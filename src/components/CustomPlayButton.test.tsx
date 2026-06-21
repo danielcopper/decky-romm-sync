@@ -21,7 +21,7 @@ import { CustomPlayButton } from "./CustomPlayButton";
 import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
 import * as backend from "../api/backend";
 import type { CachedGameDetail } from "../api/backend";
-import type { DownloadFailedEvent } from "../types";
+import type { DownloadFailedEvent, DownloadProgressEvent } from "../types";
 
 // Stub the cached-detail store: synchronous Promise.resolve so the initial
 // useEffect settles within a single waitFor tick. The default test-setup
@@ -119,6 +119,152 @@ describe("CustomPlayButton — download_failed listener", () => {
 
     unmount();
     expect(deckyEventListenerCount("download_failed")).toBe(0);
+  });
+});
+
+describe("CustomPlayButton — download_progress cancelled listener (#1017)", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedGameDetail).mockReset();
+  });
+
+  it("transitions out of its downloading state when a matching cancelled frame arrives", async () => {
+    // The cancel terminal frame the backend now emits (#1017) — the button's
+    // download_progress listener resets to "download" on status "cancelled",
+    // exactly as it does for "failed".
+    mockCachedDetail({ rom_id: 42, installed: true });
+    const { findByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+
+    act(() => {
+      const event: DownloadProgressEvent = {
+        rom_id: 42,
+        rom_name: "Test ROM",
+        platform_name: "PSX",
+        file_name: "test.chd",
+        status: "cancelled",
+        progress: 0.3,
+        bytes_downloaded: 300,
+        total_bytes: 1000,
+      };
+      emitDeckyEvent<[DownloadProgressEvent]>("download_progress", event);
+    });
+
+    // Post-state: the Download label is shown and Play is gone — the visible
+    // side-effect of setState("download") on the cancelled frame.
+    await findByText("Download");
+    expect(queryByText("Play")).toBeNull();
+  });
+
+  it("ignores a cancelled frame for a different rom_id", async () => {
+    mockCachedDetail({ rom_id: 42, installed: true });
+    const { findByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+
+    act(() => {
+      emitDeckyEvent<[DownloadProgressEvent]>("download_progress", {
+        rom_id: 999, // mismatched — listener no-ops
+        rom_name: "Other",
+        platform_name: "PSX",
+        file_name: "other.chd",
+        status: "cancelled",
+        progress: 0,
+        bytes_downloaded: 0,
+        total_bytes: 0,
+      });
+    });
+
+    // Button stays in "play" — the cancelled frame for another ROM is ignored.
+    expect(await findByText("Play")).toBeInTheDocument();
+    expect(queryByText("Download")).toBeNull();
+  });
+});
+
+describe("CustomPlayButton — cancel X on active download (#1049)", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedGameDetail).mockReset();
+    // startDownload resolves success so handleDownload leaves actionPending
+    // true (it only resets actionPending on !success). A subsequent
+    // download_progress "downloading" frame then sets dlProgress, making
+    // `downloading` truthy and rendering the cancel X.
+    vi.mocked(backend.startDownload).mockResolvedValue({ success: true, message: "" });
+    vi.mocked(backend.cancelDownload).mockResolvedValue({ success: true, message: "" });
+  });
+
+  // Drive the button into its active-download render: cache says not installed
+  // (→ "download" state), click Download (→ actionPending), then a matching
+  // "downloading" progress frame sets dlProgress (→ downloading truthy).
+  async function renderDownloading(romId = 42) {
+    mockCachedDetail({ rom_id: romId, installed: false });
+    const utils = render(<CustomPlayButton appId={100} />);
+    const downloadBtn = await utils.findByText("Download");
+
+    await act(async () => {
+      downloadBtn.click();
+      // Drain handleDownload (startDownload resolve → actionPending stays true).
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    act(() => {
+      const event: DownloadProgressEvent = {
+        rom_id: romId,
+        rom_name: "Test ROM",
+        platform_name: "PSX",
+        file_name: "test.chd",
+        status: "downloading",
+        progress: 0.3,
+        bytes_downloaded: 300,
+        total_bytes: 1000,
+      };
+      emitDeckyEvent<[DownloadProgressEvent]>("download_progress", event);
+    });
+
+    return utils;
+  }
+
+  it("renders the cancel X while a download is actively running", async () => {
+    const { findByLabelText } = await renderDownloading(42);
+    // The icon-only cancel button is identified by its aria-label/title.
+    expect(await findByLabelText("Cancel download")).toBeInTheDocument();
+  });
+
+  it("does NOT render the cancel X in the idle Download state", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    const { findByText, queryByLabelText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Download");
+    // No download in flight → no cancel control.
+    expect(queryByLabelText("Cancel download")).toBeNull();
+  });
+
+  it("clicking the cancel X calls cancelDownload with the rom_id", async () => {
+    const { findByLabelText } = await renderDownloading(42);
+    const cancelX = await findByLabelText("Cancel download");
+
+    await act(async () => {
+      cancelX.click();
+      // Let the detached cancelDownload().catch chain settle.
+      await Promise.resolve();
+    });
+
+    // Non-vacuous: assert the exact rom_id was passed.
+    expect(backend.cancelDownload).toHaveBeenCalledWith(42);
+  });
+
+  it("swallows a cancelDownload rejection without crashing the button", async () => {
+    vi.mocked(backend.cancelDownload).mockRejectedValue(new Error("nope"));
+    const { findByLabelText } = await renderDownloading(42);
+    const cancelX = await findByLabelText("Cancel download");
+
+    await act(async () => {
+      cancelX.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Post-catch state: the X is still rendered (button did not crash); the
+    // backend cancellation frame, not this catch, is what tears the row down.
+    expect(backend.cancelDownload).toHaveBeenCalledWith(42);
+    expect(await findByLabelText("Cancel download")).toBeInTheDocument();
   });
 });
 

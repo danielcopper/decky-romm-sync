@@ -27,7 +27,11 @@ Games appear as shortcuts in your library even before the ROM file is downloaded
 
 <!-- Screenshot: Game detail page during a download with progress bar -->
 
-You can also tap **Cancel** to abort a download in progress. Partial files are cleaned up automatically.
+You can also abort a download in progress — tap the **X** that appears on the right of the download button on the game's
+detail page, or use **Cancel** in the QAM download queue. Only the partial transfer files are cleaned up — an
+already-installed copy of the game is never removed, so cancelling a re-download (or a download that fails partway)
+leaves your existing install intact. If the cancel happens to land just as the download finishes, the game is kept as
+**Installed** rather than torn down.
 
 Downloaded ROMs are stored in your RetroDECK roms directory (e.g. `~/retrodeck/roms/gba/`).
 
@@ -94,6 +98,10 @@ The **Downloads** page (accessible from the main QAM panel) shows all active and
 - Active downloads with progress bars and cancel buttons
 - Completed, failed, and cancelled downloads with status details
 - **Clear Completed** button to clean up the list
+
+At most **two** ROMs download at the same time. If you start more, the extra ones wait their turn and begin
+automatically as soon as a slot frees up. Before a download starts, the plugin checks there's enough free disk space for
+everything already in flight, so a batch of downloads won't overcommit the SD card.
 
 <!-- Screenshot: Download Queue page with an active download and completed entries -->
 

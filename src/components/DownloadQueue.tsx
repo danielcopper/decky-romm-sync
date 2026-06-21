@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, FC } from "react";
-import { PanelSection, PanelSectionRow, ButtonItem, Field, ProgressBarWithInfo } from "@decky/ui";
+import { PanelSection, PanelSectionRow, ButtonItem, Field, ProgressBar } from "@decky/ui";
 import { getDownloadQueue, cancelDownload } from "../api/backend";
 import { getDownloadState, setDownloads } from "../utils/downloadStore";
 import { formatBytes } from "../utils/formatters";
@@ -121,16 +121,38 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
           <>
             {active.map((item) => (
               <PanelSectionRow key={item.rom_id}>
-                <ProgressBarWithInfo
-                  {...(item.total_bytes > 0 ? { nProgress: (item.bytes_downloaded / item.total_bytes) * 100 } : {})}
-                  indeterminate={item.total_bytes === 0}
-                  sOperationText={`${item.rom_name} (${item.platform_name})`}
-                  sTimeRemaining={
-                    item.total_bytes > 0
-                      ? `${formatBytes(item.bytes_downloaded)} / ${formatBytes(item.total_bytes)}`
-                      : formatBytes(item.bytes_downloaded)
-                  }
-                />
+                {/* Own the caption in a full-width row and use the bare ProgressBar.
+                    ProgressBarWithInfo is a Steam Field (label column | bar column);
+                    with the rom name in sOperationText the empty bar column gets
+                    squeezed into the right half and clips (#751). The bare
+                    ProgressBar is just the bar and spans the full panel width
+                    (mirrors the sync-progress fix in MainPage). */}
+                <div style={{ width: "100%" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      fontSize: "12px",
+                      marginBottom: "4px",
+                    }}
+                  >
+                    <span
+                      data-testid="dl-caption"
+                      style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    >
+                      {item.rom_name} ({item.platform_name})
+                    </span>
+                    <span data-testid="dl-bytes" style={{ flexShrink: 0 }}>
+                      {item.total_bytes > 0
+                        ? `${formatBytes(item.bytes_downloaded)} / ${formatBytes(item.total_bytes)}`
+                        : formatBytes(item.bytes_downloaded)}
+                    </span>
+                  </div>
+                  <ProgressBar
+                    indeterminate={item.total_bytes === 0}
+                    {...(item.total_bytes > 0 ? { nProgress: (item.bytes_downloaded / item.total_bytes) * 100 } : {})}
+                  />
+                </div>
               </PanelSectionRow>
             ))}
             {active.map((item) => (

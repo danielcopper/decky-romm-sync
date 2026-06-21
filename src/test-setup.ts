@@ -64,8 +64,27 @@ vi.mock("@decky/ui", () => {
   return {
     ConfirmModal: passthrough("div"),
     ModalRoot: passthrough("div"),
-    DialogButton: ({ children, onClick, disabled }: AnyProps & { disabled?: boolean }) =>
-      createElement("button", { onClick, disabled }, children as never),
+    DialogButton: ({
+      children,
+      onClick,
+      disabled,
+      className,
+      ...rest
+    }: AnyProps & { disabled?: boolean; className?: string }) =>
+      // Forward className + the a11y/identity attrs (aria-label, title, …) so
+      // icon-only buttons (no text child) stay queryable in tests. style and
+      // the FooterLegend-only props are dropped — no DOM effect under happy-dom.
+      createElement(
+        "button",
+        {
+          onClick,
+          disabled,
+          className,
+          "aria-label": rest["aria-label"],
+          title: rest.title,
+        },
+        children as never,
+      ),
     DialogButtonPrimary: ({ children, onClick }: AnyProps) => createElement("button", { onClick }, children as never),
     ButtonItem: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
       createElement("button", { onClick, disabled }, children as never),

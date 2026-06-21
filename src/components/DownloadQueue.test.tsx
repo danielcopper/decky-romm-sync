@@ -26,8 +26,11 @@ import * as backend from "../api/backend";
 import { setDownloads, getDownloadState } from "../utils/downloadStore";
 import type { DownloadItem } from "../types";
 
-// Local @decky/ui mock adds ProgressBarWithInfo (not in the global stub) and
-// exposes per-prop testids so we can assert progress bar wiring directly.
+// Local @decky/ui mock adds ProgressBar (not in the global stub) and exposes
+// per-prop testids so we can assert progress bar wiring directly. The active
+// download caption now lives in a sibling div (the #751 full-width fix), so the
+// rom name / bytes are read from the component's own dl-caption / dl-bytes
+// testids rather than from the bar's props.
 vi.mock("@decky/ui", async () => {
   type AnyProps = Record<string, unknown> & { children?: unknown };
   const { createElement: ce } = await import("react");
@@ -44,19 +47,15 @@ vi.mock("@decky/ui", async () => {
         ce("span", { "data-testid": "field-label" }, p.label as never),
         ce("span", { "data-testid": "field-desc" }, p.description as never),
       ),
-    ProgressBarWithInfo: (
+    ProgressBar: (
       p: AnyProps & {
         nProgress?: number;
         indeterminate?: boolean;
-        sOperationText?: string;
-        sTimeRemaining?: string;
       },
     ) =>
       ce(
         "div",
         { "data-testid": "progress" },
-        ce("span", { "data-testid": "progress-op" }, p.sOperationText as never),
-        ce("span", { "data-testid": "progress-remaining" }, p.sTimeRemaining as never),
         ce("span", { "data-testid": "progress-progress" }, String(p.nProgress)),
         ce("span", { "data-testid": "progress-indeterminate" }, String(p.indeterminate)),
       ),
@@ -128,9 +127,9 @@ describe("DownloadQueue", () => {
 
       // Store was seeded — verifies setDownloads(result.downloads) ran.
       expect(getDownloadState()).toEqual([item]);
-      // Local state rendered — progress bar present for the active item.
-      const op = container.querySelector('[data-testid="progress-op"]');
-      expect(op?.textContent).toBe("Item7 (Genesis)");
+      // Local state rendered — caption present for the active item.
+      const caption = container.querySelector('[data-testid="dl-caption"]');
+      expect(caption?.textContent).toBe("Item7 (Genesis)");
     });
 
     it("rejection falls back to current getDownloadState() store contents", async () => {
@@ -143,8 +142,8 @@ describe("DownloadQueue", () => {
       const { container } = render(<DownloadQueue onBack={() => {}} />);
       await flushMount();
 
-      const op = container.querySelector('[data-testid="progress-op"]');
-      expect(op?.textContent).toBe("Fallback (Genesis)");
+      const caption = container.querySelector('[data-testid="dl-caption"]');
+      expect(caption?.textContent).toBe("Fallback (Genesis)");
       // Store unchanged by the catch branch.
       expect(getDownloadState()).toEqual([fallback]);
     });
@@ -168,8 +167,8 @@ describe("DownloadQueue", () => {
         await vi.advanceTimersByTimeAsync(500);
       });
 
-      const op = container.querySelector('[data-testid="progress-op"]');
-      expect(op?.textContent).toBe("Ticked (Genesis)");
+      const caption = container.querySelector('[data-testid="dl-caption"]');
+      expect(caption?.textContent).toBe("Ticked (Genesis)");
     });
 
     it("interval is cleared on unmount — clearInterval is invoked with the pollRef id", async () => {
@@ -246,9 +245,9 @@ describe("DownloadQueue", () => {
       });
 
       // unclearRestarted removed rom_id 42 from `cleared`, so the active
-      // progress bar is rendered again.
-      const op = container.querySelector('[data-testid="progress-op"]');
-      expect(op?.textContent).toBe("Restart (Genesis)");
+      // download caption is rendered again.
+      const caption = container.querySelector('[data-testid="dl-caption"]');
+      expect(caption?.textContent).toBe("Restart (Genesis)");
     });
 
     it("a cleared rom_id whose download restarts as 'queued' also becomes visible", async () => {
@@ -274,7 +273,7 @@ describe("DownloadQueue", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(500);
       });
-      expect(container.querySelector('[data-testid="progress-op"]')?.textContent).toBe("Queued (Genesis)");
+      expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("Queued (Genesis)");
     });
 
     it("if no cleared rom_id matches, cleared Set stays the same instance (no needless re-set)", async () => {
@@ -340,7 +339,7 @@ describe("DownloadQueue", () => {
         await Promise.resolve();
       });
       // Component still rendered normally — the catch swallowed cleanly.
-      expect(container.querySelector('[data-testid="progress-op"]')?.textContent).toBe("Cancellable (Genesis)");
+      expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("Cancellable (Genesis)");
     });
   });
 
@@ -391,7 +390,7 @@ describe("DownloadQueue", () => {
       expect(labelsAfter).not.toContain("Done");
       expect(labelsAfter).not.toContain("Broke");
       expect(labelsAfter).not.toContain("Stopped");
-      expect(container.querySelector('[data-testid="progress-op"]')?.textContent).toBe("Active (Genesis)");
+      expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("Active (Genesis)");
       // Clear Completed button is gone (no finished items remain).
       expect(buttonByExactText(container, "Clear Completed")).toBeNull();
     });
@@ -425,8 +424,8 @@ describe("DownloadQueue", () => {
       // 512 / 2048 * 100 = 25
       expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("25");
       expect(container.querySelector('[data-testid="progress-indeterminate"]')?.textContent).toBe("false");
-      expect(container.querySelector('[data-testid="progress-remaining"]')?.textContent).toBe("512 B / 2.0 KB");
-      expect(container.querySelector('[data-testid="progress-op"]')?.textContent).toBe("Det (Genesis)");
+      expect(container.querySelector('[data-testid="dl-bytes"]')?.textContent).toBe("512 B / 2.0 KB");
+      expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("Det (Genesis)");
     });
 
     it("active item with total_bytes === 0: nProgress=undefined, indeterminate=true, sTimeRemaining = formatBytes(bytes_downloaded)", async () => {
@@ -445,7 +444,7 @@ describe("DownloadQueue", () => {
       // String(undefined) → "undefined".
       expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("undefined");
       expect(container.querySelector('[data-testid="progress-indeterminate"]')?.textContent).toBe("true");
-      expect(container.querySelector('[data-testid="progress-remaining"]')?.textContent).toBe("700 B");
+      expect(container.querySelector('[data-testid="dl-bytes"]')?.textContent).toBe("700 B");
     });
 
     it("finished list: completed → 'Completed — <bytes>'", async () => {

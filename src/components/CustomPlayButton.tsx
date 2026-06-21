@@ -18,6 +18,7 @@ import { hasAnySaveConflict } from "../utils/saveStatus";
 import {
   getCachedGameDetail,
   startDownload,
+  cancelDownload,
   removeRom,
   debugLog,
   preLaunchSync,
@@ -496,6 +497,14 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     }
   };
 
+  // Cancel an in-flight download. Fire-and-forget: the backend emits a
+  // cancelled download_progress frame that the progress listener reacts to
+  // (resets to "download"). The inline .catch keeps the click non-throwing.
+  const handleCancelDownload = () => {
+    if (romId == null) return;
+    detach(cancelDownload(romId).catch(() => {}));
+  };
+
   const handleUninstall = async () => {
     if (!romId) return;
     detach(debugLog(`CustomPlayButton: uninstalling romId=${romId}`));
@@ -540,7 +549,8 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   }
   detach(debugLog(`CustomPlayButton: rendering state=${state}`));
 
-  // Dropdown arrow button style
+  // Dropdown arrow button style. Shared shape for the play-state chevron and
+  // the download-state cancel X — both are 36px side actions on the right.
   const dropdownArrowStyle: React.CSSProperties = {
     height: "48px",
     width: "36px",
@@ -631,37 +641,79 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       baseBg = "linear-gradient(to right, #1a9fff, #0078d4)";
     }
 
+    // While a download is actively running, the main button shares the row
+    // with a right-side action section (the cancel X). Square off its right
+    // edge so it butts cleanly against that section; idle/starting keeps the
+    // full pill radius.
+    const downloadBtn = (
+      <DialogButton
+        className={[appActionButtonClasses?.PlayButton, "romm-btn-download", downloading && "romm-dl-active"]
+          .filter(Boolean)
+          .join(" ")}
+        style={
+          {
+            ...mainBtnStyle,
+            borderRadius: downloading ? "2px 0 0 2px" : "2px",
+            background: baseBg,
+            "--romm-pulse-color": pulseColor,
+          } as React.CSSProperties
+        }
+        onClick={() => {
+          detach(handleDownload());
+        }}
+        disabled={actionPending || isOffline}
+      >
+        {/* Progress fill bar */}
+        {downloading && (
+          <div
+            className="romm-dl-fill"
+            style={{
+              width: `${t * 100}%`,
+              background: fillColor,
+            }}
+          />
+        )}
+        <span className="romm-dl-label">{dlLabel}</span>
+      </DialogButton>
+    );
+
+    if (!downloading) {
+      // Idle ("Download") or "Starting..." — single full-width button, no X.
+      return (
+        <Focusable ref={containerRef} className={appActionButtonClasses?.PlayButtonContainer} style={btnContainerStyle}>
+          {downloadBtn}
+        </Focusable>
+      );
+    }
+
+    // Active download: button + a right-side action section. The section is a
+    // flex sub-container so a second action (Pause, follow-up #1049) can join
+    // next to the X later without restructuring the row.
     return (
       <Focusable ref={containerRef} className={appActionButtonClasses?.PlayButtonContainer} style={btnContainerStyle}>
-        <DialogButton
-          className={[appActionButtonClasses?.PlayButton, "romm-btn-download", downloading && "romm-dl-active"]
-            .filter(Boolean)
-            .join(" ")}
-          style={
-            {
-              ...mainBtnStyle,
-              borderRadius: "2px",
-              background: baseBg,
-              "--romm-pulse-color": pulseColor,
-            } as React.CSSProperties
-          }
-          onClick={() => {
-            detach(handleDownload());
-          }}
-          disabled={actionPending || isOffline}
-        >
-          {/* Progress fill bar */}
-          {downloading && (
-            <div
-              className="romm-dl-fill"
-              style={{
-                width: `${t * 100}%`,
-                background: fillColor,
-              }}
-            />
-          )}
-          <span className="romm-dl-label">{dlLabel}</span>
-        </DialogButton>
+        {downloadBtn}
+        <div style={{ display: "flex", flexDirection: "row", height: "100%" }}>
+          <DialogButton
+            className="romm-btn-cancel"
+            aria-label="Cancel download"
+            title="Cancel download"
+            style={{
+              ...dropdownArrowStyle,
+              background: "linear-gradient(to right, #0a3a5a, #062a45)",
+              color: "#fff",
+            }}
+            onClick={handleCancelDownload}
+          >
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path
+                d="M1 1L11 11M11 1L1 11"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </DialogButton>
+        </div>
       </Focusable>
     );
   }
