@@ -717,11 +717,13 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "dismiss_settings_reset_notice",
     # Read-only RetroDECK path-resolution health probe (for the frontend banner).
     "get_retrodeck_status",
-    # Cancel operations — must remain callable mid-operation when migration
-    # marker fires so the user can stop in-flight work.
+    # Cancel / pause operations — must remain callable mid-operation when
+    # migration marker fires so the user can stop in-flight work. (Resume,
+    # which re-begins a filesystem transfer, IS migration-blocked.)
     "cancel_sync",
     "sync_cancel_preview",
     "cancel_download",
+    "pause_download",
     # Frontend logging / diagnostic helpers.
     "frontend_log",
     "debug_log",

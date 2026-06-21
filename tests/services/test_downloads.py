@@ -23,7 +23,7 @@ from domain.rom import Rom
 from domain.rom_install import RomInstall
 from lib.list_result import ErrorCode
 from services.active_core_resolver import ActiveCoreResolver, ActiveCoreResolverConfig
-from services.downloads import DownloadService, DownloadServiceConfig, _CancelToken
+from services.downloads import DownloadService, DownloadServiceConfig, _DownloadControl
 from services.library import LibraryService, LibraryServiceConfig
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
 
@@ -885,7 +885,7 @@ class TestDoDownloadSingleFile:
             "has_multiple_files": False,
         }
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(b"\x00" * 512)
 
@@ -955,7 +955,7 @@ class TestDoDownloadSingleFile:
             "has_multiple_files": False,
         }
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(b"\x00" * 512)
 
@@ -1014,7 +1014,7 @@ class TestDoDownloadOverrideRebake:
             "has_multiple_files": False,
         }
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(b"\x00" * 512)
 
@@ -1116,7 +1116,7 @@ class TestDoDownloadMultiFile:
             "has_multiple_files": True,
         }
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(zip_bytes)
 
@@ -1206,7 +1206,7 @@ class TestDoDownloadMultiFile:
             ],
         }
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(zip_bytes)
 
@@ -1288,7 +1288,7 @@ class TestDoDownloadMultiFile:
             ],
         }
 
-        def fake_download(_rom_id, _filename, _dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, _dest, _progress_callback=None, *, resume=False, on_meta=None):
             raise OSError("network died mid-download")
 
         plugin._download_service._loop = asyncio.get_event_loop()
@@ -1333,7 +1333,7 @@ class TestEsDeCollapseRename:
                 z.writestr(name, data)
         zip_bytes = zip_content_path.read_bytes()
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(zip_bytes)
 
@@ -1506,7 +1506,7 @@ class TestEsDeCollapseRename:
             "files": [{"file_name": "Game.gba"}],
         }
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(b"\x00" * 100)
 
@@ -1559,7 +1559,7 @@ class TestEsDeCollapseRename:
             "has_multiple_files": True,
         }
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(zip_bytes)
 
@@ -1626,7 +1626,7 @@ class TestDoDownloadNestedSingleFile:
             "files": [{"file_name": "Game.gba"}],
         }
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(b"\x00" * 64)
 
@@ -1674,7 +1674,7 @@ class TestDoDownloadNestedSingleFile:
             "files": [{"file_name": "My Game.chd"}],
         }
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(b"\x00" * 128)
 
@@ -2123,7 +2123,7 @@ class TestDoDownloadCancelled:
             "has_multiple_files": False,
         }
 
-        def fake_download_cancel(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download_cancel(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             raise asyncio.CancelledError()
 
         plugin._download_service._loop = asyncio.get_event_loop()
@@ -2171,7 +2171,7 @@ class TestDoDownloadZipFailure:
             "has_multiple_files": True,
         }
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             # Write invalid data (not a real zip)
             with open(dest, "wb") as f:
                 f.write(b"not a zip file")
@@ -2221,7 +2221,7 @@ class TestDoDownloadPostDecodeTraversal:
             z.writestr("%2e%2e%2fevil.sh", b"payload")
         zip_bytes = zip_content_path.read_bytes()
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(zip_bytes)
 
@@ -2292,7 +2292,7 @@ class TestDoDownloadPostDecodeTraversal:
             z.writestr("update/Game%20Update.nsp", b"\x00" * 50)
         zip_bytes = zip_content_path.read_bytes()
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(zip_bytes)
 
@@ -2357,7 +2357,7 @@ class TestDoDownloadFailureEmit:
             "has_multiple_files": False,
         }
 
-        def fake_download(_rom_id, _filename, _dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, _dest, _progress_callback=None, *, resume=False, on_meta=None):
             raise OSError("simulated network drop")
 
         plugin._download_service._loop = asyncio.get_event_loop()
@@ -2415,7 +2415,7 @@ class TestDoDownloadInvariantFailure:
             "has_multiple_files": False,
         }
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(b"\x00" * 64)
 
@@ -2472,7 +2472,7 @@ class TestDoDownloadInvariantFailure:
             "has_multiple_files": True,
         }
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(zip_bytes)
 
@@ -2699,7 +2699,7 @@ class TestUrlEncodedFilenameRename:
             "has_multiple_files": True,
         }
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(zip_bytes)
 
@@ -2758,7 +2758,7 @@ class TestUrlEncodedFilenameRename:
             "has_multiple_files": True,
         }
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(zip_bytes)
 
@@ -3500,7 +3500,7 @@ class TestDoDownloadRedownloadPreservesExisting:
             "has_multiple_files": False,
         }
 
-        def fake_download(_rom_id, _filename, _dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, _dest, _progress_callback=None, *, resume=False, on_meta=None):
             raise OSError("network died mid-redownload")
 
         plugin._download_service._loop = asyncio.get_event_loop()
@@ -3565,7 +3565,7 @@ class TestDoDownloadCancelReconcile:
             "total_bytes": 0,
         }
 
-        def fake_transfer(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_transfer(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(b"\x00" * 512)
 
@@ -3648,7 +3648,7 @@ class TestDoDownloadCancelReconcile:
             "total_bytes": 0,
         }
 
-        def fake_transfer(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_transfer(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(b"PK\x05\x06" + b"\x00" * 18)  # zip-ish bytes; the stubbed post-IO never reads them
 
@@ -3731,7 +3731,7 @@ class TestDoDownloadCancelEmitsEvent:
             "has_multiple_files": False,
         }
 
-        def fake_download_cancel(_rom_id, _filename, _dest, _progress_callback=None):
+        def fake_download_cancel(_rom_id, _filename, _dest, _progress_callback=None, *, resume=False, on_meta=None):
             raise asyncio.CancelledError()
 
         plugin._download_service._loop = asyncio.get_event_loop()
@@ -3848,7 +3848,7 @@ class TestConcurrencyReservation:
             "has_multiple_files": False,
         }
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(b"\x00" * 512)
 
@@ -3898,7 +3898,7 @@ class TestConcurrencyReservation:
         }
         target_path = str(roms_dir / "third.z64")
 
-        def fake_download(_rom_id, _filename, dest, _progress_callback=None):
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
             with open(dest, "wb") as f:
                 f.write(b"\x00" * 64)
 
@@ -3943,7 +3943,7 @@ class TestCooperativeCancel:
 
     def test_progress_callback_raises_once_token_cancelled(self, plugin):
         """The callback runs clean while the token is unset; raises after it flips."""
-        token = _CancelToken()
+        token = _DownloadControl()
         # The queue entry the callback would update if it didn't bail early.
         plugin._download_service._download_queue[42] = {
             "rom_id": 42,
@@ -4010,11 +4010,11 @@ class TestCooperativeCancel:
             "has_multiple_files": False,
         }
 
-        token = _CancelToken()
-        plugin._download_service._cancel_tokens[42] = token
+        token = _DownloadControl()
+        plugin._download_service._control_tokens[42] = token
         captured: list[int] = []
 
-        def fake_transfer(_rom_id, _filename, _dest, progress_callback=None):
+        def fake_transfer(_rom_id, _filename, _dest, progress_callback=None, *, resume=False, on_meta=None):
             assert progress_callback is not None  # _do_download always threads a real callback
             for i in range(1, 500):
                 captured.append(i)
@@ -4042,8 +4042,8 @@ class TestCooperativeCancel:
     async def test_cancel_download_sets_token_and_cancels_task(self, plugin):
         """``cancel_download`` flips the token AND cancels the asyncio task."""
         loop = asyncio.get_event_loop()
-        token = _CancelToken()
-        plugin._download_service._cancel_tokens[42] = token
+        token = _DownloadControl()
+        plugin._download_service._control_tokens[42] = token
 
         async def _never_ending():
             await asyncio.Event().wait()
@@ -4091,9 +4091,9 @@ class TestCooperativeCancel:
 
         plugin._download_service._emit = _record_emit
 
-        old_token = _CancelToken()
+        old_token = _DownloadControl()
         old_token.cancelled = True  # the cancelled zombie's token
-        new_token = _CancelToken()  # the fresh re-download's token
+        new_token = _DownloadControl()  # the fresh re-download's token
 
         cb_old = plugin._download_service._make_progress_callback(42, "Zelda", "N64", "zelda.z64", old_token)
         cb_new = plugin._download_service._make_progress_callback(42, "Zelda", "N64", "zelda.z64", new_token)
@@ -4109,3 +4109,381 @@ class TestCooperativeCancel:
 # the service module's private names. Keep in sync with services/downloads.py.
 _ZIP_TMP_EXT_LITERAL = ".zip.tmp"
 _TMP_EXT_LITERAL = ".tmp"
+
+
+class TestPauseResume:
+    """#1124: pause keeps the partial .tmp; resume re-begins with resume=True."""
+
+    @staticmethod
+    def _retrodeck(plugin, tmp_path):
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_pause_sets_status_and_keeps_tmp(self, plugin, tmp_path):
+        from unittest.mock import patch
+
+        import decky
+
+        self._retrodeck(plugin, tmp_path)
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "zelda.z64")
+
+        rom_detail = {
+            "id": 42,
+            "name": "Zelda",
+            "fs_name": "zelda.z64",
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+            "has_multiple_files": False,
+        }
+
+        control = _DownloadControl()
+
+        def fake_pause(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
+            # Write a partial .tmp, then simulate the progress callback aborting
+            # because the control was paused (the real path raises CancelledError).
+            with open(dest, "wb") as f:
+                f.write(b"\x00" * 256)
+            control.paused = True
+            raise asyncio.CancelledError()
+
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[42] = {
+            "rom_id": 42,
+            "status": "downloading",
+            "progress": 0.25,
+            "bytes_downloaded": 256,
+            "total_bytes": 1024,
+            "resumable": True,
+        }
+
+        with (
+            patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_pause),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await plugin._download_service._do_download(42, rom_detail, target_path, "n64", "zelda.z64", control)
+
+        # Status flips to "paused" and the partial .tmp is KEPT for resume.
+        assert plugin._download_service._download_queue[42]["status"] == "paused"
+        assert os.path.exists(target_path + _TMP_EXT_LITERAL)
+        # A terminal "paused" frame reached the frontend, carrying resumable.
+        paused_frames = [
+            c for c in decky.emit.call_args_list if c[0][0] == "download_progress" and c[0][1].get("status") == "paused"
+        ]
+        assert len(paused_frames) == 1
+        assert paused_frames[0][0][1]["resumable"] is True
+        assert paused_frames[0][0][1]["bytes_downloaded"] == 256
+
+    @pytest.mark.asyncio
+    async def test_cancel_still_deletes_tmp(self, plugin, tmp_path):
+        """Contrast with pause: a cancel deletes the partial .tmp (no resume)."""
+        from unittest.mock import patch
+
+        self._retrodeck(plugin, tmp_path)
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "zelda.z64")
+
+        rom_detail = {
+            "id": 42,
+            "name": "Zelda",
+            "fs_name": "zelda.z64",
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+            "has_multiple_files": False,
+        }
+
+        control = _DownloadControl()
+
+        def fake_cancel(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
+            with open(dest, "wb") as f:
+                f.write(b"\x00" * 256)
+            control.cancelled = True
+            raise asyncio.CancelledError()
+
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[42] = {"rom_id": 42, "status": "downloading", "progress": 0}
+
+        with (
+            patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_cancel),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await plugin._download_service._do_download(42, rom_detail, target_path, "n64", "zelda.z64", control)
+
+        assert plugin._download_service._download_queue[42]["status"] == "cancelled"
+        assert not os.path.exists(target_path + _TMP_EXT_LITERAL)
+
+    @pytest.mark.asyncio
+    async def test_on_meta_sets_resumable_and_emits(self, plugin, tmp_path):
+        """The adapter's on_meta(True) callback flips resumable and emits it live."""
+        from unittest.mock import patch
+
+        import decky
+
+        self._retrodeck(plugin, tmp_path)
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "zelda.z64")
+
+        rom_detail = {
+            "id": 42,
+            "name": "Zelda",
+            "fs_name": "zelda.z64",
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+            "has_multiple_files": False,
+        }
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
+            if on_meta is not None:
+                on_meta(True)  # server proved range support
+            with open(dest, "wb") as f:
+                f.write(b"\x00" * 256)
+
+        _seed_rom(plugin._uow, 42)
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[42] = {
+            "rom_id": 42,
+            "status": "downloading",
+            "progress": 0,
+            "bytes_downloaded": 0,
+            "total_bytes": 0,
+            "resumable": False,
+        }
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(42, rom_detail, target_path, "n64", "zelda.z64")
+
+        # on_meta flipped the queue entry's resumable flag...
+        assert plugin._download_service._download_queue[42]["resumable"] is True
+        # ...and emitted a download_progress frame carrying resumable: True.
+        meta_frames = [
+            c for c in decky.emit.call_args_list if c[0][0] == "download_progress" and c[0][1].get("resumable") is True
+        ]
+        assert meta_frames
+
+    @pytest.mark.asyncio
+    async def test_non_resumable_stays_false(self, plugin, tmp_path):
+        """on_meta(False) leaves resumable False (mod_zip / Cloudflare path)."""
+        from unittest.mock import patch
+
+        import decky
+
+        self._retrodeck(plugin, tmp_path)
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "zelda.z64")
+
+        rom_detail = {
+            "id": 42,
+            "name": "Zelda",
+            "fs_name": "zelda.z64",
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+            "has_multiple_files": False,
+        }
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
+            if on_meta is not None:
+                on_meta(False)
+            with open(dest, "wb") as f:
+                f.write(b"\x00" * 256)
+
+        _seed_rom(plugin._uow, 42)
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[42] = {
+            "rom_id": 42,
+            "status": "downloading",
+            "progress": 0,
+            "bytes_downloaded": 0,
+            "total_bytes": 0,
+            "resumable": False,
+        }
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(42, rom_detail, target_path, "n64", "zelda.z64")
+
+        assert plugin._download_service._download_queue[42]["resumable"] is False
+
+    @pytest.mark.asyncio
+    async def test_resume_rebegins_with_resume_true(self, plugin, tmp_path):
+        """resume_download calls the transfer with resume=True (appends, not restarts)."""
+        from unittest.mock import AsyncMock
+
+        self._retrodeck(plugin, tmp_path)
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        # A partial .tmp left by the paused download.
+        with open(str(roms_dir / "zelda.z64") + _TMP_EXT_LITERAL, "wb") as f:
+            f.write(b"\x00" * 256)
+
+        rom_detail = {
+            "id": 42,
+            "name": "Zelda",
+            "fs_name": "zelda.z64",
+            "fs_size_bytes": 1024,
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+        }
+
+        # The entry exists in "paused" state (what a prior pause left behind).
+        plugin._download_service._download_queue[42] = {
+            "rom_id": 42,
+            "status": "paused",
+            "progress": 0.25,
+            "bytes_downloaded": 256,
+            "total_bytes": 1024,
+            "resumable": True,
+        }
+
+        plugin._download_service._loop = MagicMock()
+        plugin._download_service._loop.run_in_executor = AsyncMock(return_value=rom_detail)
+        captured_coros = []
+
+        def _capture_task(coro):
+            captured_coros.append(coro)
+            coro.close()  # don't actually run the download
+            return MagicMock()
+
+        plugin._download_service._loop.create_task = _capture_task
+        plugin._download_service._download_file_store.disk_free = lambda _p: 500 * 1024 * 1024
+
+        result = await plugin.resume_download(42)
+
+        assert result["success"] is True
+        # A fresh task was scheduled (the resumed download).
+        assert len(captured_coros) == 1
+        # The re-begun download carried resumable across (verdict re-confirmed live).
+        assert plugin._download_service._download_queue[42]["resumable"] is True
+
+    @pytest.mark.asyncio
+    async def test_resume_threads_resume_true_into_do_download(self, plugin, tmp_path):
+        """End-to-end: the resumed transfer reaches download_rom_content with resume=True."""
+        from unittest.mock import patch
+
+        import decky
+
+        self._retrodeck(plugin, tmp_path)
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "zelda.z64")
+        with open(target_path + _TMP_EXT_LITERAL, "wb") as f:
+            f.write(b"\x00" * 256)
+
+        rom_detail = {
+            "id": 42,
+            "name": "Zelda",
+            "fs_name": "zelda.z64",
+            "fs_size_bytes": 1024,
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+        }
+
+        _seed_rom(plugin._uow, 42)
+        plugin._download_service._download_queue[42] = {
+            "rom_id": 42,
+            "status": "paused",
+            "progress": 0.25,
+            "bytes_downloaded": 256,
+            "total_bytes": 1024,
+            "resumable": True,
+        }
+        plugin._download_service._loop = asyncio.get_event_loop()
+
+        # get_rom is fetched via run_in_executor; the real loop runs it.
+        captured_resume: list[bool] = []
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
+            captured_resume.append(resume)
+            with open(dest, "wb") as f:
+                f.write(b"\x00" * 1024)
+
+        with (
+            patch.object(plugin._romm_api, "get_rom", return_value=rom_detail),
+            patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download),
+        ):
+            result = await plugin.resume_download(42)
+            assert result["success"] is True
+            # Drain the scheduled task so the transfer actually runs.
+            task = plugin._download_service._download_tasks.get(42)
+            assert task is not None
+            await task
+
+        assert captured_resume == [True]
+        assert plugin._download_service._download_queue[42]["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_resume_non_paused_returns_not_paused(self, plugin):
+        """resume on a missing or non-paused entry returns the not_paused shape."""
+        result = await plugin.resume_download(999)
+        assert result == {
+            "success": False,
+            "reason": "not_paused",
+            "message": "No paused download for this ROM",
+        }
+
+        # A downloading (not paused) entry is also rejected.
+        plugin._download_service._download_queue[7] = {"rom_id": 7, "status": "downloading"}
+        result = await plugin.resume_download(7)
+        assert result["success"] is False
+        assert result["reason"] == "not_paused"
+
+    @pytest.mark.asyncio
+    async def test_pause_no_active_returns_no_active_download(self, plugin):
+        result = await plugin.pause_download(999)
+        assert result == {
+            "success": False,
+            "reason": "no_active_download",
+            "message": "No active download for this ROM",
+        }
+
+    @pytest.mark.asyncio
+    async def test_pause_download_sets_paused_flag_and_cancels_task(self, plugin):
+        """pause_download flips control.paused (not cancelled) and cancels the task."""
+        loop = asyncio.get_event_loop()
+        control = _DownloadControl()
+        plugin._download_service._control_tokens[42] = control
+
+        async def _never_ending():
+            await asyncio.Event().wait()
+
+        task = loop.create_task(_never_ending())
+        await asyncio.sleep(0)
+        plugin._download_service._download_tasks[42] = task
+
+        result = await plugin.pause_download(42)
+        assert result["success"] is True
+        assert result["message"] == "Download paused"
+        # paused flag set (not cancelled) so the terminal handler keeps the .tmp.
+        assert control.paused is True
+        assert control.cancelled is False
+        assert task.cancelled() or task.cancelling()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    @pytest.mark.asyncio
+    async def test_paused_entry_not_pruned(self, plugin):
+        """A 'paused' entry survives queue pruning (only terminal states are pruned)."""
+        plugin._download_service._download_queue[1] = {"rom_id": 1, "status": "paused"}
+        for i in range(2, 60):
+            plugin._download_service._download_queue[i] = {"rom_id": i, "status": "completed"}
+        plugin._download_service._prune_download_queue()
+        assert 1 in plugin._download_service._download_queue
+        assert plugin._download_service._download_queue[1]["status"] == "paused"

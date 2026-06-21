@@ -83,12 +83,17 @@ class RommApiAdapter:
         filename: str,
         dest: str,
         progress_callback=None,
+        *,
+        resume: bool = False,
+        on_meta: Any = None,
     ) -> None:
         quoted_filename = urllib.parse.quote(filename, safe="")
         self._client.download(
             f"/api/roms/{rom_id}/content/{quoted_filename}",
             dest,
             progress_callback,
+            resume=resume,
+            on_meta=on_meta,
         )
 
     def download_cover(self, cover_url: str, dest: str) -> None:

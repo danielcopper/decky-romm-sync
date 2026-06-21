@@ -103,6 +103,14 @@ class DownloadFileStore(Protocol):
         """Return the free space in bytes for the filesystem hosting *path*."""
         ...
 
+    def file_size(self, path: str) -> int:
+        """Return the size in bytes of the file at *path*, or 0 if it's missing.
+
+        Used by the resume pre-flight to discount the bytes already held by a
+        partial ``.tmp``. A missing path reports 0 (no partial to discount).
+        """
+        ...
+
     def walk_files_matching_suffixes(self, base_dir: str, suffixes: tuple[str, ...]) -> list[str]:
         """Recursively list files under *base_dir* whose name ends with any of *suffixes*.
 

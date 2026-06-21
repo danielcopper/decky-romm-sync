@@ -1568,3 +1568,211 @@ class TestDownloadTimeout:
 
         with open(dest, "rb") as f:
             assert f.read() == data
+
+
+def _make_resp(status, headers, body):
+    """Build a context-manager urlopen-style response mock.
+
+    ``status`` drives the resume branch; ``headers`` is a plain dict (so
+    ``.get`` works for Content-Range / Accept-Ranges / cf-ray); ``body`` is the
+    bytes the stream yields.
+    """
+    from io import BytesIO
+
+    resp = MagicMock()
+    resp.status = status
+    resp.headers = headers
+    resp.fp = None  # short-circuit the raw-socket settimeout chain
+    stream = BytesIO(body)
+    resp.read = stream.read
+    resp.__enter__ = MagicMock(return_value=resp)
+    resp.__exit__ = MagicMock(return_value=False)
+    return resp
+
+
+def _resume_adapter():
+    import logging
+
+    settings = {"romm_url": "http://romm.local", "romm_user": "u", "romm_pass": "p"}
+    return RommHttpAdapter(settings, "/fake/plugin_dir", logging.getLogger("test"), "decky-romm-sync/9.9.9")
+
+
+class TestIsCloudflare:
+    """``_is_cloudflare`` — Cloudflare edge detection from response headers."""
+
+    def test_cf_ray_present_is_cloudflare(self):
+        assert RommHttpAdapter._is_cloudflare({"cf-ray": "abc123-FRA"}) is True
+
+    def test_server_cloudflare_is_cloudflare(self):
+        assert RommHttpAdapter._is_cloudflare({"server": "cloudflare"}) is True
+
+    def test_server_cloudflare_mixed_case(self):
+        assert RommHttpAdapter._is_cloudflare({"server": "Cloudflare"}) is True
+
+    def test_no_cloudflare_markers(self):
+        assert RommHttpAdapter._is_cloudflare({"server": "nginx"}) is False
+
+    def test_empty_headers(self):
+        assert RommHttpAdapter._is_cloudflare({}) is False
+
+
+class TestRangeSupported:
+    """``_range_supported`` — resumability verdict from status + headers."""
+
+    def test_206_proves_range_even_without_accept_ranges(self):
+        # RomM's single-file 206 may omit Accept-Ranges; the 206 itself proves it.
+        assert RommHttpAdapter._range_supported(206, {}) is True
+
+    def test_200_with_accept_ranges_bytes(self):
+        assert RommHttpAdapter._range_supported(200, {"Accept-Ranges": "bytes"}) is True
+
+    def test_200_mod_zip_no_accept_ranges(self):
+        # Multi-file ROM mod_zip: 200, no Accept-Ranges → not resumable.
+        assert RommHttpAdapter._range_supported(200, {}) is False
+
+    def test_206_through_cloudflare_is_not_resumable(self):
+        # The edge strips Range, so even a 206 can't be trusted for resume.
+        assert RommHttpAdapter._range_supported(206, {"cf-ray": "x"}) is False
+
+    def test_200_accept_ranges_through_cloudflare_is_not_resumable(self):
+        assert RommHttpAdapter._range_supported(200, {"Accept-Ranges": "bytes", "server": "cloudflare"}) is False
+
+
+class TestParseContentRange:
+    """``_parse_content_range`` — extract (start, total) from Content-Range."""
+
+    def test_parses_well_formed_range(self):
+        assert RommHttpAdapter._parse_content_range("bytes 100-199/500") == (100, 500)
+
+    def test_none_for_missing_header(self):
+        assert RommHttpAdapter._parse_content_range(None) is None
+
+    def test_none_for_unknown_total(self):
+        assert RommHttpAdapter._parse_content_range("bytes 100-199/*") is None
+
+    def test_none_for_wrong_unit(self):
+        assert RommHttpAdapter._parse_content_range("items 0-9/100") is None
+
+    def test_none_for_malformed(self):
+        assert RommHttpAdapter._parse_content_range("garbage") is None
+
+
+class TestDownloadResume:
+    """``download(resume=True)`` — 206 appends, 200 truncates + restarts."""
+
+    def test_206_appends_onto_existing_tmp(self, tmp_path):
+        adapter = _resume_adapter()
+        dest = str(tmp_path / "rom.tmp")
+        with open(dest, "wb") as f:
+            f.write(b"AAAA")  # 4 bytes already on disk
+
+        # 206: remaining 6 bytes, Content-Range start matches the 4 on disk.
+        resp = _make_resp(
+            206,
+            {"Content-Length": "6", "Content-Range": "bytes 4-9/10"},
+            b"BBBBBB",
+        )
+
+        with patch("urllib.request.urlopen", return_value=resp):
+            adapter.download("/api/roms/1/content/rom", dest, resume=True)
+
+        with open(dest, "rb") as f:
+            assert f.read() == b"AAAABBBBBB"  # appended, full 10 bytes
+
+    def test_200_fallback_truncates_and_restarts(self, tmp_path):
+        adapter = _resume_adapter()
+        dest = str(tmp_path / "rom.tmp")
+        with open(dest, "wb") as f:
+            f.write(b"STALE")  # stale partial that must be discarded
+
+        # Server ignored Range (Cloudflare/compression): plain 200, full body.
+        resp = _make_resp(200, {"Content-Length": "5"}, b"FRESH")
+
+        with patch("urllib.request.urlopen", return_value=resp):
+            adapter.download("/api/roms/1/content/rom", dest, resume=True)
+
+        with open(dest, "rb") as f:
+            assert f.read() == b"FRESH"  # truncated + rewritten, no STALE prefix
+
+    def test_206_start_mismatch_restarts_from_zero(self, tmp_path):
+        adapter = _resume_adapter()
+        dest = str(tmp_path / "rom.tmp")
+        with open(dest, "wb") as f:
+            f.write(b"AAAA")  # 4 bytes locally
+
+        # 206 whose start (2) does NOT match the 4 local bytes → treat as restart.
+        resp = _make_resp(
+            206,
+            {"Content-Length": "8", "Content-Range": "bytes 2-9/8"},
+            b"WHOLEDAT",
+        )
+
+        with patch("urllib.request.urlopen", return_value=resp):
+            adapter.download("/api/roms/1/content/rom", dest, resume=True)
+
+        with open(dest, "rb") as f:
+            assert f.read() == b"WHOLEDAT"  # truncated, not appended
+
+    def test_206_mismatch_validates_against_full_total(self):
+        """L2 fail-safe: a 206 whose start we did NOT ask for restarts (wb, 0) but
+        keeps the FULL Content-Range total, not the partial-remainder
+        Content-Length — so a non-compliant server's short body fails the
+        completeness check instead of silently passing as a truncated file."""
+        adapter = _resume_adapter()
+        # start=2 (≠ the 4 local bytes), full total=10, but only 6 remainder bytes.
+        resp = _make_resp(206, {"Content-Length": "6", "Content-Range": "bytes 2-9/10"}, b"PARTAL")
+        mode, seed, total = adapter._resume_branch(resp, 206, existing_size=4)
+        assert (mode, seed) == ("wb", 0)
+        assert total == 10  # full file size, NOT the 6-byte remainder
+
+    def test_on_meta_fires_once_with_range_supported(self, tmp_path):
+        adapter = _resume_adapter()
+        dest = str(tmp_path / "rom.tmp")
+
+        resp = _make_resp(206, {"Content-Length": "5", "Content-Range": "bytes 0-4/5"}, b"hello")
+        meta_calls: list[bool] = []
+
+        with patch("urllib.request.urlopen", return_value=resp):
+            adapter.download("/api/roms/1/content/rom", dest, on_meta=meta_calls.append)
+
+        assert meta_calls == [True]  # 206 → range_supported True, exactly once
+
+    def test_on_meta_false_for_mod_zip_200(self, tmp_path):
+        adapter = _resume_adapter()
+        dest = str(tmp_path / "rom.tmp")
+
+        resp = _make_resp(200, {"Content-Length": "5"}, b"hello")
+        meta_calls: list[bool] = []
+
+        with patch("urllib.request.urlopen", return_value=resp):
+            adapter.download("/api/roms/1/content/rom", dest, on_meta=meta_calls.append)
+
+        assert meta_calls == [False]  # 200, no Accept-Ranges → not resumable
+
+    def test_resume_sends_range_header_when_tmp_exists(self, tmp_path):
+        adapter = _resume_adapter()
+        dest = str(tmp_path / "rom.tmp")
+        with open(dest, "wb") as f:
+            f.write(b"AAAA")
+
+        resp = _make_resp(206, {"Content-Length": "6", "Content-Range": "bytes 4-9/10"}, b"BBBBBB")
+
+        with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+            adapter.download("/api/roms/1/content/rom", dest, resume=True)
+
+        req = mock_open.call_args[0][0]
+        assert req.get_header("Range") == "bytes=4-"
+
+    def test_no_range_header_without_resume(self, tmp_path):
+        adapter = _resume_adapter()
+        dest = str(tmp_path / "rom.tmp")
+        with open(dest, "wb") as f:
+            f.write(b"AAAA")  # exists, but resume not requested
+
+        resp = _make_resp(200, {"Content-Length": "5"}, b"FRESH")
+
+        with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+            adapter.download("/api/roms/1/content/rom", dest, resume=False)
+
+        req = mock_open.call_args[0][0]
+        assert req.get_header("Range") is None

@@ -57,3 +57,30 @@ async def test_get_installed_rom_installed_shape(harness):
     assert result["file_name"] == "pokemon.gba"
     assert result["platform_slug"] == "gba"
     assert isinstance(result["file_path"], str)
+
+
+# ── pause_download / resume_download (#1124) ─────────────────────────────
+
+
+async def test_pause_download_no_active_failure_shape(harness):
+    """Pausing a ROM with no active download → canonical failure shape.
+
+    ``pauseDownload = callable<[number], {success, message}>`` — the failure
+    branch carries the canonical ``{success: False, reason, message}``.
+    """
+    result = await harness.plugin.pause_download(999)
+    assert result == {
+        "success": False,
+        "reason": "no_active_download",
+        "message": "No active download for this ROM",
+    }
+
+
+async def test_resume_download_not_paused_failure_shape(harness):
+    """Resuming a ROM with no paused download → canonical failure shape."""
+    result = await harness.plugin.resume_download(999)
+    assert result == {
+        "success": False,
+        "reason": "not_paused",
+        "message": "No paused download for this ROM",
+    }

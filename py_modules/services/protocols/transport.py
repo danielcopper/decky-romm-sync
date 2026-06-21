@@ -208,11 +208,17 @@ class RommRomReader(Protocol):
         filename: str,
         dest: str,
         progress_callback: Any = None,
+        *,
+        resume: bool = False,
+        on_meta: Any = None,
     ) -> None:
         """Download a ROM file to a local destination.
 
         Streams /api/roms/{rom_id}/content/{filename} to dest.
         Filename is URL-encoded. Optional progress_callback for tracking.
+        ``resume=True`` appends onto an existing partial transfer when the
+        server honours the ``Range`` request; ``on_meta`` is invoked once with
+        ``range_supported: bool`` when the response headers arrive.
         """
         ...
 

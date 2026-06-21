@@ -61,6 +61,13 @@ class DownloadFileAdapter:
         """Return the free space in bytes for the filesystem hosting *path*."""
         return shutil.disk_usage(path).free
 
+    def file_size(self, path: str) -> int:
+        """Return the size in bytes of the file at *path*, or 0 if it's missing."""
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+
     def walk_files_matching_suffixes(self, base_dir: str, suffixes: tuple[str, ...]) -> list[str]:
         """Recursively list files under *base_dir* matching any of *suffixes*.
 

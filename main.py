@@ -350,6 +350,13 @@ class Plugin:
     async def cancel_download(self, rom_id):
         return self._download_service.cancel_download(rom_id)
 
+    async def pause_download(self, rom_id):
+        return self._download_service.pause_download(rom_id)
+
+    @migration_blocked
+    async def resume_download(self, rom_id):
+        return await self._download_service.resume_download(rom_id)
+
     async def get_download_queue(self):
         return self._download_service.get_download_queue()
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from domain.rom_files import (
@@ -50,20 +51,27 @@ _ZIP_TMP_EXT = ".zip.tmp"
 _TMP_EXT = ".tmp"
 
 
-class _CancelToken:
-    """Per-download cancellation flag. Set on the event-loop thread by
-    ``cancel_download``; polled on the executor worker thread by the progress
-    callback, which raises to abort the in-flight HTTP transfer (#144).
+class _DownloadControl:
+    """Per-download cooperative-control flags. Set on the event-loop thread by
+    ``cancel_download`` / ``pause_download``; polled on the executor worker
+    thread by the progress callback, which raises ``CancelledError`` to abort
+    the in-flight HTTP transfer when EITHER flag is set (#144).
 
-    A plain bool — not ``threading.Event`` — because the import-linter
+    ``cancelled`` and ``paused`` differ only in the terminal handling: a cancel
+    deletes the partial ``.tmp``; a pause keeps it so the transfer can resume
+    from where it stopped. The abort mechanism (raise to unwind the executor
+    transfer) is identical.
+
+    Plain bools — not ``threading.Event`` — because the import-linter
     ``no-stdlib-io-in-services`` contract forbids ``threading`` in services, and
     under the GIL a one-way set-once bool flip needs no synchronisation.
     """
 
-    __slots__ = ("cancelled",)
+    __slots__ = ("cancelled", "paused")
 
     def __init__(self) -> None:
         self.cancelled = False
+        self.paused = False
 
 
 @dataclass(frozen=True)
@@ -118,10 +126,11 @@ class DownloadService:
         # Reserved bytes per in-flight ROM, so the disk pre-flight accounts for
         # siblings already committed to download but not yet written to disk.
         self._reserved_bytes: dict[int, int] = {}
-        # Per-download cooperative-cancel tokens. The progress callback polls its
-        # captured token on the executor thread; ``cancel_download`` flips it on
-        # the loop thread to abort the in-flight transfer (#144).
-        self._cancel_tokens: dict[int, _CancelToken] = {}
+        # Per-download cooperative-control tokens. The progress callback polls its
+        # captured token on the executor thread; ``cancel_download`` /
+        # ``pause_download`` flip it on the loop thread to abort the in-flight
+        # transfer (#144).
+        self._control_tokens: dict[int, _DownloadControl] = {}
 
     async def shutdown(self) -> None:
         """Cancel in-flight per-ROM download tasks on plugin unload.
@@ -189,7 +198,13 @@ class DownloadService:
         return self._remove_tmp_files(paths)
 
     def cleanup_leftover_tmp_files(self):
-        """Remove leftover .tmp and .zip.tmp files from ROM and BIOS directories on startup."""
+        """Remove leftover .tmp and .zip.tmp files from ROM and BIOS directories on startup.
+
+        v1 note: this also deletes the ``.tmp`` of a download paused before a
+        plugin reload. That is acceptable — the in-memory download queue does not
+        survive a reload either, so a paused download could not have been resumed
+        across one regardless; the next download restarts from scratch.
+        """
         cleaned = self._clean_rom_tmp_files() + self._clean_bios_tmp_files()
         if cleaned:
             self._logger.info(f"Cleaned {cleaned} leftover tmp file(s)")
@@ -198,7 +213,20 @@ class DownloadService:
         rom_id = int(rom_id)
         if rom_id in self._download_in_progress:
             return {"success": False, "reason": "already_downloading", "message": "Already downloading"}
+        return await self._begin_download(rom_id, resume=False)
 
+    async def _begin_download(self, rom_id, *, resume: bool):
+        """Shared core of ``start_download`` and ``resume_download``.
+
+        Fetches ROM detail, resolves the platform path, runs the disk pre-flight,
+        then registers the queue entry, task, byte reservation, and control token.
+        On ``resume=True`` the disk pre-flight discounts the bytes already on the
+        existing ``.tmp`` (only the remainder is still needed) and ``_do_download``
+        is started with ``resume=True`` so the transfer appends rather than restarts.
+
+        The ``already_downloading`` guard stays with ``start_download``;
+        ``resume_download`` validates the paused entry before calling here.
+        """
         self._download_in_progress.add(rom_id)
         try:
             rom_detail = await self._loop.run_in_executor(None, self._romm_api.get_rom, rom_id)
@@ -252,12 +280,18 @@ class DownloadService:
                 self._logger.warning(f"Sanitized fs_name from '{file_name}' to '{safe_name}'")
                 file_name = safe_name
             file_size = rom_detail.get("fs_size_bytes", 0)
+            target_path = os.path.join(roms_dir, file_name)
 
             # Check disk space: multi-file ROMs need space for ZIP + extracted contents
             self._download_file_store.make_dirs(roms_dir)
             free_space = self._download_file_store.disk_free(roms_dir)
             buffer = 100 * 1024 * 1024
             required = file_size * 2 + buffer if is_multi_file_download(rom_detail) else file_size + buffer
+            # On resume, the partial ``.tmp`` already holds some of the bytes, so
+            # only the remainder still needs free space — discount what's on disk
+            # so a near-complete resume isn't rejected for the full size.
+            if resume:
+                required = max(required - self._partial_tmp_size(target_path, rom_detail), 0)
             # Account for siblings already reserved but not yet written to disk,
             # so two concurrent downloads can't each pass a pre-flight that only
             # one of them actually fits (#1053).
@@ -271,8 +305,6 @@ class DownloadService:
                     "reason": "insufficient_space",
                     "message": f"Not enough disk space ({free_mb}MB free, need {need_mb}MB)",
                 }
-
-            target_path = os.path.join(roms_dir, file_name)
         except Exception as e:
             self._download_in_progress.discard(rom_id)
             self._logger.error(f"Failed to prepare download for ROM {rom_id}: {e}")
@@ -280,15 +312,19 @@ class DownloadService:
 
         rom_name = rom_detail.get("name", file_name)
         platform_name = rom_detail.get("platform_name", platform_slug)
+        # Carry the prior resumability verdict across a resume so the UI keeps
+        # showing Pause before the resumed transfer's headers re-confirm it.
+        prior = self._download_queue.get(rom_id, {})
+        resumable = bool(prior.get("resumable", False))
 
-        # Create the cancel token BEFORE the task so the closure captured inside
+        # Create the control token BEFORE the task so the closure captured inside
         # ``_do_download``'s progress callback polls this exact object. A later
         # re-download installs a fresh token, leaving the zombie's callback bound
         # to the cancelled one (#144).
-        cancel_token = _CancelToken()
+        control = _DownloadControl()
         try:
             task = self._loop.create_task(
-                self._do_download(rom_id, rom_detail, target_path, system, file_name, cancel_token)
+                self._do_download(rom_id, rom_detail, target_path, system, file_name, control, resume=resume)
             )
         except Exception as e:
             self._download_in_progress.discard(rom_id)
@@ -307,14 +343,27 @@ class DownloadService:
             "progress": 0,
             "bytes_downloaded": 0,
             "total_bytes": file_size,
+            # Whether the server proved byte-range resume support for this ROM.
+            # Re-confirmed live by the ``on_meta`` callback once headers arrive.
+            "resumable": resumable,
         }
         self._download_tasks[rom_id] = task
         # Reserve this download's required bytes so a concurrent sibling's
         # pre-flight sees the outstanding claim (released in ``_do_download``'s
         # ``finally``).
         self._reserved_bytes[rom_id] = required
-        self._cancel_tokens[rom_id] = cancel_token
+        self._control_tokens[rom_id] = control
         return {"success": True, "message": "Download started"}
+
+    def _partial_tmp_size(self, target_path, rom_detail) -> int:
+        """Bytes already on disk in the partial ``.tmp`` for *target_path*.
+
+        Single-file ROMs stream to ``target_path + .tmp``; multi-file ROMs to
+        ``target_path + .zip.tmp``. Returns 0 when no partial exists (the file
+        store reports a missing path as size 0).
+        """
+        tmp_ext = _ZIP_TMP_EXT if is_multi_file_download(rom_detail) else _TMP_EXT
+        return self._download_file_store.file_size(target_path + tmp_ext)
 
     def _record_install_io(self, *, rom_id, rom_detail, file_path, rom_dir, system, cleanup):
         """Build the ``RomInstall`` aggregate and persist it in a short write UoW.
@@ -451,18 +500,20 @@ class DownloadService:
         core_so, _label = self._active_core.active_core_for_rom(int(rom_id))
         return (rom.shortcut_app_id, core_so)
 
-    def _make_progress_callback(self, rom_id, rom_name, platform_name, file_name, cancel_token=None):
+    def _make_progress_callback(self, rom_id, rom_name, platform_name, file_name, control=None):
         """Build a throttled progress callback for a download."""
-        if cancel_token is None:
-            cancel_token = _CancelToken()
+        if control is None:
+            control = _DownloadControl()
         last_emit = [0.0]  # mutable container for closure
         last_log = [0.0]
 
         def progress_callback(downloaded, total):
-            if cancel_token.cancelled:
+            if control.cancelled or control.paused:
                 # Abort the in-flight transfer thread (#144). CancelledError is a
                 # BaseException, so it propagates untouched through the adapter's
                 # Exception-only retry/translate — no retry, no error translation.
+                # Both cancel and pause unwind through here; the terminal handling
+                # in ``_do_download`` branches on which flag was set.
                 raise asyncio.CancelledError()
             now = self._clock.monotonic()
             if now - last_log[0] >= 30.0:
@@ -503,6 +554,7 @@ class DownloadService:
                             "progress": progress,
                             "bytes_downloaded": downloaded,
                             "total_bytes": total,
+                            "resumable": entry.get("resumable", False),
                         },
                     )
                 )
@@ -522,8 +574,9 @@ class DownloadService:
         uninstall → reinstall. Called from the normal success path and from the
         cancel handler when the install committed before the cancel landed (#1049).
         """
-        self._download_queue[rom_id]["status"] = "completed"
-        self._download_queue[rom_id]["progress"] = 1.0
+        entry = self._download_queue[rom_id]
+        entry["status"] = "completed"
+        entry["progress"] = 1.0
         app_id, active_core_so = await self._loop.run_in_executor(None, self._resolve_bound_app_id, rom_id)
         await self._emit(
             "download_complete",
@@ -536,6 +589,7 @@ class DownloadService:
                 "launch_options": build_launch_options(
                     resolve_emulator_invocation(rom_detail, active_core_so), final_path
                 ),
+                "resumable": entry.get("resumable", False),
             },
         )
         self._logger.info(f"Download complete: {rom_name} -> {final_path}")
@@ -561,13 +615,56 @@ class DownloadService:
             return (final_path, True)
         return (None, False)
 
-    async def _do_download(self, rom_id, rom_detail, target_path, system, file_name, cancel_token=None):
-        if cancel_token is None:
-            cancel_token = _CancelToken()
+    def _make_on_meta(self, rom_id, rom_name, platform_name, file_name):
+        """Build the one-shot resumability callback the adapter fires when the
+        download's response headers arrive (before the body streams).
+
+        It records the server's ``range_supported`` verdict on the queue entry
+        and emits a ``download_progress`` frame carrying it, so the frontend can
+        flip Pause/Cancel live DURING the transfer instead of only learning the
+        verdict at the end. Runs on the executor transfer thread, so it hops back
+        to the loop via ``call_soon_threadsafe`` like the progress callback (#973).
+        """
+
+        def on_meta(range_supported: bool) -> None:
+            def _apply() -> None:
+                entry = self._download_queue.get(rom_id)
+                if entry is None:
+                    return  # evicted mid-download — do not resurrect or emit
+                entry["resumable"] = range_supported
+                self._loop.create_task(
+                    self._emit(
+                        "download_progress",
+                        {
+                            "rom_id": rom_id,
+                            "rom_name": rom_name,
+                            "platform_name": platform_name,
+                            "file_name": file_name,
+                            "status": entry.get("status", "downloading"),
+                            "progress": entry.get("progress", 0),
+                            "bytes_downloaded": entry.get("bytes_downloaded", 0),
+                            "total_bytes": entry.get("total_bytes", 0),
+                            "resumable": range_supported,
+                        },
+                    )
+                )
+
+            self._loop.call_soon_threadsafe(_apply)
+
+        return on_meta
+
+    async def _do_download(self, rom_id, rom_detail, target_path, system, file_name, control=None, *, resume=False):
+        if control is None:
+            # Direct invocation (no ``_begin_download``): own + register a control
+            # so the ``finally``'s identity-gated cleanup releases this task's
+            # registrations like the real path does.
+            control = _DownloadControl()
+            self._control_tokens[rom_id] = control
         rom_name = rom_detail.get("name", file_name)
         platform_name = rom_detail.get("platform_name", rom_detail.get("platform_slug", ""))
         has_multiple = is_multi_file_download(rom_detail)
-        progress_callback = self._make_progress_callback(rom_id, rom_name, platform_name, file_name, cancel_token)
+        progress_callback = self._make_progress_callback(rom_id, rom_name, platform_name, file_name, control)
+        on_meta = self._make_on_meta(rom_id, rom_name, platform_name, file_name)
         # Tracks the resolved launch path once extraction returns it, so a
         # failure AFTER the ES-DE collapse rename cleans up the *renamed* dir
         # (``os.path.dirname(final_path)``) — not just the staging name.
@@ -584,7 +681,8 @@ class DownloadService:
             # semaphore is already held, surface an honest "queued" frame so the
             # UI shows the wait instead of a stalled "downloading" bar.
             if self._download_semaphore.locked():
-                self._download_queue[rom_id]["status"] = "queued"
+                entry = self._download_queue[rom_id]
+                entry["status"] = "queued"
                 await self._emit(
                     "download_progress",
                     {
@@ -596,6 +694,7 @@ class DownloadService:
                         "progress": 0,
                         "bytes_downloaded": 0,
                         "total_bytes": rom_detail.get("fs_size_bytes", 0),
+                        "resumable": entry.get("resumable", False),
                     },
                 )
 
@@ -606,7 +705,16 @@ class DownloadService:
                     # Multi-file ROM: API returns ZIP, download to temp then extract
                     tmp_zip = target_path + _ZIP_TMP_EXT
                     await self._loop.run_in_executor(
-                        None, self._romm_api.download_rom_content, rom_id, file_name, tmp_zip, progress_callback
+                        None,
+                        partial(
+                            self._romm_api.download_rom_content,
+                            rom_id,
+                            file_name,
+                            tmp_zip,
+                            progress_callback,
+                            resume=resume,
+                            on_meta=on_meta,
+                        ),
                     )
                     post_io_future = self._loop.run_in_executor(
                         None, self._post_download_multi_io, rom_id, rom_detail, target_path, file_name, system
@@ -622,7 +730,16 @@ class DownloadService:
                 else:
                     tmp_path = target_path + _TMP_EXT
                     await self._loop.run_in_executor(
-                        None, self._romm_api.download_rom_content, rom_id, file_name, tmp_path, progress_callback
+                        None,
+                        partial(
+                            self._romm_api.download_rom_content,
+                            rom_id,
+                            file_name,
+                            tmp_path,
+                            progress_callback,
+                            resume=resume,
+                            on_meta=on_meta,
+                        ),
                     )
                     post_io_future = self._loop.run_in_executor(
                         None, self._post_download_single_io, rom_id, rom_detail, target_path, system
@@ -641,14 +758,37 @@ class DownloadService:
                 await self._finalize_download_complete(rom_id, rom_detail, final_path, rom_name, platform_name)
 
         except asyncio.CancelledError:
-            # The cancel may have raced a committing install. Executor threads run
-            # to completion, so wait for the post-IO future before deciding (#1049).
+            # The cancel/pause may have raced a committing install. Executor
+            # threads run to completion, so wait for the post-IO future before
+            # deciding (#1049).
             committed_path, committed = await self._reconcile_post_io(post_io_future)
             if committed:
                 # The ROM IS installed — surface completed, don't tear it down.
                 # This also bakes launch_options for the just-committed install.
                 await self._finalize_download_complete(rom_id, rom_detail, committed_path, rom_name, platform_name)
                 self._logger.info(f"Download cancelled after install committed; surfaced as complete: {rom_name}")
+            elif control.paused:
+                # PAUSE: keep the partial ``.tmp`` so the transfer can resume from
+                # where it stopped. NOTHING is cleaned up. The entry stays "paused"
+                # in the queue (``_prune_download_queue`` only prunes terminal
+                # completed/failed/cancelled, so "paused" is retained).
+                entry = self._download_queue[rom_id]
+                entry["status"] = "paused"
+                await self._emit(
+                    "download_progress",
+                    {
+                        "rom_id": rom_id,
+                        "rom_name": rom_name,
+                        "platform_name": platform_name,
+                        "file_name": file_name,
+                        "status": "paused",
+                        "progress": entry.get("progress", 0),
+                        "bytes_downloaded": entry.get("bytes_downloaded", 0),
+                        "total_bytes": entry.get("total_bytes", 0),
+                        "resumable": entry.get("resumable", False),
+                    },
+                )
+                self._logger.info(f"Download paused: {rom_name}")
             else:
                 entry = self._download_queue[rom_id]
                 entry["status"] = "cancelled"
@@ -666,6 +806,7 @@ class DownloadService:
                         "progress": entry.get("progress", 0),
                         "bytes_downloaded": entry.get("bytes_downloaded", 0),
                         "total_bytes": entry.get("total_bytes", 0),
+                        "resumable": entry.get("resumable", False),
                     },
                 )
                 self._logger.info(f"Download cancelled: {rom_name}")
@@ -687,14 +828,18 @@ class DownloadService:
             )
 
         finally:
-            self._download_tasks.pop(rom_id, None)
-            self._download_in_progress.discard(rom_id)
-            self._reserved_bytes.pop(rom_id, None)
-            # A re-download overwrites the dict entry with a fresh token; only
-            # delete OUR registration so a zombie's finally never evicts the
-            # newer download's token (#144).
-            if self._cancel_tokens.get(rom_id) is cancel_token:
-                del self._cancel_tokens[rom_id]
+            # A re-download (or resume) can overwrite these per-download
+            # registrations with a fresh attempt's BEFORE this (older/superseded)
+            # task's finally runs. Gate ALL of them on the control-token identity
+            # so a zombie/superseded task never evicts the newer attempt's task,
+            # in-progress flag, reservation, or token (#144). The control is
+            # registered by ``_begin_download``; a direct-call test that never
+            # registered it simply skips these no-op pops.
+            if self._control_tokens.get(rom_id) is control:
+                self._download_tasks.pop(rom_id, None)
+                self._download_in_progress.discard(rom_id)
+                self._reserved_bytes.pop(rom_id, None)
+                del self._control_tokens[rom_id]
             self._prune_download_queue()
 
     def _maybe_generate_m3u_io(self, extract_dir: str, rom_detail: dict[str, Any]) -> None:
@@ -778,11 +923,44 @@ class DownloadService:
         task = self._download_tasks.get(rom_id)
         if not task:
             return {"success": False, "reason": "no_active_download", "message": "No active download for this ROM"}
-        token = self._cancel_tokens.get(rom_id)
+        token = self._control_tokens.get(rom_id)
         if token is not None:
             token.cancelled = True  # stop the executor transfer thread, not just the asyncio wrapper (#144)
         task.cancel()
         return {"success": True, "message": "Download cancelled"}
+
+    def pause_download(self, rom_id):
+        """Pause an in-flight download, keeping the partial ``.tmp`` for resume.
+
+        Mirrors ``cancel_download`` but flips ``control.paused`` instead of
+        ``cancelled`` before cancelling the task, so ``_do_download``'s terminal
+        handler routes to the pause branch (status "paused", no cleanup) rather
+        than the cancel branch (status "cancelled", ``.tmp`` deleted). Kept
+        defensive — the frontend only offers Pause when a download is resumable.
+        """
+        rom_id = int(rom_id)
+        task = self._download_tasks.get(rom_id)
+        if not task:
+            return {"success": False, "reason": "no_active_download", "message": "No active download for this ROM"}
+        token = self._control_tokens.get(rom_id)
+        if token is not None:
+            token.paused = True  # stop the executor transfer thread, keeping the .tmp (#144)
+        task.cancel()
+        return {"success": True, "message": "Download paused"}
+
+    async def resume_download(self, rom_id):
+        """Resume a previously paused download from its partial ``.tmp``.
+
+        Requires a queue entry in status "paused"; otherwise returns the
+        ``not_paused`` failure shape. Re-begins the download with ``resume=True``
+        so the transfer appends onto the existing bytes (when the server honoured
+        the original ``Range`` probe) instead of restarting.
+        """
+        rom_id = int(rom_id)
+        entry = self._download_queue.get(rom_id)
+        if entry is None or entry.get("status") != "paused":
+            return {"success": False, "reason": "not_paused", "message": "No paused download for this ROM"}
+        return await self._begin_download(rom_id, resume=True)
 
     def get_download_queue(self):
         return {"downloads": list(self._download_queue.values())}

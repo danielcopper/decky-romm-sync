@@ -155,6 +155,9 @@ class FakeSaveApi:
         filename: str,
         dest: str,
         progress_callback: Any = None,
+        *,
+        resume: bool = False,
+        on_meta: Any = None,
     ) -> None:
         raise NotImplementedError
 

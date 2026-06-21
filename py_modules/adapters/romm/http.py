@@ -261,14 +261,58 @@ class RommHttpAdapter:
         return self.with_retry(_do_request)
 
     @staticmethod
+    def _is_cloudflare(headers) -> bool:
+        """True when the response was served through a Cloudflare edge.
+
+        Cloudflare Tunnel strips ``Range`` from the request (the origin then
+        returns a plain 200) and stamps ``cf-ray`` / ``server: cloudflare`` on
+        the response, so a download routed through it can NEVER be resumed even
+        if the origin itself supports ranges. Detecting the edge lets the
+        service surface "not resumable" honestly instead of attempting a resume
+        that silently restarts from byte 0.
+        """
+        if headers.get("cf-ray"):
+            return True
+        return "cloudflare" in (headers.get("server") or "").lower()
+
+    @classmethod
+    def _range_supported(cls, status: int, headers) -> bool:
+        """Whether the live response proves byte-range resumption is available.
+
+        A ``206 Partial Content`` proves range support even without an
+        ``Accept-Ranges`` header (RomM's single-file 206 may omit it); a plain
+        ``200`` carrying ``Accept-Ranges: bytes`` advertises it. Either way a
+        Cloudflare edge vetoes resumability (it discards ``Range``), so the
+        edge check overrides both.
+        """
+        ranged = status == 206 or (headers.get("Accept-Ranges", "").lower() == "bytes")
+        return ranged and not cls._is_cloudflare(headers)
+
+    @staticmethod
     def _stream_to_file(
-        resp, dest_path: Path, progress_callback=None, block_size: int = 65536, url: str = ""
+        resp,
+        dest_path: Path,
+        progress_callback=None,
+        block_size: int = 65536,
+        url: str = "",
+        *,
+        mode: str = "wb",
+        downloaded: int = 0,
+        total: int | None = None,
     ) -> tuple[int, int]:
-        """Read *resp* into *dest_path* and return ``(total, downloaded)``."""
-        raw_total = resp.headers.get("Content-Length")
-        total = int(raw_total) if raw_total else 0
-        downloaded = 0
-        with open(dest_path, "wb") as f:
+        """Read *resp* into *dest_path* and return ``(total, downloaded)``.
+
+        ``mode`` is ``"ab"`` for a resumed transfer (append onto the existing
+        ``.tmp``) or ``"wb"`` for a fresh one. ``downloaded`` seeds the running
+        byte count with the bytes already on disk so progress + validation count
+        against the FULL file. ``total`` overrides the ``Content-Length``-derived
+        total — required on a 206, whose ``Content-Length`` is only the REMAINING
+        byte count, not the whole file (the full size comes from ``Content-Range``).
+        """
+        if total is None:
+            raw_total = resp.headers.get("Content-Length")
+            total = int(raw_total) if raw_total else 0
+        with open(dest_path, mode) as f:
             while True:
                 try:
                     chunk = resp.read(block_size)
@@ -294,24 +338,75 @@ class RommHttpAdapter:
         if total == 0 and downloaded == 0:
             raise OSError("Download produced 0 bytes (no Content-Length header and no data received)")
 
-    def download(self, path: str, dest: str, progress_callback=None):
-        """Download a file from the RomM API to a local path."""
+    @staticmethod
+    def _parse_content_range(header: str | None) -> tuple[int, int] | None:
+        """Parse ``Content-Range: bytes start-end/total`` → ``(start, total)``.
+
+        Returns ``None`` for a missing/malformed header or an unknown total
+        (``*``), so the caller falls back to a fresh transfer rather than
+        trusting a bad range.
+        """
+        if not header:
+            return None
+        try:
+            unit, _, spec = header.strip().partition(" ")
+            if unit.lower() != "bytes":
+                return None
+            range_part, _, total_part = spec.partition("/")
+            start_str, _, _end = range_part.partition("-")
+            if total_part == "*":
+                return None
+            return int(start_str), int(total_part)
+        except (ValueError, AttributeError):
+            return None
+
+    def download(self, path: str, dest: str, progress_callback=None, *, resume=False, on_meta=None):
+        """Download a file from the RomM API to a local path.
+
+        When ``resume`` is set and ``dest`` already holds a partial transfer, the
+        request carries a ``Range`` header and the server's actual response status
+        decides the branch: a ``206 Partial Content`` appends onto the existing
+        bytes; a plain ``200`` (Range ignored — Cloudflare, compression, or a
+        non-range server) restarts from scratch. ``on_meta``, when given, is
+        invoked exactly once with ``range_supported: bool`` the moment the
+        response headers arrive (before the body streams), so the caller can
+        surface resumability live during the download.
+        """
         encoded_path = urllib.parse.quote(path, safe="/:?=&@")
         url = self._settings["romm_url"].rstrip("/") + encoded_path
         dest_path = Path(dest)
         dest_path.parent.mkdir(parents=True, exist_ok=True)
+        # One-shot guard: ``on_meta`` fires once even across a ``with_retry`` retry.
+        meta_sent = [False]
 
         def _do_download():
             req = urllib.request.Request(url, method="GET")
             self._apply_default_headers(req)
+            # Re-evaluated on every retry attempt from the CURRENT .tmp size, so a
+            # retried resume picks up wherever the previous attempt left the file.
+            existing_size = dest_path.stat().st_size if (resume and dest_path.exists()) else 0
+            if existing_size > 0:
+                req.add_header("Range", f"bytes={existing_size}-")
             ctx = self.ssl_context()
             try:
                 with urllib.request.urlopen(req, context=ctx, timeout=self._CONNECT_TIMEOUT) as resp:
                     raw_sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
                     if raw_sock is not None:
                         raw_sock.settimeout(self._READ_TIMEOUT)
+                    status = getattr(resp, "status", None) or resp.getcode()
+                    if on_meta is not None and not meta_sent[0]:
+                        meta_sent[0] = True
+                        on_meta(self._range_supported(status, resp.headers))
+                    mode, seed, total = self._resume_branch(resp, status, existing_size)
                     total, downloaded = self._stream_to_file(
-                        resp, dest_path, progress_callback, block_size=self._DOWNLOAD_BLOCK_SIZE, url=url
+                        resp,
+                        dest_path,
+                        progress_callback,
+                        block_size=self._DOWNLOAD_BLOCK_SIZE,
+                        url=url,
+                        mode=mode,
+                        downloaded=seed,
+                        total=total,
                     )
                 self._validate_download(total, downloaded)
             except RommApiError:
@@ -320,6 +415,33 @@ class RommHttpAdapter:
                 raise self.translate_http_error(exc, url, "GET") from exc
 
         return self.with_retry(_do_download)
+
+    def _resume_branch(self, resp, status: int, existing_size: int) -> tuple[str, int, int]:
+        """Decide ``(open_mode, seed_bytes, total)`` from the live response.
+
+        On a ``206`` whose ``Content-Range`` start matches the bytes already on
+        disk: append (``"ab"``), seed the running count with those bytes, and use
+        the Content-Range total (the 206's ``Content-Length`` is only the
+        remainder). A 206 whose start does NOT match the local size is treated as
+        a fresh transfer (truncate + restart) — a stale ``.tmp`` must never be
+        appended onto a mismatched offset. Any other status (a plain ``200`` — the
+        server ignored ``Range``, or a non-resume download) truncates and restarts.
+        """
+        if status == 206:
+            parsed = self._parse_content_range(resp.headers.get("Content-Range"))
+            if parsed is not None and parsed[0] == existing_size and existing_size > 0:
+                return ("ab", existing_size, parsed[1])
+            if parsed is not None:
+                # A 206 whose range start we did NOT ask for (only a non-compliant
+                # server does this — a compliant one honours the Range or returns
+                # 200/416). Restart from byte 0, but validate against the FULL
+                # Content-Range total so the server's partial body fails the
+                # completeness check loudly instead of silently passing as a
+                # short/corrupt file.
+                return ("wb", 0, parsed[1])
+        # 200 (server ignored Range — safe full re-download) → restart from byte 0.
+        raw_total = resp.headers.get("Content-Length")
+        return ("wb", 0, int(raw_total) if raw_total else 0)
 
     def json_request(self, path: str, data, method: str = "POST"):
         """Send a JSON request (POST/PUT) to RomM API, return parsed response."""

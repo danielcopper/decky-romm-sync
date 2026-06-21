@@ -89,6 +89,8 @@ class FakeRommApi:
         self.list_roms_by_virtual_collection_side_effect: Exception | None = None
         self.list_roms_by_smart_collection_side_effect: Exception | None = None
         self.download_rom_content_side_effect: Exception | None = None
+        # Resumability verdict the fake reports via ``on_meta`` (server range support).
+        self.download_range_supported: bool = False
         self.download_cover_side_effect: Exception | None = None
         self.get_current_user_side_effect: Exception | None = None
         self.get_rom_with_notes_side_effect: Exception | None = None
@@ -280,13 +282,18 @@ class FakeRommApi:
         filename: str,
         dest: str,
         progress_callback: Any = None,
+        *,
+        resume: bool = False,
+        on_meta: Any = None,
     ) -> None:
         self._log(
             "download_rom_content",
             (rom_id, filename, dest),
-            {"progress_callback": progress_callback},
+            {"progress_callback": progress_callback, "resume": resume, "on_meta": on_meta},
         )
         self._check_fail(self.download_rom_content_side_effect)
+        if on_meta is not None:
+            on_meta(self.download_range_supported)
         key = f"rom:{rom_id}:{filename}"
         payload = self.download_payloads.get(key, b"")
         self._materialize_download(dest, payload)

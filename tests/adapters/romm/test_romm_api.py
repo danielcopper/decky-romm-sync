@@ -483,6 +483,21 @@ class TestDownloadRomContent:
             "/api/roms/42/content/game.zip",
             "/tmp/game.zip",
             cb,
+            resume=False,
+            on_meta=None,
+        )
+
+    def test_forwards_resume_and_on_meta(self):
+        api, client = _make_api()
+        cb = lambda current, total: None  # noqa: E731
+        meta = lambda supported: None  # noqa: E731
+        api.download_rom_content(42, "game.zip", "/tmp/game.zip", progress_callback=cb, resume=True, on_meta=meta)
+        client.download.assert_called_once_with(
+            "/api/roms/42/content/game.zip",
+            "/tmp/game.zip",
+            cb,
+            resume=True,
+            on_meta=meta,
         )
 
 
