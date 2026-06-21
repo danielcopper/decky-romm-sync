@@ -10,6 +10,7 @@ import pytest
 from conftest import _make_testable_plugin
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
@@ -112,6 +113,7 @@ def plugin(tmp_path, fake_romm_api):
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(),
             active_core=p._active_core,
+            disc_resolver=FakeDiscResolver(),
         ),
     )
 
@@ -133,6 +135,7 @@ def plugin(tmp_path, fake_romm_api):
             retrodeck_paths=FakeRetroDeckPaths(),
             get_save_layout=_default_save_layout,
             active_core=p._active_core,
+            disc_resolver=FakeDiscResolver(),
             get_core_name=_no_core_name,
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
@@ -1478,6 +1481,7 @@ class TestMigrationFailureInjection:
             "retrodeck_paths": FakeRetroDeckPaths(),
             "get_save_layout": lambda: InSaveDir(sort_by_content=False, sort_by_core=False),
             "active_core": FakeActiveCoreResolver(default=(None, None)),
+            "disc_resolver": FakeDiscResolver(),
             "get_core_name": lambda core_so: None,
             "uow_factory": FakeUnitOfWorkFactory(uow=uow),
         }

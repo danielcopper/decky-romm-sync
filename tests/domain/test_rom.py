@@ -154,3 +154,45 @@ class TestClearEmulatorOverride:
         assert rom.emulator_override is None
         rom.clear_emulator_override()
         assert rom.emulator_override is None
+
+
+class TestPinSelectedDisc:
+    def test_sets_filename(self):
+        rom = _make_rom()
+        rom.pin_selected_disc("FF7 (Disc 2).cue")
+        assert rom.selected_disc == "FF7 (Disc 2).cue"
+
+    def test_strips_surrounding_whitespace(self):
+        rom = _make_rom()
+        rom.pin_selected_disc("  FF7 (Disc 2).cue  ")
+        assert rom.selected_disc == "FF7 (Disc 2).cue"
+
+    def test_empty_filename_raises(self):
+        rom = _make_rom()
+        with pytest.raises(ValueError, match="selected_disc filename must not be empty"):
+            rom.pin_selected_disc("")
+        assert rom.selected_disc is None
+
+    def test_whitespace_only_filename_raises(self):
+        rom = _make_rom()
+        with pytest.raises(ValueError, match="selected_disc filename must not be empty"):
+            rom.pin_selected_disc("   ")
+        assert rom.selected_disc is None
+
+    def test_defaults_to_none(self):
+        rom = _make_rom()
+        assert rom.selected_disc is None
+
+
+class TestClearSelectedDisc:
+    def test_clear_after_pin_sets_none(self):
+        rom = _make_rom()
+        rom.pin_selected_disc("FF7 (Disc 2).cue")
+        rom.clear_selected_disc()
+        assert rom.selected_disc is None
+
+    def test_clear_when_already_none_stays_none(self):
+        rom = _make_rom()
+        assert rom.selected_disc is None
+        rom.clear_selected_disc()
+        assert rom.selected_disc is None

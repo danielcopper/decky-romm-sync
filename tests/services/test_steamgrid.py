@@ -7,6 +7,7 @@ import pytest
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
+from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
@@ -78,6 +79,7 @@ def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api, uow):
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
             active_core=FakeActiveCoreResolver(default=(None, None)),
+            disc_resolver=FakeDiscResolver(),
         ),
     )
 
@@ -986,6 +988,7 @@ class TestDebugLoggerProtocolSeam:
                 artwork=FakeArtworkManager(),
                 uow_factory=FakeUnitOfWorkFactory(),
                 active_core=FakeActiveCoreResolver(default=(None, None)),
+                disc_resolver=FakeDiscResolver(),
             ),
         )
 

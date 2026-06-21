@@ -96,6 +96,19 @@ class SystemM3uSupportFn(Protocol):
     def __call__(self, system_name: str) -> bool: ...
 
 
+class SystemSupportedExtensionsFn(Protocol):
+    """Return the extensions ES-DE accepts for a system (lowercased frozenset).
+
+    Backed by the same per-system ``<extension>`` list in ``es_systems.xml`` as
+    :class:`SystemM3uSupportFn`, so a service can intersect the live accept-list
+    with the disc-image set and never offer a disc the emulator cannot launch.
+    Default-safe: an empty frozenset for an unknown system or when
+    ``es_systems.xml`` cannot be found (the caller falls back to the full disc set).
+    """
+
+    def __call__(self, system_name: str) -> frozenset[str]: ...
+
+
 class PlatformCoreReader(Protocol):
     """Read seam for the plugin-owned per-platform core selection.
 

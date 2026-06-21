@@ -68,8 +68,8 @@ def _set_user_version(db_path: str, version: int) -> None:
 
 
 # Highest NNN in the shipped migrations dir (001_initial + 002_add_emulator_override
-# + 003_unique_shortcut_app_id).
-_SHIPPED_VERSION = 3
+# + 003_unique_shortcut_app_id + 004_add_selected_disc).
+_SHIPPED_VERSION = 4
 
 
 class TestEmptyDatabase:
@@ -82,7 +82,7 @@ class TestEmptyDatabase:
 
         assert final_version == _SHIPPED_VERSION
         assert _user_version(db_path) == _SHIPPED_VERSION
-        # 002 ALTERs roms, 003 adds an index — neither adds a table, so the
+        # 002/004 ALTER roms, 003 adds an index — none adds a table, so the
         # table set is unchanged from v1.
         assert _tables(db_path) == _V1_TABLES
 
@@ -115,6 +115,16 @@ class TestEmptyDatabase:
         assert _user_version(db_path) == _SHIPPED_VERSION
         assert "emulator_override" in _columns(db_path, "roms")
         assert "emulator_override" not in _columns(db_path, "rom_installs")
+
+    def test_adds_selected_disc_to_roms_only(self, tmp_path: Path):
+        # 004 ALTERs only roms; rom_installs (and every other table) is untouched.
+        db_path = str(tmp_path / "romm_sync.db")
+
+        apply_migrations(db_path)
+
+        assert _user_version(db_path) == _SHIPPED_VERSION
+        assert "selected_disc" in _columns(db_path, "roms")
+        assert "selected_disc" not in _columns(db_path, "rom_installs")
 
 
 def _insert_rom(conn: sqlite3.Connection, rom_id: int, app_id: int | None) -> None:

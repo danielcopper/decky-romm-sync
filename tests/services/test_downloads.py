@@ -10,6 +10,7 @@ import pytest
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
@@ -117,6 +118,7 @@ def plugin():
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(),
             active_core=p._active_core,
+            disc_resolver=FakeDiscResolver(),
         ),
     )
     p._download_service = DownloadService(
@@ -134,6 +136,7 @@ def plugin():
                 bios=os.path.join(os.path.expanduser("~"), "retrodeck", "bios"),
             ),
             active_core=p._active_core,
+            disc_resolver=FakeDiscResolver(),
             # Default-True so the existing M3U/launch-file tests are unaffected;
             # a test that exercises a non-m3u platform repoints this seam.
             m3u_support=lambda system_name: p._m3u_supported,

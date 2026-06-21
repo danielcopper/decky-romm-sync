@@ -1,0 +1,15 @@
+-- =============================================================================
+-- 004_add_selected_disc.sql — per-game disc selection on the Rom aggregate
+-- Issue #865 (disc picker — bake the selected disc into launch_options)
+-- =============================================================================
+--
+-- Adds a nullable disc-basename column to roms (the Rom aggregate's anchor
+-- table, so the selection survives uninstall/reinstall per ADR-0007). NULL = no
+-- selection -> the default target (the install's .m3u, else disc 1). Only
+-- pin/clear ever write it; the sync UPSERT deliberately excludes it so a re-sync
+-- never wipes a user's pick. See ADR-0014.
+--
+-- Transaction-safe DDL only — the runner (adapters/sqlite_migrations.py) wraps
+-- BEGIN/COMMIT and stamps PRAGMA user_version = 4.
+-- -----------------------------------------------------------------------------
+ALTER TABLE roms ADD COLUMN selected_disc TEXT;  -- disc basename; NULL = default (pin/clear only)

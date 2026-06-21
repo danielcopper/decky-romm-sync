@@ -34,6 +34,7 @@ if TYPE_CHECKING:
         ArtworkManager,
         Clock,
         DebugLogger,
+        DiscResolver,
         EventEmitter,
         RommLibraryApi,
         SettingsPersister,
@@ -55,7 +56,9 @@ class LibraryServiceConfig:
     metadata cache now live in ``roms`` / ``sync_runs`` / ``rom_metadata``
     via the UoW), debug-logger seam, the artwork peer service, and the
     shared per-ROM ``active_core`` resolver (used to bake each ROM's full
-    active core into ``launch_options`` at sync).
+    active core into ``launch_options`` at sync) and the shared ``disc_resolver``
+    (used to bake each multi-disc ROM's selected disc into ``launch_options`` at
+    sync).
     """
 
     romm_api: RommLibraryApi
@@ -73,6 +76,7 @@ class LibraryServiceConfig:
     artwork: ArtworkManager
     uow_factory: UnitOfWorkFactory
     active_core: ActiveCoreReader
+    disc_resolver: DiscResolver
 
 
 class LibraryService:
@@ -134,6 +138,7 @@ class LibraryService:
                 reporter=reporter_binding,
                 artwork=config.artwork,
                 active_core=config.active_core,
+                disc_resolver=config.disc_resolver,
             )
         )
 

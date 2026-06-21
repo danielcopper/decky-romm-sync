@@ -303,6 +303,73 @@ class TestResyncPreservesOverride:
         assert loaded.name == "Renamed Game"
 
 
+class TestSelectedDisc:
+    def test_round_trips_via_get(self, uow: SqliteUnitOfWork):
+        uow.roms.save(_rom(1))
+        uow.roms.set_selected_disc(1, "FF7 (Disc 2).cue")
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.selected_disc == "FF7 (Disc 2).cue"
+
+    def test_defaults_to_none_when_never_pinned(self, uow: SqliteUnitOfWork):
+        uow.roms.save(_rom(1))
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.selected_disc is None
+
+    def test_setting_none_writes_sql_null(self, uow: SqliteUnitOfWork):
+        uow.roms.save(_rom(1))
+        uow.roms.set_selected_disc(1, "FF7 (Disc 2).cue")
+        uow.roms.set_selected_disc(1, None)
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.selected_disc is None
+        # The column is SQL NULL, not an empty string.
+        assert uow._conn is not None
+        stored = uow._conn.execute("SELECT selected_disc FROM roms WHERE rom_id = 1").fetchone()[0]
+        assert stored is None
+
+
+class TestResyncPreservesSelectedDisc:
+    """A re-sync builds a fresh ``Rom`` with ``selected_disc=None``; the sync
+    UPSERT must NOT wipe a disc the user pinned via ``set_selected_disc``."""
+
+    def test_pin_survives_resync_and_identity_still_updates(self, uow: SqliteUnitOfWork):
+        rom_id = 1
+        uow.roms.save(_rom(rom_id, app_id=100))
+        uow.roms.set_selected_disc(rom_id, "FF7 (Disc 2).cue")
+
+        # A normal library re-sync: fresh Rom, no selection, changed identity.
+        resynced = _rom(rom_id, app_id=200)
+        resynced.name = "Renamed Game"
+        assert resynced.selected_disc is None
+        uow.roms.save(resynced)
+
+        loaded = uow.roms.get(rom_id)
+        assert loaded is not None
+        # (a) The pin survives the re-sync.
+        assert loaded.selected_disc == "FF7 (Disc 2).cue"
+        # (b) Identity columns still update on that save.
+        assert loaded.shortcut_app_id == 200
+        assert loaded.name == "Renamed Game"
+
+    def test_resync_preserves_both_deviations_together(self, uow: SqliteUnitOfWork):
+        """Both per-game deviations survive a re-sync independently."""
+        rom_id = 1
+        uow.roms.save(_rom(rom_id, app_id=100))
+        uow.roms.set_emulator_override(rom_id, "Beetle PSX HW")
+        uow.roms.set_selected_disc(rom_id, "FF7 (Disc 3).cue")
+
+        uow.roms.save(_rom(rom_id, app_id=200))
+
+        loaded = uow.roms.get(rom_id)
+        assert loaded is not None
+        assert loaded.emulator_override == "Beetle PSX HW"
+        assert loaded.selected_disc == "FF7 (Disc 3).cue"
+
+
 def _seed_children(uow: SqliteUnitOfWork, rom_id: int) -> None:
     """Seed a row in all five ``ON DELETE CASCADE`` children of ``roms``.
 

@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     from models.state import InstalledRomEntry, ShortcutRegistryEntry
 
+    from domain.disc_selection import Disc
+    from domain.rom_install import RomInstall
     from domain.save_layout import SaveLayout
 
 
@@ -58,6 +60,27 @@ class ActiveCoreReader(Protocol):
     """
 
     def active_core_for_rom(self, rom_id: int) -> tuple[str | None, str | None]: ...
+
+
+class DiscResolver(Protocol):
+    """Per-ROM multi-disc launch-path resolution consumed by the bake sites.
+
+    The composition root satisfies this with ``DiscLaunchResolver``. The three
+    launch-bake sites (library sync, download-complete, RetroDECK-home migration)
+    and the disc-picker callables ask "which file does this installed ROM launch
+    with, given its persisted disc pick?" and operate entirely in path space.
+    :meth:`enumerate_discs` lists the launchable discs in disc order (empty for a
+    single-file ROM); :meth:`resolve_bake_path` resolves the pin over that list;
+    :meth:`resolve_for_install` is the bake-site convenience that does both. A
+    non-multi-disc ROM resolves to its own ``file_path`` unchanged; a stale pin
+    degrades to the default with a WARNING rather than raising.
+    """
+
+    def enumerate_discs(self, install: RomInstall) -> list[Disc]: ...
+
+    def resolve_bake_path(self, install: RomInstall, discs: list[Disc], selected_disc: str | None) -> str: ...
+
+    def resolve_for_install(self, install: RomInstall, selected_disc: str | None) -> str: ...
 
 
 class AchievementsReader(Protocol):

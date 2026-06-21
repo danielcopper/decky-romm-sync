@@ -17,6 +17,7 @@ import pytest
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_testable_plugin
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
@@ -119,6 +120,7 @@ def plugin(tmp_path):
             artwork=artwork_service,
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
             active_core=p._active_core,
+            disc_resolver=FakeDiscResolver(),
         ),
     )
 

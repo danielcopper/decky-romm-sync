@@ -27,6 +27,7 @@ class Rom:
     sgdb_id: int | None = None
     ra_id: int | None = None
     emulator_override: str | None = None
+    selected_disc: str | None = None
 
     @classmethod
     def synced(
@@ -93,3 +94,21 @@ class Rom:
     def clear_emulator_override(self) -> None:
         """Drop the per-game override so the ROM follows the system default."""
         self.emulator_override = None
+
+    def pin_selected_disc(self, filename: str) -> None:
+        """Pin the multi-disc launch target to the disc named *filename*.
+
+        Stores the disc's basename (the stable selection key), not a resolved
+        path — the absolute path is re-derived live at launch-bake time, so the
+        pin survives uninstall/reinstall and RetroDECK-home migration. A blank
+        or whitespace-only *filename* is meaningless and raises ``ValueError``;
+        clear the selection with :meth:`clear_selected_disc` instead.
+        """
+        stripped = filename.strip()
+        if not stripped:
+            raise ValueError("selected_disc filename must not be empty")
+        self.selected_disc = stripped
+
+    def clear_selected_disc(self) -> None:
+        """Drop the disc pin so the ROM follows the default (m3u or disc 1)."""
+        self.selected_disc = None

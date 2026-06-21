@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from services.protocols import (
         ActiveCoreReader,
         CoreNameProviderFn,
+        DiscResolver,
         EventEmitter,
         MigrationFileStore,
         RetroArchSaveLayoutProvider,
@@ -57,9 +58,11 @@ class MigrationServiceConfig:
     dict, runtime infrastructure, persistence callbacks, event emitter,
     and the provider callables MigrationService needs at construction
     time. The shared ``active_core`` resolver re-bakes each relocated ROM's
-    full active core into ``launch_options``. Relational migration state
-    (ROM installs, BIOS records, change markers) is read through the
-    injected ``uow_factory``.
+    full active core into ``launch_options``, and the shared ``disc_resolver``
+    re-resolves each relocated multi-disc ROM's selected disc against its moved
+    install directory so the pick survives the home migration. Relational
+    migration state (ROM installs, BIOS records, change markers) is read through
+    the injected ``uow_factory``.
     """
 
     migration_file_store: MigrationFileStore
@@ -72,6 +75,7 @@ class MigrationServiceConfig:
     retrodeck_paths: RetroDeckPaths
     get_save_layout: RetroArchSaveLayoutProvider
     active_core: ActiveCoreReader
+    disc_resolver: DiscResolver
     get_core_name: CoreNameProviderFn
     uow_factory: UnitOfWorkFactory
 
@@ -90,6 +94,7 @@ class MigrationService:
         self._retrodeck_paths = config.retrodeck_paths
         self._get_save_layout = config.get_save_layout
         self._active_core = config.active_core
+        self._disc_resolver = config.disc_resolver
         self._get_core_name = config.get_core_name
         self._uow_factory = config.uow_factory
         # One-shot guard so the ContentDir "save sync unsupported" warning is
@@ -535,9 +540,12 @@ class MigrationService:
         For every ROM that is both installed (has a ``rom_installs`` row, now at
         the relocated ``file_path``) and bound (its ``Rom.shortcut_app_id`` is
         set), compose the new Steam-shortcut launch command from the relocated
-        path. Uninstalled or unbound ROMs are skipped — their shortcuts show
-        Download or carry a placeholder launch command, so there is nothing to
-        re-resolve. Reads through the UoW; no raw I/O at the service layer.
+        path. A multi-disc ROM re-resolves its selected disc against the moved
+        install directory through the shared ``disc_resolver`` (a single-disc ROM
+        resolves to its own ``file_path``, unchanged). Uninstalled or unbound ROMs
+        are skipped — their shortcuts show Download or carry a placeholder launch
+        command, so there is nothing to re-resolve. Reads through the UoW; the
+        disc scan is the resolver's I/O seam, none at the service layer.
         """
         items: list[dict[str, Any]] = []
         with self._uow_factory() as uow:
@@ -547,10 +555,11 @@ class MigrationService:
                     continue
                 core_so, _label = self._active_core.active_core_for_rom(rom.rom_id)
                 invocation = resolve_emulator_invocation({"id": rom.rom_id}, core_so)
+                bake_path = self._disc_resolver.resolve_for_install(install, rom.selected_disc)
                 items.append(
                     {
                         "app_id": rom.shortcut_app_id,
-                        "launch_options": build_launch_options(invocation, install.file_path),
+                        "launch_options": build_launch_options(invocation, bake_path),
                     }
                 )
         return items

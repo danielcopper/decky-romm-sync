@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from domain.disc_formats import DISC_IMAGE_EXTENSIONS
 from domain.rom_files import (
     build_m3u_content,
     detect_launch_file,
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
     from services.protocols import (
         ActiveCoreReader,
         Clock,
+        DiscResolver,
         DownloadFileStore,
         EventEmitter,
         RetroDeckPaths,
@@ -84,7 +86,9 @@ class DownloadServiceConfig:
     DownloadService needs at construction time. The shared ``active_core``
     resolver resolves a reinstalled ROM's full active core so
     ``download_complete`` re-bakes the ``-e`` override into ``launch_options``
-    (the per-game/per-platform selection survives uninstall → reinstall).
+    (the per-game/per-platform selection survives uninstall → reinstall), and the
+    shared ``disc_resolver`` resolves a freshly-downloaded multi-disc ROM's
+    selected disc so the same persisted pick survives uninstall → reinstall too.
     """
 
     romm_api: RommRomReader
@@ -97,6 +101,7 @@ class DownloadServiceConfig:
     sleeper: Sleeper
     retrodeck_paths: RetroDeckPaths
     active_core: ActiveCoreReader
+    disc_resolver: DiscResolver
     m3u_support: SystemM3uSupportFn
     uow_factory: UnitOfWorkFactory
 
@@ -115,6 +120,7 @@ class DownloadService:
         self._sleeper = config.sleeper
         self._retrodeck_paths = config.retrodeck_paths
         self._active_core = config.active_core
+        self._disc_resolver = config.disc_resolver
         self._m3u_support = config.m3u_support
         self._uow_factory = config.uow_factory
 
@@ -485,29 +491,41 @@ class DownloadService:
             cleanup=lambda: self._download_file_store.remove_file(target_path),
         )
 
-    def _resolve_bound_app_id(self, rom_id: int) -> tuple[int | None, str | None]:
-        """Return the ROM's ``(shortcut_app_id, active_core_so)`` for the re-bake.
+    def _resolve_bound_app_id(self, rom_id: int, file_path: str) -> tuple[int | None, str | None, str]:
+        """Return the ROM's ``(shortcut_app_id, active_core_so, bake_path)`` for the re-bake.
 
-        Reads the ROM's Steam ``app_id`` in a short read UoW, then resolves the
-        ROM's FULL active core through the shared ``active_core`` resolver so
-        ``download_complete`` re-bakes the right launch command. ``app_id`` is
-        ``None`` when the ROM has no Steam shortcut yet (not synced) — the
-        frontend no-ops and the next sync writes the launch command.
-        ``active_core_so`` is the resolved ``.so`` when the ROM's
+        Reads the ROM + its fresh install record in a short read UoW, then
+        resolves the ROM's FULL active core through the shared ``active_core``
+        resolver and the multi-disc launch path through the shared
+        ``disc_resolver`` so ``download_complete`` re-bakes the right launch
+        command. ``app_id`` is ``None`` when the ROM has no Steam shortcut yet
+        (not synced) — the frontend no-ops and the next sync writes the launch
+        command. ``active_core_so`` is the resolved ``.so`` when the ROM's
         per-game/per-platform/system resolution yields a core (bake the ``-e``
         form), ``None`` when it resolves to ``(None, None)`` — a genuinely
-        unresolvable platform (bake the plain launch). The resolver already warns
-        + degrades on a stale label, so no bogus ``None.so`` ever reaches the
-        bake. This is the load-bearing site: the per-game override lives on
-        ``roms`` so it survives uninstall → reinstall, and reinstall goes through
-        here.
+        unresolvable platform (bake the plain launch). ``bake_path`` is the
+        selected disc's path for a multi-disc ROM (the persisted pick survives
+        uninstall → reinstall, just like the core override), or *file_path*
+        unchanged for a single-disc ROM. The resolver already warns + degrades on
+        a stale label/pin, so no bogus ``None.so`` or missing-disc path ever
+        reaches the bake. This is the load-bearing site: the per-game override and
+        the disc pin both live on ``roms`` so they survive uninstall → reinstall,
+        and reinstall goes through here.
         """
         with self._uow_factory() as uow:
             rom = uow.roms.get(int(rom_id))
+            install = uow.rom_installs.get(int(rom_id))
+            selected_disc = rom.selected_disc if rom is not None else None
         if rom is None:
-            return (None, None)
+            return (None, None, file_path)
         core_so, _label = self._active_core.active_core_for_rom(int(rom_id))
-        return (rom.shortcut_app_id, core_so)
+        # The install record was committed just before this read, so it is
+        # present in the normal flow; guard for the rare race where it is not and
+        # fall back to the raw download path (no multi-disc resolution possible).
+        bake_path = (
+            self._disc_resolver.resolve_for_install(install, selected_disc) if install is not None else file_path
+        )
+        return (rom.shortcut_app_id, core_so, bake_path)
 
     def _make_progress_callback(self, rom_id, rom_name, platform_name, file_name, control=None):
         """Build a throttled progress callback for a download."""
@@ -678,16 +696,19 @@ class DownloadService:
 
         Resolves the bound Steam ``shortcut_app_id`` for this rom_id (or ``None``
         when the ROM hasn't been synced yet) plus the ROM's full active core
-        (resolved ``.so`` or ``None``) so the frontend confirm-sets launch options
-        on the exact shortcut without a full-library scan to re-resolve
-        rom_id→app_id, and the re-bake keeps the per-game/per-platform core across
-        uninstall → reinstall. Called from the normal success path and from the
-        cancel handler when the install committed before the cancel landed (#1049).
+        (resolved ``.so`` or ``None``) and the multi-disc launch path so the
+        frontend confirm-sets launch options on the exact shortcut without a
+        full-library scan to re-resolve rom_id→app_id, and the re-bake keeps the
+        per-game/per-platform core AND the selected disc across uninstall →
+        reinstall. Called from the normal success path and from the cancel handler
+        when the install committed before the cancel landed (#1049).
         """
         entry = self._download_queue[rom_id]
         entry["status"] = "completed"
         entry["progress"] = 1.0
-        app_id, active_core_so = await self._loop.run_in_executor(None, self._resolve_bound_app_id, rom_id)
+        app_id, active_core_so, bake_path = await self._loop.run_in_executor(
+            None, self._resolve_bound_app_id, rom_id, final_path
+        )
         await self._emit(
             "download_complete",
             {
@@ -697,7 +718,7 @@ class DownloadService:
                 "file_path": final_path,
                 "app_id": app_id,
                 "launch_options": build_launch_options(
-                    resolve_emulator_invocation(rom_detail, active_core_so), final_path
+                    resolve_emulator_invocation(rom_detail, active_core_so), bake_path
                 ),
                 "resumable": entry.get("resumable", False),
             },
@@ -970,11 +991,10 @@ class DownloadService:
         if any(path.lower().endswith(".m3u") for path, _size in all_files):
             return
 
-        # Collect disc files: .cue, .chd, .iso (search recursively)
+        # Collect disc files (the DISC_IMAGE_EXTENSIONS set; search recursively).
+        disc_suffixes = tuple(DISC_IMAGE_EXTENSIONS)
         disc_files = [
-            os.path.relpath(path, extract_dir)
-            for path, _size in all_files
-            if path.lower().endswith((".cue", ".chd", ".iso"))
+            os.path.relpath(path, extract_dir) for path, _size in all_files if path.lower().endswith(disc_suffixes)
         ]
 
         if not needs_m3u(disc_files, m3u_supported):

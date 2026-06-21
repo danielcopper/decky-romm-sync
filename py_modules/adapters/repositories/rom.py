@@ -13,10 +13,11 @@ if TYPE_CHECKING:
 
 # The sync-owned columns: written by the library re-sync UPSERT. Driving
 # SELECT/INSERT/VALUES/SET from this ONE tuple keeps them in lockstep so a
-# subset omission is impossible (R10). emulator_override is deliberately NOT
-# here — it is a per-game deviation, not synced identity: it is read in SELECT
-# but written only via set_emulator_override(), never by save(), so a re-sync
-# (which builds a fresh Rom with emulator_override=None) cannot wipe a user's pin.
+# subset omission is impossible (R10). emulator_override and selected_disc are
+# deliberately NOT here — they are per-game deviations, not synced identity:
+# each is read in SELECT but written only via its own set_*() method, never by
+# save(), so a re-sync (which builds a fresh Rom with both = None) cannot wipe a
+# user's pin.
 _SYNC_COLUMNS = (
     "rom_id",
     "platform_slug",
@@ -30,8 +31,8 @@ _SYNC_COLUMNS = (
     "ra_id",
 )
 
-# Read set: the synced columns plus the pin-only emulator_override.
-_SELECT_COLUMNS = ", ".join((*_SYNC_COLUMNS, "emulator_override"))
+# Read set: the synced columns plus the pin-only emulator_override and selected_disc.
+_SELECT_COLUMNS = ", ".join((*_SYNC_COLUMNS, "emulator_override", "selected_disc"))
 _INSERT_COLUMNS = ", ".join(_SYNC_COLUMNS)
 _INSERT_PLACEHOLDERS = ", ".join("?" for _ in _SYNC_COLUMNS)
 # Every sync column except the rom_id primary key is overwritten on conflict.
@@ -51,6 +52,7 @@ def _row_to_rom(row: sqlite3.Row) -> Rom:
         sgdb_id=row["sgdb_id"],
         ra_id=row["ra_id"],
         emulator_override=row["emulator_override"],
+        selected_disc=row["selected_disc"],
     )
 
 
@@ -94,11 +96,12 @@ class SqliteRomRepository(BaseRepository):
         # ON DELETE CASCADE on the per-ROM child tables, silently wiping install,
         # playtime, and save-sync baselines on every re-sync (#887).
         #
-        # emulator_override is intentionally absent from both the INSERT column
-        # list and the ON CONFLICT SET clause: a re-sync builds a fresh Rom with
-        # emulator_override=None, and writing it here would wipe a user's pin on
-        # every sync. save() owns only the synced-identity columns; the override
-        # defaults NULL on first insert and is preserved on re-sync (Q1/R10).
+        # emulator_override and selected_disc are intentionally absent from both
+        # the INSERT column list and the ON CONFLICT SET clause: a re-sync builds
+        # a fresh Rom with both = None, and writing either here would wipe a
+        # user's pin on every sync. save() owns only the synced-identity columns;
+        # each deviation defaults NULL on first insert and is preserved on
+        # re-sync (Q1/R10).
         self._conn.execute(
             f"INSERT INTO roms ({_INSERT_COLUMNS}) VALUES ({_INSERT_PLACEHOLDERS}) "
             f"ON CONFLICT(rom_id) DO UPDATE SET {_UPDATE_ASSIGNMENTS}",
@@ -136,6 +139,19 @@ class SqliteRomRepository(BaseRepository):
         """
         cursor = self._conn.execute("SELECT rom_id, emulator_override FROM roms WHERE emulator_override IS NOT NULL")
         return {row["rom_id"]: row["emulator_override"] for row in cursor}
+
+    def set_selected_disc(self, rom_id: int, filename: str | None) -> None:
+        """Write (or clear) the per-game disc selection for ``rom_id``.
+
+        ``filename`` is the disc basename to pin, or ``None`` to store SQL NULL
+        (follow the default — the install's ``.m3u`` else disc 1). This is the
+        only write path for the column — the sync UPSERT in :meth:`save` never
+        touches it.
+        """
+        self._conn.execute(
+            "UPDATE roms SET selected_disc = ? WHERE rom_id = ?",
+            (filename, rom_id),
+        )
 
     def delete(self, rom_id: int) -> None:
         self._conn.execute("DELETE FROM roms WHERE rom_id = ?", (rom_id,))

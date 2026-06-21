@@ -47,6 +47,7 @@ if TYPE_CHECKING:
         ActiveCoreReader,
         ArtworkManager,
         Clock,
+        DiscResolver,
         EventEmitter,
         Sleeper,
         UnitOfWorkFactory,
@@ -87,7 +88,9 @@ class SyncOrchestratorConfig:
     plugs the reader in via ``set()`` once the reporter is built. The
     shared ``active_core`` resolver bakes each ROM's full active core (the
     per-game/per-platform deviation folded over the es_systems default)
-    into ``launch_options`` at sync time.
+    into ``launch_options`` at sync time, and the shared ``disc_resolver`` bakes
+    each multi-disc ROM's selected disc (the persisted ``selected_disc`` pin) into
+    the installed-launch path at sync time.
     """
 
     settings: dict[str, Any]
@@ -104,6 +107,7 @@ class SyncOrchestratorConfig:
     reporter: LateBinding[SyncReporter]
     artwork: ArtworkManager
     active_core: ActiveCoreReader
+    disc_resolver: DiscResolver
 
 
 class SyncOrchestrator:
@@ -124,6 +128,7 @@ class SyncOrchestrator:
         self._artwork = config.artwork
         self._reporter = config.reporter
         self._active_core = config.active_core
+        self._disc_resolver = config.disc_resolver
 
     # ── Sync control ─────────────────────────────────────────────
 
@@ -893,32 +898,45 @@ class SyncOrchestrator:
         return resolved
 
     def _scan_installed_paths(self) -> dict[int, str]:
-        """Read ``{rom_id: file_path}`` for the whole installed library in one scan.
+        """Read ``{rom_id: bake_path}`` for the whole installed library in one scan.
 
         Used by the preview path, which already operates over every ROM in the
         library — a single ``iter_all()`` is the cheapest way to cover them all.
-        Only ROMs with a current install record appear in the map; ROMs not
-        downloaded are absent, so :func:`build_shortcuts_data` emits an empty
-        placeholder launch command for them.
+        Each path is the disc-resolved launch path: a multi-disc ROM resolves its
+        persisted ``selected_disc`` pin against its install directory (a
+        single-disc ROM resolves to its own ``file_path``, unchanged). Only ROMs
+        with a current install record appear in the map; ROMs not downloaded are
+        absent, so :func:`build_shortcuts_data` emits an empty placeholder launch
+        command for them.
         """
         with self._uow_factory() as uow:
-            return {install.rom_id: install.file_path for install in uow.rom_installs.iter_all()}
+            paths: dict[int, str] = {}
+            for install in uow.rom_installs.iter_all():
+                rom = uow.roms.get(install.rom_id)
+                selected_disc = rom.selected_disc if rom is not None else None
+                paths[install.rom_id] = self._disc_resolver.resolve_for_install(install, selected_disc)
+            return paths
 
     def _read_installed_paths(self, rom_ids: set[int]) -> dict[int, str]:
-        """Read ``{rom_id: file_path}`` for *rom_ids* via targeted point-lookups.
+        """Read ``{rom_id: bake_path}`` for *rom_ids* via targeted point-lookups.
 
         Used by the per-unit apply path: scanning the whole ``rom_installs``
         table once per unit is O(units * all-installs) (#797), so this resolves
-        only the unit's ROMs via ``get(rom_id)``. ROMs with no install record
-        are absent, so :func:`build_shortcuts_data` emits an empty placeholder
-        launch command for them.
+        only the unit's ROMs via ``get(rom_id)``. Each path is the disc-resolved
+        launch path — a multi-disc ROM resolves its persisted ``selected_disc``
+        pin against its install directory (a single-disc ROM resolves to its own
+        ``file_path``, unchanged). ROMs with no install record are absent, so
+        :func:`build_shortcuts_data` emits an empty placeholder launch command for
+        them.
         """
         with self._uow_factory() as uow:
             paths: dict[int, str] = {}
             for rom_id in rom_ids:
                 install = uow.rom_installs.get(rom_id)
                 if install is not None:
-                    paths[rom_id] = install.file_path
+                    rom = uow.roms.get(rom_id)
+                    selected_disc = rom.selected_disc if rom is not None else None
+                    paths[rom_id] = self._disc_resolver.resolve_for_install(install, selected_disc)
             return paths
 
     def _scan_stale_roms(self, synced_rom_ids: set[int], synced_app_ids: set[int]) -> list[tuple[int, int]]:

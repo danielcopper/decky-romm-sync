@@ -9,9 +9,11 @@ from typing import Any
 import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 
+from domain.disc_selection import Disc
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from services.cores import CoreService, CoreServiceConfig
@@ -56,6 +58,7 @@ def _seed_rom(
     platform_slug: str = "snes",
     shortcut_app_id: int | None = None,
     emulator_override: str | None = None,
+    selected_disc: str | None = None,
 ) -> None:
     uow.roms.save(
         Rom(
@@ -66,16 +69,24 @@ def _seed_rom(
             shortcut_app_id=shortcut_app_id,
             last_synced_at="2026-01-01T00:00:00+00:00",
             emulator_override=emulator_override,
+            selected_disc=selected_disc,
         )
     )
 
 
-def _seed_install(uow: FakeUnitOfWork, *, rom_id: int, file_path: str, platform_slug: str = "snes") -> None:
+def _seed_install(
+    uow: FakeUnitOfWork,
+    *,
+    rom_id: int,
+    file_path: str,
+    platform_slug: str = "snes",
+    rom_dir: str | None = None,
+) -> None:
     uow.rom_installs.save(
         RomInstall(
             rom_id=rom_id,
             file_path=file_path,
-            rom_dir=None,
+            rom_dir=rom_dir,
             platform_slug=platform_slug,
             system=platform_slug,
             installed_at="2026-01-01T00:00:00+00:00",
@@ -148,6 +159,11 @@ def active_core() -> FakeActiveCoreResolver:
 
 
 @pytest.fixture
+def disc_resolver() -> FakeDiscResolver:
+    return FakeDiscResolver()
+
+
+@pytest.fixture
 def service(
     event_loop,
     logger,
@@ -158,6 +174,7 @@ def service(
     bios_checker,
     uow_factory,
     active_core,
+    disc_resolver,
 ) -> CoreService:
     return CoreService(
         config=CoreServiceConfig(
@@ -170,6 +187,7 @@ def service(
             bios_checker=bios_checker,
             uow_factory=uow_factory,
             active_core=active_core,
+            disc_resolver=disc_resolver,
         ),
     )
 
@@ -553,3 +571,90 @@ class TestSetSystemCoreFanOut:
         result = event_loop.run_until_complete(service.set_system_core("snes", "bsnes"))
         assert result["success"] is True
         assert result["rebake_items"] == []
+
+
+# ── disc-pin preservation across core changes (#865 HIGH) ──────────────
+
+
+_DISC_DIR = "/roms/psx/sonic"
+_DISC1 = "Sonic (Disc 1).cue"
+_DISC2 = "Sonic (Disc 2).cue"
+
+
+def _multi_disc_list() -> list[Disc]:
+    return [
+        Disc(filename=_DISC1, path=f"{_DISC_DIR}/{_DISC1}", label="Disc 1", index=1),
+        Disc(filename=_DISC2, path=f"{_DISC_DIR}/{_DISC2}", label="Disc 2", index=2),
+    ]
+
+
+class TestCoreChangePreservesPinnedDisc:
+    """A core change must re-bake the PINNED disc, never revert to disc 1 (#865).
+
+    Every launch-bake site folds the ROM's persisted ``selected_disc`` over the
+    install. Before the fix these cores.py sites baked the raw ``file_path``, so
+    changing a per-game or per-platform core silently re-baked the shortcut back
+    to disc 1 / the m3u, dropping the user's pinned disc.
+    """
+
+    def test_set_game_core_rebakes_pinned_disc(self, event_loop, service, uow, disc_resolver):
+        # A multi-disc PSX ROM pinned to disc 2: pinning a per-game core must
+        # re-bake launch_options at DISC 2, not disc 1.
+        disc_resolver.set_discs(_DISC_DIR, _multi_disc_list())
+        _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99, selected_disc=_DISC2)
+        _seed_install(uow, rom_id=42, file_path=f"{_DISC_DIR}/{_DISC1}", rom_dir=_DISC_DIR)
+        result = event_loop.run_until_complete(service.set_game_core(42, "bsnes"))
+        assert result["success"] is True
+        assert result["app_id"] == 99
+        assert f'"{_DISC_DIR}/{_DISC2}"' in result["launch_options"]
+        assert _DISC1 not in result["launch_options"]
+        # The disc seam was queried with the pin.
+        assert (_DISC_DIR, _DISC2) in disc_resolver.calls
+
+    def test_clear_game_core_rebakes_pinned_disc(self, event_loop, service, uow, active_core, disc_resolver):
+        # Clearing the per-game core (Follow default) must STILL re-bake the
+        # pinned disc 2 — clearing the CORE pin does not clear the DISC pin.
+        disc_resolver.set_discs(_DISC_DIR, _multi_disc_list())
+        _seed_rom(
+            uow,
+            rom_id=42,
+            platform_slug="snes",
+            shortcut_app_id=99,
+            emulator_override="bsnes",
+            selected_disc=_DISC2,
+        )
+        _seed_install(uow, rom_id=42, file_path=f"{_DISC_DIR}/{_DISC1}", rom_dir=_DISC_DIR)
+        active_core.per_rom[42] = ("snes9x_libretro", "Snes9x")
+        result = event_loop.run_until_complete(service.clear_game_core(42))
+        assert result["success"] is True
+        assert result["app_id"] == 99
+        assert f'"{_DISC_DIR}/{_DISC2}"' in result["launch_options"]
+        assert _DISC1 not in result["launch_options"]
+        # The DISC pin survives a core clear.
+        assert uow.roms.get(42).selected_disc == _DISC2
+
+    def test_set_system_core_fan_out_rebakes_pinned_disc(self, event_loop, service, uow, active_core, disc_resolver):
+        # The per-platform fan-out must re-bake each installed+bound ROM at its
+        # OWN pinned disc, not disc 1.
+        disc_resolver.set_discs(_DISC_DIR, _multi_disc_list())
+        _seed_rom(uow, rom_id=1, platform_slug="snes", shortcut_app_id=101, selected_disc=_DISC2)
+        _seed_install(uow, rom_id=1, file_path=f"{_DISC_DIR}/{_DISC1}", rom_dir=_DISC_DIR)
+        active_core.per_rom[1] = ("bsnes_libretro", "bsnes")
+        result = event_loop.run_until_complete(service.set_system_core("snes", "bsnes"))
+        items = {item["app_id"]: item["launch_options"] for item in result["rebake_items"]}
+        assert f'"{_DISC_DIR}/{_DISC2}"' in items[101]
+        assert _DISC1 not in items[101]
+        assert (_DISC_DIR, _DISC2) in disc_resolver.calls
+
+    def test_set_game_core_single_disc_unchanged(self, event_loop, service, uow, disc_resolver):
+        # A non-multi-disc ROM resolves to its own file_path — byte-identical to
+        # the pre-fix behavior (the resolver returns file_path for < 2 discs).
+        _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99)
+        _seed_install(uow, rom_id=42, file_path="/roms/snes/mario.sfc")
+        result = event_loop.run_until_complete(service.set_game_core(42, "bsnes"))
+        assert result["success"] is True
+        assert result["launch_options"] == (
+            "flatpak run net.retrodeck.retrodeck -e "
+            '"%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/bsnes_libretro.so %ROM%" '
+            '"/roms/snes/mario.sfc"'
+        )

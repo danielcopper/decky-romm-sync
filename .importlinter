@@ -119,6 +119,8 @@ modules =
     services.artwork
     services.connection
     services.cores
+    services.disc
+    services.disc_launch_resolver
     services.downloads
     services.firmware
     services.game_detail

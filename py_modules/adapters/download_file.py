@@ -177,6 +177,18 @@ class DownloadFileAdapter:
                 out.append((path, size))
         return out
 
+    def list_files(self, directory: str) -> list[str]:
+        """Recursively return the absolute path of every file under *directory*.
+
+        Satisfies the ``DirectoryFileListerFn`` Protocol — the disc resolver
+        needs only which files are present, not their sizes. Idempotent on a
+        missing directory: ``os.walk`` yields nothing, so the result is ``[]``.
+        """
+        out: list[str] = []
+        for root, _dirs, files in os.walk(directory):
+            out.extend(os.path.join(root, f) for f in files)
+        return out
+
     def write_text_atomic(self, path: str, content: str) -> None:
         """Atomically write *content* to *path* as UTF-8 text.
 

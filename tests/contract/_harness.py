@@ -77,6 +77,7 @@ _BOUND_SERVICE_ATTRS = {
     "_shortcut_removal_service": "shortcut_removal_service",
     "_settings_service": "settings_service",
     "_core_service": "core_service",
+    "_disc_service": "disc_service",
     "_connection_service": "connection_service",
     "_startup_healing_service": "startup_healing_service",
     "_launch_gate_service": "launch_gate_service",

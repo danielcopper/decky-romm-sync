@@ -273,6 +273,53 @@ export const clearGameCore = callable<[number], GameCoreApplyResult>("clear_game
 // core reflects the per-game DB override when one is pinned, else the platform
 // default.
 export const getPlatformCoreInfo = callable<[number], CoreInfo>("get_platform_core_info");
+
+/** One launchable disc image within a multi-disc ROM's install directory. */
+export interface Disc {
+  filename: string;
+  label: string;
+  index: number;
+}
+
+/**
+ * Disc-picker state for a ROM (#865). `multi_disc` is `false` when the ROM is
+ * unknown, not installed, single-file, or has fewer than two discs — the picker
+ * renders nothing. When `true` the remaining fields are present: `discs` in disc
+ * order, `selected` the persisted `roms.selected_disc` (null when following the
+ * default), and `default` describing the NULL-selection target (the `.m3u`
+ * playlist, or disc 1).
+ */
+export interface DiscSelection {
+  multi_disc: boolean;
+  discs?: Disc[];
+  selected?: string | null;
+  default?: { kind: "m3u" | "disc"; label: string; filename: string };
+}
+
+/**
+ * Result of pinning / clearing a disc selection. On success the backend persists
+ * the pick (or NULL when clearing back to the default) and re-bakes the
+ * `launch_options` for the now-selected disc — the frontend confirm-sets it via
+ * `setLaunchOptionsConfirmed`. `selected` echoes the now-effective pin (null when
+ * cleared). A failure carries the canonical `{success: false, reason, message}`
+ * shape (`not_found` for an unknown filename, `not_installed` / `unsupported`
+ * when the ROM is not a multi-disc install).
+ */
+export interface SelectDiscResult {
+  success: boolean;
+  launch_options?: string;
+  selected?: string | null;
+  reason?: string;
+  message?: string;
+}
+
+// Per-game disc pick (#865). Keyed by rom_id — the DB pin survives
+// uninstall/reinstall (roms.selected_disc). select_disc(rom_id, filename) pins a
+// disc by basename; select_disc(rom_id, null) clears the pin (follow the default
+// — the m3u playlist or disc 1).
+export const getDiscSelection = callable<[number], DiscSelection>("get_disc_selection");
+export const selectDisc = callable<[number, string | null], SelectDiscResult>("select_disc");
+
 export const saveLogLevel = callable<[string], { success: boolean }>("save_log_level");
 export const debugLog = callable<[string], void>("debug_log");
 const frontendLog = callable<[string, string], void>("frontend_log");

@@ -119,6 +119,7 @@ class Plugin:
         self._shortcut_removal_service = services["shortcut_removal_service"]
         self._settings_service = services["settings_service"]
         self._core_service = services["core_service"]
+        self._disc_service = services["disc_service"]
         self._connection_service = services["connection_service"]
         self._startup_healing_service = services["startup_healing_service"]
         self._launch_gate_service = services["launch_gate_service"]
@@ -225,6 +226,15 @@ class Plugin:
 
     async def get_platform_core_info(self, rom_id):
         return await self._core_service.get_available_cores(rom_id)
+
+    # ── Disc picker delegation to DiscService ──────────────
+
+    async def get_disc_selection(self, rom_id):
+        return await self._disc_service.get_disc_selection(rom_id)
+
+    @migration_blocked
+    async def select_disc(self, rom_id, filename):
+        return await self._disc_service.select_disc(rom_id, filename)
 
     # ── Firmware delegation to FirmwareService ──────────────
 

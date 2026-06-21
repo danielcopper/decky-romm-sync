@@ -154,6 +154,36 @@ Three distinct notions in core selection, kept separate because they have differ
   resolver answers it for both the launch and every read consumer (BIOS requirement, save path, game-detail badge), so
   the launched core never diverges from what those reads assume.
 
+### Disc
+
+The launchable unit of a multi-disc ROM: a single-disc **container** file the emulator opens directly — a `.cue`, a
+`.chd`, or an `.iso` (`DISC_IMAGE_EXTENSIONS`, `domain/disc_formats.py`). A disc is **not** its `.bin` sidecar (raw
+track data a `.cue` references, never launched directly) and **not** the `.m3u` playlist (which points at several
+discs). When a bin/cue PS1 game ships both files, the disc is the `.cue`, never the `.bin`. The foil to **disc-image
+format** (the file-shape category) and **selected disc** (the user's per-game pick among the discs).
+
+### Disc-image format
+
+The format-semantic, emulator-independent category "this file shape is a launchable disc image" — the hardcoded set
+`{.cue, .chd, .iso}` (`DISC_IMAGE_EXTENSIONS`). It answers _is this a disc image?_, which es_systems cannot: es_systems
+is a flat per-system accept-list with no per-token role metadata, so it can say a system _accepts_ `.cue` but never that
+`.cue` is a disc while `.bin` is its sidecar. The set is intersected with the system's **live** es_systems accept-list
+at enumeration time, so the hardcoded knowledge supplies disc _identity_ and es_systems supplies per-system _capability_
+— two different questions with two different owners
+([ADR-0014](docs/adr/0014-per-game-disc-selection-in-db-applied-as-bake-time-launch-path-override.md)).
+
+### Selected disc
+
+A user's per-game pick of **which disc launches** for a multi-disc ROM, stored as the disc's **basename** on
+`roms.selected_disc` (nullable). It mirrors the per-game **emulator override** exactly: NULL means "follow the default"
+(the install's `.m3u` when `file_path` is one, else the first enumerated disc), only `pin_selected_disc` /
+`clear_selected_disc` write it, it is **excluded from the sync UPSERT** so a re-sync never resets it, and it anchors on
+`roms` so it survives uninstall/reinstall and home migration. Applied as a **bake-time launch-path override** — it
+changes only the path baked into the shortcut's `launch_options`, never `RomInstall.file_path`, structurally identical
+to how the override changes the invocation without touching `file_path`
+([ADR-0014](docs/adr/0014-per-game-disc-selection-in-db-applied-as-bake-time-launch-path-override.md)). A stale pin (the
+disc no longer present) degrades to the default with a WARNING, never fatal.
+
 ### Save-sync slot
 
 A named channel for a ROM's saves (e.g. `default`). The active slot for a ROM is recorded on its `RomSaveState`;

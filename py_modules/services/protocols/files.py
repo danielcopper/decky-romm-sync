@@ -18,6 +18,20 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+class DirectoryFileListerFn(Protocol):
+    """Recursively list the absolute paths of every file under a directory.
+
+    The narrow read seam the disc resolver needs to enumerate a multi-file
+    ROM's install directory: it cares only about which files are present, not
+    their sizes. Returns absolute paths; idempotent on a missing directory
+    (returns ``[]``). Backed by the same recursive walk the download file store
+    uses, exposed as a call-shaped Protocol so the resolver never depends on the
+    whole ``DownloadFileStore`` surface.
+    """
+
+    def __call__(self, directory: str) -> list[str]: ...
+
+
 class CoverArtFileStore(Protocol):
     """Filesystem seam for cover-art file operations.
 

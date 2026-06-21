@@ -9,6 +9,7 @@ import pytest
 from conftest import _make_retry, _make_testable_plugin
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
@@ -70,6 +71,7 @@ def plugin(tmp_path):
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
             active_core=FakeActiveCoreResolver(default=(None, None)),
+            disc_resolver=FakeDiscResolver(),
         ),
     )
     decky.DECKY_USER_HOME = str(tmp_path)

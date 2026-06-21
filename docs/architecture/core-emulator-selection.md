@@ -164,6 +164,109 @@ to protect. Each site bakes `-e` for every ROM that resolves to a concrete core,
 resolver returns `(None, None)`. A stale LABEL is handled inside the resolver (warn + degrade), so no bake site ever
 emits `None.so`.
 
+## Multi-disc selection
+
+A multi-disc game (a PS1 RPG across four CDs, say) installs as a folder of disc images. The same bake that carries the
+core also carries **which disc launches** — a second per-game deviation that follows the core override's structure point
+for point. The decision record is
+[ADR-0014](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0014-per-game-disc-selection-in-db-applied-as-bake-time-launch-path-override.md);
+the user-facing guide is
+[Picking a Disc for Multi-Disc Games](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/user-guide/managing-games.md#picking-a-disc-for-multi-disc-games).
+
+### Storage: the disc pick is a basename on the `Rom` aggregate
+
+`roms.selected_disc` is a nullable `TEXT` column added by migration `004_add_selected_disc.sql`. It holds the
+**basename** of the disc the user pinned (e.g. `"Final Fantasy VII (USA) (Disc 2).cue"`), never a resolved absolute path
+and never a disc index.
+
+- **`NULL` = no selection** → the ROM follows the **default**: the install's `.m3u` when `file_path` is one (the
+  in-emulator disc-swap default), else the first enumerated disc.
+- It anchors on `roms`, not `rom_installs`, so the pick **survives uninstall/reinstall and RetroDECK-home migration**
+  (per
+  [ADR-0007](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0007-rom-retention-identity-anchor.md))
+  — the disc folder is gone while uninstalled, but the basename re-resolves the moment it returns.
+- Mutations go through the verb-named aggregate methods `Rom.pin_selected_disc(filename)` (rejects a blank filename) and
+  `Rom.clear_selected_disc()`. Only `pin`/`clear` ever write the column (`SqliteRomRepository.set_selected_disc`); it is
+  **excluded from the sync UPSERT `SET` clause** — the same `_SYNC_COLUMNS` tuple that omits `emulator_override` omits
+  `selected_disc` — so a re-sync never wipes the pick.
+
+The plugin stores the **basename** because the absolute path changes across uninstall/reinstall and home migration (a
+stored path would go stale) and a positional index would silently re-point if a disc file were added, removed, or
+renamed. The basename re-resolves to the same disc whenever it is present and cleanly registers as **stale** (→ default
+
+- WARNING) when it is not.
+
+### Disc identity vs the live accept-list
+
+Enumerating a ROM's discs needs two different facts kept separate:
+
+- **Disc identity is format-semantic and hardcoded** — `domain/disc_formats.py` defines
+  `DISC_IMAGE_EXTENSIONS = {.cue, .chd, .iso}`, the irreducible set of launchable disc-image containers. A `.bin` is a
+  **sidecar** (owned by its `.cue`, never launched directly) and an `.m3u` is a **playlist**; both are excluded simply
+  by not being in the set. The disc unit is the `.cue`/`.chd`/`.iso` itself, never the `.bin`.
+- **The per-system accept-list is a capability and read live** — `CoreResolver.get_supported_extensions(system)`
+  (`adapters/es_de_config.py`) returns the system's es_systems `<extension>` set, threaded into the resolver through the
+  `SystemSupportedExtensionsFn` Protocol, exactly as `system_supports_m3u` is read for the `.m3u` gate
+  ([ADR-0013](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0013-platform-gated-m3u-via-es-systems.md)).
+
+Enumeration keeps the files whose extension is in **the intersection** of the two, so a disc the emulator cannot launch
+on this system is never offered. es_systems alone cannot supply disc identity — it is a flat accept-list with no
+per-token role metadata, so it lists `.cue`, `.bin`, and `.m3u` identically and cannot say which is the disc. When
+es_systems is unavailable, enumeration falls back to the full disc set rather than intersecting to nothing.
+
+### The read seam: `DiscLaunchResolver`
+
+`DiscLaunchResolver` (`py_modules/services/disc_launch_resolver.py`) is the single place that answers "which file will
+this multi-disc ROM actually launch with?", mirroring `ActiveCoreResolver`. It scans the install directory recursively
+(the file-lister Protocol), reads the live accept-list, enumerates the discs (`domain/disc_selection.enumerate_discs`),
+and resolves the persisted `selected_disc` over them (`domain/disc_selection.resolve_launch_path`):
+
+```text
+resolve_for_install(install, selected_disc):
+  discs = enumerate_discs(scan(install.rom_dir), supported_extensions(install.system))
+  if len(discs) < 2:                    ── not multi-disc → file_path unchanged
+      return install.file_path
+  if selected_disc names a disc:        ── valid pin
+      return that disc's path
+  # NULL, or a stale pin (warn + degrade):
+  return install.file_path if it ends .m3u else discs[0].path   ── the default
+```
+
+A **non-multi-disc ROM resolves to its own `file_path`** — zero behavior change for the overwhelming majority of games.
+A **stale pin** (the selected disc no longer present) degrades to the default with a WARNING, never fatal, exactly like
+`ActiveCoreResolver`'s stale-label handling. Crucially, the resolver **never rewrites `file_path`**: it returns the path
+to bake, and `file_path`-derived values (save path, core, displayed filename) stay stable — the same bake-time
+path-override layering the `-e` core override uses.
+
+### The same three bake sites — disc path composes with the core
+
+The three sites that re-bake the core override re-bake the disc path through this seam, and the two compose: the disc
+resolver yields the **path**, `ActiveCoreResolver` yields the **core `.so`**, and
+`resolve_emulator_invocation(rom,
+core_so)` + `build_launch_options(invocation, disc_path)` fold them into one command —
+a per-game core and a pinned disc on the same shortcut coexist.
+
+| Bake site                                                              | How it resolves the disc path                                                             |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `SyncOrchestrator` (`_scan_installed_paths` / `_read_installed_paths`) | each installed ROM through `resolve_for_install` → `{rom_id: bake_path}` for the bake     |
+| `DownloadService._resolve_bound_app_id`                                | the freshly-installed ROM through `resolve_for_install` → re-applies the pin on reinstall |
+| `MigrationService._build_relaunch_items`                               | each relocated ROM through `resolve_for_install` against the moved install directory      |
+
+### The picker callables
+
+Two service methods on `DiscService` (`py_modules/services/disc.py`) drive the inline `DiscSelector` dropdown on the
+game detail page:
+
+- **`get_disc_selection(rom_id)`** reports `{multi_disc: false}` for an unknown, not-installed, single-file, or
+  fewer-than-two-disc ROM (the frontend renders no picker), else `{multi_disc: true, discs: [...], selected, default}`.
+  Read-only over the local filesystem; the no-picker answers are normal responses, not failures.
+- **`select_disc(rom_id, filename)`** pins a disc (or clears to the default with `filename = null`). An unknown filename
+  is a hard `not_found` failure and **nothing is written**; a non-multi-disc ROM is `unsupported`; a not-installed ROM
+  is `not_installed` — all in the canonical `{success: false, reason, message}` shape. On success it persists the pick
+  via the pin-only `set_selected_disc` write path, bakes the new disc path **folded over the ROM's full active core**,
+  and returns the fresh `launch_options` + the now-effective `selected` for the frontend to confirm-set on the live
+  shortcut. So the picker's selection and the baked launch command cannot diverge.
+
 ## Set, clear, and the confirm-before-toast flow
 
 ### Per-game (`CoreService`)
@@ -272,5 +375,6 @@ is not built until a second emulator is concrete.
 - [Config Source Parsers](config-source-parsers.md) — one-parser-per-source principle; how `es_systems.xml` and
   `core_defaults.json` are read (the gamelist is no longer read)
 - [Steam Non-Steam Shortcuts](steam-non-steam-shortcuts.md) — AddShortcut API, `launch_options`, app-id derivation
-- [Database Design](database-design.md) — the `Rom` aggregate and the `roms` table
+- [Database Design](database-design.md) — the `Rom` aggregate and the `roms` table (incl. `selected_disc`)
 - [BIOS and Emulator Cores](../user-guide/bios-management.md) — the user-facing core-selection guide
+- [Managing Games](../user-guide/managing-games.md#picking-a-disc-for-multi-disc-games) — the user-facing disc picker

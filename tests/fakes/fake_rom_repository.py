@@ -67,6 +67,11 @@ class FakeRomRepository:
             rom_id: rom.emulator_override for rom_id, rom in self._roms.items() if rom.emulator_override is not None
         }
 
+    def set_selected_disc(self, rom_id: int, filename: str | None) -> None:
+        rom = self._roms.get(rom_id)
+        if rom is not None:
+            rom.selected_disc = filename
+
     def _snapshot(self) -> dict[int, Rom]:
         return copy.deepcopy(self._roms)
 

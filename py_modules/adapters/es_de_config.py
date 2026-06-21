@@ -168,6 +168,21 @@ class CoreResolver:
             return False
         return ".m3u" in system_info.get("extensions", set())
 
+    def get_supported_extensions(self, system_name: str) -> frozenset[str]:
+        """Return the extensions ES-DE accepts for *system_name* (lowercased).
+
+        Reads the same per-system ``<extension>`` list in ``es_systems.xml`` ES-DE
+        consults, so a caller can intersect it with the disc-image set and never
+        offer a disc the emulator cannot launch. Returns an empty frozenset for an
+        unknown system or when ``es_systems.xml`` cannot be found (default-safe:
+        the caller falls back to the full disc set).
+        """
+        es_systems = self._load_es_systems()
+        system_info = es_systems.get(system_name)
+        if not system_info:
+            return frozenset()
+        return frozenset(system_info.get("extensions", set()))
+
     # -- helpers -------------------------------------------------------------
 
     def find_es_systems_xml(self) -> str | None:

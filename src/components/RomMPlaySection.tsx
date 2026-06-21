@@ -25,6 +25,7 @@ import {
 import { basicAppDetailsSectionStylerClasses } from "../utils/deckyUiInternals";
 import { FaGamepad, FaCog, FaMicrochip, FaExclamationTriangle } from "react-icons/fa";
 import { CustomPlayButton } from "./CustomPlayButton";
+import { DiscSelector } from "./DiscSelector";
 import { WarningCard } from "./WarningCard";
 import { SgdbGamePickerModalContent } from "./SgdbGamePickerModal";
 import { applyArtwork } from "../utils/artwork";
@@ -1159,6 +1160,8 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     },
     // Play button on the left
     createElement(CustomPlayButton, { appId }),
+    // Disc picker for multi-disc ROMs — renders nothing otherwise (#865)
+    createElement(DiscSelector, { appId }),
     // Info items row
     createElement(
       "div",

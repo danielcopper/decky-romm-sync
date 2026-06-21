@@ -86,6 +86,14 @@ class RomRepository(Protocol):
         """Return ``rom_id`` -> pinned core label for every ROM with an override (NULL rows omitted)."""
         ...
 
+    def set_selected_disc(self, rom_id: int, filename: str | None) -> None:
+        """Pin (or clear with ``None``) the per-game disc selection for *rom_id*.
+
+        The only write path for ``selected_disc``; the sync upsert in
+        :meth:`save` never touches it, so a re-sync preserves the pick.
+        """
+        ...
+
 
 class RomInstallRepository(Protocol):
     """Persistence seam for the ``RomInstall`` aggregate (installed-ROM file records)."""

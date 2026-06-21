@@ -52,6 +52,8 @@ from services.active_core_resolver import ActiveCoreResolver, ActiveCoreResolver
 from services.artwork import ArtworkService, ArtworkServiceConfig
 from services.connection import ConnectionService, ConnectionServiceConfig
 from services.cores import CoreService, CoreServiceConfig
+from services.disc import DiscService, DiscServiceConfig
+from services.disc_launch_resolver import DiscLaunchResolver, DiscLaunchResolverConfig
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.game_detail import GameDetailService, GameDetailServiceConfig
@@ -79,6 +81,7 @@ if TYPE_CHECKING:
         CoreNameProviderFn,
         CoverArtFileStore,
         DebugLogger,
+        DirectoryFileListerFn,
         DownloadFileStore,
         EventEmitter,
         FirmwareFileStore,
@@ -98,6 +101,7 @@ if TYPE_CHECKING:
         Sleeper,
         SteamConfigStore,
         SystemM3uSupportFn,
+        SystemSupportedExtensionsFn,
         UnitOfWorkFactory,
         UuidGen,
     )
@@ -158,6 +162,8 @@ class CallbackBundle:
     get_core_name: CoreNameProviderFn
     platform_core_reader: PlatformCoreReader
     m3u_support: SystemM3uSupportFn
+    system_extensions: SystemSupportedExtensionsFn
+    list_rom_dir_files: DirectoryFileListerFn
     settings_persister: SettingsPersister
     log_debug: DebugLogger
     plugin_metadata: PluginMetadataReader
@@ -369,6 +375,8 @@ def bootstrap(
         get_core_name=retroarch_core_info.get_corename,
         platform_core_reader=platform_core_reader,
         m3u_support=core_resolver.system_supports_m3u,
+        system_extensions=core_resolver.get_supported_extensions,
+        list_rom_dir_files=download_file_store.list_files,
         settings_persister=settings_persister,
         log_debug=debug_logger,
         plugin_metadata=plugin_metadata,
@@ -427,6 +435,19 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    # The single read-path disc resolver (#865): folds the per-game
+    # selected_disc pick over the live disc-image enumeration of an installed
+    # ROM's directory. Built alongside active_core_resolver (no service deps) so
+    # every launch-bake site and the picker callables draw the bake path from the
+    # SAME seam and the baked launch_options never diverge from the selection.
+    disc_launch_resolver = DiscLaunchResolver(
+        config=DiscLaunchResolverConfig(
+            list_files=cfg.callbacks.list_rom_dir_files,
+            system_extensions=cfg.callbacks.system_extensions,
+            logger=cfg.runtime.logger,
+        ),
+    )
+
     # MigrationService is constructed before SaveService so that
     # save_sync_service can receive a bound reference to
     # ``migration_service.detect_save_sort_change``. SaveService must observe
@@ -443,6 +464,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             get_save_layout=cfg.callbacks.get_save_layout,
             active_core=active_core_resolver,
+            disc_resolver=disc_launch_resolver,
             get_core_name=cfg.callbacks.get_core_name,
             uow_factory=cfg.callbacks.uow_factory,
         ),
@@ -537,6 +559,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             artwork=artwork_service,
             uow_factory=cfg.callbacks.uow_factory,
             active_core=active_core_resolver,
+            disc_resolver=disc_launch_resolver,
         ),
     )
     pending_sync_binding.set(lambda: sync_service.pending_sync)
@@ -553,6 +576,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             sleeper=cfg.runtime.sleeper,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             active_core=active_core_resolver,
+            disc_resolver=disc_launch_resolver,
             m3u_support=cfg.callbacks.m3u_support,
             uow_factory=cfg.callbacks.uow_factory,
         ),
@@ -648,6 +672,17 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             bios_checker=firmware_service,
             uow_factory=cfg.callbacks.uow_factory,
             active_core=active_core_resolver,
+            disc_resolver=disc_launch_resolver,
+        ),
+    )
+
+    disc_service = DiscService(
+        config=DiscServiceConfig(
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+            uow_factory=cfg.callbacks.uow_factory,
+            disc_resolver=disc_launch_resolver,
+            active_core=active_core_resolver,
         ),
     )
 
@@ -707,6 +742,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         "shortcut_removal_service": shortcut_removal_service,
         "settings_service": settings_service,
         "core_service": core_service,
+        "disc_service": disc_service,
         "connection_service": connection_service,
         "startup_healing_service": startup_healing_service,
         "launch_gate_service": launch_gate_service,

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
+from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_path_exists_reader import FakePathExistsReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_settings_persister import FakeSettingsPersister
@@ -67,6 +68,7 @@ def plugin():
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(),
             active_core=FakeActiveCoreResolver(default=(None, None)),
+            disc_resolver=FakeDiscResolver(),
         ),
     )
 
@@ -735,6 +737,8 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_cached_game_detail",
     "get_available_cores",
     "get_platform_core_info",
+    # Read-only disc-picker state query (the pin-write select_disc IS decorated).
+    "get_disc_selection",
     "get_platforms",
     "get_collections",
     "sync_heartbeat",
@@ -933,6 +937,7 @@ class TestMainStartupOrdering:
             "shortcut_removal_service": MagicMock(),
             "settings_service": MagicMock(),
             "core_service": MagicMock(),
+            "disc_service": MagicMock(),
             "connection_service": connection_service,
             "startup_healing_service": startup_healing_service,
             "launch_gate_service": MagicMock(),
@@ -964,6 +969,8 @@ class TestMainStartupOrdering:
                 get_core_name=MagicMock(),
                 platform_core_reader=MagicMock(),
                 m3u_support=MagicMock(),
+                system_extensions=MagicMock(),
+                list_rom_dir_files=MagicMock(),
                 settings_persister=MagicMock(),
                 log_debug=MagicMock(),
                 plugin_metadata=MagicMock(),

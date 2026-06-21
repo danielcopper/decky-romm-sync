@@ -521,6 +521,63 @@ class TestSystemSupportsM3u:
         assert parsed["switch"]["extensions"] == {".nsp", ".xci"}
 
 
+class TestGetSupportedExtensions:
+    """``get_supported_extensions`` returns ES-DE's per-system ``<extension>`` set."""
+
+    def test_known_system_returns_lowercased_frozenset(self, resolver):
+        path = _write_temp_xml(EXTENSION_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                result = resolver.get_supported_extensions("psx")
+        finally:
+            os.unlink(path)
+        assert result == frozenset({".cue", ".chd", ".m3u"})
+        assert isinstance(result, frozenset)
+
+    def test_other_known_system_returns_its_own_set(self, resolver):
+        path = _write_temp_xml(EXTENSION_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                result = resolver.get_supported_extensions("switch")
+        finally:
+            os.unlink(path)
+        assert result == frozenset({".nsp", ".xci"})
+
+    def test_unknown_system_returns_empty_frozenset(self, resolver):
+        path = _write_temp_xml(EXTENSION_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                result = resolver.get_supported_extensions("totally_unknown")
+        finally:
+            os.unlink(path)
+        assert result == frozenset()
+
+    def test_empty_when_es_systems_absent(self, resolver):
+        """es_systems.xml cannot be found → empty (caller falls back to full disc set)."""
+        with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=None):
+            assert resolver.get_supported_extensions("psx") == frozenset()
+
+    def test_extensions_are_lowercased_case_insensitively(self, resolver):
+        """A mixed/uppercase ``<extension>`` list is returned lowercased."""
+        xml = """\
+<?xml version="1.0"?>
+<systemList>
+  <system>
+    <name>segacd</name>
+    <extension>.CUE .CHD .M3U</extension>
+    <command label="GX">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/genesis_plus_gx_libretro.so %ROM%</command>
+  </system>
+</systemList>
+"""
+        path = _write_temp_xml(xml)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                result = resolver.get_supported_extensions("segacd")
+        finally:
+            os.unlink(path)
+        assert result == frozenset({".cue", ".chd", ".m3u"})
+
+
 class TestMtimeInvalidation:
     """Caches invalidate when underlying files change on disk."""
 

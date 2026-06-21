@@ -8,6 +8,7 @@ import pytest
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
 from conftest import _make_retry, _make_testable_plugin
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
+from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
@@ -69,6 +70,7 @@ def plugin(tmp_path):
             artwork=FakeArtworkManager(),
             uow_factory=FakeUnitOfWorkFactory(),
             active_core=FakeActiveCoreResolver(default=(None, None)),
+            disc_resolver=FakeDiscResolver(),
         ),
     )
     decky.DECKY_USER_HOME = str(tmp_path)
@@ -526,6 +528,7 @@ class TestPostExitSync:
                 retrodeck_paths=FakeRetroDeckPaths(),
                 get_save_layout=lambda: InSaveDir(sort_by_content=False, sort_by_core=False),
                 active_core=FakeActiveCoreResolver(default=(None, None)),
+                disc_resolver=FakeDiscResolver(),
                 get_core_name=lambda core_so: None,
                 uow_factory=plugin._uow_factory,
             ),

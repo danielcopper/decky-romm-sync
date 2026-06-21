@@ -28,6 +28,7 @@ from services.protocols.cross_service import (
     ArtworkManager,
     ArtworkRemover,
     BiosChecker,
+    DiscResolver,
     LaunchGateInstalledChecker,
     LaunchGateRomLookup,
     LaunchGateSaveStatusReader,
@@ -42,6 +43,7 @@ from services.protocols.cross_service import (
 from services.protocols.determinism import Clock, Sleeper, UuidGen
 from services.protocols.files import (
     CoverArtFileStore,
+    DirectoryFileListerFn,
     DownloadFileStore,
     FirmwareFileStore,
     MigrationFileStore,
@@ -69,6 +71,7 @@ from services.protocols.paths import (
     RetroDeckPaths,
     SystemM3uSupportFn,
     SystemResolver,
+    SystemSupportedExtensionsFn,
 )
 from services.protocols.persistence import (
     PluginMetadataReader,
@@ -117,6 +120,8 @@ __all__ = [
     "CoreResolverFn",
     "CoverArtFileStore",
     "DebugLogger",
+    "DirectoryFileListerFn",
+    "DiscResolver",
     "DownloadFileStore",
     "DownloadQueueCleanup",
     "EventEmitter",
@@ -172,6 +177,7 @@ __all__ = [
     "SyncRunRepository",
     "SystemM3uSupportFn",
     "SystemResolver",
+    "SystemSupportedExtensionsFn",
     "UnitOfWork",
     "UnitOfWorkFactory",
     "UuidGen",

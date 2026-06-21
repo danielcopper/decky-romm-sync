@@ -87,6 +87,59 @@ no playlist either way.
     loose files — or, on cartridge systems, as a stray `.m3u`. The fix only affects new downloads; re-download the game
     to get the single clean ES-DE entry.
 
+## Picking a Disc for Multi-Disc Games
+
+When an installed game has more than one disc, a small **disc dropdown** appears on the game detail page, right next to
+the **Play** button. Its face shows the disc that will launch (a 💿 with the disc's label), so it doubles as a badge —
+single-disc games show no dropdown at all.
+
+To pick a disc:
+
+1. Open the game's detail page in the Steam Library.
+2. Tap the **💿 disc dropdown** next to Play.
+3. Choose the disc (or "All discs" — see below). The Play button now launches that disc.
+
+That's the whole flow — there's no separate save step. The next time Steam launches the game, it launches the disc you
+picked.
+
+### What "All discs" means
+
+On the **disc-swapping consoles** (PS1, Saturn, Sega CD, PC Engine CD, Dreamcast, GameCube, Wii, and the like) a
+multi-disc game gets a generated `.m3u` playlist, so the dropdown's default entry is **All discs (m3u)** — it launches
+through the playlist and lets you flip between discs **inside the emulator**, no relaunch needed. You can still pick a
+single disc from the same dropdown to jump straight to it.
+
+On systems with **no playlist concept**, there's no in-emulator disc switching, so the dropdown defaults to **Disc 1**
+and switching discs means picking a different disc here and relaunching. Either way, the picker works the same.
+
+The dropdown only ever lists discs your emulator can actually launch — it reads ES-DE's own per-system file-type list,
+so you'll never be offered a disc image the emulator can't open.
+
+### Your pick sticks
+
+The selected disc is **saved**, and it survives the things that would otherwise reset it:
+
+- **A library re-sync** never changes your pick.
+- **Uninstalling and re-downloading** the game restores it — the choice is remembered against the game, not the
+  downloaded files, so a reinstall re-applies it automatically.
+- A **RetroDECK path migration** (moving your RetroDECK home) keeps it too.
+
+If the specific disc you pinned ever goes missing (for example a partial re-download), the game quietly falls back to
+the default disc rather than failing to launch.
+
+### Where it applies
+
+The disc you pick applies to **the Steam shortcut this plugin created for the game**, whenever Steam launches it — in
+**game mode** (the couch UI) or **desktop mode**. It does **not** touch any custom non-plugin shortcut you set up
+yourself (for example a hand-made Xenia or standalone-emulator shortcut) — those carry their own launch command, which
+the plugin doesn't manage.
+
+!!! note "RetroDECK is the supported launcher"
+
+    The disc picker launches through RetroDECK, the supported launcher today. PS1 and the other `.m3u` disc-swapping
+    systems are fully covered; systems that need an external standalone emulator to run at all are a separate roadmap
+    item.
+
 ## Uninstalling ROMs
 
 To remove a downloaded ROM file:
@@ -147,6 +200,7 @@ shortcut when the game is synced or downloaded, so launching just runs that comm
 2. RetroDECK auto-detects the system from the ROM's directory path and uses the appropriate emulator
 3. If you picked a [per-game core](bios-management.md#per-game-game-detail-page), the chosen core is baked into the
    command and used directly
+4. For a multi-disc game, the [disc you picked](#picking-a-disc-for-multi-disc-games) is the one that launches
 
 If the ROM is not downloaded, pressing Play won't launch a game — download it first from the game's detail panel; the
 shortcut's command is filled in automatically when the download completes.

@@ -39,6 +39,7 @@ from adapters.steam_config import SteamConfigAdapter
 from domain.save_layout import InSaveDir
 from services.achievements import AchievementsService
 from services.cores import CoreService
+from services.disc import DiscService
 from services.downloads import DownloadService
 from services.firmware import FirmwareService
 from services.library import LibraryService
@@ -261,6 +262,8 @@ class TestWireServices:
             "get_core_name": MagicMock(return_value="Snes9x"),
             "platform_core_reader": FakePlatformCoreReader(),
             "m3u_support": MagicMock(return_value=True),
+            "system_extensions": MagicMock(return_value=frozenset()),
+            "list_rom_dir_files": MagicMock(return_value=[]),
             "settings_persister": MagicMock(),
             "core_info_provider": FakeCoreInfoProvider(),
             "log_debug": MagicMock(),
@@ -308,6 +311,8 @@ class TestWireServices:
                 get_core_name=deps["get_core_name"],
                 platform_core_reader=deps["platform_core_reader"],
                 m3u_support=deps["m3u_support"],
+                system_extensions=deps["system_extensions"],
+                list_rom_dir_files=deps["list_rom_dir_files"],
                 settings_persister=deps["settings_persister"],
                 log_debug=deps["log_debug"],
                 plugin_metadata=deps["plugin_metadata"],
@@ -341,13 +346,15 @@ class TestWireServices:
     def test_returns_expected_services(self, tmp_path):
         deps = self._make_deps(tmp_path)
         result = wire_services(self._make_config(deps))
-        assert len(result) == 19
+        assert len(result) == 20
         assert "migration_service" in result
         assert "game_detail_service" in result
         assert "rom_removal_service" in result
         assert "settings_service" in result
         assert "core_service" in result
         assert isinstance(result["core_service"], CoreService)
+        assert "disc_service" in result
+        assert isinstance(result["disc_service"], DiscService)
         assert "connection_service" in result
         assert "startup_healing_service" in result
         assert "launch_gate_service" in result
