@@ -483,6 +483,35 @@ export function hideNativePlaySection(playSectionClass: string) {
 }
 .romm-gear-btn:active {
   filter: brightness(0.9);
+}
+.romm-disc-btn {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 7px !important;
+  width: auto !important;
+  min-width: 0 !important;
+  height: 48px !important;
+  padding: 0 12px !important;
+  border-radius: 2px !important;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.06) !important;
+  cursor: pointer;
+  transition: background 0.15s ease, filter 0.15s ease;
+  flex-shrink: 0;
+  line-height: normal !important;
+}
+.romm-disc-btn:hover {
+  background: rgba(255,255,255,0.14);
+  filter: brightness(1.2);
+}
+.romm-disc-btn.gpfocus {
+  background: rgba(255,255,255,0.14) !important;
+  filter: brightness(1.3);
+  border-color: rgba(255,255,255,0.5) !important;
+}
+.romm-disc-btn:active {
+  filter: brightness(0.9);
 }`;
     sp.window.document.head.appendChild(gearStyle);
   }
