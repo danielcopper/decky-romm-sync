@@ -148,13 +148,18 @@ class LaunchGateSaveStatusReader(Protocol):
     """Save-status surface consumed by LaunchGateService.
 
     The composition root satisfies this with ``SaveService``. The gate
-    calls ``get_save_status`` for the canonical conflict signal (a
-    non-empty ``conflicts`` array blocks the launch) and falls back to
-    the synchronous ``has_tracked_save`` in-memory check to decide
+    first consults ``is_save_sync_enabled`` — when the feature toggle is
+    off there is no conflict state to gate on, so the gate allows the
+    launch and skips the ``get_save_status`` round-trip entirely. With
+    save-sync on, it calls ``get_save_status`` for the canonical conflict
+    signal (a non-empty ``conflicts`` array blocks the launch) and falls
+    back to the synchronous ``has_tracked_save`` in-memory check to decide
     whether a ``get_save_status`` failure should be soft-warned (ROM has
     tracked saves — silent allow would risk data loss) or silently
     allowed (no tracked saves — nothing to corrupt).
     """
+
+    def is_save_sync_enabled(self) -> bool: ...
 
     async def get_save_status(self, rom_id: int) -> dict[str, Any]: ...
 

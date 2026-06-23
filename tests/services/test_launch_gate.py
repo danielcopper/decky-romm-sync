@@ -56,12 +56,17 @@ class FakeSaveStatusReader:
         payload: dict[str, Any] | None = None,
         side_effect: BaseException | None = None,
         tracked_rom_ids: set[int] | None = None,
+        save_sync_enabled: bool = True,
     ) -> None:
         self.payload: dict[str, Any] = payload if payload is not None else {"conflicts": []}
         self.side_effect = side_effect
         self.tracked_rom_ids: set[int] = tracked_rom_ids if tracked_rom_ids is not None else set()
+        self.save_sync_enabled = save_sync_enabled
         self.calls: list[int] = []
         self.tracked_calls: list[int] = []
+
+    def is_save_sync_enabled(self) -> bool:
+        return self.save_sync_enabled
 
     async def get_save_status(self, rom_id: int) -> dict[str, Any]:
         self.calls.append(rom_id)
@@ -319,3 +324,52 @@ class TestEvaluateEdgeCases:
         verdict = event_loop.run_until_complete(service.evaluate(42))
 
         assert verdict == LaunchVerdict(action="allow")
+
+
+class TestEvaluateSaveSyncDisabled:
+    def test_disabled_installed_allows_and_skips_status_round_trip(self, event_loop, logger):
+        """Save-sync off + installed → allow, even with a server-side conflict, and ``get_save_status`` is never called.
+
+        Regression for #1056: a stale conflict (another device moved the save
+        while sync was disabled) must not block the launch, and the gate must
+        not perform a RomM round-trip on every direct launch while the feature
+        is off.
+        """
+        rom_lookup = FakeRomLookup(mapping={42: {"rom_id": 99, "name": "Game"}})
+        installed_checker = FakeInstalledChecker(installed={99: _installed_rom(99)})
+        save_status_reader = FakeSaveStatusReader(
+            payload={"conflicts": [{"type": "sync_conflict", "rom_id": 99, "filename": "game.srm"}]},
+            save_sync_enabled=False,
+        )
+        service = _make_service(
+            rom_lookup=rom_lookup,
+            installed_checker=installed_checker,
+            save_status_reader=save_status_reader,
+            logger=logger,
+        )
+
+        verdict = event_loop.run_until_complete(service.evaluate(42))
+
+        assert verdict == LaunchVerdict(action="allow")
+        assert installed_checker.calls == [99]
+        # The conflict round-trip must be skipped entirely while save-sync is off.
+        assert save_status_reader.calls == []
+        assert save_status_reader.tracked_calls == []
+
+    def test_disabled_still_blocks_not_installed(self, event_loop, logger):
+        """The save-sync-disabled allow is gated behind the not-installed check — uninstalled still blocks."""
+        rom_lookup = FakeRomLookup(mapping={42: {"rom_id": 99}})
+        installed_checker = FakeInstalledChecker(installed={})  # not installed
+        save_status_reader = FakeSaveStatusReader(save_sync_enabled=False)
+        service = _make_service(
+            rom_lookup=rom_lookup,
+            installed_checker=installed_checker,
+            save_status_reader=save_status_reader,
+            logger=logger,
+        )
+
+        verdict = event_loop.run_until_complete(service.evaluate(42))
+
+        assert verdict.action == "block"
+        assert verdict.reason == "not_installed"
+        assert save_status_reader.calls == []

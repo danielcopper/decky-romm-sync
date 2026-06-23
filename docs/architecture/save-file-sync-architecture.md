@@ -1097,9 +1097,12 @@ names and constraints.
 
 The save-sync feature toggles (`save_sync_enabled`, `sync_before_launch`, `sync_after_exit`, `default_slot`,
 `autocleanup_limit`) and the device label (`device_name`) live in `settings.json` (ADR-0003), not in this aggregate.
-`save_sync_enabled` is the master feature toggle; `sync_before_launch` / `sync_after_exit` gate the automatic pre-launch
-/ post-exit syncs; `default_slot` is the slot new games adopt (`"default"`); `autocleanup_limit` caps retained save
-versions per slot on the server (10).
+`save_sync_enabled` is the master feature toggle — when it is off, the universal launch gate
+(`LaunchGateService.evaluate`) skips the save-status round-trip and never blocks a launch on a save conflict, so a stale
+server-side conflict (e.g. another device moved the save) can't render a game unplayable while the feature is disabled
+and its SAVES tab is hidden. `sync_before_launch` / `sync_after_exit` gate the automatic pre-launch / post-exit syncs;
+`default_slot` is the slot new games adopt (`"default"`); `autocleanup_limit` caps retained save versions per slot on
+the server (10).
 
 Conflicts are no longer persisted. They are returned ephemerally from `_sync_rom_saves` and `_get_save_status_io` and
 surfaced via the modal at the moment of the sync. If the user dismisses the modal (Cancel), the conflict re-fires on the

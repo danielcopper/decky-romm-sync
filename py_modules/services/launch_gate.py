@@ -38,8 +38,9 @@ class LaunchVerdict:
     """Outcome of a pre-launch evaluation for a single Steam app id.
 
     ``action="allow"`` means the launch may proceed (the ROM is either
-    not a RomM ROM, is installed with no save conflict, or the save
-    status check failed for a ROM with no tracked saves). ``action="warn"``
+    not a RomM ROM, is installed with save-sync disabled, is installed
+    with no save conflict, or the save status check failed for a ROM
+    with no tracked saves). ``action="warn"``
     means the launch may proceed but the frontend should surface a
     soft toast — used when ``get_save_status`` failed for a ROM that
     *does* have tracked saves, where silent allow would risk data loss
@@ -108,6 +109,7 @@ class LaunchGateService:
         -------
         LaunchVerdict
             ``allow`` when the app is not a RomM ROM, when the ROM is
+            installed but save-sync is disabled, when the ROM is
             installed with no save conflict, or when the save-status
             read failed for a ROM with no tracked saves. ``warn`` with
             ``reason="save_status_failed"`` when the save-status read
@@ -131,6 +133,15 @@ class LaunchGateService:
                 toast_title=_TOAST_TITLE_NOT_INSTALLED,
                 toast_body=_TOAST_BODY_NOT_INSTALLED,
             )
+
+        # Save-sync off → there is no conflict state to gate on. Allow the
+        # launch and skip the get_save_status round-trip entirely. Otherwise a
+        # stale server-side conflict (e.g. another device moved the save while
+        # sync was disabled) would block every launch with no way to resolve
+        # it — the Saves tab is hidden while the feature is off — leaving the
+        # game permanently unplayable.
+        if not self._save_status_reader.is_save_sync_enabled():
+            return LaunchVerdict(action="allow")
 
         try:
             save_status = await self._save_status_reader.get_save_status(rom_id)
