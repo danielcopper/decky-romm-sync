@@ -9,7 +9,6 @@ overrides:
   minimatch@>=3.0.0 <3.1.4: 3.1.4
   rollup@>=4.0.0 <4.59.0: 4.59.0
   picomatch@>=4.0.0 <4.0.4: '>=4.0.4'
-  vite: 8.0.16
   js-yaml@>=4.0.0 <4.2.0: 4.2.0
   markdown-it@>=14.0.0 <14.2.0: 14.2.0
   '@babel/core@>=7.0.0 <7.29.6': 7.29.6
@@ -103,6 +102,9 @@ importers:
       typescript-eslint:
         specifier: ^8.61.1
         version: 8.62.0(eslint@9.39.4)(typescript@6.0.3)
+      vite:
+        specifier: ^8.0.16
+        version: 8.0.16(@types/node@26.0.0)
       vitest:
         specifier: ^4.1.9
         version: 4.1.9(@types/node@26.0.0)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.6)(vite@8.0.16(@types/node@26.0.0))
@@ -904,7 +906,7 @@ packages:
     resolution: {integrity: sha512-EVkXzBjrPGM+cK8/ANWgBrkUCfJfb38/EfTSO8h7pWvKkyPkpWxvR7BkD2MyItMF62C97zAEoqdpUixwR/e+Rw==}
     peerDependencies:
       msw: ^2.4.9
-      vite: 8.0.16
+      vite: ^6.0.0 || ^7.0.0 || ^8.0.0
     peerDependenciesMeta:
       msw:
         optional: true
@@ -2608,7 +2610,7 @@ packages:
       '@vitest/ui': 4.1.9
       happy-dom: '*'
       jsdom: '*'
-      vite: 8.0.16
+      vite: ^6.0.0 || ^7.0.0 || ^8.0.0
     peerDependenciesMeta:
       '@edge-runtime/vm':
         optional: true
