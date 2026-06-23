@@ -60,13 +60,12 @@ depends = ["build"]
 raw = true
 run = """
 DEST="$HOME/homebrew/plugins/decky-romm-sync"
-# Decky's root plugin_loader can re-own individual files inside the plugin dir
-# (e.g. plugin.json) while the dir itself stays user-owned. A guard that checks
-# only the dir's owner then skips the chown, and the rsync/cp below hits
-# "permission denied" on the root-owned file. Always chown recursively when the
-# dir exists; the dev task's `sudo -v` keeps the password cached, so it costs no
-# extra prompt.
-[ -d "$DEST" ] && sudo chown -R "$USER:$USER" "$DEST"
+# The plugin dir can be root-owned (Decky's root plugin_loader re-owns files like
+# plugin.json on each load), which makes the rsync/cp below hit "permission
+# denied". Ownership is reset by the `dev` task BEFORE this runs — it must happen
+# there, not here: mise pipes this sub-run (the `[deploy] $` prefix) so it has no
+# controlling tty, and a `sudo` here can't reuse the tty-bound cached credential
+# and silently fails. Run via `dev`, not `deploy` standalone, on a root-owned dir.
 mkdir -p "$DEST/dist" "$DEST/bin" "$DEST/defaults" "$DEST/py_modules"
 rsync -a --delete dist/ "$DEST/dist/"
 rsync -a --delete bin/ "$DEST/bin/"
@@ -88,6 +87,13 @@ description = "Build, deploy, and restart plugin loader"
 raw = true
 run = """
 sudo -v
+# Reset plugin-dir ownership HERE, in dev's tty-attached (raw) shell, so sudo
+# reuses the credential just cached by `sudo -v`. The deploy sub-run can't do it:
+# mise pipes it (no controlling tty), so its `sudo` can't reuse the tty-bound
+# credential and silently fails, leaving plugin.json root-owned and breaking the
+# cp. `id -un`/`id -gn` are used directly (robust regardless of the task env).
+DEST="$HOME/homebrew/plugins/decky-romm-sync"
+[ -d "$DEST" ] && sudo chown -R "$(id -un):$(id -gn)" "$DEST"
 mise run deploy
 sudo systemctl restart plugin_loader
 """
