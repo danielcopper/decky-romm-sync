@@ -776,4 +776,133 @@ describe("CustomPlayButton — pre-launch failure shapes without an errors array
     // Still in the conflict state — not dropped to "play".
     await findByText("Resolve Conflict");
   });
+
+  it("proceeds with the synced toast and no confirm on a clean pre-launch sync", async () => {
+    mockCachedDetail();
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: true,
+      message: "",
+      synced: 1,
+      errors: [],
+      conflicts: [],
+    });
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+    });
+
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalled());
+    expect(vi.mocked(showModal)).not.toHaveBeenCalled();
+    expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100);
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Saves synced with RomM" }));
+  });
+
+  it("falls back to the generic confirm when pre-launch sync throws (catch path)", async () => {
+    mockCachedDetail();
+    vi.mocked(backend.preLaunchSync).mockRejectedValue(new Error("network down"));
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+    });
+
+    await waitFor(() => expect(vi.mocked(showModal)).toHaveBeenCalled());
+    // No backend message on a throw → the generic copy (the no-message branch).
+    expect(lastModalProps().strDescription).toContain("Couldn't sync saves with RomM server");
+    await act(async () => {
+      lastModalProps().onCancel?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+  });
+
+  it("tolerates a minimal failure shape with no reason or errors and launches on confirm", async () => {
+    mockCachedDetail();
+    // No reason / errors / synced — exercises the `reason ?? ""` and
+    // `errors?.join() ?? ""` fallbacks in the failure-debug log.
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({ success: false, message: "Save sync unavailable" });
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+    });
+
+    await waitFor(() => expect(vi.mocked(showModal)).toHaveBeenCalled());
+    expect(lastModalProps().strDescription).toContain("Save sync unavailable");
+    await act(async () => {
+      lastModalProps().onOK?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalled();
+  });
+
+  it("returns to the Play button when resolve-conflict sync succeeds", async () => {
+    mockCachedDetail();
+    const { findByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    await act(async () => {
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: 42, has_conflict: true } }),
+      );
+    });
+    const resolveBtn = await findByText("Resolve Conflict");
+
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: true,
+      message: "",
+      synced: 0,
+      errors: [],
+      conflicts: [],
+    });
+
+    await act(async () => {
+      resolveBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await findByText("Play");
+    expect(queryByText("Resolve Conflict")).toBeNull();
+  });
+
+  it("shows the generic resolve toast when the failed resolve carries no message", async () => {
+    mockCachedDetail();
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    await act(async () => {
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: 42, has_conflict: true } }),
+      );
+    });
+    const resolveBtn = await findByText("Resolve Conflict");
+
+    // Empty message → the `|| "Couldn't resolve conflict…"` fallback body.
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: false,
+      message: "",
+      synced: 0,
+      errors: [],
+      conflicts: [],
+    });
+
+    await act(async () => {
+      resolveBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("Couldn't resolve conflict") }),
+    );
+    await findByText("Resolve Conflict");
+  });
 });
