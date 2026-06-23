@@ -254,6 +254,16 @@ class StatusService:
         playtime_dict = _playtime_to_dict(playtime)
         last_sync_check_at = save_state.last_sync_check_at if save_state else None
 
+        # Save sync disabled → suppress the conflict signal at the source. Every
+        # consumer (launch gate, the play button, the save_status_updated emit
+        # that index.tsx forwards) reads this single ``conflicts`` array, and the
+        # SAVES tab that would resolve a conflict is hidden while disabled — so a
+        # surfaced conflict is one the user has no UI to clear (#1056). The launch
+        # gate already short-circuits before calling here; this closes the same
+        # hole for any other caller.
+        if not save_sync_enabled(self._settings):
+            conflicts = []
+
         # When saves go to the content dir, override the display with a clear
         # "not supported" status — no local files were probed, so the normal
         # computation would report a misleading "No saves" (#239).

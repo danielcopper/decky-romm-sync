@@ -211,6 +211,49 @@ class TestGetSaveStatusComputeAction:
         assert c["server_save_id"] == 100
         assert "created_at" in c
 
+    def test_get_save_status_suppresses_conflicts_when_save_sync_disabled(self, tmp_path):
+        """#1056: with save sync disabled, the conflict signal is empty at the source.
+
+        Every consumer (launch gate, play button, the ``save_status_updated``
+        emit that index.tsx forwards) reads this single ``conflicts`` array, and
+        the SAVES tab that would resolve a conflict is hidden while disabled.
+        Non-vacuous: the identical setup is conflict-producing while enabled, so
+        the toggle is the only thing that changes the outcome.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"diverged local")
+
+        ss = _server_save_with_syncs(
+            device_syncs=[{"device_id": "device-1", "is_current": False}],
+        )
+        fake.saves[100] = ss
+        _seed_save_state_dict(
+            svc,
+            42,
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": "0" * 32,
+                        "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+                    }
+                }
+            },
+        )
+
+        # Sanity: the identical setup is conflict-producing while save sync is on.
+        assert len(svc._status._get_save_status_io(42, [ss])["conflicts"]) == 1
+
+        # Disable save sync → the conflict array is empty; the rest of the
+        # payload is still produced (only the conflict signal is gated).
+        svc._config.settings["save_sync_enabled"] = False
+        result = svc._status._get_save_status_io(42, [ss])
+        assert result["conflicts"] == []
+        assert result["rom_id"] == 42
+        assert "files" in result
+
     def test_get_save_status_status_field_mapping(self, tmp_path):
         """Skip→synced, Upload→upload, Download→download, Conflict→conflict."""
         svc, fake = make_service(tmp_path)
