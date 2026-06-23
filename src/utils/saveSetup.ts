@@ -48,6 +48,10 @@ export const SERVER_UNREACHABLE_TOAST_BODY =
 
 const NEEDS_USER_CHOICE_TOAST_BODY = "Configure save sync in the Saves tab first";
 
+/** Fallback toast body when `confirmSlotChoice` resolves to `success: false`
+ *  without a message — used by both automated setup paths. */
+const CONFIRM_FAILED_TOAST_BODY = "Couldn't configure save sync — open the Saves tab to finish setup.";
+
 /** Side-effect bundle for the launch-gate handler. The component supplies
  *  Decky's `toaster.toast` and the global event dispatch; tests pass spies. */
 export interface LaunchGateSetupDeps {
@@ -59,7 +63,7 @@ export interface LaunchGateSetupDeps {
     slot: string | null,
     migrate: boolean,
     migrateFrom: string | null,
-  ) => Promise<unknown>;
+  ) => Promise<{ success?: boolean; message?: string } | undefined>;
   /** Shows a Decky toast — wrapped as a callback so the helper is dispatch-agnostic. */
   toast: (body: string) => void;
   /** Switches to the Saves tab — wrapped as a callback so the helper is
@@ -81,7 +85,15 @@ export async function applyLaunchGateSetupOutcome(
   }
   if (outcome.kind === "auto_confirm") {
     // Auto-confirm of a named/default slot — never migrate.
-    await deps.confirmSlotChoice(deps.rid, outcome.slot, false, null);
+    const result = await deps.confirmSlotChoice(deps.rid, outcome.slot, false, null);
+    if (result?.success === false) {
+      // A resolved failure (not a throw) must not let the launch proceed with
+      // save tracking unconfigured — route to the Saves tab like the other
+      // abort branches (#1009).
+      deps.toast(result.message || CONFIRM_FAILED_TOAST_BODY);
+      deps.dispatchSavesTab();
+      return "abort";
+    }
     return "proceed";
   }
   // Server has saves — user must configure in saves tab.
@@ -100,7 +112,7 @@ export interface WizardSetupDeps {
     slot: string | null,
     migrate: boolean,
     migrateFrom: string | null,
-  ) => Promise<{ success?: boolean } | undefined>;
+  ) => Promise<{ success?: boolean; message?: string } | undefined>;
   setError: (message: string | null) => void;
   setConfirming: (confirming: boolean) => void;
   setInfo: (info: SaveSetupInfo) => void;
@@ -128,8 +140,19 @@ export async function applyWizardInitialSetupResult(result: SaveSetupInfo, deps:
     deps.setConfirming(true);
     try {
       // Auto-confirm of the default slot — never migrate.
-      await deps.confirmSlotChoice(deps.romId, result.default_slot, false, null);
-      if (!deps.isCancelled()) deps.onComplete();
+      const confirmResult = await deps.confirmSlotChoice(deps.romId, result.default_slot, false, null);
+      if (deps.isCancelled()) return;
+      if (confirmResult?.success === false) {
+        // Resolved failure (not a throw): mirror the catch branch — surface the
+        // error and re-hydrate the wizard rather than completing with save
+        // tracking unconfigured (#1009).
+        deps.setError(`Auto-setup failed: ${confirmResult.message || "could not confirm slot"}`);
+        deps.logError(`SlotSetupWizard auto-confirm returned success=false: ${confirmResult.message ?? ""}`);
+        deps.setConfirming(false);
+        deps.setInfo(result);
+        return;
+      }
+      deps.onComplete();
     } catch (e) {
       if (!deps.isCancelled()) {
         deps.setError(`Auto-setup failed: ${e}`);

@@ -99,6 +99,30 @@ describe("applyLaunchGateSetupOutcome", () => {
     expect(deps.dispatchSavesTab).not.toHaveBeenCalled();
   });
 
+  it("aborts and routes to the saves tab when confirmSlotChoice resolves success:false", async () => {
+    // #1009: a resolved failure (not a throw) must not let the launch proceed
+    // with save tracking unconfigured. The backend returns {success:false}
+    // without throwing, so only this branch catches it.
+    const deps = makeLaunchGateDeps({
+      confirmSlotChoice: vi.fn().mockResolvedValue({ success: false, message: "slot taken" }),
+    });
+    const result = await applyLaunchGateSetupOutcome({ kind: "auto_confirm", slot: "main" }, deps);
+    expect(result).toBe("abort");
+    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(42, "main", false, null);
+    expect(deps.toast).toHaveBeenCalledWith("slot taken");
+    expect(deps.dispatchSavesTab).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to the generic toast when confirmSlotChoice fails without a message", async () => {
+    const deps = makeLaunchGateDeps({
+      confirmSlotChoice: vi.fn().mockResolvedValue({ success: false }),
+    });
+    const result = await applyLaunchGateSetupOutcome({ kind: "auto_confirm", slot: "main" }, deps);
+    expect(result).toBe("abort");
+    expect(deps.toast).toHaveBeenCalledWith(expect.stringContaining("Couldn't configure save sync"));
+    expect(deps.dispatchSavesTab).toHaveBeenCalledOnce();
+  });
+
   it("toasts the configure-in-saves-tab copy, dispatches the tab switch, and aborts on needs_user_choice", async () => {
     const deps = makeLaunchGateDeps();
     const result = await applyLaunchGateSetupOutcome({ kind: "needs_user_choice" }, deps);
@@ -192,6 +216,23 @@ describe("applyWizardInitialSetupResult", () => {
     await applyWizardInitialSetupResult(result, deps);
     expect(deps.setError).toHaveBeenCalledWith(expect.stringContaining("Auto-setup failed:"));
     expect(deps.logError).toHaveBeenCalledWith(expect.stringContaining("SlotSetupWizard auto-confirm failed:"));
+    expect(deps.setConfirming).toHaveBeenNthCalledWith(1, true);
+    expect(deps.setConfirming).toHaveBeenNthCalledWith(2, false);
+    expect(deps.setInfo).toHaveBeenCalledWith(result);
+    expect(deps.onComplete).not.toHaveBeenCalled();
+  });
+
+  it("recovers from a resolved success:false confirm without calling onComplete", async () => {
+    // #1009: a {success:false} that does NOT throw is exactly what the backend
+    // returns on a failed confirm — the automated path must treat it like the
+    // manual path (SlotSetupWizard), not complete with tracking unconfigured.
+    const deps = makeWizardDeps({
+      confirmSlotChoice: vi.fn().mockResolvedValue({ success: false, message: "slot taken" }),
+    });
+    const result = makeInfo({ recommended_action: "auto_confirm_default", default_slot: "alpha" });
+    await applyWizardInitialSetupResult(result, deps);
+    expect(deps.setError).toHaveBeenCalledWith(expect.stringContaining("slot taken"));
+    expect(deps.logError).toHaveBeenCalledWith(expect.stringContaining("success=false"));
     expect(deps.setConfirming).toHaveBeenNthCalledWith(1, true);
     expect(deps.setConfirming).toHaveBeenNthCalledWith(2, false);
     expect(deps.setInfo).toHaveBeenCalledWith(result);
