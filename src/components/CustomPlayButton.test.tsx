@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, waitFor, act } from "@testing-library/react";
 import { toaster } from "@decky/api";
-import { showContextMenu } from "@decky/ui";
+import { showContextMenu, showModal } from "@decky/ui";
 import type { ReactElement } from "react";
 import { CustomPlayButton } from "./CustomPlayButton";
 import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
@@ -638,5 +638,142 @@ describe("CustomPlayButton — uninstall resets launch_options (#1051)", () => {
     // The reset lives in the success branch — a failed uninstall leaves the
     // command untouched (the shortcut is still installed).
     expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
+  });
+});
+
+describe("CustomPlayButton — pre-launch failure shapes without an errors array (#1050)", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedGameDetail).mockReset();
+    vi.mocked(toaster.toast).mockReset();
+    vi.mocked(showModal).mockClear();
+    vi.mocked(backend.preLaunchSync).mockReset();
+    // Gate predecessors so handlePlay reaches runPreLaunchSync.
+    vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "default" });
+    vi.mocked(backend.checkCoreChange).mockResolvedValue({ changed: false });
+    vi.stubGlobal("SteamClient", { Apps: { RunGame: vi.fn() } });
+    vi.stubGlobal("appStore", {
+      GetAppOverviewByAppID: vi.fn(() => ({ GetGameID: () => "gid-1" })),
+      allApps: [],
+    });
+  });
+
+  // success:false failures that carry NO errors array — the shapes that
+  // previously fell through to a silent "proceed".
+  const FAILURE_SHAPES = [
+    {
+      reason: "device_not_registered",
+      message: "Device is not registered with RomM. Open the Saves tab to set it up.",
+    },
+    { reason: "save_sort_changed", message: "RetroArch save sorting changed — migrate saves in Settings first" },
+    {
+      reason: "blocked_by_migration",
+      message: "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
+    },
+  ];
+
+  function lastModalProps(): { strDescription?: string; onOK?: () => void; onCancel?: () => void } {
+    const calls = vi.mocked(showModal).mock.calls;
+    const el = calls[calls.length - 1]?.[0] as
+      | ReactElement<{ strDescription?: string; onOK?: () => void; onCancel?: () => void }>
+      | undefined;
+    if (!el) throw new Error("showModal was not called");
+    return el.props;
+  }
+
+  it.each(FAILURE_SHAPES)(
+    "surfaces the fallback-launch confirm with the backend message on $reason instead of proceeding silently",
+    async ({ reason, message }) => {
+      mockCachedDetail();
+      vi.mocked(backend.preLaunchSync).mockResolvedValue({
+        success: false,
+        reason,
+        message,
+        synced: 0,
+        errors: [],
+        conflicts: [],
+      });
+
+      const { findByText } = render(<CustomPlayButton appId={100} />);
+      const playBtn = await findByText("Play");
+      await act(async () => {
+        playBtn.click();
+      });
+
+      // The fallback-launch confirm opened (not a silent launch) ...
+      await waitFor(() => expect(vi.mocked(showModal)).toHaveBeenCalled());
+      // ... and it surfaces the backend's specific message (e.g. save_sort_changed's
+      // "migrate saves in Settings first" — previously never shown).
+      expect(lastModalProps().strDescription).toContain(message);
+
+      // Cancelling the fallback must NOT launch.
+      await act(async () => {
+        lastModalProps().onCancel?.();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+    },
+  );
+
+  it("launches with local saves when the user confirms the fallback on a no-errors failure", async () => {
+    mockCachedDetail();
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: false,
+      reason: "device_not_registered",
+      message: "Device is not registered with RomM.",
+      synced: 0,
+      errors: [],
+      conflicts: [],
+    });
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+    });
+
+    await waitFor(() => expect(vi.mocked(showModal)).toHaveBeenCalled());
+    await act(async () => {
+      lastModalProps().onOK?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100);
+  });
+
+  it("stays in the conflict state and toasts the message when resolve-conflict sync fails without conflicts", async () => {
+    mockCachedDetail();
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    // Drive the button into the conflict state via the backend push (DOM event).
+    await act(async () => {
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: 42, has_conflict: true } }),
+      );
+    });
+    const resolveBtn = await findByText("Resolve Conflict");
+
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: false,
+      reason: "device_not_registered",
+      message: "Device is not registered with RomM.",
+      synced: 0,
+      errors: [],
+      conflicts: [],
+    });
+
+    await act(async () => {
+      resolveBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("Device is not registered") }),
+    );
+    // Still in the conflict state — not dropped to "play".
+    await findByText("Resolve Conflict");
   });
 });

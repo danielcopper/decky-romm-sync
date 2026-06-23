@@ -401,10 +401,12 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   // Sync-error confirmation: ask the user whether to launch despite a failed
   // pre-launch sync. Centralises the toast strings so timeout vs result-errors
   // share copy.
-  const confirmFallbackLaunch = async (): Promise<boolean> => {
+  const confirmFallbackLaunch = async (message?: string): Promise<boolean> => {
     return showLaunchConfirmation(
       "Save Sync Unavailable",
-      "Couldn't sync saves with RomM server. Launch with local saves?",
+      message?.trim()
+        ? `${message} — launch with local saves?`
+        : "Couldn't sync saves with RomM server. Launch with local saves?",
     );
   };
 
@@ -447,9 +449,17 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: rid } }));
       }
 
-      if (!result.success && result.errors && result.errors.length > 0) {
-        detach(debugLog(`CustomPlayButton: pre-launch sync errors: ${result.errors.join(", ")}`));
-        const proceed = await confirmFallbackLaunch();
+      if (!result.success) {
+        detach(
+          debugLog(
+            `CustomPlayButton: pre-launch sync failed: reason=${result.reason ?? ""} errors=[${result.errors?.join(", ") ?? ""}] message=${result.message}`,
+          ),
+        );
+        // Any resolved failure must surface, not silently proceed. Failures with
+        // no errors array — DEVICE_NOT_REGISTERED, blocked_by_migration,
+        // save_sort_changed — still mean sync didn't run; without this the user
+        // plays on stale local saves believing pre-launch sync happened (#1050).
+        const proceed = await confirmFallbackLaunch(result.message);
         return proceed ? "proceed" : "abort";
       }
       if (result.synced && result.synced > 0) {
@@ -531,6 +541,18 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           setState("conflict");
           return;
         }
+      }
+      // A resolved failure without conflicts (DEVICE_NOT_REGISTERED,
+      // save_sort_changed, blocked_by_migration) must not masquerade as
+      // "resolved" — surface it and stay in the conflict state instead of
+      // dispatching a refresh and dropping back to play (#1050).
+      if (!result.success) {
+        detach(
+          debugLog(`CustomPlayButton: resolve conflict sync failed: reason=${result.reason ?? ""} message=${result.message}`),
+        );
+        toaster.toast({ title: "RomM Save Sync", body: result.message || "Couldn't resolve conflict — try again." });
+        setState("conflict");
+        return;
       }
       // Resolved or no conflicts left — notify siblings and go back to play
       globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
