@@ -39,7 +39,15 @@ vi.mock("../utils/connectionState", () => ({
   getRommConnectionState: () => "connected",
 }));
 
+// Uninstall resets the shortcut's launch_options via setLaunchOptionsConfirmed
+// (#1051) — mock it so the test asserts the call without touching SteamClient.
+vi.mock("../utils/steamShortcuts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/steamShortcuts")>()),
+  setLaunchOptionsConfirmed: vi.fn().mockResolvedValue(true),
+}));
+
 import { getCachedGameDetail } from "../utils/cachedGameDetailStore";
+import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 
 function mockCachedDetail(overrides: Partial<CachedGameDetail> = {}): void {
   vi.mocked(getCachedGameDetail).mockResolvedValue({
@@ -573,5 +581,62 @@ describe("CustomPlayButton — pre-launch savefiles_in_content_dir benign skip (
     expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
     // No fallback-launch confirm modal was opened (would mean we treated it as failure).
     expect(vi.mocked(backend.preLaunchSync)).toHaveBeenCalledWith(42);
+  });
+});
+
+describe("CustomPlayButton — uninstall resets launch_options (#1051)", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedGameDetail).mockReset();
+    vi.mocked(toaster.toast).mockReset();
+    vi.mocked(showContextMenu).mockReset();
+    vi.mocked(setLaunchOptionsConfirmed).mockReset();
+    vi.mocked(setLaunchOptionsConfirmed).mockResolvedValue(true);
+    vi.mocked(backend.removeRom).mockResolvedValue({ success: true, message: "" });
+  });
+
+  // Open the play-state "RomM Actions" menu (the chevron next to Play) and click
+  // its Uninstall item — mirrors the download-actions menu-driving pattern above.
+  async function clickUninstall(container: HTMLElement): Promise<void> {
+    const chevron = container.querySelector(".romm-btn-dropdown") as HTMLElement | null;
+    if (!chevron) throw new Error("dropdown chevron not rendered");
+    act(() => {
+      chevron.click();
+    });
+    const calls = vi.mocked(showContextMenu).mock.calls;
+    const menu = calls[calls.length - 1]![0] as ReactElement;
+    const { findByText } = render(menu);
+    const uninstallItem = await findByText("Uninstall");
+    await act(async () => {
+      uninstallItem.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("clears the shortcut launch command to the uninstalled placeholder on a successful uninstall", async () => {
+    mockCachedDetail({ rom_id: 42, installed: true });
+    const { container, findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+
+    await clickUninstall(container);
+
+    // Reset to "" for the shortcut's appId so a raced-past not_installed can't
+    // exec a stale command into the deleted path (#1051).
+    expect(vi.mocked(setLaunchOptionsConfirmed)).toHaveBeenCalledWith(100, "");
+    expect(vi.mocked(backend.removeRom)).toHaveBeenCalledWith(42);
+  });
+
+  it("does not reset launch_options when the uninstall fails", async () => {
+    vi.mocked(backend.removeRom).mockResolvedValue({ success: false, message: "boom" });
+    mockCachedDetail({ rom_id: 42, installed: true });
+    const { container, findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+
+    await clickUninstall(container);
+
+    // The reset lives in the success branch — a failed uninstall leaves the
+    // command untouched (the shortcut is still installed).
+    expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
   });
 });
