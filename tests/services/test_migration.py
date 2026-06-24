@@ -13,6 +13,7 @@ from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_platform_core_reader import FakePlatformCoreReader
+from fakes.fake_relaunch_options_resolver import FakeRelaunchOptionsResolver
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
@@ -28,6 +29,7 @@ from services.active_core_resolver import ActiveCoreResolver, ActiveCoreResolver
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
+from services.relaunch_options_resolver import RelaunchOptionsResolver, RelaunchOptionsResolverConfig
 
 
 class RecordingEmitter:
@@ -123,6 +125,17 @@ def plugin(tmp_path, fake_romm_api):
     def _default_save_layout() -> SaveLayout:
         return InSaveDir(sort_by_content=True, sort_by_core=False)
 
+    # Real RelaunchOptionsResolver over the shared fake UoW + p._active_core so
+    # the migration relaunch-emit integration tests still bake real launch
+    # commands from the relocated rom_installs.file_path.
+    relaunch_options = RelaunchOptionsResolver(
+        config=RelaunchOptionsResolverConfig(
+            uow_factory=FakeUnitOfWorkFactory(uow=uow),
+            active_core=p._active_core,
+            disc_resolver=FakeDiscResolver(),
+        ),
+    )
+
     p._migration_service = MigrationService(
         config=MigrationServiceConfig(
             migration_file_store=MigrationFileAdapter(),
@@ -135,7 +148,7 @@ def plugin(tmp_path, fake_romm_api):
             retrodeck_paths=FakeRetroDeckPaths(),
             get_save_layout=_default_save_layout,
             active_core=p._active_core,
-            disc_resolver=FakeDiscResolver(),
+            relaunch_options=relaunch_options,
             get_core_name=_no_core_name,
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),
@@ -1481,7 +1494,7 @@ class TestMigrationFailureInjection:
             "retrodeck_paths": FakeRetroDeckPaths(),
             "get_save_layout": lambda: InSaveDir(sort_by_content=False, sort_by_core=False),
             "active_core": FakeActiveCoreResolver(default=(None, None)),
-            "disc_resolver": FakeDiscResolver(),
+            "relaunch_options": FakeRelaunchOptionsResolver(),
             "get_core_name": lambda core_so: None,
             "uow_factory": FakeUnitOfWorkFactory(uow=uow),
         }

@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, Any
 from domain.save_extensions import get_save_extensions
 from domain.save_layout import ContentDir
 from domain.save_path import resolve_save_dir
-from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
 
 if TYPE_CHECKING:
     import logging
@@ -31,9 +30,9 @@ if TYPE_CHECKING:
     from services.protocols import (
         ActiveCoreReader,
         CoreNameProviderFn,
-        DiscResolver,
         EventEmitter,
         MigrationFileStore,
+        RelaunchOptionsReader,
         RetroArchSaveLayoutProvider,
         RetroDeckPaths,
         SettingsPersister,
@@ -57,12 +56,12 @@ class MigrationServiceConfig:
     Holds the Protocol-typed migration-file adapter, the live settings
     dict, runtime infrastructure, persistence callbacks, event emitter,
     and the provider callables MigrationService needs at construction
-    time. The shared ``active_core`` resolver re-bakes each relocated ROM's
-    full active core into ``launch_options``, and the shared ``disc_resolver``
-    re-resolves each relocated multi-disc ROM's selected disc against its moved
-    install directory so the pick survives the home migration. Relational
-    migration state (ROM installs, BIOS records, change markers) is read through
-    the injected ``uow_factory``.
+    time. The shared ``active_core`` resolver answers which RetroArch core a
+    ROM launches with when re-deriving the save-sort subdirectory name. The
+    ``relaunch_options`` seam re-bakes every relocated ROM's full Steam
+    ``launch_options`` (active core + selected disc) from its moved path so the
+    pick survives the home migration. Relational migration state (ROM installs,
+    BIOS records, change markers) is read through the injected ``uow_factory``.
     """
 
     migration_file_store: MigrationFileStore
@@ -75,7 +74,7 @@ class MigrationServiceConfig:
     retrodeck_paths: RetroDeckPaths
     get_save_layout: RetroArchSaveLayoutProvider
     active_core: ActiveCoreReader
-    disc_resolver: DiscResolver
+    relaunch_options: RelaunchOptionsReader
     get_core_name: CoreNameProviderFn
     uow_factory: UnitOfWorkFactory
 
@@ -94,7 +93,7 @@ class MigrationService:
         self._retrodeck_paths = config.retrodeck_paths
         self._get_save_layout = config.get_save_layout
         self._active_core = config.active_core
-        self._disc_resolver = config.disc_resolver
+        self._relaunch_options = config.relaunch_options
         self._get_core_name = config.get_core_name
         self._uow_factory = config.uow_factory
         # One-shot guard so the ContentDir "save sync unsupported" warning is
@@ -537,40 +536,14 @@ class MigrationService:
     def _build_relaunch_items(self) -> list[dict[str, Any]]:
         """Build the ``migration_relaunch_options`` items from the post-move state.
 
-        For every ROM that is both installed (has a ``rom_installs`` row, now at
-        the relocated ``file_path``) and bound (its ``Rom.shortcut_app_id`` is
-        set), compose the new Steam-shortcut launch command from the relocated
-        path. A multi-disc ROM re-resolves its selected disc against the moved
-        install directory through the shared ``disc_resolver`` (a single-disc ROM
-        resolves to its own ``file_path``, unchanged). Uninstalled or unbound ROMs
-        are skipped — their shortcuts show Download or carry a placeholder launch
-        command, so there is nothing to re-resolve.
-
-        The install/ROM rows are snapshotted inside one short read UoW which is
-        then closed *before* the bake resolution runs: ``active_core_for_rom``
-        opens its own UoW, so resolving inside the iteration UoW would deadlock
-        on the per-connection write lock. The disc scan is the resolver's I/O
-        seam, none at the service layer.
+        Delegates to the shared ``relaunch_options`` resolver: it re-bakes every
+        installed+bound ROM's Steam ``launch_options`` from the relocated path
+        (active core + selected disc), snapshotting the rows in one short read
+        UoW it closes before resolving so the nested resolver UoW never deadlocks
+        (#1154). Called after ``_apply_relocations`` has persisted the new paths,
+        so the items carry the relocated ``file_path``.
         """
-        with self._uow_factory() as uow:
-            bound_installs = [
-                (rom, install)
-                for install in uow.rom_installs.iter_all()
-                if (rom := uow.roms.get(install.rom_id)) is not None and rom.shortcut_app_id is not None
-            ]
-
-        items: list[dict[str, Any]] = []
-        for rom, install in bound_installs:
-            core_so, _label = self._active_core.active_core_for_rom(rom.rom_id)
-            invocation = resolve_emulator_invocation({"id": rom.rom_id}, core_so)
-            bake_path = self._disc_resolver.resolve_for_install(install, rom.selected_disc)
-            items.append(
-                {
-                    "app_id": rom.shortcut_app_id,
-                    "launch_options": build_launch_options(invocation, bake_path),
-                }
-            )
-        return items
+        return self._relaunch_options.installed_relaunch_items()
 
     def _apply_relocations(self, installs, relocations, bios_files, bios_relocations, *, clear_marker):
         """Persist the relocated install and BIOS records (and optionally clear the marker).

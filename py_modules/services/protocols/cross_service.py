@@ -83,6 +83,21 @@ class DiscResolver(Protocol):
     def resolve_for_install(self, install: RomInstall, selected_disc: str | None) -> str: ...
 
 
+class RelaunchOptionsReader(Protocol):
+    """Installed+bound relaunch-items build consumed by the two relaunch sites.
+
+    The composition root satisfies this with ``RelaunchOptionsResolver``. Both
+    the RetroDECK-home migration (re-baking each relocated shortcut to its new
+    path) and the startup launch-options reconcile (#1043, healing drift to the
+    empty placeholder) ask "what is the current ``launch_options`` for every
+    installed and bound ROM?" and forward the returned list to the frontend.
+    Each item is a ``{app_id, launch_options}`` dict; uninstalled and unbound
+    ROMs are skipped by construction, so an empty list means nothing to relaunch.
+    """
+
+    def installed_relaunch_items(self) -> list[dict[str, Any]]: ...
+
+
 class AchievementsReader(Protocol):
     """Achievement data access consumed by GameDetailService."""
 

@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
-from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_migration_file_store import FakeMigrationFileStore
+from fakes.fake_relaunch_options_resolver import FakeRelaunchOptionsResolver
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 
@@ -127,7 +127,7 @@ def _make_service(
             ),
             get_save_layout=lambda: layout,
             active_core=active_core if active_core is not None else FakeActiveCoreResolver(default=(None, None)),
-            disc_resolver=FakeDiscResolver(),
+            relaunch_options=FakeRelaunchOptionsResolver(),
             get_core_name=get_core_name,
             uow_factory=FakeUnitOfWorkFactory(uow=uow),
         ),

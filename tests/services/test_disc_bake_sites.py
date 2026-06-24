@@ -10,7 +10,10 @@ behavior.
 Bake sites covered:
   * ``services.library.sync_orchestrator`` — the ``installed_paths`` map.
   * ``services.downloads`` — ``_finalize_download_complete`` (via ``_resolve_bound_app_id``).
-  * ``services.migration`` — ``_build_relaunch_items``.
+
+The migration relaunch path (``services.migration._build_relaunch_items``) and
+the startup reconcile both bake through the shared ``RelaunchOptionsResolver``;
+its disc-pin behavior is pinned in ``test_relaunch_options_resolver.py``.
 """
 
 from __future__ import annotations
@@ -170,45 +173,3 @@ class TestDownloadsBakeSite:
         svc = self._service(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
         _app_id, _core_so, bake_path = svc._resolve_bound_app_id(1, _DISC1_PATH)
         assert bake_path == _DISC1_PATH
-
-
-# ── migration bake site ──────────────────────────────────────────────────
-
-
-class TestMigrationBakeSite:
-    def _service(self, uow_factory, disc_resolver):
-        from services.migration import MigrationService, MigrationServiceConfig
-
-        return MigrationService(
-            config=MigrationServiceConfig(
-                migration_file_store=MagicMock(),
-                settings={},
-                loop=MagicMock(),
-                logger=logging.getLogger("test_disc_bake"),
-                settings_persister=MagicMock(),
-                emit=MagicMock(),
-                get_bios_files_index=dict,
-                retrodeck_paths=MagicMock(),
-                get_save_layout=MagicMock(),
-                active_core=FakeActiveCoreResolver(default=(None, None)),
-                disc_resolver=disc_resolver,
-                get_core_name=lambda core_so: None,
-                uow_factory=uow_factory,
-            )
-        )
-
-    def test_build_relaunch_items_honors_pin(self, disc_resolver):
-        uow = FakeUnitOfWork()
-        _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, app_id=555)
-        svc = self._service(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
-        items = svc._build_relaunch_items()
-        assert len(items) == 1
-        assert items[0]["app_id"] == 555
-        assert items[0]["launch_options"] == f'flatpak run net.retrodeck.retrodeck "{_DISC2_PATH}"'
-
-    def test_build_relaunch_items_unpinned_defaults_to_disc_1(self, disc_resolver):
-        uow = FakeUnitOfWork()
-        _seed_multi_disc(uow, rom_id=1, selected_disc=None, app_id=555)
-        svc = self._service(FakeUnitOfWorkFactory(uow=uow), disc_resolver)
-        items = svc._build_relaunch_items()
-        assert items[0]["launch_options"] == f'flatpak run net.retrodeck.retrodeck "{_DISC1_PATH}"'

@@ -62,6 +62,7 @@ from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService, MetadataServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
 from services.playtime import PlaytimeService, PlaytimeServiceConfig
+from services.relaunch_options_resolver import RelaunchOptionsResolver, RelaunchOptionsResolverConfig
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
 from services.saves import SaveService, SaveServiceConfig
 from services.session_lifecycle import SessionLifecycleService, SessionLifecycleServiceConfig
@@ -448,6 +449,19 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    # The single installed+bound relaunch-items resolver (#1154): snapshots the
+    # rows in one short read UoW it closes before resolving core + disc, so the
+    # nested resolver UoW never deadlocks. Both the RetroDECK-home migration and
+    # the startup launch-options reconcile draw their relaunch items from this
+    # SAME seam, so the two never carry a divergent build of the list.
+    relaunch_options_resolver = RelaunchOptionsResolver(
+        config=RelaunchOptionsResolverConfig(
+            uow_factory=cfg.callbacks.uow_factory,
+            active_core=active_core_resolver,
+            disc_resolver=disc_launch_resolver,
+        ),
+    )
+
     # MigrationService is constructed before SaveService so that
     # save_sync_service can receive a bound reference to
     # ``migration_service.detect_save_sort_change``. SaveService must observe
@@ -464,7 +478,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             get_save_layout=cfg.callbacks.get_save_layout,
             active_core=active_core_resolver,
-            disc_resolver=disc_launch_resolver,
+            relaunch_options=relaunch_options_resolver,
             get_core_name=cfg.callbacks.get_core_name,
             uow_factory=cfg.callbacks.uow_factory,
         ),
@@ -704,8 +718,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             path_probe=cfg.adapters.path_probe,
             uow_factory=cfg.callbacks.uow_factory,
-            active_core=active_core_resolver,
-            disc_resolver=disc_launch_resolver,
+            relaunch_options=relaunch_options_resolver,
         ),
     )
 

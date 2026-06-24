@@ -129,6 +129,7 @@ modules =
     services.metadata
     services.migration
     services.playtime
+    services.relaunch_options_resolver
     services.rom_removal
     services.saves
     services.session_lifecycle

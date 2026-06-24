@@ -12,6 +12,7 @@ from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
+from fakes.fake_relaunch_options_resolver import FakeRelaunchOptionsResolver
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_save_api import FakeSaveApi
 from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
@@ -528,7 +529,7 @@ class TestPostExitSync:
                 retrodeck_paths=FakeRetroDeckPaths(),
                 get_save_layout=lambda: InSaveDir(sort_by_content=False, sort_by_core=False),
                 active_core=FakeActiveCoreResolver(default=(None, None)),
-                disc_resolver=FakeDiscResolver(),
+                relaunch_options=FakeRelaunchOptionsResolver(),
                 get_core_name=lambda core_so: None,
                 uow_factory=plugin._uow_factory,
             ),
