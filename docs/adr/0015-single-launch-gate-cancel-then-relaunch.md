@@ -3,9 +3,10 @@
 ## Status
 
 Proposed. Part of [#1051](https://github.com/danielcopper/decky-romm-sync/issues/1051) — the launch-gate / save-conflict
-/ offline hardening, expanded from "4b modal hardening" after a RomM-communication audit. Resolves the
-[#1144](https://github.com/danielcopper/decky-romm-sync/issues/1144) pre-launch-sync bypass on non-plugin launch
-surfaces.
+/ offline hardening, expanded from "4b modal hardening" after a RomM-communication audit. Addresses the **gaming-mode**
+portion of [#1144](https://github.com/danielcopper/decky-romm-sync/issues/1144) (the one genuine non-Play-button launch
+path in gaming mode — `steam://rungameid` deep links — now funnels through the gate); **desktop-mode** coverage remains
+open there and under [#831](https://github.com/danielcopper/decky-romm-sync/issues/831).
 
 ## Context
 
@@ -14,8 +15,13 @@ A RomM ROM can be launched two ways in Steam gaming mode, and today they behave 
 1. **The plugin Play button** (`CustomPlayButton.handlePlay`) runs a rich gate **before** the launch — connectivity,
    save-slot setup, core-change, then a pre-launch save sync with a conflict modal — and only then calls `RunGame`.
    Because it runs before the launch, it can block cleanly.
-2. **A direct Steam launch** (library grid, Big Picture, "recent games") never opens our page, so none of that runs. The
-   only thing watching is a global hook (`launchInterceptor.ts` via `SteamClient.Apps.RegisterForGameActionStart`).
+2. **A launch that bypasses our button.** In gaming mode the library grid, the home "recent" carousel, and Big Picture
+   tiles all **navigate to the detail page** (our button) — they do not launch directly (verified against the
+   deobfuscated SteamUI: a tile's `onActivate` does `navigate(/library/app/:appid)`, never `RunGame`). The genuine
+   non-Play-button launch paths are `steam://rungameid` deep links (which issue a launch with no detail-page visit) and
+   the resilience case where a Steam UI update breaks our React-tree patch and the native Play button renders. The only
+   thing watching **beneath every surface** is a global hook (`launchInterceptor.ts` via
+   `SteamClient.Apps.RegisterForGameActionStart`).
 
 The global watcher has a structural defect: it fires **after** Steam has already begun the launch, so it can only
 `CancelGameAction`, never pause. Today it `await`s a network `evaluate_launch` and then cancels on a block verdict — but
@@ -41,7 +47,11 @@ synchronously and don't await, `RunGame` returns `void`, and it would miss launc
 symbol. **Cancel-then-relaunch** (`CancelGameAction` → async work → `RunGame`) is the only mechanism, and it is the
 established community pattern (MoonDeck and unifideck both use it; unifideck shows modals from the watcher in
 production). The watcher **can** show a real modal — `showModal` is imperative, already used from non-component code.
-Desktop-mode launches bypass these hooks entirely and are ungateable.
+Decky loads plugins **only in gaming mode** — in the desktop Steam client the whole plugin (these hooks, the session
+manager, sync, and playtime) is absent, so desktop-mode launches are entirely ungated. That gap is tracked separately
+([#1144](https://github.com/danielcopper/decky-romm-sync/issues/1144) /
+[#831](https://github.com/danielcopper/decky-romm-sync/issues/831)): the only universal chokepoint there is the
+`bin/rom-launcher` wrapper, which can sync headlessly but cannot show a modal.
 
 ## Decision
 
@@ -81,13 +91,16 @@ local file to `.romm-backup`, so there is no silent data loss. "Unknown because 
 
 ## Consequences
 
-- **Consistent:** one behavior for all gaming-mode launches. The cold-grid-launch-misses-a-fresh-conflict gap is closed,
-  and #1144 is resolved — non-plugin launch surfaces now get the full gate.
-- **Cost (the deliberate trade):** every direct library launch becomes cancel → gate (incl. a network sync up to ~15s +
-  a possible modal) → relaunch — a brief "starts, cancels, restarts" flicker plus added latency on a **common** path;
-  the instant-tile-launch feel is gone for RomM games. **Accepted provisionally, to be evaluated on-device.** A **hybrid
-  fast-path** — skip the funnel when cheap synchronous signals (installed, last-known reachability, recently-seen
-  conflict) say nothing needs attention — is a known, **deferred** optimization if the full-funnel feel is too heavy.
+- **Consistent:** one behavior for all gaming-mode launch paths. The cold-launch-misses-a-fresh-conflict gap is closed;
+  the gaming-mode portion of #1144 is addressed — deep-link launches now funnel through the gate. Desktop-mode launches
+  remain ungated (Decky doesn't run there — #1144 / #831).
+- **Cost — smaller than first feared (corrected after the SteamUI-code research):** in gaming mode, **normal launches go
+  through our Play button**, which gates _before_ `RunGame` and skip-marks the launch, so the watcher skips it — **no
+  flicker, no cancel-relaunch** on the common path. The cancel → gate → relaunch flicker only fires for the rare genuine
+  bypass (`steam://rungameid` deep links, or a launch via the native button if our React-tree patch breaks). So the
+  feared "instant-launch feel is gone on every launch" does **not** happen, and the **hybrid fast-path** is largely moot
+  — there is no common direct-launch path to fast-path. Still worth an on-device confirm that a normal Play-button
+  launch is flicker-free and that a deep link is caught.
 - **One gate** to maintain instead of two divergent ones; the double-gate's redundant `list_saves` is gone.
 - The skip-set adds a little state; its lifetime self-heals (check-and-delete at entry).
 - **On-device verification required** (cannot be unit-tested): the cancel-relaunch flicker, modal focus after cancel,
