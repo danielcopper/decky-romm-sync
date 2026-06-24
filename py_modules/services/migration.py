@@ -544,24 +544,32 @@ class MigrationService:
         install directory through the shared ``disc_resolver`` (a single-disc ROM
         resolves to its own ``file_path``, unchanged). Uninstalled or unbound ROMs
         are skipped — their shortcuts show Download or carry a placeholder launch
-        command, so there is nothing to re-resolve. Reads through the UoW; the
-        disc scan is the resolver's I/O seam, none at the service layer.
+        command, so there is nothing to re-resolve.
+
+        The install/ROM rows are snapshotted inside one short read UoW which is
+        then closed *before* the bake resolution runs: ``active_core_for_rom``
+        opens its own UoW, so resolving inside the iteration UoW would deadlock
+        on the per-connection write lock. The disc scan is the resolver's I/O
+        seam, none at the service layer.
         """
-        items: list[dict[str, Any]] = []
         with self._uow_factory() as uow:
-            for install in uow.rom_installs.iter_all():
-                rom = uow.roms.get(install.rom_id)
-                if rom is None or rom.shortcut_app_id is None:
-                    continue
-                core_so, _label = self._active_core.active_core_for_rom(rom.rom_id)
-                invocation = resolve_emulator_invocation({"id": rom.rom_id}, core_so)
-                bake_path = self._disc_resolver.resolve_for_install(install, rom.selected_disc)
-                items.append(
-                    {
-                        "app_id": rom.shortcut_app_id,
-                        "launch_options": build_launch_options(invocation, bake_path),
-                    }
-                )
+            bound_installs = [
+                (rom, install)
+                for install in uow.rom_installs.iter_all()
+                if (rom := uow.roms.get(install.rom_id)) is not None and rom.shortcut_app_id is not None
+            ]
+
+        items: list[dict[str, Any]] = []
+        for rom, install in bound_installs:
+            core_so, _label = self._active_core.active_core_for_rom(rom.rom_id)
+            invocation = resolve_emulator_invocation({"id": rom.rom_id}, core_so)
+            bake_path = self._disc_resolver.resolve_for_install(install, rom.selected_disc)
+            items.append(
+                {
+                    "app_id": rom.shortcut_app_id,
+                    "launch_options": build_launch_options(invocation, bake_path),
+                }
+            )
         return items
 
     def _apply_relocations(self, installs, relocations, bios_files, bios_relocations, *, clear_marker):
