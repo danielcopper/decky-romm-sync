@@ -12,10 +12,10 @@
 // (onResolve resolves vs. rejects) to keep the call site exercised.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { render, fireEvent, act, cleanup } from "@testing-library/react";
 import { createElement, type ReactElement } from "react";
 import { showModal } from "@decky/ui";
-import { showSyncConflictModal } from "./SyncConflictModal";
+import { showSyncConflictModal, handleConflicts } from "./SyncConflictModal";
 import * as backend from "../api/backend";
 import type { SyncConflict } from "../types";
 import { detach } from "../utils/detach";
@@ -505,6 +505,62 @@ describe("SyncConflictModal", () => {
         fireEvent.click(buttonByText(container, "Cancel"));
       });
       await expect(promise).resolves.toBe("cancel");
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // handleConflicts — sequential walk over a conflict list, bailing on the
+  // first cancel. Each entry shows a fresh SyncConflictModalHost; we render the
+  // most-recently-shown modal and click a button to settle it, which advances
+  // the loop to the next conflict (or completes the walk).
+  // ---------------------------------------------------------------------------
+  describe("handleConflicts", () => {
+    // Render the newest shown modal and click `button`, settling its
+    // showSyncConflictModal promise so handleConflicts proceeds.
+    async function resolveNewestModal(button: "Keep Local" | "Use Server" | "Cancel"): Promise<void> {
+      const { container } = render(lastShownElement());
+      await act(async () => {
+        fireEvent.click(buttonByText(container, button));
+      });
+      await flushAsync();
+      cleanup();
+    }
+
+    it("empty list → 'resolved' and shows no modal", async () => {
+      const result = await handleConflicts([]);
+      expect(result).toBe("resolved");
+      expect(showModal).not.toHaveBeenCalled();
+    });
+
+    it("multi-conflict all resolved → 'resolved' (one modal per conflict)", async () => {
+      vi.mocked(backend.resolveSyncConflict).mockResolvedValue({ success: true });
+      const conflicts = [makeConflict({ filename: "a.srm" }), makeConflict({ filename: "b.srm" })];
+
+      const promise = handleConflicts(conflicts);
+      // First modal is shown synchronously by the first loop iteration.
+      await resolveNewestModal("Keep Local");
+      // Second loop iteration shows the next modal once the first settled.
+      await resolveNewestModal("Use Server");
+
+      await expect(promise).resolves.toBe("resolved");
+      expect(showModal).toHaveBeenCalledTimes(2);
+    });
+
+    it("2nd conflict cancelled → 'cancel' and no modal for conflicts after the cancel", async () => {
+      vi.mocked(backend.resolveSyncConflict).mockResolvedValue({ success: true });
+      const conflicts = [
+        makeConflict({ filename: "a.srm" }),
+        makeConflict({ filename: "b.srm" }),
+        makeConflict({ filename: "c.srm" }),
+      ];
+
+      const promise = handleConflicts(conflicts);
+      await resolveNewestModal("Keep Local"); // conflict 1 resolved
+      await resolveNewestModal("Cancel"); // conflict 2 cancelled → bail
+
+      await expect(promise).resolves.toBe("cancel");
+      // Short-circuit: only 2 modals shown — conflict 3 is never reached.
+      expect(showModal).toHaveBeenCalledTimes(2);
     });
   });
 });

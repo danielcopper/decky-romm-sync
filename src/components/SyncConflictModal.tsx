@@ -216,3 +216,18 @@ export function showSyncConflictModal(conflict: SyncConflict): Promise<SyncConfl
     showModal(<SyncConflictModalHost conflict={conflict} onDone={resolve} />);
   });
 }
+
+/**
+ * Walk a list of conflicts sequentially, showing the resolution modal for each.
+ * Bails on the first cancel so the caller can decide what to do (e.g. not
+ * relaunch). Shared by the Play button's pre-launch sync and the global launch
+ * watcher's `conflict` verdict. Returns "resolved" once every conflict was
+ * resolved (or the list was empty), "cancel" on the first dismissal.
+ */
+export async function handleConflicts(conflicts: SyncConflict[]): Promise<"cancel" | "resolved"> {
+  for (const conflict of conflicts) {
+    const resolution = await showSyncConflictModal(conflict);
+    if (resolution === "cancel") return "cancel";
+  }
+  return "resolved";
+}

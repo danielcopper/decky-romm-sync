@@ -42,6 +42,17 @@ function getRomIdForApp(appId: number): number | null {
   return romId ?? null;
 }
 
+/**
+ * Snapshot of the cached appId -> romId map (the same shape the backend's
+ * `get_app_id_rom_id_map` callable returns — string-keyed appIds). The global
+ * launch watcher reads this synchronously to resolve a launching app's romId
+ * without an await, so its cancel-then-gate path never races the map refresh.
+ * Returns the live reference; callers treat it as read-only.
+ */
+export function getAppIdRomIdMapSnapshot(): Record<string, number> {
+  return appIdToRomId;
+}
+
 function getAppIdForRom(romId: number): number | null {
   for (const [appIdStr, rid] of Object.entries(appIdToRomId)) {
     if (rid === romId) return Number(appIdStr);

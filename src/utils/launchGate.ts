@@ -15,6 +15,7 @@
  */
 
 import type { SyncConflict } from "../types";
+import { logError } from "../api/backend";
 
 /**
  * Outcome of the injected pre-launch sync, shaped after the
@@ -165,8 +166,12 @@ export async function runLaunchGate(appId: number, romId: number, ops: LaunchGat
       return { decision: "offline_drift" };
     }
     return { decision: "allow" };
-  } catch {
-    // Never trap the user's game behind a gate bug — fail open to "allow".
+  } catch (e) {
+    // Never trap the user's game behind a gate bug — fail open to "allow". The
+    // log leaves a breadcrumb so a gate bug that should have blocked isn't
+    // swallowed with zero trace. After the watcher's preLaunchSync op handles
+    // its own throws, this catch is only reached on a truly-unexpected error.
+    logError(`runLaunchGate threw (failing open to allow): ${e}`);
     return { decision: "allow" };
   }
 }

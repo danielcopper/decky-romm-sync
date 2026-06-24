@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, waitFor, act } from "@testing-library/react";
 import { toaster } from "@decky/api";
-import { showContextMenu, showModal } from "@decky/ui";
+import { showContextMenu } from "@decky/ui";
 import type { ReactElement } from "react";
 import { CustomPlayButton } from "./CustomPlayButton";
 import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
@@ -46,8 +46,40 @@ vi.mock("../utils/steamShortcuts", async (importOriginal) => ({
   setLaunchOptionsConfirmed: vi.fn().mockResolvedValue(true),
 }));
 
+// Keep the real launch gate + skip-set (so handlePlay's full funnel runs and the
+// skip-FIRST C1 behavior is exercised end-to-end); only SPY on markLaunchSkipped
+// so its call order vs RunGame is observable.
+vi.mock("../utils/launchGate", async (importActual) => {
+  const actual = await importActual<typeof import("../utils/launchGate")>();
+  return { ...actual, markLaunchSkipped: vi.fn(actual.markLaunchSkipped) };
+});
+
+// Migration store is a real module defaulting to { pending: false }; mock it so
+// the migration-block verdict test can flip `pending` true.
+vi.mock("../utils/migrationStore", () => ({
+  getMigrationState: vi.fn(() => ({ pending: false })),
+}));
+
+// Shared launch-gate modals — spy so the Play button's verdict switch is
+// observable without rendering each modal (mirrors the watcher's test shape).
+vi.mock("../components/OfflineDriftModal", () => ({
+  showOfflineDriftModal: vi.fn(),
+}));
+vi.mock("../components/FallbackLaunchModal", () => ({
+  showFallbackLaunchModal: vi.fn(),
+}));
+vi.mock("../components/SyncConflictModal", () => ({
+  handleConflicts: vi.fn(),
+}));
+
 import { getCachedGameDetail } from "../utils/cachedGameDetailStore";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
+import { markLaunchSkipped, consumeLaunchSkip } from "../utils/launchGate";
+import { getMigrationState } from "../utils/migrationStore";
+import { showOfflineDriftModal } from "../components/OfflineDriftModal";
+import { showFallbackLaunchModal } from "../components/FallbackLaunchModal";
+import { handleConflicts } from "../components/SyncConflictModal";
+import type { SyncConflict } from "../types";
 
 function mockCachedDetail(overrides: Partial<CachedGameDetail> = {}): void {
   vi.mocked(getCachedGameDetail).mockResolvedValue({
@@ -535,6 +567,9 @@ describe("CustomPlayButton — pre-launch savefiles_in_content_dir benign skip (
     // so handlePlay reaches preLaunchSync and then the launch dispatch.
     vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "default" });
     vi.mocked(backend.checkCoreChange).mockResolvedValue({ changed: false });
+    // Fresh reachability probe is online → the gate runs the online pre-launch
+    // sync branch (not the offline drift check).
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
     // RunGame is the launch sink — assert it fires on the benign-skip path.
     vi.stubGlobal("SteamClient", {
       Apps: { RunGame: vi.fn() },
@@ -645,11 +680,13 @@ describe("CustomPlayButton — pre-launch failure shapes without an errors array
   beforeEach(() => {
     vi.mocked(getCachedGameDetail).mockReset();
     vi.mocked(toaster.toast).mockReset();
-    vi.mocked(showModal).mockClear();
+    vi.mocked(showFallbackLaunchModal).mockReset();
     vi.mocked(backend.preLaunchSync).mockReset();
     // Gate predecessors so handlePlay reaches runPreLaunchSync.
     vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "default" });
     vi.mocked(backend.checkCoreChange).mockResolvedValue({ changed: false });
+    // Online probe → the online pre-launch sync branch.
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
     vi.stubGlobal("SteamClient", { Apps: { RunGame: vi.fn() } });
     vi.stubGlobal("appStore", {
       GetAppOverviewByAppID: vi.fn(() => ({ GetGameID: () => "gid-1" })),
@@ -657,8 +694,8 @@ describe("CustomPlayButton — pre-launch failure shapes without an errors array
     });
   });
 
-  // success:false failures that carry NO errors array — the shapes that
-  // previously fell through to a silent "proceed".
+  // success:false failures that carry NO errors array — the shapes the gate maps
+  // to `sync_failed` → the shared fallback confirm.
   const FAILURE_SHAPES = [
     {
       reason: "device_not_registered",
@@ -671,17 +708,8 @@ describe("CustomPlayButton — pre-launch failure shapes without an errors array
     },
   ];
 
-  function lastModalProps(): { strDescription?: string; onOK?: () => void; onCancel?: () => void } {
-    const calls = vi.mocked(showModal).mock.calls;
-    const el = calls[calls.length - 1]?.[0] as
-      | ReactElement<{ strDescription?: string; onOK?: () => void; onCancel?: () => void }>
-      | undefined;
-    if (!el) throw new Error("showModal was not called");
-    return el.props;
-  }
-
   it.each(FAILURE_SHAPES)(
-    "surfaces the fallback-launch confirm with the backend message on $reason instead of proceeding silently",
+    "surfaces the shared fallback-launch confirm with the backend message on $reason instead of proceeding silently",
     async ({ reason, message }) => {
       mockCachedDetail();
       vi.mocked(backend.preLaunchSync).mockResolvedValue({
@@ -692,30 +720,27 @@ describe("CustomPlayButton — pre-launch failure shapes without an errors array
         errors: [],
         conflicts: [],
       });
+      // User cancels the fallback.
+      vi.mocked(showFallbackLaunchModal).mockResolvedValue(false);
 
       const { findByText } = render(<CustomPlayButton appId={100} />);
       const playBtn = await findByText("Play");
       await act(async () => {
         playBtn.click();
+        await Promise.resolve();
+        await Promise.resolve();
       });
 
-      // The fallback-launch confirm opened (not a silent launch) ...
-      await waitFor(() => expect(vi.mocked(showModal)).toHaveBeenCalled());
-      // ... and it surfaces the backend's specific message (e.g. save_sort_changed's
-      // "migrate saves in Settings first" — previously never shown).
-      expect(lastModalProps().strDescription).toContain(message);
-
+      // The shared fallback confirm opened (not a silent launch) carrying the
+      // backend's specific message (e.g. save_sort_changed's "migrate saves in
+      // Settings first" — previously never shown).
+      await waitFor(() => expect(vi.mocked(showFallbackLaunchModal)).toHaveBeenCalledWith(message));
       // Cancelling the fallback must NOT launch.
-      await act(async () => {
-        lastModalProps().onCancel?.();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
       expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
     },
   );
 
-  it("launches with local saves when the user confirms the fallback on a no-errors failure", async () => {
+  it("launches with local saves when the user confirms the shared fallback on a no-errors failure", async () => {
     mockCachedDetail();
     vi.mocked(backend.preLaunchSync).mockResolvedValue({
       success: false,
@@ -725,21 +750,19 @@ describe("CustomPlayButton — pre-launch failure shapes without an errors array
       errors: [],
       conflicts: [],
     });
+    // User confirms "Launch Anyway".
+    vi.mocked(showFallbackLaunchModal).mockResolvedValue(true);
 
     const { findByText } = render(<CustomPlayButton appId={100} />);
     const playBtn = await findByText("Play");
     await act(async () => {
       playBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
     });
 
-    await waitFor(() => expect(vi.mocked(showModal)).toHaveBeenCalled());
-    await act(async () => {
-      lastModalProps().onOK?.();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100);
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
   });
 
   it("stays in the conflict state and toasts the message when resolve-conflict sync fails without conflicts", async () => {
@@ -777,7 +800,7 @@ describe("CustomPlayButton — pre-launch failure shapes without an errors array
     await findByText("Resolve Conflict");
   });
 
-  it("proceeds with the synced toast and no confirm on a clean pre-launch sync", async () => {
+  it("proceeds with the synced toast and no fallback confirm on a clean pre-launch sync", async () => {
     mockCachedDetail();
     vi.mocked(backend.preLaunchSync).mockResolvedValue({
       success: true,
@@ -794,53 +817,48 @@ describe("CustomPlayButton — pre-launch failure shapes without an errors array
     });
 
     await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalled());
-    expect(vi.mocked(showModal)).not.toHaveBeenCalled();
+    expect(vi.mocked(showFallbackLaunchModal)).not.toHaveBeenCalled();
     expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100);
     expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Saves synced with RomM" }));
   });
 
-  it("falls back to the generic confirm when pre-launch sync throws (catch path)", async () => {
+  it("surfaces the shared fallback (empty message → generic copy) when pre-launch sync throws", async () => {
     mockCachedDetail();
     vi.mocked(backend.preLaunchSync).mockRejectedValue(new Error("network down"));
+    vi.mocked(showFallbackLaunchModal).mockResolvedValue(false);
 
     const { findByText } = render(<CustomPlayButton appId={100} />);
     const playBtn = await findByText("Play");
     await act(async () => {
       playBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
     });
 
-    await waitFor(() => expect(vi.mocked(showModal)).toHaveBeenCalled());
-    // No backend message on a throw → the generic copy (the no-message branch).
-    expect(lastModalProps().strDescription).toContain("Couldn't sync saves with RomM server");
-    await act(async () => {
-      lastModalProps().onCancel?.();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    // A throw/timeout maps to sync_failed with an empty message — the modal
+    // itself supplies the generic "Couldn't sync saves" copy from "".
+    await waitFor(() => expect(vi.mocked(showFallbackLaunchModal)).toHaveBeenCalledWith(""));
+    // Cancelled → no launch.
     expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
   });
 
-  it("tolerates a minimal failure shape with no reason or errors and launches on confirm", async () => {
+  it("tolerates a minimal failure shape with no reason or errors and launches on fallback confirm", async () => {
     mockCachedDetail();
     // No reason / errors / synced — exercises the `reason ?? ""` and
     // `errors?.join() ?? ""` fallbacks in the failure-debug log.
     vi.mocked(backend.preLaunchSync).mockResolvedValue({ success: false, message: "Save sync unavailable" });
+    vi.mocked(showFallbackLaunchModal).mockResolvedValue(true);
 
     const { findByText } = render(<CustomPlayButton appId={100} />);
     const playBtn = await findByText("Play");
     await act(async () => {
       playBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
     });
 
-    await waitFor(() => expect(vi.mocked(showModal)).toHaveBeenCalled());
-    expect(lastModalProps().strDescription).toContain("Save sync unavailable");
-    await act(async () => {
-      lastModalProps().onOK?.();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalled();
+    await waitFor(() => expect(vi.mocked(showFallbackLaunchModal)).toHaveBeenCalledWith("Save sync unavailable"));
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalled());
   });
 
   it("returns to the Play button when resolve-conflict sync succeeds", async () => {
@@ -904,5 +922,396 @@ describe("CustomPlayButton — pre-launch failure shapes without an errors array
       expect.objectContaining({ body: expect.stringContaining("Couldn't resolve conflict") }),
     );
     await findByText("Resolve Conflict");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Shared launch-gate funnel (ADR-0015) driven through the Play button. The
+// gate (runLaunchGate) is REAL; only the leaf backend probes + shared modal
+// helpers are stubbed, so these assert the Play button's verdict→UI mapping.
+// ---------------------------------------------------------------------------
+describe("CustomPlayButton — shared launch gate (ADR-0015)", () => {
+  const conflict = (overrides: Partial<SyncConflict> = {}): SyncConflict => ({
+    type: "sync_conflict",
+    rom_id: 42,
+    filename: "save.srm",
+    server_save_id: 7,
+    server_updated_at: "2026-01-01T00:00:00Z",
+    server_size: 1024,
+    local_path: "/local/save.srm",
+    local_hash: "abc",
+    local_mtime: "2026-01-01T00:00:00Z",
+    local_size: 1024,
+    created_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Drain any skip-set leak from a prior test's launch (the real skip-set is
+    // module-level state) so a mark in one test never silently affects the next.
+    consumeLaunchSkip(100);
+
+    // Gate predecessors default to "pass": no migration, tracking configured,
+    // no core change. Each test overrides the branch it exercises.
+    vi.mocked(getMigrationState).mockReturnValue({ pending: false });
+    vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "default" });
+    vi.mocked(backend.checkCoreChange).mockResolvedValue({ changed: false });
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({ success: true, message: "", synced: 0, conflicts: [] });
+
+    vi.stubGlobal("SteamClient", { Apps: { RunGame: vi.fn() } });
+    vi.stubGlobal("appStore", {
+      GetAppOverviewByAppID: vi.fn(() => ({ GetGameID: () => "gid-1" })),
+      allApps: [],
+    });
+  });
+
+  async function clickPlay(): Promise<void> {
+    mockCachedDetail();
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+      // Drain the gate chain (migration → tracking → core → reachability →
+      // sync/drift → verdict → modal → dispatch).
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("online allow → marks the launch skipped BEFORE RunGame and launches (C1 double-gate fix)", async () => {
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
+    // Clean sync → allow.
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({ success: true, message: "", synced: 0, conflicts: [] });
+
+    await clickPlay();
+
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+    // C1: markLaunchSkipped(appId) fired, and it fired BEFORE RunGame — so the
+    // global watcher skips this launch instead of cancel-then-re-gating it.
+    expect(vi.mocked(markLaunchSkipped)).toHaveBeenCalledWith(100);
+    const markOrder = vi.mocked(markLaunchSkipped).mock.invocationCallOrder[0]!;
+    const runOrder = vi.mocked(SteamClient.Apps.RunGame).mock.invocationCallOrder[0]!;
+    expect(markOrder).toBeLessThan(runOrder);
+    // The skip-set actually carries appId 100 (the real markLaunchSkipped ran).
+    expect(consumeLaunchSkip(100)).toBe(true);
+  });
+
+  it("offline + local drift → OfflineDriftModal; start_anyway launches", async () => {
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: false });
+    vi.mocked(backend.checkLocalDrift).mockResolvedValue({ drifted: true, rom_id: 42 });
+    vi.mocked(showOfflineDriftModal).mockResolvedValue("start_anyway");
+
+    await clickPlay();
+
+    // The offline-drift modal was the funnel's verdict (NOT the old stale-flag
+    // confirmOfflineLaunch), and the pre-launch sync never ran (offline branch).
+    expect(vi.mocked(showOfflineDriftModal)).toHaveBeenCalled();
+    expect(vi.mocked(backend.preLaunchSync)).not.toHaveBeenCalled();
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+    expect(vi.mocked(markLaunchSkipped)).toHaveBeenCalledWith(100);
+  });
+
+  it("offline + local drift → OfflineDriftModal; cancel does NOT launch", async () => {
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: false });
+    vi.mocked(backend.checkLocalDrift).mockResolvedValue({ drifted: true, rom_id: 42 });
+    vi.mocked(showOfflineDriftModal).mockResolvedValue("cancel");
+
+    await clickPlay();
+
+    expect(vi.mocked(showOfflineDriftModal)).toHaveBeenCalled();
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+    expect(vi.mocked(markLaunchSkipped)).not.toHaveBeenCalled();
+  });
+
+  it("offline + NO local drift → launches silently (no modal)", async () => {
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: false });
+    vi.mocked(backend.checkLocalDrift).mockResolvedValue({ drifted: false, rom_id: 42 });
+
+    await clickPlay();
+
+    // Nothing to lose → silent allow: no drift modal, no fallback, just launch.
+    expect(vi.mocked(showOfflineDriftModal)).not.toHaveBeenCalled();
+    expect(vi.mocked(showFallbackLaunchModal)).not.toHaveBeenCalled();
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+  });
+
+  it("online conflict → shared handleConflicts; resolved → romm_data_changed + launch", async () => {
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: false,
+      message: "conflict",
+      synced: 0,
+      conflicts: [conflict()],
+    });
+    vi.mocked(handleConflicts).mockResolvedValue("resolved");
+
+    const dataChanged = vi.fn();
+    globalThis.addEventListener("romm_data_changed", dataChanged);
+
+    await clickPlay();
+
+    // The SHARED handleConflicts (from SyncConflictModal) handled the conflicts,
+    // not a Play-button-local duplicate.
+    expect(vi.mocked(handleConflicts)).toHaveBeenCalledWith([conflict()]);
+    // Resolved → sibling refresh dispatched, then launch.
+    expect(dataChanged).toHaveBeenCalled();
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+
+    globalThis.removeEventListener("romm_data_changed", dataChanged);
+  });
+
+  it("online conflict → cancelled → stays in conflict state, no launch", async () => {
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: false,
+      message: "conflict",
+      synced: 0,
+      conflicts: [conflict()],
+    });
+    vi.mocked(handleConflicts).mockResolvedValue("cancel");
+
+    mockCachedDetail();
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(vi.mocked(handleConflicts)).toHaveBeenCalled();
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+    // Cancelling a conflict drops the button into its "conflict" (Resolve) state.
+    await findByText("Resolve Conflict");
+  });
+
+  it("a verdict modal helper that THROWS → resets to play (never frozen in syncing)", async () => {
+    // runPreLaunchSync flips the button to "syncing", the gate returns a
+    // conflict verdict, then the shared handleConflicts REJECTS at the framework
+    // level. Without the outer try/catch the button would stay stuck in
+    // "syncing"; with it, handlePlay recovers to "play".
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: false,
+      message: "conflict",
+      synced: 0,
+      conflicts: [conflict()],
+    });
+    vi.mocked(handleConflicts).mockRejectedValue(new Error("modal blew up"));
+
+    mockCachedDetail();
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Recovered: the Play label is back (NOT stuck on "Syncing saves...") and no
+    // launch happened.
+    expect(await findByText("Play")).toBeInTheDocument();
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+  });
+
+  it("migration pending → blocks: no sync, no modal, no launch", async () => {
+    vi.mocked(getMigrationState).mockReturnValue({ pending: true });
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
+
+    await clickPlay();
+
+    // The migration block short-circuits the funnel before any network step.
+    expect(vi.mocked(backend.probeReachability)).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.preLaunchSync)).not.toHaveBeenCalled();
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+    expect(vi.mocked(markLaunchSkipped)).not.toHaveBeenCalled();
+  });
+
+  it("tracking-setup abort → silent bail back to play, no launch", async () => {
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
+    // Unconfigured tracking whose setup needs a user choice (server has saves)
+    // → the page-aware ensureTrackingConfigured returns "abort" (routes to the
+    // saves tab) → gate `abort`. The funnel never reaches reachability/sync.
+    vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: false, active_slot: "default" });
+    vi.mocked(backend.getSaveSetupInfo).mockResolvedValue({
+      recommended_action: "needs_user_choice",
+      default_slot: "default",
+      server_slots: [{ slot: "default" }],
+    } as unknown as Awaited<ReturnType<typeof backend.getSaveSetupInfo>>);
+
+    mockCachedDetail();
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Abort → bailed silently to "play" (Play button back), no launch, and the
+    // funnel short-circuited before the reachability probe.
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.probeReachability)).not.toHaveBeenCalled();
+    await findByText("Play");
+  });
+
+  it("reachability probe rejects → treated as offline; with drift → OfflineDriftModal", async () => {
+    vi.mocked(backend.probeReachability).mockRejectedValue(new Error("net"));
+    vi.mocked(backend.checkLocalDrift).mockResolvedValue({ drifted: true, rom_id: 42 });
+    vi.mocked(showOfflineDriftModal).mockResolvedValue("cancel");
+
+    await clickPlay();
+
+    // A thrown probe is treated as offline (the probe `.catch` arm), so the
+    // funnel takes the drift branch — NOT a silent online allow.
+    expect(vi.mocked(showOfflineDriftModal)).toHaveBeenCalled();
+    expect(vi.mocked(backend.preLaunchSync)).not.toHaveBeenCalled();
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+  });
+
+  it("local-drift check rejects → treated as not-drifted; launches silently", async () => {
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: false });
+    vi.mocked(backend.checkLocalDrift).mockRejectedValue(new Error("net"));
+
+    await clickPlay();
+
+    // A thrown drift check resolves to not-drifted (the drift `.catch` arm), so
+    // the offline branch silently allows rather than showing a false modal.
+    expect(vi.mocked(showOfflineDriftModal)).not.toHaveBeenCalled();
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+  });
+
+  it("unresolved romId → launches straight through with no gating", async () => {
+    // Cached as installed but with no rom_id — the launch isn't ours to gate, so
+    // handlePlay launches straight away (still marking the skip-set).
+    vi.mocked(getCachedGameDetail).mockResolvedValue({
+      found: true,
+      rom_name: "Test ROM",
+      installed: true,
+    });
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // No gate steps ran — no probe, no sync — just a direct (skip-marked) launch.
+    expect(vi.mocked(backend.probeReachability)).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.preLaunchSync)).not.toHaveBeenCalled();
+    expect(vi.mocked(markLaunchSkipped)).toHaveBeenCalledWith(100);
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F7 — settling into "play" fires a fire-and-forget background save-status
+// refresh when save sync is enabled (the save_status_updated → romm_data_changed
+// production trigger).
+// ---------------------------------------------------------------------------
+describe("CustomPlayButton — F7 background save-status refresh on settle-to-play", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(backend.refreshSaveStatus).mockResolvedValue({ success: true });
+  });
+
+  it("fires refreshSaveStatus(romId) once it settles into play with save_sync_enabled", async () => {
+    vi.mocked(getCachedGameDetail).mockResolvedValue({
+      found: true,
+      rom_id: 42,
+      rom_name: "Test ROM",
+      installed: true,
+      save_sync_enabled: true,
+    });
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+
+    await waitFor(() => expect(vi.mocked(backend.refreshSaveStatus)).toHaveBeenCalledWith(42));
+  });
+
+  it("does NOT fire refreshSaveStatus when save sync is disabled", async () => {
+    vi.mocked(getCachedGameDetail).mockResolvedValue({
+      found: true,
+      rom_id: 42,
+      rom_name: "Test ROM",
+      installed: true,
+      save_sync_enabled: false,
+    });
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    // Give the init effect a tick to (not) fire.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(vi.mocked(backend.refreshSaveStatus)).not.toHaveBeenCalled();
+  });
+
+  it("does NOT fire refreshSaveStatus when the button settles into conflict (not play)", async () => {
+    vi.mocked(getCachedGameDetail).mockResolvedValue({
+      found: true,
+      rom_id: 42,
+      rom_name: "Test ROM",
+      installed: true,
+      save_sync_enabled: true,
+      save_status: {
+        files: [{ filename: "save.srm", status: "conflict" }],
+        conflicts: [
+          {
+            type: "sync_conflict",
+            rom_id: 42,
+            filename: "save.srm",
+            server_save_id: 7,
+            server_updated_at: "2026-01-01T00:00:00Z",
+            server_size: 1,
+            local_path: null,
+            local_hash: null,
+            local_mtime: null,
+            local_size: null,
+            created_at: "2026-01-01T00:00:00Z",
+          },
+        ],
+      },
+    });
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Resolve Conflict");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // F7 is scoped to the play branch only — a conflict-on-load doesn't trigger it.
+    expect(vi.mocked(backend.refreshSaveStatus)).not.toHaveBeenCalled();
+  });
+
+  it("swallows a refreshSaveStatus rejection without disturbing the play state", async () => {
+    vi.mocked(backend.refreshSaveStatus).mockRejectedValue(new Error("offline"));
+    vi.mocked(getCachedGameDetail).mockResolvedValue({
+      found: true,
+      rom_id: 42,
+      rom_name: "Test ROM",
+      installed: true,
+      save_sync_enabled: true,
+    });
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    // The catch is fire-and-forget — the button still shows Play (post-catch
+    // state unchanged) and the rejected call was made.
+    await findByText("Play");
+    await waitFor(() => expect(vi.mocked(backend.refreshSaveStatus)).toHaveBeenCalledWith(42));
+    expect(await findByText("Play")).toBeInTheDocument();
   });
 });

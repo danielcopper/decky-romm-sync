@@ -2,28 +2,52 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { toaster } from "@decky/api";
 import * as backend from "../api/backend";
 import * as gameDetailPatch from "../patches/gameDetailPatch";
-import * as migrationStore from "./migrationStore";
+import * as launchGate from "./launchGate";
+import * as sessionManager from "./sessionManager";
+import * as syncConflictModal from "../components/SyncConflictModal";
+import * as offlineDriftModal from "../components/OfflineDriftModal";
+import * as fallbackLaunchModal from "../components/FallbackLaunchModal";
+import * as coreChangeModal from "../components/CoreChangeModal";
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./launchInterceptor";
-import type { LaunchVerdict } from "../types";
+import type { GateVerdict, LaunchGateOps } from "./launchGate";
+import type { SyncConflict } from "../types";
 
 // The interceptor pulls in `../patches/gameDetailPatch` which transitively
-// imports from `@decky/ui` and `react`. The global `@decky/ui` mock in
-// test-setup.ts covers most of it, but `routerHook`/`afterPatch` etc. are
-// pulled by the patch module's top-level imports. To keep this test focused
-// on the interceptor branches, mock the gameDetailPatch surface we touch.
+// imports `@decky/ui`/`react`. Mock just the surface we touch to keep the test
+// focused on the watcher branches.
 vi.mock("../patches/gameDetailPatch", () => ({
   isRomMAppId: vi.fn(),
 }));
 
 vi.mock("../api/backend", () => ({
-  evaluateLaunch: vi.fn(),
   refreshMigrationState: vi.fn(),
+  getInstalledRom: vi.fn(),
+  getCachedGameDetail: vi.fn(),
+  isSaveTrackingConfigured: vi.fn(),
+  getSaveSetupInfo: vi.fn(),
+  confirmSlotChoice: vi.fn(),
+  checkCoreChange: vi.fn(),
+  probeReachability: vi.fn(),
+  preLaunchSync: vi.fn(),
+  checkLocalDrift: vi.fn(),
   logInfo: vi.fn(),
   logError: vi.fn(),
 }));
 
+// Keep the real skip-set (markLaunchSkipped / consumeLaunchSkip) so the
+// skip-FIRST behavior is exercised end-to-end; replace runLaunchGate with a spy
+// each verdict test drives.
+vi.mock("./launchGate", async (importActual) => {
+  const actual = await importActual<typeof import("./launchGate")>();
+  return { ...actual, runLaunchGate: vi.fn() };
+});
+
+vi.mock("./sessionManager", () => ({
+  getAppIdRomIdMapSnapshot: vi.fn(() => ({ "1234": 42 })),
+}));
+
 vi.mock("./migrationStore", () => ({
-  getMigrationState: vi.fn(),
+  getMigrationState: vi.fn(() => ({ pending: false })),
   setMigrationStatus: vi.fn(),
 }));
 
@@ -31,12 +55,23 @@ vi.mock("./saveSortMigrationStore", () => ({
   setSaveSortMigrationStatus: vi.fn(),
 }));
 
-type GameActionHandler = (
-  gameActionId: number,
-  appIdStr: string,
-  action: string,
-  launchSource: number,
-) => Promise<void>;
+vi.mock("../components/SyncConflictModal", () => ({
+  handleConflicts: vi.fn(),
+}));
+
+vi.mock("../components/OfflineDriftModal", () => ({
+  showOfflineDriftModal: vi.fn(),
+}));
+
+vi.mock("../components/FallbackLaunchModal", () => ({
+  showFallbackLaunchModal: vi.fn(),
+}));
+
+vi.mock("../components/CoreChangeModal", () => ({
+  showCoreChangeModal: vi.fn(),
+}));
+
+type GameActionHandler = (gameActionId: number, appIdStr: string, action: string, launchSource: number) => void;
 
 const captureHandler = (): GameActionHandler => {
   const calls = vi.mocked(SteamClient.Apps.RegisterForGameActionStart).mock.calls;
@@ -45,164 +80,495 @@ const captureHandler = (): GameActionHandler => {
   return handler as GameActionHandler;
 };
 
-const makeVerdict = (overrides: Partial<LaunchVerdict> = {}): LaunchVerdict => ({
-  action: "allow",
-  reason: null,
-  toast_title: null,
-  toast_body: null,
+const conflict = (overrides: Partial<SyncConflict> = {}): SyncConflict => ({
+  type: "sync_conflict",
+  rom_id: 42,
+  filename: "save.srm",
+  server_save_id: 7,
+  server_updated_at: "2026-01-01T00:00:00Z",
+  server_size: 1024,
+  local_path: "/local/save.srm",
+  local_hash: "abc",
+  local_mtime: "2026-01-01T00:00:00Z",
+  local_size: 1024,
+  created_at: "2026-01-01T00:00:00Z",
   ...overrides,
 });
 
-describe("launchInterceptor", () => {
+// Let the detached async body settle (microtasks).
+const flush = () => new Promise<void>((r) => setTimeout(r, 0));
+
+const runGameMock = () => vi.mocked(SteamClient.Apps.RunGame);
+
+describe("launchInterceptor — full funnel watcher", () => {
   let unregisterMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Drain any skip-set leak from a prior test's relaunch (the real skip-set is
+    // module-level state) so a relaunch in one test never silently skips the next.
+    launchGate.consumeLaunchSkip(1234);
 
     unregisterMock = vi.fn();
     vi.stubGlobal("SteamClient", {
       Apps: {
         RegisterForGameActionStart: vi.fn(() => ({ unregister: unregisterMock })),
         CancelGameAction: vi.fn(),
+        RunGame: vi.fn(),
       },
+    });
+    vi.stubGlobal("appStore", {
+      GetAppOverviewByAppID: vi.fn(() => ({ GetGameID: () => "gid-7" })),
     });
 
     vi.mocked(gameDetailPatch.isRomMAppId).mockReturnValue(true);
-    vi.mocked(migrationStore.getMigrationState).mockReturnValue({
-      pending: false,
-      reason: null,
-    } as unknown as ReturnType<typeof migrationStore.getMigrationState>);
     vi.mocked(backend.refreshMigrationState).mockResolvedValue({
-      retrodeck: { pending: false, reason: null },
-      save_sort: { pending: false, reason: null },
+      retrodeck: { pending: false },
+      save_sort: { pending: false },
     } as unknown as Awaited<ReturnType<typeof backend.refreshMigrationState>>);
+    // Default: installed ROM so the funnel runs.
+    vi.mocked(backend.getInstalledRom).mockResolvedValue({
+      rom_id: 42,
+      file_name: "g.rom",
+      file_path: "/p/g.rom",
+      system: "snes",
+      platform_slug: "snes",
+      installed_at: "2026-01-01T00:00:00Z",
+    });
+    // Skip-set empty by default — a marked appId is set per-test.
+    vi.mocked(sessionManager.getAppIdRomIdMapSnapshot).mockReturnValue({ "1234": 42 });
+    vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "allow" });
   });
 
   afterEach(() => {
     unregisterLaunchInterceptor();
   });
 
-  describe("warn action", () => {
-    it("toasts but does NOT cancel the launch when verdict.action is 'warn'", async () => {
-      vi.mocked(backend.evaluateLaunch).mockResolvedValueOnce(
-        makeVerdict({
-          action: "warn",
-          reason: "save_status_failed",
-          toast_title: "Save check failed",
-          toast_body: "Could not verify save state; launching anyway.",
-        }),
-      );
-
+  describe("entry guards", () => {
+    it("ignores non-LaunchApp actions — no cancel, no gate", async () => {
       registerLaunchInterceptor();
       const handler = captureHandler();
-      await handler(42, "1234", "LaunchApp", 0);
+      handler(1, "1234", "QuitApp", 0);
+      await flush();
 
       expect(SteamClient.Apps.CancelGameAction).not.toHaveBeenCalled();
-      expect(toaster.toast).toHaveBeenCalledOnce();
-      expect(toaster.toast).toHaveBeenCalledWith({
-        title: "Save check failed",
-        body: "Could not verify save state; launching anyway.",
-      });
+      expect(launchGate.runLaunchGate).not.toHaveBeenCalled();
     });
 
-    it("does not toast on 'warn' when toast fields are null", async () => {
-      vi.mocked(backend.evaluateLaunch).mockResolvedValueOnce(
-        makeVerdict({ action: "warn", reason: "save_status_failed" }),
-      );
-
-      registerLaunchInterceptor();
-      const handler = captureHandler();
-      await handler(42, "1234", "LaunchApp", 0);
-
-      expect(SteamClient.Apps.CancelGameAction).not.toHaveBeenCalled();
-      expect(toaster.toast).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("block action (regression)", () => {
-    it("cancels the game action and toasts when verdict.action is 'block'", async () => {
-      vi.mocked(backend.evaluateLaunch).mockResolvedValueOnce(
-        makeVerdict({
-          action: "block",
-          reason: "not_installed",
-          toast_title: "Not installed",
-          toast_body: "Download the ROM first.",
-        }),
-      );
-
-      registerLaunchInterceptor();
-      const handler = captureHandler();
-      await handler(99, "1234", "LaunchApp", 0);
-
-      expect(SteamClient.Apps.CancelGameAction).toHaveBeenCalledWith(99);
-      expect(toaster.toast).toHaveBeenCalledWith({
-        title: "Not installed",
-        body: "Download the ROM first.",
-      });
-    });
-
-    it("cancels without toast when 'block' has no toast fields", async () => {
-      vi.mocked(backend.evaluateLaunch).mockResolvedValueOnce(
-        makeVerdict({ action: "block", reason: "save_conflict" }),
-      );
-
-      registerLaunchInterceptor();
-      const handler = captureHandler();
-      await handler(7, "1234", "LaunchApp", 0);
-
-      expect(SteamClient.Apps.CancelGameAction).toHaveBeenCalledWith(7);
-      expect(toaster.toast).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("allow action (regression)", () => {
-    it("neither cancels nor toasts when verdict.action is 'allow'", async () => {
-      vi.mocked(backend.evaluateLaunch).mockResolvedValueOnce(makeVerdict({ action: "allow" }));
-
-      registerLaunchInterceptor();
-      const handler = captureHandler();
-      await handler(1, "1234", "LaunchApp", 0);
-
-      expect(SteamClient.Apps.CancelGameAction).not.toHaveBeenCalled();
-      expect(toaster.toast).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("short-circuit guards", () => {
-    it("ignores non-LaunchApp actions", async () => {
-      registerLaunchInterceptor();
-      const handler = captureHandler();
-      await handler(1, "1234", "QuitApp", 0);
-
-      expect(backend.evaluateLaunch).not.toHaveBeenCalled();
-      expect(SteamClient.Apps.CancelGameAction).not.toHaveBeenCalled();
-    });
-
-    it("ignores non-RomM app IDs", async () => {
+    it("ignores non-RomM app IDs — no cancel, no gate", async () => {
       vi.mocked(gameDetailPatch.isRomMAppId).mockReturnValue(false);
       registerLaunchInterceptor();
       const handler = captureHandler();
-      await handler(1, "9999", "LaunchApp", 0);
+      handler(1, "9999", "LaunchApp", 0);
+      await flush();
 
-      expect(backend.evaluateLaunch).not.toHaveBeenCalled();
+      expect(SteamClient.Apps.CancelGameAction).not.toHaveBeenCalled();
+      expect(launchGate.runLaunchGate).not.toHaveBeenCalled();
     });
 
-    it("blocks launch when a RetroDECK migration is pending", async () => {
-      vi.mocked(migrationStore.getMigrationState).mockReturnValue({
-        pending: true,
-        reason: null,
-      } as unknown as ReturnType<typeof migrationStore.getMigrationState>);
+    it("skips a marked appId WITHOUT cancelling or gating", async () => {
+      // Pre-mark appId 1234 via the real skip-set.
+      launchGate.markLaunchSkipped(1234);
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(99, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(SteamClient.Apps.CancelGameAction).not.toHaveBeenCalled();
+      expect(launchGate.runLaunchGate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("cancel-first", () => {
+    it("calls CancelGameAction synchronously before any gate await", () => {
+      // Make the gate hang so we can prove the cancel already happened
+      // before any async funnel work.
+      let resolveGate!: (v: GateVerdict) => void;
+      vi.mocked(launchGate.runLaunchGate).mockReturnValue(
+        new Promise<GateVerdict>((r) => {
+          resolveGate = r;
+        }),
+      );
 
       registerLaunchInterceptor();
       const handler = captureHandler();
-      await handler(55, "1234", "LaunchApp", 0);
+      handler(77, "1234", "LaunchApp", 0);
 
-      expect(SteamClient.Apps.CancelGameAction).toHaveBeenCalledWith(55);
+      // Synchronously — no await yet — the cancel must already be in.
+      expect(SteamClient.Apps.CancelGameAction).toHaveBeenCalledWith(77);
+      resolveGate({ decision: "allow" });
+    });
+  });
+
+  describe("installed check", () => {
+    it("toasts and does NOT relaunch when the ROM is not installed", async () => {
+      vi.mocked(backend.getInstalledRom).mockResolvedValue(null);
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(SteamClient.Apps.CancelGameAction).toHaveBeenCalledWith(77);
+      expect(toaster.toast).toHaveBeenCalledWith({
+        title: "RomM Sync",
+        body: "ROM not downloaded. Open the plugin to download it first.",
+      });
+      expect(launchGate.runLaunchGate).not.toHaveBeenCalled();
+      expect(runGameMock()).not.toHaveBeenCalled();
+    });
+
+    it("relaunches without gating when the appId is unknown to the session map", async () => {
+      vi.mocked(sessionManager.getAppIdRomIdMapSnapshot).mockReturnValue({});
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(launchGate.runLaunchGate).not.toHaveBeenCalled();
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+    });
+
+    it("getInstalledRom throws + cached installed=true → funnel proceeds (not hard-blocked)", async () => {
+      vi.mocked(backend.getInstalledRom).mockRejectedValue(new Error("net"));
+      vi.mocked(backend.getCachedGameDetail).mockResolvedValue({ found: true, installed: true });
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "allow" });
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      // Transient install-check error fell back to the cached truth → gate ran.
+      expect(launchGate.runLaunchGate).toHaveBeenCalled();
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+      expect(toaster.toast).not.toHaveBeenCalled();
+    });
+
+    it("getInstalledRom throws + cached installed=false → hard-blocked (toast, no RunGame)", async () => {
+      vi.mocked(backend.getInstalledRom).mockRejectedValue(new Error("net"));
+      vi.mocked(backend.getCachedGameDetail).mockResolvedValue({ found: true, installed: false });
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(toaster.toast).toHaveBeenCalledWith({
+        title: "RomM Sync",
+        body: "ROM not downloaded. Open the plugin to download it first.",
+      });
+      expect(launchGate.runLaunchGate).not.toHaveBeenCalled();
+      expect(runGameMock()).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("verdict handling", () => {
+    it("allow → relaunches via RunGame and marks the appId skipped", async () => {
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "allow" });
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+      // markLaunchSkipped fired before RunGame → a re-fire of the same appId is skipped.
+      expect(launchGate.consumeLaunchSkip(1234)).toBe(true);
+    });
+
+    it("conflict → SyncConflictModal shown; resolved → relaunch + romm_data_changed", async () => {
+      const conflicts = [conflict()];
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "conflict", conflicts });
+      vi.mocked(syncConflictModal.handleConflicts).mockResolvedValue("resolved");
+      const dataChanged = vi.fn();
+      globalThis.addEventListener("romm_data_changed", dataChanged);
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(syncConflictModal.handleConflicts).toHaveBeenCalledWith(conflicts);
+      expect(dataChanged).toHaveBeenCalled();
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+      globalThis.removeEventListener("romm_data_changed", dataChanged);
+    });
+
+    it("conflict → cancelled → no relaunch", async () => {
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "conflict", conflicts: [conflict()] });
+      vi.mocked(syncConflictModal.handleConflicts).mockResolvedValue("cancel");
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(syncConflictModal.handleConflicts).toHaveBeenCalled();
+      expect(runGameMock()).not.toHaveBeenCalled();
+    });
+
+    it("offline_drift → OfflineDriftModal shown; start_anyway → relaunch", async () => {
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "offline_drift" });
+      vi.mocked(offlineDriftModal.showOfflineDriftModal).mockResolvedValue("start_anyway");
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(offlineDriftModal.showOfflineDriftModal).toHaveBeenCalled();
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+    });
+
+    it("offline_drift → cancel → no relaunch", async () => {
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "offline_drift" });
+      vi.mocked(offlineDriftModal.showOfflineDriftModal).mockResolvedValue("cancel");
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(offlineDriftModal.showOfflineDriftModal).toHaveBeenCalled();
+      expect(runGameMock()).not.toHaveBeenCalled();
+    });
+
+    it("sync_failed → fallback confirm; OK → relaunch", async () => {
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "sync_failed", message: "no device" });
+      vi.mocked(fallbackLaunchModal.showFallbackLaunchModal).mockResolvedValue(true);
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(fallbackLaunchModal.showFallbackLaunchModal).toHaveBeenCalledWith("no device");
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+    });
+
+    it("sync_failed → cancel → no relaunch", async () => {
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "sync_failed", message: "no device" });
+      vi.mocked(fallbackLaunchModal.showFallbackLaunchModal).mockResolvedValue(false);
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(runGameMock()).not.toHaveBeenCalled();
+    });
+
+    it("migration_pending block → migration toast, no relaunch", async () => {
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "block", reason: "migration_pending" });
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
       expect(toaster.toast).toHaveBeenCalledWith({
         title: "RomM Sync",
         body: "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
       });
-      expect(backend.evaluateLaunch).not.toHaveBeenCalled();
+      expect(runGameMock()).not.toHaveBeenCalled();
+    });
+
+    it("abort → no toast, no relaunch", async () => {
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "abort" });
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(toaster.toast).not.toHaveBeenCalled();
+      expect(runGameMock()).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("error fallback", () => {
+    it("relaunches (never traps) when the gate throws", async () => {
+      vi.mocked(launchGate.runLaunchGate).mockRejectedValue(new Error("boom"));
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      // The interceptor's own `.catch(() => allow)` on runLaunchGate maps a
+      // throw to the allow verdict → relaunch. RunGame must have fired.
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+    });
+  });
+
+  describe("auto-adopt tracking variant", () => {
+    it("does NOT dispatch romm_tab_switch and auto-confirms the default slot", async () => {
+      // Drive the REAL gate op: runLaunchGate invokes ensureTrackingConfigured,
+      // exercising the watcher's silent auto-adopt path.
+      vi.mocked(launchGate.runLaunchGate).mockImplementation(
+        async (_appId: number, _romId: number, ops: LaunchGateOps): Promise<GateVerdict> => {
+          await ops.ensureTrackingConfigured();
+          return { decision: "allow" };
+        },
+      );
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: false, active_slot: null });
+      vi.mocked(backend.getSaveSetupInfo).mockResolvedValue({
+        has_local_saves: false,
+        local_files: [],
+        server_slots: [],
+        default_slot: "slot1",
+        slot_confirmed: false,
+        active_slot: null,
+        recommended_action: "auto_confirm_default",
+      });
+      vi.mocked(backend.confirmSlotChoice).mockResolvedValue({ success: true, message: "" });
+
+      const tabSwitch = vi.fn();
+      globalThis.addEventListener("romm_tab_switch", tabSwitch);
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(backend.confirmSlotChoice).toHaveBeenCalledWith(42, "slot1", false, null);
+      expect(tabSwitch).not.toHaveBeenCalled();
+      // The funnel still proceeds to a relaunch.
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+      globalThis.removeEventListener("romm_tab_switch", tabSwitch);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // The watcher's gate ops (the funnel callbacks) — captured via a passthrough
+  // runLaunchGate and invoked directly, so each op's happy path AND its
+  // error-swallow breadcrumb are exercised. The verdict tests above stub
+  // runLaunchGate entirely, so the ops only run here.
+  // ---------------------------------------------------------------------------
+  describe("watcher gate ops", () => {
+    // Capture the ops object the watcher hands to runLaunchGate.
+    async function captureOps(): Promise<LaunchGateOps> {
+      let captured: LaunchGateOps | undefined;
+      vi.mocked(launchGate.runLaunchGate).mockImplementation(
+        async (_appId: number, _romId: number, ops: LaunchGateOps): Promise<GateVerdict> => {
+          captured = ops;
+          return { decision: "allow" };
+        },
+      );
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+      if (!captured) throw new Error("ops were not captured");
+      return captured;
+    }
+
+    it("migrationPending reads the migration store", async () => {
+      const ops = await captureOps();
+      expect(ops.migrationPending()).toBe(false);
+    });
+
+    it("checkReachability: online passes through; a throw logs and treats as offline", async () => {
+      const ops = await captureOps();
+
+      vi.mocked(backend.probeReachability).mockResolvedValueOnce({ online: true });
+      expect(await ops.checkReachability()).toBe(true);
+
+      vi.mocked(backend.probeReachability).mockRejectedValueOnce(new Error("net"));
+      expect(await ops.checkReachability()).toBe(false);
+      expect(backend.logError).toHaveBeenCalledWith(expect.stringContaining("reachability probe failed"));
+    });
+
+    it("checkLocalDrift: drifted passes through; a throw logs and treats as not-drifted", async () => {
+      const ops = await captureOps();
+
+      vi.mocked(backend.checkLocalDrift).mockResolvedValueOnce({ drifted: true, rom_id: 42 });
+      expect(await ops.checkLocalDrift()).toBe(true);
+
+      vi.mocked(backend.checkLocalDrift).mockRejectedValueOnce(new Error("net"));
+      expect(await ops.checkLocalDrift()).toBe(false);
+      expect(backend.logError).toHaveBeenCalledWith(expect.stringContaining("local-drift check failed"));
+    });
+
+    it("checkCoreChange: unchanged proceeds; a throw logs and treats as unchanged; changed shows the modal", async () => {
+      const ops = await captureOps();
+
+      vi.mocked(backend.checkCoreChange).mockResolvedValueOnce({ changed: false });
+      expect(await ops.checkCoreChange()).toBe(true);
+
+      vi.mocked(backend.checkCoreChange).mockRejectedValueOnce(new Error("net"));
+      expect(await ops.checkCoreChange()).toBe(true);
+      expect(backend.logError).toHaveBeenCalledWith(expect.stringContaining("core-change check failed"));
+
+      vi.mocked(backend.checkCoreChange).mockResolvedValueOnce({
+        changed: true,
+        old_label: "Old",
+        new_label: "New",
+      });
+      vi.mocked(coreChangeModal.showCoreChangeModal).mockResolvedValueOnce(true);
+      expect(await ops.checkCoreChange()).toBe(true);
+      expect(coreChangeModal.showCoreChangeModal).toHaveBeenCalledWith("Old", "New");
+    });
+
+    it("preLaunchSync: savefiles_in_content_dir → success; conflicts pass through; a throw → sync_failed outcome", async () => {
+      const ops = await captureOps();
+
+      vi.mocked(backend.preLaunchSync).mockResolvedValueOnce({
+        success: false,
+        message: "skip",
+        reason: "savefiles_in_content_dir",
+      });
+      expect(await ops.preLaunchSync()).toEqual({ success: true, message: "skip" });
+
+      const conflicts = [conflict()];
+      vi.mocked(backend.preLaunchSync).mockResolvedValueOnce({ success: false, message: "c", conflicts });
+      expect(await ops.preLaunchSync()).toEqual({ success: false, message: "c", conflicts });
+
+      // A throw must NOT fail open — it maps to a failed outcome so the gate
+      // surfaces sync_failed instead of silently allowing.
+      vi.mocked(backend.preLaunchSync).mockRejectedValueOnce(new Error("boom"));
+      expect(await ops.preLaunchSync()).toEqual({
+        success: false,
+        message: "Couldn't sync saves with RomM server.",
+      });
+      expect(backend.logError).toHaveBeenCalledWith(expect.stringContaining("pre-launch sync failed"));
+    });
+
+    it("ensureTrackingConfigured: already-configured proceeds; a tracking-check throw logs and proceeds", async () => {
+      const ops = await captureOps();
+
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValueOnce({ configured: true, active_slot: "slot1" });
+      expect(await ops.ensureTrackingConfigured()).toBe("proceed");
+
+      vi.mocked(backend.isSaveTrackingConfigured).mockRejectedValueOnce(new Error("net"));
+      expect(await ops.ensureTrackingConfigured()).toBe("proceed");
+      expect(backend.logError).toHaveBeenCalledWith(expect.stringContaining("tracking check failed"));
+    });
+
+    it("ensureTrackingConfigured: a getSaveSetupInfo throw logs and proceeds unconfigured", async () => {
+      const ops = await captureOps();
+
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValueOnce({ configured: false, active_slot: null });
+      vi.mocked(backend.getSaveSetupInfo).mockRejectedValueOnce(new Error("net"));
+      expect(await ops.ensureTrackingConfigured()).toBe("proceed");
+      expect(backend.logError).toHaveBeenCalledWith(expect.stringContaining("save-setup fetch failed"));
+    });
+
+    it("ensureTrackingConfigured: an auto-adopt confirmSlotChoice throw logs and still proceeds", async () => {
+      const ops = await captureOps();
+
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValueOnce({ configured: false, active_slot: null });
+      vi.mocked(backend.getSaveSetupInfo).mockResolvedValueOnce({
+        has_local_saves: false,
+        local_files: [],
+        server_slots: [],
+        default_slot: "slot1",
+        slot_confirmed: false,
+        active_slot: null,
+        recommended_action: "auto_confirm_default",
+      });
+      vi.mocked(backend.confirmSlotChoice).mockRejectedValueOnce(new Error("net"));
+      expect(await ops.ensureTrackingConfigured()).toBe("proceed");
+      expect(backend.logError).toHaveBeenCalledWith(expect.stringContaining("auto-adopt slot failed"));
     });
   });
 });
