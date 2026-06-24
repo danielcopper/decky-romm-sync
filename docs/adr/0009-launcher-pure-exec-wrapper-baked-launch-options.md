@@ -58,8 +58,10 @@ Steam's launch-options tokenizer. Only the path is escaped — the emulator invo
 whose own `-e "..."` quoting must survive verbatim. `launch_options` carries:
 
 - the **full command** for an installed ROM, written at **sync** (for ROMs already on disk), at **download-complete**
-  (the moment a ROM becomes installed), and **re-resolved on RetroDECK-home migration** (a new
-  `migration_relaunch_options` event rewrites every installed+bound shortcut to the relocated path);
+  (the moment a ROM becomes installed), **re-resolved on RetroDECK-home migration** (a new `migration_relaunch_options`
+  event rewrites every installed+bound shortcut to the relocated path), and **re-confirmed at every plugin load** by a
+  startup pull-reconcile (the frontend pulls `get_installed_relaunch_options` once the backend is reachable and
+  confirm-sets each installed+bound shortcut's command, healing any drift to `""` left by a missed bake);
 - the **empty string `""`** (placeholder) for an uninstalled ROM, until it is downloaded.
 
 The `romm:<rom_id>` marker is **gone**. Two bindings that previously rode on it move off `launch_options`:
@@ -106,6 +108,14 @@ storage + precedence + bake-site model is [ADR-0011](0011-per-game-core-override
   rewrites each installed+bound shortcut's `launch_options` (the `migration_relaunch_options` event). This is the
   N-shortcut update pass ADR-0005 wanted to avoid; #827 proved it reliable, so it is now an acceptable cost, and the
   per-shortcut confirm makes a silently dropped write observable.
+- Because every `launch_options` write is event-driven, any path that misses its bake leaves an installed shortcut stuck
+  on the `""` placeholder with no self-correction — `bin/rom-launcher` then runs with zero args and exits non-zero
+  ([#1043](https://github.com/danielcopper/decky-romm-sync/issues/1043)). A **startup pull-reconcile** closes that gap:
+  the backend exposes `get_installed_relaunch_options` (a 0-arg read returning `[{app_id, launch_options}]` for every
+  installed+bound ROM, resolved through the same active-core/disc seams as the other bake sites), and the frontend pulls
+  it once the backend is proven reachable and confirm-sets each entry. The pass is **idempotent and appId-safe**:
+  re-confirming a correct command matches the read-back instantly, and `launch_options` is not part of the appId CRC32,
+  so the shortcut identity, artwork, and collections survive. It heals drift from every cause at the next plugin load.
 - **Breaking for existing shortcuts: a re-sync is required.** Shortcuts created under the `romm:<rom_id>` model carry
   the old marker and no baked command; they are detected by exe but recreated by re-sync to pick up the baked
   `launch_options`. Accepted as a **pre-release** breaking change.

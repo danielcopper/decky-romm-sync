@@ -704,6 +704,8 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             path_probe=cfg.adapters.path_probe,
             uow_factory=cfg.callbacks.uow_factory,
+            active_core=active_core_resolver,
+            disc_resolver=disc_launch_resolver,
         ),
     )
 

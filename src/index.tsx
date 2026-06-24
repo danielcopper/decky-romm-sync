@@ -23,6 +23,7 @@ import {
   getAllPlaytime,
   getMigrationStatus,
   getSaveSortMigrationStatus,
+  getInstalledRelaunchOptions,
   testConnection,
   logError,
   logInfo,
@@ -52,6 +53,7 @@ import type {
   SyncCollectionsData,
 } from "./types";
 import { removeShortcut, setLaunchOptionsConfirmed } from "./utils/steamShortcuts";
+import { batchConfirmLaunchOptions } from "./utils/launchOptionsReconcile";
 
 type Page = "main" | "settings" | "library" | "data" | "downloads" | "system";
 
@@ -178,6 +180,17 @@ export default definePlugin(() => {
             await new Promise((r) => setTimeout(r, RETRY_DELAYS[initAttempt]));
           }
           initAttempt++;
+        }
+      }
+      // After backend reachability is confirmed, reconcile launch_options for
+      // all installed+bound ROMs to heal any drift from a missed bake (#1043).
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `initDone` is flipped to true inside the awaited `loadAppIdsAndMetadata()`; TS's control-flow analysis can't see that cross-function mutation and narrows it to the `false` literal here. The guard is real: it gates the reconcile on the loop having actually reached a reachable backend.
+      if (initDone) {
+        try {
+          const items = await getInstalledRelaunchOptions();
+          await batchConfirmLaunchOptions(items, "startup_reconcile");
+        } catch (e) {
+          logError(`startup_reconcile: failed to reconcile launch options: ${e}`);
         }
       }
     })(),
@@ -545,30 +558,7 @@ export default definePlugin(() => {
   const migrationRelaunchListener = addEventListener<[{ items: { app_id: number; launch_options: string }[] }]>(
     "migration_relaunch_options",
     (data) => {
-      if (!Array.isArray(data.items) || data.items.length === 0) return;
-      detach(
-        (async () => {
-          // Apply in bounded-concurrency batches (mirrors getExistingRomMShortcuts)
-          // so a migration touching many ROMs doesn't serialize worst-case
-          // per-shortcut confirm-poll timeouts.
-          const CONCURRENCY = 10;
-          for (let i = 0; i < data.items.length; i += CONCURRENCY) {
-            const batch = data.items.slice(i, i + CONCURRENCY);
-            await Promise.all(
-              batch.map(async (item) => {
-                try {
-                  const ok = await setLaunchOptionsConfirmed(item.app_id, item.launch_options);
-                  if (!ok) {
-                    logError(`migration_relaunch_options: failed to confirm launch options for appId ${item.app_id}`);
-                  }
-                } catch (e) {
-                  logError(`migration_relaunch_options: failed to set launch options for appId ${item.app_id}: ${e}`);
-                }
-              }),
-            );
-          }
-        })(),
-      );
+      detach(batchConfirmLaunchOptions(data.items, "migration_relaunch_options"));
     },
   );
 

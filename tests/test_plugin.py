@@ -116,6 +116,8 @@ def plugin():
             retrodeck_paths=p._retrodeck_paths,
             path_probe=FakePathExistsReader(),
             uow_factory=FakeUnitOfWorkFactory(),
+            active_core=FakeActiveCoreResolver(),
+            disc_resolver=FakeDiscResolver(),
         ),
     )
     return p
@@ -800,6 +802,9 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_rom_metadata",
     "get_all_metadata_cache",
     "get_app_id_rom_id_map",
+    # Read-only startup launch-options reconcile pull (#1043) — heals drifted
+    # shortcut launch commands; pure read, never gated.
+    "get_installed_relaunch_options",
     # Achievements queries (server-side).
     "get_achievements",
     "get_achievement_progress",

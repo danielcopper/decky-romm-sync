@@ -1,0 +1,62 @@
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { batchConfirmLaunchOptions } from "./launchOptionsReconcile";
+import * as steamShortcuts from "./steamShortcuts";
+import * as backend from "../api/backend";
+
+vi.mock("./steamShortcuts");
+vi.mock("../api/backend");
+
+function items(n: number): { app_id: number; launch_options: string }[] {
+  return Array.from({ length: n }, (_, i) => ({ app_id: i + 1, launch_options: `cmd ${i + 1}` }));
+}
+
+describe("batchConfirmLaunchOptions", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(steamShortcuts.setLaunchOptionsConfirmed).mockResolvedValue(true);
+  });
+
+  it("no-ops on an empty list (no confirm, no log)", async () => {
+    await batchConfirmLaunchOptions([], "startup_reconcile");
+    expect(vi.mocked(steamShortcuts.setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.logError)).not.toHaveBeenCalled();
+  });
+
+  it("no-ops on a non-array input (defensive guard)", async () => {
+    await batchConfirmLaunchOptions(undefined as unknown as { app_id: number; launch_options: string }[], "ctx");
+    expect(vi.mocked(steamShortcuts.setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.logError)).not.toHaveBeenCalled();
+  });
+
+  it("confirms every item across batches (12 items -> two batches of 10 + 2)", async () => {
+    await batchConfirmLaunchOptions(items(12), "startup_reconcile");
+    expect(vi.mocked(steamShortcuts.setLaunchOptionsConfirmed)).toHaveBeenCalledTimes(12);
+    expect(vi.mocked(steamShortcuts.setLaunchOptionsConfirmed)).toHaveBeenNthCalledWith(1, 1, "cmd 1");
+    expect(vi.mocked(steamShortcuts.setLaunchOptionsConfirmed)).toHaveBeenNthCalledWith(12, 12, "cmd 12");
+    expect(vi.mocked(backend.logError)).not.toHaveBeenCalled();
+  });
+
+  it("logs a non-vacuous error with the appId + context on a false confirm; still processes the rest", async () => {
+    vi.mocked(steamShortcuts.setLaunchOptionsConfirmed).mockImplementation((appId: number) =>
+      Promise.resolve(appId !== 2),
+    );
+    await batchConfirmLaunchOptions(items(3), "startup_reconcile");
+    expect(vi.mocked(steamShortcuts.setLaunchOptionsConfirmed)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(backend.logError)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(backend.logError)).toHaveBeenCalledWith(
+      "startup_reconcile: failed to confirm launch options for appId 2",
+    );
+  });
+
+  it("logs a non-vacuous error with the appId + context when a confirm throws; still processes the rest", async () => {
+    vi.mocked(steamShortcuts.setLaunchOptionsConfirmed).mockImplementation((appId: number) =>
+      appId === 2 ? Promise.reject(new Error("boom")) : Promise.resolve(true),
+    );
+    await batchConfirmLaunchOptions(items(3), "migration_relaunch_options");
+    expect(vi.mocked(steamShortcuts.setLaunchOptionsConfirmed)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(backend.logError)).toHaveBeenCalledTimes(1);
+    const msg = vi.mocked(backend.logError).mock.calls[0]![0];
+    expect(msg).toContain("migration_relaunch_options: failed to set launch options for appId 2");
+    expect(msg).toContain("boom");
+  });
+});

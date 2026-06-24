@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 
 import pytest
+from fakes.fake_active_core_resolver import FakeActiveCoreResolver
+from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_path_exists_reader import FakePathExistsReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
@@ -23,19 +25,29 @@ def logger() -> logging.Logger:
     return logging.getLogger("test_startup_healing")
 
 
-def _make_rom(rom_id: int) -> Rom:
+def _make_rom(rom_id: int, *, shortcut_app_id: int | None = None) -> Rom:
     return Rom(
         rom_id=rom_id,
         platform_slug="n64",
         name=f"Game {rom_id}",
         fs_name=f"game_{rom_id}.z64",
-        shortcut_app_id=1000 + rom_id,
+        shortcut_app_id=1000 + rom_id if shortcut_app_id is None else shortcut_app_id,
         last_synced_at="2025-01-01T00:00:00",
     )
 
 
-def _seed_install(uow: FakeUnitOfWork, rom_id: int, *, file_path: str, rom_dir: str | None = None) -> None:
-    """Seed the FK-parent Rom THEN its install record, in one commit."""
+def _seed_install(
+    uow: FakeUnitOfWork,
+    rom_id: int,
+    *,
+    file_path: str,
+    rom_dir: str | None = None,
+    rom: Rom | None = None,
+) -> None:
+    """Seed the FK-parent Rom THEN its install record, in one commit.
+
+    *rom* overrides the default ROM identity row.
+    """
     install = RomInstall.mark_installed(
         rom_id=rom_id,
         file_path=file_path,
@@ -45,7 +57,7 @@ def _seed_install(uow: FakeUnitOfWork, rom_id: int, *, file_path: str, rom_dir: 
         installed_at="2025-01-01T00:00:00",
     )
     with uow:
-        uow.roms.save(_make_rom(rom_id))
+        uow.roms.save(rom if rom is not None else _make_rom(rom_id))
         uow.rom_installs.save(install)
 
 
@@ -56,6 +68,8 @@ def _make_service(
     path_probe: FakePathExistsReader | None = None,
     uow: FakeUnitOfWork | None = None,
     clock: FakeClock | None = None,
+    active_core: FakeActiveCoreResolver | None = None,
+    disc_resolver: FakeDiscResolver | None = None,
 ) -> StartupHealingService:
     probe = path_probe if path_probe is not None else FakePathExistsReader(paths={retrodeck_home})
     return StartupHealingService(
@@ -65,6 +79,8 @@ def _make_service(
             retrodeck_paths=FakeRetroDeckPaths(home=retrodeck_home),
             path_probe=probe,
             uow_factory=FakeUnitOfWorkFactory(uow) if uow is not None else FakeUnitOfWorkFactory(),
+            active_core=active_core if active_core is not None else FakeActiveCoreResolver(),
+            disc_resolver=disc_resolver if disc_resolver is not None else FakeDiscResolver(),
         ),
     )
 
@@ -227,3 +243,90 @@ class TestReconcileOrphanedSyncRuns:
         service.reconcile_orphaned_sync_runs()
 
         assert uow.sync_runs.save_count == 0
+
+
+class TestGetInstalledRelaunchOptions:
+    def test_no_installs_returns_empty(self, logger):
+        """No rom_installs rows → empty list (nothing to reconcile)."""
+        uow = FakeUnitOfWork()
+        service = _make_service(logger=logger, uow=uow)
+        assert service.get_installed_relaunch_options() == []
+
+    def test_skips_install_when_rom_lookup_returns_none(self, logger, monkeypatch):
+        """Defensive skip: an install whose ``roms.get`` yields None is dropped.
+
+        The real schema's FK keeps this from happening on disk, so the branch is
+        forced by stubbing the lookup rather than by orphaning the install (the
+        FK-modelling fake would reject that at commit).
+        """
+        uow = FakeUnitOfWork()
+        _seed_install(uow, 1, file_path="/roms/n64/a.z64", rom=_make_rom(1, shortcut_app_id=99))
+        monkeypatch.setattr(uow.roms, "get", lambda _rom_id: None)
+        service = _make_service(logger=logger, uow=uow)
+        assert service.get_installed_relaunch_options() == []
+
+    def test_skips_unbound_rom(self, logger):
+        """An installed ROM with shortcut_app_id=None (unbound) is skipped."""
+        uow = FakeUnitOfWork()
+        _seed_install(
+            uow,
+            1,
+            file_path="/roms/n64/a.z64",
+            rom=Rom(
+                rom_id=1,
+                platform_slug="n64",
+                name="Game 1",
+                fs_name="game_1.z64",
+                shortcut_app_id=None,
+                last_synced_at="2025-01-01T00:00:00",
+            ),
+        )
+        service = _make_service(logger=logger, uow=uow)
+        assert service.get_installed_relaunch_options() == []
+
+    def test_single_installed_bound_default_core(self, logger):
+        """Installed+bound, core resolves None → plain flatpak launch command."""
+        uow = FakeUnitOfWork()
+        file_path = "/roms/n64/zelda.z64"
+        _seed_install(uow, 1, file_path=file_path, rom=_make_rom(1, shortcut_app_id=4242))
+        service = _make_service(logger=logger, uow=uow)
+        items = service.get_installed_relaunch_options()
+        assert items == [
+            {
+                "app_id": 4242,
+                "launch_options": f'flatpak run net.retrodeck.retrodeck "{file_path}"',
+            }
+        ]
+
+    def test_core_override_bakes_e_form(self, logger):
+        """A resolved core .so produces the RetroDECK -e override in the command."""
+        uow = FakeUnitOfWork()
+        file_path = "/roms/n64/mario.z64"
+        _seed_install(uow, 1, file_path=file_path, rom=_make_rom(1, shortcut_app_id=7))
+        active_core = FakeActiveCoreResolver(per_rom={1: ("mupen64plus_next", "Mupen64Plus-Next")})
+        service = _make_service(logger=logger, uow=uow, active_core=active_core)
+        items = service.get_installed_relaunch_options()
+        assert items == [
+            {
+                "app_id": 7,
+                "launch_options": (
+                    "flatpak run net.retrodeck.retrodeck -e "
+                    '"%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/mupen64plus_next.so %ROM%" '
+                    f'"{file_path}"'
+                ),
+            }
+        ]
+        assert active_core.calls == [1]
+
+    def test_multiple_installs_yield_multiple_items(self, logger):
+        """Every installed+bound ROM contributes one item, in iteration order."""
+        uow = FakeUnitOfWork()
+        _seed_install(uow, 1, file_path="/roms/n64/a.z64", rom=_make_rom(1, shortcut_app_id=11))
+        _seed_install(uow, 2, file_path="/roms/n64/b.z64", rom=_make_rom(2, shortcut_app_id=22))
+        service = _make_service(logger=logger, uow=uow)
+        items = service.get_installed_relaunch_options()
+        assert {item["app_id"] for item in items} == {11, 22}
+        assert items == [
+            {"app_id": 11, "launch_options": 'flatpak run net.retrodeck.retrodeck "/roms/n64/a.z64"'},
+            {"app_id": 22, "launch_options": 'flatpak run net.retrodeck.retrodeck "/roms/n64/b.z64"'},
+        ]

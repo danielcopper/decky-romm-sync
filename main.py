@@ -518,6 +518,12 @@ class Plugin:
     async def get_app_id_rom_id_map(self):
         return self._metadata_service.get_app_id_rom_id_map()
 
+    async def get_installed_relaunch_options(self):
+        """Return [{app_id, launch_options}] for every installed+bound ROM so the
+        frontend can re-confirm drifted Steam-shortcut launch commands at startup
+        (#1043). Read-only — not migration-gated."""
+        return await self.loop.run_in_executor(None, self._startup_healing_service.get_installed_relaunch_options)
+
     # ── Achievements delegation to AchievementsService ───────
 
     async def get_achievements(self, rom_id):

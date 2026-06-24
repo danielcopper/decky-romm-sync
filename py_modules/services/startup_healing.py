@@ -12,15 +12,18 @@ wiped on the next reload.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from domain.installed_roms import is_pending_migration_path
+from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
 
 if TYPE_CHECKING:
     import logging
 
     from services.protocols import (
+        ActiveCoreReader,
         Clock,
+        DiscResolver,
         PathExistsReader,
         RetroDeckPaths,
         UnitOfWorkFactory,
@@ -35,8 +38,12 @@ class StartupHealingServiceConfig:
     provider, the generic path-exists probe, and the SQLite Unit-of-Work
     factory (the transactional seam over the ``rom_installs``, ``sync_runs``,
     and ``kv_config`` repositories — the last holding the pending-migration
-    previous home marker). Bundled here so the ctor stays within the S107
-    parameter budget and the service stays free of raw filesystem I/O.
+    previous home marker). The shared ``active_core`` and ``disc_resolver``
+    seams re-bake each installed+bound ROM's full launch command (active core,
+    selected disc) so the startup launch-options reconcile draws the bake path
+    from the same resolvers as every other bake site. Bundled here so the ctor
+    stays within the S107 parameter budget and the service stays free of raw
+    filesystem I/O.
     """
 
     logger: logging.Logger
@@ -44,6 +51,8 @@ class StartupHealingServiceConfig:
     retrodeck_paths: RetroDeckPaths
     path_probe: PathExistsReader
     uow_factory: UnitOfWorkFactory
+    active_core: ActiveCoreReader
+    disc_resolver: DiscResolver
 
 
 class StartupHealingService:
@@ -55,6 +64,8 @@ class StartupHealingService:
         self._retrodeck_paths = config.retrodeck_paths
         self._path_probe = config.path_probe
         self._uow_factory = config.uow_factory
+        self._active_core = config.active_core
+        self._disc_resolver = config.disc_resolver
 
     def prune_stale_installed_roms(self) -> None:
         """Remove ``rom_installs`` rows whose files no longer exist on disk.
@@ -110,3 +121,41 @@ class StartupHealingService:
             self._logger.info(f"Healing orphaned sync run {run.id}: marking errored (interrupted by restart)")
             run.mark_errored(at=self._clock.now().isoformat(), error="interrupted by restart")
             uow.sync_runs.save(run)
+
+    def get_installed_relaunch_options(self) -> list[dict[str, Any]]:
+        """Build the relaunch items for every installed+bound ROM so the
+        frontend can re-confirm drifted ``launch_options`` at startup (#1043).
+
+        For each ROM that is both installed (has a ``rom_installs`` row) and
+        bound (its ``Rom.shortcut_app_id`` is set), composes the full
+        Steam-shortcut launch command from the active core and the selected
+        disc through the same ``active_core`` / ``disc_resolver`` seams every
+        other bake site uses. Uninstalled ROMs (no ``rom_installs`` row) and
+        unbound ROMs (``shortcut_app_id`` is ``None``) are skipped by
+        construction — they carry no installed launch command to reconcile.
+
+        The install/ROM rows are snapshotted inside one short read UoW which is
+        then closed *before* the bake resolution runs: ``active_core_for_rom``
+        opens its own UoW, so resolving inside the iteration UoW would deadlock
+        on the per-connection write lock. The disc scan is the resolver's I/O
+        seam, none at the service layer.
+        """
+        with self._uow_factory() as uow:
+            bound_installs = [
+                (rom, install)
+                for install in uow.rom_installs.iter_all()
+                if (rom := uow.roms.get(install.rom_id)) is not None and rom.shortcut_app_id is not None
+            ]
+
+        items: list[dict[str, Any]] = []
+        for rom, install in bound_installs:
+            core_so, _label = self._active_core.active_core_for_rom(rom.rom_id)
+            invocation = resolve_emulator_invocation({"id": rom.rom_id}, core_so)
+            bake_path = self._disc_resolver.resolve_for_install(install, rom.selected_disc)
+            items.append(
+                {
+                    "app_id": rom.shortcut_app_id,
+                    "launch_options": build_launch_options(invocation, bake_path),
+                }
+            )
+        return items

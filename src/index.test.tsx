@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act } from "@testing-library/react";
 import { toaster } from "@decky/api";
 import { emitDeckyEvent, deckyEventListenerCount } from "./test-utils/decky-api-mock";
-import { getSettingsResetNotice, getAllPlaytime, getAppIdRomIdMap } from "./api/backend";
+import { getSettingsResetNotice, getAllPlaytime, getAppIdRomIdMap, getInstalledRelaunchOptions } from "./api/backend";
 import { getSettingsResetState, setSettingsResetState } from "./utils/settingsResetStore";
 import { recordSyncCreated, resetSyncDelta } from "./utils/syncDeltaStore";
 import type { DownloadCompleteEvent, SyncPlanData, SyncStaleData } from "./types";
@@ -261,6 +261,69 @@ describe("index.tsx — migration_relaunch_options listener", () => {
 
     plugin.onDismount();
     expect(deckyEventListenerCount("migration_relaunch_options")).toBe(0);
+  });
+});
+
+describe("index.tsx — startup launch-options reconcile (#1043)", () => {
+  beforeEach(() => {
+    setLaunchOptionsConfirmed.mockClear();
+    setLaunchOptionsConfirmed.mockResolvedValue(true);
+    logError.mockClear();
+    // Make the init detach reach initDone=true so the reconcile fires.
+    vi.mocked(getAllPlaytime).mockResolvedValue({ playtime: {} });
+    vi.mocked(getAppIdRomIdMap).mockResolvedValue({});
+    // Settle the sibling reset-notice detach so its .catch doesn't muddy logError.
+    vi.mocked(getSettingsResetNotice).mockResolvedValue({ pending: false, backed_up_to: null });
+    vi.mocked(getInstalledRelaunchOptions).mockReset();
+  });
+
+  it("confirm-sets launch options for each reconciled item after init", async () => {
+    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue([
+      { app_id: 100, launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/a.bin"' },
+      { app_id: 200, launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/b.bin"' },
+    ]);
+    const plugin = pluginFactory();
+    await flush();
+
+    expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(100, 'flatpak run net.retrodeck.retrodeck "/roms/a.bin"');
+    expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(200, 'flatpak run net.retrodeck.retrodeck "/roms/b.bin"');
+    expect(logError).not.toHaveBeenCalledWith(expect.stringContaining("startup_reconcile"));
+    plugin.onDismount();
+  });
+
+  it("never confirm-sets when there is nothing installed to reconcile", async () => {
+    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue([]);
+    const plugin = pluginFactory();
+    await flush();
+
+    expect(getInstalledRelaunchOptions).toHaveBeenCalled();
+    expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+    plugin.onDismount();
+  });
+
+  it("surfaces a startup_reconcile-prefixed logError when a confirm returns false", async () => {
+    setLaunchOptionsConfirmed.mockResolvedValue(false);
+    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue([
+      { app_id: 100, launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/a.bin"' },
+    ]);
+    const plugin = pluginFactory();
+    await flush();
+
+    expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(100, 'flatpak run net.retrodeck.retrodeck "/roms/a.bin"');
+    expect(logError).toHaveBeenCalledWith("startup_reconcile: failed to confirm launch options for appId 100");
+    plugin.onDismount();
+  });
+
+  it("surfaces a startup_reconcile-prefixed logError when the pull callable rejects", async () => {
+    vi.mocked(getInstalledRelaunchOptions).mockRejectedValue(new Error("pull failed"));
+    const plugin = pluginFactory();
+    await flush();
+
+    expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+    expect(logError).toHaveBeenCalledWith(
+      expect.stringContaining("startup_reconcile: failed to reconcile launch options"),
+    );
+    plugin.onDismount();
   });
 });
 
