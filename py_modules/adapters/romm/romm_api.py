@@ -48,8 +48,23 @@ class RommApiAdapter:
 
     # ── Server / Auth ─────────────────────────────────────────────────
 
+    # Fast-fail reachability probe: a single ~3s attempt, no retry. Keeps the
+    # launch gate's "offline" verdict snappy instead of waiting through the
+    # retrying heartbeat (3 attempts + up to ~90s of accumulated timeouts).
+    _PROBE_TIMEOUT_SECONDS = 3
+
     def heartbeat(self) -> dict[str, Any]:
         return self._client.request("/api/heartbeat")
+
+    def heartbeat_once(self) -> dict[str, Any]:
+        """Single-attempt, short-timeout heartbeat for the reachability probe.
+
+        Unlike :meth:`heartbeat` (3 retries, 30s/attempt), this fires one
+        ``/api/heartbeat`` GET with a ~3s timeout so an offline verdict returns
+        fast. The retrying :meth:`heartbeat` stays the path the version/sync
+        flows use.
+        """
+        return self._client.request_once("/api/heartbeat", timeout=self._PROBE_TIMEOUT_SECONDS)
 
     def list_platforms(self) -> list[dict[str, Any]]:
         return self._client.request("/api/platforms")

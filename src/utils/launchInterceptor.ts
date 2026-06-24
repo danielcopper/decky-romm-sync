@@ -178,38 +178,65 @@ function relaunch(appId: number): void {
 /**
  * Act on the funnel's verdict for a cancelled launch. The launch is already
  * stopped, so each branch either relaunches (`relaunch`) or does nothing.
+ *
+ * Returns "retry" only from the offline-drift branch when the user asks to
+ * re-probe — {@link runWatcherGate} loops on that and re-runs the gate (which
+ * re-probes via the fast reachability check); every other outcome returns
+ * "done".
  */
-async function handleWatcherVerdict(verdict: GateVerdict, appId: number, romId: number): Promise<void> {
+async function handleWatcherVerdict(verdict: GateVerdict, appId: number, romId: number): Promise<"done" | "retry"> {
   switch (verdict.decision) {
     case "allow":
       relaunch(appId);
-      return;
+      return "done";
     case "abort":
       // The user saw setup/core UI and declined — already cancelled, nothing to do.
-      return;
+      return "done";
     case "block":
       if (verdict.reason === "migration_pending") {
         toaster.toast({ title: "RomM Sync", body: MIGRATION_TOAST_BODY });
       }
-      return;
+      return "done";
     case "conflict": {
       const resolution = await handleConflicts(verdict.conflicts);
-      if (resolution === "cancel") return;
+      if (resolution === "cancel") return "done";
       // Conflicts resolved — notify sibling components to refresh, then relaunch.
       globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
       relaunch(appId);
-      return;
+      return "done";
     }
     case "offline_drift": {
       const choice = await showOfflineDriftModal();
       if (choice === "start_anyway") relaunch(appId);
-      return;
+      if (choice === "retry") return "retry";
+      return "done";
     }
     case "sync_failed": {
       const proceed = await showFallbackLaunchModal(verdict.message);
       if (proceed) relaunch(appId);
-      return;
+      return "done";
     }
+  }
+}
+
+/**
+ * Run the shared launch gate and act on its verdict, looping while the user
+ * keeps choosing "Retry" on the offline-drift modal. Each retry re-runs
+ * {@link runLaunchGate} (re-probing connectivity via the fast reachability
+ * check) and acts on the NEW verdict — online now relaunches via the normal
+ * path; still offline + drift re-shows the offline modal. A gate throw fails
+ * open to `allow` so a gate bug never traps the user's already-cancelled launch.
+ */
+async function runWatcherGate(appId: number, romId: number): Promise<void> {
+  let verdict = await runLaunchGate(appId, romId, makeWatcherOps(romId)).catch((e): GateVerdict => {
+    logError(`Watcher gate threw (failing open to allow): ${e}`);
+    return { decision: "allow" };
+  });
+  while ((await handleWatcherVerdict(verdict, appId, romId)) === "retry") {
+    verdict = await runLaunchGate(appId, romId, makeWatcherOps(romId)).catch((e): GateVerdict => {
+      logError(`Watcher gate threw (failing open to allow): ${e}`);
+      return { decision: "allow" };
+    });
   }
 }
 
@@ -281,11 +308,7 @@ export function registerLaunchInterceptor(): void {
               return;
             }
 
-            const verdict = await runLaunchGate(appId, romId, makeWatcherOps(romId)).catch((e): GateVerdict => {
-              logError(`Watcher gate threw (failing open to allow): ${e}`);
-              return { decision: "allow" };
-            });
-            await handleWatcherVerdict(verdict, appId, romId);
+            await runWatcherGate(appId, romId);
           } catch (e) {
             // Any unexpected error must NEVER trap the user's game — relaunch.
             logError(`Launch interceptor error: ${e}`);

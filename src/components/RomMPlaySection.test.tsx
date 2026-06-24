@@ -322,6 +322,9 @@ describe("RomMPlaySection", () => {
       success: true,
       message: "Connected",
     });
+    // Fast offline-badge probe defaults to "online" — a positive probe is not
+    // acted on, so it defers to testConnection. Tests opt into {online:false}.
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
     vi.mocked(backend.debugLog).mockResolvedValue(undefined);
     // reconcilePlaytime defaults to a server-unreachable no-op so the
     // connection effect's fire-and-forget reconcile doesn't push playtime or
@@ -745,6 +748,49 @@ describe("RomMPlaySection", () => {
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("offline");
+    });
+
+    it("fast probeReachability=offline flips the badge offline even while testConnection hangs", async () => {
+      // The fast probe resolves offline immediately; testConnection NEVER
+      // resolves (slow/retrying path). The offline badge must NOT wait on it.
+      vi.mocked(backend.probeReachability).mockResolvedValue({ online: false });
+      vi.mocked(backend.testConnection).mockImplementation(() => new Promise(() => {}));
+      const listener = vi.fn();
+      globalThis.addEventListener("romm_connection_changed", listener);
+      try {
+        render(<RomMPlaySection appId={testAppId} />);
+        await flushAsync();
+        expect(vi.mocked(backend.probeReachability)).toHaveBeenCalled();
+        expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("offline");
+        const states = listener.mock.calls.map((c) => (c[0] as CustomEvent).detail.state);
+        expect(states).toContain("offline");
+      } finally {
+        globalThis.removeEventListener("romm_connection_changed", listener);
+      }
+    });
+
+    it("fast probeReachability=online defers to testConnection (no premature offline flip)", async () => {
+      // A positive fast probe is NOT acted on — the precise verdict comes from
+      // testConnection (so a pending version error never flashes 'connected').
+      vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: true, message: "ok" });
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("connected");
+      // The fast probe never forced an offline badge on a reachable server.
+      expect(vi.mocked(connectionState.setRommConnectionState)).not.toHaveBeenCalledWith("offline");
+    });
+
+    it("fast probeReachability throws → defers (no premature offline flip)", async () => {
+      // A thrown probe is "no signal" — it must NOT guess offline; the precise
+      // verdict comes from testConnection. (testConnection hangs here, so the
+      // only thing that could flip offline is the fast probe — which defers.)
+      vi.mocked(backend.probeReachability).mockRejectedValue(new Error("bridge error"));
+      vi.mocked(backend.testConnection).mockImplementation(() => new Promise(() => {}));
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(vi.mocked(backend.probeReachability)).toHaveBeenCalled();
+      expect(vi.mocked(connectionState.setRommConnectionState)).not.toHaveBeenCalledWith("offline");
     });
 
     it("on timeout (timeoutMs rejects first) → catch sets 'offline'", async () => {

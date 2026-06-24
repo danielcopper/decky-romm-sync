@@ -678,31 +678,44 @@ class TestProbeReachability:
         result = event_loop.run_until_complete(service.probe_reachability())
 
         assert result == {"online": True}
-        romm_api.heartbeat.assert_called_once_with()
+        # Fast-fail path: the SINGLE-attempt probe is used, not the retrying heartbeat.
+        romm_api.heartbeat_once.assert_called_once_with()
+        romm_api.heartbeat.assert_not_called()
         # Pure connectivity probe — never asserts a version or writes state.
         romm_api.set_version.assert_not_called()
+
+    def test_uses_single_attempt_probe_not_retrying_heartbeat(self, event_loop, romm_api, logger):
+        """The probe drives ``heartbeat_once`` (one shot, short timeout) — never the
+        retrying ``heartbeat`` that the version/sync flows use."""
+        settings: dict[str, Any] = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+
+        event_loop.run_until_complete(service.probe_reachability())
+
+        assert romm_api.heartbeat_once.call_count == 1
+        romm_api.heartbeat.assert_not_called()
 
     def test_heartbeat_raises_reports_offline(self, event_loop, romm_api, logger):
         """Any heartbeat exception → {"online": False}, never raises."""
         settings: dict[str, Any] = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
-        romm_api.heartbeat.side_effect = RommConnectionError("refused")
+        romm_api.heartbeat_once.side_effect = RommConnectionError("refused")
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
 
         result = event_loop.run_until_complete(service.probe_reachability())
 
         assert result == {"online": False}
-        romm_api.heartbeat.assert_called_once_with()
+        romm_api.heartbeat_once.assert_called_once_with()
 
     def test_heartbeat_generic_exception_reports_offline_and_logs(self, event_loop, romm_api, logger, caplog):
         """A non-connection (code/wiring bug) exception still → {"online": False}, logged, never raises."""
         settings: dict[str, Any] = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
-        romm_api.heartbeat.side_effect = RuntimeError("heartbeat wiring bug")
+        romm_api.heartbeat_once.side_effect = RuntimeError("heartbeat wiring bug")
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
 
         with caplog.at_level(logging.DEBUG, logger="test_connection"):
             result = event_loop.run_until_complete(service.probe_reachability())
 
         assert result == {"online": False}
-        romm_api.heartbeat.assert_called_once_with()
+        romm_api.heartbeat_once.assert_called_once_with()
         # The swallow is diagnosable: a genuine bug is not silently lost.
         assert any("probe_reachability heartbeat failed" in r.message for r in caplog.records)

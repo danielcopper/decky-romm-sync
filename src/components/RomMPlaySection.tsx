@@ -36,6 +36,7 @@ import {
   getCachedGameDetail,
   invalidateCachedGameDetail,
   testConnection,
+  probeReachability,
   getSaveStatus,
   getBiosStatus,
   getPlatformCoreInfo,
@@ -406,15 +407,50 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       }
     }
 
+    // Once testConnection() lands an authoritative verdict, the fast probe must
+    // not override it (avoids a late probe clobbering a "connected" badge).
+    let settled = false;
+
+    // Fast offline-badge probe (ADR-0015): the slow `testConnection()` below
+    // goes through the retrying heartbeat (3 attempts + backoff, up to ~90s on a
+    // remote timeout), so the offline badge would otherwise lag the page open by
+    // seconds. The fast `probeReachability()` (single attempt, ~3s) flips the
+    // badge to "offline" the moment the server is unreachable. We only ACT on a
+    // negative result here — a positive probe still defers to `testConnection()`
+    // for the precise verdict (version gate, auth) so we never flash "connected"
+    // when a version error is pending.
+    const fastOfflineProbe = async () => {
+      // Only an EXPLICIT `online === false` flips the badge offline here. A
+      // throw, or any non-{online} payload, is "no signal" → defer to the
+      // precise `testConnection()` verdict below rather than guess offline.
+      const offline = await probeReachability()
+        .then((r) => r.online === false)
+        .catch((e) => {
+          detach(debugLog(`RomMPlaySection: fast reachability probe failed (no signal — deferring to testConnection): ${e}`));
+          return false;
+        });
+      // The fast probe is an EARLY hint, not the authority. Bail if testConnection
+      // already settled an authoritative verdict (so a late probe can't clobber
+      // "connected"), or if cancelled / not offline.
+      if (cancelled || settled || !offline) return;
+      setRommConnectionState("offline");
+      setConnectionState("offline");
+      globalThis.dispatchEvent(new CustomEvent("romm_connection_changed", { detail: { state: "offline" } }));
+    };
+
     const check = async () => {
       // Reset stale connection state immediately so downstream consumers
       // (e.g. CustomPlayButton) don't stay stuck on a previous "offline"
       setRommConnectionState("checking");
       globalThis.dispatchEvent(new CustomEvent("romm_connection_changed", { detail: { state: "checking" } }));
 
+      // Snappy offline badge — runs concurrently with the precise check below.
+      detach(fastOfflineProbe());
+
       try {
         const result = await Promise.race([testConnection(), timeoutMs(5000)]);
         if (cancelled) return;
+        settled = true; // authoritative verdict in hand — a late fast probe must not override it
         if (result.reason === "version_error") {
           setVersionError(result.message);
           setRommConnectionState("offline");
@@ -437,6 +473,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         }
       } catch {
         if (!cancelled) {
+          settled = true;
           setRommConnectionState("offline");
           setConnectionState("offline");
           globalThis.dispatchEvent(new CustomEvent("romm_connection_changed", { detail: { state: "offline" } }));

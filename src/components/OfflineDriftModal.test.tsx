@@ -11,8 +11,10 @@ interface ConfirmModalProps {
   strTitle?: string;
   strDescription?: string;
   strOKButtonText?: string;
+  strMiddleButtonText?: string;
   strCancelButtonText?: string;
   onOK?: () => void;
+  onMiddleButton?: () => void;
   onCancel?: () => void;
 }
 
@@ -28,12 +30,13 @@ describe("OfflineDriftModal — showOfflineDriftModal", () => {
     vi.mocked(showModal).mockClear();
   });
 
-  it("renders the RomM Unreachable copy with Start Anyway / Cancel buttons", () => {
+  it("renders the RomM Unreachable copy with Start Anyway / Retry / Cancel buttons", () => {
     void showOfflineDriftModal();
     const props = lastConfirmModalProps();
     expect(props.strTitle).toBe("RomM Unreachable");
     expect(props.strDescription).toContain("unsynced changes");
     expect(props.strOKButtonText).toBe("Start Anyway");
+    expect(props.strMiddleButtonText).toBe("Retry connection");
     expect(props.strCancelButtonText).toBe("Cancel");
   });
 
@@ -41,6 +44,12 @@ describe("OfflineDriftModal — showOfflineDriftModal", () => {
     const promise = showOfflineDriftModal();
     lastConfirmModalProps().onOK?.();
     await expect(promise).resolves.toBe("start_anyway");
+  });
+
+  it("resolves 'retry' when the middle button is pressed", async () => {
+    const promise = showOfflineDriftModal();
+    lastConfirmModalProps().onMiddleButton?.();
+    await expect(promise).resolves.toBe("retry");
   });
 
   it("resolves 'cancel' when Cancel is pressed", async () => {

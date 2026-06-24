@@ -501,9 +501,16 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     // the gate or a verdict's modal helper (framework-level) would otherwise
     // leave the button frozen there. The watcher never traps the user's game;
     // the Play-button equivalent is to reset the button to "play".
+    //
+    // Retry loop: the offline-drift modal can ask to re-probe. Each retry is a
+    // fresh user action, so the loop is bounded by the user choosing "Retry"
+    // again; the only thing that re-runs is the gate (which re-probes via the
+    // fast reachability check), and `actOnVerdict` signals back "retry".
     try {
-      const verdict = await runLaunchGate(appId, romId, makePlayButtonOps(romId));
-      await actOnVerdict(verdict, gameId, romId);
+      let verdict = await runLaunchGate(appId, romId, makePlayButtonOps(romId));
+      while ((await actOnVerdict(verdict, gameId, romId)) === "retry") {
+        verdict = await runLaunchGate(appId, romId, makePlayButtonOps(romId));
+      }
     } catch (e) {
       detach(debugLog(`CustomPlayButton: handlePlay unexpected error — resetting to play: ${e}`));
       setState("play");
@@ -513,47 +520,57 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   // Map a gate verdict onto the Play button's UI. `dispatchLaunch` marks the
   // skip-set, so every relaunch from here is exempt from the watcher (no
   // double-gate). Each non-launch branch returns the button to a settled state.
-  const actOnVerdict = async (verdict: GateVerdict, gameId: string, rid: number): Promise<void> => {
+  // Returns "retry" only from the offline-drift branch when the user asks to
+  // re-probe — `handlePlay` loops on that and re-runs the gate; every other
+  // outcome returns "done".
+  const actOnVerdict = async (verdict: GateVerdict, gameId: string, rid: number): Promise<"done" | "retry"> => {
     switch (verdict.decision) {
       case "allow":
         dispatchLaunch(gameId);
-        return;
+        return "done";
       case "abort":
         // The user saw setup/core UI and declined — bail silently to "play".
         setState("play");
-        return;
+        return "done";
       case "block":
         // Migration pending: the QAM/page already surfaces it; don't launch.
         setState("play");
-        return;
+        return "done";
       case "conflict": {
         const resolution = await handleConflicts(verdict.conflicts);
         if (resolution === "cancel") {
           setState("conflict");
-          return;
+          return "done";
         }
         // Conflicts resolved — notify sibling components to refresh, then launch.
         globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: rid } }));
         dispatchLaunch(gameId);
-        return;
+        return "done";
       }
       case "offline_drift": {
         const choice = await showOfflineDriftModal();
         if (choice === "start_anyway") {
           dispatchLaunch(gameId);
-          return;
+          return "done";
+        }
+        if (choice === "retry") {
+          // Re-run the gate (re-probes via the fast reachability check). The
+          // button stays interactive while the modal is open; flip to "syncing"
+          // so the user sees the gate working again instead of a dead "play".
+          setState("syncing");
+          return "retry";
         }
         setState("play");
-        return;
+        return "done";
       }
       case "sync_failed": {
         const proceed = await showFallbackLaunchModal(verdict.message);
         if (proceed) {
           dispatchLaunch(gameId);
-          return;
+          return "done";
         }
         setState("play");
-        return;
+        return "done";
       }
     }
   };

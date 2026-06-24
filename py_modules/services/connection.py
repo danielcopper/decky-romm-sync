@@ -111,15 +111,18 @@ class ConnectionService:
         """Probe server reachability with a fresh heartbeat — no version assertion, no cache.
 
         A bare connectivity check the launch path runs at the decision point
-        instead of trusting a possibly-stale cached connection state. Fires the
-        ``/api/heartbeat`` request on the executor thread and reports
-        ``{"online": True}`` on success, ``{"online": False}`` on any exception
-        (transport error, auth failure, malformed response). It deliberately
-        does NOT gate on version or persist anything — it answers only "can we
-        reach the server right now?".
+        instead of trusting a possibly-stale cached connection state. Fires a
+        SINGLE-attempt, short-timeout ``/api/heartbeat`` request
+        (``heartbeat_once``) on the executor thread — NOT the retrying
+        ``heartbeat`` the version/sync flows use — so an offline verdict returns
+        in ~3s instead of 3 retries x 30s. Reports ``{"online": True}`` on
+        success, ``{"online": False}`` on any exception (transport error, auth
+        failure, malformed response). It deliberately does NOT gate on version
+        or persist anything — it answers only "can we reach the server right
+        now?".
         """
         try:
-            await self._loop.run_in_executor(None, self._romm_api.heartbeat)
+            await self._loop.run_in_executor(None, self._romm_api.heartbeat_once)
         except Exception as e:
             # Logged so a genuine code/wiring bug in the heartbeat path is
             # diagnosable rather than masquerading silently as "server offline".

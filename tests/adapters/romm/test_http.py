@@ -421,6 +421,48 @@ class TestRommRequest:
         assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
 
 
+class TestRommRequestOnce:
+    def test_single_attempt_short_timeout(self, plugin):
+        """``request_once`` fires ONE urlopen with the passed (short) timeout —
+        no with_retry wrapper, unlike ``request``."""
+        import json as _json
+        from unittest.mock import MagicMock, patch
+
+        plugin.settings["romm_url"] = "http://romm.local"
+        plugin.settings["romm_api_token"] = "rmm_runtime"
+        plugin.settings["romm_allow_insecure_ssl"] = False
+
+        fake_resp = MagicMock()
+        fake_resp.read.return_value = _json.dumps({"ok": True}).encode()
+        fake_resp.__enter__ = MagicMock(return_value=fake_resp)
+        fake_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=fake_resp) as mock_open:
+            result = plugin._http_adapter.request_once("/api/heartbeat", timeout=3)
+
+        assert result == {"ok": True}
+        assert mock_open.call_count == 1
+        # The short timeout is threaded through to urlopen, not the 30s default.
+        assert mock_open.call_args.kwargs["timeout"] == 3
+
+    def test_does_not_retry_on_transient_error(self, plugin):
+        """A retryable transport error from ``request_once`` raises immediately —
+        a SINGLE attempt, no exponential backoff (``request`` would retry 3x)."""
+        from unittest.mock import patch
+
+        plugin.settings["romm_url"] = "http://romm.local"
+        plugin.settings["romm_api_token"] = "rmm_runtime"
+        plugin.settings["romm_allow_insecure_ssl"] = False
+
+        with (
+            patch("urllib.request.urlopen", side_effect=TimeoutError("timed out")) as mock_open,
+            pytest.raises(RommTimeoutError),
+        ):
+            plugin._http_adapter.request_once("/api/heartbeat", timeout=3)
+
+        assert mock_open.call_count == 1
+
+
 class TestRommJsonRequest:
     def test_post_json(self, plugin):
         import json as _json

@@ -175,6 +175,13 @@ class FakeRommApi:
         self._check_fail(self.heartbeat_side_effect)
         return dict(self.heartbeat_response)
 
+    def heartbeat_once(self) -> dict[str, Any]:
+        # Single-attempt reachability probe — same response/side-effect as the
+        # retrying heartbeat (the fake has no retry to bypass).
+        self._log("heartbeat_once")
+        self._check_fail(self.heartbeat_side_effect)
+        return dict(self.heartbeat_response)
+
     def get_current_user(self) -> dict[str, Any]:
         self._log("get_current_user")
         self._check_fail(self.get_current_user_side_effect)

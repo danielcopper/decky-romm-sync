@@ -129,6 +129,12 @@ class FakeSaveApi:
             raise self.heartbeat_raises
         return {"status": "ok"}
 
+    def heartbeat_once(self) -> dict[str, Any]:
+        self.call_log.append(("heartbeat_once", (), {}))
+        if self.heartbeat_raises is not None:
+            raise self.heartbeat_raises
+        return {"status": "ok"}
+
     def list_platforms(self) -> list[dict[str, Any]]:
         raise NotImplementedError
 

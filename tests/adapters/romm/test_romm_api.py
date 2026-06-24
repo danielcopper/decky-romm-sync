@@ -13,6 +13,7 @@ from lib.errors import RommNotFoundError, RommServerError
 def _make_api():
     client = MagicMock()
     client.request = MagicMock()
+    client.request_once = MagicMock()
     client.download = MagicMock()
     client.post_json = MagicMock()
     client.put_json = MagicMock()
@@ -28,6 +29,18 @@ class TestHeartbeat:
         result = api.heartbeat()
         client.request.assert_called_once_with("/api/heartbeat")
         assert result["SYSTEM"]["VERSION"] == "4.7.0"
+
+
+class TestHeartbeatOnce:
+    def test_uses_single_attempt_short_timeout_request(self):
+        """The reachability probe drives the single-attempt ``request_once`` with a
+        short timeout — NOT the retrying ``request`` used by ``heartbeat``."""
+        api, client = _make_api()
+        client.request_once.return_value = {"SYSTEM": {"VERSION": "4.8.1"}}
+        result = api.heartbeat_once()
+        client.request_once.assert_called_once_with("/api/heartbeat", timeout=3)
+        client.request.assert_not_called()
+        assert result["SYSTEM"]["VERSION"] == "4.8.1"
 
 
 class TestListPlatforms:

@@ -309,6 +309,15 @@ class RommVersion(Protocol):
         """
         ...
 
+    def heartbeat_once(self) -> dict[str, Any]:
+        """Single-attempt, short-timeout heartbeat for the reachability probe.
+
+        Bypasses the retry/long-timeout path of :meth:`heartbeat` so the launch
+        gate reaches an offline verdict fast. Same ``/api/heartbeat`` response
+        dict on success; raises on the first transport/auth failure.
+        """
+        ...
+
     def get_current_user(self) -> dict[str, Any]:
         """Fetch the currently authenticated user profile.
 

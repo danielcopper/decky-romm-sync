@@ -332,6 +332,40 @@ describe("launchInterceptor — full funnel watcher", () => {
       expect(runGameMock()).not.toHaveBeenCalled();
     });
 
+    it("offline_drift → retry → re-runs the gate; now allow → relaunch", async () => {
+      // First gate pass → offline_drift; user retries. Second gate pass → allow.
+      vi.mocked(launchGate.runLaunchGate)
+        .mockResolvedValueOnce({ decision: "offline_drift" })
+        .mockResolvedValue({ decision: "allow" });
+      vi.mocked(offlineDriftModal.showOfflineDriftModal).mockResolvedValueOnce("retry");
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      // Non-vacuous: the gate RE-RAN (called twice) on retry, and the now-allow
+      // verdict relaunched.
+      expect(vi.mocked(launchGate.runLaunchGate).mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(offlineDriftModal.showOfflineDriftModal).toHaveBeenCalledTimes(1);
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+    });
+
+    it("offline_drift → retry → still offline_drift → re-shows modal; cancel → no relaunch", async () => {
+      // Both gate passes → offline_drift. User retries once, then cancels.
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "offline_drift" });
+      vi.mocked(offlineDriftModal.showOfflineDriftModal).mockResolvedValueOnce("retry").mockResolvedValueOnce("cancel");
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(vi.mocked(launchGate.runLaunchGate).mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(offlineDriftModal.showOfflineDriftModal).toHaveBeenCalledTimes(2);
+      expect(runGameMock()).not.toHaveBeenCalled();
+    });
+
     it("sync_failed → fallback confirm; OK → relaunch", async () => {
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "sync_failed", message: "no device" });
       vi.mocked(fallbackLaunchModal.showFallbackLaunchModal).mockResolvedValue(true);

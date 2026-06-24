@@ -1027,6 +1027,62 @@ describe("CustomPlayButton — shared launch gate (ADR-0015)", () => {
     expect(vi.mocked(markLaunchSkipped)).not.toHaveBeenCalled();
   });
 
+  it("offline + drift → retry → gate re-probes, now online → launches via online path", async () => {
+    // First gate pass: offline + drift → offline modal. User picks "retry".
+    // Second gate pass: probe now returns online → clean sync → allow → launch.
+    vi.mocked(backend.probeReachability).mockResolvedValueOnce({ online: false }).mockResolvedValue({ online: true });
+    vi.mocked(backend.checkLocalDrift).mockResolvedValue({ drifted: true, rom_id: 42 });
+    vi.mocked(showOfflineDriftModal).mockResolvedValueOnce("retry");
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({ success: true, message: "", synced: 0, conflicts: [] });
+
+    await clickPlay();
+
+    // The modal asked, the user retried, and the gate RE-RAN: a second
+    // reachability probe fired (the re-probe), the now-online branch ran the
+    // pre-launch sync, and the launch dispatched. Non-vacuous: assert the ops
+    // were invoked AGAIN on retry, not just once.
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+    expect(vi.mocked(backend.probeReachability).mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(vi.mocked(backend.preLaunchSync)).toHaveBeenCalled();
+    expect(vi.mocked(markLaunchSkipped)).toHaveBeenCalledWith(100);
+  });
+
+  it("offline + drift → retry → still offline+drift → re-shows modal; cancel bails (no launch)", async () => {
+    // Both gate passes are offline + drift. User retries once, then cancels.
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: false });
+    vi.mocked(backend.checkLocalDrift).mockResolvedValue({ drifted: true, rom_id: 42 });
+    vi.mocked(showOfflineDriftModal).mockResolvedValueOnce("retry").mockResolvedValueOnce("cancel");
+
+    await clickPlay();
+
+    // The modal was shown TWICE (initial + after the retry re-ran the gate) and
+    // the gate re-probed; the final "cancel" bails without launching.
+    await waitFor(() => expect(vi.mocked(showOfflineDriftModal)).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(backend.probeReachability).mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+    expect(vi.mocked(markLaunchSkipped)).not.toHaveBeenCalled();
+  });
+
+  it("offline + drift → retry → now online conflict → conflict modal (online path)", async () => {
+    // Retry flips online and the online sync surfaces a conflict → the conflict
+    // modal runs, proving retry routes to the FULL online path, not just allow.
+    vi.mocked(backend.probeReachability).mockResolvedValueOnce({ online: false }).mockResolvedValue({ online: true });
+    vi.mocked(backend.checkLocalDrift).mockResolvedValue({ drifted: true, rom_id: 42 });
+    vi.mocked(showOfflineDriftModal).mockResolvedValueOnce("retry");
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: false,
+      message: "conflict",
+      synced: 0,
+      conflicts: [conflict()],
+    });
+    vi.mocked(handleConflicts).mockResolvedValue("cancel");
+
+    await clickPlay();
+
+    await waitFor(() => expect(vi.mocked(handleConflicts)).toHaveBeenCalledWith([conflict()]));
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+  });
+
   it("offline + NO local drift → launches silently (no modal)", async () => {
     vi.mocked(backend.probeReachability).mockResolvedValue({ online: false });
     vi.mocked(backend.checkLocalDrift).mockResolvedValue({ drifted: false, rom_id: 42 });

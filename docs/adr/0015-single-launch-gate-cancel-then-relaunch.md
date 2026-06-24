@@ -71,12 +71,16 @@ manager, sync, and playtime) is absent, so desktop-mode launches are entirely un
 
 - **Not installed** → hard block (no "Start Anyway"); the ROM isn't on disk.
 - **Migration pending** → block.
-- **Reachability** is checked with a **fresh probe** (heartbeat) at gate time, replacing the page-open-stale connection
-  flag.
+- **Reachability** is checked with a **fast fresh probe** at gate time — a single-attempt, short-timeout
+  `heartbeat_once` (no retry/backoff, unlike the sync paths' retrying heartbeat), so an offline verdict returns in ~3s
+  instead of up to ~90s on a remote timeout. The same fast probe drives the page's **offline badge** (it shows
+  immediately on page open), replacing the page-open-stale connection flag.
 - **Server reachable** → pre-launch save sync; a true conflict opens the conflict modal.
-- **Server unreachable + local drift** → a modal ("RomM unreachable — your local save has unsynced changes; playing may
-  create a conflict you'll resolve later. Start anyway?"). **Local drift is detected by content hash, never by file size
-  or mtime.**
+- **Server unreachable + local drift** → a **3-button modal** ("RomM unreachable — your local save has unsynced changes;
+  playing may create a conflict you'll resolve later."): **Start Anyway** / **Retry connection** / **Cancel**. _Retry
+  connection_ re-runs the gate with a fresh probe — if the server is back it proceeds down the online path (pre-launch
+  sync → conflict modal / launch), otherwise the modal reappears. **Local drift is detected by content hash, never by
+  file size or mtime.**
 - **Server unreachable + no local drift** → allow silently (nothing to lose; reconciles on the next sync).
 
 The watcher surfaces these as **real modals**, not toasts. The gate must **always fall back to launching on its own

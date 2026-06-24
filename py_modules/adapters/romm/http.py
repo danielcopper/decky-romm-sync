@@ -244,21 +244,36 @@ class RommHttpAdapter:
     # ------------------------------------------------------------------
 
     def request(self, path: str):
-        """GET a JSON resource from the RomM API."""
+        """GET a JSON resource from the RomM API (with retry)."""
+        return self.with_retry(self._build_get(path))
+
+    def request_once(self, path: str, *, timeout: int):
+        """GET a JSON resource in a SINGLE attempt with a SHORT *timeout*.
+
+        Deliberately bypasses :meth:`with_retry` and the 30s urlopen timeout used
+        by :meth:`request`. The launch-gate reachability probe needs a fast
+        offline verdict (~3s, one shot) instead of waiting through 3 retry
+        attempts and up to ~90s of accumulated remote timeouts. The real sync
+        paths keep the retrying :meth:`request`.
+        """
+        return self._build_get(path, timeout=timeout)()
+
+    def _build_get(self, path: str, *, timeout: int = 30):
+        """Build the GET worker closure shared by :meth:`request` / :meth:`request_once`."""
         url = self._settings["romm_url"].rstrip("/") + path
 
         def _do_request():
             req = urllib.request.Request(url, method="GET")
             self._apply_default_headers(req)
             try:
-                with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
+                with urllib.request.urlopen(req, context=self.ssl_context(), timeout=timeout) as resp:
                     return json.loads(resp.read().decode())
             except RommApiError:
                 raise
             except Exception as exc:
                 raise self.translate_http_error(exc, url, "GET") from exc
 
-        return self.with_retry(_do_request)
+        return _do_request
 
     @staticmethod
     def _is_cloudflare(headers) -> bool:
