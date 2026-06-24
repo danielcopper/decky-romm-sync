@@ -64,7 +64,9 @@ whose own `-e "..."` quoting must survive verbatim. `launch_options` carries:
   confirm-sets each installed+bound shortcut's command, healing any drift to `""` left by a missed bake), and
   **re-confirmed once more just before a Play-button launch** by a single-ROM pull (the funnel pulls
   `get_rom_relaunch_options(rom_id)` and confirm-sets the shortcut's command before `RunGame`, healing mid-session drift
-  on the most common launch path between plugin loads — best-effort, a failed re-confirm still launches; #1150);
+  on the most common launch path between plugin loads — best-effort, a failed re-confirm still launches; #1150), and
+  **re-confirmed after every sync** by the same startup-reconcile pass on `sync_complete` (a normal sync skips unchanged
+  platforms, so the post-sync reconcile heals their drift without waiting for a reload or a launch; #1151);
 - the **empty string `""`** (placeholder) for an uninstalled ROM, until it is downloaded.
 
 The `romm:<rom_id>` marker is **gone**. Two bindings that previously rode on it move off `launch_options`:
@@ -127,6 +129,11 @@ storage + precedence + bake-site model is [ADR-0011](0011-per-game-core-override
   ([#1150](https://github.com/danielcopper/decky-romm-sync/issues/1150)). The **direct-Steam-launch watcher path stays
   uncovered**: it must decide synchronously before `CancelGameAction` with no pre-warmed state, so it can't afford the
   extra round-trip; that path still relies on the startup reconcile.
+- The startup reconcile also runs **on `sync_complete`**. A normal sync skips unchanged platforms (no per-unit
+  `sync_apply_unit` emit), so a shortcut whose command drifted on an unchanged platform is otherwise never re-applied by
+  the sync — only by a later reload or Play press. Re-running the same idempotent pass after every sync heals it then
+  and there, which is also when the user expects "Sync" to make the library whole
+  ([#1151](https://github.com/danielcopper/decky-romm-sync/issues/1151)).
 - **Breaking for existing shortcuts: a re-sync is required.** Shortcuts created under the `romm:<rom_id>` model carry
   the old marker and no baked command; they are detected by exe but recreated by re-sync to pick up the baked
   `launch_options`. Accepted as a **pre-release** breaking change.

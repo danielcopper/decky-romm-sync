@@ -327,6 +327,97 @@ describe("index.tsx — startup launch-options reconcile (#1043)", () => {
   });
 });
 
+describe("index.tsx — sync_complete launch-options reconcile (#1151)", () => {
+  type SyncCompletePayload = {
+    platform_app_ids: Record<string, number[]>;
+    total_games: number;
+    cancelled?: boolean;
+  };
+
+  beforeEach(() => {
+    setLaunchOptionsConfirmed.mockClear();
+    setLaunchOptionsConfirmed.mockResolvedValue(true);
+    logError.mockClear();
+    vi.mocked(getAllPlaytime).mockResolvedValue({ playtime: {} });
+    vi.mocked(getAppIdRomIdMap).mockResolvedValue({});
+    vi.mocked(getSettingsResetNotice).mockResolvedValue({ pending: false, backed_up_to: null });
+    // The startup reconcile fires on factory init; default it to an empty set
+    // so each test isolates the sync_complete-triggered reconcile below.
+    vi.mocked(getInstalledRelaunchOptions).mockReset();
+    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue([]);
+  });
+
+  it("re-confirms launch options for every installed+bound ROM after a sync", async () => {
+    const plugin = pluginFactory();
+    await flush(); // settle the startup reconcile (empty set)
+    setLaunchOptionsConfirmed.mockClear();
+    vi.mocked(getInstalledRelaunchOptions).mockClear();
+    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue([
+      { app_id: 100, launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/a.bin"' },
+    ]);
+
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
+        platform_app_ids: {},
+        total_games: 0,
+        cancelled: false,
+      });
+    });
+    await flush();
+
+    expect(getInstalledRelaunchOptions).toHaveBeenCalled();
+    expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(100, 'flatpak run net.retrodeck.retrodeck "/roms/a.bin"');
+    expect(logError).not.toHaveBeenCalledWith(expect.stringContaining("sync_reconcile"));
+    plugin.onDismount();
+  });
+
+  it("reconciles even when the sync was cancelled", async () => {
+    const plugin = pluginFactory();
+    await flush();
+    setLaunchOptionsConfirmed.mockClear();
+    vi.mocked(getInstalledRelaunchOptions).mockClear();
+    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue([
+      { app_id: 200, launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/b.bin"' },
+    ]);
+
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
+        platform_app_ids: {},
+        total_games: 0,
+        cancelled: true,
+      });
+    });
+    await flush();
+
+    expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(200, 'flatpak run net.retrodeck.retrodeck "/roms/b.bin"');
+    plugin.onDismount();
+  });
+
+  it("surfaces a sync_reconcile-prefixed logError when the pull callable rejects", async () => {
+    const plugin = pluginFactory();
+    await flush();
+    setLaunchOptionsConfirmed.mockClear();
+    logError.mockClear();
+    vi.mocked(getInstalledRelaunchOptions).mockReset();
+    vi.mocked(getInstalledRelaunchOptions).mockRejectedValue(new Error("pull failed"));
+
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
+        platform_app_ids: {},
+        total_games: 0,
+        cancelled: false,
+      });
+    });
+    await flush();
+
+    expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+    expect(logError).toHaveBeenCalledWith(
+      expect.stringContaining("sync_reconcile: failed to reconcile launch options"),
+    );
+    plugin.onDismount();
+  });
+});
+
 describe("index.tsx — corrupt-settings reset notice", () => {
   beforeEach(() => {
     vi.mocked(toaster.toast).mockClear();

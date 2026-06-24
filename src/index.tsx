@@ -312,6 +312,23 @@ export default definePlugin(() => {
       }
     }
 
+    // Re-confirm launch_options for every installed+bound ROM after a sync. A
+    // normal sync skips unchanged platforms (no per-unit sync_apply_unit emit),
+    // so a shortcut whose launch_options drifted on an unchanged platform is
+    // otherwise healed only on the next plugin reload (startup reconcile) or
+    // Play press — never by the sync itself (#1151). Reuse the startup-reconcile
+    // mechanism: idempotent + appId-safe, runs regardless of cancellation.
+    detach(
+      (async () => {
+        try {
+          const items = await getInstalledRelaunchOptions();
+          await batchConfirmLaunchOptions(items, "sync_reconcile");
+        } catch (e) {
+          logError(`sync_reconcile: failed to reconcile launch options: ${e}`);
+        }
+      })(),
+    );
+
     // Create/update platform and RomM Steam collections + clean stale ones
     detach(
       (async () => {
