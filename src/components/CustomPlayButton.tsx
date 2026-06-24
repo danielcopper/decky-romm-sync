@@ -529,11 +529,10 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         dispatchLaunch(gameId);
         return "done";
       case "abort":
-        // The user saw setup/core UI and declined — bail silently to "play".
-        setState("play");
-        return "done";
       case "block":
-        // Migration pending: the QAM/page already surfaces it; don't launch.
+        // abort: the user saw setup/core UI and declined. block: migration
+        // pending (the QAM/page already surfaces it). Either way, bail silently
+        // to "play" without launching.
         setState("play");
         return "done";
       case "conflict": {

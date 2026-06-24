@@ -54,15 +54,15 @@ const MIGRATION_TOAST_BODY = "Pending RetroDECK migration. Open the plugin QAM t
  * plugin page open, so — unlike the Play button — this MUST NOT route the user
  * to the saves tab. Instead it silently auto-adopts the default/recommended
  * slot (via `confirmSlotChoice`) and proceeds. A direct launch is never blocked
- * on setup: any failure (server unreachable, needs-user-choice, a thrown error)
- * resolves to "proceed".
+ * on setup — it always proceeds (the gate op below maps this to "proceed"); any
+ * failure (server unreachable, needs-user-choice, a thrown error) is swallowed.
  */
-async function ensureTrackingConfiguredWatcher(romId: number): Promise<"proceed" | "abort"> {
+async function ensureTrackingConfiguredWatcher(romId: number): Promise<void> {
   const trackingResult = await isSaveTrackingConfigured(romId).catch((e) => {
     logError(`Watcher tracking check failed (assuming configured): ${e}`);
     return { configured: true };
   });
-  if (trackingResult.configured) return "proceed";
+  if (trackingResult.configured) return;
 
   let setupInfo;
   try {
@@ -70,7 +70,7 @@ async function ensureTrackingConfiguredWatcher(romId: number): Promise<"proceed"
   } catch (e) {
     // Network/backend failure — never block a direct launch on setup.
     logError(`Watcher save-setup fetch failed (proceeding unconfigured): ${e}`);
-    return "proceed";
+    return;
   }
 
   // Reuse the shared outcome handler with a no-op saves-tab dispatch and a
@@ -85,8 +85,6 @@ async function ensureTrackingConfiguredWatcher(romId: number): Promise<"proceed"
     toast: () => undefined,
     dispatchSavesTab: () => undefined,
   }).catch((e) => logError(`Watcher auto-adopt slot failed (proceeding): ${e}`));
-
-  return "proceed";
 }
 
 /**
@@ -147,7 +145,10 @@ async function preLaunchSyncWatcher(romId: number): Promise<PreLaunchSyncOutcome
 function makeWatcherOps(romId: number): LaunchGateOps {
   return {
     migrationPending: () => getMigrationState().pending,
-    ensureTrackingConfigured: () => ensureTrackingConfiguredWatcher(romId),
+    ensureTrackingConfigured: async (): Promise<"proceed"> => {
+      await ensureTrackingConfiguredWatcher(romId);
+      return "proceed";
+    },
     checkCoreChange: () => checkCoreChangeWatcher(romId),
     checkReachability: async () =>
       (

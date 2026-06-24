@@ -122,13 +122,11 @@ export interface LaunchGateOps {
  * otherwise) resolves to `{ decision: "allow" }`. A bug in the gate must never
  * trap the user's game behind it.
  *
- * `appId` / `romId` are accepted so callers pass the identifiers the injected
+ * `_appId` / `_romId` are accepted so callers pass the identifiers the injected
  * ops were bound for (and to keep the signature stable as ops grow); the gate
- * itself routes purely through the callbacks.
+ * itself routes purely through the callbacks, so they are intentionally unused.
  */
-export async function runLaunchGate(appId: number, romId: number, ops: LaunchGateOps): Promise<GateVerdict> {
-  void appId;
-  void romId;
+export async function runLaunchGate(_appId: number, _romId: number, ops: LaunchGateOps): Promise<GateVerdict> {
   try {
     // 1. Pending RetroDECK migration — hard block before any other work.
     if (ops.migrationPending()) {
