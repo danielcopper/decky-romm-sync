@@ -127,21 +127,23 @@ class StatusService:
         device_id: str | None,
         server_in_slot: list[dict[str, Any]],
         info: dict[str, Any],
-    ) -> tuple[MatrixOutcome | None, list[MatrixOutcome], bool, list[str]]:
+    ) -> tuple[list[MatrixOutcome], list[MatrixOutcome], bool, list[str]]:
         """Iterate matrix outcomes for the active slot, splitting them into local/server-only buckets.
 
         Side effect: when an outcome is ``Skip(adopt_baseline=True)`` with
         a local hash, records that hash as the new sync baseline on
         *save_state* (in memory) and flags that a write is needed.
 
-        Returns ``(first_local_outcome, server_only_outcomes, baseline_adopted,
-        all_filenames)``. The local bucket is the first outcome with a local
-        file present — matching the active-slot single-entry view this status
-        flow surfaces. ``all_filenames`` is every distinct canonical target
-        filename the slot resolves to (one per outcome), used to detect a
-        multi-file save (#908 guard).
+        Returns ``(local_outcomes, server_only_outcomes, baseline_adopted,
+        all_filenames)``. The local bucket is every outcome with a local file
+        present — a multi-file slot (e.g. Saturn ``.bkr``/``.bcr``/``.smpc``,
+        #908) yields one local outcome per component file, and the status view
+        surfaces a row + any conflict for each so its ``conflicts`` array
+        matches ``do_sync_rom_saves``. ``all_filenames`` is every distinct
+        canonical target filename the slot resolves to (one per outcome), used
+        to detect a multi-file save (#908 guard).
         """
-        local_outcome: MatrixOutcome | None = None
+        local_outcomes: list[MatrixOutcome] = []
         server_only_outcomes: list[MatrixOutcome] = []
         baseline_adopted = False
         all_filenames: list[str] = []
@@ -154,9 +156,9 @@ class StatusService:
                 baseline_adopted = True
             if outcome.local_path is None:
                 server_only_outcomes.append(outcome)
-            elif local_outcome is None:
-                local_outcome = outcome
-        return local_outcome, server_only_outcomes, baseline_adopted, all_filenames
+            else:
+                local_outcomes.append(outcome)
+        return local_outcomes, server_only_outcomes, baseline_adopted, all_filenames
 
     def _get_save_status_io(
         self,
@@ -167,15 +169,19 @@ class StatusService:
     ) -> dict[str, Any]:
         """Sync helper for get_save_status — runs in executor.
 
-        Builds the saves-tab status for one ROM as a single-entry view of
-        the active slot:
+        Builds the saves-tab status for one ROM's active slot, one row per
+        local component file:
 
-        - Local file present: run ``compute_sync_action`` and surface the
-          resulting status, server attribution, and any conflict.
+        - Local file(s) present: run ``compute_sync_action`` per file and
+          surface each file's status, server attribution, and any conflict.
+          A multi-file slot (e.g. Saturn ``.bkr``/``.bcr``/``.smpc``, #908)
+          yields one row per component file, so a conflict on any component
+          surfaces in ``conflicts`` — matching ``do_sync_rom_saves`` and
+          keeping the launch gate's view consistent with the sync view.
         - No local file but the slot has server saves: surface the newest
-          server save as "ready to download". The canonical local target
-          is ``<rom_name>.<server.file_extension>`` — derived purely from
-          RetroArch's view of the ROM.
+          server save as a single "ready to download" row. The canonical
+          local target is ``<rom_name>.<server.file_extension>`` — derived
+          purely from RetroArch's view of the ROM.
         - ROM not installed (no rom_name available) → no entry. There is
           no server-derived filename fallback: without a deterministic
           local path we cannot tell the user where a download would land.
@@ -223,7 +229,7 @@ class StatusService:
             # The baseline-adopt path mutates a working copy; an absent aggregate
             # starts from a fresh default so the matrix can evaluate against it.
             working_state = save_state if save_state is not None else RomSaveState()
-            local_outcome, server_only_outcomes, baseline_adopted, all_filenames = self._partition_outcomes(
+            local_outcomes, server_only_outcomes, baseline_adopted, all_filenames = self._partition_outcomes(
                 rom_id, working_state, device_id, server_in_slot, info
             )
             multi_file = compute_multi_file_slot(all_filenames)
@@ -233,11 +239,17 @@ class StatusService:
                 save_state = working_state
                 own_upload_ids = working_state.own_upload_ids
 
-            chosen = local_outcome
-            if chosen is None and server_only_outcomes:
-                chosen = max(server_only_outcomes, key=_outcome_server_sort_key)
+            # Surface a row (and any conflict) for every local component file so a
+            # multi-file slot's status matches ``do_sync_rom_saves`` — a conflict on
+            # the 2nd/3rd component (e.g. Saturn .bcr/.smpc) must still block the
+            # launch gate, not be dropped by reporting only the first file (#908).
+            chosen_outcomes = local_outcomes
+            if not chosen_outcomes and server_only_outcomes:
+                # No local files but the slot has a server-only candidate: surface
+                # the newest as a single "ready to download" row (no conflict).
+                chosen_outcomes = [max(server_only_outcomes, key=_outcome_server_sort_key)]
 
-            if chosen is not None:
+            for chosen in chosen_outcomes:
                 status_entry, conflict_entry = self._status_entry_from_outcome(
                     chosen,
                     rom_id=rom_id,

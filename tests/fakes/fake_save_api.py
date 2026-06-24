@@ -124,6 +124,7 @@ class FakeSaveApi:
         return getattr(self, "version", None)
 
     def heartbeat(self) -> dict[str, Any]:
+        self.call_log.append(("heartbeat", (), {}))
         if self.heartbeat_raises is not None:
             raise self.heartbeat_raises
         return {"status": "ok"}

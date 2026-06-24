@@ -479,6 +479,22 @@ class SyncEngine:
             if not sync_before_launch(self._settings):
                 return {"success": True, "message": "Pre-launch sync disabled", "synced": 0}
 
+            # Pre-probe reachability before any sync work — mirror post_exit_sync.
+            # When the server is offline, surface the canonical unreachable shape
+            # (plus the additive ``offline`` flag) so the launch path can warn on
+            # local drift instead of stalling on a doomed sync round-trip.
+            try:
+                await self._loop.run_in_executor(None, self._romm_api.heartbeat)
+            except Exception:
+                self._logger.info("pre_launch_sync skipped: server offline")
+                return {
+                    "success": False,
+                    "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                    "message": "Server offline",
+                    "synced": 0,
+                    "offline": True,
+                }
+
             if not self.get_device_id():
                 reg = await self.ensure_device_registered()
                 if not reg.get("success"):

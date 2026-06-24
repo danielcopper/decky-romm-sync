@@ -189,6 +189,32 @@ class SaveService:
             return False
         return bool(save_entry.files) or bool(save_entry.slots)
 
+    def find_local_save_files(self, rom_id: int) -> list[dict[str, str]]:
+        """Enumerate the ROM's local save files (``[{"path", "filename"}]``).
+
+        Delegates to the shared ``RomInfoService.find_save_files`` discovery —
+        the same enumeration the sync/status path uses — so the launch gate's
+        drift check sees exactly the files a real sync would. Returns ``[]``
+        when the ROM is not installed or no save files are present. Satisfies
+        the ``LaunchGateDriftReader`` seam.
+        """
+        return self._rom_info.find_save_files(int(rom_id))
+
+    def last_sync_hashes(self, rom_id: int) -> dict[str, str | None]:
+        """Return the per-file ``last_sync_hash`` baselines for a ROM.
+
+        Reads the ``rom_save_states`` aggregate through a narrow read UoW —
+        no network — and projects each tracked file's baseline hash onto a
+        ``{filename: last_sync_hash}`` map (``None`` for a file with no
+        baseline yet). An untracked ROM yields ``{}``. Satisfies the
+        ``LaunchGateDriftReader`` seam.
+        """
+        with self._uow_factory() as uow:
+            save_entry = uow.rom_save_states.get(int(rom_id))
+        if save_entry is None:
+            return {}
+        return {filename: state.last_sync_hash for filename, state in save_entry.files.items()}
+
     # ------------------------------------------------------------------
     # Sync orchestration (delegated to SyncEngine)
     # ------------------------------------------------------------------

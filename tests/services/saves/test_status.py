@@ -9,6 +9,7 @@ from domain.rom_save_state import RomSaveState
 from domain.save_layout import ContentDir, InSaveDir
 from tests.services.saves._helpers import (
     _create_save,
+    _do_sync,
     _enable_sync_with_device,
     _file_md5,
     _get_save_state,
@@ -624,6 +625,281 @@ class TestServerQueryFailed:
         assert row["local_size"] == 1024
         assert row["server_save_id"] is None
         assert result["conflicts"] == []
+
+
+def _multi_file_server_save(*, save_id, ext, is_current):
+    """A Saturn-component server save grouped to ``rally.<ext>`` (is_current per device-1)."""
+    ss = _server_save_with_syncs(
+        save_id=save_id,
+        filename=f"rally.{ext}",
+        device_syncs=[{"device_id": "device-1", "is_current": is_current}],
+    )
+    # The matrix groups server saves by canonical target ``<rom_name>.<file_extension>``,
+    # so each component's server record must carry its own extension.
+    ss["file_extension"] = ext
+    return ss
+
+
+class TestMultiFileSlotConflictAggregation:
+    """get_save_status aggregates conflicts across ALL local component files (#1051 F6).
+
+    A multi-file slot (e.g. Saturn ``.bkr``/``.bcr``/``.smpc``, #908) is one
+    game state spread across several files. The launch gate consumes this
+    read-only status path's ``conflicts`` array; if only the FIRST component's
+    conflict were reported, a conflict on the 2nd/3rd component would let the
+    launch through while the mutating ``do_sync_rom_saves`` correctly flags it.
+    The status view must collect a row + any conflict for every component.
+    """
+
+    def _seed_multi_file(self, svc, tmp_path, *, bkr_baseline, bcr_baseline):
+        """Install a Saturn ROM with two diverged component saves + per-file baselines.
+
+        ``rally.bkr`` and ``rally.bcr`` both exist on disk with content that
+        diverges from the supplied baseline hash; whether each surfaces a
+        conflict is driven by the baseline match and the server save's
+        is_current flag set by the caller.
+        """
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path, system="saturn", file_name="rally.cue")
+        _create_save(tmp_path, system="saturn", rom_name="rally", ext=".bkr", content=b"diverged bkr")
+        _create_save(tmp_path, system="saturn", rom_name="rally", ext=".bcr", content=b"diverged bcr")
+        _seed_save_state_dict(
+            svc,
+            42,
+            {
+                "system": "saturn",
+                "files": {
+                    "rally.bkr": {
+                        "tracked_save_id": 200,
+                        "last_sync_hash": bkr_baseline,
+                        "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+                    },
+                    "rally.bcr": {
+                        "tracked_save_id": 201,
+                        "last_sync_hash": bcr_baseline,
+                        "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+                    },
+                },
+            },
+            platform_slug="saturn",
+        )
+
+    def test_second_component_conflict_is_surfaced(self, tmp_path):
+        """The SECOND component file in conflict → conflicts non-empty (gate blocks).
+
+        ``.bkr`` matches its baseline (synced), ``.bcr`` diverges → only the
+        second component conflicts. The old first-only behavior reported the
+        synced ``.bkr`` and dropped the ``.bcr`` conflict entirely.
+        """
+        svc, fake = make_service(tmp_path)
+        # Build the scenario first so the files exist, then read the real .bkr
+        # hash so its baseline matches (synced); .bcr baseline differs (conflict).
+        self._seed_multi_file(svc, tmp_path, bkr_baseline="placeholder", bcr_baseline="0" * 32)
+        bkr_hash = _file_md5(str(tmp_path / "saves" / "saturn" / "rally.bkr"))
+        self._seed_multi_file(svc, tmp_path, bkr_baseline=bkr_hash, bcr_baseline="0" * 32)
+
+        bkr_ss = _multi_file_server_save(save_id=200, ext="bkr", is_current=True)
+        bcr_ss = _multi_file_server_save(save_id=201, ext="bcr", is_current=False)
+        fake.saves[200] = bkr_ss
+        fake.saves[201] = bcr_ss
+
+        result = svc._status._get_save_status_io(42, [bkr_ss, bcr_ss])
+
+        assert len(result["conflicts"]) >= 1
+        conflict_files = {c["filename"] for c in result["conflicts"]}
+        assert "rally.bcr" in conflict_files
+        # The aggregate display reflects the conflict — the gate would block.
+        assert result["save_sync_display"]["status"] == "conflict"
+
+    def test_status_and_sync_paths_agree_on_conflict_set(self, tmp_path):
+        """The read-only status path and the mutating sync path report the SAME
+        conflicting filenames for a multi-file slot (the F6 invariant directly).
+
+        The launch gate consumes ``get_save_status``'s ``conflicts``; before F6
+        the status path reported only the first component, so for a slot whose
+        non-first component (``.bcr``) is the one in conflict the gate's view
+        disagreed with ``do_sync_rom_saves``. Both must now see ``{rally.bcr}``.
+
+        Driving ``do_sync_rom_saves`` over this exact fixture does NOT mutate it:
+        ``.bkr`` is ``Skip(synced)`` (no transfer) and ``.bcr`` is ``Conflict``
+        (no transfer — conflicts only append to the sink), so the local files
+        the status path re-reads are unchanged and the set comparison is clean.
+        """
+        svc, fake = make_service(tmp_path)
+        # Same fixture as test_second_component_conflict_is_surfaced: .bkr synced,
+        # .bcr diverged.
+        self._seed_multi_file(svc, tmp_path, bkr_baseline="placeholder", bcr_baseline="0" * 32)
+        bkr_hash = _file_md5(str(tmp_path / "saves" / "saturn" / "rally.bkr"))
+        self._seed_multi_file(svc, tmp_path, bkr_baseline=bkr_hash, bcr_baseline="0" * 32)
+
+        bkr_ss = _multi_file_server_save(save_id=200, ext="bkr", is_current=True)
+        bcr_ss = _multi_file_server_save(save_id=201, ext="bcr", is_current=False)
+        fake.saves[200] = bkr_ss
+        fake.saves[201] = bcr_ss
+
+        status_conflicts = {c["filename"] for c in svc._status._get_save_status_io(42, [bkr_ss, bcr_ss])["conflicts"]}
+        _synced, _errors, sync_conflicts = _do_sync(svc, 42)
+        sync_conflict_files = {c["filename"] for c in sync_conflicts}
+
+        # Both paths agree, and the agreed set is the non-first component.
+        assert status_conflicts == sync_conflict_files == {"rally.bcr"}
+
+    def test_two_components_both_in_conflict(self, tmp_path):
+        """Two component files both diverging → conflicts has BOTH."""
+        svc, fake = make_service(tmp_path)
+        self._seed_multi_file(svc, tmp_path, bkr_baseline="0" * 32, bcr_baseline="1" * 32)
+
+        bkr_ss = _multi_file_server_save(save_id=200, ext="bkr", is_current=False)
+        bcr_ss = _multi_file_server_save(save_id=201, ext="bcr", is_current=False)
+        fake.saves[200] = bkr_ss
+        fake.saves[201] = bcr_ss
+
+        result = svc._status._get_save_status_io(42, [bkr_ss, bcr_ss])
+
+        conflict_files = {c["filename"] for c in result["conflicts"]}
+        assert conflict_files == {"rally.bkr", "rally.bcr"}
+        # Two component rows surfaced (one per local file).
+        assert len(result["files"]) == 2
+
+    def test_one_conflict_one_synced_yields_exactly_one_conflict(self, tmp_path):
+        """One component conflict + one synced → exactly one conflict entry."""
+        svc, fake = make_service(tmp_path)
+        # Seed once to create the files, read the real .bkr hash, re-seed synced.
+        self._seed_multi_file(svc, tmp_path, bkr_baseline="placeholder", bcr_baseline="0" * 32)
+        bkr_hash = _file_md5(str(tmp_path / "saves" / "saturn" / "rally.bkr"))
+        self._seed_multi_file(svc, tmp_path, bkr_baseline=bkr_hash, bcr_baseline="0" * 32)
+
+        bkr_ss = _multi_file_server_save(save_id=200, ext="bkr", is_current=True)
+        bcr_ss = _multi_file_server_save(save_id=201, ext="bcr", is_current=False)
+        fake.saves[200] = bkr_ss
+        fake.saves[201] = bcr_ss
+
+        result = svc._status._get_save_status_io(42, [bkr_ss, bcr_ss])
+
+        assert len(result["conflicts"]) == 1
+        assert result["conflicts"][0]["filename"] == "rally.bcr"
+        # Both component files still produce a status row.
+        assert len(result["files"]) == 2
+
+    def test_server_query_failed_suppresses_all_multi_file_conflicts(self, tmp_path):
+        """server_query_failed True with a multi-file slot → conflicts [], all rows redacted.
+
+        Offline never surfaces a conflict (the matrix ran against an empty
+        server list), and every component row is redacted to status="unknown".
+        """
+        svc, fake = make_service(tmp_path)
+        self._seed_multi_file(svc, tmp_path, bkr_baseline="0" * 32, bcr_baseline="1" * 32)
+
+        bkr_ss = _multi_file_server_save(save_id=200, ext="bkr", is_current=False)
+        bcr_ss = _multi_file_server_save(save_id=201, ext="bcr", is_current=False)
+        fake.saves[200] = bkr_ss
+        fake.saves[201] = bcr_ss
+
+        # Sanity: identical setup surfaces both conflicts when the server query
+        # succeeded — the failure flag is the only thing that empties them.
+        assert len(svc._status._get_save_status_io(42, [bkr_ss, bcr_ss])["conflicts"]) == 2
+
+        result = svc._status._get_save_status_io(42, [bkr_ss, bcr_ss], server_query_failed=True)
+
+        assert result["conflicts"] == []
+        assert len(result["files"]) == 2
+        # Every component row is redacted to the neutral "unknown" status.
+        assert all(row["status"] == "unknown" for row in result["files"])
+        # Local-side metadata stays intact per row.
+        assert all(row["local_path"] is not None for row in result["files"])
+        assert all(row["server_save_id"] is None for row in result["files"])
+
+    def test_empty_local_with_server_only_candidate_one_entry_no_conflict(self, tmp_path):
+        """Empty-local fallback intact: no local files + server-only candidate →
+        one download row, no conflict (the multi-file change must not regress it)."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        # No local file on disk; two server saves in the slot.
+        ss_old = _server_save_with_syncs(
+            save_id=200,
+            updated_at="2026-03-24T10:00:00",
+            device_syncs=[{"device_id": "device-other", "is_current": True}],
+        )
+        ss_new = _server_save_with_syncs(
+            save_id=201,
+            updated_at="2026-03-24T15:00:00",
+            device_syncs=[{"device_id": "device-other", "is_current": True}],
+        )
+        fake.saves[200] = ss_old
+        fake.saves[201] = ss_new
+        _seed_save_state(svc, 42, RomSaveState())
+
+        result = svc._status._get_save_status_io(42, [ss_old, ss_new])
+
+        assert len(result["files"]) == 1
+        assert result["files"][0]["server_save_id"] == 201  # newest
+        assert result["files"][0]["status"] == "download"
+        assert result["files"][0]["local_path"] is None
+        assert result["conflicts"] == []
+
+
+class TestSingleFileConflictRegression:
+    """Single-file behavior is unchanged by the multi-file aggregation (#1051 F6)."""
+
+    def test_single_file_conflict_still_reported(self, tmp_path):
+        """A single-file slot's conflict is still surfaced (one entry)."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"diverged local")
+
+        ss = _server_save_with_syncs(device_syncs=[{"device_id": "device-1", "is_current": False}])
+        fake.saves[100] = ss
+        _seed_save_state_dict(
+            svc,
+            42,
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": "0" * 32,
+                        "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+                    }
+                }
+            },
+        )
+
+        result = svc._status._get_save_status_io(42, [ss])
+
+        assert len(result["conflicts"]) == 1
+        assert result["conflicts"][0]["filename"] == "pokemon.srm"
+        assert len(result["files"]) == 1
+
+    def test_single_file_no_conflict_still_empty(self, tmp_path):
+        """A single-file synced slot reports no conflict (empty array)."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"matches baseline")
+        local_hash = _file_md5(str(save_path))
+
+        ss = _server_save_with_syncs(device_syncs=[{"device_id": "device-1", "is_current": True}])
+        fake.saves[100] = ss
+        _seed_save_state_dict(
+            svc,
+            42,
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": local_hash,
+                        "last_sync_server_updated_at": ss["updated_at"],
+                    }
+                }
+            },
+        )
+
+        result = svc._status._get_save_status_io(42, [ss])
+
+        assert result["conflicts"] == []
+        assert len(result["files"]) == 1
+        assert result["files"][0]["status"] == "synced"
 
 
 class TestCompositeServerQueryFailedDomain:

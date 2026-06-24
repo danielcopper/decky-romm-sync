@@ -347,8 +347,23 @@ class Plugin:
         verdict = await self._launch_gate_service.evaluate(steam_app_id)
         return asdict(verdict)
 
-    async def finalize_game_session(self, rom_id):
-        result = await self._session_lifecycle_service.finalize(rom_id)
+    async def check_local_drift(self, rom_id):
+        return await self._launch_gate_service.check_local_drift(rom_id)
+
+    async def probe_reachability(self):
+        return await self._connection_service.probe_reachability()
+
+    async def refresh_save_status(self, rom_id):
+        # Fire-and-forget: schedule the background status check (which re-reads
+        # the conflict state and emits ``save_status_updated``) and return
+        # immediately so the frontend never blocks on the round-trip. Mirrors the
+        # create_task pattern in services/saves/slots/switching.py (same call,
+        # same target); check_save_status_background owns its own error handling.
+        self.loop.create_task(self._save_sync_service.check_save_status_background(int(rom_id)))
+        return {"success": True}
+
+    async def finalize_game_session(self, rom_id, suspended_seconds):
+        result = await self._session_lifecycle_service.finalize(rom_id, int(suspended_seconds))
         return asdict(result)
 
     # ── Download delegation to DownloadService ──────────────

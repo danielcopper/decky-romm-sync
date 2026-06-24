@@ -121,6 +121,9 @@ export const resumeDownload = callable<[number], BackendResult>("resume_download
 export const getDownloadQueue = callable<[], { downloads: DownloadItem[] }>("get_download_queue");
 export const getInstalledRom = callable<[number], InstalledRom | null>("get_installed_rom");
 export const evaluateLaunch = callable<[number], LaunchVerdict>("evaluate_launch");
+export const checkLocalDrift = callable<[number], { drifted: boolean; rom_id: number }>("check_local_drift");
+export const probeReachability = callable<[], { online: boolean }>("probe_reachability");
+export const refreshSaveStatus = callable<[number], { success: boolean }>("refresh_save_status");
 export const removeRom = callable<[number], BackendResult>("remove_rom");
 export const getPlatforms = callable<[], { success: boolean; platforms: PlatformSyncSetting[] }>("get_platforms");
 export const savePlatformSync = callable<[number, boolean], { success: boolean; message: string }>(
@@ -469,7 +472,7 @@ export interface SessionFinalizeResult {
   migration: SessionFinalizeMigration | null;
 }
 
-export const finalizeGameSession = callable<[number], SessionFinalizeResult>("finalize_game_session");
+export const finalizeGameSession = callable<[number, number], SessionFinalizeResult>("finalize_game_session");
 
 // Delete operations
 export const deleteLocalSaves = callable<[number], { success: boolean; deleted_count: number; message: string }>(

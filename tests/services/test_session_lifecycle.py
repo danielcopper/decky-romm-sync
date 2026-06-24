@@ -29,9 +29,11 @@ class FakePlaytimeRecorder:
         self.payload: dict[str, Any] = payload if payload is not None else {"success": True, "total_seconds": 3600}
         self.side_effect = side_effect
         self.calls: list[int] = []
+        self.suspended_calls: list[int] = []
 
-    async def record_session_end(self, rom_id: int) -> dict[str, Any]:
+    async def record_session_end(self, rom_id: int, suspended_seconds: int = 0) -> dict[str, Any]:
         self.calls.append(rom_id)
+        self.suspended_calls.append(suspended_seconds)
         if self.side_effect is not None:
             raise self.side_effect
         return self.payload
@@ -174,6 +176,40 @@ class TestFinalizePlaytime:
 
         assert result.total_seconds == 7200
         assert playtime.calls == [99]
+
+    def test_suspended_seconds_forwarded_to_recorder(self, event_loop, logger):
+        """``finalize`` forwards ``suspended_seconds`` to the playtime recorder."""
+        playtime = FakePlaytimeRecorder(payload={"success": True, "total_seconds": 7200})
+        service = _make_service(
+            playtime_recorder=playtime,
+            post_exit_sync=FakePostExitSync(),
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        result = event_loop.run_until_complete(service.finalize(99, 600))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        assert result.total_seconds == 7200
+        assert playtime.calls == [99]
+        assert playtime.suspended_calls == [600]
+
+    def test_default_suspended_seconds_is_zero(self, event_loop, logger):
+        """``finalize`` without a suspend arg forwards ``0`` to the recorder."""
+        playtime = FakePlaytimeRecorder(payload={"success": True, "total_seconds": 7200})
+        service = _make_service(
+            playtime_recorder=playtime,
+            post_exit_sync=FakePostExitSync(),
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        event_loop.run_until_complete(service.finalize(99))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        assert playtime.suspended_calls == [0]
 
     def test_no_session_returns_none(self, event_loop, logger):
         """Playtime record returns ``success=False`` → ``total_seconds=None``."""

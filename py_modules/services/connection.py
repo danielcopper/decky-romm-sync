@@ -107,6 +107,26 @@ class ConnectionService:
 
         return self._success_result(version)
 
+    async def probe_reachability(self) -> dict[str, Any]:
+        """Probe server reachability with a fresh heartbeat — no version assertion, no cache.
+
+        A bare connectivity check the launch path runs at the decision point
+        instead of trusting a possibly-stale cached connection state. Fires the
+        ``/api/heartbeat`` request on the executor thread and reports
+        ``{"online": True}`` on success, ``{"online": False}`` on any exception
+        (transport error, auth failure, malformed response). It deliberately
+        does NOT gate on version or persist anything — it answers only "can we
+        reach the server right now?".
+        """
+        try:
+            await self._loop.run_in_executor(None, self._romm_api.heartbeat)
+        except Exception as e:
+            # Logged so a genuine code/wiring bug in the heartbeat path is
+            # diagnosable rather than masquerading silently as "server offline".
+            self._logger.debug(f"probe_reachability heartbeat failed: {e}")
+            return {"online": False}
+        return {"online": True}
+
     async def establish_token(
         self,
         romm_url: str,

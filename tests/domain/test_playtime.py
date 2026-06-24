@@ -68,6 +68,40 @@ class TestRecordSession:
         with pytest.raises(ValueError, match="inconsistent session timestamps"):
             playtime.record_session("2026-05-28T11:00:00Z")  # aware (Z -> +00:00)
 
+    def test_suspend_subtracted_from_duration(self):
+        playtime = Playtime()
+        playtime.begin_session("2026-05-28T10:00:00")
+        # 3600s elapsed minus 600s suspended -> 3000s counted.
+        playtime.record_session("2026-05-28T11:00:00", suspended_seconds=600)
+        assert playtime.last_session_duration_sec == 3000
+        assert playtime.total_seconds == 3000
+        assert playtime.session_count == 1
+        assert playtime.last_session_start is None
+
+    def test_default_suspend_is_zero(self):
+        playtime = Playtime()
+        playtime.begin_session("2026-05-28T10:00:00")
+        # No suspend arg → full elapsed counted (unchanged behavior).
+        playtime.record_session("2026-05-28T11:00:00")
+        assert playtime.last_session_duration_sec == 3600
+
+    def test_over_subtraction_clamps_to_zero(self):
+        playtime = Playtime()
+        playtime.begin_session("2026-05-28T10:00:00")
+        # 30s elapsed minus 60s suspended -> clamped to 0, never negative.
+        playtime.record_session("2026-05-28T10:00:30", suspended_seconds=60)
+        assert playtime.last_session_duration_sec == 0
+        assert playtime.total_seconds == 0
+        assert playtime.session_count == 1
+
+    def test_24h_cap_applies_after_subtraction(self):
+        playtime = Playtime()
+        playtime.begin_session("2026-05-28T10:00:00")
+        # 90000s elapsed minus 3600s suspended = 86400s, still capped at 24h.
+        playtime.record_session("2026-05-29T11:00:00", suspended_seconds=3600)
+        assert playtime.last_session_duration_sec == 86400
+        assert playtime.total_seconds == 86400
+
 
 class TestLinkNote:
     def test_link_note_sets_id(self):

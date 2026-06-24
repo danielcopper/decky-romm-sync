@@ -166,6 +166,28 @@ class LaunchGateSaveStatusReader(Protocol):
     def has_tracked_save(self, rom_id: int) -> bool: ...
 
 
+class LaunchGateDriftReader(Protocol):
+    """Local save-file enumeration + baseline lookup consumed by LaunchGateService.
+
+    The composition root satisfies this with a thin shim over the same
+    ``RomInfoService.find_save_files`` discovery the sync/status path uses
+    and the ``rom_save_states`` aggregate's per-file ``last_sync_hash``
+    baselines — so the launch-gate drift check sees exactly the files a
+    real sync would, never a divergent file-discovery path.
+
+    :meth:`find_local_save_files` returns the on-disk save files for an
+    installed ROM (``[{"path", "filename"}]``); an empty list means the ROM
+    is not installed or has no save files present.
+    :meth:`last_sync_hashes` returns the persisted ``last_sync_hash``
+    baseline per filename (``None`` for a file with no baseline yet, and
+    missing keys for files never tracked).
+    """
+
+    def find_local_save_files(self, rom_id: int) -> list[dict[str, str]]: ...
+
+    def last_sync_hashes(self, rom_id: int) -> dict[str, str | None]: ...
+
+
 class SessionPlaytimeRecorder(Protocol):
     """Playtime end-of-session record consumed by SessionLifecycleService.
 
@@ -174,9 +196,12 @@ class SessionPlaytimeRecorder(Protocol):
     ``total_seconds`` field to the frontend so the playtime display can
     be updated; a falsy ``success`` value yields ``total_seconds=None``
     on the returned DTO so the frontend leaves the display untouched.
+    ``suspended_seconds`` carries the device-suspend wall-clock the
+    frontend accumulated during the session, subtracted from the counted
+    playtime.
     """
 
-    async def record_session_end(self, rom_id: int) -> dict[str, Any]: ...
+    async def record_session_end(self, rom_id: int, suspended_seconds: int = 0) -> dict[str, Any]: ...
 
 
 class SessionPostExitSync(Protocol):

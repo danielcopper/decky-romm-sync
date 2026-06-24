@@ -472,8 +472,8 @@ class TestLifecycleCallableDelegation:
             synced: bool
 
         plugin._session_lifecycle_service.finalize = AsyncMock(return_value=Outcome(synced=False))
-        result = await plugin.finalize_game_session(7)
-        plugin._session_lifecycle_service.finalize.assert_awaited_once_with(7)
+        result = await plugin.finalize_game_session(7, 120)
+        plugin._session_lifecycle_service.finalize.assert_awaited_once_with(7, 120)
         assert result == {"synced": False}
 
 

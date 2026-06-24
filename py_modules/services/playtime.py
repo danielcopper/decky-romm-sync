@@ -205,24 +205,27 @@ class PlaytimeService:
             return {"success": False, "reason": "unknown_rom", "message": "Unknown ROM"}
         return {"success": True}
 
-    async def record_session_end(self, rom_id: int) -> dict[str, Any]:
+    async def record_session_end(self, rom_id: int, suspended_seconds: int = 0) -> dict[str, Any]:
         """Record end of play session, accumulate playtime delta.
 
-        Only handles playtime — save sync is handled separately. The work runs
-        in an executor: the durable fold happens in a short write UoW (the
-        SQLite connection has thread affinity), then the RomM note push runs
-        best-effort outside any transaction.
+        Only handles playtime — save sync is handled separately. ``suspended_seconds``
+        is the wall-clock time the device spent suspended during the session; it
+        is subtracted from the raw elapsed span so suspend time is not counted as
+        play. The work runs in an executor: the durable fold happens in a short
+        write UoW (the SQLite connection has thread affinity), then the RomM note
+        push runs best-effort outside any transaction.
         """
-        return await self._loop.run_in_executor(None, self._record_session_end_io, int(rom_id))
+        return await self._loop.run_in_executor(None, self._record_session_end_io, int(rom_id), suspended_seconds)
 
-    def _record_session_end_io(self, rom_id: int) -> dict[str, Any]:
+    def _record_session_end_io(self, rom_id: int, suspended_seconds: int = 0) -> dict[str, Any]:
         """Synchronous twin of :meth:`record_session_end` (runs in the executor).
 
-        Phase A — fold the closed session into the aggregate in a short write
-        UoW. Phase B — push the merged total to RomM outside the transaction
-        (best-effort). Returns the same dict shape the frontend consumes:
-        ``success`` plus ``duration_sec`` / ``total_seconds`` / ``session_count``
-        on the happy path, or ``success: False`` with a ``message`` otherwise.
+        Phase A — fold the closed session (minus ``suspended_seconds``) into the
+        aggregate in a short write UoW. Phase B — push the merged total to RomM
+        outside the transaction (best-effort). Returns the same dict shape the
+        frontend consumes: ``success`` plus ``duration_sec`` / ``total_seconds`` /
+        ``session_count`` on the happy path, or ``success: False`` with a
+        ``message`` otherwise.
         """
         try:
             with self._uow_factory() as uow:
@@ -230,7 +233,7 @@ class PlaytimeService:
                 if entry is None or not entry.last_session_start:
                     return {"success": False, "reason": "no_active_session", "message": "No active session"}
                 try:
-                    entry.record_session(self._clock.now().isoformat())
+                    entry.record_session(self._clock.now().isoformat(), suspended_seconds=suspended_seconds)
                 except ValueError:
                     return {
                         "success": False,

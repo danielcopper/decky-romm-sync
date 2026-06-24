@@ -194,6 +194,36 @@ class TestRecordSession:
         assert result["success"] is True
         assert result["duration_sec"] == 86400
 
+    @pytest.mark.asyncio
+    async def test_suspended_seconds_threaded_to_domain(self):
+        """``suspended_seconds`` is subtracted from the counted session duration."""
+        clk = FakeClock(now=datetime(2026, 1, 1, 0, 5, tzinfo=UTC))
+        svc, _, uow = make_service(clock=clk)
+        start = (clk.now() - timedelta(seconds=300)).isoformat()  # 5min elapsed
+        _seed_playtime(uow, 42, Playtime(last_session_start=start))
+
+        result = await svc.record_session_end(42, 120)  # 120s suspended
+
+        assert result["success"] is True
+        assert result["duration_sec"] == 180  # 300 minus 120
+        assert result["total_seconds"] == 180
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.total_seconds == 180
+
+    @pytest.mark.asyncio
+    async def test_default_suspend_counts_full_duration(self):
+        """Omitting ``suspended_seconds`` (default 0) counts the full elapsed span."""
+        clk = FakeClock(now=datetime(2026, 1, 1, 0, 5, tzinfo=UTC))
+        svc, _, uow = make_service(clock=clk)
+        start = (clk.now() - timedelta(seconds=300)).isoformat()
+        _seed_playtime(uow, 42, Playtime(last_session_start=start))
+
+        result = await svc.record_session_end(42)
+
+        assert result["success"] is True
+        assert result["duration_sec"] == 300
+
 
 # ---------------------------------------------------------------------------
 # TestSyncPlaytime

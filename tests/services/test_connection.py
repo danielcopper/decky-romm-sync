@@ -667,3 +667,42 @@ class TestMigrateLegacyCredentials:
             event_loop.run_until_complete(service.migrate_legacy_credentials())
         settings_persister.save_settings.assert_called_once_with()
         assert any("Legacy credential migration failed" in r.message for r in caplog.records)
+
+
+class TestProbeReachability:
+    def test_heartbeat_ok_reports_online(self, event_loop, romm_api, logger):
+        """A successful heartbeat → {"online": True}; no version gate, no persist."""
+        settings: dict[str, Any] = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+
+        result = event_loop.run_until_complete(service.probe_reachability())
+
+        assert result == {"online": True}
+        romm_api.heartbeat.assert_called_once_with()
+        # Pure connectivity probe — never asserts a version or writes state.
+        romm_api.set_version.assert_not_called()
+
+    def test_heartbeat_raises_reports_offline(self, event_loop, romm_api, logger):
+        """Any heartbeat exception → {"online": False}, never raises."""
+        settings: dict[str, Any] = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
+        romm_api.heartbeat.side_effect = RommConnectionError("refused")
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+
+        result = event_loop.run_until_complete(service.probe_reachability())
+
+        assert result == {"online": False}
+        romm_api.heartbeat.assert_called_once_with()
+
+    def test_heartbeat_generic_exception_reports_offline_and_logs(self, event_loop, romm_api, logger, caplog):
+        """A non-connection (code/wiring bug) exception still → {"online": False}, logged, never raises."""
+        settings: dict[str, Any] = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
+        romm_api.heartbeat.side_effect = RuntimeError("heartbeat wiring bug")
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+
+        with caplog.at_level(logging.DEBUG, logger="test_connection"):
+            result = event_loop.run_until_complete(service.probe_reachability())
+
+        assert result == {"online": False}
+        romm_api.heartbeat.assert_called_once_with()
+        # The swallow is diagnosable: a genuine bug is not silently lost.
+        assert any("probe_reachability heartbeat failed" in r.message for r in caplog.records)

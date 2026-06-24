@@ -48,12 +48,16 @@ class Playtime:
         """Open a play session that started at ISO timestamp ``at``."""
         self.last_session_start = at
 
-    def record_session(self, ended_at: str) -> None:
+    def record_session(self, ended_at: str, *, suspended_seconds: int = 0) -> None:
         """Close the open session at ``ended_at`` and fold its duration into the totals.
 
         The duration is the span from the stored ``last_session_start`` to
-        ``ended_at``, clamped to ``[0, 24h]``. Raises ``ValueError`` if no
-        session is open or either timestamp is unusable.
+        ``ended_at`` minus any ``suspended_seconds`` the device spent suspended
+        during the session (a negative value is treated as 0), clamped to
+        ``[0, 24h]``. The suspend subtraction happens before the 24h cap, so a
+        long session minus suspend still respects the cap and never goes
+        negative. Raises ``ValueError`` if no session is open or either
+        timestamp is unusable.
         """
         if self.last_session_start is None:
             raise ValueError("no open session to record")
@@ -62,10 +66,11 @@ class Playtime:
         if start is None or end is None:
             raise ValueError("unparseable session timestamps")
         try:
-            elapsed = (end - start).total_seconds()
+            raw_elapsed = (end - start).total_seconds()
         except TypeError as exc:  # naive/aware datetime mismatch
             raise ValueError("inconsistent session timestamps") from exc
-        seconds = int(max(0, min(elapsed, _MAX_SESSION_SECONDS)))
+        elapsed = max(0.0, raw_elapsed - max(0, suspended_seconds))
+        seconds = int(min(elapsed, _MAX_SESSION_SECONDS))
         self.total_seconds += seconds
         self.session_count += 1
         self.last_session_duration_sec = seconds

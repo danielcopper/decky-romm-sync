@@ -22,6 +22,9 @@ const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 let activeRomId: number | null = null;
 let sessionStartTime: number | null = null;
 let suspendedAt: number | null = null;
+// Accumulated device-suspend wall-clock for the current session (ms). Folded
+// into `suspendedSeconds` and subtracted from playtime at session stop.
+let totalPausedMs = 0;
 
 // Serialization chain — ensures lifecycle events don't interleave
 let lifecycleChain: Promise<void> = Promise.resolve();
@@ -61,6 +64,8 @@ async function handleGameStart(appId: number): Promise<void> {
   logInfo(`Session start: romId=${romId}, appId=${appId}`);
   activeRomId = romId;
   sessionStartTime = Date.now();
+  suspendedAt = null;
+  totalPausedMs = 0;
 
   // Record session start for playtime tracking
   try {
@@ -77,12 +82,21 @@ async function handleGameStop(): Promise<void> {
   const romId = activeRomId;
   logInfo(`Session end: romId=${romId}`);
 
+  // Fold any in-flight suspend (device stopped the game while suspended)
+  // into the accumulator before computing the total.
+  if (suspendedAt !== null) {
+    totalPausedMs += Date.now() - suspendedAt;
+  }
+  const suspendedSeconds = Math.round(totalPausedMs / 1000);
+
   // Clear active session immediately to avoid double-processing
   activeRomId = null;
   sessionStartTime = null;
+  suspendedAt = null;
+  totalPausedMs = 0;
 
   try {
-    const result = await finalizeGameSession(romId);
+    const result = await finalizeGameSession(romId, suspendedSeconds);
 
     // Playtime display update — appStore mutation must stay frontend.
     if (result.total_seconds != null) {
@@ -133,6 +147,7 @@ function handleSuspend(): void {
 function handleResume(): void {
   if (activeRomId && suspendedAt) {
     const pauseDuration = Date.now() - suspendedAt;
+    totalPausedMs += pauseDuration;
     logInfo(`Device resumed, paused for ${Math.round(pauseDuration / 1000)}s`);
     suspendedAt = null;
   }
@@ -202,6 +217,7 @@ export function destroySessionManager(): void {
   activeRomId = null;
   sessionStartTime = null;
   suspendedAt = null;
+  totalPausedMs = 0;
   lifecycleChain = Promise.resolve();
 
   logInfo("Session manager destroyed");

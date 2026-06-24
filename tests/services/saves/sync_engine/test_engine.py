@@ -581,6 +581,49 @@ class TestPostExitServerOfflineGuard:
         assert not any(c[0] == "upload_save" for c in fake.call_log)
 
 
+class TestPreLaunchServerOfflineGuard:
+    """pre_launch_sync probes heartbeat first (F4); on failure returns the
+    canonical SERVER_UNREACHABLE shape + offline=True instead of attempting a
+    download, mirroring post_exit_sync."""
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_returns_offline_when_heartbeat_raises(self, tmp_path):
+        from lib.list_result import ErrorCode
+
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        fake.saves[100] = _server_save()
+        fake.heartbeat_raises = RommApiError("Connection refused")
+
+        result = await svc.pre_launch_sync(42)
+
+        assert result["success"] is False
+        assert result["offline"] is True
+        assert result["reason"] == ErrorCode.SERVER_UNREACHABLE.value
+        assert result["message"] == "Server offline"
+        assert result["synced"] == 0
+        # No download/list was attempted after heartbeat failed.
+        assert not any(c[0] in ("download_save", "list_saves") for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_proceeds_when_heartbeat_ok(self, tmp_path):
+        """Control: a healthy heartbeat (default) lets the download proceed."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        fake.saves[100] = _server_save()
+
+        result = await svc.pre_launch_sync(42)
+
+        assert result["success"] is True
+        assert result["synced"] == 1
+        assert "offline" not in result
+        assert any(c[0] == "heartbeat" for c in fake.call_log)
+
+
 class TestSyncRomSavesDisabledGuard:
     """Public sync_rom_saves returns failure when save sync is disabled
     (engine.py line 396)."""
