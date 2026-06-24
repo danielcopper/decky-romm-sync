@@ -95,11 +95,15 @@ Every backend feature or callable where testing makes sense should have unit tes
 ## Dev Reload
 
 ```bash
-mise run dev          # builds frontend + restarts plugin_loader
+mise run dev          # build frontend, deploy to the plugin dir, restart plugin_loader
 ```
 
-This runs `pnpm build` and then `sudo systemctl restart plugin_loader` to pick up changes. For backend-only changes,
-restarting the plugin loader is sufficient without rebuilding.
+This builds the frontend, copies the plugin files into `~/homebrew/plugins/decky-romm-sync`, and restarts
+`plugin_loader` to pick up the changes. It **stops** `plugin_loader` around the file copy on purpose: the loader runs as
+root and continuously re-owns the plugin dir back to root within ~1–2s as a tamper guard, so copying while it runs races
+against that re-own and fails with `permission denied`. With the loader stopped, the copy is uncontested; it restarts
+automatically when the task finishes — even if the build or copy fails, so a failure never leaves the plugin dead. For
+backend-only changes, restarting the plugin loader is sufficient without rebuilding.
 
 ## Deploying to Device
 

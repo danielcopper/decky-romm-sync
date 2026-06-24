@@ -60,12 +60,11 @@ depends = ["build"]
 raw = true
 run = """
 DEST="$HOME/homebrew/plugins/decky-romm-sync"
-# The plugin dir can be root-owned (Decky's root plugin_loader re-owns files like
-# plugin.json on each load), which makes the rsync/cp below hit "permission
-# denied". Ownership is reset by the `dev` task BEFORE this runs — it must happen
-# there, not here: mise pipes this sub-run (the `[deploy] $` prefix) so it has no
-# controlling tty, and a `sudo` here can't reuse the tty-bound cached credential
-# and silently fails. Run via `dev`, not `deploy` standalone, on a root-owned dir.
+# The plugin dir is root-owned: Decky's root plugin_loader continuously re-owns the
+# dir + plugin.json back to root within ~1-2s as a tamper guard, so a plain
+# deck-owned rsync/cp hits "permission denied". The `dev` task makes this safe by
+# stopping plugin_loader and chowning the dir to deck around this deploy, so nothing
+# re-roots mid-flight. Run via `dev`, not `deploy` standalone, on a root-owned dir.
 mkdir -p "$DEST/dist" "$DEST/bin" "$DEST/defaults" "$DEST/py_modules"
 rsync -a --delete dist/ "$DEST/dist/"
 rsync -a --delete bin/ "$DEST/bin/"
@@ -87,13 +86,16 @@ description = "Build, deploy, and restart plugin loader"
 raw = true
 run = """
 sudo -v
-# Reset plugin-dir ownership HERE, in dev's tty-attached (raw) shell, so sudo
-# reuses the credential just cached by `sudo -v`. The deploy sub-run can't do it:
-# mise pipes it (no controlling tty), so its `sudo` can't reuse the tty-bound
-# credential and silently fails, leaving plugin.json root-owned and breaking the
-# cp. `id -un`/`id -gn` are used directly (robust regardless of the task env).
 DEST="$HOME/homebrew/plugins/decky-romm-sync"
+# plugin_loader runs as root and continuously re-owns the plugin dir + plugin.json
+# back to root within ~1-2s (Decky's tamper guard). A chown-then-deploy loses that
+# race: the rollup build between the chown and the cp is ~8s, so the dir is
+# root-owned again long before the copy runs ("permission denied"). Stop the loader
+# for the whole build+deploy so nothing re-roots mid-flight — then the chown sticks
+# and the deck-owned copy succeeds. The `trap` restarts the loader (loading the new
+# code) even if the build/deploy fails, so a failure never leaves the plugin dead.
+sudo systemctl stop plugin_loader
+trap 'sudo systemctl start plugin_loader' EXIT
 [ -d "$DEST" ] && sudo chown -R "$(id -un):$(id -gn)" "$DEST"
 mise run deploy
-sudo systemctl restart plugin_loader
 """
