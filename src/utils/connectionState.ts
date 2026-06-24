@@ -1,4 +1,4 @@
-/** Shared RomM connection state — set by RomMPlaySection, read by CustomPlayButton and sessionManager */
+/** Shared RomM connection state — set by RomMPlaySection, read by CustomPlayButton and SavesTab */
 let _state: "checking" | "connected" | "offline" = "checking";
 export function getRommConnectionState() {
   return _state;

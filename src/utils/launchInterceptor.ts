@@ -24,10 +24,10 @@ export function registerLaunchInterceptor(): void {
           const appId = Number.parseInt(appIdStr, 10);
           if (Number.isNaN(appId) || !isRomMAppId(appId)) return;
 
-          // Block launch if a RetroDECK migration is pending. Backend also blocks
-          // via @migration_blocked, but cancelling the Steam action here prevents
-          // Steam from even trying to start the game. Synchronous in-memory check
-          // so it stays on the frontend.
+          // Block launch if a RetroDECK migration is pending. evaluate_launch is
+          // NOT @migration_blocked, so this synchronous in-memory check is the only
+          // migration enforcement on the interceptor path — cancelling the Steam
+          // action here prevents Steam from even trying to start the game.
           if (getMigrationState().pending) {
             SteamClient.Apps.CancelGameAction(gameActionId);
             toaster.toast({

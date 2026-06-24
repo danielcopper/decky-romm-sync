@@ -231,7 +231,7 @@ below.
 | `Download(server_save)`       | GET save content, overwrite local file, update sync state.                                                                         |
 | `Conflict(server_save)`       | Surface a `SyncConflict` to the frontend. The user resolves via `resolve_sync_conflict(rom_id, filename, server_save_id, action)`. |
 
-`Skip(adopt_baseline=True)` is recorded both from the mutating sync path (`SyncEngine._sync_rom_saves`) and the
+`Skip(adopt_baseline=True)` is recorded both from the mutating sync path (`SyncEngine.do_sync_rom_saves`) and the
 read-only status path (`StatusService._get_save_status_io`). The alternative — only writing the baseline from the
 mutating path — would leave state incomplete forever for users who only ever open the game-detail panel.
 
@@ -240,7 +240,7 @@ mutating path — would leave state incomplete forever for users who only ever o
 The algorithm is `compute_sync_action` in `py_modules/domain/sync_action.py`. The `SaveService` aggregate
 (`py_modules/services/saves/`) calls it from two sub-services:
 
-- `SyncEngine._sync_rom_saves` (`services/saves/sync_engine/`) iterates local files and server-only-in-slot groups,
+- `SyncEngine.do_sync_rom_saves` (`services/saves/sync_engine/`) iterates local files and server-only-in-slot groups,
   dispatching each action via the matrix executor's `_dispatch_sync_action` (POST/PUT/GET + state update).
 - `StatusService._get_save_status_io` (`services/saves/status/`) runs the same decisions read-only and folds them into
   the `SaveStatus.files[*].status` strings the frontend renders. The only allowed mutation is recording an adopted
@@ -515,19 +515,20 @@ All five trigger points call the `refresh_migration_state` callable and share th
 Running on every trigger is cheap: `detect_retrodeck_path_change()` and `detect_save_sort_change()` both have
 early-return guards that exit immediately when no config change has occurred since the last call.
 
-| When             | Where (code location)                        | Why                                                                                                  |
-| ---------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Plugin load      | `main.py` Phase 6 in `_main()`               | Catches changes that occurred between plugin sessions                                                |
-| QAM open         | `MainPage.tsx` mount `useEffect`             | User navigating via QAM sees current state when Settings is one tap away                             |
-| Game-detail open | `RomMGameInfoPanel.tsx` `useEffect([appId])` | Per-game navigation refreshes state when the user browses without launching                          |
-| Pre-game-launch  | `launchInterceptor.ts`                       | Catches setting changes made by external tooling between sessions                                    |
-| Post-game-exit   | `sessionManager.ts` (after save-sync)        | **Primary trigger for the main real-world scenario** — user changed settings via Quick Menu mid-game |
+| When             | Where (code location)                                              | Why                                                                                                  |
+| ---------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
+| Plugin load      | `main.py` Phase 6 in `_main()`                                     | Catches changes that occurred between plugin sessions                                                |
+| QAM open         | `MainPage.tsx` mount `useEffect`                                   | User navigating via QAM sees current state when Settings is one tap away                             |
+| Game-detail open | `RomMGameInfoPanel.tsx` `useEffect([appId])`                       | Per-game navigation refreshes state when the user browses without launching                          |
+| Pre-game-launch  | `launchInterceptor.ts`                                             | Catches setting changes made by external tooling between sessions                                    |
+| Post-game-exit   | `SessionLifecycleService.finalize` (backend, after post-exit sync) | **Primary trigger for the main real-world scenario** — user changed settings via Quick Menu mid-game |
 
 ### Post-game ordering and the detect-first invariant (#238)
 
-In `sessionManager.ts` `handleGameStop`, save-sync runs first, then migration refresh runs unconditionally. However, the
-ordering within `handleGameStop` is **not load-bearing** — save-sync is order-independent with respect to detect
-triggers because of three structural guards introduced in #238:
+In `SessionLifecycleService.finalize` (backend), the post-exit save sync runs first, then the migration refresh runs
+unconditionally; `sessionManager.ts` `handleGameStop` now makes a single `finalizeGameSession` call and feeds the
+returned payloads into the migration stores. However, the ordering is **not load-bearing** — save-sync is
+order-independent with respect to detect triggers because of three structural guards introduced in #238:
 
 **The race problem (pre-#238):** When the user changes RetroArch sort settings mid-game, `refreshMigrationState` from
 `RomMGameInfoPanel` remount could update state to the new layout before `postExitSync` read it. Save-sync would then
@@ -541,9 +542,9 @@ download over the real user progress.
    session) in preference to `save_sort_settings` (the new layout). This ensures save-sync always looks where RetroArch
    actually wrote.
 
-2. **Rule 2 — Upload-only mode during pending migration.** `SyncEngine._sync_rom_saves` skips `server_only` matches (no
-   downloads) when a save-sort migration is pending. This prevents stale server content from being written to disk with
-   `mtime=now`, which the mtime-naive migration resolver could then mispick.
+2. **Rule 2 — Upload-only mode during pending migration.** `SyncEngine.do_sync_rom_saves` skips `server_only` matches
+   (no downloads) when a save-sort migration is pending. This prevents stale server content from being written to disk
+   with `mtime=now`, which the mtime-naive migration resolver could then mispick.
 
 3. **Detect-first invariant.** `pre_launch_sync`, `post_exit_sync`, `sync_rom_saves`, and `sync_all_saves` all call
    `detect_save_sort_change` (via an injected callback from `MigrationService`) before reading state. This closes the
@@ -820,7 +821,7 @@ other save in the slot.
 ### Matrix pre-flight
 
 Before the destructive switch starts, `rollback_to_version` runs a full `compute_sync_action` pre-flight on the
-currently-tracked save (via `_sync_rom_saves`):
+currently-tracked save (via `do_sync_rom_saves`):
 
 | Pre-flight outcome                           | What happens                                                                                                                                                                                                |
 | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -888,10 +889,10 @@ The upserted row has `last_synced_at = save.updated_at`, which under the strict-
 `is_current = false` — i.e. the row is created in a "not current yet" state.
 
 This has a concrete consequence for the sync algorithm: the "no entry for our device on the picked save" branch of
-`compute_sync_action` (matrix rows 6a/6b) is unreachable in real plugin operation, because `SyncEngine._sync_rom_saves`
-always calls `list_saves` (which triggers the upsert) before passing the data to the algorithm. By the time the
-algorithm runs, our device entry exists on every server save. The branch is retained as defensive code and is exercised
-by unit tests in `tests/domain/test_sync_action.py`.
+`compute_sync_action` (matrix rows 6a/6b) is unreachable in real plugin operation, because
+`SyncEngine.do_sync_rom_saves` always calls `list_saves` (which triggers the upsert) before passing the data to the
+algorithm. By the time the algorithm runs, our device entry exists on every server save. The branch is retained as
+defensive code and is exercised by unit tests in `tests/domain/test_sync_action.py`.
 
 ### PUT bumps `updated_at`, not the calling device's sync row
 
@@ -935,12 +936,15 @@ Triggered from the game detail page when the user clicks the Play button (if `sy
 
 1. User clicks Play on the game detail page.
 2. `CustomPlayButton` calls `preLaunchSync(romId)` on the backend (15s timeout).
-3. Backend fetches server saves, runs `_sync_rom_saves` which iterates files and dispatches every `compute_sync_action`
-   outcome.
+3. Backend fetches server saves, runs `do_sync_rom_saves` which iterates files and dispatches every
+   `compute_sync_action` outcome.
 4. If a `Conflict` was returned for any file, the result includes a `conflicts` list. `CustomPlayButton` shows
    `SyncConflictModal` for the first conflict, awaits the user's choice, then either re-runs sync (Keep Local / Use
    Server) or falls through (Cancel).
-5. Game launches. Sync failures and timeouts do not block launch.
+5. Game launches — but a sync failure or timeout no longer launches unconditionally. `runPreLaunchSync` surfaces a "Save
+   Sync Unavailable" fallback-launch confirm; the launch proceeds only if the user confirms it, and is aborted (the
+   button returns to "play") if they decline (#1050). The benign `savefiles_in_content_dir` skip still proceeds
+   silently.
 6. Toast notification shown on sync result.
 
 ### Post-exit sync
@@ -948,9 +952,11 @@ Triggered from the game detail page when the user clicks the Play button (if `sy
 Triggered automatically when a game stops (if `sync_after_exit` is enabled).
 
 1. `RegisterForAppLifetimeNotifications` fires with `bRunning: false`.
-2. `sessionManager` calls `recordSessionEnd(romId)` for playtime, then `postExitSync(romId)`.
-3. Backend runs `_sync_rom_saves`. For most rows the local file's hash will differ from `last_sync_hash` (the user just
-   played), so the typical action is `Upload(PUT to picked.id)` — matrix row 9.
+2. `sessionManager.handleGameStop` makes a single `finalizeGameSession(romId)` call; the backend
+   `SessionLifecycleService.finalize` orchestrates playtime record → post-exit save sync → migration refresh and returns
+   one typed payload (the old `recordSessionEnd` / `postExitSync` frontend callables were collapsed into it).
+3. Backend runs `do_sync_rom_saves`. For most rows the local file's hash will differ from `last_sync_hash` (the user
+   just played), so the typical action is `Upload(PUT to picked.id)` — matrix row 9.
 4. If a `Conflict` is returned, a toast notifies the user. The modal is **not** opened post-exit — the conflict re-fires
    at the next pre-launch sync, where the user resolves it via Keep Local / Use Server before launch.
 5. Toast notification shown on success or conflict.
@@ -960,7 +966,7 @@ Triggered automatically when a game stops (if `sync_after_exit` is enabled).
 User-initiated from the "Sync All Saves Now" button in Save Sync settings.
 
 1. Iterates all installed ROMs from the backend registry.
-2. For each ROM with sync state: runs `_sync_rom_saves`.
+2. For each ROM with sync state: runs `do_sync_rom_saves`.
 3. Per-rom asyncio.Lock prevents collision with concurrent pre-launch / post-exit syncs.
 4. Reports total synced count and number of pending conflicts. Conflicts surface via the modal individually at each
    game's next pre-launch sync.
@@ -968,7 +974,7 @@ User-initiated from the "Sync All Saves Now" button in Save Sync settings.
 ### Get save status (read-only)
 
 Triggered by the game-detail panel and SAVES tab via `getSaveStatus(romId)`. Runs `_get_save_status_io` — a read-only
-counterpart of `_sync_rom_saves` that returns the same `compute_sync_action` decisions but performs no upload/download
+counterpart of `do_sync_rom_saves` that returns the same `compute_sync_action` decisions but performs no upload/download
 I/O. The only mutation it allows is recording `last_sync_hash` for `Skip(adopt_baseline=True)` rows so future drift
 detection works.
 
@@ -996,12 +1002,15 @@ Session tracking:
 
 1. `recordSessionStart(romId)`: backend opens the session marker (`last_session_start`) on the ROM's `rom_playtime` row
    in a short write Unit of Work
-2. During play, device suspend/resume events pause the timer (via `RegisterForOnSuspendRequest` /
-   `RegisterForOnResumeFromSuspend`)
-3. `recordSessionEnd(romId)`: in an executor worker, a short write UoW folds the closed session into the aggregate
-   (`record_session` clamps elapsed to 0–24h, increments `total_seconds` and `session_count`, records
-   `last_session_duration_sec`); then, outside the transaction, the merged total is pushed to RomM via user notes
-   (best-effort)
+2. During play, the frontend `sessionManager` accumulates device-suspend wall-clock across suspend/resume cycles (via
+   `RegisterForOnSuspendRequest` / `RegisterForOnResumeFromSuspend`; an in-flight suspend still open at game-stop is
+   folded in even without a resume event), and passes the rounded `suspended_seconds` to `finalizeGameSession` at
+   session end
+3. Session end (`finalizeGameSession(romId, suspendedSeconds)` → backend `record_session_end`): in an executor worker, a
+   short write UoW folds the closed session into the aggregate (`record_session` subtracts `suspended_seconds` from the
+   raw elapsed span, then clamps the result to 0–24h — subtraction before the cap, never negative — increments
+   `total_seconds` and `session_count`, records `last_session_duration_sec`); then, outside the transaction, the merged
+   total is pushed to RomM via user notes (best-effort)
 
 ### Steam display
 
@@ -1078,7 +1087,7 @@ names and constraints.
 | `saves.<id>.last_synced_core`                       | string / null          | RetroArch core used at last sync (for core change detection, e.g. `"mgba_libretro"`)                                                                                                                                                                                                                                                                                                                                                    |
 | `saves.<id>.own_upload_ids`                         | array of integer       | Save ids this device originally POSTed. Drives the `uploaded_by_us` indicator on the SAVES tab.                                                                                                                                                                                                                                                                                                                                         |
 | `saves.<id>.slots`                                  | object                 | Merged slot listing (read-model cache): per slot, its `source` / `count` / latest `updated_at`.                                                                                                                                                                                                                                                                                                                                         |
-| `saves.<id>.last_sync_check_at`                     | ISO-8601 string / null | Timestamp of the most recent `_sync_rom_saves` run for this rom (regardless of whether files transferred).                                                                                                                                                                                                                                                                                                                              |
+| `saves.<id>.last_sync_check_at`                     | ISO-8601 string / null | Timestamp of the most recent `do_sync_rom_saves` run for this rom (regardless of whether files transferred).                                                                                                                                                                                                                                                                                                                            |
 | `saves.<id>.files`                                  | object                 | Per-file sync state, keyed by filename (e.g. `"game.srm"`)                                                                                                                                                                                                                                                                                                                                                                              |
 | `saves.<id>.files.<fn>.tracked_save_id`             | integer / null         | Most recent RomM save id this device tracked. Used to exclude the active save from the Previous Versions dropdown and as an uploader-attribution hint; **not** consulted by `compute_sync_action` (the algorithm picks newest by `updated_at`).                                                                                                                                                                                         |
 | `saves.<id>.files.<fn>.last_sync_hash`              | MD5 hex string         | Hash of the save file at last sync. Drift baseline used by matrix rows 7/8/9/10/11/12.                                                                                                                                                                                                                                                                                                                                                  |
@@ -1105,7 +1114,7 @@ disabled. A stale server-side conflict (e.g. another device moved the save) ther
 `sync_before_launch` / `sync_after_exit` gate the automatic pre-launch / post-exit syncs; `default_slot` is the slot new
 games adopt (`"default"`); `autocleanup_limit` caps retained save versions per slot on the server (10).
 
-Conflicts are no longer persisted. They are returned ephemerally from `_sync_rom_saves` and `_get_save_status_io` and
+Conflicts are no longer persisted. They are returned ephemerally from `do_sync_rom_saves` and `_get_save_status_io` and
 surfaced via the modal at the moment of the sync. If the user dismisses the modal (Cancel), the conflict re-fires on the
 next sync as long as the underlying state still produces matrix row 12.
 
