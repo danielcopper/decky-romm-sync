@@ -122,6 +122,9 @@ export const getDownloadQueue = callable<[], { downloads: DownloadItem[] }>("get
 export const getInstalledRom = callable<[number], InstalledRom | null>("get_installed_rom");
 export const evaluateLaunch = callable<[number], LaunchVerdict>("evaluate_launch");
 export const checkLocalDrift = callable<[number], { drifted: boolean; rom_id: number }>("check_local_drift");
+export const getRomRelaunchOptions = callable<[number], { app_id: number; launch_options: string } | null>(
+  "get_rom_relaunch_options",
+);
 export const probeReachability = callable<[], { online: boolean }>("probe_reachability");
 export const refreshSaveStatus = callable<[number], { success: boolean }>("refresh_save_status");
 export const removeRom = callable<[number], BackendResult>("remove_rom");

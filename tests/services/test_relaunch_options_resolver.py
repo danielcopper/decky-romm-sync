@@ -1,10 +1,13 @@
 """Tests for RelaunchOptionsResolver — the shared installed+bound relaunch seam.
 
-The single (deadlock-free) build of the ``{app_id, launch_options}`` list both
-the RetroDECK-home migration and the startup launch-options reconcile delegate
-to. These cases pin the resolution behavior — empty, skip-on-missing-rom,
-skip-unbound, default core, ``-e`` core-override form, multiple installs, and
-the multi-disc pin — over the fake active-core / disc seams and the fake UoW.
+The single (deadlock-free) build of the ``{app_id, launch_options}`` items the
+RetroDECK-home migration, the startup launch-options reconcile, and the
+Play-button pre-launch re-confirm (#1150) all delegate to. These cases pin the
+resolution behavior — empty, skip-on-missing-rom, skip-unbound, default core,
+``-e`` core-override form, multiple installs, and the multi-disc pin — over the
+fake active-core / disc seams and the fake UoW, for both the batch
+(``installed_relaunch_items``) and single-ROM (``relaunch_item_for_rom``)
+entry points that share the one resolve body.
 """
 
 from __future__ import annotations
@@ -206,3 +209,78 @@ def test_multi_disc_unpinned_defaults_to_disc_1():
     resolver = _make_resolver(uow=uow, disc_resolver=_multi_disc_resolver())
     items = resolver.installed_relaunch_items()
     assert items[0]["launch_options"] == f'flatpak run net.retrodeck.retrodeck "{_DISC1_PATH}"'
+
+
+# ── relaunch_item_for_rom — the single-ROM re-confirm seam (#1150) ──────────
+
+
+def test_single_rom_installed_bound_default_core():
+    """One installed+bound ROM (no core override) → its plain launch command."""
+    uow = FakeUnitOfWork()
+    file_path = "/roms/n64/zelda.z64"
+    _seed_install(uow, 1, file_path=file_path, shortcut_app_id=4242)
+    resolver = _make_resolver(uow=uow)
+    assert resolver.relaunch_item_for_rom(1) == {
+        "app_id": 4242,
+        "launch_options": f'flatpak run net.retrodeck.retrodeck "{file_path}"',
+    }
+
+
+def test_single_rom_core_override_bakes_e_form():
+    """A resolved core .so produces the RetroDECK -e override for the single ROM."""
+    uow = FakeUnitOfWork()
+    file_path = "/roms/n64/mario.z64"
+    _seed_install(uow, 1, file_path=file_path, shortcut_app_id=7)
+    active_core = FakeActiveCoreResolver(per_rom={1: ("mupen64plus_next", "Mupen64Plus-Next")})
+    resolver = _make_resolver(uow=uow, active_core=active_core)
+    assert resolver.relaunch_item_for_rom(1) == {
+        "app_id": 7,
+        "launch_options": (
+            "flatpak run net.retrodeck.retrodeck -e "
+            '"%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/mupen64plus_next.so %ROM%" '
+            f'"{file_path}"'
+        ),
+    }
+    assert active_core.calls == [1]
+
+
+def test_single_rom_no_install_row_returns_none():
+    """A ROM with no rom_installs row (uninstalled) → None, nothing to confirm."""
+    uow = FakeUnitOfWork()
+    with uow:
+        uow.roms.save(_make_rom(1, shortcut_app_id=99))
+    resolver = _make_resolver(uow=uow)
+    assert resolver.relaunch_item_for_rom(1) is None
+
+
+def test_single_rom_unbound_returns_none():
+    """An installed ROM with shortcut_app_id=None (unbound) → None."""
+    uow = FakeUnitOfWork()
+    _seed_install(uow, 1, file_path="/roms/n64/a.z64", shortcut_app_id=None)
+    resolver = _make_resolver(uow=uow)
+    assert resolver.relaunch_item_for_rom(1) is None
+
+
+def test_single_rom_missing_rom_returns_none(monkeypatch):
+    """An install whose ``roms.get`` yields None (defensive) → None.
+
+    The schema FK keeps this from happening on disk, so the branch is forced by
+    stubbing the lookup rather than orphaning the install (the FK-modelling fake
+    rejects an orphan at commit).
+    """
+    uow = FakeUnitOfWork()
+    _seed_install(uow, 1, file_path="/roms/n64/a.z64", shortcut_app_id=99)
+    monkeypatch.setattr(uow.roms, "get", lambda _rom_id: None)
+    resolver = _make_resolver(uow=uow)
+    assert resolver.relaunch_item_for_rom(1) is None
+
+
+def test_single_rom_multi_disc_pin_bakes_selected_disc_path():
+    """A multi-disc ROM pinned to disc 2 → its single-ROM item bakes disc 2."""
+    uow = FakeUnitOfWork()
+    _seed_multi_disc(uow, rom_id=1, selected_disc=_DISC2, app_id=555)
+    resolver = _make_resolver(uow=uow, disc_resolver=_multi_disc_resolver())
+    assert resolver.relaunch_item_for_rom(1) == {
+        "app_id": 555,
+        "launch_options": f'flatpak run net.retrodeck.retrodeck "{_DISC2_PATH}"',
+    }

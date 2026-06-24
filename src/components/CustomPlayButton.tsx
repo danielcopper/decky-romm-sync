@@ -33,6 +33,7 @@ import {
   probeReachability,
   checkLocalDrift,
   refreshSaveStatus,
+  getRomRelaunchOptions,
 } from "../api/backend";
 import { getRommConnectionState } from "../utils/connectionState";
 import { scrollToTop } from "../utils/scrollHelpers";
@@ -447,10 +448,31 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   };
 
   // Final launch step — set state and hand off to Steam. Marks the appId in the
-  // shared skip-set FIRST so this RunGame does NOT re-enter the global watcher
-  // and re-gate a launch that already ran the funnel (the double-gate fix C1).
-  const dispatchLaunch = (gameId: string) => {
+  // shared skip-set immediately before RunGame so this RunGame does NOT re-enter
+  // the global watcher and re-gate a launch that already ran the funnel (the
+  // double-gate fix C1).
+  const dispatchLaunch = async (gameId: string) => {
     setState("launching");
+    // Heal any mid-session launch_options drift on this shortcut before launch
+    // (#1150). Best-effort: a failed re-confirm still launches — no worse than today.
+    // The Decky callable bridge can hang indefinitely if the backend is wedged, so
+    // bound the read with a timeout (mirrors index.tsx's withTimeout and the
+    // funnel's preLaunchSync Promise.race) — a hang must fall through to the launch,
+    // never trap the button on "Launching…". setLaunchOptionsConfirmed has its own
+    // 2s internal timeout, so only the fetch needs bounding here.
+    if (romId) {
+      try {
+        const item = await Promise.race([
+          getRomRelaunchOptions(romId),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("get_rom_relaunch_options timed out")), 3000),
+          ),
+        ]);
+        if (item) await setLaunchOptionsConfirmed(appId, item.launch_options);
+      } catch (e) {
+        logError(`CustomPlayButton: pre-launch relaunch re-confirm failed (launching anyway): ${e}`);
+      }
+    }
     markLaunchSkipped(appId);
     SteamClient.Apps.RunGame(gameId, "", -1, 100);
   };
@@ -493,7 +515,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
 
     // Non-RomM / unresolved ROM — nothing to gate, launch straight through.
     if (!romId) {
-      dispatchLaunch(gameId);
+      await dispatchLaunch(gameId);
       return;
     }
 
@@ -526,7 +548,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   const actOnVerdict = async (verdict: GateVerdict, gameId: string, rid: number): Promise<"done" | "retry"> => {
     switch (verdict.decision) {
       case "allow":
-        dispatchLaunch(gameId);
+        await dispatchLaunch(gameId);
         return "done";
       case "abort":
       case "block":
@@ -543,13 +565,13 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         }
         // Conflicts resolved — notify sibling components to refresh, then launch.
         globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: rid } }));
-        dispatchLaunch(gameId);
+        await dispatchLaunch(gameId);
         return "done";
       }
       case "offline_drift": {
         const choice = await showOfflineDriftModal();
         if (choice === "start_anyway") {
-          dispatchLaunch(gameId);
+          await dispatchLaunch(gameId);
           return "done";
         }
         if (choice === "retry") {
@@ -565,7 +587,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       case "sync_failed": {
         const proceed = await showFallbackLaunchModal(verdict.message);
         if (proceed) {
-          dispatchLaunch(gameId);
+          await dispatchLaunch(gameId);
           return "done";
         }
         setState("play");

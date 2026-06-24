@@ -1371,3 +1371,130 @@ describe("CustomPlayButton — F7 background save-status refresh on settle-to-pl
     expect(await findByText("Play")).toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// #1150 — the Play-button pre-launch relaunch re-confirm. dispatchLaunch pulls
+// getRomRelaunchOptions and confirm-sets the shortcut's launch_options BEFORE
+// RunGame, healing mid-session drift on the common launch path. Best-effort:
+// a None item skips the set, and a rejection logs + still launches.
+// ---------------------------------------------------------------------------
+describe("CustomPlayButton — pre-launch relaunch re-confirm (#1150)", () => {
+  const RELAUNCH_COMMAND = 'flatpak run net.retrodeck.retrodeck "/roms/gba/pokemon.gba"';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    consumeLaunchSkip(100);
+    // Allow-path gate predecessors: online, tracking configured, no core change,
+    // clean pre-launch sync → the gate returns "allow" → dispatchLaunch runs.
+    vi.mocked(getMigrationState).mockReturnValue({ pending: false });
+    vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "default" });
+    vi.mocked(backend.checkCoreChange).mockResolvedValue({ changed: false });
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({ success: true, message: "", synced: 0, conflicts: [] });
+    vi.mocked(setLaunchOptionsConfirmed).mockResolvedValue(true);
+
+    vi.stubGlobal("SteamClient", { Apps: { RunGame: vi.fn() } });
+    vi.stubGlobal("appStore", {
+      GetAppOverviewByAppID: vi.fn(() => ({ GetGameID: () => "gid-1" })),
+      allApps: [],
+    });
+  });
+
+  async function clickPlay(): Promise<void> {
+    mockCachedDetail();
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+      // Drain the gate chain + the dispatchLaunch re-confirm awaits.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  }
+
+  it("re-confirms launch_options (getRomRelaunchOptions → setLaunchOptionsConfirmed) BEFORE RunGame", async () => {
+    vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({ app_id: 100, launch_options: RELAUNCH_COMMAND });
+
+    await clickPlay();
+
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+    // The re-confirm pulled this ROM's resolved command and confirm-set it onto
+    // the shortcut's appId with that exact command.
+    expect(vi.mocked(backend.getRomRelaunchOptions)).toHaveBeenCalledWith(42);
+    expect(vi.mocked(setLaunchOptionsConfirmed)).toHaveBeenCalledWith(100, RELAUNCH_COMMAND);
+    // Order: getRomRelaunchOptions → setLaunchOptionsConfirmed → RunGame.
+    const getOrder = vi.mocked(backend.getRomRelaunchOptions).mock.invocationCallOrder[0]!;
+    const setOrder = vi.mocked(setLaunchOptionsConfirmed).mock.invocationCallOrder[0]!;
+    const runOrder = vi.mocked(SteamClient.Apps.RunGame).mock.invocationCallOrder[0]!;
+    expect(getOrder).toBeLessThan(setOrder);
+    expect(setOrder).toBeLessThan(runOrder);
+  });
+
+  it("a null item skips setLaunchOptionsConfirmed but still launches", async () => {
+    // No install/binding to re-confirm → backend returns null → the set is
+    // skipped, but the launch must still proceed (nothing to heal, no block).
+    vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue(null);
+
+    await clickPlay();
+
+    expect(vi.mocked(backend.getRomRelaunchOptions)).toHaveBeenCalledWith(42);
+    expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+  });
+
+  it("a rejected re-confirm logs the pre-launch message AND still launches (non-vacuous catch)", async () => {
+    const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+    vi.mocked(backend.getRomRelaunchOptions).mockRejectedValue(new Error("offline"));
+
+    await clickPlay();
+
+    // Post-catch state: the failure was logged with the #1150 message AND the
+    // launch still fired (best-effort — a failed re-confirm is no worse than today).
+    await waitFor(() =>
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("pre-launch relaunch re-confirm failed")),
+    );
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+
+    logSpy.mockRestore();
+  });
+
+  it("a hung getRomRelaunchOptions falls through to the launch after the timeout (button never trapped)", async () => {
+    // The Decky callable bridge can hang forever on a wedged backend. The fetch
+    // is bounded by a 3s Promise.race; on timeout the re-confirm is skipped and
+    // the launch still fires — the button must not stay stuck on "Launching…".
+    // RTL's findBy* deadlocks under fake timers, so render + settle to "Play"
+    // under REAL timers, then switch to fake timers right before the click so the
+    // 3s re-confirm timeout fires without a real wait (kept fast).
+    const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+    // Never resolves — simulates a wedged backend / hung bridge.
+    vi.mocked(backend.getRomRelaunchOptions).mockReturnValue(new Promise<never>(() => {}));
+
+    try {
+      mockCachedDetail();
+      const { findByText } = render(<CustomPlayButton appId={100} />);
+      const playBtn = await findByText("Play");
+
+      vi.useFakeTimers();
+      await act(async () => {
+        playBtn.click();
+        // The gate chain up to dispatchLaunch is microtask-driven (no setTimeout);
+        // advancing past 3000ms flushes those microtasks and fires the re-confirm
+        // timeout that unblocks the hung fetch.
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+
+      // The hung fetch timed out → re-confirm skipped (no set), logged, and the
+      // launch STILL fired. RunGame is the proof the button escaped "Launching…".
+      expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("pre-launch relaunch re-confirm failed"));
+      expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100);
+    } finally {
+      vi.useRealTimers();
+      logSpy.mockRestore();
+    }
+  });
+});

@@ -755,11 +755,13 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_installed_rom",
     "evaluate_launch",
     # Launch-gate offline funnel: a local-only drift hash check, a version-free
-    # reachability heartbeat, and a fire-and-forget read-only save-status
-    # refresh. None mutate RetroDECK state, so all stay callable mid-migration.
+    # reachability heartbeat, a fire-and-forget read-only save-status refresh,
+    # and the pre-launch relaunch re-confirm read (#1150). None mutate RetroDECK
+    # state, so all stay callable mid-migration.
     "check_local_drift",
     "probe_reachability",
     "refresh_save_status",
+    "get_rom_relaunch_options",
     # End-of-session orchestration — composes record_session_end (whitelisted),
     # post_exit_sync (decorator-gated, but SessionLifecycleService applies its
     # own ``is_retrodeck_migration_pending`` check internally so the
@@ -953,6 +955,7 @@ class TestMainStartupOrdering:
             "startup_healing_service": startup_healing_service,
             "launch_gate_service": MagicMock(),
             "session_lifecycle_service": MagicMock(),
+            "relaunch_options_resolver": MagicMock(),
         }
 
         bootstrap_result = BootstrapResult(

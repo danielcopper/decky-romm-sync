@@ -124,6 +124,7 @@ class Plugin:
         self._startup_healing_service = services["startup_healing_service"]
         self._launch_gate_service = services["launch_gate_service"]
         self._session_lifecycle_service = services["session_lifecycle_service"]
+        self._relaunch_options_resolver = services["relaunch_options_resolver"]
 
         # ── 4b. Legacy credential migration ─────────────────────────────────
         # Upgrade a stored-password install to a Client API Token. The
@@ -349,6 +350,15 @@ class Plugin:
 
     async def check_local_drift(self, rom_id):
         return await self._launch_gate_service.check_local_drift(rom_id)
+
+    async def get_rom_relaunch_options(self, rom_id):
+        """Return ``{app_id, launch_options}`` for one installed+bound ROM, or None.
+
+        The Play-button funnel re-confirms the shortcut's launch command from
+        this just before launch to heal mid-session ``launch_options`` drift
+        (#1150). Read-only — no migration gate, no canonical failure shape.
+        """
+        return await self.loop.run_in_executor(None, self._relaunch_options_resolver.relaunch_item_for_rom, int(rom_id))
 
     async def probe_reachability(self):
         return await self._connection_service.probe_reachability()

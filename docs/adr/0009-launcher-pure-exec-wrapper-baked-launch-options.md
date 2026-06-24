@@ -59,9 +59,12 @@ whose own `-e "..."` quoting must survive verbatim. `launch_options` carries:
 
 - the **full command** for an installed ROM, written at **sync** (for ROMs already on disk), at **download-complete**
   (the moment a ROM becomes installed), **re-resolved on RetroDECK-home migration** (a new `migration_relaunch_options`
-  event rewrites every installed+bound shortcut to the relocated path), and **re-confirmed at every plugin load** by a
+  event rewrites every installed+bound shortcut to the relocated path), **re-confirmed at every plugin load** by a
   startup pull-reconcile (the frontend pulls `get_installed_relaunch_options` once the backend is reachable and
-  confirm-sets each installed+bound shortcut's command, healing any drift to `""` left by a missed bake);
+  confirm-sets each installed+bound shortcut's command, healing any drift to `""` left by a missed bake), and
+  **re-confirmed once more just before a Play-button launch** by a single-ROM pull (the funnel pulls
+  `get_rom_relaunch_options(rom_id)` and confirm-sets the shortcut's command before `RunGame`, healing mid-session drift
+  on the most common launch path between plugin loads — best-effort, a failed re-confirm still launches; #1150);
 - the **empty string `""`** (placeholder) for an uninstalled ROM, until it is downloaded.
 
 The `romm:<rom_id>` marker is **gone**. Two bindings that previously rode on it move off `launch_options`:
@@ -116,6 +119,14 @@ storage + precedence + bake-site model is [ADR-0011](0011-per-game-core-override
   it once the backend is proven reachable and confirm-sets each entry. The pass is **idempotent and appId-safe**:
   re-confirming a correct command matches the read-back instantly, and `launch_options` is not part of the appId CRC32,
   so the shortcut identity, artwork, and collections survive. It heals drift from every cause at the next plugin load.
+- Because the startup reconcile only runs at plugin load, drift that appears **mid-session** (e.g. a `download-complete`
+  confirm-set that timed out) survives until the next reload. The **Play-button funnel** closes that gap for the common
+  launch path: it runs and `await`s **before** `RunGame`, so it pulls `get_rom_relaunch_options(rom_id)` (the single-ROM
+  build over the same active-core/disc seams) and confirm-sets the shortcut's command just before launch — best-effort,
+  a failed or `None` re-confirm still launches, no worse than today
+  ([#1150](https://github.com/danielcopper/decky-romm-sync/issues/1150)). The **direct-Steam-launch watcher path stays
+  uncovered**: it must decide synchronously before `CancelGameAction` with no pre-warmed state, so it can't afford the
+  extra round-trip; that path still relies on the startup reconcile.
 - **Breaking for existing shortcuts: a re-sync is required.** Shortcuts created under the `romm:<rom_id>` model carry
   the old marker and no baked command; they are detected by exe but recreated by re-sync to pick up the baked
   `launch_options`. Accepted as a **pre-release** breaking change.

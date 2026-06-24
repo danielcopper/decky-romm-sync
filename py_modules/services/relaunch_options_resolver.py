@@ -31,6 +31,8 @@ from typing import TYPE_CHECKING, Any
 from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
 
 if TYPE_CHECKING:
+    from domain.rom import Rom
+    from domain.rom_install import RomInstall
     from services.protocols import (
         ActiveCoreReader,
         DiscResolver,
@@ -62,14 +64,30 @@ class RelaunchOptionsResolver:
         self._active_core = config.active_core
         self._disc_resolver = config.disc_resolver
 
+    def _resolve_item(self, rom: Rom, install: RomInstall) -> dict[str, Any]:
+        """Compose one ``{app_id, launch_options}`` item for an installed+bound ROM.
+
+        The single resolve body shared by the batch and single-ROM entry points.
+        Resolves the ROM's active core and selected disc — through the same
+        ``active_core`` / ``disc_resolver`` seams every other launch-bake site
+        uses — outside any open Unit of Work (``active_core_for_rom`` opens its
+        own, and the per-connection write lock is not re-entrant; #1154). A
+        multi-disc ROM bakes its selected disc's path, a single-disc ROM its own
+        ``file_path``.
+        """
+        core_so, _label = self._active_core.active_core_for_rom(rom.rom_id)
+        invocation = resolve_emulator_invocation({"id": rom.rom_id}, core_so)
+        bake_path = self._disc_resolver.resolve_for_install(install, rom.selected_disc)
+        return {
+            "app_id": rom.shortcut_app_id,
+            "launch_options": build_launch_options(invocation, bake_path),
+        }
+
     def installed_relaunch_items(self) -> list[dict[str, Any]]:
         """Return one ``{app_id, launch_options}`` item per installed+bound ROM.
 
         Snapshots the installed+bound ``(rom, install)`` pairs in one short read
-        UoW, closes it, then resolves each ROM's active core and selected disc
-        outside any open UoW and composes the launch command. A multi-disc ROM
-        re-resolves its selected disc against its install directory (a
-        single-disc ROM resolves to its own ``file_path``, unchanged).
+        UoW, closes it, then resolves each item outside any open UoW.
         Uninstalled or unbound ROMs are skipped by construction.
 
         The iteration UoW is closed before the resolve loop runs because
@@ -84,15 +102,24 @@ class RelaunchOptionsResolver:
                 if (rom := uow.roms.get(install.rom_id)) is not None and rom.shortcut_app_id is not None
             ]
 
-        items: list[dict[str, Any]] = []
-        for rom, install in bound_installs:
-            core_so, _label = self._active_core.active_core_for_rom(rom.rom_id)
-            invocation = resolve_emulator_invocation({"id": rom.rom_id}, core_so)
-            bake_path = self._disc_resolver.resolve_for_install(install, rom.selected_disc)
-            items.append(
-                {
-                    "app_id": rom.shortcut_app_id,
-                    "launch_options": build_launch_options(invocation, bake_path),
-                }
-            )
-        return items
+        return [self._resolve_item(rom, install) for rom, install in bound_installs]
+
+    def relaunch_item_for_rom(self, rom_id: int) -> dict[str, Any] | None:
+        """Resolve the ``{app_id, launch_options}`` for one installed+bound ROM.
+
+        Returns ``None`` when the ROM has no install row or no bound shortcut —
+        there is no installed launch command to re-confirm. Snapshots the
+        rom/install in one short read UoW, closes it, then resolves outside —
+        same non-reentrant-write-lock reason as the batch path (#1154).
+
+        The Play-button funnel re-confirms the shortcut's launch command from
+        this just before launch, healing mid-session ``launch_options`` drift on
+        the most common launch path (#1150).
+        """
+        with self._uow_factory() as uow:
+            install = uow.rom_installs.get(rom_id)
+            rom = uow.roms.get(rom_id) if install is not None else None
+            if install is None or rom is None or rom.shortcut_app_id is None:
+                return None
+            pair = (rom, install)
+        return self._resolve_item(*pair)

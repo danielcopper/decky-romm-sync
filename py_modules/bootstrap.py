@@ -765,4 +765,5 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         "startup_healing_service": startup_healing_service,
         "launch_gate_service": launch_gate_service,
         "session_lifecycle_service": session_lifecycle_service,
+        "relaunch_options_resolver": relaunch_options_resolver,
     }

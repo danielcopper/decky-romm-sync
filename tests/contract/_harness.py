@@ -82,6 +82,7 @@ _BOUND_SERVICE_ATTRS = {
     "_startup_healing_service": "startup_healing_service",
     "_launch_gate_service": "launch_gate_service",
     "_session_lifecycle_service": "session_lifecycle_service",
+    "_relaunch_options_resolver": "relaunch_options_resolver",
 }
 
 
