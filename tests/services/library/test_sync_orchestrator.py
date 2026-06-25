@@ -609,6 +609,50 @@ class TestSyncControl:
         assert result["success"] is True
         assert "No sync" in result["message"]
 
+    def test_cancel_sync_with_matching_run_id_sets_cancelling(self, plugin):
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._current_sync_id = "run-B"
+        result = plugin._sync_service.cancel_sync("run-B")
+        assert result["success"] is True
+        assert plugin._sync_service._sync_state == SyncState.CANCELLING
+
+    def test_cancel_sync_with_stale_run_id_is_noop(self, plugin):
+        """A cancel meant for run-A must NOT abort the fresh run-B (#1198).
+
+        The regression case: run-A finalized to IDLE and run-B started fresh,
+        then run-A's Cancel click lands. The argument-less cancel would flip
+        run-B to CANCELLING; the run-scoped cancel ignores the stale id.
+        """
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._current_sync_id = "run-B"
+        result = plugin._sync_service.cancel_sync("run-A")
+        assert result["success"] is True
+        assert "stale" in result["message"].lower()
+        assert plugin._sync_service._sync_state == SyncState.RUNNING
+
+    def test_cancel_sync_with_none_run_id_cancels_unconditionally(self, plugin):
+        """A falsy run_id (legacy caller / no id captured yet) always cancels."""
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._current_sync_id = "run-B"
+        result = plugin._sync_service.cancel_sync(None)
+        assert result["success"] is True
+        assert plugin._sync_service._sync_state == SyncState.CANCELLING
+
+    def test_cancel_sync_with_empty_run_id_cancels_unconditionally(self, plugin):
+        """An empty-string run_id (the frontend's no-id-yet fallback) cancels."""
+        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._current_sync_id = "run-B"
+        result = plugin._sync_service.cancel_sync("")
+        assert result["success"] is True
+        assert plugin._sync_service._sync_state == SyncState.CANCELLING
+
+    def test_cancel_sync_stale_run_id_when_idle_is_no_op(self, plugin):
+        """Idle short-circuits before the run-id check — no sync, plain no-op."""
+        plugin._sync_service._current_sync_id = "run-B"
+        result = plugin._sync_service.cancel_sync("run-A")
+        assert result["success"] is True
+        assert "No sync" in result["message"]
+
     def test_sync_heartbeat(self, plugin):
         old = plugin._sync_service._sync_last_heartbeat
         # Advance the injected FakeClock so monotonic moves forward.
@@ -922,6 +966,7 @@ class TestDoSyncPerUnit:
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._current_sync_id = "run-plan"
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -930,6 +975,8 @@ class TestDoSyncPerUnit:
         payload = plan_events[0][0][1]
         assert payload["total_units"] == 1
         assert payload["units"][0]["name"] == "N64"
+        # The frontend captures this run_id to scope a later Cancel click (#1198).
+        assert payload["run_id"] == "run-plan"
 
     @pytest.mark.asyncio
     async def test_processes_each_unit_in_order(self, plugin, fake_romm_api):

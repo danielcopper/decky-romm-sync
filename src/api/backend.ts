@@ -106,7 +106,7 @@ export const updateWhitelistSettings = callable<[string[], string[]], { success:
 
 export const testConnection = callable<[], BackendResult>("test_connection");
 export const startSync = callable<[], BackendResult>("start_sync");
-export const cancelSync = callable<[], BackendResult>("cancel_sync");
+export const cancelSync = callable<[string], BackendResult>("cancel_sync");
 export const syncHeartbeat = callable<[], { success: boolean }>("sync_heartbeat");
 export const syncPreview = callable<[], SyncPreview>("sync_preview");
 export const syncApplyDelta = callable<[string], BackendResult>("sync_apply_delta");

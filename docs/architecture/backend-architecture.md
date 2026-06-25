@@ -185,6 +185,27 @@ the heartbeat-timeout abandon window (the same unit's late ack must still valida
 or is cancelled. On the frontend side, the unit handler **does not send the ack at all once cancel has been requested**
 — the first line of defence against a cancelled run's bindings landing in whatever run started next.
 
+**Run identity on the cancel (#1198).** `cancel_sync(run_id)` is run-scoped, mirroring the ack-path
+`_ack_matches_active_unit` check above. A Cancel click meant for run N can land after run N finalized to IDLE
+(`current_sync_id` nulled) and run N+1 started fresh — an unscoped cancel would flip run N+1 to CANCELLING (a sync the
+user never cancelled), which would abort it and report cancelled. So when the requested `run_id` is **truthy and does
+not match** `current_sync_id`, the cancel is **ignored** (logged at INFO, returns
+`{success: True, message: "Cancel
+ignored (stale run)"}`) — `sync_state` is left RUNNING. A matching id (or no active
+run) flips RUNNING → CANCELLING as before. A **falsy/`None`** `run_id` cancels **unconditionally** — legacy callers and
+the "no active run id captured yet" safety case — so cancel is never made less reliable. Every cancel logs one INFO line
+recording the requested `run_id`, the active `current_sync_id`, and the `sync_state` at call time. The frontend captures
+the run id from the `sync_plan` event (now carrying `run_id`) and the `sync_apply_unit` event into a module variable
+(`getActiveRunId`) and passes it on the Cancel click; an empty string when no run is in flight maps to the unconditional
+path. `sync_cancel_preview` is **not** run-scoped: it only clears the pending preview delta (`pending_delta`), never
+touches `sync_state`, and `sync_apply_delta` independently validates the `preview_id`, so a stale preview-cancel cannot
+abort a fresh sync.
+
+The same `sync_plan` capture point also clears the frontend's per-run cancel flag (`_cancelRequested`). The per-unit
+handler resets that flag at its own start, but an incrementally-**skipped** unit never runs that handler, so a skip-only
+run could otherwise carry a stale cancel from a prior cancelled run; resetting once per run on `sync_plan` is the
+reliable reset.
+
 #### DownloadService notes
 
 RomM exposes three mutually exclusive file-layout flags on every ROM detail. They control how the server stores files

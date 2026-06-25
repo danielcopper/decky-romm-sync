@@ -40,7 +40,7 @@ import {
   onSaveSortMigrationChange,
   setSaveSortMigrationStatus,
 } from "../utils/saveSortMigrationStore";
-import { reconcileStaleShortcuts, requestSyncCancel } from "../utils/syncManager";
+import { reconcileStaleShortcuts, requestSyncCancel, getActiveRunId } from "../utils/syncManager";
 import { setVersionError } from "../utils/connectionState";
 import { retroDeckBanner, type RetroDeckBanner } from "../utils/retrodeckHealth";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
@@ -370,7 +370,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     }
     try {
       requestSyncCancel();
-      const result = await cancelSync();
+      // Scope the cancel to the active run so a click meant for this run can't
+      // abort a fresh run that started in the meantime (#1198). An empty string
+      // when no run id is captured yet → backend cancels unconditionally.
+      const result = await cancelSync(getActiveRunId() ?? "");
       finishCancelWithStatus(result.message);
     } catch {
       finishCancelWithStatus("Failed to cancel sync");

@@ -142,10 +142,27 @@ class SyncOrchestrator:
         self._loop.create_task(self._do_sync_per_unit())
         return {"success": True, "message": "Sync started"}
 
-    def cancel_sync(self):
+    def cancel_sync(self, run_id=None):
+        """Request cancellation of the active sync, scoped to *run_id*.
+
+        A truthy *run_id* must match the active run's ``current_sync_id`` for
+        the cancel to take effect — a cancel click meant for run N can land
+        after run N finalized to IDLE and run N+1 started fresh, and an
+        unscoped cancel would wrongly abort run N+1 (the bug #1198 fixes,
+        mirroring the ack-path identity check ``_ack_matches_active_unit``).
+        A falsy/``None`` *run_id* cancels **unconditionally** — legacy callers
+        that pass no id, and the "no active run id yet" safety case — so cancel
+        is never made less reliable.
+        """
         box = self._sync_state
+        self._logger.info(
+            f"cancel_sync: run_id={run_id!r} active run={box.current_sync_id!r} state={box.sync_state.value}"
+        )
         if box.sync_state != SyncState.RUNNING:
             return {"success": True, "message": "No sync in progress"}
+        if run_id and str(run_id) != str(box.current_sync_id):
+            self._logger.info(f"Ignoring stale cancel for run={run_id!r}; active run={box.current_sync_id!r}")
+            return {"success": True, "message": "Cancel ignored (stale run)"}
         box.sync_state = SyncState.CANCELLING
         return {"success": True, "message": "Sync cancelling..."}
 
@@ -438,6 +455,7 @@ class SyncOrchestrator:
             await self._emit(
                 "sync_plan",
                 {
+                    "run_id": str(run_id or ""),
                     "units": [u.to_event_payload() for u in work_queue],
                     "total_units": total_units,
                     "total_roms": total_roms_planned,

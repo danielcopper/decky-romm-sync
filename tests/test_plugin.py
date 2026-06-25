@@ -1023,9 +1023,9 @@ class TestCancelCallablesNotBlockedByMigration:
     async def test_cancel_sync_callable_when_migration_pending(self, plugin):
         plugin._migration_service.is_retrodeck_migration_pending.return_value = True
         plugin._sync_service.cancel_sync = MagicMock(return_value={"success": True, "stopped": True})
-        result = await plugin.cancel_sync()
+        result = await plugin.cancel_sync("run-1")
         assert result.get("blocked_by_migration") is not True
-        plugin._sync_service.cancel_sync.assert_called_once()
+        plugin._sync_service.cancel_sync.assert_called_once_with("run-1")
 
     @pytest.mark.asyncio
     async def test_sync_cancel_preview_callable_when_migration_pending(self, plugin):

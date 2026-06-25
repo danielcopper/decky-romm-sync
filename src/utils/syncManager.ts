@@ -31,6 +31,16 @@ let _cancelRequested = false;
 let _isUnitRunning = false;
 
 /**
+ * Run id of the sync currently in flight, captured from the backend
+ * ``sync_plan`` / ``sync_apply_unit`` events. Passed back on cancel so a
+ * Cancel click is scoped to the active run — a click meant for run N can land
+ * after run N finalized and run N+1 started, and an unscoped cancel would
+ * wrongly abort run N+1 (#1198). ``null`` before any run has started; the
+ * backend then cancels unconditionally (the safety case).
+ */
+let _activeRunId: string | null = null;
+
+/**
  * Once-per-run cache of the existing-shortcut scan. The backend emits one
  * ``sync_apply_unit`` event per unit but the scan only needs to run once per
  * run: every pre-existing RomM shortcut is captured at the first unit, and the
@@ -43,6 +53,29 @@ let _scanCache: { runId: string; map: Map<number, number> } | null = null;
 /** Request cancellation of the frontend shortcut processing loop. */
 export function requestSyncCancel(): void {
   _cancelRequested = true;
+}
+
+/**
+ * Mark a fresh sync run started: capture its ``run_id`` and clear the cancel
+ * flag. Called from the ``sync_plan`` listener, which fires exactly once per
+ * run before any unit. The per-unit handler also clears ``_cancelRequested``,
+ * but that handler never runs for an incrementally-SKIPPED unit — so a
+ * skip-only run would otherwise carry a stale ``_cancelRequested`` from a prior
+ * cancelled run (the #1198 adjacent H4 defect). Resetting here, once per run,
+ * is the reliable reset.
+ */
+export function beginSyncRun(runId: string): void {
+  _activeRunId = runId || null;
+  _cancelRequested = false;
+}
+
+/**
+ * Run id of the sync currently in flight, or ``null`` before any run has
+ * started. Passed to ``cancelSync`` so the backend scopes the cancel to the
+ * active run (#1198).
+ */
+export function getActiveRunId(): string | null {
+  return _activeRunId;
 }
 
 /**
@@ -225,6 +258,10 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
       }
 
       _cancelRequested = false;
+      // Capture the run id here too — ``sync_apply_unit`` always carries it, so
+      // a Cancel click resolves the right run even if the ``sync_plan`` capture
+      // was missed (#1198).
+      _activeRunId = data.run_id || _activeRunId;
       const romIdToAppId: Record<string, number> = {};
       const artworkTargets: ArtworkTarget[] = [];
 

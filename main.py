@@ -293,8 +293,8 @@ class Plugin:
     async def start_sync(self):
         return self._sync_service.start_sync()
 
-    async def cancel_sync(self):
-        return self._sync_service.cancel_sync()
+    async def cancel_sync(self, run_id):
+        return self._sync_service.cancel_sync(run_id)
 
     async def sync_heartbeat(self):
         return self._sync_service.sync_heartbeat()

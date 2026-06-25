@@ -284,8 +284,8 @@ class LibraryService:
     def start_sync(self):
         return self._orchestrator.start_sync()
 
-    def cancel_sync(self):
-        return self._orchestrator.cancel_sync()
+    def cancel_sync(self, run_id=None):
+        return self._orchestrator.cancel_sync(run_id)
 
     def sync_heartbeat(self):
         return self._orchestrator.sync_heartbeat()

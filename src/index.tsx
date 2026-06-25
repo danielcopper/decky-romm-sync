@@ -7,7 +7,7 @@ import { LibraryPage } from "./components/LibraryPage";
 import { SystemPage } from "./components/SystemPage";
 import { DangerZone } from "./components/DangerZone";
 import { DownloadQueue } from "./components/DownloadQueue";
-import { initUnitSyncManager } from "./utils/syncManager";
+import { initUnitSyncManager, beginSyncRun } from "./utils/syncManager";
 import { setSyncProgress } from "./utils/syncProgress";
 import { updateDownload, getDownloadState } from "./utils/downloadStore";
 import { handleGlobalDownloadFailure } from "./utils/downloadFailure";
@@ -423,6 +423,10 @@ export default definePlugin(() => {
     // sync_plan fires once per run, before any unit — reset the per-run delta
     // so the terminal toast counts only this run's created/removed shortcuts.
     resetSyncDelta();
+    // Capture the run id and clear the per-run cancel flag. Doing it here (not
+    // only in the per-unit handler) keeps cancel run-scoped and the flag fresh
+    // even on a skip-only run, where no unit handler ever runs (#1198).
+    beginSyncRun(data.run_id);
     logInfo(`sync_plan received: ${data.total_units} units, ${data.total_roms} ROMs total`);
   });
 

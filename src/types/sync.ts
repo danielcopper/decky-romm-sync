@@ -104,6 +104,8 @@ interface SyncPlanUnit {
 }
 
 export interface SyncPlanData {
+  /** Identifies the sync run; captured frontend-side so a Cancel click is scoped to the active run (#1198). */
+  run_id: string;
   units: SyncPlanUnit[];
   total_units: number;
   total_roms: number;

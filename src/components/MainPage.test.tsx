@@ -112,6 +112,7 @@ import * as saveSortMigrationStore from "../utils/saveSortMigrationStore";
 vi.mock("../utils/syncManager", () => ({
   requestSyncCancel: vi.fn(),
   reconcileStaleShortcuts: vi.fn().mockResolvedValue(undefined),
+  getActiveRunId: vi.fn().mockReturnValue("run-active"),
 }));
 
 vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
@@ -270,6 +271,10 @@ describe("MainPage", () => {
 
     // Re-stub useVersionError (resetAllMocks wiped it).
     vi.mocked(useVersionError).mockReturnValue(null);
+
+    // Re-stub getActiveRunId (resetAllMocks wiped the module-mock return value).
+    // handleCancel reads it to scope the cancel to the active run (#1198).
+    vi.mocked(syncManager.getActiveRunId).mockReturnValue("run-active");
 
     // Re-stub migrationStore impls.
     vi.mocked(migrationStore.getMigrationState).mockImplementation(() => currentMigrationState);
@@ -1254,7 +1259,9 @@ describe("MainPage", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(syncManager.requestSyncCancel)).toHaveBeenCalled();
-      expect(vi.mocked(backend.cancelSync)).toHaveBeenCalled();
+      // Cancel is scoped to the active run id captured frontend-side (#1198) —
+      // getActiveRunId() returns "run-active" in this suite's syncManager mock.
+      expect(vi.mocked(backend.cancelSync)).toHaveBeenCalledWith("run-active");
     });
 
     it("cancelSync success: surfaces result.message in the status field (un-gated)", async () => {

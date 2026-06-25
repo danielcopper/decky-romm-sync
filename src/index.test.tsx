@@ -18,6 +18,7 @@ import { emitDeckyEvent, deckyEventListenerCount } from "./test-utils/decky-api-
 import { getSettingsResetNotice, getAllPlaytime, getAppIdRomIdMap, getInstalledRelaunchOptions } from "./api/backend";
 import { getSettingsResetState, setSettingsResetState } from "./utils/settingsResetStore";
 import { recordSyncCreated, resetSyncDelta } from "./utils/syncDeltaStore";
+import { beginSyncRun } from "./utils/syncManager";
 import type { DownloadCompleteEvent, SyncPlanData, SyncStaleData } from "./types";
 
 vi.mock("./patches/gameDetailPatch", () => ({
@@ -40,6 +41,7 @@ vi.mock("./utils/sessionManager", () => ({
 }));
 vi.mock("./utils/syncManager", () => ({
   initUnitSyncManager: vi.fn(() => () => {}),
+  beginSyncRun: vi.fn(),
 }));
 
 // Observe the collection create/update + stale-cleanup calls fired by
@@ -613,11 +615,26 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
     resetSyncDelta();
   });
 
+  it("sync_plan begins the run frontend-side — captures run id + resets cancel (#1198)", async () => {
+    const plugin = pluginFactory();
+    vi.mocked(beginSyncRun).mockClear();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-xyz", units: [], total_units: 1, total_roms: 1 });
+    });
+
+    // The listener routes the run id into beginSyncRun, which both captures it
+    // (for a run-scoped cancel) and clears the per-run cancel flag — reliable
+    // even on a skip-only run where no per-unit handler fires.
+    expect(vi.mocked(beginSyncRun)).toHaveBeenCalledWith("run-xyz");
+    plugin.onDismount();
+  });
+
   it("reports 'X added, Y removed' when both are non-zero (ignores total_games)", async () => {
     const plugin = pluginFactory();
 
     act(() => {
-      emitDeckyEvent<[SyncPlanData]>("sync_plan", { units: [], total_units: 2, total_roms: 2 });
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-1", units: [], total_units: 2, total_roms: 2 });
     });
     // Two distinct shortcuts created this run (what the syncManager create path records).
     recordSyncCreated(100);
@@ -641,7 +658,7 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
     const plugin = pluginFactory();
 
     act(() => {
-      emitDeckyEvent<[SyncPlanData]>("sync_plan", { units: [], total_units: 1, total_roms: 0 });
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-1", units: [], total_units: 1, total_roms: 0 });
     });
     act(() => {
       emitDeckyEvent<[SyncStaleData]>("sync_stale", {
@@ -664,7 +681,7 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
     const plugin = pluginFactory();
 
     act(() => {
-      emitDeckyEvent<[SyncPlanData]>("sync_plan", { units: [], total_units: 1, total_roms: 53 });
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-1", units: [], total_units: 1, total_roms: 53 });
     });
     // No creates, no removes — but total_games=53 (the old toast wrongly said
     // "53 games added"). The fixed toast must say the library is up to date.
@@ -681,7 +698,7 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
     const plugin = pluginFactory();
 
     act(() => {
-      emitDeckyEvent<[SyncPlanData]>("sync_plan", { units: [], total_units: 2, total_roms: 1 });
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-1", units: [], total_units: 2, total_roms: 1 });
     });
     // Same appId surfaces in its platform unit and a collection unit; the Set
     // in the store collapses it to one "added".
@@ -700,7 +717,7 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
     const plugin = pluginFactory();
 
     act(() => {
-      emitDeckyEvent<[SyncPlanData]>("sync_plan", { units: [], total_units: 3, total_roms: 10 });
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-1", units: [], total_units: 3, total_roms: 10 });
     });
     recordSyncCreated(100);
     recordSyncCreated(200);
@@ -722,7 +739,7 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
     const plugin = pluginFactory();
 
     act(() => {
-      emitDeckyEvent<[SyncPlanData]>("sync_plan", { units: [], total_units: 3, total_roms: 10 });
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-1", units: [], total_units: 3, total_roms: 10 });
     });
     act(() => {
       emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
