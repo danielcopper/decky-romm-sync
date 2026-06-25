@@ -971,10 +971,15 @@ Triggered automatically when a game stops (if `sync_after_exit` is enabled).
 User-initiated from the "Sync All Saves Now" button in Save Sync settings.
 
 1. Iterates all installed ROMs from the backend registry.
-2. For each ROM with sync state: runs `do_sync_rom_saves`.
+2. For each ROM **whose slot the user has confirmed** (`slot_confirmed`): runs `do_sync_rom_saves`. A never-configured
+   ROM — one the user has not yet set up save sync for — is **skipped**, so its possibly-stale local save can't be
+   auto-uploaded into the default slot and overwrite another device's newer progress (#1055). The single-ROM paths
+   (pre-launch / post-exit / per-game manual sync) stay ungated — those are the user's explicit per-ROM actions and the
+   first-sync auto-seed path, where the user decides.
 3. Per-rom asyncio.Lock prevents collision with concurrent pre-launch / post-exit syncs.
 4. Reports total synced count and number of pending conflicts. Conflicts surface via the modal individually at each
-   game's next pre-launch sync.
+   game's next pre-launch sync. Skipped (unconfirmed) ROMs contribute zero synced / zero conflicts; `roms_checked` stays
+   the count of installed ROMs iterated.
 
 ### Get save status (read-only)
 

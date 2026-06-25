@@ -10,6 +10,7 @@ import logging
 
 import pytest
 
+from domain.rom_save_state import RomSaveState
 from domain.save_layout import ContentDir, InSaveDir
 from lib.errors import RommApiError, RommAuthError, RommConnectionError, RommSSLError, RommTimeoutError
 from lib.list_result import ErrorCode
@@ -18,6 +19,7 @@ from tests.services.saves._helpers import (
     _do_sync,
     _get_device_id,
     _install_rom,
+    _seed_save_state,
     _server_save,
     _set_device_id,
     _set_sort_settings,
@@ -190,6 +192,10 @@ class TestSyncAllSaves:
 
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
+        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(
+            svc, 2, RomSaveState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
+        )
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
         _create_save(tmp_path, system="snes", rom_name="game2", content=b"save2")
 
@@ -213,6 +219,10 @@ class TestSyncAllSaves:
 
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
+        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(
+            svc, 2, RomSaveState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
+        )
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
         _create_save(tmp_path, system="snes", rom_name="game2", content=b"save2")
 
@@ -250,6 +260,7 @@ class TestSyncAllSaves:
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
 
         orig_sync = svc._sync_engine.do_sync_rom_saves
@@ -279,6 +290,7 @@ class TestSyncAllSaves:
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
 
         # Stub internal sync to produce conflicts but no errors
         def stub_sync(rom_id, *args):
@@ -291,6 +303,103 @@ class TestSyncAllSaves:
         assert result["success"] is True
         assert result["conflicts"] >= 1
         assert "conflict(s)" in result["message"]
+
+    # ------------------------------------------------------------------
+    # #1055: the bulk sweep gates each ROM on slot confirmation so a
+    # never-configured ROM's stale local save can't be auto-uploaded into
+    # the default slot and overwrite another device's newer progress.
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_confirmed_rom_is_swept_and_uploads(self, tmp_path):
+        """A ROM whose slot the user has confirmed IS swept and uploads (#1055)."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
+
+        result = await svc.sync_all_saves()
+
+        assert result["success"] is True
+        assert result["synced"] == 1
+        assert result["roms_checked"] == 1
+        assert any(c[0] == "upload_save" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_unconfirmed_rom_is_skipped_no_upload(self, tmp_path):
+        """A never-configured ROM is SKIPPED — no upload, no download (#1055).
+
+        Non-vacuous: the assertion that NO ``upload_save`` reached the server is
+        what proves the slot-confirmation gate fired before any transfer.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        # No save state seeded → slot_confirmed defaults to False → never configured.
+        _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
+
+        result = await svc.sync_all_saves()
+
+        assert result["synced"] == 0
+        assert result["roms_checked"] == 1
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+        assert not any(c[0] == "download_save" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_mixed_only_confirmed_rom_syncs(self, tmp_path):
+        """With one confirmed and one unconfirmed ROM, only the confirmed one syncs (#1055)."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
+        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        # rom 2 left unconfirmed (no save state seeded).
+        _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
+        _create_save(tmp_path, system="snes", rom_name="game2", content=b"save2")
+
+        result = await svc.sync_all_saves()
+
+        assert result["synced"] == 1
+        assert result["roms_checked"] == 2
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        # The single upload was for the confirmed ROM (rom_id is the first positional arg).
+        assert upload_calls[0][1][0] == 1
+
+    @pytest.mark.asyncio
+    async def test_confirmed_legacy_rom_is_swept_and_uploads_as_null(self, tmp_path):
+        """A confirmed LEGACY-slot ROM is swept and uploads slot=None — gate doesn't skip it (#1055).
+
+        Belt-and-suspenders for Arm A: confirming the legacy slot goes through
+        ``confirm_slot(None)`` → ``slot_confirmed=True``, so the bulk sweep must
+        include it and upload with ``slot:null`` (not 'default').
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _seed_save_state(
+            svc,
+            1,
+            RomSaveState(
+                system="gba",
+                slot_confirmed=True,
+                active_slot=None,
+                slots={"": {"source": "local", "count": 0, "latest_updated_at": None}},
+            ),
+        )
+        _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
+
+        result = await svc.sync_all_saves()
+
+        assert result["synced"] == 1
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        assert upload_calls[0][2]["slot"] is None  # legacy-confirmed → slot:null, NOT "default"
 
 
 class TestPreLaunchSync:

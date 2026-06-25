@@ -75,6 +75,10 @@ Tap **Sync All Saves Now** to sync saves for all installed ROMs at once. This is
 - Catching up after a period of offline play
 - Verifying that all saves are in sync
 
+This only covers games you've already set up save sync for (games whose save slot you've confirmed). Games you haven't
+configured yet are left untouched, so a stale local save can't accidentally overwrite newer progress from another
+device.
+
 ## Resolving Conflicts
 
 When both your local save and the server save have changed since the last sync, a modal appears with both versions.

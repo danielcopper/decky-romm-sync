@@ -439,7 +439,9 @@ class SyncEngine:
             "synced": 0,
         }
 
-    async def _run_rom_sync(self, rom_id: int) -> tuple[int, list[str], list[dict[str, Any]]]:
+    async def _run_rom_sync(
+        self, rom_id: int, *, require_confirmed: bool = False
+    ) -> tuple[int, list[str], list[dict[str, Any]]]:
         """Read inputs → sync in executor → persist, for one ROM under its lock.
 
         The narrow-UoW shape (ADR-0006): a short read UoW loads the aggregate +
@@ -449,12 +451,21 @@ class SyncEngine:
         A ROM with no install record has nothing to sync — and no ``roms`` row
         to anchor a ``rom_save_states`` write against (ADR-0007 FK) — so we
         short-circuit before touching the aggregate.
+
+        When *require_confirmed* is set (the bulk ``sync_all_saves`` sweep), a ROM
+        whose slot the user has not confirmed is skipped entirely — no transfer,
+        no write — so a never-configured ROM's possibly-stale local save can't be
+        auto-uploaded into the default slot and overwrite another device's newer
+        progress (#1055). The single-ROM entry points leave it unset.
         """
         info = await self._loop.run_in_executor(None, self._rom_info.get_rom_save_info, rom_id)
         if not info:
             self._log_debug(f"_run_rom_sync({rom_id}): ROM not installed, skipping")
             return 0, [], []
         save_state, device_id = await self._loop.run_in_executor(None, self._read_sync_inputs, rom_id)
+        if require_confirmed and not save_state.slot_confirmed:
+            self._log_debug(f"_run_rom_sync({rom_id}): slot not confirmed, skipping bulk sync")
+            return 0, [], []
         core_so = await self._loop.run_in_executor(None, self.resolve_core, rom_id)
         default_slot = resolve_default_slot(self._settings)
         synced, errors, conflicts = await self._loop.run_in_executor(
@@ -686,7 +697,7 @@ class SyncEngine:
         for rom_id_int in rom_ids:
             rom_count += 1
             async with self.rom_lock(rom_id_int):
-                synced, errors, conflicts = await self._run_rom_sync(rom_id_int)
+                synced, errors, conflicts = await self._run_rom_sync(rom_id_int, require_confirmed=True)
             total_synced += synced
             total_errors.extend(errors)
             all_conflicts.extend(conflicts)
