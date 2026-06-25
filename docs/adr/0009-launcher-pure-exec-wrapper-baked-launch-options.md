@@ -122,13 +122,16 @@ storage + precedence + bake-site model is [ADR-0011](0011-per-game-core-override
   re-confirming a correct command matches the read-back instantly, and `launch_options` is not part of the appId CRC32,
   so the shortcut identity, artwork, and collections survive. It heals drift from every cause at the next plugin load.
 - Because the startup reconcile only runs at plugin load, drift that appears **mid-session** (e.g. a `download-complete`
-  confirm-set that timed out) survives until the next reload. The **Play-button funnel** closes that gap for the common
-  launch path: it runs and `await`s **before** `RunGame`, so it pulls `get_rom_relaunch_options(rom_id)` (the single-ROM
-  build over the same active-core/disc seams) and confirm-sets the shortcut's command just before launch — best-effort,
-  a failed or `None` re-confirm still launches, no worse than today
-  ([#1150](https://github.com/danielcopper/decky-romm-sync/issues/1150)). The **direct-Steam-launch watcher path stays
-  uncovered**: it must decide synchronously before `CancelGameAction` with no pre-warmed state, so it can't afford the
-  extra round-trip; that path still relies on the startup reconcile.
+  confirm-set that timed out) survives until the next reload. **Both launch surfaces** close that gap via the shared
+  `reconfirmLaunchOptions` helper (`utils/launchOptionsReconcile.ts`): it pulls `get_rom_relaunch_options(rom_id)` (the
+  single-ROM build over the same active-core/disc seams, bounded by a 3s race) and confirm-sets the shortcut's command
+  just before launch — best-effort, a hang/`None`/failure still launches, no worse than today.
+  - The **Play-button funnel** runs it `await`-before-`RunGame` in `dispatchLaunch`
+    ([#1150](https://github.com/danielcopper/decky-romm-sync/issues/1150)).
+  - The **direct-Steam-launch watcher** runs it in its `relaunch` chokepoint, in the already-detached portion after
+    `CancelGameAction` + the gate ([#1152](https://github.com/danielcopper/decky-romm-sync/issues/1152)). This closes
+    the previously-uncovered watcher path; it is defense-in-depth (rarely reachable in current Gaming Mode) and
+    de-duplicates #1150's inline re-confirm into one helper.
 - The startup reconcile also runs **on `sync_complete`**. A normal sync skips unchanged platforms (no per-unit
   `sync_apply_unit` emit), so a shortcut whose command drifted on an unchanged platform is otherwise never re-applied by
   the sync — only by a later reload or Play press. Re-running the same idempotent pass after every sync heals it then

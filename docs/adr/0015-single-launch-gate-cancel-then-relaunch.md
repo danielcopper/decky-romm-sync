@@ -107,13 +107,19 @@ local file to `.romm-backup`, so there is no silent data loss. "Unknown because 
   launch is flicker-free and that a deep link is caught.
 - **One gate** to maintain instead of two divergent ones; the double-gate's redundant `list_saves` is gone.
 - The skip-set adds a little state; its lifetime self-heals (check-and-delete at entry).
-- **The Play-button funnel re-confirms `launch_options` just before `RunGame`** (in `dispatchLaunch`, after the verdict
-  approves and on every launching branch): it pulls `get_rom_relaunch_options(rom_id)` and confirm-sets the shortcut's
-  command, healing mid-session drift on the common launch path between plugin loads
-  ([ADR-0009](0009-launcher-pure-exec-wrapper-baked-launch-options.md),
-  [#1150](https://github.com/danielcopper/decky-romm-sync/issues/1150)). Best-effort — a failed or `None` re-confirm
-  still launches. The **watcher path is not covered**: it decides synchronously before `CancelGameAction` and can't
-  afford the round-trip, so it relies on the startup reconcile.
+- **Both launch surfaces re-confirm `launch_options` just before `RunGame`**, via the shared
+  `reconfirmLaunchOptions(romId, appId, context)` helper (in `utils/launchOptionsReconcile.ts`): it pulls
+  `get_rom_relaunch_options(rom_id)` (bounded by a 3s race) and confirm-sets the shortcut's command, healing mid-session
+  drift on the launch path between plugin loads ([ADR-0009](0009-launcher-pure-exec-wrapper-baked-launch-options.md)).
+  Best-effort — a hang, a `None` item, or a failure still launches.
+  - The **Play-button funnel** runs it in `dispatchLaunch` (after the verdict approves, on every launching branch)
+    ([#1150](https://github.com/danielcopper/decky-romm-sync/issues/1150)).
+  - The **watcher** runs it in its `relaunch` chokepoint (after `CancelGameAction` + the gate, in the already-detached
+    async portion — so it adds only a bounded ≤3s wait to the cancel→relaunch window)
+    ([#1152](https://github.com/danielcopper/decky-romm-sync/issues/1152)). This closes the previously-uncovered watcher
+    path. It is **defense-in-depth** — in current Steam Gaming Mode a launch needs the game page + Play button, so the
+    direct-Steam-launch watcher path is rarely reachable; its concrete win is **de-duplicating** #1150's inline
+    re-confirm into the one shared helper.
 - **On-device verification required** (cannot be unit-tested): the cancel-relaunch flicker, modal focus after cancel,
   slow-server feel, and the suspend hooks.
 

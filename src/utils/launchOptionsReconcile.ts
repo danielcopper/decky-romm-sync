@@ -1,10 +1,38 @@
-import { logError } from "../api/backend";
+import { getRomRelaunchOptions, logError } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "./steamShortcuts";
 
 // Apply in bounded-concurrency batches (mirrors getExistingRomMShortcuts) so a
 // reconcile touching many ROMs doesn't serialize worst-case per-shortcut
 // confirm-poll timeouts.
 const CONCURRENCY = 10;
+
+/** Bound on the single-ROM relaunch-options fetch before a launch. The Decky
+ *  callable bridge can hang indefinitely on a wedged backend, so the read is
+ *  raced against this timeout — a hang falls through to the launch instead of
+ *  trapping the caller (mirrors index.tsx's withTimeout). */
+const RECONFIRM_FETCH_TIMEOUT_MS = 3000;
+
+/**
+ * Heal any mid-session `launch_options` drift on one shortcut right before a
+ * launch: pull the ROM's resolved command (`get_rom_relaunch_options`) and
+ * confirm-set it onto the shortcut's appId. Best-effort — a hang (bounded by a
+ * 3s race), a `null` item, or a thrown error is logged via `logError` with the
+ * `context` prefix and never blocks the caller; the launch proceeds regardless.
+ * Shared by the Play-button funnel and the direct-launch watcher relaunch path.
+ */
+export async function reconfirmLaunchOptions(romId: number, appId: number, context: string): Promise<void> {
+  try {
+    const item = await Promise.race([
+      getRomRelaunchOptions(romId),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("get_rom_relaunch_options timed out")), RECONFIRM_FETCH_TIMEOUT_MS),
+      ),
+    ]);
+    if (item) await setLaunchOptionsConfirmed(appId, item.launch_options);
+  } catch (e) {
+    logError(`${context}: launch_options re-confirm failed (launching anyway): ${e}`);
+  }
+}
 
 /**
  * Confirm-set the launch command on every shortcut in `items`, batching the

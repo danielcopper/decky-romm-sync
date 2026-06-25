@@ -36,6 +36,7 @@ import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
 import { getAppIdRomIdMapSnapshot } from "./sessionManager";
 import { runLaunchGate, markLaunchSkipped, consumeLaunchSkip } from "./launchGate";
 import type { GateVerdict, LaunchGateOps, PreLaunchSyncOutcome } from "./launchGate";
+import { reconfirmLaunchOptions } from "./launchOptionsReconcile";
 import { applyLaunchGateSetupOutcome, resolveSaveSetupOutcome } from "./saveSetup";
 import { showCoreChangeModal } from "../components/CoreChangeModal";
 import { handleConflicts } from "../components/SyncConflictModal";
@@ -168,12 +169,25 @@ function makeWatcherOps(romId: number): LaunchGateOps {
   };
 }
 
-/** Relaunch a previously-cancelled, now-approved launch. Marks the appId as
- *  skipped FIRST so this RunGame doesn't re-enter the watcher and re-gate. */
-function relaunch(appId: number): void {
+/** Relaunch a previously-cancelled launch. Marks the appId as skipped FIRST so
+ *  this RunGame doesn't re-enter the watcher and re-gate. Used directly only for
+ *  the no-romId paths (unknown appId, error fallback) where there is nothing to
+ *  re-confirm; the gated path goes through {@link relaunch}. */
+function bareRelaunch(appId: number): void {
   markLaunchSkipped(appId);
   const gameId = appStore.GetAppOverviewByAppID(appId)?.GetGameID?.() ?? String(appId);
   SteamClient.Apps.RunGame(gameId, "", -1, 100);
+}
+
+/** Relaunch a previously-cancelled, now-approved launch. Heals any mid-session
+ *  `launch_options` drift on the shortcut first (shared bounded-race re-confirm,
+ *  best-effort — a hang/null/failure still relaunches), then marks the appId as
+ *  skipped immediately before this RunGame so it doesn't re-enter the watcher
+ *  and re-gate. The re-confirm runs in the already-detached post-cancel portion,
+ *  so it only adds a bounded (≤3s) wait to the cancel→relaunch window. */
+async function relaunch(appId: number, romId: number): Promise<void> {
+  await reconfirmLaunchOptions(romId, appId, "Watcher");
+  bareRelaunch(appId);
 }
 
 /**
@@ -188,7 +202,7 @@ function relaunch(appId: number): void {
 async function handleWatcherVerdict(verdict: GateVerdict, appId: number, romId: number): Promise<"done" | "retry"> {
   switch (verdict.decision) {
     case "allow":
-      relaunch(appId);
+      await relaunch(appId, romId);
       return "done";
     case "abort":
       // The user saw setup/core UI and declined — already cancelled, nothing to do.
@@ -203,18 +217,18 @@ async function handleWatcherVerdict(verdict: GateVerdict, appId: number, romId: 
       if (resolution === "cancel") return "done";
       // Conflicts resolved — notify sibling components to refresh, then relaunch.
       globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
-      relaunch(appId);
+      await relaunch(appId, romId);
       return "done";
     }
     case "offline_drift": {
       const choice = await showOfflineDriftModal();
-      if (choice === "start_anyway") relaunch(appId);
+      if (choice === "start_anyway") await relaunch(appId, romId);
       if (choice === "retry") return "retry";
       return "done";
     }
     case "sync_failed": {
       const proceed = await showFallbackLaunchModal(verdict.message);
-      if (proceed) relaunch(appId);
+      if (proceed) await relaunch(appId, romId);
       return "done";
     }
   }
@@ -295,7 +309,7 @@ export function registerLaunchInterceptor(): void {
             // unknown appId is not ours to gate — relaunch and bail.
             const romId = getAppIdRomIdMapSnapshot()[String(appId)];
             if (romId == null) {
-              relaunch(appId);
+              bareRelaunch(appId);
               return;
             }
 
@@ -312,8 +326,11 @@ export function registerLaunchInterceptor(): void {
             await runWatcherGate(appId, romId);
           } catch (e) {
             // Any unexpected error must NEVER trap the user's game — relaunch.
+            // Use the bare relaunch (no re-confirm): the failure may be the
+            // re-confirm's own dependency, and the priority here is escaping the
+            // cancelled state, not healing drift.
             logError(`Launch interceptor error: ${e}`);
-            relaunch(appId);
+            bareRelaunch(appId);
           }
         })(),
       );

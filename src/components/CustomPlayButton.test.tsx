@@ -1452,10 +1452,13 @@ describe("CustomPlayButton — pre-launch relaunch re-confirm (#1150)", () => {
 
     await clickPlay();
 
-    // Post-catch state: the failure was logged with the #1150 message AND the
-    // launch still fired (best-effort — a failed re-confirm is no worse than today).
+    // Post-catch state: the failure was logged with the shared-helper message
+    // (carrying the "CustomPlayButton" context) AND the launch still fired
+    // (best-effort — a failed re-confirm is no worse than today).
     await waitFor(() =>
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("pre-launch relaunch re-confirm failed")),
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("CustomPlayButton: launch_options re-confirm failed"),
+      ),
     );
     await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
 
@@ -1490,7 +1493,9 @@ describe("CustomPlayButton — pre-launch relaunch re-confirm (#1150)", () => {
       // The hung fetch timed out → re-confirm skipped (no set), logged, and the
       // launch STILL fired. RunGame is the proof the button escaped "Launching…".
       expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("pre-launch relaunch re-confirm failed"));
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("CustomPlayButton: launch_options re-confirm failed"),
+      );
       expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100);
     } finally {
       vi.useRealTimers();

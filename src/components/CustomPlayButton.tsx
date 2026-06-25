@@ -33,7 +33,6 @@ import {
   probeReachability,
   checkLocalDrift,
   refreshSaveStatus,
-  getRomRelaunchOptions,
 } from "../api/backend";
 import { getRommConnectionState } from "../utils/connectionState";
 import { scrollToTop } from "../utils/scrollHelpers";
@@ -51,6 +50,7 @@ import type { DownloadProgressEvent, DownloadCompleteEvent, DownloadFailedEvent 
 import { SAVEFILES_IN_CONTENT_DIR_REASON } from "../types";
 import { detach } from "../utils/detach";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
+import { reconfirmLaunchOptions } from "../utils/launchOptionsReconcile";
 
 type PlayButtonState =
   | "loading"
@@ -454,25 +454,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   const dispatchLaunch = async (gameId: string) => {
     setState("launching");
     // Heal any mid-session launch_options drift on this shortcut before launch
-    // (#1150). Best-effort: a failed re-confirm still launches — no worse than today.
-    // The Decky callable bridge can hang indefinitely if the backend is wedged, so
-    // bound the read with a timeout (mirrors index.tsx's withTimeout and the
-    // funnel's preLaunchSync Promise.race) — a hang must fall through to the launch,
-    // never trap the button on "Launching…". setLaunchOptionsConfirmed has its own
-    // 2s internal timeout, so only the fetch needs bounding here.
-    if (romId) {
-      try {
-        const item = await Promise.race([
-          getRomRelaunchOptions(romId),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error("get_rom_relaunch_options timed out")), 3000),
-          ),
-        ]);
-        if (item) await setLaunchOptionsConfirmed(appId, item.launch_options);
-      } catch (e) {
-        logError(`CustomPlayButton: pre-launch relaunch re-confirm failed (launching anyway): ${e}`);
-      }
-    }
+    // (#1150) via the shared bounded-race re-confirm. Best-effort: a hang, a
+    // null item, or a failure still launches — no worse than today.
+    if (romId) await reconfirmLaunchOptions(romId, appId, "CustomPlayButton");
     markLaunchSkipped(appId);
     SteamClient.Apps.RunGame(gameId, "", -1, 100);
   };

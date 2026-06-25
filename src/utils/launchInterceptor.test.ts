@@ -8,6 +8,7 @@ import * as syncConflictModal from "../components/SyncConflictModal";
 import * as offlineDriftModal from "../components/OfflineDriftModal";
 import * as fallbackLaunchModal from "../components/FallbackLaunchModal";
 import * as coreChangeModal from "../components/CoreChangeModal";
+import * as steamShortcuts from "./steamShortcuts";
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./launchInterceptor";
 import type { GateVerdict, LaunchGateOps } from "./launchGate";
 import type { SyncConflict } from "../types";
@@ -30,8 +31,18 @@ vi.mock("../api/backend", () => ({
   probeReachability: vi.fn(),
   preLaunchSync: vi.fn(),
   checkLocalDrift: vi.fn(),
+  // The shared reconcile helper (real module) pulls the single-ROM command here
+  // before each watcher relaunch (#1152).
+  getRomRelaunchOptions: vi.fn(),
   logInfo: vi.fn(),
   logError: vi.fn(),
+}));
+
+// The reconcile helper confirm-sets the resolved command onto the shortcut.
+// Mock just that surface so the watcher relaunch re-confirm is observable
+// without touching SteamClient's shortcut APIs.
+vi.mock("./steamShortcuts", () => ({
+  setLaunchOptionsConfirmed: vi.fn().mockResolvedValue(true),
 }));
 
 // Keep the real skip-set (markLaunchSkipped / consumeLaunchSkip) so the
@@ -138,6 +149,11 @@ describe("launchInterceptor — full funnel watcher", () => {
     // Skip-set empty by default — a marked appId is set per-test.
     vi.mocked(sessionManager.getAppIdRomIdMapSnapshot).mockReturnValue({ "1234": 42 });
     vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "allow" });
+    // The shared relaunch re-confirm (#1152) runs on every relaunch; default it
+    // to a resolved command + a clean confirm-set so the existing verdict tests
+    // exercise the happy path without per-test wiring.
+    vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({ app_id: 1234, launch_options: "flatpak run x" });
+    vi.mocked(steamShortcuts.setLaunchOptionsConfirmed).mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -416,6 +432,110 @@ describe("launchInterceptor — full funnel watcher", () => {
 
       expect(toaster.toast).not.toHaveBeenCalled();
       expect(runGameMock()).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // #1152 — the watcher's relaunch path re-confirms launch_options just before
+  // RunGame, mirroring the Play-button funnel via the shared
+  // `reconfirmLaunchOptions` helper. Best-effort: a null/rejected/hung re-confirm
+  // still relaunches (the launch must never be trapped).
+  // ---------------------------------------------------------------------------
+  describe("relaunch launch_options re-confirm (#1152)", () => {
+    const RELAUNCH_COMMAND = 'flatpak run net.retrodeck.retrodeck "/roms/snes/g.rom"';
+
+    it("allow → re-confirms (getRomRelaunchOptions → setLaunchOptionsConfirmed) BEFORE RunGame", async () => {
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "allow" });
+      vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({ app_id: 1234, launch_options: RELAUNCH_COMMAND });
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(backend.getRomRelaunchOptions).toHaveBeenCalledWith(42);
+      expect(steamShortcuts.setLaunchOptionsConfirmed).toHaveBeenCalledWith(1234, RELAUNCH_COMMAND);
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+      // Order: getRomRelaunchOptions → setLaunchOptionsConfirmed → RunGame.
+      const getOrder = vi.mocked(backend.getRomRelaunchOptions).mock.invocationCallOrder[0]!;
+      const setOrder = vi.mocked(steamShortcuts.setLaunchOptionsConfirmed).mock.invocationCallOrder[0]!;
+      const runOrder = vi.mocked(SteamClient.Apps.RunGame).mock.invocationCallOrder[0]!;
+      expect(getOrder).toBeLessThan(setOrder);
+      expect(setOrder).toBeLessThan(runOrder);
+    });
+
+    it("markLaunchSkipped fires immediately before RunGame (re-confirm doesn't disturb the skip→run order)", async () => {
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "allow" });
+      vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({ app_id: 1234, launch_options: RELAUNCH_COMMAND });
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      // markLaunchSkipped(1234) ran before RunGame, so the relaunch is exempt:
+      // consuming the skip now returns true (the real skip-set carries it).
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+      expect(launchGate.consumeLaunchSkip(1234)).toBe(true);
+    });
+
+    it("a null item skips setLaunchOptionsConfirmed but STILL relaunches", async () => {
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "allow" });
+      vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue(null);
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(backend.getRomRelaunchOptions).toHaveBeenCalledWith(42);
+      expect(steamShortcuts.setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+    });
+
+    it("a rejected re-confirm logs with the Watcher context AND still relaunches (non-vacuous)", async () => {
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "allow" });
+      vi.mocked(backend.getRomRelaunchOptions).mockRejectedValue(new Error("offline"));
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      // Post-catch: no set, the failure was logged with the helper's Watcher
+      // prefix, and the relaunch still fired (best-effort).
+      expect(steamShortcuts.setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+      expect(backend.logError).toHaveBeenCalledWith(
+        expect.stringContaining("Watcher: launch_options re-confirm failed"),
+      );
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+    });
+
+    it("conflict resolved → re-confirms then relaunches (shared path covers every relaunch branch)", async () => {
+      vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "conflict", conflicts: [conflict()] });
+      vi.mocked(syncConflictModal.handleConflicts).mockResolvedValue("resolved");
+      vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({ app_id: 1234, launch_options: RELAUNCH_COMMAND });
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(steamShortcuts.setLaunchOptionsConfirmed).toHaveBeenCalledWith(1234, RELAUNCH_COMMAND);
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+    });
+
+    it("unknown appId relaunches WITHOUT a re-confirm (no romId to resolve)", async () => {
+      vi.mocked(sessionManager.getAppIdRomIdMapSnapshot).mockReturnValue({});
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(backend.getRomRelaunchOptions).not.toHaveBeenCalled();
+      expect(steamShortcuts.setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
     });
   });
 
