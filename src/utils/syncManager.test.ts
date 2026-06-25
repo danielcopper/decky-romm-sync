@@ -24,7 +24,7 @@ vi.mock("./steamShortcuts", () => ({
   getExistingRomMShortcuts: (...args: unknown[]) => getExistingRomMShortcuts(...args),
 }));
 
-import { initUnitSyncManager } from "./syncManager";
+import { initUnitSyncManager, requestSyncCancel } from "./syncManager";
 
 function unit(launchOptions: string, runId = "run-1"): SyncApplyUnitData {
   return {
@@ -74,8 +74,41 @@ describe("syncManager — existing-shortcut update uses confirm-poll", () => {
 
     expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(5000, cmd);
     expect(addShortcut).not.toHaveBeenCalled();
-    // The rom_id→appId binding is reported back to the backend.
-    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 5000 });
+    // The rom_id→appId binding is reported back to the backend, echoing the
+    // run + unit identity so the backend can reject a stale ack (#1041).
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 5000 }, "run-confirm", 1);
+  });
+});
+
+describe("syncManager — does not ack a cancelled unit (#1041)", () => {
+  beforeEach(() => {
+    setLaunchOptionsConfirmed.mockClear();
+    setLaunchOptionsConfirmed.mockResolvedValue(true);
+    addShortcut.mockReset();
+    getExistingRomMShortcuts.mockReset();
+    vi.mocked(backend.reportUnitResults).mockClear();
+  });
+
+  it("skips reportUnitResults when cancel is requested during the unit loop", async () => {
+    // Cancel is requested during the once-per-run existing-shortcut scan (a
+    // fresh-run cache miss always calls it), which runs before the unit loop —
+    // so the loop's cancel check breaks early and the post-loop guard skips the
+    // ack. A unique run_id guarantees the module-level scan cache misses here.
+    getExistingRomMShortcuts.mockImplementation(async () => {
+      requestSyncCancel();
+      return new Map<number, number>([[42, 5000]]);
+    });
+    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-cancel-1041"));
+      await flush(120);
+    });
+
+    // Observable effect of the post-cancel guard: the ack callable is NEVER
+    // invoked, so a cancelled run's bindings can't be credited to a fresh run.
+    expect(vi.mocked(backend.reportUnitResults)).not.toHaveBeenCalled();
   });
 });
 

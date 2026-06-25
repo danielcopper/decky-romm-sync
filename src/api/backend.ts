@@ -209,9 +209,10 @@ export interface SgdbSearchResult {
 export const getSgdbResolution = callable<[number], SgdbResolution>("get_sgdb_resolution");
 export const searchSgdbGames = callable<[string], SgdbSearchResult>("search_sgdb_games");
 export const applySgdbGameId = callable<[number, number], { success: boolean }>("apply_sgdb_game_id");
-export const reportUnitResults = callable<[Record<string, number>], { success: boolean; count: number }>(
-  "report_unit_results",
-);
+export const reportUnitResults = callable<
+  [Record<string, number>, string, number | string],
+  { success: boolean; count: number; ignored?: boolean }
+>("report_unit_results");
 export const reportRemovalResults = callable<[(string | number)[]], { success: boolean; message: string }>(
   "report_removal_results",
 );

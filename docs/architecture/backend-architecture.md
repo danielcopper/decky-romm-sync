@@ -173,6 +173,18 @@ the cause (#1052):
   shortcuts that the next sync re-creates as duplicates. The committed binding is mapped by the next sync's
   existing-shortcut scan, so no active orphan deletion is needed (a Steam shortcut is the sole record of its tile).
 
+**Run/unit identity on the ack (#1041).** Every `sync_apply_unit` event carries the `run_id` (the run's
+`current_sync_id` UUID) and the `unit_id` (the `WorkUnit.id`); the frontend echoes both back on the
+`report_unit_results` ack. The orchestrator stamps the dispatched unit's id into `active_unit_id` just before it emits,
+and `report_unit_results` validates the ack against it: the `run_id` must match `current_sync_id` **and** the `unit_id`
+must match `active_unit_id` (both compared by string value, since a platform's id is numeric and a collection's is a
+string). An ack that fails the check — a **late ack from a cancelled run** arriving while a fresh run is in flight, or a
+stray ack for a different unit — is ignored (logged at debug, returns `{success: True, count: 0, ignored: True}`): it is
+neither recorded, signalled, nor committed, so it can never be credited to the wrong run/unit. `active_unit_id` survives
+the heartbeat-timeout abandon window (the same unit's late ack must still validate) and is cleared once the unit commits
+or is cancelled. On the frontend side, the unit handler **does not send the ack at all once cancel has been requested**
+— the first line of defence against a cancelled run's bindings landing in whatever run started next.
+
 #### DownloadService notes
 
 RomM exposes three mutually exclusive file-layout flags on every ROM detail. They control how the server stores files

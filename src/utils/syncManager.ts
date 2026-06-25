@@ -192,10 +192,21 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
       // payload comfortably under the decky.emit WebSocket size ceiling.
       await processUnitArtwork(artworkTargets);
 
-      try {
-        await reportUnitResults(romIdToAppId);
-      } catch (e) {
-        logError(`Failed to report unit results for ${data.unit_name}: ${e}`);
+      // Do NOT ack a cancelled unit: the backend has already discarded this
+      // run's in-flight state, so a post-cancel ack only risks being credited
+      // to whatever run started next (the cross-run collision + rapid-restart
+      // self-cancel in #1041). The backend also validates run_id/unit_id, but
+      // not sending is the first line of defence.
+      if (_cancelRequested) {
+        logInfo(`Per-unit cancel observed for ${data.unit_name}; skipping reportUnitResults`);
+      } else {
+        try {
+          // Echo back the run + unit identity so the backend can reject a stale
+          // ack (cancelled run) instead of crediting it to a fresh run (#1041).
+          await reportUnitResults(romIdToAppId, data.run_id, data.unit_id);
+        } catch (e) {
+          logError(`Failed to report unit results for ${data.unit_name}: ${e}`);
+        }
       }
       logInfo(`sync_apply_unit complete: ${data.unit_name} (${Object.keys(romIdToAppId).length}/${total})`);
     } finally {

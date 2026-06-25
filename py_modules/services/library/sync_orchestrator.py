@@ -709,6 +709,10 @@ class SyncOrchestrator:
         # Emit per-unit apply event + wait for the frontend callback.
         box.unit_complete_event = asyncio.Event()
         box.last_unit_results = None
+        # Stamp the unit's identity so the reporter can validate the ack's
+        # run_id + unit_id and reject a late ack from a cancelled run or a
+        # stray ack for a different unit (#1041).
+        box.active_unit_id = unit.id
         # Reset the abandoned-unit stash so a prior timed-out unit can't
         # leak its state into this one's late-ack commit (#1052).
         box.unit_abandoned = False
@@ -734,10 +738,11 @@ class SyncOrchestrator:
             # whether the frontend's in-flight work is recoverable.
             if box.is_cancelling():
                 # User cancel: in-flight work is intentionally discarded.
-                # Drop the pending state and null the event so a stray late
-                # ack can't commit a cancelled unit.
+                # Drop the pending state, null the event, and clear the unit
+                # identity so a stray late ack can't commit a cancelled unit.
                 box.pending_sync = {}
                 box.unit_complete_event = None
+                box.active_unit_id = None
             else:
                 # Heartbeat timeout: the frontend has already created this
                 # unit's Steam shortcuts and will still fire its late
@@ -761,6 +766,7 @@ class SyncOrchestrator:
 
         box.pending_sync = {}
         box.unit_complete_event = None
+        box.active_unit_id = None
         return len(applied)
 
     async def _sync_platform_unit(

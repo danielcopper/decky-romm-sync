@@ -1773,25 +1773,75 @@ class TestReportUnitResults:
     @pytest.mark.asyncio
     async def test_signals_unit_complete_event(self, plugin):
         plugin._sync_service._pending_sync = {}
+        box = plugin._sync_service._box
+        box.current_sync_id = "run-1"
+        box.active_unit_id = 1
         event = asyncio.Event()
-        plugin._sync_service._box.unit_complete_event = event
+        box.unit_complete_event = event
         assert not event.is_set()
 
-        await plugin.report_unit_results({})
+        await plugin.report_unit_results({}, "run-1", 1)
 
         assert event.is_set()
-        assert plugin._sync_service._box.last_unit_results == {}
+        assert box.last_unit_results == {}
 
     @pytest.mark.asyncio
     async def test_records_last_unit_results(self, plugin):
         plugin._sync_service._pending_sync = {}
-        plugin._sync_service._box.unit_complete_event = asyncio.Event()
+        box = plugin._sync_service._box
+        box.current_sync_id = "run-1"
+        box.active_unit_id = 1
+        box.unit_complete_event = asyncio.Event()
 
-        result = await plugin.report_unit_results({"10": 9001, "11": 9002})
+        result = await plugin.report_unit_results({"10": 9001, "11": 9002}, "run-1", 1)
 
         assert result["success"] is True
         assert result["count"] == 2
-        assert plugin._sync_service._box.last_unit_results == {"10": 9001, "11": 9002}
+        assert box.last_unit_results == {"10": 9001, "11": 9002}
+
+    @pytest.mark.asyncio
+    async def test_stale_run_id_ack_is_ignored_not_credited_to_new_run(self, plugin):
+        """A late ack from a cancelled run A, arriving while run B is in flight,
+        is ignored — not signalled, not recorded, not committed (#1041).
+
+        Run B's wait event must stay UNSET and its registry untouched: the late
+        ack carries run A's id, which no longer matches ``current_sync_id``."""
+        plugin._sync_service._pending_sync = {}
+        box = plugin._sync_service._box
+        # Run B is the active run, waiting on its own unit's event.
+        box.current_sync_id = "run-B"
+        box.active_unit_id = 7
+        event = asyncio.Event()
+        box.unit_complete_event = event
+
+        # Late ack from the cancelled run A (stale run id) for the old unit.
+        result = await plugin.report_unit_results({"10": 9001}, "run-A", 1)
+
+        assert result == {"success": True, "count": 0, "ignored": True}
+        # Run B is untouched: its event stays unset and no result was recorded.
+        assert not event.is_set()
+        assert box.last_unit_results is None
+        # Nothing committed to run B's registry.
+        assert plugin._uow.committed is False
+        with plugin._uow as uow:
+            assert uow.roms.get(10) is None
+
+    @pytest.mark.asyncio
+    async def test_mismatched_unit_id_same_run_is_ignored(self, plugin):
+        """An ack for a different unit within the SAME run is ignored — the
+        unit_id guard rejects it even though the run id matches (#1041)."""
+        plugin._sync_service._pending_sync = {}
+        box = plugin._sync_service._box
+        box.current_sync_id = "run-1"
+        box.active_unit_id = 5  # unit 5 is the active one
+        event = asyncio.Event()
+        box.unit_complete_event = event
+
+        result = await plugin.report_unit_results({"10": 9001}, "run-1", 99)
+
+        assert result == {"success": True, "count": 0, "ignored": True}
+        assert not event.is_set()
+        assert box.last_unit_results is None
 
     @pytest.mark.asyncio
     async def test_late_ack_after_abandon_commits_binding(self, plugin):
@@ -1805,7 +1855,10 @@ class TestReportUnitResults:
         box = plugin._sync_service._box
         # Timeout state the orchestrator leaves behind: pending_sync staged,
         # event already None (the wait returned), unit flagged abandoned with
-        # its live RomM fetch stashed.
+        # its live RomM fetch stashed. The run + unit identity stays set across
+        # the abandon window so the late ack for the SAME unit validates.
+        box.current_sync_id = "run-1"
+        box.active_unit_id = 1
         box.pending_sync = {
             42: {"name": "Game", "fs_name": "game.z64", "platform_slug": "gb", "cover_path": ""},
         }
@@ -1813,7 +1866,7 @@ class TestReportUnitResults:
         box.unit_abandoned = True
         box.pending_unit_roms = [{"id": 42, "metadatum": {"genres": ["RPG"]}}]
 
-        result = await plugin.report_unit_results({"42": 100001})
+        result = await plugin.report_unit_results({"42": 100001}, "run-1", 1)
 
         assert result == {"success": True, "count": 1}
         # The binding was committed (not discarded).
@@ -1830,6 +1883,9 @@ class TestReportUnitResults:
         assert box.pending_unit_roms == []
         assert box.pending_sync == {}
         assert box.last_unit_results is None
+        # The unit identity is cleared once the late ack commits, so a duplicate
+        # ack for the same unit no longer validates.
+        assert box.active_unit_id is None
 
     @pytest.mark.asyncio
     async def test_late_ack_stamps_only_stashed_acked_roms(self, plugin):
@@ -1837,6 +1893,8 @@ class TestReportUnitResults:
         metadata (its ``metadatum`` source is gone) — the binding is the
         load-bearing data, metadata is best-effort (#1052)."""
         box = plugin._sync_service._box
+        box.current_sync_id = "run-1"
+        box.active_unit_id = 1
         box.pending_sync = {
             42: {"name": "A", "fs_name": "a.z64", "platform_slug": "gb", "cover_path": ""},
         }
@@ -1845,7 +1903,7 @@ class TestReportUnitResults:
         # The stash carries a DIFFERENT rom than the one acked.
         box.pending_unit_roms = [{"id": 99, "metadatum": {"genres": ["RPG"]}}]
 
-        result = await plugin.report_unit_results({"42": 100001})
+        result = await plugin.report_unit_results({"42": 100001}, "run-1", 1)
 
         assert result == {"success": True, "count": 1}
         with plugin._uow as uow:
@@ -1859,14 +1917,18 @@ class TestReportUnitResults:
 
     @pytest.mark.asyncio
     async def test_stray_ack_when_not_abandoned_is_noop(self, plugin):
-        """An ack with no live wait and no abandoned flag (a stray duplicate)
-        records nothing on disk — it must not double-commit (#1052)."""
+        """An ack for the ACTIVE unit with no live wait and no abandoned flag
+        (a stray duplicate) records nothing on disk — it must not double-commit
+        (#1052). The run/unit identity matches, so it passes validation and
+        falls through to the no-op 'neither' branch."""
         box = plugin._sync_service._box
+        box.current_sync_id = "run-1"
+        box.active_unit_id = 1
         box.unit_complete_event = None
         box.unit_abandoned = False
         box.pending_sync = {}
 
-        result = await plugin.report_unit_results({"42": 100001})
+        result = await plugin.report_unit_results({"42": 100001}, "run-1", 1)
 
         assert result == {"success": True, "count": 1}
         # The mapping is still recorded, but NOTHING is committed.
@@ -1904,6 +1966,8 @@ class TestLateAckReconciliationWithStaleScan:
 
         # The heartbeat-timeout state the orchestrator leaves behind for the NEW
         # rom_id (2), which the frontend acks with the SAME reused appId.
+        box.current_sync_id = "run-1"
+        box.active_unit_id = 1
         box.pending_sync = {
             2: {"name": "A", "fs_name": "a.z64", "platform_slug": "n64", "cover_path": ""},
         }
@@ -1912,7 +1976,7 @@ class TestLateAckReconciliationWithStaleScan:
         box.pending_unit_roms = [{"id": 2}]
 
         # Late ack: commits the binding AND records app 5000 in committed_app_ids.
-        await plugin.report_unit_results({"2": 5000})
+        await plugin.report_unit_results({"2": 5000}, "run-1", 1)
 
         assert 5000 in box.committed_app_ids
         # rom 2 now holds app 5000; rom 1 was unbound by the collision-safe save.

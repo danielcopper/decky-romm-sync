@@ -165,13 +165,36 @@ async def test_report_unit_results_signal_shape(harness):
     import asyncio
 
     box = harness.plugin._sync_service._box
+    box.current_sync_id = "run-1"
+    box.active_unit_id = 1
     box.unit_complete_event = asyncio.Event()
 
-    result = await harness.plugin.report_unit_results({"10": 9001})
+    result = await harness.plugin.report_unit_results({"10": 9001}, "run-1", 1)
 
     assert result == {"success": True, "count": 1}
     assert box.unit_complete_event.is_set()
     # The orchestrator drives the commit on the happy path — nothing bound yet.
+    assert await harness.plugin.get_app_id_rom_id_map() == {}
+
+
+async def test_report_unit_results_stale_run_ignored(harness):
+    """A late ack carrying a CANCELLED run's id is ignored — neither signalled
+    nor credited to the active run (#1041). Pins the ``ignored`` shape and that
+    the active run's wait event stays unset."""
+    import asyncio
+
+    box = harness.plugin._sync_service._box
+    # Active run B, waiting on its own unit's event.
+    box.current_sync_id = "run-B"
+    box.active_unit_id = 7
+    box.unit_complete_event = asyncio.Event()
+
+    # Stale ack from the cancelled run A.
+    result = await harness.plugin.report_unit_results({"10": 9001}, "run-A", 1)
+
+    assert result == {"success": True, "count": 0, "ignored": True}
+    # Run B's wait is untouched and nothing was bound.
+    assert not box.unit_complete_event.is_set()
     assert await harness.plugin.get_app_id_rom_id_map() == {}
 
 
@@ -186,6 +209,9 @@ async def test_report_unit_results_late_ack_binds_orphan(harness):
     box = harness.plugin._sync_service._box
     # The state a heartbeat timeout leaves: pending_sync staged, event already
     # None (the wait returned), unit flagged abandoned with its ROMs stashed.
+    # Run + unit identity survives the abandon window so the late ack validates.
+    box.current_sync_id = "run-1"
+    box.active_unit_id = 1
     box.pending_sync = {
         42: {
             "name": "Orphan Game",
@@ -201,7 +227,7 @@ async def test_report_unit_results_late_ack_binds_orphan(harness):
     # Before the ack: the appId is NOT in the map (would be an orphan).
     assert await harness.plugin.get_app_id_rom_id_map() == {}
 
-    result = await harness.plugin.report_unit_results({"42": 100001})
+    result = await harness.plugin.report_unit_results({"42": 100001}, "run-1", 1)
 
     assert result == {"success": True, "count": 1}
     # The orphan is now a bound row — the next sync's getExistingRomMShortcuts

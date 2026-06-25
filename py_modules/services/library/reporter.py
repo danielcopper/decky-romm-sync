@@ -372,11 +372,19 @@ class SyncReporter:
             return int(existing_value)
         return None
 
-    async def report_unit_results(self, rom_id_to_app_id):
+    async def report_unit_results(self, rom_id_to_app_id, run_id, unit_id):
         """Frontend-Callable: ack that this unit's shortcuts have been applied.
 
-        Records the rom_id→app_id mapping into the state box, then routes by
-        the unit's coordination state:
+        First validates the ack's identity against the active run/unit: the
+        ``run_id`` must match ``current_sync_id`` and ``unit_id`` must match
+        the dispatched ``active_unit_id`` (#1041). A late ack from a
+        **cancelled** run that arrives while a **new** run is in flight, or a
+        stray ack for a different unit, is ignored — neither recorded, signalled,
+        nor committed — so it can never be credited to the wrong unit/run.
+        Logged at debug, returns ``ignored: True`` with ``count: 0``.
+
+        For a matching ack, records the rom_id→app_id mapping into the state
+        box, then routes by the unit's coordination state:
 
         * The orchestrator is still waiting (``unit_complete_event`` live):
           signal the event and let the orchestrator drive the per-unit
@@ -387,10 +395,17 @@ class SyncReporter:
           discard them (#1052). Rebuilds ``acked_roms`` from the stashed
           unit ROMs (the ``metadatum`` source) so metadata is stamped too,
           then clears the abandoned-unit stash.
-        * Neither (a stray duplicate ack): no-op, so nothing is
-          double-committed.
+        * Neither (a stray duplicate ack for the active unit): no-op, so
+          nothing is double-committed.
         """
         box = self._sync_state
+        if not self._ack_matches_active_unit(run_id, unit_id):
+            self._logger.debug(
+                f"Ignoring unit ack for run={run_id!r} unit={unit_id!r}: "
+                f"active run={box.current_sync_id!r} unit={box.active_unit_id!r}"
+            )
+            return {"success": True, "count": 0, "ignored": True}
+
         box.last_unit_results = dict(rom_id_to_app_id)
         if box.unit_complete_event is not None:
             box.unit_complete_event.set()
@@ -401,9 +416,27 @@ class SyncReporter:
             box.pending_unit_roms = []
             box.pending_sync = {}
             box.last_unit_results = None
+            box.active_unit_id = None
 
         self._logger.info(f"Unit results acknowledged: {len(rom_id_to_app_id)} shortcuts")
         return {"success": True, "count": len(rom_id_to_app_id)}
+
+    def _ack_matches_active_unit(self, run_id, unit_id) -> bool:
+        """True when the ack's run/unit identity matches the dispatched unit.
+
+        The frontend echoes back the ``run_id`` + ``unit_id`` carried in the
+        ``sync_apply_unit`` event. Both are compared by string value: the run
+        id is a UUID string, and the unit id is JSON-shaped (a number for a
+        platform, a string for a collection) so ``str()`` coercion on both
+        sides is robust to int-vs-str drift on the wire. An ack is rejected
+        when there is no active unit (``active_unit_id is None`` — the unit was
+        cancelled or already committed), so a stray late ack from a cancelled
+        run no-ops instead of being credited to a fresh run (#1041).
+        """
+        box = self._sync_state
+        if box.active_unit_id is None:
+            return False
+        return str(run_id) == str(box.current_sync_id) and str(unit_id) == str(box.active_unit_id)
 
     async def commit_unit_results(self, rom_id_to_app_id, acked_roms):
         """Per-unit commit: cover-path finalize then atomic ``roms`` + metadata upsert.

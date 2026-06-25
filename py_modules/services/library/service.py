@@ -304,8 +304,8 @@ class LibraryService:
         return self._orchestrator.get_sync_status()
 
     # Reporting
-    async def report_unit_results(self, rom_id_to_app_id):
-        return await self._reporter.report_unit_results(rom_id_to_app_id)
+    async def report_unit_results(self, rom_id_to_app_id, run_id, unit_id):
+        return await self._reporter.report_unit_results(rom_id_to_app_id, run_id, unit_id)
 
     # Registry queries
     def get_registry_platforms(self):

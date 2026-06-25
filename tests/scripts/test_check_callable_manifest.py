@@ -64,8 +64,13 @@ class TestParseFrontendCallables:
 
     def test_nested_generic_comma_not_counted(self, tmp_path: Path):
         # Record<string, number> is ONE element — the inner comma must not inflate.
-        src = _write_ts(tmp_path, "a.ts", 'callable<[Record<string, number>], Foo>("report_unit_results");')
-        assert check.parse_frontend_callables(src) == {"report_unit_results": 1}
+        # Mirrors report_unit_results: Record<…> + run_id + unit_id → arity 3.
+        src = _write_ts(
+            tmp_path,
+            "a.ts",
+            'callable<[Record<string, number>, string, number | string], Foo>("report_unit_results");',
+        )
+        assert check.parse_frontend_callables(src) == {"report_unit_results": 3}
 
     def test_union_with_string_literals_is_arity_two(self, tmp_path: Path):
         src = _write_ts(tmp_path, "a.ts", 'callable<[boolean, "my" | "smart" | null], Foo>("g");')

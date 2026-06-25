@@ -63,6 +63,17 @@ class LibrarySyncStateBox:
     # late ``report_unit_results`` can still commit the delivered bindings
     # that the frontend already created Steam shortcuts for (#1052).
     unit_complete_event: asyncio.Event | None = None
+    # Identity of the unit currently dispatched to the frontend: the
+    # ``WorkUnit.id`` (a platform's numeric id or a collection's string id).
+    # Set by the orchestrator just before it emits ``sync_apply_unit`` and
+    # cleared once the unit's ack is committed (or the unit is cancelled).
+    # ``SyncReporter.report_unit_results`` validates the ack against this and
+    # ``current_sync_id`` (the run id) so a late ack from a cancelled run —
+    # or a stray ack for a different unit — is ignored rather than credited
+    # to the wrong unit/run (#1041). Kept (not cleared) across the
+    # heartbeat-timeout abandon window so the late ack for the SAME unit still
+    # validates; the cleared cross-run/cross-unit case is what it rejects.
+    active_unit_id: int | str | None = None
     # Holds the frontend-supplied ``rom_id_to_app_id`` mapping reported
     # for the active unit. Surfaces the result so the orchestrator can
     # accumulate the per-unit registry into the cross-run accumulators.
