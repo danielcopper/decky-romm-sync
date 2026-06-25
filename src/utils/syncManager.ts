@@ -34,6 +34,16 @@ export function requestSyncCancel(): void {
 }
 
 /**
+ * Read the cancel flag. Accessed through a function so a read after the
+ * per-unit ``_cancelRequested = false`` reset isn't narrowed to a constant
+ * ``false`` by control-flow analysis — the flag is flipped externally by
+ * {@link requestSyncCancel} during the awaited work, which TS can't see.
+ */
+function isCancelRequested(): boolean {
+  return _cancelRequested;
+}
+
+/**
  * Resolve a shortcut item to an appId: update fields on the existing
  * shortcut when one is present, otherwise create a new shortcut. Returns
  * ``undefined`` if no appId could be resolved (creation failed).
@@ -90,7 +100,7 @@ async function processUnitShortcuts(
       syncHeartbeat().catch(() => {});
       lastHeartbeat = Date.now();
     }
-    if (_cancelRequested) {
+    if (isCancelRequested()) {
       logInfo(`Per-unit cancel observed during ${data.unit_name}`);
       break;
     }
@@ -120,7 +130,7 @@ async function processUnitArtwork(artworkTargets: ArtworkTarget[]): Promise<void
   if (artworkTargets.length === 0) return;
   let lastHeartbeat = Date.now();
   for (let i = 0; i < artworkTargets.length; i += ART_CONCURRENCY) {
-    if (_cancelRequested) break;
+    if (isCancelRequested()) break;
     const batch = artworkTargets.slice(i, i + ART_CONCURRENCY);
     await Promise.all(batch.map(applyArtworkForTarget));
     if (Date.now() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
@@ -197,7 +207,7 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
       // to whatever run started next (the cross-run collision + rapid-restart
       // self-cancel in #1041). The backend also validates run_id/unit_id, but
       // not sending is the first line of defence.
-      if (_cancelRequested) {
+      if (isCancelRequested()) {
         logInfo(`Per-unit cancel observed for ${data.unit_name}; skipping reportUnitResults`);
       } else {
         try {
