@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     )
     from services.saves.rom_info import RomInfoService
     from services.saves.sync_engine import MatrixOutcome, SyncEngine
+    from services.saves.sync_engine.devices import DeviceRegistry
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,8 @@ class StatusServiceConfig:
 
     Holds the live ``settings.json`` dict (save-sync enabled toggle), the
     Unit-of-Work factory (the transactional seam over the SQLite
-    repositories), the peer save sub-services (sync_engine, rom_info),
+    repositories), the peer save sub-services (sync_engine, rom_info, and
+    the shared :class:`DeviceRegistry` that owns the server device id),
     the Protocol-typed RomM adapter and retry strategy, the plugin event
     loop, the standard-library logger, the ``DebugLogger`` seam, the
     per-ROM active-core resolver, the event emitter used to push background
@@ -52,6 +54,7 @@ class StatusServiceConfig:
     settings: dict[str, Any]
     uow_factory: UnitOfWorkFactory
     sync_engine: SyncEngine
+    device_registry: DeviceRegistry
     rom_info: RomInfoService
     romm_api: RommSaveApi
     retry: RetryStrategy
@@ -71,6 +74,7 @@ class StatusService:
         self._settings = config.settings
         self._uow_factory = config.uow_factory
         self._sync_engine = config.sync_engine
+        self._device_registry = config.device_registry
         self._rom_info = config.rom_info
         self._romm_api = config.romm_api
         self._retry = config.retry
@@ -214,7 +218,7 @@ class StatusService:
         with self._uow_factory() as uow:
             save_state = uow.rom_save_states.get(rom_id)
             playtime = uow.playtime.get(rom_id)
-            device_id = uow.kv_config.get("device_id")
+        device_id = self._device_registry.get_device_id()
 
         active_slot = save_state.active_slot if save_state else None
         server_in_slot = self._sync_engine.filter_server_saves_to_slot(server_saves, active_slot)
@@ -350,7 +354,7 @@ class StatusService:
         server_saves: list[dict[str, Any]] = []
         server_query_failed = False
         try:
-            device_id = await self._loop.run_in_executor(None, self._read_device_id)
+            device_id = await self._loop.run_in_executor(None, self._device_registry.get_device_id)
             server_saves = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(lambda: self._romm_api.list_saves(rom_id, device_id=device_id)),
@@ -368,10 +372,6 @@ class StatusService:
                     server_query_failed=server_query_failed,
                 ),
             )
-
-    def _read_device_id(self) -> str | None:
-        with self._uow_factory() as uow:
-            return uow.kv_config.get("device_id")
 
     async def check_save_status_background(self, rom_id: int) -> None:
         """Run full save status check in background and emit result to frontend."""

@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from services.saves.rom_info import RomInfoService
     from services.saves.status import StatusService
     from services.saves.sync_engine import SyncEngine
+    from services.saves.sync_engine.devices import DeviceRegistry
 
 
 class SlotSwitcher:
@@ -51,6 +52,7 @@ class SlotSwitcher:
         settings: dict[str, Any],
         uow_factory: UnitOfWorkFactory,
         sync_engine: SyncEngine,
+        device_registry: DeviceRegistry,
         status_service: StatusService,
         rom_info: RomInfoService,
         romm_api: RommSaveApi,
@@ -63,6 +65,7 @@ class SlotSwitcher:
         self._settings = settings
         self._uow_factory = uow_factory
         self._sync_engine = sync_engine
+        self._device_registry = device_registry
         self._status_service = status_service
         self._rom_info = rom_info
         self._romm_api = romm_api
@@ -75,8 +78,7 @@ class SlotSwitcher:
     def _read_inputs(self, rom_id: int) -> tuple[RomSaveState, str | None]:
         with self._uow_factory() as uow:
             state = uow.rom_save_states.get(rom_id) or RomSaveState()
-            device_id = uow.kv_config.get("device_id")
-        return state, device_id
+        return state, self._device_registry.get_device_id()
 
     def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
         with self._uow_factory() as uow:

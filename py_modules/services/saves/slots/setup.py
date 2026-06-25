@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     )
     from services.saves.rom_info import RomInfoService
     from services.saves.sync_engine import SyncEngine
+    from services.saves.sync_engine.devices import DeviceRegistry
 
 
 class SetupWizard:
@@ -44,6 +45,7 @@ class SetupWizard:
         *,
         settings: dict[str, Any],
         uow_factory: UnitOfWorkFactory,
+        device_registry: DeviceRegistry,
         rom_info: RomInfoService,
         resolve_core: Callable[[int], str | None],
         romm_api: RommSaveApi,
@@ -56,6 +58,7 @@ class SetupWizard:
     ) -> None:
         self._settings = settings
         self._uow_factory = uow_factory
+        self._device_registry = device_registry
         self._rom_info = rom_info
         self._resolve_core = resolve_core
         self._romm_api = romm_api
@@ -69,10 +72,6 @@ class SetupWizard:
     def _read_save_state(self, rom_id: int) -> RomSaveState | None:
         with self._uow_factory() as uow:
             return uow.rom_save_states.get(rom_id)
-
-    def _read_device_id(self) -> str | None:
-        with self._uow_factory() as uow:
-            return uow.kv_config.get("device_id")
 
     def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
         with self._uow_factory() as uow:
@@ -195,8 +194,7 @@ class SetupWizard:
     def _read_setup_inputs(self, rom_id: int) -> tuple[RomSaveState | None, str | None]:
         with self._uow_factory() as uow:
             state = uow.rom_save_states.get(rom_id)
-            device_id = uow.kv_config.get("device_id")
-        return state, device_id
+        return state, self._device_registry.get_device_id()
 
     async def confirm_slot_choice(
         self,
@@ -296,7 +294,7 @@ class SetupWizard:
         could not be carried over are collected and reported. Safe order for the
         carried-over saves: POST first, DELETE after.
         """
-        device_id = await self._loop.run_in_executor(None, self._read_device_id)
+        device_id = await self._loop.run_in_executor(None, self._device_registry.get_device_id)
 
         # Find server saves in the old slot. The legacy source (None/"") can't be
         # addressed by ``slot=`` (RomM stores it as null), so list ALL saves and

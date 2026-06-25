@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from services.saves.rom_info import RomInfoService
     from services.saves.status import StatusService
     from services.saves.sync_engine import SyncEngine
+    from services.saves.sync_engine.devices import DeviceRegistry
 
 
 __all__ = ["SlotsService", "SlotsServiceConfig"]
@@ -50,7 +51,8 @@ class SlotsServiceConfig:
     Holds the live ``settings.json`` dict (save-sync toggles + default
     slot), the Unit-of-Work factory (the transactional seam over the
     SQLite repositories), the peer save sub-services (sync_engine,
-    status, rom_info), the core resolver used to stamp the upload
+    status, rom_info, and the shared :class:`DeviceRegistry` that owns the
+    server device id), the core resolver used to stamp the upload
     emulator tag, the Protocol-typed RomM adapter and retry strategy,
     runtime infrastructure (loop, logger, clock), the Protocol-typed
     filesystem adapter, and the ``DebugLogger`` seam.
@@ -59,6 +61,7 @@ class SlotsServiceConfig:
     settings: dict[str, Any]
     uow_factory: UnitOfWorkFactory
     sync_engine: SyncEngine
+    device_registry: DeviceRegistry
     status_service: StatusService
     rom_info: RomInfoService
     resolve_core: Callable[[int], str | None]
@@ -80,6 +83,7 @@ class SlotsService:
         self._listing = SlotListing(
             settings=config.settings,
             uow_factory=config.uow_factory,
+            device_registry=config.device_registry,
             romm_api=config.romm_api,
             retry=config.retry,
             loop=config.loop,
@@ -89,6 +93,7 @@ class SlotsService:
             settings=config.settings,
             uow_factory=config.uow_factory,
             sync_engine=config.sync_engine,
+            device_registry=config.device_registry,
             status_service=config.status_service,
             rom_info=config.rom_info,
             romm_api=config.romm_api,
@@ -101,6 +106,7 @@ class SlotsService:
         self._setup = SetupWizard(
             settings=config.settings,
             uow_factory=config.uow_factory,
+            device_registry=config.device_registry,
             rom_info=config.rom_info,
             resolve_core=config.resolve_core,
             romm_api=config.romm_api,
@@ -114,6 +120,7 @@ class SlotsService:
         self._deleter = SlotDeleter(
             settings=config.settings,
             uow_factory=config.uow_factory,
+            device_registry=config.device_registry,
             rom_info=config.rom_info,
             romm_api=config.romm_api,
             retry=config.retry,

@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     )
     from services.saves.rom_info import RomInfoService
     from services.saves.sync_engine import SyncEngine
+    from services.saves.sync_engine.devices import DeviceRegistry
 
 
 class SlotDeleter:
@@ -39,6 +40,7 @@ class SlotDeleter:
         *,
         settings: dict[str, Any],
         uow_factory: UnitOfWorkFactory,
+        device_registry: DeviceRegistry,
         rom_info: RomInfoService,
         romm_api: RommSaveApi,
         retry: RetryStrategy,
@@ -49,6 +51,7 @@ class SlotDeleter:
     ) -> None:
         self._settings = settings
         self._uow_factory = uow_factory
+        self._device_registry = device_registry
         self._rom_info = rom_info
         self._romm_api = romm_api
         self._retry = retry
@@ -60,10 +63,6 @@ class SlotDeleter:
     def _read_save_state(self, rom_id: int) -> RomSaveState | None:
         with self._uow_factory() as uow:
             return uow.rom_save_states.get(rom_id)
-
-    def _read_device_id(self) -> str | None:
-        with self._uow_factory() as uow:
-            return uow.kv_config.get("device_id")
 
     def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
         with self._uow_factory() as uow:
@@ -108,7 +107,7 @@ class SlotDeleter:
         # Server save count
         server_save_ids: list[int] = []
         if source == "server":
-            device_id = await self._loop.run_in_executor(None, self._read_device_id)
+            device_id = await self._loop.run_in_executor(None, self._device_registry.get_device_id)
             try:
                 # Legacy slot ("" → null on the server) is addressed by omitting
                 # ``slot=`` and filtering client-side (#1061), so a legacy delete
@@ -157,7 +156,7 @@ class SlotDeleter:
 
     async def _delete_server_slot_saves(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Delete all server saves in a slot. Returns result dict with count and IDs."""
-        device_id = await self._loop.run_in_executor(None, self._read_device_id)
+        device_id = await self._loop.run_in_executor(None, self._device_registry.get_device_id)
         try:
             # Legacy slot ("" → null on the server) deletes ONLY the null saves:
             # omit ``slot=`` and filter client-side (#1061). Named slots filter

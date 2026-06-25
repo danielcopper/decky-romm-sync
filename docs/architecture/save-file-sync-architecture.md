@@ -141,7 +141,12 @@ uploaded each save.
 
 1. On first use with save sync enabled, the plugin calls `POST /api/devices` with the friendly device label (`name`),
    platform, client info, and the contents of `/etc/machine-id` as the `hostname` fingerprint
-2. Server returns a `device_id` (UUID) stored as `server_device_id` in state
+2. Server returns a `device_id` (UUID). Registration writes it to `kv_config["device_id"]` **first** — the `device_id`
+   is the authoritative "registered" signal — then writes the device label to `settings.json` as a **best-effort** step
+   (the two live in separate stores per [ADR-0003](../adr/0003-json-sqlite-persistence-boundary.md), so the two writes
+   can't be one atomic op). A failed label write leaves a fully registered, usable device (valid `device_id`,
+   prior/default label) instead of a broken half-state, and logs at debug; the in-memory settings dict is rolled back so
+   an unsaved label never lingers
 3. This ID is passed to `list_saves` (populates `device_syncs` per save) and `upload_save` / `download_save_content`
    (tracks sync status)
 4. `device_syncs` array on each save shows per-device sync status: `device_id`, `device_name`, `is_current`,
@@ -1010,6 +1015,19 @@ The raw exception is logged at debug in every branch, so the probe is no longer 
 classification applies to the device-registration failure path in `services/saves/sync_engine/devices.py`
 (`ensure_device_registered`): an auth/SSL failure during `register_device` produces its own classified `reason` +
 `message` rather than a generic "Could not register device" unreachable slug.
+
+### `DeviceRegistry` owns device identity
+
+`DeviceRegistry` (`services/saves/sync_engine/devices.py`) is the **single owner** of the server device id. It reads
+`kv_config["device_id"]` **once** through a narrow Unit of Work and serves the cached value thereafter via
+`get_device_id()` — no per-flow transaction. The cache is refreshed when registration writes a new id and can be dropped
+via `invalidate_device_id_cache()` for the rare case where `kv_config["device_id"]` is mutated outside the registry
+(registration is the only in-process writer, so this is currently reached only from test backdoors). Every save-sync
+sub-service that needs the id — `SyncEngine`, `StatusService`, `VersionsService`, the slot sub-services (`SlotListing` /
+`SlotSwitcher` / `SetupWizard` / `SlotDeleter`), and `RollbackOrchestrator` — receives the shared `DeviceRegistry`
+through its `*ServiceConfig` (the [same-bounded-context peer-ref carve-out](backend-architecture.md)) and reads the id
+through it, instead of each opening its own `kv_config` read. The registry is built once in the `SaveService` facade and
+threaded into every sub-service config.
 
 ## Playtime Tracking
 

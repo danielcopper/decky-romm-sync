@@ -205,12 +205,17 @@ def _get_save_state(plugin, rom_id):
 
 
 def _set_device_id(plugin, device_id):
-    """Set or clear the server device id in ``kv_config``."""
+    """Set or clear the server device id in ``kv_config``.
+
+    A test backdoor that bypasses the :class:`DeviceRegistry`; invalidates the
+    registry cache so the change is observable through ``get_device_id``.
+    """
     with _uow(plugin) as uow:
         if device_id is None:
             uow.kv_config.delete("device_id")
         else:
             uow.kv_config.set("device_id", device_id)
+    plugin._save_sync_service._device_registry.invalidate_device_id_cache()
 
 
 def _get_device_id(plugin):

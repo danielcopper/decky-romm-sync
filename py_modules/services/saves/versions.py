@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from services.protocols import DebugLogger, RetryStrategy, RommSaveApi, UnitOfWorkFactory
     from services.saves.rom_info import RomInfoService
     from services.saves.sync_engine import SyncEngine
+    from services.saves.sync_engine.devices import DeviceRegistry
 
 
 @dataclass(frozen=True)
@@ -40,15 +41,17 @@ class VersionsServiceConfig:
     Holds the live ``settings.json`` dict (default-slot seeding), the
     Unit-of-Work factory (the transactional seam over the SQLite
     repositories), the peer save sub-services consumed during rollback
-    orchestration (sync_engine, rom_info), the core resolver used to
-    stamp the upload emulator tag, the Protocol-typed RomM adapter and
-    retry strategy, the plugin event loop, the standard-library logger,
-    and the ``DebugLogger`` seam.
+    orchestration (sync_engine, rom_info, and the shared
+    :class:`DeviceRegistry` that owns the server device id), the core
+    resolver used to stamp the upload emulator tag, the Protocol-typed
+    RomM adapter and retry strategy, the plugin event loop, the
+    standard-library logger, and the ``DebugLogger`` seam.
     """
 
     settings: dict[str, Any]
     uow_factory: UnitOfWorkFactory
     sync_engine: SyncEngine
+    device_registry: DeviceRegistry
     rom_info: RomInfoService
     resolve_core: Callable[[int], str | None]
     romm_api: RommSaveApi
@@ -71,6 +74,7 @@ class VersionsService:
         self._settings = config.settings
         self._uow_factory = config.uow_factory
         self._sync_engine = config.sync_engine
+        self._device_registry = config.device_registry
         self._rom_info = config.rom_info
         self._resolve_core = config.resolve_core
         self._romm_api = config.romm_api
@@ -86,8 +90,7 @@ class VersionsService:
     def _read_inputs(self, rom_id: int) -> tuple[RomSaveState, str | None]:
         with self._uow_factory() as uow:
             state = uow.rom_save_states.get(rom_id) or RomSaveState()
-            device_id = uow.kv_config.get("device_id")
-        return state, device_id
+        return state, self._device_registry.get_device_id()
 
     def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
         with self._uow_factory() as uow:

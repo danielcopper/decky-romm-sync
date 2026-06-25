@@ -35,7 +35,6 @@ from services.saves._messages import (
     SAVE_SYNC_IN_CONTENT_DIR_REASON,
 )
 from services.saves._settings import resolve_default_slot, save_sync_enabled, sync_after_exit, sync_before_launch
-from services.saves.sync_engine.devices import DeviceRegistry
 from services.saves.sync_engine.matrix import MatrixExecutor, MatrixOutcome
 from services.saves.sync_engine.rollback import RollbackOrchestrator
 
@@ -55,10 +54,10 @@ if TYPE_CHECKING:
         RommSyncApi,
         SaveFileStore,
         SaveSortChangeFn,
-        SettingsPersister,
         UnitOfWorkFactory,
     )
     from services.saves.rom_info import RomInfoService
+    from services.saves.sync_engine.devices import DeviceRegistry
 
 
 __all__ = ["MatrixOutcome", "SyncEngine", "SyncEngineConfig"]
@@ -70,20 +69,20 @@ class SyncEngineConfig:
 
     Holds the live ``settings.json`` dict (home of the save-sync feature
     toggles), the Unit-of-Work factory (the transactional seam over the
-    SQLite repositories), the peer save sub-service (rom_info), the
+    SQLite repositories), the peer save sub-services (rom_info and the
+    shared :class:`DeviceRegistry` that owns the server device id), the
     Protocol-typed RomM adapter and retry strategy, runtime
     infrastructure (loop, logger, clock), the Protocol-typed filesystem
     adapter, the ``DebugLogger`` seam, the per-ROM active-core resolver,
-    the hostname provider + machine-id provider + settings persister used for
-    device registration,
-    the plugin version string passed to the server on register/update,
-    and the optional sort-change and migration-pending callbacks
-    SyncEngine consults at the entry of every public flow.
+    the hostname provider + machine-id provider passed through to device
+    registration, and the optional sort-change and migration-pending
+    callbacks SyncEngine consults at the entry of every public flow.
     """
 
     settings: dict[str, Any]
     uow_factory: UnitOfWorkFactory
     rom_info: RomInfoService
+    device_registry: DeviceRegistry
     romm_api: RommSyncApi
     retry: RetryStrategy
     loop: asyncio.AbstractEventLoop
@@ -94,8 +93,6 @@ class SyncEngineConfig:
     active_core: ActiveCoreReader
     hostname_provider: HostnameReader
     machine_id_provider: MachineIdReader
-    settings_persister: SettingsPersister
-    plugin_version: str
     detect_sort_change: SaveSortChangeFn
     is_retrodeck_migration_pending: MigrationPendingFn
 
@@ -108,6 +105,7 @@ class SyncEngine:
         self._settings = config.settings
         self._uow_factory = config.uow_factory
         self._rom_info = config.rom_info
+        self._devices = config.device_registry
         self._romm_api = config.romm_api
         self._retry = config.retry
         self._loop = config.loop
@@ -118,8 +116,6 @@ class SyncEngine:
         self._active_core = config.active_core
         self._hostname_provider = config.hostname_provider
         self._machine_id_provider = config.machine_id_provider
-        self._settings_persister = config.settings_persister
-        self._plugin_version = config.plugin_version
         self._detect_sort_change = config.detect_sort_change
         self._is_retrodeck_migration_pending = config.is_retrodeck_migration_pending
         # Last observed RetroArch save-file layout, refreshed by
@@ -140,19 +136,10 @@ class SyncEngine:
             save_file_store=config.save_file_store,
             log_debug=config.log_debug,
         )
-        self._devices = DeviceRegistry(
-            uow_factory=config.uow_factory,
-            settings=config.settings,
-            romm_api=config.romm_api,
-            retry=config.retry,
-            logger=config.logger,
-            log_debug=config.log_debug,
-            settings_persister=config.settings_persister,
-            plugin_version=config.plugin_version,
-        )
         self._rollback = RollbackOrchestrator(
             uow_factory=config.uow_factory,
             rom_info=config.rom_info,
+            device_registry=self._devices,
             romm_api=config.romm_api,
             matrix=self._matrix,
             retry=config.retry,
@@ -178,9 +165,13 @@ class SyncEngine:
         return save_sync_enabled(self._settings)
 
     def get_device_id(self) -> str | None:
-        """Server-side device id from ``kv_config`` (None when unregistered)."""
-        with self._uow_factory() as uow:
-            return uow.kv_config.get("device_id")
+        """Server-side device id (None when unregistered).
+
+        Delegates to the shared :class:`DeviceRegistry` — the single owner of
+        ``kv_config["device_id"]`` — so the id is read once and cached rather
+        than re-queried per sync flow.
+        """
+        return self._devices.get_device_id()
 
     def resolve_core(self, rom_id: int) -> str | None:
         """Resolve the active RetroArch core for a ROM, or ``None``.
@@ -314,13 +305,14 @@ class SyncEngine:
         """Short read UoW: load the ROM's save state + device id.
 
         Returns the loaded :class:`RomSaveState` (a fresh default when absent)
-        and the server device id. The aggregate is mutated outside the
-        transaction by the matrix worker; :meth:`_write_save_state` persists it.
+        and the server device id (read through the shared
+        :class:`DeviceRegistry`, the single device-id owner). The aggregate is
+        mutated outside the transaction by the matrix worker;
+        :meth:`_write_save_state` persists it.
         """
         with self._uow_factory() as uow:
             state = uow.rom_save_states.get(rom_id) or RomSaveState()
-            device_id = uow.kv_config.get("device_id")
-        return state, device_id
+        return state, self._devices.get_device_id()
 
     def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
         """Short write UoW: persist the mutated save state for *rom_id*."""

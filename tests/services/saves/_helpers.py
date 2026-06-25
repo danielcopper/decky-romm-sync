@@ -297,19 +297,30 @@ def _file_md5(path):
 
 
 def _enable_sync_with_device(svc, device_id: str = "device-1") -> None:
-    """Flip on save sync and bind a server device id (matches FakeSaveApi)."""
+    """Flip on save sync and bind a server device id (matches FakeSaveApi).
+
+    Writes ``kv_config["device_id"]`` directly (a test backdoor that bypasses
+    the :class:`DeviceRegistry`), so the registry cache is invalidated to keep
+    the seeded id observable through ``get_device_id``.
+    """
     svc._config.settings["save_sync_enabled"] = True
     with _uow(svc) as uow:
         uow.kv_config.set("device_id", device_id)
+    svc._device_registry.invalidate_device_id_cache()
 
 
 def _set_device_id(svc, device_id: str | None) -> None:
-    """Set or clear the server device id in ``kv_config`` (None deletes it)."""
+    """Set or clear the server device id in ``kv_config`` (None deletes it).
+
+    A test backdoor that bypasses the :class:`DeviceRegistry`; invalidates the
+    registry cache so the change is observable through ``get_device_id``.
+    """
     with _uow(svc) as uow:
         if device_id is None:
             uow.kv_config.delete("device_id")
         else:
             uow.kv_config.set("device_id", device_id)
+    svc._device_registry.invalidate_device_id_cache()
 
 
 def _get_device_id(svc) -> str | None:

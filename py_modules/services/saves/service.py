@@ -27,6 +27,7 @@ from services.saves.rom_info import RomInfoService, RomInfoServiceConfig
 from services.saves.slots import SlotsService, SlotsServiceConfig
 from services.saves.status import StatusService, StatusServiceConfig
 from services.saves.sync_engine import SyncEngine, SyncEngineConfig
+from services.saves.sync_engine.devices import DeviceRegistry
 from services.saves.versions import VersionsService, VersionsServiceConfig
 
 if TYPE_CHECKING:
@@ -58,9 +59,26 @@ class SaveService:
         self._save_file_store = config.save_file_store
         self._uow_factory: UnitOfWorkFactory = config.uow_factory
         self._settings_persister = config.settings_persister
-        # Resolve plugin version once at construction; SyncEngine and any
-        # other consumer receive the resolved string, not the Protocol.
+        # Resolve plugin version once at construction; the DeviceRegistry and
+        # any other consumer receive the resolved string, not the Protocol.
         plugin_version = config.plugin_metadata.read_version(config.plugin_dir)
+
+        # The single owner of the server device id (kv_config["device_id"]).
+        # Built once here and shared into every sub-service that needs the id
+        # (sync_engine, status, versions, slots) — the same-bounded-context
+        # peer-ref carve-out — so the id is read once and cached, never
+        # re-queried per flow through a fresh UoW. The device label stays in
+        # settings.json (ADR-0003).
+        self._device_registry = DeviceRegistry(
+            uow_factory=config.uow_factory,
+            settings=config.settings,
+            romm_api=config.romm_api,
+            retry=config.retry,
+            logger=config.logger,
+            log_debug=config.log_debug,
+            settings_persister=config.settings_persister,
+            plugin_version=plugin_version,
+        )
 
         self._rom_info = RomInfoService(
             config=RomInfoServiceConfig(
@@ -78,6 +96,7 @@ class SaveService:
                 settings=config.settings,
                 uow_factory=config.uow_factory,
                 rom_info=self._rom_info,
+                device_registry=self._device_registry,
                 romm_api=config.romm_api,
                 retry=config.retry,
                 loop=config.loop,
@@ -88,8 +107,6 @@ class SaveService:
                 active_core=config.active_core,
                 hostname_provider=config.hostname_provider,
                 machine_id_provider=config.machine_id_provider,
-                settings_persister=config.settings_persister,
-                plugin_version=plugin_version,
                 detect_sort_change=config.detect_sort_change,
                 is_retrodeck_migration_pending=config.is_retrodeck_migration_pending,
             ),
@@ -100,6 +117,7 @@ class SaveService:
                 settings=config.settings,
                 uow_factory=config.uow_factory,
                 sync_engine=self._sync_engine,
+                device_registry=self._device_registry,
                 rom_info=self._rom_info,
                 romm_api=config.romm_api,
                 retry=config.retry,
@@ -117,6 +135,7 @@ class SaveService:
                 settings=config.settings,
                 uow_factory=config.uow_factory,
                 sync_engine=self._sync_engine,
+                device_registry=self._device_registry,
                 rom_info=self._rom_info,
                 resolve_core=self._sync_engine.resolve_core,
                 romm_api=config.romm_api,
@@ -132,6 +151,7 @@ class SaveService:
                 settings=config.settings,
                 uow_factory=config.uow_factory,
                 sync_engine=self._sync_engine,
+                device_registry=self._device_registry,
                 status_service=self._status,
                 rom_info=self._rom_info,
                 resolve_core=self._sync_engine.resolve_core,

@@ -42,6 +42,7 @@ if TYPE_CHECKING:
         UnitOfWorkFactory,
     )
     from services.saves.rom_info import RomInfoService
+    from services.saves.sync_engine.devices import DeviceRegistry
     from services.saves.sync_engine.matrix import MatrixExecutor
 
 
@@ -62,6 +63,7 @@ class RollbackOrchestrator:
         *,
         uow_factory: UnitOfWorkFactory,
         rom_info: RomInfoService,
+        device_registry: DeviceRegistry,
         romm_api: RommSyncApi,
         matrix: MatrixExecutor,
         retry: RetryStrategy,
@@ -73,6 +75,7 @@ class RollbackOrchestrator:
     ) -> None:
         self._uow_factory = uow_factory
         self._rom_info = rom_info
+        self._device_registry = device_registry
         self._romm_api = romm_api
         self._matrix = matrix
         self._retry = retry
@@ -86,8 +89,7 @@ class RollbackOrchestrator:
         """Short read UoW: load the ROM's save state + device id."""
         with self._uow_factory() as uow:
             state = uow.rom_save_states.get(rom_id) or RomSaveState()
-            device_id = uow.kv_config.get("device_id")
-        return state, device_id
+        return state, self._device_registry.get_device_id()
 
     def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
         """Short write UoW: persist the mutated save state for *rom_id*."""

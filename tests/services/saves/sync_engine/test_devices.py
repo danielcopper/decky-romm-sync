@@ -5,18 +5,62 @@ DeviceRegistry contract guarantees; pure-orchestration assertions live in
 test_engine.py.
 """
 
+import logging
+
 import pytest
+from conftest import _make_retry
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
+from fakes.fake_save_api import FakeSaveApi
+from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 
 from lib.errors import RommApiError, RommAuthError, RommConnectionError, RommSSLError
 from lib.list_result import ErrorCode
+from services.saves.sync_engine.devices import DeviceRegistry
 from tests.services.saves._helpers import (
     _create_save,
     _enable_sync_with_device,
     _install_rom,
     make_service,
 )
+
+
+class _FailingSettingsPersister:
+    """A ``SettingsPersister`` whose ``save_settings`` always raises.
+
+    Used to exercise the best-effort device-name write: a settings.json
+    write failure during registration must leave the device usable, not in a
+    broken half-state.
+    """
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+        self.save_count = 0
+
+    def save_settings(self) -> None:
+        self.save_count += 1
+        raise self._exc
+
+
+def _make_registry(*, settings=None, settings_persister=None):
+    """Build a stand-alone :class:`DeviceRegistry` over fresh fakes.
+
+    Returns ``(registry, uow_factory, fake_api)`` so a test can drive the
+    registry in isolation and count the underlying Unit-of-Work opens.
+    """
+    uow_factory = FakeUnitOfWorkFactory()
+    fake = FakeSaveApi()
+    registry = DeviceRegistry(
+        uow_factory=uow_factory,
+        settings=settings if settings is not None else {"save_sync_enabled": True},
+        romm_api=fake,
+        retry=_make_retry(),
+        logger=logging.getLogger("test"),
+        log_debug=lambda msg: None,
+        settings_persister=settings_persister or _FailingSettingsPersister(RuntimeError("unused")),
+        plugin_version="0.14.0",
+    )
+    return registry, uow_factory, fake
 
 
 def _register_call(fake):
@@ -225,3 +269,108 @@ class TestEnsureDeviceRegisteredUpdateSwallowLogs:
         assert result["success"] is True
         assert result["device_id"] == "server-uuid"
         assert any("update_device failed" in m and "boom" in m for m in debug_log)
+
+
+class TestRegistrationDeviceNameWriteIsBestEffort:
+    """The kv_config device id is the AUTHORITATIVE registered signal — written
+    first. The settings.json device_name is a best-effort write AFTER, so a
+    label-write failure leaves a fully registered, usable device (valid id,
+    prior/default name) instead of a broken half-state (#984)."""
+
+    @pytest.mark.asyncio
+    async def test_device_id_persisted_when_name_write_fails(self, tmp_path):
+        debug_log: list[str] = []
+        svc, _fake = make_service(
+            tmp_path,
+            log_debug=debug_log.append,
+            settings_persister=_FailingSettingsPersister(OSError("settings.json fsync failed")),
+        )
+        svc._config.settings["save_sync_enabled"] = True
+        # No prior device_name — the failed write leaves it unset.
+        svc._config.settings.pop("device_name", None)
+
+        result = await svc.ensure_device_registered()
+
+        # The device is fully registered and usable despite the name-write failure.
+        assert result["success"] is True
+        assert result["device_id"]  # a real server id was issued and persisted
+        # The id is the authoritative registered signal — written before the name.
+        assert svc._sync_engine.get_device_id() == result["device_id"]
+        # The label write failed, so the device falls back to the prior/default
+        # name (empty here) rather than the half-applied hostname.
+        assert result["device_name"] == ""
+        # The swallow leaves a debug breadcrumb naming the still-usable id.
+        assert any(
+            "device_name write failed" in m and result["device_id"] in m and "fsync failed" in m for m in debug_log
+        )
+
+    @pytest.mark.asyncio
+    async def test_prior_device_name_survives_a_failed_name_write(self, tmp_path):
+        svc, _fake = make_service(
+            tmp_path,
+            settings_persister=_FailingSettingsPersister(OSError("disk full")),
+        )
+        svc._config.settings["save_sync_enabled"] = True
+        svc._config.settings["device_name"] = "previous-label"
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is True
+        assert result["device_id"]
+        # The previously-persisted label is preserved as the fallback.
+        assert result["device_name"] == "previous-label"
+
+
+class TestDeviceIdCachedRead:
+    """DeviceRegistry is the single device-id owner: it reads kv_config ONCE and
+    serves the cached value thereafter, never re-querying per call (#984)."""
+
+    def test_repeated_reads_open_one_unit_of_work(self):
+        registry, uow_factory, _fake = _make_registry()
+        with uow_factory() as uow:
+            uow.kv_config.set("device_id", "server-uuid")
+        opens_after_seed = uow_factory.call_count
+
+        first = registry.get_device_id()
+        second = registry.get_device_id()
+        third = registry.get_device_id()
+
+        assert first == second == third == "server-uuid"
+        # Exactly one additional UoW open across the three reads — the cache
+        # served the 2nd and 3rd without re-querying SQLite.
+        assert uow_factory.call_count == opens_after_seed + 1
+
+    def test_invalidate_forces_a_re_read(self):
+        registry, uow_factory, _fake = _make_registry()
+        with uow_factory() as uow:
+            uow.kv_config.set("device_id", "first")
+        registry.get_device_id()  # caches "first"
+
+        # Mutate kv_config behind the registry's back, then invalidate.
+        with uow_factory() as uow:
+            uow.kv_config.set("device_id", "second")
+        opens_before = uow_factory.call_count
+        registry.invalidate_device_id_cache()
+
+        assert registry.get_device_id() == "second"
+        # The invalidation forced exactly one fresh read.
+        assert uow_factory.call_count == opens_before + 1
+
+
+class TestDeviceIdAbsent:
+    """Edge: no device registered yet — get_device_id behaves as before (None),
+    and a cached absent result is not re-queried on every call (#984)."""
+
+    def test_unregistered_returns_none(self):
+        registry, _uow_factory, _fake = _make_registry()
+        assert registry.get_device_id() is None
+
+    def test_absent_result_is_cached(self):
+        registry, uow_factory, _fake = _make_registry()
+        assert registry.get_device_id() is None
+        opens_after_first = uow_factory.call_count
+
+        # A second read of the still-unregistered device must not re-query —
+        # "read and found absent" is distinct from "never read".
+        assert registry.get_device_id() is None
+        assert uow_factory.call_count == opens_after_first

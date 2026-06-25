@@ -25,6 +25,7 @@ if TYPE_CHECKING:
         RommSaveApi,
         UnitOfWorkFactory,
     )
+    from services.saves.sync_engine.devices import DeviceRegistry
 
 
 class SlotListing:
@@ -35,6 +36,7 @@ class SlotListing:
         *,
         settings: dict[str, Any],
         uow_factory: UnitOfWorkFactory,
+        device_registry: DeviceRegistry,
         romm_api: RommSaveApi,
         retry: RetryStrategy,
         loop: asyncio.AbstractEventLoop,
@@ -42,6 +44,7 @@ class SlotListing:
     ) -> None:
         self._settings = settings
         self._uow_factory = uow_factory
+        self._device_registry = device_registry
         self._romm_api = romm_api
         self._retry = retry
         self._loop = loop
@@ -50,8 +53,7 @@ class SlotListing:
     def _read_inputs(self, rom_id: int) -> tuple[RomSaveState | None, str | None]:
         with self._uow_factory() as uow:
             state = uow.rom_save_states.get(rom_id)
-            device_id = uow.kv_config.get("device_id")
-        return state, device_id
+        return state, self._device_registry.get_device_id()
 
     async def get_save_slots(self, rom_id: int) -> dict[str, Any]:
         """List available save slots for a ROM.
@@ -184,7 +186,7 @@ class SlotListing:
                 "saves": [],
             }
 
-        device_id = await self._loop.run_in_executor(None, self._read_device_id)
+        device_id = await self._loop.run_in_executor(None, self._device_registry.get_device_id)
 
         try:
             # Legacy slot ("" → null on the server) can't be addressed by any
@@ -217,7 +219,3 @@ class SlotListing:
                 "slot": slot,
                 "saves": [],
             }
-
-    def _read_device_id(self) -> str | None:
-        with self._uow_factory() as uow:
-            return uow.kv_config.get("device_id")
