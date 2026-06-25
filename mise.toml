@@ -38,7 +38,7 @@ run = "pnpm test:coverage"
 
 [tasks."lint:md"]
 description = "Lint Markdown with markdownlint-cli2 (CI parity)"
-run = "pnpm exec markdownlint-cli2 \"**/*.md\" \"!node_modules\" \"!.worktrees\" \"!CHANGELOG.md\" \"!site\""
+run = "pnpm exec markdownlint-cli2 \"**/*.md\" \"!node_modules\" \"!.worktrees\" \"!.venv\" \"!CHANGELOG.md\" \"!site\""
 
 [tasks.lint]
 description = "Check Cosmic Python architecture rules (layer imports + forbidden service calls) and Markdown"
@@ -48,7 +48,9 @@ run = [
     "python scripts/check_service_independence_contract.py",
     "python scripts/check_callable_manifest.py",
     "bash scripts/check_cosmic_call_bans.sh",
+    "python scripts/check_aggregate_field_assignment.py",
     "python scripts/check_failure_shape.py --check",
+    "bash scripts/check_no_bare_ignores.sh",
     "python scripts/check_event_parity.py",
     "python scripts/check_settings_owner.py",
     "python scripts/check_lock_sync.py",
