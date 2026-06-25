@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.23.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.22.1...decky-romm-sync-v0.23.0) (2026-06-25)
+
+
+### Features
+
+* **downloads:** pause/resume downloads — resumable single-file, Cloudflare-aware ([#1126](https://github.com/danielcopper/decky-romm-sync/issues/1126)) ([1774db4](https://github.com/danielcopper/decky-romm-sync/commit/1774db419dbcb09aca243761b05570398b5a52c7))
+* **launch:** add multi-disc disc picker ([#865](https://github.com/danielcopper/decky-romm-sync/issues/865)) ([#1135](https://github.com/danielcopper/decky-romm-sync/issues/1135)) ([8653242](https://github.com/danielcopper/decky-romm-sync/commit/8653242f58868d8f5d62fb120968f630474b44da))
+* **saves:** launch-gate funnel — one shared gate for all gaming-mode launches ([#1051](https://github.com/danielcopper/decky-romm-sync/issues/1051)) ([#1149](https://github.com/danielcopper/decky-romm-sync/issues/1149)) ([a4d9d4b](https://github.com/danielcopper/decky-romm-sync/commit/a4d9d4be48b8df95a2fce43f6fdeaf97af7fec2d))
+
+
+### Bug Fixes
+
+* **build:** always chown the deploy dir recursively before syncing files ([#1127](https://github.com/danielcopper/decky-romm-sync/issues/1127)) ([ee86420](https://github.com/danielcopper/decky-romm-sync/commit/ee86420b4ec7ac7ec353172e231250d3eff8c3ed))
+* **deps:** bump vulnerable transitive dev-deps to patched versions ([#1139](https://github.com/danielcopper/decky-romm-sync/issues/1139)) ([a1aa7d5](https://github.com/danielcopper/decky-romm-sync/commit/a1aa7d59f243d368a727198b80e8519fd4f80559))
+* **dev:** reset plugin-dir ownership in dev's tty shell, not the piped deploy sub-run ([#1137](https://github.com/danielcopper/decky-romm-sync/issues/1137)) ([170fa8e](https://github.com/danielcopper/decky-romm-sync/commit/170fa8ea762c5cacec660a70bd3020ab0ef37fe1))
+* **downloads:** gate .m3u on ES-DE's per-system extension list ([#1111](https://github.com/danielcopper/decky-romm-sync/issues/1111)) ([#1128](https://github.com/danielcopper/decky-romm-sync/issues/1128)) ([88ee9ad](https://github.com/danielcopper/decky-romm-sync/commit/88ee9adafb6404909895f2fad164be0b892c54db))
+* **downloads:** show extraction progress + Steam-native cancel controls ([#1129](https://github.com/danielcopper/decky-romm-sync/issues/1129)) ([69a7e91](https://github.com/danielcopper/decky-romm-sync/commit/69a7e9128e071045156872950ab802b4bee4b6a6))
+* **downloads:** wave 1 cancel/cleanup cluster — data loss, transfer-stop, concurrency, UI ([a12128d](https://github.com/danielcopper/decky-romm-sync/commit/a12128d17366839d462ffb8003addf96c4483702))
+* **library:** re-confirm launch_options after a sync to heal skipped-platform drift ([#1151](https://github.com/danielcopper/decky-romm-sync/issues/1151)) ([#1162](https://github.com/danielcopper/decky-romm-sync/issues/1162)) ([8d23881](https://github.com/danielcopper/decky-romm-sync/commit/8d2388131be82734967d6fe7c6c8379b434738d3))
+* **library:** re-confirm launch_options before a Play-button launch ([#1150](https://github.com/danielcopper/decky-romm-sync/issues/1150)) ([#1160](https://github.com/danielcopper/decky-romm-sync/issues/1160)) ([57da53b](https://github.com/danielcopper/decky-romm-sync/commit/57da53b1f9567d51100045742d9f88bbbec5175a))
+* **library:** re-confirm launch_options on the watcher relaunch path too ([#1152](https://github.com/danielcopper/decky-romm-sync/issues/1152)) ([#1164](https://github.com/danielcopper/decky-romm-sync/issues/1164)) ([1bb8b96](https://github.com/danielcopper/decky-romm-sync/commit/1bb8b96c617c271f41b130eba8b4e14659719e84))
+* **library:** reconcile drifted launch_options at startup ([#1043](https://github.com/danielcopper/decky-romm-sync/issues/1043)) ([#1153](https://github.com/danielcopper/decky-romm-sync/issues/1153)) ([495ebde](https://github.com/danielcopper/decky-romm-sync/commit/495ebdea21233fcd15ad2915caaa961cc5a460cf))
+* **library:** reset shortcut launch_options to the uninstalled placeholder on uninstall ([#1051](https://github.com/danielcopper/decky-romm-sync/issues/1051)) ([#1145](https://github.com/danielcopper/decky-romm-sync/issues/1145)) ([9d60cd0](https://github.com/danielcopper/decky-romm-sync/commit/9d60cd032ef18ff2b9f778666667656f37cb887f))
+* **library:** resolve relaunch options outside the read UoW to avoid a deadlock ([#1154](https://github.com/danielcopper/decky-romm-sync/issues/1154)) ([#1155](https://github.com/danielcopper/decky-romm-sync/issues/1155)) ([8b3c830](https://github.com/danielcopper/decky-romm-sync/commit/8b3c830773ce3c1bbbfe690ecbce8417146a6326))
+* **saves:** check confirmSlotChoice success in the automated setup paths ([#1009](https://github.com/danielcopper/decky-romm-sync/issues/1009)) ([#1141](https://github.com/danielcopper/decky-romm-sync/issues/1141)) ([c8bfb25](https://github.com/danielcopper/decky-romm-sync/commit/c8bfb2509d7c56f92595e1781691aaf4d920c12d))
+* **saves:** order save versions chronologically + persist rollback preflight on raise ([#1014](https://github.com/danielcopper/decky-romm-sync/issues/1014), [#1012](https://github.com/danielcopper/decky-romm-sync/issues/1012)) ([#1130](https://github.com/danielcopper/decky-romm-sync/issues/1130)) ([08dab0f](https://github.com/danielcopper/decky-romm-sync/commit/08dab0fadde876a23bb2130577a1e2439f12ff5f))
+* **saves:** skip launch-gate conflict round-trip when save sync is disabled ([#1056](https://github.com/danielcopper/decky-romm-sync/issues/1056)) ([#1138](https://github.com/danielcopper/decky-romm-sync/issues/1138)) ([58be248](https://github.com/danielcopper/decky-romm-sync/commit/58be248c03da49284f534673a08c93445ae4bdc0))
+* **saves:** surface pre-launch and resolve-conflict failures without an errors array ([#1050](https://github.com/danielcopper/decky-romm-sync/issues/1050)) ([#1142](https://github.com/danielcopper/decky-romm-sync/issues/1142)) ([b2f1dc2](https://github.com/danielcopper/decky-romm-sync/commit/b2f1dc2ec9e5a94e80a78c3584e5a6d616f43229))
+* **sync:** finalize sync state on cancel during a unit's fetch phase ([#1035](https://github.com/danielcopper/decky-romm-sync/issues/1035)) ([#1131](https://github.com/danielcopper/decky-romm-sync/issues/1131)) ([4770855](https://github.com/danielcopper/decky-romm-sync/commit/4770855e00971f2f5851a07ceac9ad8ce2f209fd))
+
 ## [0.22.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.22.0...decky-romm-sync-v0.22.1) (2026-06-20)
 
 
