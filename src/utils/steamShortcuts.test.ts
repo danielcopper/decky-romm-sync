@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as backend from "../api/backend";
-import { getExistingRomMShortcuts, setLaunchOptionsConfirmed } from "./steamShortcuts";
+import { getExistingRomMShortcuts, getLiveRomMShortcutAppIds, setLaunchOptionsConfirmed } from "./steamShortcuts";
+
+const ROM_LAUNCHER = "/home/deck/homebrew/plugins/decky-romm-sync/bin/rom-launcher";
 
 /**
  * Builds a RegisterForAppDetails mock that, on registration, schedules a single
@@ -61,6 +63,59 @@ describe("setLaunchOptionsConfirmed", () => {
     await expect(promise).resolves.toBe(false);
     expect(setLaunchOptions).toHaveBeenCalledWith(99, "new-value");
     expect(unregister).toHaveBeenCalled();
+  });
+});
+
+describe("getLiveRomMShortcutAppIds", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns the raw appIds of our-exe shortcuts with no backend-map intersection", async () => {
+    const exeByAppId: Record<number, string> = {
+      10: ROM_LAUNCHER,
+      20: ROM_LAUNCHER,
+      30: "/usr/bin/some-other-game",
+    };
+    const { fn } = makeRegisterForAppDetails((appId) => ({ strShortcutExe: exeByAppId[appId] ?? "" }));
+    vi.stubGlobal("SteamClient", { Apps: { RegisterForAppDetails: fn } });
+    vi.stubGlobal("collectionStore", {
+      deckDesktopApps: {
+        apps: new Map([
+          [10, {}],
+          [20, {}],
+          [30, {}],
+        ]),
+      },
+    });
+    // Reconcile must NOT touch the backend map — the raw live set is exe-only.
+    const mapSpy = vi.mocked(backend.getAppIdRomIdMap);
+
+    const result = await getLiveRomMShortcutAppIds();
+    expect(result).toEqual([10, 20]);
+    expect(mapSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns null when collectionStore is undefined (scan could not run)", async () => {
+    vi.stubGlobal("SteamClient", { Apps: { RegisterForAppDetails: vi.fn() } });
+    vi.stubGlobal("collectionStore", undefined);
+    const result = await getLiveRomMShortcutAppIds();
+    expect(result).toBeNull();
+  });
+
+  it("returns null when deckDesktopApps.apps is absent (store unreadable)", async () => {
+    vi.stubGlobal("SteamClient", { Apps: { RegisterForAppDetails: vi.fn() } });
+    vi.stubGlobal("collectionStore", { deckDesktopApps: undefined });
+    const result = await getLiveRomMShortcutAppIds();
+    expect(result).toBeNull();
+  });
+
+  it("returns [] when the scan ran but found no RomM shortcuts", async () => {
+    const { fn } = makeRegisterForAppDetails(() => ({ strShortcutExe: "/usr/bin/other" }));
+    vi.stubGlobal("SteamClient", { Apps: { RegisterForAppDetails: fn } });
+    vi.stubGlobal("collectionStore", { deckDesktopApps: { apps: new Map([[10, {}]]) } });
+    const result = await getLiveRomMShortcutAppIds();
+    expect(result).toEqual([]);
   });
 });
 

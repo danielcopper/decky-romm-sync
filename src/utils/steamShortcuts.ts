@@ -79,32 +79,30 @@ export function setLaunchOptionsConfirmed(appId: number, value: string, timeoutM
 }
 
 /**
- * Scan all non-Steam shortcuts and return those managed by RomM.
+ * Scan Steam's live shortcut store and return the appIds of every RomM-owned
+ * shortcut — those whose `strShortcutExe` ends with `/bin/rom-launcher` (the
+ * live-in-Steam ownership marker), regardless of any backend binding.
  *
- * A shortcut is RomM-owned when BOTH hold: its `strShortcutExe` ends with
- * `/bin/rom-launcher` (live-in-Steam ownership marker) AND its appId is bound
- * to a rom_id in the backend's `get_app_id_rom_id_map()` (the authoritative
- * rom_id↔appId binding now that launch options no longer carry the id). After
- * a DB reset the backend map is empty, so our shortcuts are detected by exe but
- * remain unmapped — they're treated as orphans and re-sync recreates them.
+ * Returns the raw live appId list, or `null` when the scan could **not** run
+ * because Steam's shortcut store was unreadable (`collectionStore` /
+ * `deckDesktopApps.apps` absent). The `null`-vs-`[]` distinction is
+ * load-bearing for reconcile: `[]` means "scan ran, found zero RomM shortcuts"
+ * (a real signal — unbind everything), whereas `null` means "could not look"
+ * (callers must NOT reconcile against it, or they'd unbind every binding on a
+ * transiently-broken store).
  *
- * Returns Map<romId, steamAppId>.
+ * Detection runs in parallel batches (RegisterForAppDetails is ~2s serial per
+ * shortcut); a heartbeat every 10s keeps the backend's per-unit timeout from
+ * cancelling a long scan over a large library.
  */
-export async function getExistingRomMShortcuts(): Promise<Map<number, number>> {
-  const result = new Map<number, number>();
-
-  if (typeof collectionStore === "undefined") return result;
+export async function getLiveRomMShortcutAppIds(): Promise<number[] | null> {
+  if (typeof collectionStore === "undefined") return null;
 
   const deckApps = collectionStore.deckDesktopApps?.apps;
-  if (!deckApps) return result;
+  if (!deckApps) return null;
 
   const appIds = Array.from(deckApps.keys());
 
-  // Detect our shortcuts by exe, in parallel batches to avoid 2s-per-shortcut
-  // serial overhead from RegisterForAppDetails. A large library makes this scan
-  // take tens of seconds, so emit a heartbeat every 10s between batches —
-  // otherwise the backend's per-unit heartbeat timeout cancels the run before
-  // the scan finishes.
   const ourAppIds: number[] = [];
   const CONCURRENCY = 10;
   let lastHeartbeat = Date.now();
@@ -122,7 +120,26 @@ export async function getExistingRomMShortcuts(): Promise<Map<number, number>> {
     }
   }
 
-  if (ourAppIds.length === 0) return result;
+  return ourAppIds;
+}
+
+/**
+ * Scan all non-Steam shortcuts and return those managed by RomM.
+ *
+ * A shortcut is RomM-owned when BOTH hold: its `strShortcutExe` ends with
+ * `/bin/rom-launcher` (live-in-Steam ownership marker) AND its appId is bound
+ * to a rom_id in the backend's `get_app_id_rom_id_map()` (the authoritative
+ * rom_id↔appId binding now that launch options no longer carry the id). After
+ * a DB reset the backend map is empty, so our shortcuts are detected by exe but
+ * remain unmapped — they're treated as orphans and re-sync recreates them.
+ *
+ * Returns Map<romId, steamAppId>.
+ */
+export async function getExistingRomMShortcuts(): Promise<Map<number, number>> {
+  const result = new Map<number, number>();
+
+  const ourAppIds = await getLiveRomMShortcutAppIds();
+  if (!ourAppIds || ourAppIds.length === 0) return result;
 
   // Resolve rom_id for each of our appIds via the authoritative backend map.
   // The map is keyed by appId-string → rom_id; keep only the intersection of

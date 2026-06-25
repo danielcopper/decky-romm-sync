@@ -330,6 +330,9 @@ class Plugin:
     async def report_removal_results(self, removed_rom_ids):
         return await self._shortcut_removal_service.report_removal_results(removed_rom_ids)
 
+    async def reconcile_shortcuts(self, live_app_ids):
+        return await self._shortcut_removal_service.reconcile_live_shortcuts(live_app_ids)
+
     async def get_artwork_base64(self, rom_id):
         return await self._artwork_service.get_artwork_base64(rom_id)
 

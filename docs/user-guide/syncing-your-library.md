@@ -102,6 +102,10 @@ shortcuts are updated rather than duplicated.
 To remove synced games, use the **Danger Zone** page. See
 [Troubleshooting — Danger Zone](troubleshooting.md#danger-zone) for details on the available removal options.
 
+If you delete a synced game directly from **Steam's own library** (rather than the Danger Zone), the next sync brings it
+back. The plugin notices the shortcut is gone at sync start and re-creates it, so deleting through Steam is not a
+permanent way to remove a RomM game — use the Danger Zone for that.
+
 ---
 
 **Previous:** [Configuration](configuration.md) | **Next:** [Managing Games](managing-games.md)

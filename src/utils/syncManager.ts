@@ -1,7 +1,19 @@
 import { addEventListener } from "@decky/api";
 import type { SyncAddItem, SyncApplyUnitData } from "../types";
-import { getArtworkBase64, reportUnitResults, syncHeartbeat, logInfo, logError } from "../api/backend";
-import { getExistingRomMShortcuts, addShortcut, setLaunchOptionsConfirmed } from "./steamShortcuts";
+import {
+  getArtworkBase64,
+  reconcileShortcuts,
+  reportUnitResults,
+  syncHeartbeat,
+  logInfo,
+  logError,
+} from "../api/backend";
+import {
+  getExistingRomMShortcuts,
+  getLiveRomMShortcutAppIds,
+  addShortcut,
+  setLaunchOptionsConfirmed,
+} from "./steamShortcuts";
 import { updateSyncProgress } from "./syncProgress";
 import { recordSyncCreated } from "./syncDeltaStore";
 
@@ -154,6 +166,42 @@ async function resolveExistingShortcuts(runId: string): Promise<Map<number, numb
   _scanCache = { runId, map };
   logInfo(`getExistingRomMShortcuts: scanned ${map.size} RomM shortcuts in ${Date.now() - start}ms (run ${runId})`);
   return map;
+}
+
+/**
+ * Sync-start reconcile of stale shortcut bindings (#1046).
+ *
+ * Reads Steam's live RomM-shortcut appIds and asks the backend to unbind any
+ * binding absent from that set — a shortcut the user deleted via Steam's own UI
+ * leaves a dead ``roms.shortcut_app_id``, which the incremental skip otherwise
+ * counts as "unchanged" forever, so the shortcut never comes back. Unbinding
+ * before the work queue is built lets the next sync's incremental skip re-fetch
+ * the platform and recreate the missing shortcut.
+ *
+ * Best-effort: only reconciles when the live scan actually ran (a `null` scan —
+ * Steam's store unreadable — is skipped, never reconciled, so a transient store
+ * failure can't unbind every binding). Any error is logged and swallowed so a
+ * reconcile failure never blocks the sync itself.
+ */
+export async function reconcileStaleShortcuts(): Promise<void> {
+  let liveAppIds: number[] | null;
+  try {
+    liveAppIds = await getLiveRomMShortcutAppIds();
+  } catch (e) {
+    logError(`reconcileStaleShortcuts: failed to scan live shortcuts: ${e}`);
+    return;
+  }
+  // null = Steam's shortcut store was unreadable; do NOT reconcile (would unbind
+  // every binding). [] = scan ran, found none — a real signal the backend acts on.
+  if (liveAppIds === null) return;
+  try {
+    const result = await reconcileShortcuts(liveAppIds);
+    if (result.unbound_count) {
+      logInfo(`reconcileStaleShortcuts: backend unbound ${result.unbound_count} stale shortcut(s)`);
+    }
+  } catch (e) {
+    logError(`reconcileStaleShortcuts: backend reconcile failed: ${e}`);
+  }
 }
 
 /**

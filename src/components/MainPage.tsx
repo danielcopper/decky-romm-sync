@@ -40,7 +40,7 @@ import {
   onSaveSortMigrationChange,
   setSaveSortMigrationStatus,
 } from "../utils/saveSortMigrationStore";
-import { requestSyncCancel } from "../utils/syncManager";
+import { reconcileStaleShortcuts, requestSyncCancel } from "../utils/syncManager";
 import { setVersionError } from "../utils/connectionState";
 import { retroDeckBanner, type RetroDeckBanner } from "../utils/retrodeckHealth";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
@@ -297,6 +297,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     setPreview(null);
     setStoredSyncProgress({ running: true, stage: "fetching", message: "Fetching library..." });
     try {
+      // Reconcile shortcuts the user deleted via Steam's own UI BEFORE the work
+      // queue is built (both sync paths fetch through it): unbind any dead
+      // binding so the incremental skip re-fetches the platform and recreates
+      // the missing shortcut (#1046). Best-effort — never blocks the sync.
+      await reconcileStaleShortcuts();
       // Skip Preview takes the per-unit pipeline (start_sync) — incremental
       // shortcut delivery, per-unit crash safety, no upfront full library
       // fetch. The legacy preview/apply path remains for users who want to

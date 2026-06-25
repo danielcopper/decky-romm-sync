@@ -22,6 +22,7 @@ vi.mock("./steamShortcuts", () => ({
   setLaunchOptionsConfirmed: (...args: unknown[]) => setLaunchOptionsConfirmed(...args),
   addShortcut: (...args: unknown[]) => addShortcut(...args),
   getExistingRomMShortcuts: (...args: unknown[]) => getExistingRomMShortcuts(...args),
+  getLiveRomMShortcutAppIds: vi.fn(),
 }));
 
 import { initUnitSyncManager, requestSyncCancel } from "./syncManager";

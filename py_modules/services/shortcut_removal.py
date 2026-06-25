@@ -1,11 +1,13 @@
 """ShortcutRemovalService — Steam-shortcut removal and ROM unbinding.
 
-Resolves the Steam ``app_id``/``rom_id`` sets the frontend removes via the
-SteamClient API, then reconciles persistence: removing a shortcut **unbinds**
-the ROM (clears ``shortcut_app_id``, keeps the row and its per-ROM children per
-ADR-0007), never deletes it. Reads the synced-shortcut binding from ``uow.roms``;
-the offline ``platform_slug → display_name`` label comes from the ``kv_config``
-cache the library sync refreshes each run.
+The home for clearing a ROM's Steam-shortcut binding: both the user-driven
+removal flows (the frontend removes shortcuts via SteamClient, this service
+unbinds the rows) and the sync-start reconcile against Steam's live shortcut
+set (a shortcut the user deleted through Steam's own UI is unbound so the next
+sync recreates it — #1046). Unbinding clears ``shortcut_app_id`` and keeps the
+row and its per-ROM children (ADR-0007), never deletes. Reads the synced-shortcut
+binding from ``uow.roms``; the offline ``platform_slug → display_name`` label
+comes from the ``kv_config`` cache the library sync refreshes each run.
 """
 
 from __future__ import annotations
@@ -153,3 +155,60 @@ class ShortcutRemovalService:
         """Called by frontend after removing shortcuts via SteamClient."""
         await self._loop.run_in_executor(None, self._report_removal_results_io, removed_rom_ids)
         return {"success": True, "message": f"Removed {len(removed_rom_ids)} shortcuts"}
+
+    # ── Live-shortcut reconcile ────────────────────────────────────────────
+
+    def _reconcile_live_shortcuts_io(self, live_app_ids: list[int | str]) -> int:
+        """Unbind every bound ROM whose ``shortcut_app_id`` is absent from the live set.
+
+        *live_app_ids* is the set of appIds the frontend observed in Steam's live
+        shortcut store (every shortcut whose exe is the plugin launcher). Each
+        bound ROM (``shortcut_app_id`` not NULL) whose appId is **not** in that
+        set lost its Steam shortcut out-of-band — unbind it (ADR-0007: clear the
+        link, keep the row and its per-ROM children), so the next sync's
+        incremental skip no longer counts it and the unit re-fetches to recreate
+        the shortcut. Returns the count unbound. Defensive ``int`` coercion: the
+        frontend may serialize appIds as strings, and a non-numeric entry is
+        dropped (it can never match a numeric ``shortcut_app_id``).
+        """
+        live: set[int] = set()
+        for raw in live_app_ids:
+            try:
+                live.add(int(raw))
+            except (TypeError, ValueError):
+                continue
+
+        unbound = 0
+        with self._uow_factory() as uow:
+            for rom in list(uow.roms.iter_all()):
+                if rom.shortcut_app_id is None or rom.shortcut_app_id in live:
+                    continue
+                rom.unbind_shortcut()
+                uow.roms.save(rom)
+                unbound += 1
+        return unbound
+
+    async def reconcile_live_shortcuts(self, live_app_ids: list[int | str]) -> dict[str, Any]:
+        """Reconcile bound ROMs against the live Steam-shortcut set the frontend supplies.
+
+        Called at sync start with the appIds of every RomM shortcut still present
+        in Steam's live shortcut store. Bindings absent from that set are stale
+        (the user deleted the shortcut via Steam's own UI) and are unbound so the
+        next sync recreates them — fixing the "deleted shortcut never comes back"
+        loop (#1046). An empty *live_app_ids* means the frontend's scan found zero
+        RomM shortcuts in Steam, so every binding is unbound; the frontend MUST
+        only call this when its scan actually ran (Steam's store was readable),
+        never on a scan it could not perform.
+        """
+        try:
+            unbound = await self._loop.run_in_executor(None, self._reconcile_live_shortcuts_io, live_app_ids)
+        except Exception as e:
+            self._logger.error(f"Failed to reconcile live shortcuts: {e}")
+            return {
+                "success": False,
+                "reason": ErrorCode.UNKNOWN.value,
+                "message": f"Reconcile failed: {e}",
+            }
+        if unbound:
+            self._logger.info(f"Reconcile: unbound {unbound} stale Steam shortcut(s)")
+        return {"success": True, "unbound_count": unbound, "message": f"Unbound {unbound} stale shortcut(s)"}

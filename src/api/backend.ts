@@ -216,6 +216,10 @@ export const reportUnitResults = callable<
 export const reportRemovalResults = callable<[(string | number)[]], { success: boolean; message: string }>(
   "report_removal_results",
 );
+export const reconcileShortcuts = callable<
+  [number[]],
+  { success: boolean; reason?: string; message: string; unbound_count?: number }
+>("reconcile_shortcuts");
 export const uninstallAllRoms = callable<
   [],
   { success: boolean; removed_count: number; errors: { rom_id: string; error: string }[] }

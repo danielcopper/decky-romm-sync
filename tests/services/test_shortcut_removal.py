@@ -253,6 +253,116 @@ class TestReportRemovalResults:
         assert call.args[2]["app_id"] == 1001
 
 
+# ── TestReconcileLiveShortcuts ────────────────────────────────────────────────
+
+
+class TestReconcileLiveShortcuts:
+    @pytest.mark.asyncio
+    async def test_unbinds_appid_absent_from_live_set(self, svc, uow):
+        """A bound appId not in the live Steam set is unbound; present ones survive."""
+        _seed_rom(uow, 10, app_id=100, name="Game A")
+        _seed_rom(uow, 20, app_id=200, name="Game B")
+        _seed_rom(uow, 30, app_id=300, name="Game C")
+
+        result = await svc.reconcile_live_shortcuts([100, 200])
+        assert result["success"] is True
+        assert result["unbound_count"] == 1
+        assert isinstance(result["message"], str)
+        with uow:
+            assert uow.roms.get(10).shortcut_app_id == 100
+            assert uow.roms.get(20).shortcut_app_id == 200
+            # 300 was deleted from Steam → unbound (row kept, link cleared).
+            assert uow.roms.get(30).shortcut_app_id is None
+
+    @pytest.mark.asyncio
+    async def test_all_present_leaves_everything_bound(self, svc, uow):
+        """When the live set covers every binding nothing is unbound."""
+        _seed_rom(uow, 10, app_id=100, name="Game A")
+        _seed_rom(uow, 20, app_id=200, name="Game B")
+
+        result = await svc.reconcile_live_shortcuts([100, 200, 999])
+        assert result["success"] is True
+        assert result["unbound_count"] == 0
+        with uow:
+            assert uow.roms.get(10).shortcut_app_id == 100
+            assert uow.roms.get(20).shortcut_app_id == 200
+
+    @pytest.mark.asyncio
+    async def test_empty_live_set_unbinds_all_bound(self, svc, uow):
+        """An empty live set means the scan found zero RomM shortcuts → unbind every binding.
+
+        This is the correct semantic: the frontend only calls this when its scan
+        actually ran (Steam's store was readable), so [] is a real "they're all
+        gone" signal. The rows survive (ADR-0007); the next sync recreates them.
+        """
+        _seed_rom(uow, 10, app_id=100, name="Game A")
+        _seed_rom(uow, 20, app_id=200, name="Game B")
+
+        result = await svc.reconcile_live_shortcuts([])
+        assert result["success"] is True
+        assert result["unbound_count"] == 2
+        with uow:
+            assert uow.roms.get(10).shortcut_app_id is None
+            assert uow.roms.get(20).shortcut_app_id is None
+
+    @pytest.mark.asyncio
+    async def test_already_unbound_rows_ignored(self, svc, uow):
+        """NULL-app_id rows are not counted and never re-saved (no churn)."""
+        _seed_rom(uow, 10, app_id=None, name="Already Unbound")
+        _seed_rom(uow, 20, app_id=200, name="Bound But Live")
+
+        result = await svc.reconcile_live_shortcuts([200])
+        assert result["success"] is True
+        assert result["unbound_count"] == 0
+        with uow:
+            assert uow.roms.get(10).shortcut_app_id is None
+            assert uow.roms.get(20).shortcut_app_id == 200
+
+    @pytest.mark.asyncio
+    async def test_string_app_ids_coerced_and_matched(self, svc, uow):
+        """Frontend-serialized string appIds match numeric bindings (no spurious unbind)."""
+        _seed_rom(uow, 10, app_id=100, name="Game A")
+
+        result = await svc.reconcile_live_shortcuts(["100"])
+        assert result["unbound_count"] == 0
+        with uow:
+            assert uow.roms.get(10).shortcut_app_id == 100
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_live_entry_dropped(self, svc, uow):
+        """A non-numeric live entry can never match, so it never blocks an unbind and never crashes."""
+        _seed_rom(uow, 10, app_id=100, name="Game A")
+        _seed_rom(uow, 20, app_id=200, name="Game B")
+
+        result = await svc.reconcile_live_shortcuts(["junk", 200])
+        assert result["success"] is True
+        # 100 absent from the (sanitized) live set {200} → unbound; 200 survives.
+        assert result["unbound_count"] == 1
+        with uow:
+            assert uow.roms.get(10).shortcut_app_id is None
+            assert uow.roms.get(20).shortcut_app_id == 200
+
+    @pytest.mark.asyncio
+    async def test_empty_registry(self, svc):
+        """No ROMs at all → nothing to unbind, canonical success shape."""
+        result = await svc.reconcile_live_shortcuts([100, 200])
+        assert result["success"] is True
+        assert result["unbound_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_handles_exception(self, svc):
+        """An executor failure returns the canonical failure shape."""
+        mock_loop = MagicMock()
+        mock_loop.run_in_executor = MagicMock(side_effect=Exception("boom"))
+        svc._loop = mock_loop
+
+        result = await svc.reconcile_live_shortcuts([100])
+        assert result["success"] is False
+        assert result["reason"]
+        assert "boom" in result["message"]
+        assert "unbound_count" not in result
+
+
 # ── TestRemovalCleansUpArtwork ────────────────────────────────────────────────
 
 

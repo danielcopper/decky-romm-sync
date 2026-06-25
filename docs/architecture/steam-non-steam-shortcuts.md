@@ -87,6 +87,38 @@ Two guards keep this from wiping a freshly-synced shortcut (`#1036`):
   removal. The `get_by_app_id` reverse lookup orders `rom_id DESC LIMIT 1` so it resolves the live (newest) binding for
   any pre-migration edge state.
 
+## Sync-start reconcile of Steam-UI-deleted shortcuts
+
+A user can delete a RomM shortcut through **Steam's own UI** (remove from library), which the plugin never observes. The
+`roms` row keeps its now-dead `shortcut_app_id`, so `get_app_id_rom_id_map` keeps serving it (playtime writes and
+launch-options bakes aim at a Steam app that no longer exists) and the **incremental skip never recreates it**: the skip
+counts bound `roms` rows, not live Steam shortcuts, so the platform reports "unchanged" forever. The game stays gone
+until a server-side change or a Force Full Sync (`#1046`).
+
+The fix is a **frontend-assisted reconcile at sync start**, because only the frontend can read Steam's shortcut store.
+It runs **before** the sync builds its work queue — so the unbind lands before the incremental-skip decision — on both
+the skip-preview (`start_sync`) and preview (`sync_preview`) paths:
+
+1. `getLiveRomMShortcutAppIds()` (`src/utils/steamShortcuts.ts`) scans Steam's live shortcuts and returns the raw appIds
+   of every RomM-owned shortcut (exe ends with `/bin/rom-launcher`), regardless of any backend binding. It returns
+   `null` when the store was **unreadable** (`collectionStore` absent) versus `[]` when the scan **ran and found none**
+   — a load-bearing distinction.
+2. `reconcileStaleShortcuts()` (`src/utils/syncManager.ts`) skips the reconcile on a `null` scan (reconciling against
+   "couldn't look" would unbind every binding), and otherwise calls the `reconcile_shortcuts` callable with the live
+   set. It is best-effort: a scan or backend failure is logged and swallowed, never blocking the sync.
+3. `ShortcutRemovalService.reconcile_live_shortcuts` unbinds every bound `roms` row whose `shortcut_app_id` is **not**
+   in the live set — clearing only the binding (`Rom.unbind_shortcut`, ADR-0007), never deleting the row or its per-ROM
+   children. An empty live set is the correct "they're all gone" signal and unbinds every binding.
+
+Once a row is unbound, the fetcher's incremental baseline (`_read_incremental_baseline`, which reconstructs only rows
+with a non-NULL `shortcut_app_id`) no longer counts it, so `unit.rom_count == registry_count` fails and the platform
+falls through to a full fetch that recreates the shortcut. The unbind is reversible by design — the next sync re-binds.
+
+This is **eager (sync-start) reconciliation of the Steam-shortcut binding**, distinct from `#951`'s lazy on-access
+reconciliation of the `rom_installs` (on-disk install) view: a different aggregate, a different cost driver, and —
+unlike installs — one the backend physically cannot reconcile lazily, since no per-game backend seam observes Steam's
+shortcut store.
+
 ## BIsModOrShortcut
 
 Non-Steam shortcuts return `BIsModOrShortcut() = true` by default. This is their natural state — Steam uses this flag to
@@ -195,17 +227,18 @@ hero/logo/grid/icon, writing the icon into the grid dir) own the artwork flow. I
 
 ## Key Files
 
-| File                                  | Purpose                                                                                                                                                                                                                                                      |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `src/utils/steamShortcuts.ts`         | `addShortcut()`, `removeShortcut()`, `getExistingRomMShortcuts()` — frontend shortcut CRUD. The existing-shortcut scan emits a sync heartbeat every 10s between batches so a large library can't stall the run past the backend's per-unit heartbeat timeout |
-| `src/utils/syncManager.ts`            | Listens for sync events, orchestrates shortcut creation/removal, artwork application, collection management. Caches the existing-shortcut scan per run (keyed by the `sync_apply_unit` `run_id`) so it scans Steam once per run, not once per unit           |
-| `src/utils/collections.ts`            | Machine-scoped Steam collection management                                                                                                                                                                                                                   |
-| `src/patches/gameDetailPatch.tsx`     | Route patch for `/library/app/:appid` — injects RomMPlaySection for custom game detail UI                                                                                                                                                                    |
-| `src/patches/metadataPatches.ts`      | Store patches for description, associations, categories, release date display                                                                                                                                                                                |
-| `py_modules/adapters/steam_config.py` | `SteamConfigAdapter` — VDF read/write, grid dir, shortcut icon write, Steam Input config                                                                                                                                                                     |
-| `py_modules/services/library/`        | LibraryService — builds shortcut data, drives per-unit sync apply                                                                                                                                                                                            |
-| `py_modules/domain/sgdb_artwork.py`   | `to_signed_app_id`, SGDB asset-type/endpoint maps                                                                                                                                                                                                            |
-| `bin/rom-launcher`                    | Pure `exec "$@"` wrapper invoked by Steam — runs the full launch command baked into the shortcut's launch options; owns no state, no path resolution, no emulator knowledge                                                                                  |
+| File                                      | Purpose                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/utils/steamShortcuts.ts`             | `addShortcut()`, `removeShortcut()`, `getExistingRomMShortcuts()`, `getLiveRomMShortcutAppIds()` (raw live appId scan for the sync-start reconcile) — frontend shortcut CRUD. The existing-shortcut scan emits a sync heartbeat every 10s between batches so a large library can't stall the run past the backend's per-unit heartbeat timeout |
+| `src/utils/syncManager.ts`                | Listens for sync events, orchestrates shortcut creation/removal, artwork application, collection management. `reconcileStaleShortcuts()` runs the sync-start reconcile of Steam-UI-deleted shortcuts. Caches the existing-shortcut scan per run (keyed by the `sync_apply_unit` `run_id`) so it scans Steam once per run, not once per unit    |
+| `py_modules/services/shortcut_removal.py` | `ShortcutRemovalService` — resolves shortcut-removal sets, unbinds removed ROMs, and runs `reconcile_live_shortcuts` (the sync-start reconcile of Steam-UI-deleted bindings)                                                                                                                                                                   |
+| `src/utils/collections.ts`                | Machine-scoped Steam collection management                                                                                                                                                                                                                                                                                                     |
+| `src/patches/gameDetailPatch.tsx`         | Route patch for `/library/app/:appid` — injects RomMPlaySection for custom game detail UI                                                                                                                                                                                                                                                      |
+| `src/patches/metadataPatches.ts`          | Store patches for description, associations, categories, release date display                                                                                                                                                                                                                                                                  |
+| `py_modules/adapters/steam_config.py`     | `SteamConfigAdapter` — VDF read/write, grid dir, shortcut icon write, Steam Input config                                                                                                                                                                                                                                                       |
+| `py_modules/services/library/`            | LibraryService — builds shortcut data, drives per-unit sync apply                                                                                                                                                                                                                                                                              |
+| `py_modules/domain/sgdb_artwork.py`       | `to_signed_app_id`, SGDB asset-type/endpoint maps                                                                                                                                                                                                                                                                                              |
+| `bin/rom-launcher`                        | Pure `exec "$@"` wrapper invoked by Steam — runs the full launch command baked into the shortcut's launch options; owns no state, no path resolution, no emulator knowledge                                                                                                                                                                    |
 
 ## Common Pitfalls
 

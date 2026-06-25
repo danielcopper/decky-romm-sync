@@ -747,6 +747,10 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "report_unit_results",
     "get_registry_platforms",
     "report_removal_results",
+    # Sync-start reconcile of Steam-UI-deleted shortcut bindings (#1046) — clears
+    # only the SQLite ``shortcut_app_id`` link (never a RetroDECK path), so it is
+    # not gated by a pending migration, matching report_removal_results above.
+    "reconcile_shortcuts",
     "get_artwork_base64",
     "get_sync_status",
     "get_sync_stats",

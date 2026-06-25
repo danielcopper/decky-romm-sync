@@ -111,6 +111,7 @@ import * as saveSortMigrationStore from "../utils/saveSortMigrationStore";
 
 vi.mock("../utils/syncManager", () => ({
   requestSyncCancel: vi.fn(),
+  reconcileStaleShortcuts: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
@@ -1045,6 +1046,60 @@ describe("MainPage", () => {
       expect(vi.mocked(backend.syncPreview)).not.toHaveBeenCalled();
       // Preview did not appear — Cancel Sync (in-flight) replaces Sync Library.
       expect(buttonByExactText(container, "Apply Sync")).toBeNull();
+    });
+
+    it("reconciles stale shortcuts BEFORE startSync (skipPreview path) (#1046)", async () => {
+      const order: string[] = [];
+      vi.mocked(syncManager.reconcileStaleShortcuts).mockImplementation(async () => {
+        order.push("reconcile");
+      });
+      vi.mocked(backend.startSync).mockImplementation(async () => {
+        order.push("startSync");
+        return { success: true, message: "" };
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const toggle = container.querySelector('[data-testid="toggle-input"]') as HTMLInputElement | null;
+      fireEvent.click(toggle!);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Reconcile must unbind dead bindings before the work queue is built.
+      expect(order).toEqual(["reconcile", "startSync"]);
+    });
+
+    it("reconciles stale shortcuts BEFORE syncPreview (preview path) (#1046)", async () => {
+      const order: string[] = [];
+      vi.mocked(syncManager.reconcileStaleShortcuts).mockImplementation(async () => {
+        order.push("reconcile");
+      });
+      vi.mocked(backend.syncPreview).mockImplementation(async () => {
+        order.push("syncPreview");
+        return {
+          success: true,
+          summary: {
+            new_count: 0,
+            changed_count: 0,
+            unchanged_count: 0,
+            remove_count: 0,
+            disabled_platform_remove_count: 0,
+          },
+          new_names: [],
+          changed_names: [],
+          preview_id: "p-order",
+        };
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(order).toEqual(["reconcile", "syncPreview"]);
     });
 
     it("with skipPreview=true: startSync success=false surfaces result.message", async () => {
