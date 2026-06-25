@@ -111,13 +111,20 @@ class SessionLifecycleServiceConfig:
     logger: logging.Logger
 
 
-def _render_sync_toast(*, offline: bool, success: bool, synced: int | None) -> tuple[str | None, str | None]:
+def _render_sync_toast(
+    *, offline: bool, success: bool, synced: int | None, message: str | None = None
+) -> tuple[str | None, str | None]:
     """Map the raw post-exit-sync flags onto the (title, body) toast pair.
 
     Branching: offline wins over success, success-with-uploads renders
     the synced toast, a successful no-op produces no toast at all, and
     any non-success/non-offline state falls through to the failure
-    toast.
+    toast. ``message`` is the classified failure cause from the sync
+    result (e.g. "Authentication failed — sign in again", #971); when
+    present it names the cause in the failure body instead of the
+    generic fallback, keeping the post-exit toast consistent with the
+    pre-launch fallback modal. Only the failure body honours it — the
+    offline and success branches are unaffected.
     """
     if offline:
         return _TOAST_TITLE, _TOAST_BODY_OFFLINE
@@ -125,7 +132,7 @@ def _render_sync_toast(*, offline: bool, success: bool, synced: int | None) -> t
         return _TOAST_TITLE, _TOAST_BODY_SYNCED
     if success:
         return None, None
-    return _TOAST_TITLE, _TOAST_BODY_FAILED
+    return _TOAST_TITLE, message or _TOAST_BODY_FAILED
 
 
 def _render_conflicts_toast(conflicts: list[dict[str, Any]]) -> str | None:
@@ -264,6 +271,9 @@ class SessionLifecycleService:
             result = await self._post_exit_sync.post_exit_sync(rom_id)
         except Exception as e:
             self._logger.warning(f"SessionLifecycle post-exit sync failed for rom_id={rom_id}: {e}")
+            # No classified message on this path: the sync raised rather than
+            # returning a structured result, so there is no result["message"]
+            # to surface — fall back to the generic failure body.
             return SessionFinalizeSyncResult(
                 offline=False,
                 success=False,
@@ -294,8 +304,10 @@ class SessionLifecycleService:
         synced = raw_synced if isinstance(raw_synced, int) else None
         raw_conflicts = result.get("conflicts")
         conflicts: list[dict[str, Any]] = list(raw_conflicts) if isinstance(raw_conflicts, list) else []
+        raw_message = result.get("message")
+        message = raw_message if isinstance(raw_message, str) else None
 
-        toast_title, toast_body = _render_sync_toast(offline=offline, success=success, synced=synced)
+        toast_title, toast_body = _render_sync_toast(offline=offline, success=success, synced=synced, message=message)
         conflicts_toast = _render_conflicts_toast(conflicts)
 
         return SessionFinalizeSyncResult(

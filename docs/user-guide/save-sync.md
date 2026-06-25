@@ -145,8 +145,9 @@ If the RomM server is unreachable when a sync is attempted:
 "Server offline" is reported **only** for a genuine reachability failure (the server can't be reached or times out). A
 sync that fails for another reason — for example an expired or revoked login token, or an SSL certificate problem —
 shows that specific reason instead (such as "Authentication failed — check your username and password"), so a working
-server is never mislabelled as offline. If you see an authentication message, re-enter your server URL and sign in again
-in the plugin settings.
+server is never mislabelled as offline. This applies to both surfaces: the warning shown before launch and the "after
+exit" toast both name the actual cause rather than a generic "failed to sync" message. If you see an authentication
+message, re-enter your server URL and sign in again in the plugin settings.
 
 ## Playtime Tracking
 

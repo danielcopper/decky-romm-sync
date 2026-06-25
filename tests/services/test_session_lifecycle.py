@@ -355,6 +355,126 @@ class TestFinalizeSyncToasts:
         assert result.sync.toast_title == "RomM Save Sync"
         assert result.sync.toast_body == "Failed to sync saves after exit"
 
+    def test_failure_with_auth_message_names_the_cause(self, event_loop, logger):
+        """#971: a classified auth failure surfaces its own message, not the generic body."""
+        post = FakePostExitSync(
+            payload={
+                "success": False,
+                "reason": "AUTH_FAILED",
+                "message": "Authentication failed — sign in again",
+                "synced": 0,
+            }
+        )
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=post,
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        result = event_loop.run_until_complete(service.finalize(99))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        assert result.sync.toast_title == "RomM Save Sync"
+        assert result.sync.toast_body == "Authentication failed — sign in again"
+        # The generic fallback must NOT be used when a classified cause is present.
+        assert result.sync.toast_body != "Failed to sync saves after exit"
+
+    def test_failure_with_ssl_message_names_the_cause(self, event_loop, logger):
+        """#971: an SSL/server-classified failure surfaces its specific message."""
+        post = FakePostExitSync(
+            payload={
+                "success": False,
+                "reason": "UNKNOWN",
+                "message": "SSL certificate verification failed",
+                "synced": 0,
+            }
+        )
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=post,
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        result = event_loop.run_until_complete(service.finalize(99))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        assert result.sync.toast_title == "RomM Save Sync"
+        assert result.sync.toast_body == "SSL certificate verification failed"
+
+    def test_failure_without_message_falls_back_to_generic_body(self, event_loop, logger):
+        """A failure with no ``message`` key falls back to the generic failure body."""
+        post = FakePostExitSync(payload={"success": False, "synced": 0})
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=post,
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        result = event_loop.run_until_complete(service.finalize(99))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        assert result.sync.toast_title == "RomM Save Sync"
+        assert result.sync.toast_body == "Failed to sync saves after exit"
+
+    def test_failure_with_non_str_message_falls_back_to_generic_body(self, event_loop, logger):
+        """A non-str ``message`` (e.g. None) is coerced away → generic failure body."""
+        post = FakePostExitSync(payload={"success": False, "synced": 0, "message": None})
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=post,
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        result = event_loop.run_until_complete(service.finalize(99))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        assert result.sync.toast_title == "RomM Save Sync"
+        assert result.sync.toast_body == "Failed to sync saves after exit"
+
+    def test_offline_message_does_not_override_offline_body(self, event_loop, logger):
+        """Regression guard: the offline branch keeps its body even when a message is present."""
+        post = FakePostExitSync(payload={"success": False, "offline": True, "message": "Server offline", "synced": 0})
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=post,
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        result = event_loop.run_until_complete(service.finalize(99))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        assert result.sync.offline is True
+        assert result.sync.toast_body == "Server offline — saves will sync next time"
+
+    def test_success_message_does_not_override_synced_body(self, event_loop, logger):
+        """Regression guard: a successful sync keeps the synced body, ignoring ``message``."""
+        post = FakePostExitSync(
+            payload={"success": True, "synced": 2, "conflicts": [], "message": "Uploaded 2 save(s)"}
+        )
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=post,
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        result = event_loop.run_until_complete(service.finalize(99))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        assert result.sync.success is True
+        assert result.sync.toast_body == "Saves synced with RomM"
+
     def test_post_exit_exception_renders_failure_toast(self, event_loop, logger):
         """Post-exit sync raises → failure toast, downstream still runs."""
         post = FakePostExitSync(side_effect=RuntimeError("network down"))
@@ -377,6 +497,31 @@ class TestFinalizeSyncToasts:
         assert result.sync.conflicts == []
         # Post-exit failure must NOT short-circuit migration refresh.
         assert migration.refresh_calls == 1
+
+    def test_post_exit_exception_path_has_no_classified_message(self, event_loop, logger):
+        """The raise path produces no structured result, so the generic body is correct.
+
+        Decision: the earlier failure-return (the ``except`` branch) has no
+        ``result["message"]`` to surface — the sync raised rather than
+        returning a classified dict — so it stays on the generic fallback body.
+        Even when the underlying exception carries a descriptive ``str``, the
+        toast body is the generic constant, never the exception text.
+        """
+        post = FakePostExitSync(side_effect=RuntimeError("Authentication failed — sign in again"))
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=post,
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        result = event_loop.run_until_complete(service.finalize(99))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        assert result.sync.toast_body == "Failed to sync saves after exit"
+        # The exception text must never leak into the toast body.
+        assert "Authentication failed" not in result.sync.toast_body
 
     def test_synced_field_non_int_treated_as_falsy(self, event_loop, logger):
         """``synced`` not an int (None, str) → no synced toast even when success=True."""
