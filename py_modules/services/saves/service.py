@@ -354,9 +354,25 @@ class SaveService:
         return self._settings.get("device_name")
 
     def set_device_name(self, name: str) -> None:
-        """Persist the device label to settings.json."""
+        """Persist the device label to settings.json, atomic on failure.
+
+        Mutates the in-memory settings dict and triggers the persist; if the
+        persist raises, the in-memory dict is rolled back to its prior value so
+        an unsaved label never lingers in memory (a later unrelated
+        ``save_settings`` would otherwise commit it), then the failure
+        re-raises.
+        """
+        had_name = "device_name" in self._settings
+        prior = self._settings.get("device_name")
         self._settings["device_name"] = name
-        self._settings_persister.save_settings()
+        try:
+            self._settings_persister.save_settings()
+        except Exception:
+            if had_name:
+                self._settings["device_name"] = prior
+            else:
+                self._settings.pop("device_name", None)
+            raise
 
     # ------------------------------------------------------------------
     # Bulk local-save deletion

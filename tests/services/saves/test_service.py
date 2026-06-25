@@ -11,6 +11,7 @@ import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_save_api import FakeSaveApi
+from fakes.fake_settings_persister import FakeSettingsPersister
 
 from domain.rom_save_state import FileSyncState, RomSaveState
 from lib.errors import RommConnectionError
@@ -441,6 +442,67 @@ class TestSettings:
         result = svc.update_save_sync_settings({"unknown_key": "value"})
         assert result["success"] is True
         assert "unknown_key" not in result["settings"]
+
+
+class _FailingSettingsPersister:
+    """A ``SettingsPersister`` whose ``save_settings`` always raises.
+
+    Drives the persist-failure branch of ``set_device_name``: the in-memory
+    label mutation must roll back when the on-disk write throws.
+    """
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+        self.save_count = 0
+
+    def save_settings(self) -> None:
+        self.save_count += 1
+        raise self._exc
+
+
+class TestSetDeviceName:
+    """``set_device_name`` mirrors the #984 rollback: a failed settings.json
+    write must not leave an unsaved label lingering in the in-memory settings
+    (#1193)."""
+
+    def test_persists_label_on_success(self, tmp_path):
+        persister = FakeSettingsPersister()
+        svc, _ = make_service(tmp_path, settings_persister=persister)
+        svc._config.settings.pop("device_name", None)
+
+        svc.set_device_name("steam-deck")
+
+        assert svc.get_device_name() == "steam-deck"
+        assert persister.save_count == 1
+
+    def test_rolls_back_prior_label_on_persist_failure(self, tmp_path):
+        svc, _ = make_service(
+            tmp_path,
+            settings_persister=_FailingSettingsPersister(OSError("disk full")),
+        )
+        svc._config.settings["device_name"] = "previous-label"
+
+        with pytest.raises(OSError, match="disk full"):
+            svc.set_device_name("new-label")
+
+        # The prior label survives — the failed write rolled the in-memory
+        # mutation back rather than leaving the half-applied "new-label".
+        assert svc.get_device_name() == "previous-label"
+
+    def test_pops_key_on_persist_failure_when_no_prior_label(self, tmp_path):
+        svc, _ = make_service(
+            tmp_path,
+            settings_persister=_FailingSettingsPersister(OSError("fsync failed")),
+        )
+        svc._config.settings.pop("device_name", None)
+
+        with pytest.raises(OSError, match="fsync failed"):
+            svc.set_device_name("first-label")
+
+        # No prior value to restore — the key is popped, not left as a stale
+        # unsaved "first-label".
+        assert svc.get_device_name() is None
+        assert "device_name" not in svc._config.settings
 
 
 class TestDeleteSaves:
