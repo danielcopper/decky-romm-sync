@@ -11,7 +11,8 @@ import logging
 import pytest
 
 from domain.save_layout import ContentDir, InSaveDir
-from lib.errors import RommApiError
+from lib.errors import RommApiError, RommAuthError, RommConnectionError, RommSSLError, RommTimeoutError
+from lib.list_result import ErrorCode
 from tests.services.saves._helpers import (
     _create_save,
     _do_sync,
@@ -560,42 +561,79 @@ class TestMigrationPendingGuards:
 
 
 class TestPostExitServerOfflineGuard:
-    """post_exit_sync probes heartbeat first; on failure returns offline=True
-    instead of attempting upload (engine.py lines 358-360)."""
+    """post_exit_sync probes heartbeat first. A genuine reachability failure
+    (connection/timeout) returns offline=True; an auth/SSL failure flows through
+    classify_error so it carries its OWN reason + message instead of masking the
+    reachable server as offline (#971)."""
 
     @pytest.mark.asyncio
-    async def test_post_exit_sync_returns_offline_when_heartbeat_raises(self, tmp_path):
+    async def test_post_exit_sync_returns_offline_when_connection_error(self, tmp_path):
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"data")
-        fake.heartbeat_raises = RommApiError("Connection refused")
+        fake.heartbeat_raises = RommConnectionError("Connection refused")
 
         result = await svc.post_exit_sync(42)
 
         assert result["success"] is False
         assert result["offline"] is True
+        assert result["reason"] == ErrorCode.SERVER_UNREACHABLE.value
+        assert result["message"] == "Server offline"
         assert result["synced"] == 0
         # No upload was attempted after heartbeat failed.
         assert not any(c[0] == "upload_save" for c in fake.call_log)
 
+    @pytest.mark.asyncio
+    async def test_post_exit_sync_returns_offline_when_timeout(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"data")
+        fake.heartbeat_raises = RommTimeoutError("timed out")
 
-class TestPreLaunchServerOfflineGuard:
-    """pre_launch_sync probes heartbeat first (F4); on failure returns the
-    canonical SERVER_UNREACHABLE shape + offline=True instead of attempting a
-    download, mirroring post_exit_sync."""
+        result = await svc.post_exit_sync(42)
+
+        assert result["offline"] is True
+        assert result["reason"] == ErrorCode.SERVER_UNREACHABLE.value
+        assert result["message"] == "Server offline"
 
     @pytest.mark.asyncio
-    async def test_pre_launch_sync_returns_offline_when_heartbeat_raises(self, tmp_path):
-        from lib.list_result import ErrorCode
+    async def test_post_exit_sync_auth_failure_is_not_offline(self, tmp_path):
+        """A revoked token (401) on the heartbeat must NOT read as offline."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"data")
+        fake.heartbeat_raises = RommAuthError("401 Unauthorized")
 
+        result = await svc.post_exit_sync(42)
+
+        assert result["success"] is False
+        assert "offline" not in result
+        assert result["reason"] == ErrorCode.AUTH_FAILED.value
+        assert "uthentication failed" in result["message"]
+        assert result["message"] != "Server offline"
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+
+
+class TestPreLaunchServerOfflineGuard:
+    """pre_launch_sync probes heartbeat first (F4). A reachability failure
+    returns the canonical SERVER_UNREACHABLE shape + offline=True; an auth/SSL
+    failure flows through classify_error to its OWN reason + DISTINCT message so
+    the UI stops claiming the server is unreachable (#971)."""
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_returns_offline_when_connection_error(self, tmp_path):
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path)
         fake.saves[100] = _server_save()
-        fake.heartbeat_raises = RommApiError("Connection refused")
+        fake.heartbeat_raises = RommConnectionError("Connection refused")
 
         result = await svc.pre_launch_sync(42)
 
@@ -606,6 +644,77 @@ class TestPreLaunchServerOfflineGuard:
         assert result["synced"] == 0
         # No download/list was attempted after heartbeat failed.
         assert not any(c[0] in ("download_save", "list_saves") for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_returns_offline_when_timeout(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        fake.saves[100] = _server_save()
+        fake.heartbeat_raises = RommTimeoutError("timed out")
+
+        result = await svc.pre_launch_sync(42)
+
+        assert result["offline"] is True
+        assert result["reason"] == ErrorCode.SERVER_UNREACHABLE.value
+        assert result["message"] == "Server offline"
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_auth_failure_is_classified_not_offline(self, tmp_path):
+        """A 401 on the heartbeat surfaces AUTH_FAILED with a distinct message,
+        never the misleading "Server offline" + offline flag (#971)."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        fake.saves[100] = _server_save()
+        fake.heartbeat_raises = RommAuthError("401 Unauthorized")
+
+        result = await svc.pre_launch_sync(42)
+
+        assert result["success"] is False
+        assert "offline" not in result
+        assert result["reason"] == ErrorCode.AUTH_FAILED.value
+        assert "uthentication failed" in result["message"]
+        assert result["message"] != "Server offline"
+        assert result["synced"] == 0
+        assert not any(c[0] in ("download_save", "list_saves") for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_ssl_failure_keeps_unreachable_slug_distinct_message(self, tmp_path):
+        """An SSL misconfig classifies to SERVER_UNREACHABLE but with the SSL
+        message — NOT the literal "Server offline" and NO offline flag."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        fake.saves[100] = _server_save()
+        fake.heartbeat_raises = RommSSLError("cert verify failed")
+
+        result = await svc.pre_launch_sync(42)
+
+        assert result["success"] is False
+        assert "offline" not in result
+        assert result["reason"] == ErrorCode.SERVER_UNREACHABLE.value
+        assert "SSL" in result["message"]
+        assert result["message"] != "Server offline"
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_offline_branch_logs_at_debug(self, tmp_path):
+        """The offline branch is no longer a silent swallow — the raw exception
+        is logged via the injected DebugLogger (asserted non-vacuously)."""
+        debug_log: list[str] = []
+        svc, fake = make_service(tmp_path, log_debug=debug_log.append)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        fake.saves[100] = _server_save()
+        fake.heartbeat_raises = RommConnectionError("Connection refused")
+
+        await svc.pre_launch_sync(42)
+
+        assert any("heartbeat failed" in m and "Connection refused" in m for m in debug_log)
 
     @pytest.mark.asyncio
     async def test_pre_launch_sync_proceeds_when_heartbeat_ok(self, tmp_path):

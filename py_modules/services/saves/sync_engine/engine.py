@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_state import RomSaveState
 from domain.save_layout import ContentDir
+from lib.errors import RommConnectionError, RommTimeoutError, classify_error
 from lib.list_result import ErrorCode
 from services.saves._messages import (
     DEVICE_NOT_REGISTERED,
@@ -414,6 +415,38 @@ class SyncEngine:
             base["conflicts"] = []
         return base
 
+    def _heartbeat_failure_result(self, where: str, exc: Exception) -> dict[str, Any]:
+        """Build the sync-result dict for a heartbeat failure, classified by type.
+
+        Only a genuine reachability failure (``RommConnectionError`` /
+        ``RommTimeoutError``) is reported as "Server offline" with the additive
+        ``offline`` flag the launch path routes on. Any other typed error — a
+        revoked token (401 → ``AUTH_FAILED``), an SSL misconfig, a 5xx, etc. —
+        flows through :func:`classify_error` so the result carries its OWN
+        ``reason`` + ``message`` and the UI stops claiming the server is
+        unreachable when it is plainly reachable (#971). The raw exception is
+        always logged at debug so the offline branch is no longer a silent
+        swallow.
+        """
+        self._log_debug(f"{where}: heartbeat failed ({type(exc).__name__}: {exc})")
+        if isinstance(exc, (RommConnectionError, RommTimeoutError)):
+            self._logger.info("%s skipped: server offline", where)
+            return {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": "Server offline",
+                "synced": 0,
+                "offline": True,
+            }
+        reason, message = classify_error(exc)
+        self._logger.info("%s skipped: %s", where, message)
+        return {
+            "success": False,
+            "reason": reason,
+            "message": message,
+            "synced": 0,
+        }
+
     async def _run_rom_sync(self, rom_id: int) -> tuple[int, list[str], list[dict[str, Any]]]:
         """Read inputs → sync in executor → persist, for one ROM under its lock.
 
@@ -480,20 +513,15 @@ class SyncEngine:
                 return {"success": True, "message": "Pre-launch sync disabled", "synced": 0}
 
             # Pre-probe reachability before any sync work — mirror post_exit_sync.
-            # When the server is offline, surface the canonical unreachable shape
-            # (plus the additive ``offline`` flag) so the launch path can warn on
-            # local drift instead of stalling on a doomed sync round-trip.
+            # A genuine reachability failure surfaces the canonical unreachable
+            # shape (plus the additive ``offline`` flag) so the launch path can
+            # warn on local drift instead of stalling on a doomed round-trip; an
+            # auth/SSL/server error instead carries its OWN classified reason so
+            # the UI stops lying about reachability (#971).
             try:
                 await self._loop.run_in_executor(None, self._romm_api.heartbeat)
-            except Exception:
-                self._logger.info("pre_launch_sync skipped: server offline")
-                return {
-                    "success": False,
-                    "reason": ErrorCode.SERVER_UNREACHABLE.value,
-                    "message": "Server offline",
-                    "synced": 0,
-                    "offline": True,
-                }
+            except Exception as e:
+                return self._heartbeat_failure_result("pre_launch_sync", e)
 
             if not self.get_device_id():
                 reg = await self.ensure_device_registered()
@@ -550,15 +578,8 @@ class SyncEngine:
 
             try:
                 await self._loop.run_in_executor(None, self._romm_api.heartbeat)
-            except Exception:
-                self._logger.info("post_exit_sync skipped: server offline")
-                return {
-                    "success": False,
-                    "reason": ErrorCode.SERVER_UNREACHABLE.value,
-                    "message": "Server offline",
-                    "synced": 0,
-                    "offline": True,
-                }
+            except Exception as e:
+                return self._heartbeat_failure_result("post_exit_sync", e)
 
             if not self.get_device_id():
                 reg = await self.ensure_device_registered()

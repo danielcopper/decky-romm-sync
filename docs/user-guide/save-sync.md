@@ -142,6 +142,12 @@ If the RomM server is unreachable when a sync is attempted:
   outcome — typically pushing your changes once the server is reachable again.
 - No save data is ever lost due to a failed sync.
 
+"Server offline" is reported **only** for a genuine reachability failure (the server can't be reached or times out). A
+sync that fails for another reason — for example an expired or revoked login token, or an SSL certificate problem —
+shows that specific reason instead (such as "Authentication failed — check your username and password"), so a working
+server is never mislabelled as offline. If you see an authentication message, re-enter your server URL and sign in again
+in the plugin settings.
+
 ## Playtime Tracking
 
 The plugin tracks playtime per game. Session start and end times are recorded, and device suspend/resume is accounted

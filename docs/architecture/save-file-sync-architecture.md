@@ -990,6 +990,27 @@ If the RomM server is unreachable when a sync runs:
 4. No data is lost. There is no separate retry queue because the algorithm is idempotent: re-running it after a
    transient failure converges on the same end state.
 
+### Heartbeat error classification (launch-time probe)
+
+`pre_launch_sync` and `post_exit_sync` pre-probe the server with a single `heartbeat` call before doing any sync work. A
+failure here is **classified by type**, not collapsed onto a blanket "Server offline"
+([#971](https://github.com/danielcopper/decky-romm-sync/issues/971)):
+
+- A genuine reachability failure (`RommConnectionError` / `RommTimeoutError`) returns the canonical `SERVER_UNREACHABLE`
+  shape with `message: "Server offline"` **plus** the additive `offline: true` flag the launch path routes on
+  (offline-drift check instead of a doomed round-trip).
+- Any other typed `RommApiError` flows through `lib/errors.py` `classify_error`, so the result carries its **own**
+  `reason` + `message`: a revoked token (401) surfaces `AUTH_FAILED` + "Authentication failed — check your username and
+  password", an SSL misconfig surfaces the SSL message, a 5xx surfaces the server-error message. These branches **omit**
+  the `offline` flag, so the UI never claims a reachable server is unreachable. The Play button's fallback launch modal
+  shows that backend `message` verbatim, so a user whose token expired sees "authentication failed" instead of being
+  told the server is offline forever.
+
+The raw exception is logged at debug in every branch, so the probe is no longer a silent swallow. The same
+classification applies to the device-registration failure path in `services/saves/sync_engine/devices.py`
+(`ensure_device_registered`): an auth/SSL failure during `register_device` produces its own classified `reason` +
+`message` rather than a generic "Could not register device" unreachable slug.
+
 ## Playtime Tracking
 
 ### Local delta-based accumulation

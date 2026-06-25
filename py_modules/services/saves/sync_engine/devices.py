@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 from typing import TYPE_CHECKING, Any
 
+from lib.errors import classify_error
 from lib.list_result import ErrorCode
 from services.saves._settings import save_sync_enabled
 
@@ -139,11 +140,16 @@ class DeviceRegistry:
         device_id = await loop.run_in_executor(None, self._get_device_id)
         if device_id:
             server_id_str = str(device_id)
-            with contextlib.suppress(Exception):
+            # Best-effort touch of the server-side client_version. A failure here
+            # is non-fatal (the device is already registered), but log it at debug
+            # so the swallow leaves a breadcrumb instead of vanishing silently.
+            try:
                 await loop.run_in_executor(
                     None,
                     lambda: self._romm_api.update_device(server_id_str, client_version=self._plugin_version),
                 )
+            except Exception as e:
+                self._log_debug(f"ensure_device_registered: update_device failed (non-fatal): {e}")
             return {
                 "success": True,
                 "device_id": device_id,
@@ -178,7 +184,19 @@ class DeviceRegistry:
                     "server_device_id": new_id,
                 }
         except Exception as e:
+            # Classify the failure so a revoked token (401 → AUTH_FAILED) or an
+            # SSL misconfig carries its OWN reason + message instead of every
+            # failure collapsing onto a generic "Could not register device"
+            # offline slug (#971).
             self._logger.warning(f"Server device registration failed: {e}")
+            reason, message = classify_error(e)
+            return {
+                "success": False,
+                "reason": reason,
+                "message": message,
+                "device_id": "",
+                "device_name": "",
+            }
 
         return {
             "success": False,

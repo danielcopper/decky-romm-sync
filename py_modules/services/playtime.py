@@ -9,7 +9,6 @@ RomM communication goes through ``RommPlaytimeApi``. No ``import decky``.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -248,9 +247,13 @@ class PlaytimeService:
             self._log_debug(f"Failed to record session end for rom {rom_id}: {e}")
             return {"success": False, "reason": "unknown_rom", "message": "Unknown ROM"}
 
-        # Best-effort sync playtime to RomM server notes (outside the UoW).
-        with contextlib.suppress(Exception):
+        # Best-effort sync playtime to RomM server notes (outside the UoW). A
+        # failure here is non-fatal (the local total is already persisted), but
+        # log it at debug so the swallow leaves a breadcrumb (#971).
+        try:
             self._sync_playtime_to_romm_io(rom_id, duration)
+        except Exception as e:
+            self._log_debug(f"record_session_end: playtime-to-RomM sync failed (non-fatal) for rom {rom_id}: {e}")
 
         return {
             "success": True,

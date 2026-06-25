@@ -13,6 +13,7 @@ from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_save_api import FakeSaveApi
 
 from domain.rom_save_state import FileSyncState, RomSaveState
+from lib.errors import RommConnectionError
 from services.saves._settings import sanitize_setting
 from tests.services.saves._helpers import (
     _create_save,
@@ -80,9 +81,10 @@ class TestDeviceRegistrationServer:
 
     @pytest.mark.asyncio
     async def test_returns_failure_on_server_error(self, tmp_path):
-        """If register_device fails, returns failure."""
+        """If register_device fails with a reachability error, returns the classified failure."""
         fake = FakeSaveApi()
-        fake.fail_on_next(Exception("server error"))
+        fake.set_version("4.8.1")  # skip the pre-register heartbeat probe
+        fake.fail_on_next(RommConnectionError("server error"))
         svc, _ = make_service(tmp_path, fake_api=fake)
         svc._config.settings["save_sync_enabled"] = True
 
@@ -368,9 +370,9 @@ class TestRetroDeckMigrationBlocksSaveSync:
 class TestPostExitSyncConnectivity:
     @pytest.mark.asyncio
     async def test_returns_offline_when_heartbeat_fails(self, tmp_path):
-        """post_exit_sync returns offline=True when server is unreachable."""
+        """post_exit_sync returns offline=True when the server is genuinely unreachable."""
         fake = FakeSaveApi()
-        fake.heartbeat_raises = ConnectionError("unreachable")
+        fake.heartbeat_raises = RommConnectionError("unreachable")
         svc, _ = make_service(tmp_path, fake_api=fake)
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
@@ -399,7 +401,7 @@ class TestPostExitSyncConnectivity:
     async def test_offline_skips_before_device_registration(self, tmp_path):
         """post_exit_sync returns offline without attempting device registration."""
         fake = FakeSaveApi()
-        fake.heartbeat_raises = OSError("connection refused")
+        fake.heartbeat_raises = RommConnectionError("connection refused")
         svc, _ = make_service(tmp_path, fake_api=fake)
         svc._config.settings["save_sync_enabled"] = True
         # No device_id — would trigger registration if heartbeat passed

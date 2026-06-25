@@ -568,6 +568,28 @@ class TestEdgeCases:
         assert entry.note_id is None  # push failed before any note was created
 
     @pytest.mark.asyncio
+    async def test_record_session_end_swallows_romm_sync_failure_with_debug_log(self):
+        """If the best-effort RomM playtime push raises outright, record_session_end
+        still returns success (the local fold committed) and the swallow is logged
+        at debug rather than vanishing silently (#971)."""
+        clk = FakeClock(now=datetime(2026, 1, 1, 0, 1, tzinfo=UTC))
+        logs: list[str] = []
+        svc, _fake, uow = make_service(clock=clk, log_debug=logs.append)
+        start = (clk.now() - timedelta(seconds=60)).isoformat()
+        _seed_playtime(uow, 42, Playtime(last_session_start=start))
+
+        def _boom(rom_id: int, session_duration_sec: int) -> None:
+            raise RommApiError("kaboom")
+
+        svc._sync_playtime_to_romm_io = _boom  # bypass the inner catch to hit the outer swallow
+
+        result = await svc.record_session_end(42)
+
+        assert result["success"] is True
+        assert result["total_seconds"] == 60
+        assert any("playtime-to-RomM sync failed" in m and "rom 42" in m and "kaboom" in m for m in logs)
+
+    @pytest.mark.asyncio
     async def test_sync_playtime_error_logged_not_raised(self):
         svc, fake, uow = make_service()
         _seed_playtime(uow, 42, Playtime(total_seconds=100, session_count=1, last_session_duration_sec=60))
