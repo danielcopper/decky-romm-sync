@@ -196,10 +196,13 @@ run) flips RUNNING → CANCELLING as before. A **falsy/`None`** `run_id` cancels
 the "no active run id captured yet" safety case — so cancel is never made less reliable. Every cancel logs one INFO line
 recording the requested `run_id`, the active `current_sync_id`, and the `sync_state` at call time. The frontend captures
 the run id from the `sync_plan` event (now carrying `run_id`) and the `sync_apply_unit` event into a module variable
-(`getActiveRunId`) and passes it on the Cancel click; an empty string when no run is in flight maps to the unconditional
-path. `sync_cancel_preview` is **not** run-scoped: it only clears the pending preview delta (`pending_delta`), never
-touches `sync_state`, and `sync_apply_delta` independently validates the `preview_id`, so a stale preview-cancel cannot
-abort a fresh sync.
+(`getActiveRunId`) and passes it on the Cancel click. The sync trigger (`handleSync` / `handleApply`) calls
+`beginSyncRun("")` at the **top**, before the backend mints the new run's id and emits `sync_plan` — clearing the
+_previous_ run's captured id to `null`, so a Cancel in the "Fetching library…" window (reconcile + `build_work_queue`
+paginate for seconds) sends `""`, which maps to the unconditional path, rather than the previous run's id, which the
+backend would reject as a cross-run mismatch and silently drop the genuine cancel. `sync_cancel_preview` is **not**
+run-scoped: it only clears the pending preview delta (`pending_delta`), never touches `sync_state`, and
+`sync_apply_delta` independently validates the `preview_id`, so a stale preview-cancel cannot abort a fresh sync.
 
 The same `sync_plan` capture point also clears the frontend's per-run cancel flag (`_cancelRequested`). The per-unit
 handler resets that flag at its own start, but an incrementally-**skipped** unit never runs that handler, so a skip-only

@@ -113,6 +113,7 @@ vi.mock("../utils/syncManager", () => ({
   requestSyncCancel: vi.fn(),
   reconcileStaleShortcuts: vi.fn().mockResolvedValue(undefined),
   getActiveRunId: vi.fn().mockReturnValue("run-active"),
+  beginSyncRun: vi.fn(),
 }));
 
 vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
@@ -1076,6 +1077,34 @@ describe("MainPage", () => {
       expect(order).toEqual(["reconcile", "startSync"]);
     });
 
+    it("clears the captured run id BEFORE reconcile/startSync (#1198 C1)", async () => {
+      const order: string[] = [];
+      vi.mocked(syncManager.beginSyncRun).mockImplementation((runId: string) => {
+        order.push(`beginSyncRun(${JSON.stringify(runId)})`);
+      });
+      vi.mocked(syncManager.reconcileStaleShortcuts).mockImplementation(async () => {
+        order.push("reconcile");
+      });
+      vi.mocked(backend.startSync).mockImplementation(async () => {
+        order.push("startSync");
+        return { success: true, message: "" };
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const toggle = container.querySelector('[data-testid="toggle-input"]') as HTMLInputElement | null;
+      fireEvent.click(toggle!);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // The stale run id must be cleared (beginSyncRun("") → null) before the
+      // backend mints the new run's id, so a Cancel in the fetch window sends
+      // "" → unconditional cancel.
+      expect(order).toEqual(['beginSyncRun("")', "reconcile", "startSync"]);
+    });
+
     it("reconciles stale shortcuts BEFORE syncPreview (preview path) (#1046)", async () => {
       const order: string[] = [];
       vi.mocked(syncManager.reconcileStaleShortcuts).mockImplementation(async () => {
@@ -1262,6 +1291,37 @@ describe("MainPage", () => {
       // Cancel is scoped to the active run id captured frontend-side (#1198) —
       // getActiveRunId() returns "run-active" in this suite's syncManager mock.
       expect(vi.mocked(backend.cancelSync)).toHaveBeenCalledWith("run-active");
+    });
+
+    it("cancel in the pre-sync_plan window (no run id captured) cancels unconditionally (#1198 C1)", async () => {
+      // The "Fetching library…" window: the sync trigger cleared the captured
+      // run id (clearActiveRunId) and the backend hasn't emitted sync_plan yet,
+      // so getActiveRunId() is null. handleCancel must send "" → the backend's
+      // unconditional cancel path, NOT a stale id that would be ignored as a
+      // cross-run mismatch and silently drop the user's genuine cancel.
+      vi.mocked(syncManager.getActiveRunId).mockReturnValue(null);
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "fetching",
+        message: "Fetching library...",
+      });
+      vi.mocked(backend.cancelSync).mockResolvedValue({
+        success: true,
+        message: "cancelled-msg",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const cancel = buttonByExactText(container, "Cancel Sync");
+      expect(cancel).not.toBeNull();
+      await act(async () => {
+        fireEvent.click(cancel!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Non-vacuous: "" (not "run-active") proves the null run id maps to the
+      // unconditional cancel. A regression that kept the stale id would send a
+      // non-empty string and the backend would ignore it.
+      expect(vi.mocked(backend.cancelSync)).toHaveBeenCalledWith("");
     });
 
     it("cancelSync success: surfaces result.message in the status field (un-gated)", async () => {

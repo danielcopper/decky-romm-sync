@@ -56,13 +56,23 @@ export function requestSyncCancel(): void {
 }
 
 /**
- * Mark a fresh sync run started: capture its ``run_id`` and clear the cancel
- * flag. Called from the ``sync_plan`` listener, which fires exactly once per
- * run before any unit. The per-unit handler also clears ``_cancelRequested``,
- * but that handler never runs for an incrementally-SKIPPED unit — so a
- * skip-only run would otherwise carry a stale ``_cancelRequested`` from a prior
- * cancelled run (the #1198 adjacent H4 defect). Resetting here, once per run,
- * is the reliable reset.
+ * Set the captured run id and clear the cancel flag, marking a fresh run.
+ *
+ * Two callers, two roles:
+ *
+ * - The ``sync_plan`` listener passes the real ``run_id`` — sync_plan fires
+ *   once per run before any unit, so this is the per-run cancel-flag reset that
+ *   the per-unit handler can't be relied on for (a skip-only run never runs
+ *   that handler and would otherwise carry a stale ``_cancelRequested`` from a
+ *   prior cancelled run — the #1198 adjacent H4 defect).
+ * - The sync trigger (``handleSync`` / ``handleApply``) passes ``""`` at the
+ *   TOP, before the backend mints the new run's id. That clears the *previous*
+ *   run's captured id (``"" → null``) so a Cancel in the "Fetching library…"
+ *   window (reconcile + build_work_queue paginate for seconds, before
+ *   sync_plan) sends ``""`` → the backend's unconditional-cancel path, not a
+ *   stale id the backend would reject as a cross-run mismatch and drop (#1198).
+ *   It can't reintroduce the cross-run race: an *already-fired* stale cancel
+ *   carried its own run id as a bound argument, unaffected by this reset.
  */
 export function beginSyncRun(runId: string): void {
   _activeRunId = runId || null;
@@ -83,8 +93,10 @@ export function getActiveRunId(): string | null {
  * per-unit ``_cancelRequested = false`` reset isn't narrowed to a constant
  * ``false`` by control-flow analysis — the flag is flipped externally by
  * {@link requestSyncCancel} during the awaited work, which TS can't see.
+ * Exported so tests can observe the per-run reset on the skip-only path
+ * (``sync_plan`` with no following ``sync_apply_unit``).
  */
-function isCancelRequested(): boolean {
+export function isCancelRequested(): boolean {
   return _cancelRequested;
 }
 

@@ -40,7 +40,7 @@ import {
   onSaveSortMigrationChange,
   setSaveSortMigrationStatus,
 } from "../utils/saveSortMigrationStore";
-import { reconcileStaleShortcuts, requestSyncCancel, getActiveRunId } from "../utils/syncManager";
+import { reconcileStaleShortcuts, requestSyncCancel, getActiveRunId, beginSyncRun } from "../utils/syncManager";
 import { setVersionError } from "../utils/connectionState";
 import { retroDeckBanner, type RetroDeckBanner } from "../utils/retrodeckHealth";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
@@ -287,6 +287,13 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   };
 
   const handleSync = async () => {
+    // Clear any captured run id from a prior run BEFORE the backend mints this
+    // run's id (beginSyncRun("") → null). The Cancel button goes live with
+    // setSyncing(true) below, but sync_plan (which re-captures the new id) only
+    // fires after reconcile + build_work_queue paginate the library (seconds).
+    // A Cancel in that window must send "" → the backend's unconditional cancel,
+    // not a stale id that would be ignored as a cross-run mismatch (#1198).
+    beginSyncRun("");
     // Optimistically disable the button and show the in-progress UI before
     // the backend's first sync_progress event lands — writing running:true
     // into the MODULE store (the single source of truth the subscription
@@ -330,6 +337,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const handleApply = async () => {
     if (!preview) return;
     const previewId = preview.preview_id;
+    // Same window as handleSync: syncApplyDelta mints a fresh run id and emits
+    // sync_plan only later, so clear the stale captured id first (beginSyncRun("")
+    // → null) so a Cancel in the apply window cancels unconditionally rather than
+    // being ignored (#1198).
+    beginSyncRun("");
     setPreview(null);
     setLoading(true);
     setSyncing(true);
