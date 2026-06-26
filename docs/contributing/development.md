@@ -8,6 +8,11 @@ Guide for setting up a development environment and contributing to decky-romm-sy
 - Git
 - A Steam Deck or Linux PC with [Decky Loader](https://decky.xyz/) installed (for testing)
 
+> **On Windows, develop inside [WSL2](https://learn.microsoft.com/windows/wsl/install).** The plugin targets Linux —
+> some adapters import Unix-only modules (e.g. `fcntl`), a few dev dependencies have no Windows wheel, and CI runs on
+> Linux. Native Windows is not supported for running the test suite; in a WSL2 Linux distro the same `mise install` /
+> `mise run setup` / `mise run test` work unchanged.
+
 ## Setup
 
 ```bash
