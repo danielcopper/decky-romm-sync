@@ -39,6 +39,13 @@ export interface SyncProgress {
   step?: number;
   /** Coarse: total units. ``0`` means indeterminate. */
   totalSteps?: number;
+  /**
+   * Backend run identity for the in-flight sync, stamped from the backend's
+   * ``current_sync_id``. ``""`` when no run is in flight. The authoritative
+   * source a Cancel click scopes itself to — the frontend no longer mirrors a
+   * separate run id (#1202).
+   */
+  runId?: string;
 }
 
 export interface SyncStats {

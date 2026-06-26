@@ -18,7 +18,7 @@ import { emitDeckyEvent, deckyEventListenerCount } from "./test-utils/decky-api-
 import { getSettingsResetNotice, getAllPlaytime, getAppIdRomIdMap, getInstalledRelaunchOptions } from "./api/backend";
 import { getSettingsResetState, setSettingsResetState } from "./utils/settingsResetStore";
 import { recordSyncCreated, resetSyncDelta } from "./utils/syncDeltaStore";
-import { beginSyncRun } from "./utils/syncManager";
+import { resetSyncCancel } from "./utils/syncManager";
 import type { DownloadCompleteEvent, SyncPlanData, SyncStaleData } from "./types";
 
 vi.mock("./patches/gameDetailPatch", () => ({
@@ -42,7 +42,7 @@ vi.mock("./utils/sessionManager", () => ({
 }));
 vi.mock("./utils/syncManager", () => ({
   initUnitSyncManager: vi.fn(() => () => {}),
-  beginSyncRun: vi.fn(),
+  resetSyncCancel: vi.fn(),
 }));
 
 // Observe the collection create/update + stale-cleanup calls fired by
@@ -616,18 +616,18 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
     resetSyncDelta();
   });
 
-  it("sync_plan begins the run frontend-side — captures run id + resets cancel (#1198)", async () => {
+  it("sync_plan resets the per-run cancel flag (#1198)", async () => {
     const plugin = pluginFactory();
-    vi.mocked(beginSyncRun).mockClear();
+    vi.mocked(resetSyncCancel).mockClear();
 
     act(() => {
       emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-xyz", units: [], total_units: 1, total_roms: 1 });
     });
 
-    // The listener routes the run id into beginSyncRun, which both captures it
-    // (for a run-scoped cancel) and clears the per-run cancel flag — reliable
-    // even on a skip-only run where no per-unit handler fires.
-    expect(vi.mocked(beginSyncRun)).toHaveBeenCalledWith("run-xyz");
+    // The listener clears the per-run cancel flag once per run, before any unit
+    // — reliable even on a skip-only run where no per-unit handler fires. Run
+    // identity for a Cancel click now comes from the sync_progress store (#1202).
+    expect(vi.mocked(resetSyncCancel)).toHaveBeenCalled();
     plugin.onDismount();
   });
 

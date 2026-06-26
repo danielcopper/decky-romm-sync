@@ -40,7 +40,7 @@ import {
   onSaveSortMigrationChange,
   setSaveSortMigrationStatus,
 } from "../utils/saveSortMigrationStore";
-import { reconcileStaleShortcuts, requestSyncCancel, getActiveRunId, beginSyncRun } from "../utils/syncManager";
+import { reconcileStaleShortcuts, requestSyncCancel, isCancelRequested, resetSyncCancel } from "../utils/syncManager";
 import { setVersionError } from "../utils/connectionState";
 import { retroDeckBanner, type RetroDeckBanner } from "../utils/retrodeckHealth";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
@@ -176,6 +176,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [connected, setConnected] = useState<boolean | null>(null);
   const versionError = useVersionError();
   const [syncing, setSyncing] = useState(false);
+  // Disarmed "Cancelling…" state during the backend's RUNNING→CANCELLING→IDLE
+  // drain. The Sync/Cancel button stays disabled until the terminal
+  // sync_progress stage re-arms it, so a quick re-press can't hit the
+  // sync_in_progress reject and look like an instant finish (#1202, RC-B).
+  const [cancelling, setCancelling] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [status, setStatus] = useState("");
   const [preview, setPreview] = useState<SyncPreview | null>(null);
@@ -251,6 +256,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       if (isTerminalStage(progress.stage)) {
         setSyncing(false);
         setLoading(false);
+        // True terminal reached — re-arm the button out of any "Cancelling…"
+        // drain state (#1202, RC-B).
+        setCancelling(false);
         showTransientStatus(progress.message || "Sync finished");
         getSyncStats()
           .then(setStats)
@@ -283,23 +291,22 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     setStatus(msg);
     setSyncing(false);
     setLoading(false);
+    setCancelling(false);
     setStoredSyncProgress({ running: false, stage: "" });
   };
 
   const handleSync = async () => {
-    // Clear any captured run id from a prior run BEFORE the backend mints this
-    // run's id (beginSyncRun("") → null). The Cancel button goes live with
-    // setSyncing(true) below, but sync_plan (which re-captures the new id) only
-    // fires after reconcile + build_work_queue paginate the library (seconds).
-    // A Cancel in that window must send "" → the backend's unconditional cancel,
-    // not a stale id that would be ignored as a cross-run mismatch (#1198).
-    beginSyncRun("");
+    // Clear any stale cancel flag from a prior run BEFORE this sync starts, so a
+    // fresh sync never begins pre-cancelled (#1198). Run identity for a Cancel
+    // click comes from the backend-fed sync_progress store now (#1202).
+    resetSyncCancel();
     // Optimistically disable the button and show the in-progress UI before
     // the backend's first sync_progress event lands — writing running:true
     // into the MODULE store (the single source of truth the subscription
     // reads), not a shadowing local state.
     setLoading(true);
     setSyncing(true);
+    setCancelling(false);
     setStatus("");
     setPreview(null);
     setStoredSyncProgress({ running: true, stage: "fetching", message: "Fetching library..." });
@@ -322,13 +329,24 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         return;
       }
       const result = await syncPreview();
-      if (result.success) {
-        setPreview(result);
-        setSyncing(false);
-        setLoading(false);
-      } else {
+      if (!result.success) {
         abortOptimisticSync(result.message || "Preview failed");
+        return;
       }
+      // RC-CANCEL-PREVIEW (#1202): a Cancel can land in the sub-second window
+      // while syncPreview() is in flight. The backend returns a cancelled
+      // result for a preview cancelled mid-loop, but a preview that finished
+      // just before the cancel still resolves success — re-check the flag
+      // before showing the phantom "Apply Sync". On a cancel, clear the flag
+      // (so the next sync doesn't start pre-cancelled) and abort to idle.
+      if (isCancelRequested()) {
+        resetSyncCancel();
+        abortOptimisticSync("Sync cancelled");
+        return;
+      }
+      setPreview(result);
+      setSyncing(false);
+      setLoading(false);
     } catch {
       abortOptimisticSync("Failed to start sync");
     }
@@ -337,14 +355,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const handleApply = async () => {
     if (!preview) return;
     const previewId = preview.preview_id;
-    // Same window as handleSync: syncApplyDelta mints a fresh run id and emits
-    // sync_plan only later, so clear the stale captured id first (beginSyncRun("")
-    // → null) so a Cancel in the apply window cancels unconditionally rather than
-    // being ignored (#1198).
-    beginSyncRun("");
+    // Clear any stale cancel flag before the apply run starts (#1198). A Cancel
+    // in the apply window reads "" from the sync_progress store until the
+    // backend stamps the run id, which the backend treats as an unconditional
+    // cancel (#1202).
+    resetSyncCancel();
     setPreview(null);
     setLoading(true);
     setSyncing(true);
+    setCancelling(false);
     setStoredSyncProgress({ running: true, stage: "applying", message: "Applying changes..." });
     try {
       const result = await syncApplyDelta(previewId);
@@ -368,6 +387,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   };
 
   const finishCancelWithStatus = (msg: string) => {
+    setCancelling(false);
     setSyncing(false);
     setLoading(false);
     showTransientStatus(msg);
@@ -380,14 +400,23 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       setLoading(false);
       return;
     }
+    // RC-B (#1202): do NOT re-arm the Sync button here. The backend drains
+    // RUNNING → CANCELLING → IDLE asynchronously; flipping back to enabled now
+    // lets a quick re-press hit the sync_in_progress reject and look like an
+    // "instant finish". Disarm into the "Cancelling…" state and wait for the
+    // terminal sync_progress stage (the store subscription) to re-arm.
+    setCancelling(true);
+    requestSyncCancel();
     try {
-      requestSyncCancel();
-      // Scope the cancel to the active run so a click meant for this run can't
-      // abort a fresh run that started in the meantime (#1198). An empty string
-      // when no run id is captured yet → backend cancels unconditionally.
-      const result = await cancelSync(getActiveRunId() ?? "");
-      finishCancelWithStatus(result.message);
+      // Scope the cancel to the active run via the backend-fed run id; "" in the
+      // pre-progress window → the backend's unconditional cancel (#1202).
+      await cancelSync(getSyncProgress().runId ?? "");
+      // Success: stay disarmed; the terminal stage tears the UI down and
+      // re-arms, surfacing the backend's final message — no status here, so no
+      // instant-finish flash during the drain.
     } catch {
+      // The cancel call itself failed — no terminal will arrive from a cancel
+      // that never landed, so re-arm and surface the failure for a retry.
       finishCancelWithStatus("Failed to cancel sync");
     }
   };
@@ -510,13 +539,14 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         <PanelSectionRow>
           <ButtonItem
             layout="below"
+            disabled={cancelling}
             onClick={() => {
               detach(handleCancel());
             }}
             // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
             onFocus={scrollToTop}
           >
-            Cancel Sync
+            {cancelling ? "Cancelling…" : "Cancel Sync"}
           </ButtonItem>
         </PanelSectionRow>
       </>

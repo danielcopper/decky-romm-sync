@@ -25,7 +25,7 @@ vi.mock("./steamShortcuts", () => ({
   getLiveRomMShortcutAppIds: vi.fn(),
 }));
 
-import { initUnitSyncManager, requestSyncCancel, beginSyncRun, getActiveRunId, isCancelRequested } from "./syncManager";
+import { initUnitSyncManager, requestSyncCancel, resetSyncCancel, isCancelRequested } from "./syncManager";
 
 function unit(launchOptions: string, runId = "run-1"): SyncApplyUnitData {
   return {
@@ -157,7 +157,7 @@ describe("syncManager — once-per-run existing-shortcut scan cache", () => {
   });
 });
 
-describe("syncManager — run-id capture + per-run cancel reset (#1198)", () => {
+describe("syncManager — per-run cancel reset (#1198)", () => {
   beforeEach(() => {
     setLaunchOptionsConfirmed.mockClear();
     setLaunchOptionsConfirmed.mockResolvedValue(true);
@@ -167,39 +167,19 @@ describe("syncManager — run-id capture + per-run cancel reset (#1198)", () => 
     vi.mocked(backend.reportUnitResults).mockClear();
   });
 
-  it("beginSyncRun captures the run id for getActiveRunId", () => {
-    beginSyncRun("run-captured");
-    expect(getActiveRunId()).toBe("run-captured");
-  });
-
-  it("beginSyncRun(empty) maps to null so the backend cancels unconditionally", () => {
-    beginSyncRun("");
-    expect(getActiveRunId()).toBeNull();
-  });
-
-  it("a sync_apply_unit event also captures its run id", async () => {
-    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
-    initUnitSyncManager();
-    await act(async () => {
-      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-from-unit"));
-      await flush(120);
-    });
-    expect(getActiveRunId()).toBe("run-from-unit");
-  });
-
-  it("beginSyncRun clears a stale cancel on the skip-only path (no sync_apply_unit)", async () => {
-    // Stale cancel from a prior (cancelled) run. beginSyncRun is what the
+  it("resetSyncCancel clears a stale cancel on the skip-only path (no sync_apply_unit)", () => {
+    // Stale cancel from a prior (cancelled) run. resetSyncCancel is what the
     // sync_plan listener calls, and sync_plan fires once per run BEFORE any
     // unit — so even a run whose only work is an incremental SKIP (no
     // sync_apply_unit, hence no per-unit handler reset) must start with a clean
     // flag (#1198). This exercises that exact path: NO sync_apply_unit is
-    // dispatched, so the only thing that can clear the flag is beginSyncRun.
-    // Non-vacuous: if beginSyncRun's `_cancelRequested = false` line were
+    // dispatched, so the only thing that can clear the flag is resetSyncCancel.
+    // Non-vacuous: if resetSyncCancel's `_cancelRequested = false` line were
     // removed, isCancelRequested() would still be true here and this fails.
     requestSyncCancel();
     expect(isCancelRequested()).toBe(true);
 
-    beginSyncRun("run-skip-only");
+    resetSyncCancel();
 
     expect(isCancelRequested()).toBe(false);
   });

@@ -31,16 +31,6 @@ let _cancelRequested = false;
 let _isUnitRunning = false;
 
 /**
- * Run id of the sync currently in flight, captured from the backend
- * ``sync_plan`` / ``sync_apply_unit`` events. Passed back on cancel so a
- * Cancel click is scoped to the active run — a click meant for run N can land
- * after run N finalized and run N+1 started, and an unscoped cancel would
- * wrongly abort run N+1 (#1198). ``null`` before any run has started; the
- * backend then cancels unconditionally (the safety case).
- */
-let _activeRunId: string | null = null;
-
-/**
  * Once-per-run cache of the existing-shortcut scan. The backend emits one
  * ``sync_apply_unit`` event per unit but the scan only needs to run once per
  * run: every pre-existing RomM shortcut is captured at the first unit, and the
@@ -56,36 +46,22 @@ export function requestSyncCancel(): void {
 }
 
 /**
- * Set the captured run id and clear the cancel flag, marking a fresh run.
+ * Clear the per-run cancel flag at the start of a run.
  *
- * Two callers, two roles:
+ * Two callers:
  *
- * - The ``sync_plan`` listener passes the real ``run_id`` — sync_plan fires
- *   once per run before any unit, so this is the per-run cancel-flag reset that
- *   the per-unit handler can't be relied on for (a skip-only run never runs
- *   that handler and would otherwise carry a stale ``_cancelRequested`` from a
- *   prior cancelled run — the #1198 adjacent H4 defect).
- * - The sync trigger (``handleSync`` / ``handleApply``) passes ``""`` at the
- *   TOP, before the backend mints the new run's id. That clears the *previous*
- *   run's captured id (``"" → null``) so a Cancel in the "Fetching library…"
- *   window (reconcile + build_work_queue paginate for seconds, before
- *   sync_plan) sends ``""`` → the backend's unconditional-cancel path, not a
- *   stale id the backend would reject as a cross-run mismatch and drop (#1198).
- *   It can't reintroduce the cross-run race: an *already-fired* stale cancel
- *   carried its own run id as a bound argument, unaffected by this reset.
+ * - The ``sync_plan`` listener — sync_plan fires once per run before any unit,
+ *   so this is the per-run reset the per-unit handler can't be relied on for (a
+ *   skip-only run never runs that handler and would otherwise carry a stale
+ *   ``_cancelRequested`` from a prior cancelled run — the #1198 H4 defect).
+ * - The sync trigger (``handleSync`` / ``handleApply``) at the TOP, so a fresh
+ *   sync never starts pre-cancelled by a flag left set from a prior run.
+ *
+ * Run identity is no longer mirrored frontend-side: a Cancel click reads the
+ * backend-fed run id from the ``sync_progress`` store (#1202).
  */
-export function beginSyncRun(runId: string): void {
-  _activeRunId = runId || null;
+export function resetSyncCancel(): void {
   _cancelRequested = false;
-}
-
-/**
- * Run id of the sync currently in flight, or ``null`` before any run has
- * started. Passed to ``cancelSync`` so the backend scopes the cancel to the
- * active run (#1198).
- */
-export function getActiveRunId(): string | null {
-  return _activeRunId;
 }
 
 /**
@@ -270,10 +246,6 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
       }
 
       _cancelRequested = false;
-      // Capture the run id here too — ``sync_apply_unit`` always carries it, so
-      // a Cancel click resolves the right run even if the ``sync_plan`` capture
-      // was missed (#1198).
-      _activeRunId = data.run_id || _activeRunId;
       const romIdToAppId: Record<string, number> = {};
       const artworkTargets: ArtworkTarget[] = [];
 

@@ -112,8 +112,8 @@ import * as saveSortMigrationStore from "../utils/saveSortMigrationStore";
 vi.mock("../utils/syncManager", () => ({
   requestSyncCancel: vi.fn(),
   reconcileStaleShortcuts: vi.fn().mockResolvedValue(undefined),
-  getActiveRunId: vi.fn().mockReturnValue("run-active"),
-  beginSyncRun: vi.fn(),
+  isCancelRequested: vi.fn().mockReturnValue(false),
+  resetSyncCancel: vi.fn(),
 }));
 
 vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
@@ -273,9 +273,10 @@ describe("MainPage", () => {
     // Re-stub useVersionError (resetAllMocks wiped it).
     vi.mocked(useVersionError).mockReturnValue(null);
 
-    // Re-stub getActiveRunId (resetAllMocks wiped the module-mock return value).
-    // handleCancel reads it to scope the cancel to the active run (#1198).
-    vi.mocked(syncManager.getActiveRunId).mockReturnValue("run-active");
+    // Re-stub isCancelRequested (resetAllMocks wiped the module-mock return
+    // value). Defaults to false so the normal preview flow runs; the
+    // RC-CANCEL-PREVIEW test flips it true (#1202).
+    vi.mocked(syncManager.isCancelRequested).mockReturnValue(false);
 
     // Re-stub migrationStore impls.
     vi.mocked(migrationStore.getMigrationState).mockImplementation(() => currentMigrationState);
@@ -1032,6 +1033,42 @@ describe("MainPage", () => {
       expect(fieldLabels(container)).toContain("Failed to start sync");
     });
 
+    it("aborts to idle (no phantom 'Apply Sync') when a cancel landed during syncPreview (#1202 RC-CANCEL-PREVIEW)", async () => {
+      // syncPreview resolves SUCCESS with changes (normally → Apply Sync), but a
+      // Cancel landed in-flight so isCancelRequested() is true at the
+      // post-resolve re-check. The preview must NOT show; the UI returns to idle
+      // and the stale flag is cleared so the next sync isn't pre-cancelled.
+      vi.mocked(syncManager.isCancelRequested).mockReturnValue(true);
+      vi.mocked(backend.syncPreview).mockResolvedValue({
+        success: true,
+        summary: {
+          new_count: 5,
+          changed_count: 0,
+          unchanged_count: 0,
+          remove_count: 0,
+          disabled_platform_remove_count: 0,
+        },
+        new_names: ["a", "b"],
+        changed_names: [],
+        preview_id: "preview-cancel",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // No phantom preview — Apply Sync absent, back to idle (Sync Library back).
+      expect(buttonByExactText(container, "Apply Sync")).toBeNull();
+      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
+      // Non-vacuous: the abort surfaced the "Sync cancelled" status — only the
+      // RC-CANCEL-PREVIEW branch produces idle + that status after a SUCCESS
+      // preview, and the stale cancel flag was cleared for the next run.
+      expect(fieldLabels(container)).toContain("Sync cancelled");
+      expect(vi.mocked(syncManager.resetSyncCancel)).toHaveBeenCalled();
+    });
+
     it("with skipPreview=true: startSync success bypasses preview entirely", async () => {
       vi.mocked(backend.startSync).mockResolvedValue({ success: true, message: "" });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
@@ -1077,10 +1114,10 @@ describe("MainPage", () => {
       expect(order).toEqual(["reconcile", "startSync"]);
     });
 
-    it("clears the captured run id BEFORE reconcile/startSync (#1198 C1)", async () => {
+    it("resets the stale cancel flag BEFORE reconcile/startSync (#1198/#1202)", async () => {
       const order: string[] = [];
-      vi.mocked(syncManager.beginSyncRun).mockImplementation((runId: string) => {
-        order.push(`beginSyncRun(${JSON.stringify(runId)})`);
+      vi.mocked(syncManager.resetSyncCancel).mockImplementation(() => {
+        order.push("resetSyncCancel");
       });
       vi.mocked(syncManager.reconcileStaleShortcuts).mockImplementation(async () => {
         order.push("reconcile");
@@ -1099,10 +1136,9 @@ describe("MainPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      // The stale run id must be cleared (beginSyncRun("") → null) before the
-      // backend mints the new run's id, so a Cancel in the fetch window sends
-      // "" → unconditional cancel.
-      expect(order).toEqual(['beginSyncRun("")', "reconcile", "startSync"]);
+      // The stale cancel flag must be cleared before the run starts, so a fresh
+      // sync never begins pre-cancelled.
+      expect(order).toEqual(["resetSyncCancel", "reconcile", "startSync"]);
     });
 
     it("reconciles stale shortcuts BEFORE syncPreview (preview path) (#1046)", async () => {
@@ -1267,12 +1303,15 @@ describe("MainPage", () => {
   // I. Sync flow — handleCancel (in-flight Cancel Sync click)
   // ===========================================================================
   describe("handleCancel", () => {
-    it("clicking the in-flight 'Cancel Sync' button calls requestSyncCancel + cancelSync", async () => {
-      // Pre-arm an in-flight sync via the backend-authoritative mount query.
+    it("clicking 'Cancel Sync' requests cancel, cancels the active run, and disarms to 'Cancelling…' (#1202)", async () => {
+      // Pre-arm an in-flight sync via the backend-authoritative mount query. The
+      // run id rides on the sync_progress store (runId), which handleCancel
+      // reads to scope the cancel — no separate frontend run-id mirror (#1202).
       vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
         stage: "applying",
         message: "Working",
+        runId: "run-x",
       });
       vi.mocked(backend.cancelSync).mockResolvedValue({
         success: true,
@@ -1288,22 +1327,24 @@ describe("MainPage", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(syncManager.requestSyncCancel)).toHaveBeenCalled();
-      // Cancel is scoped to the active run id captured frontend-side (#1198) —
-      // getActiveRunId() returns "run-active" in this suite's syncManager mock.
-      expect(vi.mocked(backend.cancelSync)).toHaveBeenCalledWith("run-active");
+      // Scoped to the active run id sourced from the sync_progress store (#1202).
+      expect(vi.mocked(backend.cancelSync)).toHaveBeenCalledWith("run-x");
+      // RC-B: disarmed into a disabled "Cancelling…" — NOT re-armed to idle.
+      const cancelling = buttonByExactText(container, "Cancelling…");
+      expect(cancelling).not.toBeNull();
+      expect(cancelling!.disabled).toBe(true);
+      expect(buttonByExactText(container, "Sync Library")).toBeNull();
     });
 
-    it("cancel in the pre-sync_plan window (no run id captured) cancels unconditionally (#1198 C1)", async () => {
-      // The "Fetching library…" window: the sync trigger cleared the captured
-      // run id (clearActiveRunId) and the backend hasn't emitted sync_plan yet,
-      // so getActiveRunId() is null. handleCancel must send "" → the backend's
-      // unconditional cancel path, NOT a stale id that would be ignored as a
-      // cross-run mismatch and silently drop the user's genuine cancel.
-      vi.mocked(syncManager.getActiveRunId).mockReturnValue(null);
+    it("cancel in the pre-progress window (no run id yet) cancels unconditionally (#1202)", async () => {
+      // The "Fetching library…" window: the backend hasn't stamped a run id into
+      // sync_progress yet, so the store's runId is empty. handleCancel must send
+      // "" → the backend's unconditional cancel path, NOT a stale id.
       vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
         stage: "fetching",
         message: "Fetching library...",
+        // no runId — pre-progress window
       });
       vi.mocked(backend.cancelSync).mockResolvedValue({
         success: true,
@@ -1318,20 +1359,17 @@ describe("MainPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      // Non-vacuous: "" (not "run-active") proves the null run id maps to the
-      // unconditional cancel. A regression that kept the stale id would send a
-      // non-empty string and the backend would ignore it.
+      // Non-vacuous: "" proves the empty/absent run id maps to the unconditional
+      // cancel. A regression that fabricated a stale id would send non-empty.
       expect(vi.mocked(backend.cancelSync)).toHaveBeenCalledWith("");
     });
 
-    it("cancelSync success: surfaces result.message in the status field (un-gated)", async () => {
-      // #733 fix: handleCancel flips syncing/loading off before setting status,
-      // so the `status && !syncing && !preview` gate un-masks the cancel
-      // message.
+    it("stays disarmed ('Cancelling…') during the drain — no status flash — then re-arms on the terminal CANCELLED stage (#1202 RC-B)", async () => {
       vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
         stage: "applying",
         message: "Working",
+        runId: "run-x",
       });
       vi.mocked(backend.cancelSync).mockResolvedValue({
         success: true,
@@ -1344,12 +1382,25 @@ describe("MainPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      // Cancel-specific message visible — Cancel Sync button gone (syncing=false).
-      expect(fieldLabels(container)).toContain("cancelled-msg");
-      expect(buttonByExactText(container, "Cancel Sync")).toBeNull();
+      // Drain: disarmed to "Cancelling…", Sync Library NOT back, and the
+      // cancelSync result message is NOT surfaced — no instant-finish flash.
+      expect(buttonByExactText(container, "Cancelling…")).not.toBeNull();
+      expect(buttonByExactText(container, "Sync Library")).toBeNull();
+      expect(fieldLabels(container)).not.toContain("cancelled-msg");
+
+      // Terminal CANCELLED sync_progress lands via the module store → re-arm.
+      await act(async () => {
+        setSyncProgress({ running: false, stage: "cancelled", message: "Sync cancelled" });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
+      expect(buttonByExactText(container, "Cancelling…")).toBeNull();
+      // The terminal stage's message is surfaced (not the cancelSync result's).
+      expect(fieldLabels(container)).toContain("Sync cancelled");
     });
 
-    it("cancelSync success: status auto-clears after 8s", async () => {
+    it("the terminal cancel message auto-clears after 8s", async () => {
       vi.useFakeTimers({
         toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"],
       });
@@ -1358,6 +1409,7 @@ describe("MainPage", () => {
           running: true,
           stage: "applying",
           message: "Working",
+          runId: "run-x",
         });
         vi.mocked(backend.cancelSync).mockResolvedValue({
           success: true,
@@ -1373,24 +1425,30 @@ describe("MainPage", () => {
           await Promise.resolve();
           await Promise.resolve();
         });
-        expect(fieldLabels(container)).toContain("cancelled-msg");
-        // showTransientStatus arms an 8s auto-clear timer.
+        // Terminal stage surfaces the message + arms the 8s auto-clear.
+        await act(async () => {
+          setSyncProgress({ running: false, stage: "cancelled", message: "Sync cancelled" });
+          await Promise.resolve();
+        });
+        expect(fieldLabels(container)).toContain("Sync cancelled");
         await act(async () => {
           await vi.advanceTimersByTimeAsync(8000);
         });
-        expect(fieldLabels(container)).not.toContain("cancelled-msg");
+        expect(fieldLabels(container)).not.toContain("Sync cancelled");
       } finally {
         vi.useRealTimers();
       }
     });
 
-    it("cancelSync rejection: surfaces 'Failed to cancel sync' in the status field", async () => {
-      // #733 fix: catch branch now uses the same cleanup-and-status helper, so
-      // the failure message is visible to the user.
+    it("cancelSync rejection: re-arms and surfaces 'Failed to cancel sync' (no terminal will arrive)", async () => {
+      // The cancel call itself fails — no backend terminal stage will follow, so
+      // handleCancel re-arms (out of "Cancelling…") and surfaces the failure so
+      // the user can retry.
       vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
         stage: "applying",
         message: "Working",
+        runId: "run-x",
       });
       vi.mocked(backend.cancelSync).mockRejectedValue(new Error("net"));
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
@@ -1401,9 +1459,10 @@ describe("MainPage", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(backend.cancelSync)).toHaveBeenCalled();
-      // Status field un-gated and shows the failure message.
+      // Status field un-gated and shows the failure message; re-armed to idle.
       expect(fieldLabels(container)).toContain("Failed to cancel sync");
       expect(buttonByExactText(container, "Cancel Sync")).toBeNull();
+      expect(buttonByExactText(container, "Cancelling…")).toBeNull();
     });
 
     it("when a preview is showing: clicking Cancel (non-zero preview) routes through handleDismiss", async () => {

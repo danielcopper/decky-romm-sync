@@ -9,7 +9,12 @@
  *
  * Read by:
  *   - MainPage.tsx, which subscribes via onSyncProgressChange and re-renders
- *     on every notify (no setInterval polling).
+ *     on every notify (no setInterval polling), and reads ``runId`` to scope a
+ *     Cancel click to the active run (#1202).
+ *
+ * The ``runId`` field is fed straight from the backend ``sync_progress`` payload
+ * (the persistent listener in index.tsx passes the whole event through), so it
+ * is the single source of run identity frontend-side.
  */
 
 import type { SyncProgress } from "../types";
@@ -20,6 +25,7 @@ let _progress: SyncProgress = {
   current: 0,
   total: 0,
   message: "",
+  runId: "",
 };
 let _listeners: Array<() => void> = [];
 
