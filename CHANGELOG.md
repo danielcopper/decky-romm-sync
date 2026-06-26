@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.24.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.23.0...decky-romm-sync-v0.24.0) (2026-06-26)
+
+
+### Features
+
+* route PS2/PS3/etc... games to standalone emulators ([#1208](https://github.com/danielcopper/decky-romm-sync/issues/1208)) ([c028a02](https://github.com/danielcopper/decky-romm-sync/commit/c028a02400ed7e40cffb6c03df0f417ae9f607e5))
+
+
+### Bug Fixes
+
+* **dev:** drop stale root-level defaults snapshots on deploy ([#1211](https://github.com/danielcopper/decky-romm-sync/issues/1211)) ([cc721fc](https://github.com/danielcopper/decky-romm-sync/commit/cc721fcc3137f47eb0c6681e352df59f13e639b9))
+* **library:** reconcile Steam-UI-deleted shortcuts by unbinding dead appIds at sync start ([#1197](https://github.com/danielcopper/decky-romm-sync/issues/1197)) ([23d3336](https://github.com/danielcopper/decky-romm-sync/commit/23d3336dcccbe4fd6a8cf0c889220ff6964bdaa8))
+* **plugin:** remove the inert _root flag from plugin.json ([#1187](https://github.com/danielcopper/decky-romm-sync/issues/1187)) ([0e753eb](https://github.com/danielcopper/decky-romm-sync/commit/0e753eb36b9fcb9be4f30ccb950477ecafd23a71)), closes [#1157](https://github.com/danielcopper/decky-romm-sync/issues/1157)
+* **saves:** classify heartbeat and registration errors instead of masking as offline ([#1191](https://github.com/danielcopper/decky-romm-sync/issues/1191)) ([ea4ffcf](https://github.com/danielcopper/decky-romm-sync/commit/ea4ffcfb54e485da7e1428fcf0e4b4fe2795a1b7))
+* **saves:** gate sync_all_saves on slot confirmation to avoid auto-uploading unconfigured ROMs ([#1195](https://github.com/danielcopper/decky-romm-sync/issues/1195)) ([e45c98e](https://github.com/danielcopper/decky-romm-sync/commit/e45c98e35af334244229bf6945eb94e4543e504f)), closes [#1055](https://github.com/danielcopper/decky-romm-sync/issues/1055)
+* **saves:** roll back the in-memory device_name on a failed settings persist ([#1194](https://github.com/danielcopper/decky-romm-sync/issues/1194)) ([44b352b](https://github.com/danielcopper/decky-romm-sync/commit/44b352b23912b51314f2d70c84306724d9782724))
+* **sync:** scope cancel_sync to the active run so a stale cancel can't abort a fresh sync ([#1200](https://github.com/danielcopper/decky-romm-sync/issues/1200)) ([c6a7f47](https://github.com/danielcopper/decky-romm-sync/commit/c6a7f475b27dc2e62b634ec86352d8b1fe8dd514))
+* **sync:** validate run/unit identity on unit-result acks and stop sending after cancel ([#1196](https://github.com/danielcopper/decky-romm-sync/issues/1196)) ([5b17f59](https://github.com/danielcopper/decky-romm-sync/commit/5b17f598eea457673441e7607f3113d0641f5b21))
+* **ui:** apply RomM overview metadata with readiness retry ([#1203](https://github.com/danielcopper/decky-romm-sync/issues/1203)) ([#1206](https://github.com/danielcopper/decky-romm-sync/issues/1206)) ([8142a61](https://github.com/danielcopper/decky-romm-sync/commit/8142a6149a4b2edaae3148b6166149944c8f9848))
+
 ## [0.23.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.22.1...decky-romm-sync-v0.23.0) (2026-06-25)
 
 
