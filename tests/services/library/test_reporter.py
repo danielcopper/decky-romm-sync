@@ -632,14 +632,20 @@ class TestFinalizePerUnitRun:
         assert "cancelled" not in complete_events[0][0][1]
 
     @pytest.mark.asyncio
-    async def test_sets_state_to_idle_at_end(self, plugin):
+    async def test_does_not_reset_run_lifecycle(self, plugin):
+        """finalize_per_unit_run no longer owns the terminal reset (#1202).
+
+        The IDLE/None reset moved to the orchestrator's single run-scoped
+        ``finally: box.finish_run(run_id)``; the reporter only emits the
+        terminal events, leaving ``sync_state`` / ``current_sync_id`` untouched.
+        """
         import decky
 
         from domain.sync_state import SyncState
 
         decky.emit.reset_mock()
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._current_sync_id = "sync-xyz"
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "sync-xyz"
 
         await plugin._sync_service._reporter.finalize_per_unit_run(
             pending_collection_memberships={},
@@ -648,8 +654,8 @@ class TestFinalizePerUnitRun:
             platform_names={},
         )
 
-        assert plugin._sync_service._sync_state == SyncState.IDLE
-        assert plugin._sync_service._current_sync_id is None
+        assert plugin._sync_service._sync_state == SyncState.RUNNING
+        assert plugin._sync_service._current_sync_id == "sync-xyz"
 
     @pytest.mark.asyncio
     async def test_unbinds_stale_rom_ids_keeping_rows(self, plugin):

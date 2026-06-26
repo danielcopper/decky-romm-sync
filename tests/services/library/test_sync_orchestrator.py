@@ -404,7 +404,7 @@ class TestSyncPreview:
 
     @pytest.mark.asyncio
     async def test_returns_error_when_sync_running(self, plugin):
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
         result = await plugin.sync_preview()
         assert result["success"] is False
         assert "already in progress" in result["message"]
@@ -460,6 +460,25 @@ class TestSyncApplyDelta:
         result = await plugin.sync_apply_delta("any-id")
         assert result["success"] is False
         assert result["reason"] == "stale_preview"
+
+    @pytest.mark.asyncio
+    async def test_rejected_when_run_in_flight_preserves_delta(self, plugin):
+        """RC-OVERLAP (#1202): an apply landing while a run is already in flight
+        is rejected by the admission guard WITHOUT consuming the staged delta or
+        disturbing the active run id.
+        """
+        self._setup_pending_delta(plugin, "pv-1")
+        box = plugin._sync_service._box
+        assert box.try_begin_run("active-run") is True
+
+        result = await plugin.sync_apply_delta("pv-1")
+
+        assert result == {"success": False, "reason": "sync_in_progress", "message": "Sync already in progress"}
+        # The active run is untouched and the staged delta survives for the
+        # legitimate apply.
+        assert box.current_sync_id == "active-run"
+        assert box.pending_delta is not None
+        assert box.pending_delta.preview_id == "pv-1"
 
     @pytest.mark.asyncio
     async def test_rejects_when_preview_older_than_max_age(self, plugin):
@@ -593,13 +612,13 @@ class TestSyncControl:
         assert plugin._sync_service._sync_state == SyncState.RUNNING
 
     def test_start_sync_rejects_when_running(self, plugin):
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
         result = plugin._sync_service.start_sync()
         assert result["success"] is False
         assert "already in progress" in result["message"]
 
     def test_cancel_sync_when_running(self, plugin):
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
         result = plugin._sync_service.cancel_sync()
         assert result["success"] is True
         assert plugin._sync_service._sync_state == SyncState.CANCELLING
@@ -610,8 +629,8 @@ class TestSyncControl:
         assert "No sync" in result["message"]
 
     def test_cancel_sync_with_matching_run_id_sets_cancelling(self, plugin):
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._current_sync_id = "run-B"
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-B"
         result = plugin._sync_service.cancel_sync("run-B")
         assert result["success"] is True
         assert plugin._sync_service._sync_state == SyncState.CANCELLING
@@ -623,8 +642,8 @@ class TestSyncControl:
         then run-A's Cancel click lands. The argument-less cancel would flip
         run-B to CANCELLING; the run-scoped cancel ignores the stale id.
         """
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._current_sync_id = "run-B"
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-B"
         result = plugin._sync_service.cancel_sync("run-A")
         assert result["success"] is True
         assert "stale" in result["message"].lower()
@@ -632,23 +651,23 @@ class TestSyncControl:
 
     def test_cancel_sync_with_none_run_id_cancels_unconditionally(self, plugin):
         """A falsy run_id (legacy caller / no id captured yet) always cancels."""
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._current_sync_id = "run-B"
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-B"
         result = plugin._sync_service.cancel_sync(None)
         assert result["success"] is True
         assert plugin._sync_service._sync_state == SyncState.CANCELLING
 
     def test_cancel_sync_with_empty_run_id_cancels_unconditionally(self, plugin):
         """An empty-string run_id (the frontend's no-id-yet fallback) cancels."""
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._current_sync_id = "run-B"
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-B"
         result = plugin._sync_service.cancel_sync("")
         assert result["success"] is True
         assert plugin._sync_service._sync_state == SyncState.CANCELLING
 
     def test_cancel_sync_stale_run_id_when_idle_is_no_op(self, plugin):
         """Idle short-circuits before the run-id check — no sync, plain no-op."""
-        plugin._sync_service._current_sync_id = "run-B"
+        plugin._sync_service._box.current_sync_id = "run-B"
         result = plugin._sync_service.cancel_sync("run-A")
         assert result["success"] is True
         assert "No sync" in result["message"]
@@ -663,34 +682,43 @@ class TestSyncControl:
 
 
 class TestFinishSync:
-    """Tests for _finish_sync()."""
+    """Tests for _finish_sync().
+
+    ``_finish_sync`` emits the terminal CANCELLED progress snapshot only; the
+    IDLE/None reset of the run-lifecycle pair is owned by the caller's
+    ``finally: box.finish_run(run_id)`` (#1202), so this method leaves
+    ``sync_state`` / ``current_sync_id`` untouched.
+    """
 
     @pytest.mark.asyncio
-    async def test_sets_cancelled_state(self, plugin):
+    async def test_emits_cancelled_progress_snapshot(self, plugin):
         import decky
 
         decky.emit.reset_mock()
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._sync_progress = {"running": True, "current": 5, "total": 10}
 
         await plugin._sync_service._orchestrator._finish_sync("Sync cancelled")
 
-        assert plugin._sync_service._sync_state == SyncState.IDLE
         assert plugin._sync_service._sync_progress["running"] is False
         assert plugin._sync_service._sync_progress["stage"] == "cancelled"
         assert plugin._sync_service._sync_progress["message"] == "Sync cancelled"
 
     @pytest.mark.asyncio
-    async def test_clears_current_sync_id(self, plugin):
-        """_finish_sync invalidates _current_sync_id so generation-guarded
-        background work (per-unit heartbeat) sees a stale generation."""
-        plugin._sync_service._sync_state = SyncState.RUNNING
+    async def test_does_not_reset_run_lifecycle(self, plugin):
+        """_finish_sync only emits — the terminal ``finally`` owns the reset.
+
+        Leaving ``current_sync_id`` set here is what lets the run-scoped
+        ``finish_run(run_id)`` later decide whether this run still owns the slot.
+        """
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._sync_progress = {"running": True}
-        plugin._sync_service._current_sync_id = "sync-abc"
+        plugin._sync_service._box.current_sync_id = "sync-abc"
 
         await plugin._sync_service._orchestrator._finish_sync("Sync cancelled")
 
-        assert plugin._sync_service._current_sync_id is None
+        assert plugin._sync_service._sync_state == SyncState.RUNNING
+        assert plugin._sync_service._current_sync_id == "sync-abc"
 
 
 class TestGetSyncStatus:
@@ -942,7 +970,7 @@ class TestDoSyncPerUnit:
         # No platforms enabled → empty work queue.
         plugin.settings["enabled_platforms"] = {}
         plugin.settings["enabled_collections"] = {}
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -965,8 +993,8 @@ class TestDoSyncPerUnit:
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._current_sync_id = "run-plan"
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-plan"
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1011,7 +1039,7 @@ class TestDoSyncPerUnit:
             return {str(_unit.id * 10): 9000 + int(_unit.id)}
 
         plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1054,8 +1082,8 @@ class TestDoSyncPerUnit:
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._current_sync_id = "run-abc"
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-abc"
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1091,7 +1119,7 @@ class TestDoSyncPerUnit:
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1134,7 +1162,7 @@ class TestDoSyncPerUnit:
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1176,7 +1204,7 @@ class TestDoSyncPerUnit:
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         import logging
 
@@ -1220,7 +1248,7 @@ class TestDoSyncPerUnit:
         plugin._sync_service._orchestrator._wait_for_unit_complete = wait_mock
         commit_mock = AsyncMock()
         plugin._sync_service._reporter.commit_unit_results = commit_mock  # type: ignore[method-assign]
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1275,7 +1303,7 @@ class TestDoSyncPerUnit:
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._wait_for_unit_complete = AsyncMock(return_value={})
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1321,7 +1349,7 @@ class TestDoSyncPerUnit:
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._wait_for_unit_complete = AsyncMock(return_value={})
         plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1370,7 +1398,7 @@ class TestDoSyncPerUnit:
             return {"2": 5000}
 
         plugin._sync_service._orchestrator._wait_for_unit_complete = ack_same_appid
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1417,7 +1445,7 @@ class TestDoSyncPerUnit:
             return {"2": 5000}
 
         plugin._sync_service._orchestrator._wait_for_unit_complete = ack_same_appid
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1446,7 +1474,7 @@ class TestDoSyncPerUnit:
         download_artwork = AsyncMock(return_value={10: "/grid/a.png"})
         plugin._sync_service._orchestrator._download_artwork = download_artwork
         plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
         download_artwork.assert_called_once()
@@ -1489,11 +1517,11 @@ class TestDoSyncPerUnit:
         async def fake_wait(_u, event):
             event.set()
             # Flip to CANCELLING after first unit completes
-            plugin._sync_service._sync_state = SyncState.CANCELLING
+            plugin._sync_service._box.sync_state = SyncState.CANCELLING
             return {}
 
         plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1524,7 +1552,7 @@ class TestDoSyncPerUnit:
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1574,11 +1602,11 @@ class TestDoSyncPerUnit:
 
         async def fake_wait(_u, event):
             event.set()
-            plugin._sync_service._sync_state = SyncState.CANCELLING
+            plugin._sync_service._box.sync_state = SyncState.CANCELLING
             return {}
 
         plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1612,8 +1640,8 @@ class TestSyncRunLifecycle:
             return {"10": 9001}
 
         plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._current_sync_id = "run-clean"
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-clean"
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1641,8 +1669,8 @@ class TestSyncRunLifecycle:
 
         plugin.settings["enabled_platforms"] = {}
         plugin.settings["enabled_collections"] = {}
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._current_sync_id = "run-empty"
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-empty"
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1668,12 +1696,12 @@ class TestSyncRunLifecycle:
 
         async def fake_wait(_u, event):
             event.set()
-            plugin._sync_service._sync_state = SyncState.CANCELLING
+            plugin._sync_service._box.sync_state = SyncState.CANCELLING
             return {}
 
         plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._current_sync_id = "run-cancel"
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-cancel"
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -1693,8 +1721,8 @@ class TestSyncRunLifecycle:
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
         fake_romm_api.list_roms_side_effect = RuntimeError("boom")
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._current_sync_id = "run-error"
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-error"
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
         for _ in range(3):
@@ -1736,8 +1764,8 @@ class TestSyncRunLifecycle:
             raise RuntimeError("terminal write boom")
 
         plugin._sync_service._orchestrator._complete_sync_run = boom  # type: ignore[method-assign]
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._current_sync_id = "run-terminal-fail"
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-terminal-fail"
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
         for _ in range(3):
@@ -1781,7 +1809,7 @@ class TestWaitForUnitComplete:
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
         event = asyncio.Event()
         event.set()
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._sync_last_heartbeat = plugin._sync_service._orchestrator._clock.monotonic()
         plugin._sync_service._box.last_unit_results = {"10": 9000}
 
@@ -1792,7 +1820,7 @@ class TestWaitForUnitComplete:
     async def test_returns_none_on_cancel(self, plugin):
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
         event = asyncio.Event()
-        plugin._sync_service._sync_state = SyncState.CANCELLING
+        plugin._sync_service._box.sync_state = SyncState.CANCELLING
         plugin._sync_service._sync_last_heartbeat = plugin._sync_service._orchestrator._clock.monotonic()
 
         results = await plugin._sync_service._orchestrator._wait_for_unit_complete(unit, event)
@@ -1802,7 +1830,7 @@ class TestWaitForUnitComplete:
     async def test_returns_none_on_heartbeat_timeout(self, plugin):
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
         event = asyncio.Event()
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
         # Heartbeat is way too old — should timeout immediately on first loop check
         plugin._sync_service._sync_last_heartbeat = plugin._sync_service._orchestrator._clock.monotonic() - 999.0
 
@@ -2083,17 +2111,17 @@ class TestShutdown:
     """
 
     def test_shutdown_when_running_marks_cancelling(self, plugin):
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service.shutdown()
         assert plugin._sync_service._sync_state == SyncState.CANCELLING
 
     def test_shutdown_when_idle_is_noop(self, plugin):
-        plugin._sync_service._sync_state = SyncState.IDLE
+        plugin._sync_service._box.sync_state = SyncState.IDLE
         plugin._sync_service.shutdown()
         assert plugin._sync_service._sync_state == SyncState.IDLE
 
     def test_shutdown_when_cancelling_is_noop(self, plugin):
-        plugin._sync_service._sync_state = SyncState.CANCELLING
+        plugin._sync_service._box.sync_state = SyncState.CANCELLING
         plugin._sync_service.shutdown()
         assert plugin._sync_service._sync_state == SyncState.CANCELLING
 
@@ -2113,8 +2141,8 @@ class TestDoSyncPerUnitErrors:
         # CancelledError exactly like an asyncio cancel would propagate.
         fake_romm_api.list_platforms_side_effect = asyncio.CancelledError()
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._current_sync_id = "sync-cancel-build"
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "sync-cancel-build"
 
         with pytest.raises(asyncio.CancelledError):
             await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -2137,7 +2165,7 @@ class TestDoSyncPerUnitErrors:
         _use_fake_romm(plugin, fake_romm_api)
         fake_romm_api.list_platforms_side_effect = RuntimeError("RomM down")
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         # Should NOT raise — outer flow swallows the exception after emitting an error.
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -2165,7 +2193,7 @@ class TestDoSyncPerUnitErrors:
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
         fake_romm_api.list_roms_side_effect = RuntimeError("boom")
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
         # Drain any pending tasks scheduled by the outer handler (loop.create_task).
@@ -2207,7 +2235,7 @@ class TestDoSyncPerUnitErrors:
         # Mid-pagination failure — the bug scenario from #630.
         fake_romm_api.list_roms_side_effect = RuntimeError("HTTP 500 on page 2")
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
         # Drain any pending tasks scheduled by the outer handler.
@@ -2277,8 +2305,8 @@ class TestDoSyncPerUnitErrors:
         fake_romm_api.list_roms = MagicMock(side_effect=SyncCancelled("Sync cancelled"))
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._current_sync_id = "run-mid-fetch-cancel"
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-mid-fetch-cancel"
 
         # Guard against cross-test state leakage: a stale CANCELLING at entry
         # would break the unit loop before the fetch and pass for the wrong reason.
@@ -2340,8 +2368,8 @@ class TestDoSyncPerUnitErrors:
         fake_romm_api.list_roms = MagicMock(side_effect=asyncio.CancelledError("real task cancel"))
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._sync_state = SyncState.RUNNING
-        plugin._sync_service._current_sync_id = "run-real-cancel"
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-real-cancel"
 
         # Guard against cross-test state leakage (a stale CANCELLING would break
         # the loop before the fetch and the cancel would never fire).
@@ -2410,7 +2438,7 @@ class TestDoSyncPerUnitErrors:
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
-        plugin._sync_service._sync_state = SyncState.CANCELLING
+        plugin._sync_service._box.sync_state = SyncState.CANCELLING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -2454,7 +2482,7 @@ class TestSyncOneUnitCollectionAndCancel:
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -2482,12 +2510,12 @@ class TestSyncOneUnitCollectionAndCancel:
 
         def list_roms_then_cancel(platform_id, limit=50, offset=0):
             page = orig_list_roms(platform_id, limit=limit, offset=offset)
-            plugin._sync_service._sync_state = SyncState.CANCELLING
+            plugin._sync_service._box.sync_state = SyncState.CANCELLING
             return page
 
         fake_romm_api.list_roms = list_roms_then_cancel  # type: ignore[method-assign]
 
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
         applied = await plugin._sync_service._orchestrator._sync_one_unit(
@@ -2517,11 +2545,11 @@ class TestSyncOneUnitCollectionAndCancel:
 
         async def cancel_during_artwork(*_a, **_kw):
             # Trigger CANCELLING in between the post-fetch check and the post-artwork check.
-            plugin._sync_service._sync_state = SyncState.CANCELLING
+            plugin._sync_service._box.sync_state = SyncState.CANCELLING
             return {}
 
         plugin._sync_service._orchestrator._download_artwork = cancel_during_artwork
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
         applied = await plugin._sync_service._orchestrator._sync_one_unit(
@@ -2559,11 +2587,11 @@ class TestSyncOneUnitCollectionAndCancel:
 
         # The wait observes a user cancel: flip CANCELLING, then give up (None).
         async def wait_user_cancel(_unit, _event):
-            plugin._sync_service._sync_state = SyncState.CANCELLING
+            plugin._sync_service._box.sync_state = SyncState.CANCELLING
             return
 
         plugin._sync_service._orchestrator._wait_for_unit_complete = wait_user_cancel
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
         applied = await plugin._sync_service._orchestrator._sync_one_unit(
@@ -2610,7 +2638,7 @@ class TestSyncOneUnitCollectionAndCancel:
             return
 
         plugin._sync_service._orchestrator._wait_for_unit_complete = wait_timeout
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
         applied = await plugin._sync_service._orchestrator._sync_one_unit(
@@ -2665,7 +2693,7 @@ class TestPerUnitMetadataStamping:
             return {"10": 5001}
 
         plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
         await plugin._sync_service._orchestrator._sync_one_unit(
@@ -2713,7 +2741,7 @@ class TestPerUnitMetadataStamping:
             return {"10": 5001}
 
         plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
         await plugin._sync_service._orchestrator._sync_one_unit(
@@ -2763,7 +2791,7 @@ class TestPerUnitMetadataStamping:
             return {"1": 5001, "3": 5003, "5": 5005}
 
         plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
         await plugin._sync_service._orchestrator._sync_one_unit(
@@ -2865,7 +2893,7 @@ class TestRegression738CacheCorruption:
             return {"1": 1001, "2": 1002, "3": 1003}
 
         plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -2888,7 +2916,7 @@ class TestWaitForUnitCompleteCancelled:
                 raise asyncio.CancelledError()
 
         plugin._sync_service._orchestrator._sleeper = _CancellingSleeper()
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._sync_last_heartbeat = plugin._sync_service._orchestrator._clock.monotonic()
 
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
@@ -2920,7 +2948,7 @@ class TestDownloadArtworkDelegation:
         assert call_kwargs["progress_total_steps"] == 7
         # is_cancelling closure reflects the live sync_state.
         is_cancelling = call_kwargs["is_cancelling"]
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
         assert is_cancelling() is False
-        plugin._sync_service._sync_state = SyncState.CANCELLING
+        plugin._sync_service._box.sync_state = SyncState.CANCELLING
         assert is_cancelling() is True

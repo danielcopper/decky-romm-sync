@@ -184,15 +184,15 @@ class LibraryService:
     # The bootstrap-style ``get_pending_sync=lambda: service._pending_sync``
     # callback and fixture-level test setup poke at the legacy private
     # attribute names. Proxy them through the shared state box so external
-    # readers and writers see the live values mutated by sub-services.
+    # readers and writers see the live values mutated by sub-services. The
+    # run-lifecycle pair (``_sync_state`` / ``_current_sync_id``) is read-only
+    # here: those two fields are written **only** through the box's verb
+    # methods (``try_begin_run`` / ``request_cancel`` / ``finish_run``), so no
+    # setter is exposed (#1202).
 
     @property
     def _sync_state(self) -> SyncState:
         return self._box.sync_state
-
-    @_sync_state.setter
-    def _sync_state(self, value: SyncState) -> None:
-        self._box.sync_state = value
 
     @property
     def _pending_sync(self) -> dict[int, dict[str, Any]]:
@@ -245,10 +245,6 @@ class LibraryService:
     @property
     def _current_sync_id(self) -> str | None:
         return self._box.current_sync_id
-
-    @_current_sync_id.setter
-    def _current_sync_id(self, value: str | None) -> None:
-        self._box.current_sync_id = value
 
     @property
     def _settings(self) -> dict[str, Any]:

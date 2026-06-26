@@ -28,7 +28,7 @@ class TestCheckCancelling:
     """Tests for _check_cancelling() — pure state check, no API surface."""
 
     def test_raises_when_cancelling(self, plugin):
-        plugin._sync_service._sync_state = SyncState.CANCELLING
+        plugin._sync_service._box.sync_state = SyncState.CANCELLING
         # The cooperative cancel signal is the dedicated ``SyncCancelled``
         # BaseException — NOT ``asyncio.CancelledError`` — so a cooperative
         # sync cancel is never conflated with a real asyncio task cancel.
@@ -36,7 +36,7 @@ class TestCheckCancelling:
             plugin._sync_service._fetcher._check_cancelling()
 
     def test_noop_when_running(self, plugin):
-        plugin._sync_service._sync_state = SyncState.RUNNING
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._fetcher._check_cancelling()  # should not raise
 
     def test_noop_when_idle(self, plugin):

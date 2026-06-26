@@ -53,6 +53,7 @@ run = [
     "bash scripts/check_no_bare_ignores.sh",
     "python scripts/check_event_parity.py",
     "python scripts/check_settings_owner.py",
+    "python scripts/check_sync_lifecycle_owner.py",
     "python scripts/check_lock_sync.py",
 ]
 

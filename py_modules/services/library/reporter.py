@@ -27,7 +27,6 @@ from domain.rom import Rom
 from domain.rom_metadata_mapping import build_rom_metadata
 from domain.sync_diff import should_include_in_platform_collection
 from domain.sync_stage import SyncStage
-from domain.sync_state import SyncState
 
 if TYPE_CHECKING:
     import asyncio
@@ -64,9 +63,10 @@ class SyncReporterConfig:
     the SQLite Unit-of-Work factory (the transactional seam over the
     ``roms`` / ``rom_installs`` / ``sync_runs`` / ``kv_config``
     repositories), the shared ``LibrarySyncStateBox`` (the reporter reads
-    the pending-sync dicts populated by the orchestrator and clears the
-    active sync id when reporting completes), an orchestrator-supplied
-    ``emit_progress`` callback for the terminal "done" event, and the
+    the pending-sync dicts populated by the orchestrator; the run-lifecycle
+    reset is owned by the orchestrator's terminal ``finally``, not here), an
+    orchestrator-supplied ``emit_progress`` callback for the terminal "done"
+    event, and the
     ``ArtworkManager`` peer used for cover-path finalisation.
     """
 
@@ -249,8 +249,6 @@ class SyncReporter:
                 running=False,
             )
 
-        self._sync_state.sync_state = SyncState.IDLE
-        self._sync_state.current_sync_id = None
         return platform_app_ids, romm_collection_app_ids
 
     def _count_bound_roms(self) -> int:

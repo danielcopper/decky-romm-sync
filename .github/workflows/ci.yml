@@ -148,6 +148,9 @@ jobs:
       - name: Check settings-owner confinement
         run: python scripts/check_settings_owner.py
 
+      - name: Check sync-lifecycle owner confinement
+        run: python scripts/check_sync_lifecycle_owner.py
+
       - name: Check dependency locks satisfy their source constraints
         run: python scripts/check_lock_sync.py
 

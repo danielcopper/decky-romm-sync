@@ -68,10 +68,11 @@ async def test_cancel_sync_stale_run_does_not_abort_fresh_run(harness):
     run_a_id = "run-A"
     start_a = await harness.plugin.start_sync()
     assert start_a["success"] is True
-    harness.plugin._sync_service._current_sync_id = run_a_id
+    harness.plugin._sync_service._box.current_sync_id = run_a_id
 
-    # Finalize run A to IDLE exactly as the lifecycle does (id nulled).
-    await orch._finish_sync("Sync cancelled")
+    # Finalize run A to IDLE exactly as the lifecycle's terminal finally does
+    # (run-scoped compare-and-reset on the owning box).
+    harness.plugin._sync_service._box.finish_run(run_a_id)
     assert harness.plugin._sync_service._sync_state == SyncState.IDLE
     assert harness.plugin._sync_service._current_sync_id is None
 
@@ -79,7 +80,7 @@ async def test_cancel_sync_stale_run_does_not_abort_fresh_run(harness):
     run_b_id = "run-B"
     start_b = await harness.plugin.start_sync()
     assert start_b["success"] is True
-    harness.plugin._sync_service._current_sync_id = run_b_id
+    harness.plugin._sync_service._box.current_sync_id = run_b_id
 
     # Run A's Cancel click lands now — it must be ignored as stale.
     cancel = await harness.plugin.cancel_sync(run_a_id)
@@ -97,8 +98,8 @@ async def test_cancel_sync_stale_run_does_not_abort_fresh_run(harness):
 
 async def test_cancel_sync_matching_run_aborts_it(harness):
     """A cancel that matches the active run id flips it to CANCELLING."""
-    harness.plugin._sync_service._sync_state = SyncState.RUNNING
-    harness.plugin._sync_service._current_sync_id = "run-B"
+    harness.plugin._sync_service._box.sync_state = SyncState.RUNNING
+    harness.plugin._sync_service._box.current_sync_id = "run-B"
 
     cancel = await harness.plugin.cancel_sync("run-B")
     assert cancel == {"success": True, "message": "Sync cancelling..."}
@@ -107,9 +108,86 @@ async def test_cancel_sync_matching_run_aborts_it(harness):
 
 async def test_cancel_sync_empty_run_id_cancels_unconditionally(harness):
     """The frontend's no-id-yet fallback (empty string) always cancels."""
-    harness.plugin._sync_service._sync_state = SyncState.RUNNING
-    harness.plugin._sync_service._current_sync_id = "run-B"
+    harness.plugin._sync_service._box.sync_state = SyncState.RUNNING
+    harness.plugin._sync_service._box.current_sync_id = "run-B"
 
     cancel = await harness.plugin.cancel_sync("")
     assert cancel == {"success": True, "message": "Sync cancelling..."}
     assert harness.plugin._sync_service._sync_state == SyncState.CANCELLING
+
+
+async def test_apply_rejected_while_run_in_flight_emits_single_complete(harness):
+    """RC-OVERLAP (#1202): a second apply landing while a run is in flight is
+    rejected without consuming the staged delta, and the in-flight run still
+    emits exactly one terminal ``sync_complete``.
+
+    The load-bearing edit: ``sync_apply_delta`` now carries an admission guard,
+    so an overlapping apply can't begin a second concurrent run that would
+    double the terminal events and corrupt the shared sync state.
+    """
+    harness.romm.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
+    harness.romm.roms[10] = {
+        "id": 10,
+        "name": "Game",
+        "platform_id": 1,
+        "platform_name": "N64",
+        "platform_slug": "n64",
+    }
+    harness.plugin.settings["enabled_platforms"] = {"1": True}
+
+    orch = _orchestrator(harness)
+    orch._wait_for_unit_complete = _ack_immediately
+    box = harness.plugin._sync_service._box
+
+    # A real preview stages a valid pending_delta (and finalizes to IDLE).
+    preview = await harness.plugin.sync_preview()
+    assert preview["success"] is True
+    preview_id = preview["preview_id"]
+
+    # A run is now in flight (the legitimate apply already running).
+    assert box.try_begin_run("active-run") is True
+
+    # A second apply lands mid-run — rejected, the staged delta survives.
+    rejected = await harness.plugin.sync_apply_delta(preview_id)
+    assert rejected == {"success": False, "reason": "sync_in_progress", "message": "Sync already in progress"}
+    assert box.current_sync_id == "active-run"
+    assert box.pending_delta is not None
+
+    # Drive the in-flight run — exactly one terminal sync_complete.
+    await orch._do_sync_per_unit()
+    completes = _sync_complete_payloads(harness)
+    assert len(completes) == 1
+    assert harness.plugin._sync_service._sync_state == SyncState.IDLE
+
+
+async def test_preview_cancel_after_unit_loop_returns_cancelled(harness):
+    """RC-CANCEL-PREVIEW (#1202): a cancel landing after the unit loop but before
+    the preview delta is staged routes through the post-loop checkpoint into the
+    cancelled branch, leaving no staged delta behind.
+    """
+    harness.romm.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
+    harness.romm.roms[10] = {
+        "id": 10,
+        "name": "Game",
+        "platform_id": 1,
+        "platform_name": "N64",
+        "platform_slug": "n64",
+    }
+    harness.plugin.settings["enabled_platforms"] = {"1": True}
+
+    orch = _orchestrator(harness)
+    box = harness.plugin._sync_service._box
+    orig_fetch = orch._fetch_preview_unit
+
+    async def fetch_then_cancel(unit, all_roms, platform_rom_ids, synced_rom_ids, collection_memberships):
+        await orig_fetch(unit, all_roms, platform_rom_ids, synced_rom_ids, collection_memberships)
+        # Cancel lands after the unit's ROMs are fetched, after the in-loop
+        # checkpoint already passed — only the post-loop re-check can catch it.
+        box.request_cancel()
+
+    orch._fetch_preview_unit = fetch_then_cancel
+
+    result = await harness.plugin.sync_preview()
+    assert result == {"success": False, "reason": "cancelled", "message": "Sync cancelled"}
+    assert box.pending_delta is None
+    assert harness.plugin._sync_service._sync_state == SyncState.IDLE

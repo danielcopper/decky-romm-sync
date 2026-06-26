@@ -2,10 +2,18 @@
 
 Owned by :class:`LibraryService`; each sub-service receives a reference
 so they can coordinate without back-refs to the façade. The contract:
-sub-services mutate the box's fields directly (it is the single source
-of truth for in-flight sync run state); the façade exposes property
-accessors over the box so external callers see a flat shape rather
-than reaching through ``service._state.x``.
+sub-services mutate the box's coordination fields directly (it is the
+single source of truth for in-flight sync run state); the façade exposes
+property accessors over the box so external callers see a flat shape
+rather than reaching through ``service._state.x``.
+
+The run-lifecycle pair — ``sync_state`` and ``current_sync_id`` — is the
+one exception: it is mutated **only** through the box's own verb methods
+(``try_begin_run`` / ``request_cancel`` / ``finish_run``), never by direct
+field assignment from a sub-service. Confining those two writes to the box
+keeps run admission, cancellation, and termination a single
+compare-and-swap on the one event loop, so a rapid Sync/Cancel can't leave
+a half-reset run id (#1202). Enforced by ``scripts/check_sync_lifecycle_owner.py``.
 """
 
 from __future__ import annotations
@@ -30,6 +38,7 @@ def _default_progress() -> dict[str, Any]:
         "message": "",
         "step": 0,
         "totalSteps": 0,
+        "runId": "",
     }
 
 
@@ -94,6 +103,62 @@ class LibrarySyncStateBox:
     # reuses an old appId (CRC32 of unchanged exe+name) can't wipe the shortcut
     # the run just bound (#1036). Reset at the start of each run.
     committed_app_ids: set[int] = field(default_factory=set)
+
+    # ── Run lifecycle — the only writers of sync_state / current_sync_id ──
+    #
+    # These four methods are the sole mutators of the run-lifecycle pair. The
+    # plugin runs on a single event loop, so a method body that reads then
+    # writes ``sync_state`` without awaiting in between is a true atomic
+    # compare-and-swap — nothing else can observe or change the pair mid-update.
+
+    def try_begin_run(self, run_id: str) -> bool:
+        """Claim the single in-flight run slot for ``run_id`` (compare-and-swap).
+
+        Returns ``False`` with no state change when a run is already in flight
+        (the admission guard a rapid second Sync/Apply hits); otherwise
+        transitions IDLE → RUNNING, stamps ``current_sync_id``, and returns
+        ``True``.
+        """
+        if self.sync_state is not SyncState.IDLE:
+            return False
+        self.sync_state = SyncState.RUNNING
+        self.current_sync_id = run_id
+        return True
+
+    def request_cancel(self, run_id: str | None = None) -> str:
+        """Request cancellation of the in-flight run, scoped to ``run_id``.
+
+        Returns ``"no_sync"`` when nothing is in flight; ``"stale"`` when a
+        truthy ``run_id`` does not match the active ``current_sync_id`` (the
+        #1198/#1200 run-scoping, centralized here); otherwise flips to
+        CANCELLING and returns ``"cancelling"``. A falsy ``run_id`` cancels
+        unconditionally — the legacy no-id callers and the "no active id yet"
+        safety case, so cancel is never made less reliable.
+        """
+        if self.sync_state is SyncState.IDLE:
+            return "no_sync"
+        if run_id and str(run_id) != str(self.current_sync_id):
+            return "stale"
+        self.sync_state = SyncState.CANCELLING
+        return "cancelling"
+
+    def finish_run(self, run_id: str | None) -> bool:
+        """Return to IDLE only when ``run_id`` owns the slot (compare-and-reset).
+
+        Resets to IDLE + nulls ``current_sync_id`` only when ``run_id`` equals
+        the active ``current_sync_id``; a late, foreign, or doubled terminal is
+        a no-op and can never null a freshly-started run. Returns ``True`` when
+        it reset.
+        """
+        if str(run_id) != str(self.current_sync_id):
+            return False
+        self.sync_state = SyncState.IDLE
+        self.current_sync_id = None
+        return True
+
+    def is_in_flight(self) -> bool:
+        """True while a run is not IDLE (running or cancelling)."""
+        return self.sync_state is not SyncState.IDLE
 
     def is_cancelling(self) -> bool:
         """True while a cancel has been requested for the in-flight run."""

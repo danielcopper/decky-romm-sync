@@ -38,6 +38,7 @@ async def test_get_sync_status_idle_shape(harness):
         "message": "",
         "step": 0,
         "totalSteps": 0,
+        "runId": "",
     }
     assert result["running"] is False
     for key in ("current", "total", "step", "totalSteps"):

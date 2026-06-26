@@ -130,13 +130,13 @@ the rest are single modules. A service over ~700 LOC is the decomposition signal
 
 The library sync subsystem is a façade over three sub-services that coordinate through a shared `LibrarySyncStateBox`:
 
-| Module                 | Role                                                                                                                                             |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `service.py`           | `LibraryService` façade — public callable surface; wires the sub-services and delegates                                                          |
-| `fetcher.py`           | `LibraryFetcher` — read-only RomM roundtrips: list platforms/collections, the incremental/full pagination loop, per-unit work-queue construction |
-| `sync_orchestrator.py` | `SyncOrchestrator` — preview (read-only), the per-unit apply pipeline, cancel, the heartbeat clock, progress emission                            |
-| `reporter.py`          | `SyncReporter` — post-apply finalisation (artwork filenames, per-unit `roms` upsert + `SyncRun` lifecycle) and the `roms`-derived queries        |
-| `_state.py`            | `LibrarySyncStateBox` — shared mutable in-flight sync state; the single source of truth threaded through every sub-service                       |
+| Module                 | Role                                                                                                                                                                                                                             |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `service.py`           | `LibraryService` façade — public callable surface; wires the sub-services and delegates                                                                                                                                          |
+| `fetcher.py`           | `LibraryFetcher` — read-only RomM roundtrips: list platforms/collections, the incremental/full pagination loop, per-unit work-queue construction                                                                                 |
+| `sync_orchestrator.py` | `SyncOrchestrator` — preview (read-only), the per-unit apply pipeline, cancel, the heartbeat clock, progress emission                                                                                                            |
+| `reporter.py`          | `SyncReporter` — post-apply finalisation (artwork filenames, per-unit `roms` upsert + `SyncRun` lifecycle) and the `roms`-derived queries                                                                                        |
+| `_state.py`            | `LibrarySyncStateBox` — shared mutable in-flight sync state; single source of truth threaded through every sub-service, and the **sole owner** of the run-lifecycle pair (`sync_state` / `current_sync_id`) via its verb methods |
 
 The pipeline is split **fetch (read-only) / apply (owns persistence)**: the fetcher never mutates the `roms` registry or
 `rom_metadata`, and the reporter's per-unit commit upserts each acked ROM's `roms` row and stamps its cached
@@ -194,15 +194,44 @@ not match** `current_sync_id`, the cancel is **ignored** (logged at INFO, return
 ignored (stale run)"}`) — `sync_state` is left RUNNING. A matching id (or no active
 run) flips RUNNING → CANCELLING as before. A **falsy/`None`** `run_id` cancels **unconditionally** — legacy callers and
 the "no active run id captured yet" safety case — so cancel is never made less reliable. Every cancel logs one INFO line
-recording the requested `run_id`, the active `current_sync_id`, and the `sync_state` at call time. The frontend captures
-the run id from the `sync_plan` event (now carrying `run_id`) and the `sync_apply_unit` event into a module variable
-(`getActiveRunId`) and passes it on the Cancel click. The sync trigger (`handleSync` / `handleApply`) calls
-`beginSyncRun("")` at the **top**, before the backend mints the new run's id and emits `sync_plan` — clearing the
-_previous_ run's captured id to `null`, so a Cancel in the "Fetching library…" window (reconcile + `build_work_queue`
-paginate for seconds) sends `""`, which maps to the unconditional path, rather than the previous run's id, which the
-backend would reject as a cross-run mismatch and silently drop the genuine cancel. `sync_cancel_preview` is **not**
-run-scoped: it only clears the pending preview delta (`pending_delta`), never touches `sync_state`, and
-`sync_apply_delta` independently validates the `preview_id`, so a stale preview-cancel cannot abort a fresh sync.
+recording the requested `run_id`, the active `current_sync_id`, and the `sync_state` at call time. The frontend sources
+the run id from the backend-fed `sync_progress` store — its additive `runId` field (see below) — and passes it on the
+Cancel click; in the pre-run "Fetching library…" window the store's `runId` is still `""`, which maps to the
+unconditional cancel path rather than a stale prior-run id the backend would reject as a cross-run mismatch.
+`sync_cancel_preview` is **not** run-scoped: it only clears the pending preview delta (`pending_delta`), never touches
+`sync_state`, and `sync_apply_delta` independently validates the `preview_id`, so a stale preview-cancel cannot abort a
+fresh sync.
+
+**Single-owner run lifecycle (#1202).** The run-lifecycle pair — `sync_state` (idle/running/cancelling) and
+`current_sync_id` — is mutated **only** through four verb methods on `LibrarySyncStateBox`, never by direct field
+assignment from a sub-service. Confining those two writes to the box makes run admission, cancellation, and termination
+a single compare-and-swap on the plugin's one event loop, so a rapid Sync/Cancel can't interleave a stale terminal with
+a fresh run's start and leave a half-reset id:
+
+- `try_begin_run(run_id)` — the **admission guard**. Compare-and-swap: returns `False` (no state change) if a run is
+  already in flight, else flips IDLE → RUNNING and stamps `current_sync_id`. Every entry point (`start_sync`,
+  `sync_preview`, **`sync_apply_delta`**) goes through it, so an overlapping second Sync/Apply is rejected with
+  `{success: False, reason: "sync_in_progress"}` instead of beginning a concurrent run that would double the terminal
+  events. A rejected apply does **not** consume `pending_delta`, so the still-valid preview survives for the legitimate
+  apply.
+- `request_cancel(run_id)` — the run-scoped cancel routing (the #1198 / #1200 logic, centralized): `"no_sync"` when
+  idle, `"stale"` when a truthy `run_id` doesn't match the active run (cancel ignored, run left RUNNING), else flips to
+  CANCELLING. A falsy `run_id` cancels unconditionally. `cancel_sync` and `shutdown` delegate here.
+- `finish_run(run_id)` — the **terminal**. Compare-and-reset: resets to IDLE + nulls `current_sync_id` **only** if
+  `run_id` still owns the slot; a late, foreign, or doubled terminal is a no-op and can never null a fresher run. Every
+  exit path (success, cancel, error, zero-unit) of the apply pipeline and the preview funnels into one
+  `finally: box.finish_run(run_id)` per run — the scattered per-unit / reporter resets are gone.
+- `is_in_flight()` / `is_cancelling()` — read-only state probes for the per-unit loop and checkpoints.
+
+`sync_preview` adds a final cancel checkpoint **after** the unit loop, immediately before it stages `pending_delta`, so
+a cancel landing in that last window routes into the cancelled branch (`{success: False, reason: "cancelled"}`,
+`pending_delta` left `None`) rather than staging a delta the user already cancelled. The confinement is enforced by
+`scripts/check_sync_lifecycle_owner.py` (an AST gate that fails CI if `sync_state` / `current_sync_id` is assigned
+anywhere outside `_state.py`).
+
+**`sync_progress` carries `runId`.** Every `sync_progress` event (and the persisted `get_sync_status` snapshot) now
+includes an additive `runId: str` field — `str(current_sync_id or "")` — so the frontend reads the active run id from
+the authoritative backend store rather than minting or threading its own. The idle default snapshot carries `runId: ""`.
 
 The same `sync_plan` capture point also clears the frontend's per-run cancel flag (`_cancelRequested`). The per-unit
 handler resets that flag at its own start, but an incrementally-**skipped** unit never runs that handler, so a skip-only

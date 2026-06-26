@@ -31,7 +31,7 @@ from domain.sync_diff import (
 )
 from domain.sync_run import SyncRun
 from domain.sync_stage import SyncStage
-from domain.sync_state import SyncCancelled, SyncState
+from domain.sync_state import SyncCancelled
 from lib.errors import classify_error
 from lib.list_result import ErrorCode
 
@@ -134,10 +134,9 @@ class SyncOrchestrator:
 
     def start_sync(self):
         box = self._sync_state
-        if box.sync_state != SyncState.IDLE:
+        run_id = self._uuid_gen.uuid4()
+        if not box.try_begin_run(run_id):
             return {"success": False, "reason": "sync_in_progress", "message": "Sync already in progress"}
-        box.sync_state = SyncState.RUNNING
-        box.current_sync_id = self._uuid_gen.uuid4()
         box.sync_last_heartbeat = self._clock.monotonic()
         self._loop.create_task(self._do_sync_per_unit())
         return {"success": True, "message": "Sync started"}
@@ -158,12 +157,12 @@ class SyncOrchestrator:
         self._logger.info(
             f"cancel_sync: run_id={run_id!r} active run={box.current_sync_id!r} state={box.sync_state.value}"
         )
-        if box.sync_state != SyncState.RUNNING:
+        outcome = box.request_cancel(run_id)
+        if outcome == "no_sync":
             return {"success": True, "message": "No sync in progress"}
-        if run_id and str(run_id) != str(box.current_sync_id):
+        if outcome == "stale":
             self._logger.info(f"Ignoring stale cancel for run={run_id!r}; active run={box.current_sync_id!r}")
             return {"success": True, "message": "Cancel ignored (stale run)"}
-        box.sync_state = SyncState.CANCELLING
         return {"success": True, "message": "Sync cancelling..."}
 
     def sync_heartbeat(self):
@@ -173,9 +172,7 @@ class SyncOrchestrator:
 
     def shutdown(self) -> None:
         """Request graceful shutdown — cancels sync if running."""
-        box = self._sync_state
-        if box.sync_state == SyncState.RUNNING:
-            box.sync_state = SyncState.CANCELLING
+        self._sync_state.request_cancel()
 
     # ── Preview / Apply ──────────────────────────────────────────
 
@@ -189,10 +186,9 @@ class SyncOrchestrator:
         path, which carry no ``metadatum`` (#738).
         """
         box = self._sync_state
-        if box.sync_state != SyncState.IDLE:
+        run_id = self._uuid_gen.uuid4()
+        if not box.try_begin_run(run_id):
             return {"success": False, "reason": "sync_in_progress", "message": "Sync already in progress"}
-        box.sync_state = SyncState.RUNNING
-        box.current_sync_id = self._uuid_gen.uuid4()
         box.sync_last_heartbeat = self._clock.monotonic()
         try:
             await self.emit_progress(SyncStage.DISCOVERING, message="Fetching platforms...")
@@ -229,6 +225,14 @@ class SyncOrchestrator:
                 registry,
                 platform_name_set,
             )
+
+            # Final cancel checkpoint: a cancel can land after the unit loop's
+            # last per-unit check but before the preview is staged. Re-check
+            # here so a late cancel routes into the SyncCancelled branch (which
+            # leaves ``pending_delta`` None) instead of staging a delta the
+            # user already cancelled (#1202).
+            if box.is_cancelling():
+                raise SyncCancelled(_SYNC_CANCELLED)
 
             preview_id = self._uuid_gen.uuid4()
             platforms_count = sum(1 for u in work_queue if u.type == "platform")
@@ -284,7 +288,7 @@ class SyncOrchestrator:
             await self.emit_progress(SyncStage.ERROR, message=_msg, running=False)
             return {"success": False, "reason": _reason, "message": _msg}
         finally:
-            box.sync_state = SyncState.IDLE
+            box.finish_run(run_id)
 
     async def _fetch_preview_unit(
         self,
@@ -329,9 +333,14 @@ class SyncOrchestrator:
                 "reason": ErrorCode.STALE_PREVIEW.value,
                 "message": "Preview is older than 30 minutes, please re-run sync",
             }
+        # Admission guard: a rapid second apply (or an apply landing while a
+        # sync is already in flight) must be rejected without consuming the
+        # staged delta, so the still-valid preview survives for the legitimate
+        # apply (#1202). Claim the run slot before nulling ``pending_delta``.
+        run_id = self._uuid_gen.uuid4()
+        if not box.try_begin_run(run_id):
+            return {"success": False, "reason": "sync_in_progress", "message": "Sync already in progress"}
         box.pending_delta = None
-        box.sync_state = SyncState.RUNNING
-        box.current_sync_id = self._uuid_gen.uuid4()
         box.sync_last_heartbeat = self._clock.monotonic()
 
         self._loop.create_task(self._do_sync_per_unit())
@@ -364,6 +373,7 @@ class SyncOrchestrator:
             "message": message,
             "step": step,
             "totalSteps": total_steps,
+            "runId": str(self._sync_state.current_sync_id or ""),
         }
         await self._emit("sync_progress", self._sync_state.sync_progress)
 
@@ -378,6 +388,12 @@ class SyncOrchestrator:
     # ── Sync termination ─────────────────────────────────────────
 
     async def _finish_sync(self, message):
+        """Emit the terminal CANCELLED progress snapshot for the in-flight run.
+
+        Emission only — the IDLE/None reset of the run-lifecycle pair is owned
+        by the caller's ``finally: box.finish_run(run_id)`` so every run has a
+        single, run-scoped termination point (#1202).
+        """
         box = self._sync_state
         box.sync_progress = {
             "running": False,
@@ -387,10 +403,9 @@ class SyncOrchestrator:
             "message": message,
             "step": box.sync_progress.get("step", 0),
             "totalSteps": box.sync_progress.get("totalSteps", 0),
+            "runId": str(box.current_sync_id or ""),
         }
         await self._emit("sync_progress", box.sync_progress)
-        box.sync_state = SyncState.IDLE
-        box.current_sync_id = None
         self._logger.info(message)
 
     # ── Per-unit pipeline ────────────────────────────────────────
@@ -424,11 +439,12 @@ class SyncOrchestrator:
         # happy-path and late-ack commit paths). The stale scan excludes it so
         # a new rom_id reusing an old appId is never wrongly removed (#1036).
         box.committed_app_ids = set()
-        # Capture the run id up front so the error path can mark the run
-        # ``errored`` even after finalize nulls ``box.current_sync_id``
-        # (reporter.finalize_per_unit_run runs before the terminal write,
-        # both inside this try — a raising terminal write must still record
-        # the failure on the run rather than leave it stuck ``running``).
+        # Capture the run id up front so the terminal SyncRun writes and the
+        # ``finally`` reset below operate on a stable id for the lifetime of
+        # this run. Every terminal IDLE/None reset for this run is collapsed
+        # into the single ``finally: box.finish_run(run_id)`` — a run-scoped
+        # compare-and-reset that no-ops if a fresher run already owns the slot,
+        # so a rapid Sync/Cancel can't leave a half-reset run id (#1202).
         run_id = box.current_sync_id
 
         try:
@@ -441,7 +457,6 @@ class SyncOrchestrator:
                 self._logger.error(f"Failed to build work queue: {e}")
                 _code, _msg = classify_error(e)
                 await self.emit_progress(SyncStage.ERROR, message=_msg, running=False)
-                box.sync_state = SyncState.IDLE
                 return
 
             total_units = len(work_queue)
@@ -469,8 +484,6 @@ class SyncOrchestrator:
                 # report as 'added') and the ``last_sync`` timestamp. Leaving
                 # the prior completed run as the baseline matches the JSON era.
                 await self.emit_progress(SyncStage.DONE, message="Nothing to sync", running=False)
-                box.sync_state = SyncState.IDLE
-                box.current_sync_id = None
                 return
 
             # SyncRun.start — short write UoW for the planned counts.
@@ -553,14 +566,18 @@ class SyncOrchestrator:
                 "message": f"Sync failed — {_msg}",
                 "step": 0,
                 "totalSteps": 0,
+                "runId": str(box.current_sync_id or ""),
             }
             self._loop.create_task(self._emit("sync_progress", box.sync_progress))
-            # Prefer the captured ``run_id`` — finalize may have already
-            # nulled ``box.current_sync_id`` before a terminal write raised.
-            # ``_mark_sync_run_errored`` no-ops gracefully on a falsy id
-            # (pre-``_open_sync_run`` failures, where the run was never opened).
+            # Use the captured ``run_id`` — ``_mark_sync_run_errored`` no-ops
+            # gracefully on a falsy id (pre-``_open_sync_run`` failures, where
+            # the run was never opened).
             await self._loop.run_in_executor(None, self._mark_sync_run_errored, run_id or box.current_sync_id, _msg)
-            box.sync_state = SyncState.IDLE
+        finally:
+            # Single run-scoped termination point for every exit path (success,
+            # cancel, error, zero-unit) — resets to IDLE only if ``run_id``
+            # still owns the slot (#1202).
+            box.finish_run(run_id)
 
     # ── SyncRun lifecycle (short write UoWs) ─────────────────────
 
@@ -771,7 +788,7 @@ class SyncOrchestrator:
                 # reporter drives that commit itself.
                 box.unit_abandoned = True
                 box.pending_unit_roms = unit_roms
-                box.sync_state = SyncState.CANCELLING
+                box.request_cancel()
             return 0
 
         # Per-unit commit: the reporter upserts each acked ROM into the
