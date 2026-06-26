@@ -12,7 +12,12 @@ import { setSyncProgress } from "./utils/syncProgress";
 import { updateDownload, getDownloadState } from "./utils/downloadStore";
 import { handleGlobalDownloadFailure } from "./utils/downloadFailure";
 import { registerGameDetailPatch, unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
-import { registerMetadataPatches, unregisterMetadataPatches, applyAllPlaytime } from "./patches/metadataPatches";
+import {
+  registerMetadataPatches,
+  unregisterMetadataPatches,
+  applyAllPlaytime,
+  applyAllMetadata,
+} from "./patches/metadataPatches";
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./utils/launchInterceptor";
 import { hasAnySaveConflict } from "./utils/saveStatus";
 import {
@@ -150,6 +155,12 @@ export default definePlugin(() => {
         registerRomMAppId(appId);
       }
     }
+
+    // Apply the overview mutations (controller badge / rating / categories) with a
+    // readiness retry — appStore is rebuilt each mount and may not hold our
+    // overviews yet, so a single pass silently no-ops on a cold boot (#1203).
+    // Detached so the retry's backoff doesn't delay init completion.
+    detach(applyAllMetadata());
 
     try {
       const { playtime } = await withTimeout(getAllPlaytime(), CALLABLE_TIMEOUT);

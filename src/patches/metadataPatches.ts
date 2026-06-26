@@ -33,10 +33,12 @@ function getMetadataForAppId(appId: number): RomMetadata | null {
 
 /**
  * Apply direct property mutations to a SteamAppOverview for a RomM app.
+ * Returns true if the overview was present and mutated, false if it wasn't
+ * available yet (the caller retries those — see {@link applyAllMetadata}).
  */
-function applyDirectMutations(appId: number, metadata: RomMetadata) {
+function applyDirectMutations(appId: number, metadata: RomMetadata): boolean {
   const overview = appStore.GetAppOverviewByAppID(appId);
-  if (!overview) return;
+  if (!overview) return false;
 
   stateTransaction(() => {
     overview.controller_support = 2;
@@ -51,11 +53,14 @@ function applyDirectMutations(appId: number, metadata: RomMetadata) {
       }
     }
   });
+  return true;
 }
 
 /**
- * Initialize metadata state and apply direct property mutations.
- * Call on plugin load after fetching the metadata cache and app ID map.
+ * Initialize metadata state: the app_id→rom_id map and the registered-appId set.
+ * Pure setup — the overview mutations themselves happen in {@link applyAllMetadata},
+ * which retries until Steam's appStore is populated. Call on plugin load (before
+ * applyAllMetadata) after fetching the metadata cache and app ID map.
  */
 export function registerMetadataPatches(cache: Record<string, RomMetadata>, appIdMap: Record<string, number>) {
   metadataCache = cache;
@@ -69,13 +74,61 @@ export function registerMetadataPatches(cache: Record<string, RomMetadata>, appI
   // Build set of registered app IDs
   registeredAppIds = new Set(Object.keys(appIdToRomId).map(Number));
 
-  // Apply direct mutations for all known apps (controller support, categories, metacritic)
-  for (const appId of registeredAppIds) {
+  logInfo(`Registered metadata for ${registeredAppIds.size} apps`);
+}
+
+/**
+ * Attempt one pass of metadata mutations over the given appIds. Returns the
+ * appIds whose appStore overview wasn't available yet, so the caller can retry.
+ */
+function tryApplyMetadata(appIds: number[]): number[] {
+  const notApplied: number[] = [];
+  for (const appId of appIds) {
     const meta = getMetadataForAppId(appId);
-    if (meta) applyDirectMutations(appId, meta);
+    if (!meta) continue; // no metadata for this app — nothing to apply, not a retry case
+    if (!applyDirectMutations(appId, meta)) notApplied.push(appId);
+  }
+  return notApplied;
+}
+
+/**
+ * Apply the direct overview mutations (controller support, metacritic, store
+ * categories) for every registered RomM app, retrying apps whose appStore
+ * overview isn't available yet. Steam rebuilds appStore on every mount and may
+ * still be loading shortcuts when this first runs, so a single pass silently
+ * no-ops on a cold boot and the controller badge / rating / categories never
+ * apply until a later mount (#1203). Mirrors {@link applyAllPlaytime}'s readiness
+ * retry. Idempotent (re-applying the same values is safe), so retries can't
+ * corrupt state. Call after {@link registerMetadataPatches}.
+ */
+export async function applyAllMetadata(): Promise<void> {
+  let pending = [...registeredAppIds].filter((appId) => getMetadataForAppId(appId) != null);
+  if (pending.length === 0) return;
+
+  // Try up to 4 times with increasing delays (0ms, 1s, 3s, 5s) — same ladder as playtime.
+  const delays = [0, 1000, 3000, 5000];
+  for (let attempt = 0; attempt < delays.length && pending.length > 0; attempt++) {
+    if (delays[attempt]! > 0) {
+      // attempt < delays.length (loop guard) ⇒ index in bounds
+      await new Promise((r) => setTimeout(r, delays[attempt]));
+    }
+
+    pending = tryApplyMetadata(pending);
+
+    if (pending.length > 0 && attempt < delays.length - 1) {
+      detach(
+        debugLog(
+          `applyAllMetadata: attempt ${attempt + 1}, ${pending.length} apps not in appStore yet, retrying in ${delays[attempt + 1]}ms...`,
+        ),
+      );
+    }
   }
 
-  logInfo(`Applied metadata mutations for ${registeredAppIds.size} apps`);
+  if (pending.length > 0) {
+    detach(debugLog(`applyAllMetadata: ${pending.length} apps still unavailable in appStore after all retries`));
+  } else {
+    detach(debugLog(`applyAllMetadata: all metadata mutations applied`));
+  }
 }
 
 /**

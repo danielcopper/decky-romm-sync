@@ -134,6 +134,21 @@ The current approach owns the entire game detail UI via custom React components 
 
 See: `src/patches/gameDetailPatch.tsx`, `src/components/RomMPlaySection.tsx`
 
+## Overview metadata mutations (readiness-gated)
+
+Beyond the custom UI, the plugin writes three fields directly onto each RomM shortcut's `SteamAppOverview` so the
+shortcut presents like a native Steam game: `controller_support = 2` (the "Full Controller Support" badge — important so
+Game Mode doesn't flag the controller-driven RetroDECK launch), `metacritic_score` (from RomM's `average_rating`), and
+`m_setStoreCategories` (RomM's `steam_categories`).
+
+Steam rebuilds `appStore` from scratch on every `SharedJSContext` mount, so these in-memory mutations are lost on each
+reload and must re-apply per mount. `registerMetadataPatches` builds the appId→romId map; `applyAllMetadata` then
+applies the mutations with a **readiness retry** (the same `[0, 1s, 3s, 5s]` ladder as `applyAllPlaytime`). Without the
+retry the pass runs before `appStore` is populated and silently no-ops on a cold boot, so the badge/rating/categories
+never appear until a later mount (#1203). The mutations are idempotent, so retries are safe.
+
+See: `src/patches/metadataPatches.ts`
+
 ## VDF Format Notes
 
 Shortcut creation goes through the frontend `SteamClient.Apps.AddShortcut()` API — `AddShortcut` returns the real

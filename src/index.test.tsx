@@ -30,6 +30,7 @@ vi.mock("./patches/metadataPatches", () => ({
   registerMetadataPatches: vi.fn(),
   unregisterMetadataPatches: vi.fn(),
   applyAllPlaytime: vi.fn().mockResolvedValue(undefined),
+  applyAllMetadata: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("./utils/launchInterceptor", () => ({
   registerLaunchInterceptor: vi.fn(),
