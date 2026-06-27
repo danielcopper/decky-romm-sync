@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.24.0...decky-romm-sync-v0.24.1) (2026-06-27)
+
+
+### Bug Fixes
+
+* **sync:** single-owner run lifecycle — rapid Sync/Cancel no longer corrupts state ([#1202](https://github.com/danielcopper/decky-romm-sync/issues/1202)) ([#1209](https://github.com/danielcopper/decky-romm-sync/issues/1209)) ([c7d6020](https://github.com/danielcopper/decky-romm-sync/commit/c7d602040591f1342ccf48ea15163f1af381796e))
+
 ## [0.24.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.23.0...decky-romm-sync-v0.24.0) (2026-06-26)
 
 

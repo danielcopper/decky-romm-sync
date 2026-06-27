@@ -18,7 +18,7 @@ from domain.rom_save_state import RomSaveState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 from domain.save_slot import save_in_slot, slot_query_param
 from services.saves._messages import SAVE_SYNC_IN_CONTENT_DIR
-from services.saves._settings import resolve_default_slot
+from services.saves._settings import autocleanup_limit, resolve_default_slot
 
 if TYPE_CHECKING:
     import asyncio
@@ -317,6 +317,11 @@ class SetupWizard:
         core_so = await self._loop.run_in_executor(None, self._resolve_core, rom_id)
         emulator = build_emulator_tag(core_so)
 
+        # Carry-over uploads POST a new entry into the chosen slot, so the user's
+        # retention cap applies here too (RomM autocleanup defaults off → without
+        # it, repeated migrations stack uncapped).
+        cleanup_limit = autocleanup_limit(self._settings)
+
         ids_to_delete: list[int] = []
         not_carried: list[str] = []
 
@@ -341,6 +346,7 @@ class SetupWizard:
                         em,
                         device_id=device_id,
                         slot=slot_query_param(chosen_slot),
+                        autocleanup_limit=cleanup_limit,
                     ),
                 ),
             )

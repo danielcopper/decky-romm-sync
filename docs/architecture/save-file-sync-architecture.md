@@ -32,7 +32,9 @@ Requires RomM >= 4.8.1. The plugin rejects servers below 4.8.1 with `reason: "ve
 **New parameters on POST:**
 
 - `slot` — slot name (e.g. `"default"`). If omitted, save has `slot=null` (legacy behavior).
-- `autocleanup_limit` — max save versions retained per slot (default: 10).
+- `autocleanup` — whether RomM prunes old stacked versions. Defaults to **false**.
+- `autocleanup_limit` — max save versions retained per slot (default: 10). Inert unless `autocleanup=true` is sent
+  alongside it.
 - `device_id` — server-registered device UUID. Used to populate `device_syncs` per save.
 
 **New fields on save metadata:**
@@ -62,6 +64,9 @@ different save states per device).
 
 - Every game gets a `default` slot (configurable in QAM settings as "Default Save Slot")
 - First upload = POST (creates save entry with timestamp filename, server assigns ID)
+- On that POST the plugin sends `autocleanup=true` together with the user-configured `autocleanup_limit` (QAM
+  "Auto-cleanup limit"), so the setting actually caps how many versions RomM retains. It is POST-only: PUT updates in
+  place and never stacks, so the cap is established once at entry creation.
 - All subsequent syncs = PUT to the tracked `save_id` (content update, no stacking)
 - Normal single-device flow: exactly 1 save entry per game per slot
 - Multi-device: all devices share the same save entry via `tracked_save_id`
@@ -88,6 +93,18 @@ reachable):
 
 An empty target slot is just the case where step 3 is a no-op: every local file is quarantined, tracking is cleared, and
 the slot starts fresh — with every prior save recoverable under `.romm-backup`.
+
+#### Inside `.romm-backup` — naming and retention
+
+Backups live in `<saves_dir>/.romm-backup` and are named `<name>_<ts>[_<n>]<ext>`, where `<ts>` is the `YYYYMMDD_HHMMSS`
+quarantine time. When several files of one slot are backed up within the same second (so the base `<name>_<ts><ext>`
+name would collide), a `_<n>` counter (`_1`, `_2`, …) is appended so an earlier backup is never overwritten by a later
+one. The folder is capped at the **newest 10** backups per save file: each quarantine prunes the older copies of that
+same file beyond the cap, bounding disk use on the Deck while keeping a deep-enough recovery net. The cap is per save
+file — backups of a different save file in the same folder are never pruned by another file's quarantine. One deliberate
+exception: the backup a quarantine just wrote is never pruned in that same call, so under sustained same-second churn
+the folder may briefly hold one extra copy (11) — honouring the cap by deleting the just-saved file would defeat the
+backup.
 
 ### The `none` slot (legacy)
 

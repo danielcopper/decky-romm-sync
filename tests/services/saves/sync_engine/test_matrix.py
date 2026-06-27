@@ -14,7 +14,7 @@ import pytest
 
 from domain.rom_save_state import RomSaveState
 from lib.errors import RommApiError
-from services.saves.sync_engine.matrix import DispatchSink
+from services.saves.sync_engine.matrix import DispatchSink, SyncRunOptions
 from tests.services.saves._helpers import (
     _create_save,
     _do_sync,
@@ -1132,6 +1132,69 @@ class TestDoUploadSaveFileStatePersistence:
         assert reloaded_file.tracked_save_id == 100
 
 
+class TestAutocleanupLimitThreading:
+    """The user's ``autocleanup_limit`` setting reaches the POST upload, POST-only.
+
+    Drives the real public ``sync_rom_saves`` so the value is resolved from
+    ``settings.json`` in ``_run_rom_sync`` and threaded the whole way down to
+    ``upload_save`` — the path the dead-setting bug (#1060) left disconnected.
+    """
+
+    @pytest.mark.asyncio
+    async def test_post_upload_carries_autocleanup_limit(self, tmp_path):
+        """A POST (new save) upload sends the configured ``autocleanup_limit``."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        svc._config.settings["autocleanup_limit"] = 25
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)  # local only → POST
+
+        await svc.sync_rom_saves(42)
+
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        assert upload_calls[0][2]["save_id"] is None  # POST path
+        assert upload_calls[0][2]["autocleanup_limit"] == 25
+
+    @pytest.mark.asyncio
+    async def test_put_upload_drops_autocleanup_limit(self, tmp_path):
+        """A PUT (update tracked save) upload leaves ``autocleanup_limit`` None.
+
+        Even with the cap configured, the PUT branch sends nothing — RomM
+        updates in place and never stacks, so the cap is POST-only.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, device_id="device-1")
+        svc._config.settings["autocleanup_limit"] = 25
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"diverged local content")
+
+        # is_current=true on our device + local diverged from the baseline →
+        # Upload(target_save_id=100) → PUT.
+        fake.saves[100] = _server_save_with_syncs(
+            save_id=100,
+            slot="default",
+            device_syncs=[{"device_id": "device-1", "is_current": True}],
+        )
+        _seed_save_state_dict(
+            svc,
+            42,
+            {
+                "files": {"pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": "oldhash"}},
+                "system": "gba",
+                "active_slot": "default",
+                "slot_confirmed": True,
+            },
+        )
+
+        await svc.sync_rom_saves(42)
+
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        assert upload_calls[0][2]["save_id"] == 100  # PUT path
+        assert upload_calls[0][2]["autocleanup_limit"] is None
+
+
 class TestSyncRomSavesDispatch:
     def test_sync_rom_saves_skip_when_synced(self, tmp_path):
         """is_current=true + matching hash + tracked → Skip, no I/O."""
@@ -1586,7 +1649,7 @@ class TestHandleUnexpectedError:
             saves_dir=str(saves_dir),
             system="gba",
             core_so=None,
-            default_slot=None,
+            options=SyncRunOptions(),
             server_saves=[],
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
@@ -1632,7 +1695,7 @@ class TestDispatchSyncActionErrorBranches:
             saves_dir=str(saves_dir),
             system="gba",
             core_so=None,
-            default_slot=None,
+            options=SyncRunOptions(),
             server_saves=[],
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
@@ -1665,7 +1728,7 @@ class TestDispatchUploadDefensiveBranches:
             local_path=None,
             system="gba",
             core_so=None,
-            default_slot=None,
+            options=SyncRunOptions(),
             server_saves=[],
             errors=errors,
         )
@@ -1697,7 +1760,7 @@ class TestDispatchUploadDefensiveBranches:
             local_path=str(save_path),
             system="gba",
             core_so=None,
-            default_slot=None,
+            options=SyncRunOptions(),
             server_saves=[{"id": 100, "file_name": "pokemon.srm"}],
             errors=errors,
         )
@@ -1736,3 +1799,121 @@ class TestRecordOwnUploadNoneId:
         state = _do_upload(svc, 42, str(save_path), "pokemon.srm", "gba")
 
         assert state.own_upload_ids == [50, 51]
+
+
+class TestQuarantineBackupRetention:
+    """quarantine_local_file's collision-proof naming + retention pruning (#974).
+
+    The default ``FakeClock(now=datetime(2026, 1, 1))`` stamps the same
+    ``20260101_000000`` timestamp until a test calls ``clock.advance(...)``, so
+    same-second collision tests run it fixed while ordering-sensitive retention
+    tests advance it for distinct timestamps.
+    """
+
+    def test_same_second_collision_keeps_both_backups(self, tmp_path):
+        """Two same-second quarantines of one file produce two distinct backups —
+        the earlier copy is never overwritten by the ``_<n>`` counter."""
+        svc, _ = make_service(tmp_path)
+        matrix = svc._sync_engine._matrix
+        saves_dir = tmp_path / "saves" / "gba"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+        save_path = saves_dir / "game.srm"
+
+        save_path.write_bytes(b"first version")
+        assert matrix.quarantine_local_file(str(saves_dir), "game.srm") is True
+
+        save_path.write_bytes(b"second version")
+        assert matrix.quarantine_local_file(str(saves_dir), "game.srm") is True
+
+        backup_dir = saves_dir / ".romm-backup"
+        first = backup_dir / "game_20260101_000000.srm"
+        second = backup_dir / "game_20260101_000000_1.srm"
+        assert first.exists()
+        assert second.exists()
+        # The earlier backup survived the same-second second quarantine.
+        assert first.read_bytes() == b"first version"
+        assert second.read_bytes() == b"second version"
+
+    def test_retention_caps_backups_per_file_and_spares_others(self, tmp_path):
+        """More than the retention limit of quarantines for one file leaves exactly
+        ``_BACKUP_RETENTION`` backups for its stem — the NEWEST versions — while a
+        different file's backup is untouched.
+
+        Uses an advancing clock so every backup has a distinct ``<ts>`` and the
+        chronological prune ordering is unambiguous.
+        """
+        from datetime import UTC, datetime
+
+        from fakes.system_time import FakeClock
+
+        from services.saves.sync_engine.matrix import _BACKUP_RETENTION
+
+        clock = FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC))
+        svc, _ = make_service(tmp_path, clock=clock)
+        matrix = svc._sync_engine._matrix
+        saves_dir = tmp_path / "saves" / "gba"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+        backup_dir = saves_dir / ".romm-backup"
+
+        # A backup of a DIFFERENT save file that must survive game.srm pruning.
+        (saves_dir / "mario.srm").write_bytes(b"mario save")
+        assert matrix.quarantine_local_file(str(saves_dir), "mario.srm") is True
+
+        total = _BACKUP_RETENTION + 5
+        contents = [f"game v{i}".encode() for i in range(total)]
+        for content in contents:
+            clock.advance(1)  # distinct <ts> per quarantine → no same-second collisions
+            (saves_dir / "game.srm").write_bytes(content)
+            assert matrix.quarantine_local_file(str(saves_dir), "game.srm") is True
+
+        entries = os.listdir(backup_dir)
+        game_backups = [n for n in entries if n.startswith("game_")]
+        assert len(game_backups) == _BACKUP_RETENTION
+        # The survivors are exactly the newest _BACKUP_RETENTION versions written…
+        survivor_contents = {(backup_dir / n).read_bytes() for n in game_backups}
+        assert survivor_contents == set(contents[-_BACKUP_RETENTION:])
+        # …and the oldest 5 are gone.
+        assert all(c not in survivor_contents for c in contents[:5])
+        # The unrelated file's single backup was never pruned.
+        assert [n for n in entries if n.startswith("mario_")] == ["mario_20260101_000000.srm"]
+
+    def test_same_second_over_cap_never_deletes_just_created(self, tmp_path):
+        """Same-second churn past the cap must NEVER destroy the file it just backed up.
+
+        Regression for the prune-deletes-its-own-backup bug (#974): once the dir is
+        at cap a freed base name is reused for the newest file, and the base sorts
+        oldest — so an unguarded prune would delete the live save it just
+        quarantined. After every quarantine the just-written content must still be
+        recoverable somewhere in ``.romm-backup``; the folder stays bounded.
+        """
+        from services.saves.sync_engine.matrix import _BACKUP_RETENTION
+
+        svc, _ = make_service(tmp_path)
+        matrix = svc._sync_engine._matrix  # fixed clock → every backup is same-second
+        saves_dir = tmp_path / "saves" / "gba"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+        backup_dir = saves_dir / ".romm-backup"
+
+        total = _BACKUP_RETENTION + 5
+        for i in range(total):
+            content = f"game v{i}".encode()
+            (saves_dir / "game.srm").write_bytes(content)
+            assert matrix.quarantine_local_file(str(saves_dir), "game.srm") is True
+            # The file just quarantined survived its own prune pass.
+            present = {(backup_dir / n).read_bytes() for n in os.listdir(backup_dir)}
+            assert content in present
+            # Bounded: the cap plus at most the one just-created copy.
+            assert len(os.listdir(backup_dir)) <= _BACKUP_RETENTION + 1
+
+        # The very last version written is still present at the end.
+        final = {(backup_dir / n).read_bytes() for n in os.listdir(backup_dir)}
+        assert f"game v{total - 1}".encode() in final
+
+    def test_returns_false_when_nothing_to_back_up(self, tmp_path):
+        """No file at *filename* → early return False, no backup dir churn."""
+        svc, _ = make_service(tmp_path)
+        matrix = svc._sync_engine._matrix
+        saves_dir = tmp_path / "saves" / "gba"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+
+        assert matrix.quarantine_local_file(str(saves_dir), "absent.srm") is False

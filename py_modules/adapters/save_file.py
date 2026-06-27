@@ -48,6 +48,13 @@ class SaveFileAdapter:
         with contextlib.suppress(FileNotFoundError):
             os.remove(path)
 
+    def listdir(self, directory: str) -> list[str]:
+        """Return the entry names in *directory*; empty list if it does not exist."""
+        try:
+            return os.listdir(directory)
+        except FileNotFoundError:
+            return []
+
     def rename(self, src: str, dst: str) -> None:
         """Atomically rename *src* to *dst*, replacing any existing file at *dst*."""
         os.replace(src, dst)

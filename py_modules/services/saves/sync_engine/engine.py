@@ -34,7 +34,13 @@ from services.saves._messages import (
     SAVE_SYNC_IN_CONTENT_DIR,
     SAVE_SYNC_IN_CONTENT_DIR_REASON,
 )
-from services.saves._settings import resolve_default_slot, save_sync_enabled, sync_after_exit, sync_before_launch
+from services.saves._settings import (
+    autocleanup_limit,
+    resolve_default_slot,
+    save_sync_enabled,
+    sync_after_exit,
+    sync_before_launch,
+)
 from services.saves.sync_engine.matrix import MatrixExecutor, MatrixOutcome
 from services.saves.sync_engine.rollback import RollbackOrchestrator
 
@@ -203,9 +209,10 @@ class SyncEngine:
         device_id: str | None,
         core_so: str | None,
         default_slot: str | None = None,
+        autocleanup_limit: int | None = None,
     ) -> tuple[int, list[str], list[dict[str, Any]]]:
         """Sync saves for a single ROM (delegate to :class:`MatrixExecutor`)."""
-        return self._matrix.sync_rom_saves(rom_id, save_state, device_id, core_so, default_slot)
+        return self._matrix.sync_rom_saves(rom_id, save_state, device_id, core_so, default_slot, autocleanup_limit)
 
     def do_download_save(
         self,
@@ -235,10 +242,20 @@ class SyncEngine:
         core_so: str | None,
         server_save: dict[str, Any] | None = None,
         default_slot: str | None = None,
+        autocleanup_limit: int | None = None,
     ) -> dict[str, Any]:
         """Upload a local save file to server (delegate to :class:`MatrixExecutor`)."""
         return self._matrix.do_upload_save(
-            rom_id, file_path, filename, save_state, device_id, system, core_so, server_save, default_slot
+            rom_id,
+            file_path,
+            filename,
+            save_state,
+            device_id,
+            system,
+            core_so,
+            server_save,
+            default_slot,
+            autocleanup_limit=autocleanup_limit,
         )
 
     def iter_matrix_outcomes(
@@ -468,8 +485,9 @@ class SyncEngine:
             return 0, [], []
         core_so = await self._loop.run_in_executor(None, self.resolve_core, rom_id)
         default_slot = resolve_default_slot(self._settings)
+        cleanup_limit = autocleanup_limit(self._settings)
         synced, errors, conflicts = await self._loop.run_in_executor(
-            None, self.do_sync_rom_saves, rom_id, save_state, device_id, core_so, default_slot
+            None, self.do_sync_rom_saves, rom_id, save_state, device_id, core_so, default_slot, cleanup_limit
         )
         await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
         return synced, errors, conflicts
