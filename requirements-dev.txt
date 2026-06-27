@@ -4,4 +4,4 @@ pytest-cov>=7.1.0,<8.0
 hypothesis>=6.155.6,<7.0  # property-based tests for the save-sync decision kernels (#1028)
 ruff>=0.15.18,<0.16
 basedpyright>=1.39.8,<2.0
-import-linter>=2.11,<3.0
+import-linter>=2.12,<3.0
