@@ -34,11 +34,17 @@ pin, run `mise run lock-update` to regenerate the locks.
 Dependabot opens weekly update PRs. For **pip** it bumps the version range in `requirements-*.txt` but does not touch
 the compiled `requirements-*.lock` — so the [lock-sync gate](#linting) would fail on every pip PR. The
 `dependabot-auto-merge.yml` workflow closes that gap: on a pip PR it recompiles the locks with uv and pushes them back
-to the branch (authored by the release App, because pushes made with `GITHUB_TOKEN` don't re-trigger CI), then enables
-auto-merge. Because nothing installed from pip ships in the plugin (runtime deps are vendored) and auto-merge only
-completes once every required check passes, **CI is the gate** for pip — so pip PRs auto-merge regardless of bump size
-rather than relying on Dependabot's `update-type`, which it reports unreliably for `>=X,<Y` range bumps. npm and
-GitHub-Actions PRs auto-merge only on patch/minor updates.
+to the branch (authored by the release App, because pushes made with `GITHUB_TOKEN` don't re-trigger CI). The App token
+is minted only _after_ the recompile runs, so no write credential is on disk while the PR's `uv pip compile` executes.
+
+Auto-merge for pip is then gated on `scripts/check_dependabot_cap.py`: it enables only when Dependabot stayed **under
+the `<X` ceiling already declared** in `requirements-*.txt` (a routine in-range bump). If Dependabot instead _raises_ a
+ceiling (e.g. `pytest-asyncio` is deliberately held `<1.4` for #806), the gate leaves the PR for human review. The
+ceiling lives in exactly one place — the requirements source — and the gate reads it; it is not duplicated into a second
+ignore-list. Within that ceiling, nothing installed from pip ships in the plugin (runtime deps are vendored) and
+auto-merge completes only once every required check passes, so **CI is the gate** — no reliance on Dependabot's
+`update-type`, which it reports unreliably for `>=X,<Y` range bumps. npm and GitHub-Actions PRs auto-merge only on
+patch/minor updates.
 
 ## Building
 

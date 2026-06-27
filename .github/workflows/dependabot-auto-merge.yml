@@ -4,13 +4,17 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened]
 
+# GITHUB_TOKEN needs only pull-requests:write to enable auto-merge. The lock push
+# uses a separately-minted, contents:write-scoped App token (see below), so the
+# default token stays read-only on contents.
 permissions:
-  contents: write
+  contents: read
   pull-requests: write
 
 jobs:
   auto-merge:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: github.actor == 'dependabot[bot]'
     steps:
       - name: Fetch Dependabot metadata
@@ -19,36 +23,27 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # --- pip only: keep the uv lock in sync with the bumped requirement range.
+      # ---- pip path ------------------------------------------------------
       # Dependabot bumps the version RANGE in requirements-*.txt but never
       # regenerates the pinned requirements-*.lock that CI installs from, so the
       # lock-sync gate (part of the required `lint` check) fails on every pip PR
-      # until the lock is recompiled. Recompile it here and push it back.
+      # until the lock is recompiled. We recompile it here and push it back.
       #
-      # The push must be authored by the GitHub App, NOT GITHUB_TOKEN: pushes made
-      # with GITHUB_TOKEN do not trigger workflows (anti-recursion), which would
-      # leave the required checks stuck on the pre-push commit and auto-merge
-      # never completing. The App token (the same one release-please uses) makes
-      # CI re-run on the new commit. See release.yml for the same pattern.
-      #
-      # This runs PR-supplied code (`uv pip compile` may build sdists), but the
-      # whole job is gated to `github.actor == 'dependabot[bot]'`, which only ever
-      # bumps already-declared deps — no widening of the trust boundary the
-      # existing pull_request_target workflow already grants Dependabot.
-      - name: Mint App token for the lock push
-        if: steps.meta.outputs.package-ecosystem == 'pip'
-        uses: actions/create-github-app-token@v3
-        id: app-token
-        with:
-          client-id: ${{ secrets.RELEASE_PLEASE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
-
-      - name: Check out the PR branch
+      # Security: the checkout uses `persist-credentials: false` and the
+      # contents:write App token is minted ONLY AFTER `uv pip compile` has run, so
+      # no write credential is on disk or in the environment while PR-controlled
+      # code executes (uv may build an sdist = arbitrary code at resolve time).
+      # The whole job is also gated to `github.actor == 'dependabot[bot]'`, which
+      # only ever bumps already-declared deps. The push must be authored by the
+      # App, not GITHUB_TOKEN, because GITHUB_TOKEN pushes don't re-trigger CI
+      # (anti-recursion) — see release.yml for the same pattern.
+      - name: Check out the PR branch (no persisted credentials)
         if: steps.meta.outputs.package-ecosystem == 'pip'
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.ref }}
-          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Python
         if: steps.meta.outputs.package-ecosystem == 'pip'
@@ -58,38 +53,82 @@ jobs:
 
       - name: Set up uv
         if: steps.meta.outputs.package-ecosystem == 'pip'
-        uses: astral-sh/setup-uv@v8.2.0
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           version: "0.10.2"
 
-      - name: Regenerate dependency locks and push if changed
+      # Auto-merge is safe only while the bump stays UNDER the `<X` ceiling the
+      # maintainer already declared (e.g. pytest-asyncio held <1.4 for #806). If
+      # Dependabot raises a ceiling, that PR needs human review. The ceiling lives
+      # only in requirements-*.txt; this gate reads it (no duplicated cap list).
+      # The repo is public, so the unauthenticated base fetch needs no token.
+      - name: Check the bump stays under the declared version ceilings
+        id: cap
         if: steps.meta.outputs.package-ecosystem == 'pip'
         env:
-          # Passed via env, never interpolated into the shell, so a crafted
-          # dependency name can't inject commands (GitHub Actions hardening).
-          DEP_NAMES: ${{ steps.meta.outputs.dependency-names }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
+          set -euo pipefail
+          git fetch --depth=1 origin "$BASE_REF"
+          tmp="$(mktemp -d)"
+          git show "origin/${BASE_REF}:requirements-dev.txt" > "$tmp/dev.txt"
+          git show "origin/${BASE_REF}:requirements-docs.txt" > "$tmp/docs.txt"
+          if python scripts/check_dependabot_cap.py \
+               "$tmp/dev.txt" requirements-dev.txt \
+               "$tmp/docs.txt" requirements-docs.txt; then
+            echo "within_cap=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "within_cap=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Regenerate dependency locks
+        id: locks
+        if: steps.meta.outputs.package-ecosystem == 'pip'
+        run: |
+          set -euo pipefail
           uv pip compile requirements-dev.txt -o requirements-dev.lock
           uv pip compile requirements-docs.txt -o requirements-docs.lock
           if git diff --quiet -- requirements-dev.lock requirements-docs.lock; then
-            echo "Locks already satisfy the bumped constraints — nothing to push."
-            exit 0
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Mint App token for the lock push
+        id: app-token
+        if: steps.meta.outputs.package-ecosystem == 'pip' && steps.locks.outputs.changed == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.RELEASE_PLEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Push regenerated locks
+        if: steps.meta.outputs.package-ecosystem == 'pip' && steps.locks.outputs.changed == 'true'
+        env:
+          # Via env, never interpolated into the shell (Actions hardening): a
+          # crafted dependency name or branch can't inject commands, and the
+          # App token (a masked secret) can't be logged via the push URL.
+          TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          DEP_NAMES: ${{ steps.meta.outputs.dependency-names }}
+        run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add requirements-dev.lock requirements-docs.lock
           git commit -m "chore(deps): regenerate dependency locks for ${DEP_NAMES}"
-          git push
+          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${BRANCH}"
 
-      # Enable auto-merge. pip PRs are dev/docs-only tooling — nothing installed
-      # from pip ships in the plugin (runtime deps are vendored) — and auto-merge
-      # completes only once every required check passes, so CI is the real gate.
-      # We therefore don't additionally gate pip on update-type, which
-      # fetch-metadata reports unreliably for range bumps (`>=X,<Y`). npm and
-      # github-actions keep the conservative patch/minor gate.
+      # Enable auto-merge. For pip, gate on the cap check (in-range bump only);
+      # a ceiling raise is left for human review. Nothing installed from pip ships
+      # in the plugin (runtime deps are vendored) and auto-merge completes only
+      # when every required check passes, so CI is the gate for in-range bumps —
+      # no reliance on update-type, which fetch-metadata reports unreliably for
+      # range bumps. npm and github-actions keep the patch/minor gate.
       - name: Enable auto-merge
         if: |
-          steps.meta.outputs.package-ecosystem == 'pip' ||
+          (steps.meta.outputs.package-ecosystem == 'pip' && steps.cap.outputs.within_cap == 'true') ||
           steps.meta.outputs.update-type == 'version-update:semver-patch' ||
           steps.meta.outputs.update-type == 'version-update:semver-minor'
         env:
