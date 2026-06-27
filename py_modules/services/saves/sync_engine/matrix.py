@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.emulator_tag import build_emulator_tag
 from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.save_backup import backup_name, select_backups_to_prune
 from domain.save_slot import save_in_slot
 from domain.sync_action import (
     Conflict,
@@ -44,6 +45,9 @@ if TYPE_CHECKING:
         SaveFileStore,
     )
     from services.saves.rom_info import RomInfoService
+
+
+_BACKUP_RETENTION = 10  # max .romm-backup copies kept per save file (#974)
 
 
 @dataclass(frozen=True)
@@ -245,9 +249,16 @@ class MatrixExecutor:
         download-overwrite path (:meth:`do_download_save`) and the slot-switch
         removal path route through here, so no local save is ever destroyed
         without a recoverable copy (#965). The backup lands at
-        ``<saves_dir>/.romm-backup/<name>_<ts><ext>`` (``<ts>`` from the injected
-        clock). Returns ``True`` when a file was moved, ``False`` when there was
-        nothing at *filename* to back up.
+        ``<saves_dir>/.romm-backup/<name>_<ts>[_<n>]<ext>`` (``<ts>`` from the
+        injected clock). A same-second collision appends a ``_<n>`` counter so a
+        multi-file slot quarantined within one second never overwrites an earlier
+        backup, and the newest ``_BACKUP_RETENTION`` backups per save file are
+        kept — older ones are pruned to bound the recovery net's disk use (#974).
+        The backup written by this call is never pruned in its own call, so under
+        sustained same-second churn the folder may briefly hold one extra copy
+        (``_BACKUP_RETENTION + 1``) — destroying the just-saved file to honour the
+        cap would defeat the backup. Returns ``True`` when a file was moved,
+        ``False`` when there was nothing at *filename* to back up.
         """
         local_path = os.path.join(saves_dir, filename)
         if not self._save_file_store.is_file(local_path):
@@ -255,8 +266,15 @@ class MatrixExecutor:
         backup_dir = os.path.join(saves_dir, ".romm-backup")
         self._save_file_store.make_dirs(backup_dir)
         ts = self._clock.now().strftime("%Y%m%d_%H%M%S")
-        name, ext = os.path.splitext(filename)
-        self._save_file_store.rename(local_path, os.path.join(backup_dir, f"{name}_{ts}{ext}"))
+        existing = set(self._save_file_store.listdir(backup_dir))
+        backup = backup_name(filename, ts, existing)
+        self._save_file_store.rename(local_path, os.path.join(backup_dir, backup))
+        # Bound the recovery net: keep only the newest N backups per save file (#974).
+        existing.add(backup)
+        for stale in select_backups_to_prune(filename, list(existing), _BACKUP_RETENTION):
+            if stale == backup:
+                continue  # never prune the backup just created this call (#974 — would destroy the save)
+            self._save_file_store.remove_file(os.path.join(backup_dir, stale))
         return True
 
     @staticmethod

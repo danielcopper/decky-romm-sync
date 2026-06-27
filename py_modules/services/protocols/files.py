@@ -361,6 +361,10 @@ class SaveFileStore(Protocol):
         """Delete *path*. Idempotent: a missing file is not an error."""
         ...
 
+    def listdir(self, directory: str) -> list[str]:
+        """Return the entry names in *directory*; empty list if it does not exist."""
+        ...
+
     def rename(self, src: str, dst: str) -> None:
         """Atomically rename *src* to *dst*, replacing any existing file at *dst*.
 

@@ -69,6 +69,16 @@ class FakeSaveFileStore:
         self.files.pop(path, None)
         self.mtimes.pop(path, None)
 
+    def listdir(self, directory: str) -> list[str]:
+        prefix = directory.rstrip("/") + "/"
+        names: set[str] = set()
+        for stored in (*self.files, *self.dirs):
+            if stored.startswith(prefix):
+                rest = stored[len(prefix) :]
+                if rest:
+                    names.add(rest.split("/", 1)[0])
+        return sorted(names)
+
     def rename(self, src: str, dst: str) -> None:
         self.rename_calls.append((src, dst))
         if src not in self.files:

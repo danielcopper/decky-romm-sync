@@ -1736,3 +1736,121 @@ class TestRecordOwnUploadNoneId:
         state = _do_upload(svc, 42, str(save_path), "pokemon.srm", "gba")
 
         assert state.own_upload_ids == [50, 51]
+
+
+class TestQuarantineBackupRetention:
+    """quarantine_local_file's collision-proof naming + retention pruning (#974).
+
+    The default ``FakeClock(now=datetime(2026, 1, 1))`` stamps the same
+    ``20260101_000000`` timestamp until a test calls ``clock.advance(...)``, so
+    same-second collision tests run it fixed while ordering-sensitive retention
+    tests advance it for distinct timestamps.
+    """
+
+    def test_same_second_collision_keeps_both_backups(self, tmp_path):
+        """Two same-second quarantines of one file produce two distinct backups —
+        the earlier copy is never overwritten by the ``_<n>`` counter."""
+        svc, _ = make_service(tmp_path)
+        matrix = svc._sync_engine._matrix
+        saves_dir = tmp_path / "saves" / "gba"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+        save_path = saves_dir / "game.srm"
+
+        save_path.write_bytes(b"first version")
+        assert matrix.quarantine_local_file(str(saves_dir), "game.srm") is True
+
+        save_path.write_bytes(b"second version")
+        assert matrix.quarantine_local_file(str(saves_dir), "game.srm") is True
+
+        backup_dir = saves_dir / ".romm-backup"
+        first = backup_dir / "game_20260101_000000.srm"
+        second = backup_dir / "game_20260101_000000_1.srm"
+        assert first.exists()
+        assert second.exists()
+        # The earlier backup survived the same-second second quarantine.
+        assert first.read_bytes() == b"first version"
+        assert second.read_bytes() == b"second version"
+
+    def test_retention_caps_backups_per_file_and_spares_others(self, tmp_path):
+        """More than the retention limit of quarantines for one file leaves exactly
+        ``_BACKUP_RETENTION`` backups for its stem — the NEWEST versions — while a
+        different file's backup is untouched.
+
+        Uses an advancing clock so every backup has a distinct ``<ts>`` and the
+        chronological prune ordering is unambiguous.
+        """
+        from datetime import UTC, datetime
+
+        from fakes.system_time import FakeClock
+
+        from services.saves.sync_engine.matrix import _BACKUP_RETENTION
+
+        clock = FakeClock(now=datetime(2026, 1, 1, tzinfo=UTC))
+        svc, _ = make_service(tmp_path, clock=clock)
+        matrix = svc._sync_engine._matrix
+        saves_dir = tmp_path / "saves" / "gba"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+        backup_dir = saves_dir / ".romm-backup"
+
+        # A backup of a DIFFERENT save file that must survive game.srm pruning.
+        (saves_dir / "mario.srm").write_bytes(b"mario save")
+        assert matrix.quarantine_local_file(str(saves_dir), "mario.srm") is True
+
+        total = _BACKUP_RETENTION + 5
+        contents = [f"game v{i}".encode() for i in range(total)]
+        for content in contents:
+            clock.advance(1)  # distinct <ts> per quarantine → no same-second collisions
+            (saves_dir / "game.srm").write_bytes(content)
+            assert matrix.quarantine_local_file(str(saves_dir), "game.srm") is True
+
+        entries = os.listdir(backup_dir)
+        game_backups = [n for n in entries if n.startswith("game_")]
+        assert len(game_backups) == _BACKUP_RETENTION
+        # The survivors are exactly the newest _BACKUP_RETENTION versions written…
+        survivor_contents = {(backup_dir / n).read_bytes() for n in game_backups}
+        assert survivor_contents == set(contents[-_BACKUP_RETENTION:])
+        # …and the oldest 5 are gone.
+        assert all(c not in survivor_contents for c in contents[:5])
+        # The unrelated file's single backup was never pruned.
+        assert [n for n in entries if n.startswith("mario_")] == ["mario_20260101_000000.srm"]
+
+    def test_same_second_over_cap_never_deletes_just_created(self, tmp_path):
+        """Same-second churn past the cap must NEVER destroy the file it just backed up.
+
+        Regression for the prune-deletes-its-own-backup bug (#974): once the dir is
+        at cap a freed base name is reused for the newest file, and the base sorts
+        oldest — so an unguarded prune would delete the live save it just
+        quarantined. After every quarantine the just-written content must still be
+        recoverable somewhere in ``.romm-backup``; the folder stays bounded.
+        """
+        from services.saves.sync_engine.matrix import _BACKUP_RETENTION
+
+        svc, _ = make_service(tmp_path)
+        matrix = svc._sync_engine._matrix  # fixed clock → every backup is same-second
+        saves_dir = tmp_path / "saves" / "gba"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+        backup_dir = saves_dir / ".romm-backup"
+
+        total = _BACKUP_RETENTION + 5
+        for i in range(total):
+            content = f"game v{i}".encode()
+            (saves_dir / "game.srm").write_bytes(content)
+            assert matrix.quarantine_local_file(str(saves_dir), "game.srm") is True
+            # The file just quarantined survived its own prune pass.
+            present = {(backup_dir / n).read_bytes() for n in os.listdir(backup_dir)}
+            assert content in present
+            # Bounded: the cap plus at most the one just-created copy.
+            assert len(os.listdir(backup_dir)) <= _BACKUP_RETENTION + 1
+
+        # The very last version written is still present at the end.
+        final = {(backup_dir / n).read_bytes() for n in os.listdir(backup_dir)}
+        assert f"game v{total - 1}".encode() in final
+
+    def test_returns_false_when_nothing_to_back_up(self, tmp_path):
+        """No file at *filename* → early return False, no backup dir churn."""
+        svc, _ = make_service(tmp_path)
+        matrix = svc._sync_engine._matrix
+        saves_dir = tmp_path / "saves" / "gba"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+
+        assert matrix.quarantine_local_file(str(saves_dir), "absent.srm") is False

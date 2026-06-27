@@ -89,6 +89,18 @@ reachable):
 An empty target slot is just the case where step 3 is a no-op: every local file is quarantined, tracking is cleared, and
 the slot starts fresh — with every prior save recoverable under `.romm-backup`.
 
+#### Inside `.romm-backup` — naming and retention
+
+Backups live in `<saves_dir>/.romm-backup` and are named `<name>_<ts>[_<n>]<ext>`, where `<ts>` is the `YYYYMMDD_HHMMSS`
+quarantine time. When several files of one slot are backed up within the same second (so the base `<name>_<ts><ext>`
+name would collide), a `_<n>` counter (`_1`, `_2`, …) is appended so an earlier backup is never overwritten by a later
+one. The folder is capped at the **newest 10** backups per save file: each quarantine prunes the older copies of that
+same file beyond the cap, bounding disk use on the Deck while keeping a deep-enough recovery net. The cap is per save
+file — backups of a different save file in the same folder are never pruned by another file's quarantine. One deliberate
+exception: the backup a quarantine just wrote is never pruned in that same call, so under sustained same-second churn
+the folder may briefly hold one extra copy (11) — honouring the cap by deleting the just-saved file would defeat the
+backup.
+
 ### The `none` slot (legacy)
 
 - Saves uploaded before v2 (or without slot parameter) have `slot=null`
