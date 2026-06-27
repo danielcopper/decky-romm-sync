@@ -14,7 +14,7 @@ import pytest
 
 from domain.rom_save_state import RomSaveState
 from lib.errors import RommApiError
-from services.saves.sync_engine.matrix import DispatchSink
+from services.saves.sync_engine.matrix import DispatchSink, SyncRunOptions
 from tests.services.saves._helpers import (
     _create_save,
     _do_sync,
@@ -1649,7 +1649,7 @@ class TestHandleUnexpectedError:
             saves_dir=str(saves_dir),
             system="gba",
             core_so=None,
-            default_slot=None,
+            options=SyncRunOptions(),
             server_saves=[],
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
@@ -1695,7 +1695,7 @@ class TestDispatchSyncActionErrorBranches:
             saves_dir=str(saves_dir),
             system="gba",
             core_so=None,
-            default_slot=None,
+            options=SyncRunOptions(),
             server_saves=[],
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
@@ -1728,7 +1728,7 @@ class TestDispatchUploadDefensiveBranches:
             local_path=None,
             system="gba",
             core_so=None,
-            default_slot=None,
+            options=SyncRunOptions(),
             server_saves=[],
             errors=errors,
         )
@@ -1760,7 +1760,7 @@ class TestDispatchUploadDefensiveBranches:
             local_path=str(save_path),
             system="gba",
             core_so=None,
-            default_slot=None,
+            options=SyncRunOptions(),
             server_saves=[{"id": 100, "file_name": "pokemon.srm"}],
             errors=errors,
         )

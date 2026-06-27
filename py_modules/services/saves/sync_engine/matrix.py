@@ -81,6 +81,22 @@ class DispatchSink:
     conflicts: list[dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class SyncRunOptions:
+    """The settings-derived values threaded through one ROM's sync dispatch.
+
+    Resolved once per sync run and constant across every file of the ROM, so
+    they ride through ``_dispatch_sync_action`` / ``_dispatch_upload`` as one
+    argument rather than widening every signature (mirrors ``DispatchSink``).
+    ``default_slot`` seeds the active slot on a brand-new ROM's first sync and
+    selects the upload slot; ``autocleanup_limit`` caps server-retained versions
+    on the POST (create) upload.
+    """
+
+    default_slot: str | None = None
+    autocleanup_limit: int | None = None
+
+
 class MatrixExecutor:
     """Newest-wins matrix executor + per-file sync I/O dispatch.
 
@@ -455,8 +471,7 @@ class MatrixExecutor:
         local_path: str | None,
         system: str,
         core_so: str | None,
-        default_slot: str | None,
-        autocleanup_limit: int | None = None,
+        options: SyncRunOptions,
         server_saves: list[dict[str, Any]],
         errors: list[str],
     ) -> bool:
@@ -476,8 +491,8 @@ class MatrixExecutor:
                 system,
                 core_so,
                 None,
-                default_slot,
-                autocleanup_limit=autocleanup_limit,
+                options.default_slot,
+                autocleanup_limit=options.autocleanup_limit,
             )
             return True
         # PUT path: re-upload to update the tracked save (local diverged while
@@ -491,7 +506,7 @@ class MatrixExecutor:
             )
             return False
         self.do_upload_save(
-            rom_id, local_path, filename, save_state, device_id, system, core_so, server_save, default_slot
+            rom_id, local_path, filename, save_state, device_id, system, core_so, server_save, options.default_slot
         )
         return True
 
@@ -508,8 +523,7 @@ class MatrixExecutor:
         saves_dir: str,
         system: str,
         core_so: str | None,
-        default_slot: str | None,
-        autocleanup_limit: int | None = None,
+        options: SyncRunOptions,
         server_saves: list[dict[str, Any]],
         sink: DispatchSink,
     ) -> bool:
@@ -540,14 +554,13 @@ class MatrixExecutor:
                     local_path=local_path,
                     system=system,
                     core_so=core_so,
-                    default_slot=default_slot,
-                    autocleanup_limit=autocleanup_limit,
+                    options=options,
                     server_saves=server_saves,
                     errors=sink.errors,
                 )
             if isinstance(action, Download):
                 self.do_download_save(
-                    action.server_save, saves_dir, filename, save_state, device_id, system, default_slot
+                    action.server_save, saves_dir, filename, save_state, device_id, system, options.default_slot
                 )
                 return True
             if isinstance(action, Conflict):
@@ -715,6 +728,7 @@ class MatrixExecutor:
         errors: list[str] = []
         conflicts: list[dict[str, Any]] = []
         sink = DispatchSink(errors=errors, conflicts=conflicts)
+        options = SyncRunOptions(default_slot=default_slot, autocleanup_limit=autocleanup_limit)
         synced = 0
 
         pending_migration = self._rom_info.is_save_sort_changed()
@@ -741,8 +755,7 @@ class MatrixExecutor:
                 saves_dir=saves_dir,
                 system=system,
                 core_so=core_so,
-                default_slot=default_slot,
-                autocleanup_limit=autocleanup_limit,
+                options=options,
                 server_saves=outcome.server_candidates,
                 sink=sink,
             ):
