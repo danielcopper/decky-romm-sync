@@ -29,6 +29,17 @@ Python dependencies are installed from `requirements-dev.lock` — fully-pinned 
 `requirements-dev.txt` by uv. After changing a source (`requirements-dev.txt` / `requirements-docs.txt`) or bumping a
 pin, run `mise run lock-update` to regenerate the locks.
 
+### Dependency updates (Dependabot)
+
+Dependabot opens weekly update PRs. For **pip** it bumps the version range in `requirements-*.txt` but does not touch
+the compiled `requirements-*.lock` — so the [lock-sync gate](#linting) would fail on every pip PR. The
+`dependabot-auto-merge.yml` workflow closes that gap: on a pip PR it recompiles the locks with uv and pushes them back
+to the branch (authored by the release App, because pushes made with `GITHUB_TOKEN` don't re-trigger CI), then enables
+auto-merge. Because nothing installed from pip ships in the plugin (runtime deps are vendored) and auto-merge only
+completes once every required check passes, **CI is the gate** for pip — so pip PRs auto-merge regardless of bump size
+rather than relying on Dependabot's `update-type`, which it reports unreliably for `>=X,<Y` range bumps. npm and
+GitHub-Actions PRs auto-merge only on patch/minor updates.
+
 ## Building
 
 ```bash

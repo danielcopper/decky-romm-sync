@@ -19,8 +19,77 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Enable auto-merge for patch and minor updates
+      # --- pip only: keep the uv lock in sync with the bumped requirement range.
+      # Dependabot bumps the version RANGE in requirements-*.txt but never
+      # regenerates the pinned requirements-*.lock that CI installs from, so the
+      # lock-sync gate (part of the required `lint` check) fails on every pip PR
+      # until the lock is recompiled. Recompile it here and push it back.
+      #
+      # The push must be authored by the GitHub App, NOT GITHUB_TOKEN: pushes made
+      # with GITHUB_TOKEN do not trigger workflows (anti-recursion), which would
+      # leave the required checks stuck on the pre-push commit and auto-merge
+      # never completing. The App token (the same one release-please uses) makes
+      # CI re-run on the new commit. See release.yml for the same pattern.
+      #
+      # This runs PR-supplied code (`uv pip compile` may build sdists), but the
+      # whole job is gated to `github.actor == 'dependabot[bot]'`, which only ever
+      # bumps already-declared deps — no widening of the trust boundary the
+      # existing pull_request_target workflow already grants Dependabot.
+      - name: Mint App token for the lock push
+        if: steps.meta.outputs.package-ecosystem == 'pip'
+        uses: actions/create-github-app-token@v3
+        id: app-token
+        with:
+          client-id: ${{ secrets.RELEASE_PLEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+
+      - name: Check out the PR branch
+        if: steps.meta.outputs.package-ecosystem == 'pip'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Set up Python
+        if: steps.meta.outputs.package-ecosystem == 'pip'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        if: steps.meta.outputs.package-ecosystem == 'pip'
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          version: "0.10.2"
+
+      - name: Regenerate dependency locks and push if changed
+        if: steps.meta.outputs.package-ecosystem == 'pip'
+        env:
+          # Passed via env, never interpolated into the shell, so a crafted
+          # dependency name can't inject commands (GitHub Actions hardening).
+          DEP_NAMES: ${{ steps.meta.outputs.dependency-names }}
+        run: |
+          uv pip compile requirements-dev.txt -o requirements-dev.lock
+          uv pip compile requirements-docs.txt -o requirements-docs.lock
+          if git diff --quiet -- requirements-dev.lock requirements-docs.lock; then
+            echo "Locks already satisfy the bumped constraints — nothing to push."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add requirements-dev.lock requirements-docs.lock
+          git commit -m "chore(deps): regenerate dependency locks for ${DEP_NAMES}"
+          git push
+
+      # Enable auto-merge. pip PRs are dev/docs-only tooling — nothing installed
+      # from pip ships in the plugin (runtime deps are vendored) — and auto-merge
+      # completes only once every required check passes, so CI is the real gate.
+      # We therefore don't additionally gate pip on update-type, which
+      # fetch-metadata reports unreliably for range bumps (`>=X,<Y`). npm and
+      # github-actions keep the conservative patch/minor gate.
+      - name: Enable auto-merge
         if: |
+          steps.meta.outputs.package-ecosystem == 'pip' ||
           steps.meta.outputs.update-type == 'version-update:semver-patch' ||
           steps.meta.outputs.update-type == 'version-update:semver-minor'
         env:
