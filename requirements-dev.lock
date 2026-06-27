@@ -35,7 +35,7 @@ pytest==9.1.1
     #   -r requirements-dev.txt
     #   pytest-asyncio
     #   pytest-cov
-pytest-asyncio==1.3.0
+pytest-asyncio==1.4.0
     # via -r requirements-dev.txt
 pytest-cov==7.1.0
     # via -r requirements-dev.txt
