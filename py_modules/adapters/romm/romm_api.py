@@ -180,6 +180,7 @@ class RommApiAdapter:
         device_id: str | None = None,
         slot: str | None = None,
         overwrite: bool = False,
+        autocleanup_limit: int | None = None,
     ) -> dict[str, Any]:
         params = f"rom_id={rom_id}&emulator={urllib.parse.quote(emulator, safe='')}"
         if device_id is not None:
@@ -190,6 +191,12 @@ class RommApiAdapter:
             params += "&overwrite=true"
         if save_id is not None:
             return self._client.upload_multipart(f"/api/saves/{save_id}?{params}", file_path, method="PUT")
+        # POST creates the save entry and is the only path that stacks versions —
+        # PUT updates in place. RomM's autocleanup defaults OFF, so capping the
+        # retained version count requires enabling it explicitly alongside the
+        # limit; hence both params, and only here (POST).
+        if autocleanup_limit is not None:
+            params += f"&autocleanup=true&autocleanup_limit={autocleanup_limit}"
         return self._client.upload_multipart(f"/api/saves?{params}", file_path, method="POST")
 
     def download_save(self, save_id: int, dest_path: str) -> None:

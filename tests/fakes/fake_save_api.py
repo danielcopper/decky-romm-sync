@@ -306,6 +306,7 @@ class FakeSaveApi:
         device_id: str | None = None,
         slot: str | None = None,
         overwrite: bool = False,
+        autocleanup_limit: int | None = None,
     ) -> dict[str, Any]:
         self.call_log.append(
             (
@@ -316,6 +317,7 @@ class FakeSaveApi:
                     "device_id": device_id,
                     "slot": slot,
                     "overwrite": overwrite,
+                    "autocleanup_limit": autocleanup_limit,
                 },
             )
         )

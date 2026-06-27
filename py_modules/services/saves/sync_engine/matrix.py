@@ -308,6 +308,7 @@ class MatrixExecutor:
         core_so: str | None,
         server_save: dict[str, Any] | None = None,
         default_slot: str | None = None,
+        autocleanup_limit: int | None = None,
     ) -> dict[str, Any]:
         """Upload a local save file to server.
 
@@ -315,7 +316,8 @@ class MatrixExecutor:
         attribution, local→server slot promotion); the operation entry owns
         the surrounding write Unit of Work. *core_so* is the active core
         resolved once by the caller so this worker stays free of installed-rom
-        reads.
+        reads. *autocleanup_limit* caps server-retained versions — the adapter
+        honors it on the POST (create) path only, so PUT callers leave it None.
         """
         save_id = server_save.get("id") if server_save else None
         emulator = build_emulator_tag(core_so)
@@ -325,7 +327,13 @@ class MatrixExecutor:
 
         result = self._retry.with_retry(
             lambda: self._romm_api.upload_save(
-                int(rom_id), file_path, emulator, save_id, device_id=device_id, slot=slot
+                int(rom_id),
+                file_path,
+                emulator,
+                save_id,
+                device_id=device_id,
+                slot=slot,
+                autocleanup_limit=autocleanup_limit,
             )
         )
 
@@ -448,6 +456,7 @@ class MatrixExecutor:
         system: str,
         core_so: str | None,
         default_slot: str | None,
+        autocleanup_limit: int | None = None,
         server_saves: list[dict[str, Any]],
         errors: list[str],
     ) -> bool:
@@ -456,13 +465,24 @@ class MatrixExecutor:
             errors.append(f"{filename}: upload requested but no local file")
             return False
         if action.target_save_id is None:
-            # POST path: brand-new save in slot.
+            # POST path: brand-new save in slot. The retention cap is POST-only —
+            # RomM stacks versions on create, so the limit is sent here alone.
             self.do_upload_save(
-                rom_id, local_path, filename, save_state, device_id, system, core_so, None, default_slot
+                rom_id,
+                local_path,
+                filename,
+                save_state,
+                device_id,
+                system,
+                core_so,
+                None,
+                default_slot,
+                autocleanup_limit=autocleanup_limit,
             )
             return True
         # PUT path: re-upload to update the tracked save (local diverged while
-        # is_current=true).
+        # is_current=true). PUT updates in place and never stacks, so the
+        # autocleanup cap is left at its None default.
         server_save = next((s for s in server_saves if s.get("id") == action.target_save_id), None)
         if server_save is None:
             # Picked save vanished between read and dispatch — best-effort.
@@ -489,6 +509,7 @@ class MatrixExecutor:
         system: str,
         core_so: str | None,
         default_slot: str | None,
+        autocleanup_limit: int | None = None,
         server_saves: list[dict[str, Any]],
         sink: DispatchSink,
     ) -> bool:
@@ -520,6 +541,7 @@ class MatrixExecutor:
                     system=system,
                     core_so=core_so,
                     default_slot=default_slot,
+                    autocleanup_limit=autocleanup_limit,
                     server_saves=server_saves,
                     errors=sink.errors,
                 )
@@ -650,6 +672,7 @@ class MatrixExecutor:
         device_id: str | None,
         core_so: str | None,
         default_slot: str | None = None,
+        autocleanup_limit: int | None = None,
     ) -> tuple[int, list[str], list[dict[str, Any]]]:
         """Sync saves for a single ROM, mutating *save_state* in memory.
 
@@ -658,7 +681,9 @@ class MatrixExecutor:
         ``(synced_count, errors_list, conflicts_list)``. *core_so* is the
         active core resolved once by the caller (for the upload emulator tag);
         *default_slot* seeds the active slot when a brand-new ROM's first sync
-        lands; the operation entry owns the surrounding read/write Unit of Work.
+        lands; *autocleanup_limit* caps server-retained versions on the POST
+        (create) upload; the operation entry owns the surrounding read/write
+        Unit of Work.
         """
         t_total = self._clock.time()
         rom_id = int(rom_id)
@@ -717,6 +742,7 @@ class MatrixExecutor:
                 system=system,
                 core_so=core_so,
                 default_slot=default_slot,
+                autocleanup_limit=autocleanup_limit,
                 server_saves=outcome.server_candidates,
                 sink=sink,
             ):

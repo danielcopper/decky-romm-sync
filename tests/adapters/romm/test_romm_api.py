@@ -171,6 +171,33 @@ class TestUploadSave:
         path = client.upload_multipart.call_args[0][0]
         assert "overwrite" not in path
 
+    def test_post_with_autocleanup_limit(self):
+        """POST sends autocleanup=true AND the limit so RomM caps retained versions."""
+        api, client = _make_api()
+        client.upload_multipart.return_value = {"id": 1}
+        api.upload_save(42, "/tmp/save.srm", "retroarch-mgba", autocleanup_limit=25)
+        path = client.upload_multipart.call_args[0][0]
+        # autocleanup defaults OFF on RomM, so both flags are required.
+        assert "autocleanup=true" in path
+        assert "autocleanup_limit=25" in path
+
+    def test_post_without_autocleanup_limit_unchanged(self):
+        """POST with no autocleanup_limit (default) keeps the query free of autocleanup."""
+        api, client = _make_api()
+        client.upload_multipart.return_value = {"id": 1}
+        api.upload_save(42, "/tmp/save.srm", "retroarch-mgba")
+        path = client.upload_multipart.call_args[0][0]
+        assert "autocleanup" not in path
+
+    def test_put_ignores_autocleanup_limit(self):
+        """PUT updates in place and never stacks, so the cap is POST-only — not on PUT."""
+        api, client = _make_api()
+        client.upload_multipart.return_value = {"id": 5}
+        api.upload_save(42, "/tmp/save.srm", "retroarch-mgba", save_id=5, autocleanup_limit=25)
+        path = client.upload_multipart.call_args[0][0]
+        assert path.startswith("/api/saves/5?")
+        assert "autocleanup" not in path
+
     def test_encodes_emulator(self):
         """Slash in emulator name is encoded (safe="" — house style)."""
         api, client = _make_api()

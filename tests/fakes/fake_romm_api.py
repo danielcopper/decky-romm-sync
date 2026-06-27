@@ -443,6 +443,7 @@ class FakeRommApi:
         device_id: str | None = None,
         slot: str | None = None,
         overwrite: bool = False,
+        autocleanup_limit: int | None = None,
     ) -> dict[str, Any]:
         self._log(
             "upload_save",
@@ -452,6 +453,7 @@ class FakeRommApi:
                 "device_id": device_id,
                 "slot": slot,
                 "overwrite": overwrite,
+                "autocleanup_limit": autocleanup_limit,
             },
         )
         self._check_fail(self.upload_save_side_effect)

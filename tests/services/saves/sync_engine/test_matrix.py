@@ -1132,6 +1132,69 @@ class TestDoUploadSaveFileStatePersistence:
         assert reloaded_file.tracked_save_id == 100
 
 
+class TestAutocleanupLimitThreading:
+    """The user's ``autocleanup_limit`` setting reaches the POST upload, POST-only.
+
+    Drives the real public ``sync_rom_saves`` so the value is resolved from
+    ``settings.json`` in ``_run_rom_sync`` and threaded the whole way down to
+    ``upload_save`` — the path the dead-setting bug (#1060) left disconnected.
+    """
+
+    @pytest.mark.asyncio
+    async def test_post_upload_carries_autocleanup_limit(self, tmp_path):
+        """A POST (new save) upload sends the configured ``autocleanup_limit``."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        svc._config.settings["autocleanup_limit"] = 25
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)  # local only → POST
+
+        await svc.sync_rom_saves(42)
+
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        assert upload_calls[0][2]["save_id"] is None  # POST path
+        assert upload_calls[0][2]["autocleanup_limit"] == 25
+
+    @pytest.mark.asyncio
+    async def test_put_upload_drops_autocleanup_limit(self, tmp_path):
+        """A PUT (update tracked save) upload leaves ``autocleanup_limit`` None.
+
+        Even with the cap configured, the PUT branch sends nothing — RomM
+        updates in place and never stacks, so the cap is POST-only.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, device_id="device-1")
+        svc._config.settings["autocleanup_limit"] = 25
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"diverged local content")
+
+        # is_current=true on our device + local diverged from the baseline →
+        # Upload(target_save_id=100) → PUT.
+        fake.saves[100] = _server_save_with_syncs(
+            save_id=100,
+            slot="default",
+            device_syncs=[{"device_id": "device-1", "is_current": True}],
+        )
+        _seed_save_state_dict(
+            svc,
+            42,
+            {
+                "files": {"pokemon.srm": {"tracked_save_id": 100, "last_sync_hash": "oldhash"}},
+                "system": "gba",
+                "active_slot": "default",
+                "slot_confirmed": True,
+            },
+        )
+
+        await svc.sync_rom_saves(42)
+
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        assert upload_calls[0][2]["save_id"] == 100  # PUT path
+        assert upload_calls[0][2]["autocleanup_limit"] is None
+
+
 class TestSyncRomSavesDispatch:
     def test_sync_rom_saves_skip_when_synced(self, tmp_path):
         """is_current=true + matching hash + tracked → Skip, no I/O."""

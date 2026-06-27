@@ -605,6 +605,7 @@ class TestConfirmSlotChoice:
         """
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
+        svc._config.settings["autocleanup_limit"] = 7
         _set_device_id(svc, "dev-1")
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
@@ -618,6 +619,8 @@ class TestConfirmSlotChoice:
         assert len(upload_calls) >= 1
         # Check it was uploaded with the new slot
         assert upload_calls[0][2].get("slot") == "default"
+        # Carry-over POST creates a new entry, so the user's retention cap rides along.
+        assert upload_calls[0][2].get("autocleanup_limit") == 7
         # Old save should have been deleted
         delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
         assert len(delete_calls) == 1

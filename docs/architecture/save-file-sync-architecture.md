@@ -32,7 +32,9 @@ Requires RomM >= 4.8.1. The plugin rejects servers below 4.8.1 with `reason: "ve
 **New parameters on POST:**
 
 - `slot` — slot name (e.g. `"default"`). If omitted, save has `slot=null` (legacy behavior).
-- `autocleanup_limit` — max save versions retained per slot (default: 10).
+- `autocleanup` — whether RomM prunes old stacked versions. Defaults to **false**.
+- `autocleanup_limit` — max save versions retained per slot (default: 10). Inert unless `autocleanup=true` is sent
+  alongside it.
 - `device_id` — server-registered device UUID. Used to populate `device_syncs` per save.
 
 **New fields on save metadata:**
@@ -62,6 +64,9 @@ different save states per device).
 
 - Every game gets a `default` slot (configurable in QAM settings as "Default Save Slot")
 - First upload = POST (creates save entry with timestamp filename, server assigns ID)
+- On that POST the plugin sends `autocleanup=true` together with the user-configured `autocleanup_limit` (QAM
+  "Auto-cleanup limit"), so the setting actually caps how many versions RomM retains. It is POST-only: PUT updates in
+  place and never stacks, so the cap is established once at entry creation.
 - All subsequent syncs = PUT to the tracked `save_id` (content update, no stacking)
 - Normal single-device flow: exactly 1 save entry per game per slot
 - Multi-device: all devices share the same save entry via `tracked_save_id`

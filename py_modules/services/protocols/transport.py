@@ -254,8 +254,13 @@ class RommSaveApi(Protocol):
         device_id: str | None = None,
         slot: str | None = None,
         overwrite: bool = False,
+        autocleanup_limit: int | None = None,
     ) -> dict[str, Any]:
-        """Upload (or replace) a save; raises ``RommConflictError`` on 409 unless ``overwrite=True``."""
+        """Upload (or replace) a save; raises ``RommConflictError`` on 409 unless ``overwrite=True``.
+
+        ``autocleanup_limit`` caps the server-retained version count and is honored
+        on the POST (create) path only — PUT updates in place and never stacks.
+        """
         ...
 
     def download_save_content(
