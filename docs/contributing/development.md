@@ -47,6 +47,12 @@ are the gate; nothing installed from pip ships in the plugin (runtime deps are v
 auto-merge on minor/patch/digest; majors are left for human review. Updating Renovate's behavior is a `renovate.json`
 change; the bot itself runs as the Renovate GitHub App installed on the repository.
 
+The toolchain versions — `node`, `pnpm`, `python`, `uv`, `deno` — are **excluded** from Renovate: they are pinned and
+cross-file-coupled (each appears in `mise.toml` and in `package.json`'s `packageManager` and/or the workflow `setup-*`
+version inputs, and all copies must match — `python` to Decky's embedded libpython3.11, `uv` for lock reproducibility).
+Renovate is disabled for these by dependency name so a bot bump can't desync one copy; bump them by hand, together. The
+`setup-*` action SHAs themselves stay auto-updated.
+
 ## Building
 
 ```bash

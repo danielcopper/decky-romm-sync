@@ -46,6 +46,18 @@
         "digest"
       ],
       "automerge": true
+    },
+    {
+      "description": "Toolchain versions (node, pnpm, python, uv, deno) are pinned and cross-file-coupled: each appears in mise.toml AND in package.json's packageManager and/or the workflow setup-* version inputs, and all copies must match (python = Decky's embedded libpython3.11, uv pinned for lock reproducibility, pnpm = packageManager, node = CI). Disabled by NAME across every manager so a bot bump can't desync one copy. The setup-* action SHAs themselves stay updatable (different dep names).",
+      "matchDepNames": [
+        "node",
+        "pnpm",
+        "python",
+        "uv",
+        "deno",
+        "astral-sh/uv"
+      ],
+      "enabled": false
     }
   ],
   "platformAutomerge": true
