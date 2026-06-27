@@ -18,18 +18,16 @@ on:
       - .github/workflows/docs.yml
   workflow_dispatch:
 
+# Only the deploy job needs pages/id-token write; the build job (which runs on
+# PRs and executes PR-controlled `mkdocs build`) stays read-only. Pages
+# serialization is likewise scoped to deploy — PR preview builds don't deploy.
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -54,6 +52,13 @@ jobs:
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

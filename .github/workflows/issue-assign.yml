@@ -10,6 +10,7 @@ permissions:
 jobs:
   assign:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: toJson(github.event.issue.assignees) == '[]'
     steps:
       - name: Assign to repo owner

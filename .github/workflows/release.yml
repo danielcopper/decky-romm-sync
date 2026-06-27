@@ -9,9 +9,16 @@ permissions:
   contents: write
   pull-requests: write
 
+# Serialize releases: two quick pushes to main must not run release-please
+# concurrently and race on the release PR / tag.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       version: ${{ steps.release.outputs.version }}
@@ -22,13 +29,16 @@ jobs:
       # GITHUB_TOKEN do not trigger workflows (anti-recursion), which left
       # the release PR's required status checks stuck "Expected" and
       # unmergeable. An App token makes those checks run automatically.
+      # Scope it to exactly what release-please needs (contents + PRs).
       - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           client-id: ${{ secrets.RELEASE_PLEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
 
-      - uses: googleapis/release-please-action@v5
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         id: release
         with:
           token: ${{ steps.app-token.outputs.token }}
@@ -39,6 +49,7 @@ jobs:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -49,7 +60,7 @@ jobs:
           node-version: "24"
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -74,14 +85,15 @@ jobs:
 
       - name: Determine tag name
         id: tag
-        run: |
-          if [ -n "${{ needs.release-please.outputs.tag_name }}" ]; then
-            echo "tag=${{ needs.release-please.outputs.tag_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=$(gh release list --limit 1 --json tagName -q '.[0].tagName')" >> $GITHUB_OUTPUT
-          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          if [ -n "$TAG_NAME" ]; then
+            echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$(gh release list --limit 1 --json tagName -q '.[0].tagName')" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Smoke-test release zip
         run: |
@@ -119,12 +131,13 @@ jobs:
       - name: Upload release asset
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           BUILT_ZIP=$(ls /tmp/output/*.zip | head -1)
           DEST="/tmp/output/decky-romm-sync.zip"
           if [ "$BUILT_ZIP" != "$DEST" ]; then
             cp "$BUILT_ZIP" "$DEST"
           fi
-          gh release upload "${{ steps.tag.outputs.tag }}" \
+          gh release upload "$TAG" \
             "$DEST" \
             --clobber
