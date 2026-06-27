@@ -26,12 +26,26 @@
   },
   "packageRules": [
     {
-      "description": "Python dev/docs tooling: refresh the uv-compiled lock only WITHIN the declared range. update-lockfile never widens a `<X` ceiling, so deliberate caps (e.g. pytest-asyncio <1.4 for #806) are honored automatically and a ceiling raise stays a manual edit to requirements-*.txt. Auto-merge — the required CI checks are the gate; nothing from pip ships in the plugin.",
+      "description": "Python dev/docs tooling: refresh the uv-compiled lock within the declared range. Auto-merge — the required CI checks are the gate; nothing from pip ships in the plugin. (update-lockfile keeps in-range bumps lock-only, but does NOT stop a range-widening PR when the newest version is ABOVE the declared ceiling — that case is covered by the allowedVersions caps below and the no-major-auto-merge rule.)",
       "matchManagers": [
         "pip-compile"
       ],
       "rangeStrategy": "update-lockfile",
       "automerge": true
+    },
+    {
+      "description": "Deliberate tight version ceiling: pytest-asyncio is held <1.4 (#806 — 1.4 changed event-loop semantics). allowedVersions stops Renovate from even proposing a version above the cap; without it, update-lockfile still raises a *minor* (1.3 -> 1.4) range-widening PR that would auto-merge. KEEP IN SYNC with the `<1.4` in requirements-dev.txt — if you deliberately raise that ceiling, update this too.",
+      "matchDepNames": [
+        "pytest-asyncio"
+      ],
+      "allowedVersions": "<1.4"
+    },
+    {
+      "description": "Deliberate tight version ceiling: ruff is held <0.16 (0.x minors are breaking — new lint rules). Same rationale as the pytest-asyncio rule above. KEEP IN SYNC with requirements-dev.txt.",
+      "matchDepNames": [
+        "ruff"
+      ],
+      "allowedVersions": "<0.16"
     },
     {
       "description": "npm + GitHub Actions: auto-merge minor/patch/digest; majors are left for human review.",
@@ -58,6 +72,13 @@
         "astral-sh/uv"
       ],
       "enabled": false
+    },
+    {
+      "description": "Never auto-merge a major update, in any ecosystem — a major dep bump (or, for pip, raising a `<next-major` ceiling such as pytest <10.0) always gets human review. Overrides the manager auto-merge rules above for major updates; minor/patch/digest and lock-file maintenance still auto-merge.",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false
     }
   ],
   "platformAutomerge": true
