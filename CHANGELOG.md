@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.24.2](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.24.1...decky-romm-sync-v0.24.2) (2026-06-27)
+
+
+### Bug Fixes
+
+* **saves:** cap .romm-backup growth and avoid same-second backup collisions ([#974](https://github.com/danielcopper/decky-romm-sync/issues/974)) ([#1217](https://github.com/danielcopper/decky-romm-sync/issues/1217)) ([580c756](https://github.com/danielcopper/decky-romm-sync/commit/580c756840287ba9549c1dd2b63e608323cd5baa))
+* **saves:** send autocleanup_limit on save upload so the setting caps retained versions ([#1060](https://github.com/danielcopper/decky-romm-sync/issues/1060)) ([#1218](https://github.com/danielcopper/decky-romm-sync/issues/1218)) ([9882d7d](https://github.com/danielcopper/decky-romm-sync/commit/9882d7d4a6583bdee5c77cab5b9f3f19acb89080))
+
 ## [0.24.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.24.0...decky-romm-sync-v0.24.1) (2026-06-27)
 
 
