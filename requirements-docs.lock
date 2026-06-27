@@ -4,11 +4,11 @@ babel==2.18.0
     # via mkdocs-material
 backrefs==7.0
     # via mkdocs-material
-certifi==2026.5.20
+certifi==2026.6.17
     # via requests
 charset-normalizer==3.4.7
     # via requests
-click==8.4.1
+click==8.4.2
     # via mkdocs
 colorama==0.4.6
     # via mkdocs-material
@@ -51,7 +51,7 @@ platformdirs==4.10.0
     # via mkdocs-get-deps
 pygments==2.20.0
     # via mkdocs-material
-pymdown-extensions==10.21.3
+pymdown-extensions==11.0
     # via mkdocs-material
 python-dateutil==2.9.0.post0
     # via ghp-import

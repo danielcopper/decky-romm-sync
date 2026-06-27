@@ -2,9 +2,9 @@
 #    uv pip compile requirements-dev.txt --output-file=requirements-dev.lock
 basedpyright==1.39.9
     # via -r requirements-dev.txt
-click==8.4.1
+click==8.4.2
     # via import-linter
-coverage==7.14.1
+coverage==7.14.3
     # via pytest-cov
 grimp==3.14
     # via import-linter
@@ -49,4 +49,3 @@ typing-extensions==4.15.0
     # via
     #   grimp
     #   import-linter
-    #   pytest-asyncio
