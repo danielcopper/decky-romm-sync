@@ -29,14 +29,17 @@ jobs:
       # lock-sync gate (part of the required `lint` check) fails on every pip PR
       # until the lock is recompiled. We recompile it here and push it back.
       #
-      # Security: the checkout uses `persist-credentials: false` and the
-      # contents:write App token is minted ONLY AFTER `uv pip compile` has run, so
-      # no write credential is on disk or in the environment while PR-controlled
-      # code executes (uv may build an sdist = arbitrary code at resolve time).
-      # The whole job is also gated to `github.actor == 'dependabot[bot]'`, which
-      # only ever bumps already-declared deps. The push must be authored by the
-      # App, not GITHUB_TOKEN, because GITHUB_TOKEN pushes don't re-trigger CI
-      # (anti-recursion) — see release.yml for the same pattern.
+      # Security (defense in depth, all of):
+      #   - the job is gated to `github.actor == 'dependabot[bot]'`, which only
+      #     ever bumps already-declared deps (no third party can trigger it);
+      #   - the compile runs `--only-binary :all:`, so NO package code executes
+      #     (wheels are static metadata) — nothing can plant a hook for the later
+      #     push step;
+      #   - checkout uses `persist-credentials: false` and the contents:write App
+      #     token is minted ONLY AFTER the compile, so no write credential is on
+      #     disk/in env during the (non-executing) resolve.
+      # The push must be authored by the App, not GITHUB_TOKEN, because
+      # GITHUB_TOKEN pushes don't re-trigger CI (anti-recursion) — see release.yml.
       - name: Check out the PR branch (no persisted credentials)
         if: steps.meta.outputs.package-ecosystem == 'pip'
         uses: actions/checkout@v6
@@ -81,13 +84,18 @@ jobs:
             echo "within_cap=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # `--only-binary :all:` forbids building sdists, so resolving the
+      # PR-controlled requirements executes NO package code (wheels carry static
+      # metadata) — there is nothing to plant a git hook or tamper with the
+      # workspace before the later token-bearing push. Verified to resolve
+      # identically to a plain compile for this dep set.
       - name: Regenerate dependency locks
         id: locks
         if: steps.meta.outputs.package-ecosystem == 'pip'
         run: |
           set -euo pipefail
-          uv pip compile requirements-dev.txt -o requirements-dev.lock
-          uv pip compile requirements-docs.txt -o requirements-docs.lock
+          uv pip compile --only-binary :all: requirements-dev.txt -o requirements-dev.lock
+          uv pip compile --only-binary :all: requirements-docs.txt -o requirements-docs.lock
           if git diff --quiet -- requirements-dev.lock requirements-docs.lock; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
