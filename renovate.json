@@ -1,0 +1,52 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "schedule": [
+    "before 6am on monday"
+  ],
+  "labels": [
+    "area:ci"
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": [
+      "before 6am on the first day of the month"
+    ]
+  },
+  "pip_requirements": {
+    "enabled": false
+  },
+  "pip-compile": {
+    "managerFilePatterns": [
+      "/(^|/)requirements-dev\\.lock$/",
+      "/(^|/)requirements-docs\\.lock$/"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "Python dev/docs tooling: refresh the uv-compiled lock only WITHIN the declared range. update-lockfile never widens a `<X` ceiling, so deliberate caps (e.g. pytest-asyncio <1.4 for #806) are honored automatically and a ceiling raise stays a manual edit to requirements-*.txt. Auto-merge — the required CI checks are the gate; nothing from pip ships in the plugin.",
+      "matchManagers": [
+        "pip-compile"
+      ],
+      "rangeStrategy": "update-lockfile",
+      "automerge": true
+    },
+    {
+      "description": "npm + GitHub Actions: auto-merge minor/patch/digest; majors are left for human review.",
+      "matchManagers": [
+        "npm",
+        "github-actions"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "pin",
+        "digest"
+      ],
+      "automerge": true
+    }
+  ],
+  "platformAutomerge": true
+}

@@ -29,6 +29,24 @@ Python dependencies are installed from `requirements-dev.lock` — fully-pinned 
 `requirements-dev.txt` by uv. After changing a source (`requirements-dev.txt` / `requirements-docs.txt`) or bumping a
 pin, run `mise run lock-update` to regenerate the locks.
 
+### Automated dependency updates (Renovate)
+
+Dependency update PRs are managed by [Renovate](https://docs.renovatebot.com/) (`renovate.json`), across all ecosystems
+— Python (pip), npm, and GitHub Actions. It replaces Dependabot, which could not recompile the `uv pip compile` lock
+files (it only bumped the source range, leaving the lock out of sync).
+
+For Python, Renovate's [pip-compile manager](https://docs.renovatebot.com/modules/manager/pip-compile/) reads the
+command in each `requirements-*.lock` header and recompiles the lock **with uv in the same PR** — so the lock-sync gate
+is always satisfied. Crucially, `rangeStrategy: update-lockfile` means Renovate only moves versions **within the range
+already declared** in `requirements-*.txt`; it never widens a `<X` ceiling. So a deliberate cap (e.g. `pytest-asyncio`
+held `<1.4` for #806) is honored automatically, and raising a ceiling stays a manual edit to the source — the source
+range is the single source of truth.
+
+In-range minor/patch updates auto-merge via GitHub's native auto-merge (`platformAutomerge`), so the required CI checks
+are the gate; nothing installed from pip ships in the plugin (runtime deps are vendored). npm and GitHub-Actions updates
+auto-merge on minor/patch/digest; majors are left for human review. Updating Renovate's behavior is a `renovate.json`
+change; the bot itself runs as the Renovate GitHub App installed on the repository.
+
 ## Building
 
 ```bash
