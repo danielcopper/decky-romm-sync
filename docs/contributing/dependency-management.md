@@ -40,6 +40,7 @@ everything is green.
 | -------------------------------------------------- | ------------------------------- |
 | Python (pip) in-range minor/patch + lock refreshes | ✅                              |
 | npm / GitHub-Actions minor / patch / digest        | ✅                              |
+| Monthly lock-file maintenance (transitive refresh) | ✅                              |
 | **Any major** (any ecosystem)                      | ❌ → human review               |
 | **Toolchain** (`node`/`pnpm`/`python`/`uv`/`deno`) | ❌ not even proposed (excluded) |
 | **Raising a deliberate ceiling** (see below)       | ❌ not even proposed            |
