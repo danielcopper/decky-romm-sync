@@ -31,7 +31,15 @@ from __future__ import annotations
 
 import pathlib
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from models.sync import (
+        ClientSaveState,
+        SyncCompleteResponse,
+        SyncNegotiateResponse,
+        SyncPlaySessionEntry,
+    )
 
 
 class FakeRommApi:
@@ -536,6 +544,51 @@ class FakeRommApi:
             self.saves.pop(sid, None)
             self._save_content.pop(sid, None)
         return {"deleted": len(save_ids)}
+
+    def negotiate_sync(self, device_id: str, saves: list[ClientSaveState]) -> SyncNegotiateResponse:
+        self._log("negotiate_sync", (device_id, saves))
+        self._check_fail()
+        return {
+            "session_id": 1,
+            "operations": [],
+            "total_upload": 0,
+            "total_download": 0,
+            "total_conflict": 0,
+            "total_no_op": 0,
+        }
+
+    def complete_sync_session(
+        self,
+        session_id: int,
+        *,
+        operations_completed: int = 0,
+        operations_failed: int = 0,
+        play_sessions: list[SyncPlaySessionEntry] | None = None,
+    ) -> SyncCompleteResponse:
+        self._log(
+            "complete_sync_session",
+            (session_id,),
+            {
+                "operations_completed": operations_completed,
+                "operations_failed": operations_failed,
+                "play_sessions": play_sessions,
+            },
+        )
+        self._check_fail()
+        return {
+            "session": {
+                "id": session_id,
+                "device_id": "",
+                "user_id": 0,
+                "status": "completed",
+                "initiated_at": "",
+                "operations_planned": 0,
+                "operations_completed": operations_completed,
+                "operations_failed": operations_failed,
+                "created_at": "",
+                "updated_at": "",
+            }
+        }
 
     # ------------------------------------------------------------------
     # RommTokenApi

@@ -12,6 +12,13 @@ from typing import TYPE_CHECKING, Any
 from lib.errors import RommNotFoundError
 
 if TYPE_CHECKING:
+    from models.sync import (
+        ClientSaveState,
+        SyncCompleteResponse,
+        SyncNegotiateResponse,
+        SyncPlaySessionEntry,
+    )
+
     from adapters.romm.http import RommHttpAdapter
 
 # Scopes requested for the minted Client API Token. Deliberately excludes
@@ -230,6 +237,40 @@ class RommApiAdapter:
 
     def delete_server_saves(self, save_ids: list[int]) -> dict[str, Any]:
         return self._client.post_json("/api/saves/delete", {"saves": save_ids})
+
+    # ── Sync sessions (4.9 negotiate) ─────────────────────────────────
+
+    def negotiate_sync(self, device_id: str, saves: list[ClientSaveState]) -> SyncNegotiateResponse:
+        """Open a sync session: POST this device's inventory, get the planned ops.
+
+        The server compares *saves* (per ``(rom_id, slot)``) against its own
+        state and returns a ``session_id`` plus the ``upload`` / ``download`` /
+        ``conflict`` / ``no_op`` operations to execute. It detects but never
+        resolves — a ``conflict`` carries no resolution directive. Opening a
+        session cancels this device's prior in-flight sessions server-side.
+        """
+        return self._client.post_json("/api/sync/negotiate", {"device_id": device_id, "saves": saves})
+
+    def complete_sync_session(
+        self,
+        session_id: int,
+        *,
+        operations_completed: int = 0,
+        operations_failed: int = 0,
+        play_sessions: list[SyncPlaySessionEntry] | None = None,
+    ) -> SyncCompleteResponse:
+        """Close the negotiated session, reporting how many ops ran.
+
+        ``play_sessions`` is the optional play-session report (#1219); omitted
+        when ``None`` so the negotiate path stays independent of play sessions.
+        """
+        payload: dict[str, Any] = {
+            "operations_completed": operations_completed,
+            "operations_failed": operations_failed,
+        }
+        if play_sessions is not None:
+            payload["play_sessions"] = play_sessions
+        return self._client.post_json(f"/api/sync/sessions/{session_id}/complete", payload)
 
     # ── Devices ───────────────────────────────────────────────────────
 

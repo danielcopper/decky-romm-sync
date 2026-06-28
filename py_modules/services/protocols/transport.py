@@ -9,7 +9,15 @@ raw transport (HTTP requests, file writes, Steam IPC calls).
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from models.sync import (
+        ClientSaveState,
+        SyncCompleteResponse,
+        SyncNegotiateResponse,
+        SyncPlaySessionEntry,
+    )
 
 
 class SteamConfigStore(Protocol):
@@ -288,6 +296,25 @@ class RommSaveApi(Protocol):
 
     def delete_server_saves(self, save_ids: list[int]) -> dict[str, Any]:
         """Delete the given save ids via ``POST /api/saves/delete``."""
+        ...
+
+    def negotiate_sync(self, device_id: str, saves: list[ClientSaveState]) -> SyncNegotiateResponse:
+        """Open a 4.9 sync session: POST the device inventory, get the planned operations.
+
+        The server detects (``upload`` / ``download`` / ``conflict`` / ``no_op``)
+        but never resolves; opening a session cancels this device's prior ones.
+        """
+        ...
+
+    def complete_sync_session(
+        self,
+        session_id: int,
+        *,
+        operations_completed: int = 0,
+        operations_failed: int = 0,
+        play_sessions: list[SyncPlaySessionEntry] | None = None,
+    ) -> SyncCompleteResponse:
+        """Close the negotiated session, reporting executed-op counts (and optional play sessions)."""
         ...
 
 

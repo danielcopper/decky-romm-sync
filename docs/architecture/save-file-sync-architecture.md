@@ -17,17 +17,19 @@ Phase 7.
 
 Requires RomM >= 4.9.0. The plugin rejects servers below 4.9.0 with `reason: "version_error"`.
 
-| Endpoint                                                 | Method | Notes                                                                                                                                                                                                                              |
-| -------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/api/saves?rom_id={id}`                                 | GET    | Returns array. Each item now includes `slot`, `file_name_no_tags`, `file_extension`, `content_hash`, and `device_syncs` array.                                                                                                     |
-| `/api/saves/{id}`                                        | GET    | Single save metadata with v4.7 fields                                                                                                                                                                                              |
-| `/api/saves?rom_id={id}&emulator={emulator}&slot={slot}` | POST   | Creates a new save entry. Slot-aware: `slot=default` causes RomM to append a timestamp to the filename (e.g. `Game.srm` becomes `Game [2026-03-24_15-18-50].srm`). Same filename + same slot = upsert. Different slot = new entry. |
-| `/api/saves/{id}`                                        | PUT    | Updates file content only. No metadata changes, no new entry created.                                                                                                                                                              |
-| `/api/saves/{id}/content`                                | GET    | Binary download by save ID (new in v4.7)                                                                                                                                                                                           |
-| `/api/devices`                                           | GET    | List all registered devices for the authenticated user. Returns array of `{id, name, platform, client, client_version, last_seen, created_at, ...}`.                                                                               |
-| `/api/devices`                                           | POST   | Register a device. Accepts hostname, platform, client info. Returns `device_id` (UUID).                                                                                                                                            |
-| `/api/devices/{id}`                                      | DELETE | Remove a device registration. Returns 204 No Content. PATCH (rename) is not supported (405).                                                                                                                                       |
-| `/api/saves/delete`                                      | POST   | Bulk delete saves by ID. Body: `{"saves": [id1, id2, ...]}`. Returns result dict.                                                                                                                                                  |
+| Endpoint                                                 | Method | Notes                                                                                                                                                                                                                                                                          |
+| -------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/api/saves?rom_id={id}`                                 | GET    | Returns array. Each item now includes `slot`, `file_name_no_tags`, `file_extension`, `content_hash`, and `device_syncs` array.                                                                                                                                                 |
+| `/api/saves/{id}`                                        | GET    | Single save metadata with v4.7 fields                                                                                                                                                                                                                                          |
+| `/api/saves?rom_id={id}&emulator={emulator}&slot={slot}` | POST   | Creates a new save entry. Slot-aware: `slot=default` causes RomM to append a timestamp to the filename (e.g. `Game.srm` becomes `Game [2026-03-24_15-18-50].srm`). Same filename + same slot = upsert. Different slot = new entry.                                             |
+| `/api/saves/{id}`                                        | PUT    | Updates file content only. No metadata changes, no new entry created.                                                                                                                                                                                                          |
+| `/api/saves/{id}/content`                                | GET    | Binary download by save ID (new in v4.7)                                                                                                                                                                                                                                       |
+| `/api/devices`                                           | GET    | List all registered devices for the authenticated user. Returns array of `{id, name, platform, client, client_version, last_seen, created_at, ...}`.                                                                                                                           |
+| `/api/devices`                                           | POST   | Register a device. Accepts hostname, platform, client info. Returns `device_id` (UUID).                                                                                                                                                                                        |
+| `/api/devices/{id}`                                      | DELETE | Remove a device registration. Returns 204 No Content. PATCH (rename) is not supported (405).                                                                                                                                                                                   |
+| `/api/saves/delete`                                      | POST   | Bulk delete saves by ID. Body: `{"saves": [id1, id2, ...]}`. Returns result dict.                                                                                                                                                                                              |
+| `/api/sync/negotiate`                                    | POST   | Open a 4.9 sync session. Body: `{device_id, saves: ClientSaveState[]}`. Returns `{session_id, operations[], total_*}` — the server's `upload`/`download`/`conflict`/`no_op` verdicts (+ a `reason`). Detects but never resolves; opening cancels this device's prior sessions. |
+| `/api/sync/sessions/{id}/complete`                       | POST   | Close a negotiated session. Body: `{operations_completed, operations_failed, play_sessions?}`. Returns `{session, play_session_ingest?}`.                                                                                                                                      |
 
 **New parameters on POST:**
 
@@ -35,6 +37,13 @@ Requires RomM >= 4.9.0. The plugin rejects servers below 4.9.0 with `reason: "ve
 - `autocleanup` — whether RomM prunes old stacked versions. Defaults to **false**.
 - `autocleanup_limit` — max save versions retained per slot (default: 10). Inert unless `autocleanup=true` is sent
   alongside it.
+
+The `negotiate` / `complete` endpoints are wired into the adapter (`RommApiAdapter.negotiate_sync` /
+`complete_sync_session`) and typed by the `models/sync.py` schemas (`ClientSaveState`, `SyncOperation`,
+`SyncNegotiateResponse`, …), but are **additive and do not yet drive sync** — the legacy decision matrix below still
+owns save-sync until the negotiate path is wired ([ADR-0016](../adr/0016-save-sync-hands-detection-to-romm-negotiate.md)
+/ #1234 phase 2).
+
 - `device_id` — server-registered device UUID. Used to populate `device_syncs` per save.
 
 **New fields on save metadata:**

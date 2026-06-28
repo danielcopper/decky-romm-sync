@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
 
 from adapters.romm.romm_api import _TOKEN_SCOPES, RommApiAdapter
 from lib.errors import RommNotFoundError, RommServerError
+
+if TYPE_CHECKING:
+    from models.sync import ClientSaveState, SyncPlaySessionEntry
 
 
 def _make_api():
@@ -735,6 +739,78 @@ class TestDeleteServerSaves:
         result = api.delete_server_saves([10, 20])
         client.post_json.assert_called_once_with("/api/saves/delete", {"saves": [10, 20]})
         assert result["deleted"] == 2
+
+
+_EMPTY_NEGOTIATE = {
+    "session_id": 1,
+    "operations": [],
+    "total_upload": 0,
+    "total_download": 0,
+    "total_conflict": 0,
+    "total_no_op": 0,
+}
+
+
+class TestNegotiateSync:
+    def test_posts_device_id_and_inventory(self):
+        api, client = _make_api()
+        client.post_json.return_value = {**_EMPTY_NEGOTIATE, "session_id": 7}
+        saves: list[ClientSaveState] = [
+            {
+                "rom_id": 1,
+                "file_name": "a.srm",
+                "updated_at": "2026-06-01T00:00:00Z",
+                "file_size_bytes": 12,
+                "slot": "default",
+                "content_hash": "abc",
+            }
+        ]
+        result = api.negotiate_sync("dev-1", saves)
+        client.post_json.assert_called_once_with("/api/sync/negotiate", {"device_id": "dev-1", "saves": saves})
+        assert result["session_id"] == 7
+
+    def test_returns_operations(self):
+        api, client = _make_api()
+        client.post_json.return_value = {
+            **_EMPTY_NEGOTIATE,
+            "operations": [{"action": "upload", "rom_id": 1, "file_name": "a.srm", "reason": "newer locally"}],
+            "total_upload": 1,
+        }
+        result = api.negotiate_sync("dev-1", [])
+        assert result["operations"][0]["action"] == "upload"
+
+    def test_propagates_http_error(self):
+        api, client = _make_api()
+        client.post_json.side_effect = RommServerError("boom", status_code=500)
+        with pytest.raises(RommServerError):
+            api.negotiate_sync("dev-1", [])
+
+
+class TestCompleteSyncSession:
+    def test_posts_operation_counts(self):
+        api, client = _make_api()
+        client.post_json.return_value = {"session": {}}
+        api.complete_sync_session(7, operations_completed=3, operations_failed=1)
+        client.post_json.assert_called_once_with(
+            "/api/sync/sessions/7/complete",
+            {"operations_completed": 3, "operations_failed": 1},
+        )
+
+    def test_omits_play_sessions_when_none(self):
+        api, client = _make_api()
+        client.post_json.return_value = {"session": {}}
+        api.complete_sync_session(7)
+        payload = client.post_json.call_args[0][1]
+        assert "play_sessions" not in payload
+        assert payload == {"operations_completed": 0, "operations_failed": 0}
+
+    def test_includes_play_sessions_when_provided(self):
+        api, client = _make_api()
+        client.post_json.return_value = {"session": {}}
+        play_sessions: list[SyncPlaySessionEntry] = [{"start_time": "t0", "end_time": "t1", "duration_ms": 100}]
+        api.complete_sync_session(7, play_sessions=play_sessions)
+        payload = client.post_json.call_args[0][1]
+        assert payload["play_sessions"] == play_sessions
 
 
 class TestGetRomWithNotes:
