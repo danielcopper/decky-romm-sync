@@ -53,15 +53,7 @@ import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { reconfirmLaunchOptions } from "../utils/launchOptionsReconcile";
 
 type PlayButtonState =
-  | "loading"
-  | "not_romm"
-  | "download"
-  | "conflict"
-  | "syncing"
-  | "play"
-  | "launching"
-  | "dl_complete"
-  | "uninstalling";
+  "loading" | "not_romm" | "download" | "conflict" | "syncing" | "play" | "launching" | "dl_complete" | "uninstalling";
 
 interface DownloadProgress {
   bytesDownloaded: number;

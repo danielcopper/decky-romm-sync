@@ -14,9 +14,7 @@
 import type { SaveSetupInfo } from "../types";
 
 export type SaveSetupOutcome =
-  | { kind: "server_unreachable" }
-  | { kind: "auto_confirm"; slot: string }
-  | { kind: "needs_user_choice" };
+  { kind: "server_unreachable" } | { kind: "auto_confirm"; slot: string } | { kind: "needs_user_choice" };
 
 /** Resolve a SaveSetupInfo into the action its callers should take. */
 export function resolveSaveSetupOutcome(info: SaveSetupInfo): SaveSetupOutcome {
