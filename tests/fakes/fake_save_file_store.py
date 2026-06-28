@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import zipfile
+
+from domain.save_hash import combine_zip_entry_hashes
 
 
 class FakeSaveFileStore:
@@ -106,6 +110,18 @@ class FakeSaveFileStore:
         if path not in self.files:
             raise FileNotFoundError(path)
         return hashlib.md5(self.files[path]).hexdigest()
+
+    def content_hash(self, path: str) -> str:
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        data = self.files[path]
+        if not zipfile.is_zipfile(io.BytesIO(data)):
+            return hashlib.md5(data).hexdigest()
+        with zipfile.ZipFile(io.BytesIO(data), "r") as zf:
+            entries = [
+                (name, hashlib.md5(zf.read(name)).hexdigest()) for name in zf.namelist() if not name.endswith("/")
+            ]
+        return combine_zip_entry_hashes(entries)
 
     def make_temp_path(self, suffix: str = "") -> str:
         self.temp_counter += 1

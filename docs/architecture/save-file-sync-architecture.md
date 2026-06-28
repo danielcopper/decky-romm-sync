@@ -42,8 +42,16 @@ Requires RomM >= 4.9.0. The plugin rejects servers below 4.9.0 with `reason: "ve
 - `slot` — the slot this save belongs to (string or null)
 - `file_name_no_tags` — base filename without timestamp tags (e.g. `Game` from `Game [2026-03-24_15-18-50].srm`)
 - `file_extension` — file extension (e.g. `srm`)
-- `content_hash` — MD5 hash of the save file content (eliminates download-and-hash slow path)
+- `content_hash` — RomM's content hash of the save: a plain MD5 for a single file, or a per-entry combined MD5 for a
+  zipped multi-file save (eliminates the download-and-hash slow path)
 - `device_syncs` — array of per-device sync records: `device_id`, `device_name`, `is_current`, `last_synced_at`
+
+The plugin reproduces this `content_hash` byte-for-byte so a save's local and server hashes agree and sync converges:
+single-file MD5 via `SaveFileStore.checksum_md5`, and the zip per-entry scheme via `SaveFileStore.content_hash` →
+`domain.save_hash.combine_zip_entry_hashes` (sorted `name:md5(entry)` lines joined by `\n`, then MD5'd; dispatch is by
+`zipfile.is_zipfile`, a content sniff, not the extension). This hash parity is the foundation the RomM Device Sync
+negotiate transport requires ([ADR-0016](../adr/0016-save-sync-hands-detection-to-romm-negotiate.md) / #1234); the
+legacy decision matrix below still computes the single-file `checksum_md5` until the negotiate path is wired.
 
 ## Save Slots
 

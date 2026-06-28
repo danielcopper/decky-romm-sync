@@ -15,6 +15,9 @@ import contextlib
 import hashlib
 import os
 import tempfile
+import zipfile
+
+from domain.save_hash import combine_zip_entry_hashes
 
 _MD5_CHUNK_SIZE = 8192
 
@@ -82,6 +85,27 @@ class SaveFileAdapter:
             for chunk in iter(lambda: f.read(_MD5_CHUNK_SIZE), b""):
                 h.update(chunk)
         return h.hexdigest()
+
+    def content_hash(self, path: str) -> str:
+        """Return RomM's content hash for *path* — zip-aware, MD5-based.
+
+        Matches the server's ``compute_content_hash`` so a save's local and
+        server hashes agree and save-sync converges. Dispatch mirrors RomM
+        exactly: a file that *is* a zip archive (``zipfile.is_zipfile`` — a
+        content sniff, not the extension) is hashed per entry and combined via
+        :func:`domain.save_hash.combine_zip_entry_hashes`; any other file is the
+        plain streamed MD5 of :meth:`checksum_md5`. Directory entries inside the
+        archive are skipped. Non-security use, like ``checksum_md5``.
+        """
+        if not zipfile.is_zipfile(path):
+            return self.checksum_md5(path)
+        with zipfile.ZipFile(path, "r") as zf:
+            entries = [
+                (name, hashlib.md5(zf.read(name), usedforsecurity=False).hexdigest())
+                for name in zf.namelist()
+                if not name.endswith("/")
+            ]
+        return combine_zip_entry_hashes(entries)
 
     def make_temp_path(self, suffix: str = "") -> str:
         """Return a fresh, unique path safe to write to.

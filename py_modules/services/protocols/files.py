@@ -390,6 +390,16 @@ class SaveFileStore(Protocol):
         """
         ...
 
+    def content_hash(self, path: str) -> str:
+        """Return RomM's zip-aware content hash for *path*.
+
+        Identical to :meth:`checksum_md5` for a plain file; for a zip archive
+        (a multi-file save) the per-entry combined hash RomM computes, so a
+        zipped save converges on its content rather than mismatching on the
+        archive container's framing. Non-security use, like ``checksum_md5``.
+        """
+        ...
+
     def make_temp_path(self, suffix: str = "") -> str:
         """Return a fresh, unique path safe to write to.
 

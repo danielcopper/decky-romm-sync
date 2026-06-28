@@ -5,10 +5,17 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import zipfile
 
 import pytest
 
 from adapters.save_file import SaveFileAdapter
+
+# Golden value computed independently via RomM's _compute_zip_hash algorithm
+# (sorted entries → "name:md5(bytes)" lines joined by "\n" → md5 of the UTF-8
+# block) over a zip of {"a.srm": b"alpha", "b.srm": b"beta"}. Pins byte-exact
+# parity with the 4.9.2 server; a separator/sort/encoding drift breaks it.
+_GOLDEN_TWO_ENTRY_ZIP_HASH = "6e42de0bba44de86f213ca48f5c388dd"
 
 
 @pytest.fixture
@@ -172,6 +179,66 @@ class TestChecksumMd5:
     def test_missing_file_raises(self, save_files, tmp_path):
         with pytest.raises(FileNotFoundError):
             save_files.checksum_md5(str(tmp_path / "missing.srm"))
+
+
+def _write_zip(path, entries: list[tuple[str, bytes]]) -> None:
+    """Write a zip at *path* with the given ``(name, bytes)`` members."""
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, data in entries:
+            zf.writestr(name, data)
+
+
+class TestContentHash:
+    """``content_hash`` mirrors RomM's ``compute_content_hash`` (zip-aware MD5)."""
+
+    def test_plain_file_matches_checksum_md5(self, save_files, tmp_path):
+        """A non-zip file hashes identically to the streamed single-file MD5."""
+        f = tmp_path / "game.srm"
+        payload = b"save payload bytes"
+        f.write_bytes(payload)
+        assert save_files.content_hash(str(f)) == hashlib.md5(payload).hexdigest()
+        assert save_files.content_hash(str(f)) == save_files.checksum_md5(str(f))
+
+    def test_zip_matches_romm_golden(self, save_files, tmp_path):
+        """A multi-file (zip) save converges on RomM's per-entry combined hash."""
+        z = tmp_path / "multi.zip"
+        _write_zip(z, [("a.srm", b"alpha"), ("b.srm", b"beta")])
+        assert save_files.content_hash(str(z)) == _GOLDEN_TWO_ENTRY_ZIP_HASH
+
+    def test_dispatch_is_by_content_not_extension(self, save_files, tmp_path):
+        """A zip archive named ``.srm`` still takes the zip path (content sniff)."""
+        z = tmp_path / "looks_single.srm"
+        _write_zip(z, [("a.srm", b"alpha"), ("b.srm", b"beta")])
+        # Zip path → the combined hash, NOT a raw-bytes MD5 of the archive.
+        assert save_files.content_hash(str(z)) == _GOLDEN_TWO_ENTRY_ZIP_HASH
+        assert save_files.content_hash(str(z)) != save_files.checksum_md5(str(z))
+
+    def test_member_order_independent(self, save_files, tmp_path):
+        """Reversing the archive write order yields the same hash (RomM sorts)."""
+        forward = tmp_path / "forward.zip"
+        reverse = tmp_path / "reverse.zip"
+        _write_zip(forward, [("a.srm", b"alpha"), ("b.srm", b"beta")])
+        _write_zip(reverse, [("b.srm", b"beta"), ("a.srm", b"alpha")])
+        assert save_files.content_hash(str(forward)) == save_files.content_hash(str(reverse))
+
+    def test_directory_entries_are_skipped(self, save_files, tmp_path):
+        """A directory member does not change the hash — only file entries count."""
+        plain = tmp_path / "plain.zip"
+        withdir = tmp_path / "withdir.zip"
+        _write_zip(plain, [("a.srm", b"alpha"), ("b.srm", b"beta")])
+        _write_zip(withdir, [("sub/", b""), ("a.srm", b"alpha"), ("b.srm", b"beta")])
+        assert save_files.content_hash(str(withdir)) == save_files.content_hash(str(plain))
+        assert save_files.content_hash(str(withdir)) == _GOLDEN_TWO_ENTRY_ZIP_HASH
+
+    def test_empty_zip_hashes_empty_string(self, save_files, tmp_path):
+        """A zip with no file entries hashes the empty string (md5 of '')."""
+        z = tmp_path / "empty.zip"
+        _write_zip(z, [])
+        assert save_files.content_hash(str(z)) == hashlib.md5(b"").hexdigest()
+
+    def test_missing_file_raises(self, save_files, tmp_path):
+        with pytest.raises(OSError):
+            save_files.content_hash(str(tmp_path / "missing.srm"))
 
 
 class TestMakeTempPath:
