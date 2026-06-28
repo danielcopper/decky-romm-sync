@@ -352,9 +352,22 @@ device's previous token. That DELETE is only fired when the old token's stored o
 skipped (and logged) when the origins differ or the old origin is unknown. The DELETE uses Basic auth from the one-time
 credentials, unaffected by the cleared bearer.
 
+**The registered device id is forgotten on an origin change.** A device registered with RomM (`POST /api/devices`, its
+id stored in `kv_config["device_id"]`) is bound to the server it was registered against — RomM's `negotiate` save-sync
+transport hard-404s a foreign device id. So a successful sign-in whose origin differs from the previous token's origin
+forgets the stored device id (`SaveService.forget_device` → `DeviceRegistry.forget_device`, wired as the
+`DeviceForgetFn` injected into `ConnectionService`), so the next save-sync run re-registers against the new server. It
+reuses the same origin comparison as the old-token DELETE, but in the opposite sense — forget when the origins differ or
+the old origin is unknown. The forget is **local-only** (the row on the old server is left for RomM's machine-id dedup
+to reconcile on a later re-registration) and **best-effort on the success path** — a failed local clear never turns a
+good sign-in into a failure, and a failed sign-in (in-memory snapshot restored) keeps the still-current server's id.
+This is Phase 0a of the RomM Device Sync negotiate adoption
+([ADR-0016](../adr/0016-save-sync-hands-detection-to-romm-negotiate.md)).
+
 The no-sign-in URL change path (`SettingsService.save_server_url`) deliberately does not touch the token, so pointing
 the URL at a different origin leaves the stored token's origin mismatched and the auth-header guard makes subsequent
-data flows fail fast with `config_error` until the user signs in again.
+data flows fail fast with `config_error` until the user signs in again. Because every data flow (including device
+registration) is inert until that sign-in, a stale device id from this path cannot be used before the sign-in clears it.
 
 **Server-supplied paths are validated, fail-stop on traversal**: every server-supplied path component — the firmware
 `file_name`, the ROM platform slug, and post-extraction URL-decoded ZIP member names — is checked through
@@ -662,7 +675,7 @@ Protocol-typed (services never import each other's concrete classes). Selected w
 | **ShortcutRemovalService**  | `SteamConfigStore`, `ArtworkRemover` peer, `UnitOfWorkFactory` (unbinds via `roms`, offline name via `kv_config`)                                                                               |
 | **SessionLifecycleService** | `Session*` cross-service seams (playtime / post-exit sync / achievement sync / migration reader)                                                                                                |
 | **LaunchGateService**       | `LaunchGateRomLookup`, `LaunchGateInstalledChecker`, `LaunchGateSaveStatusReader` cross-service seams                                                                                           |
-| **ConnectionService**       | `RommConnectionApi`, `SettingsPersister`, `min_required_version`                                                                                                                                |
+| **ConnectionService**       | `RommConnectionApi`, `SettingsPersister`, `min_required_version`, `DeviceForgetFn` (cross-service — forgets the device id on an origin change)                                                  |
 
 Most services also receive the `settings` dict (`StateBundle`'s only field), the runtime infrastructure (event loop,
 logger, the `DebugLogger` Protocol), and the `UnitOfWorkFactory` for relational state through their config. The old

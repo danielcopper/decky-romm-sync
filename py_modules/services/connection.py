@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     import asyncio
     import logging
 
-    from services.protocols import RommConnectionApi, SettingsPersister
+    from services.protocols import DeviceForgetFn, RommConnectionApi, SettingsPersister
 
 
 _FORBIDDEN_TOKEN_MESSAGE = (
@@ -41,10 +41,11 @@ class ConnectionServiceConfig:
     """Frozen wiring bundle handed to ``ConnectionService.__init__``.
 
     Carries the live settings dict, the RomM API Protocol, the settings
-    persister, the runtime infrastructure (event loop, logger), and the
-    minimum-version policy tuple. Bundled here so the ctor stays within
-    the S107 parameter budget and so the version constant stays declared
-    once at the plugin entrypoint.
+    persister, the runtime infrastructure (event loop, logger), the
+    minimum-version policy tuple, and the device-forget callback fired on a
+    server-origin change. Bundled here so the ctor stays within the S107
+    parameter budget and so the version constant stays declared once at the
+    plugin entrypoint.
     """
 
     settings: dict[str, Any]
@@ -53,6 +54,7 @@ class ConnectionServiceConfig:
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     min_required_version: tuple[int, ...]
+    forget_device: DeviceForgetFn
 
 
 class ConnectionService:
@@ -65,6 +67,7 @@ class ConnectionService:
         self._loop = config.loop
         self._logger = config.logger
         self._min_required_version = config.min_required_version
+        self._forget_device = config.forget_device
 
     async def test_connection(self) -> dict[str, Any]:
         """Probe the configured server and return a frontend-shaped result dict.
@@ -146,8 +149,11 @@ class ConnectionService:
         untouched (#1015). The candidate URL is held only in memory while
         probing, and the old token is cleared in memory first so it never
         leaks to the candidate host (#1039). The username/password are never
-        persisted. Returns the same ``success`` / ``reason`` / ``message``
-        shape as :meth:`test_connection`.
+        persisted. On a successful sign-in whose origin differs from the
+        previous token's, the registered server device id is forgotten
+        (best-effort) — it is bound to its minting origin and would otherwise
+        404 against the new server's negotiate. Returns the same ``success`` /
+        ``reason`` / ``message`` shape as :meth:`test_connection`.
         """
         if not romm_url:
             return {"success": False, "reason": "config_error", "message": "No server URL configured"}
@@ -220,7 +226,26 @@ class ConnectionService:
             self._restore_auth_state(snapshot)
             return error_response(e)
 
+        await self._forget_device_on_origin_change(old_token_origin, trimmed)
+
         return self._success_result(version)
+
+    async def _forget_device_on_origin_change(self, old_token_origin: str | None, new_url: str) -> None:
+        """Forget the registered device id when the sign-in origin changed.
+
+        A device id is bound to the origin it was minted against, so a server
+        switch must drop it (RomM's negotiate hard-404s a foreign id) and let
+        the next sync re-register. Called on the success path only — a failed
+        sign-in keeps the still-current server's id. Best-effort: the new token
+        is already valid, so a failed local clear must not turn a successful
+        sign-in into a failure.
+        """
+        if same_origin(old_token_origin, new_url):
+            return
+        try:
+            await self._loop.run_in_executor(None, self._forget_device)
+        except Exception as e:
+            self._logger.warning(f"Could not clear device id after origin change: {e}")
 
     async def migrate_legacy_credentials(self) -> None:
         """Upgrade a stored-password install to a Client API Token on startup.

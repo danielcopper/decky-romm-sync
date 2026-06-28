@@ -77,6 +77,7 @@ def plugin():
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             min_required_version=Plugin._MIN_REQUIRED_VERSION,
+            forget_device=MagicMock(),
         ),
     )
     return p
@@ -654,6 +655,7 @@ def _setup_plugin(plugin):
             loop=plugin.loop,
             logger=decky.logger,
             min_required_version=Plugin._MIN_REQUIRED_VERSION,
+            forget_device=MagicMock(),
         ),
     )
 

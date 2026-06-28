@@ -374,6 +374,17 @@ class SaveService:
                 self._settings.pop("device_name", None)
             raise
 
+    def forget_device(self) -> None:
+        """Drop the registered server device id on a server-origin change.
+
+        Delegates to the DeviceRegistry — the single owner of
+        ``kv_config["device_id"]``. The composition root wires this as the
+        ``DeviceForgetFn`` handed to ConnectionService, which invokes it after
+        a successful sign-in to a different origin so the stale id cannot 404
+        against the new server's negotiate.
+        """
+        self._device_registry.forget_device()
+
     # ------------------------------------------------------------------
     # Bulk local-save deletion
     # ------------------------------------------------------------------

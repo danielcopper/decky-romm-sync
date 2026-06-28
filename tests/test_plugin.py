@@ -107,6 +107,7 @@ def plugin():
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             min_required_version=Plugin._MIN_REQUIRED_VERSION,
+            forget_device=MagicMock(),
         ),
     )
 
@@ -204,6 +205,7 @@ class TestConnection:
                 loop=plugin.loop,
                 logger=decky.logger,
                 min_required_version=Plugin._MIN_REQUIRED_VERSION,
+                forget_device=MagicMock(),
             ),
         )
         result = await plugin.test_connection()

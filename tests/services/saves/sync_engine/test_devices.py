@@ -374,3 +374,38 @@ class TestDeviceIdAbsent:
         # "read and found absent" is distinct from "never read".
         assert registry.get_device_id() is None
         assert uow_factory.call_count == opens_after_first
+
+
+class TestForgetDevice:
+    """0a (#1234): forget_device drops the kv_config row AND keeps the cache
+    coherent, so a server-origin change cannot leave a stale id behind."""
+
+    def test_forget_deletes_the_kv_config_row(self):
+        registry, uow_factory, _fake = _make_registry()
+        with uow_factory() as uow:
+            uow.kv_config.set("device_id", "old-server-uuid")
+
+        registry.forget_device()
+
+        # The row is gone — a fresh, independent read sees nothing.
+        with uow_factory() as uow:
+            assert uow.kv_config.get("device_id") is None
+
+    def test_forget_serves_none_from_cache_without_re_read(self):
+        registry, uow_factory, _fake = _make_registry()
+        with uow_factory() as uow:
+            uow.kv_config.set("device_id", "old-server-uuid")
+        registry.get_device_id()  # caches "old-server-uuid"
+
+        registry.forget_device()
+        opens_after_forget = uow_factory.call_count
+
+        # The cache is coherent: the id now reads absent with no extra UoW open.
+        assert registry.get_device_id() is None
+        assert uow_factory.call_count == opens_after_forget
+
+    def test_forget_when_unregistered_is_a_noop(self):
+        """First-sign-in / never-registered: forgetting an absent id is harmless."""
+        registry, _uow_factory, _fake = _make_registry()
+        registry.forget_device()
+        assert registry.get_device_id() is None

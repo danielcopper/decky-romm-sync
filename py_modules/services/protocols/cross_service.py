@@ -289,3 +289,16 @@ class MigrationPendingFn(Protocol):
     """
 
     def __call__(self) -> bool: ...
+
+
+class DeviceForgetFn(Protocol):
+    """Server-device-id reset consumed by ConnectionService.
+
+    The composition root satisfies this with ``SaveService.forget_device``.
+    ConnectionService invokes it on a successful sign-in whose origin differs
+    from the previous token's origin: the registered device id is bound to the
+    origin it was minted against, so a server switch must drop it (negotiate
+    hard-404s a foreign device id) and let the next sync re-register.
+    """
+
+    def __call__(self) -> None: ...

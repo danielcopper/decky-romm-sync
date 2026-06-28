@@ -49,6 +49,7 @@ def _make_service(
     logger: logging.Logger,
     settings_persister: MagicMock | None = None,
     min_required_version: tuple[int, ...] = _MIN_VERSION,
+    forget_device: MagicMock | None = None,
 ) -> ConnectionService:
     return ConnectionService(
         config=ConnectionServiceConfig(
@@ -58,6 +59,7 @@ def _make_service(
             loop=loop,
             logger=logger,
             min_required_version=min_required_version,
+            forget_device=forget_device if forget_device is not None else MagicMock(),
         ),
     )
 
@@ -385,6 +387,99 @@ class TestEstablishTokenOldTokenDeletion:
         # Delete failure must not abort the mint.
         assert result["success"] is True
         assert settings["romm_api_token"] == "rmm_minted"
+
+
+class TestEstablishTokenDeviceForget:
+    """0a (#1234): a registered device id is bound to its minting origin, so a
+    sign-in that changes origin must forget it (negotiate hard-404s a foreign
+    device id). The forget is local-only and best-effort on the success path."""
+
+    def test_forgets_device_when_origin_differs(self, event_loop, romm_api, logger):
+        settings = {"romm_api_token_id": 99, "romm_api_token_origin": "https://old.server"}
+        forget_device = MagicMock()
+        service = _make_service(
+            settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
+        )
+        result = event_loop.run_until_complete(service.establish_token("https://new.server", "u", "p"))
+        assert result["success"] is True
+        forget_device.assert_called_once_with()
+
+    def test_keeps_device_when_origin_matches(self, event_loop, romm_api, logger):
+        """Same-server re-auth keeps the device id — it is still valid there."""
+        settings = {"romm_api_token_id": 99, "romm_api_token_origin": "http://romm.local"}
+        forget_device = MagicMock()
+        service = _make_service(
+            settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
+        )
+        event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
+        forget_device.assert_not_called()
+
+    def test_origin_match_ignores_trailing_slash_and_default_port(self, event_loop, romm_api, logger):
+        """Origin folding (path / default port) keeps the device id, like the DELETE path."""
+        settings = {"romm_api_token_id": 99, "romm_api_token_origin": "https://romm.local"}
+        forget_device = MagicMock()
+        service = _make_service(
+            settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
+        )
+        event_loop.run_until_complete(service.establish_token("https://romm.local:443/romm/", "u", "p"))
+        forget_device.assert_not_called()
+
+    def test_forgets_device_when_old_origin_unknown(self, event_loop, romm_api, logger):
+        """A legacy token with no stored origin fails closed — forget conservatively."""
+        settings = {"romm_api_token_id": 99}  # no romm_api_token_origin
+        forget_device = MagicMock()
+        service = _make_service(
+            settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
+        )
+        event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
+        forget_device.assert_called_once_with()
+
+    def test_forgets_device_on_first_sign_in(self, event_loop, romm_api, logger):
+        """First-ever sign-in (no prior token) forgets — a harmless no-op (no device yet)."""
+        settings: dict[str, Any] = {}
+        forget_device = MagicMock()
+        service = _make_service(
+            settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
+        )
+        event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
+        forget_device.assert_called_once_with()
+
+    def test_does_not_forget_on_failed_mint(self, event_loop, romm_api, logger):
+        """A failed mint restores the snapshot — the still-current device id stays."""
+        settings = {"romm_api_token_id": 99, "romm_api_token_origin": "https://old.server"}
+        romm_api.mint_client_token.side_effect = RommConnectionError("offline")
+        forget_device = MagicMock()
+        service = _make_service(
+            settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
+        )
+        result = event_loop.run_until_complete(service.establish_token("https://new.server", "u", "p"))
+        assert result["success"] is False
+        forget_device.assert_not_called()
+
+    def test_does_not_forget_on_version_gate_failure(self, event_loop, romm_api, logger):
+        """A below-minimum server is rejected before persist — device id untouched."""
+        settings = {"romm_api_token_id": 99, "romm_api_token_origin": "https://old.server"}
+        romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.0.0"}}
+        forget_device = MagicMock()
+        service = _make_service(
+            settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
+        )
+        result = event_loop.run_until_complete(service.establish_token("https://new.server", "u", "p"))
+        assert result["success"] is False
+        forget_device.assert_not_called()
+
+    def test_forget_failure_does_not_fail_sign_in(self, event_loop, romm_api, logger):
+        """Best-effort: a forget that raises must not turn a good sign-in into a failure."""
+        settings = {"romm_api_token_id": 99, "romm_api_token_origin": "https://old.server"}
+        forget_device = MagicMock(side_effect=RuntimeError("kv write failed"))
+        service = _make_service(
+            settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
+        )
+        result = event_loop.run_until_complete(service.establish_token("https://new.server", "u", "p"))
+        # The new token is already persisted; the local forget failure is swallowed.
+        assert result["success"] is True
+        assert settings["romm_api_token"] == "rmm_minted"
+        forget_device.assert_called_once_with()
 
 
 class TestEstablishTokenBadPath:

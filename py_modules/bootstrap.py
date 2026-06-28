@@ -708,6 +708,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
             min_required_version=cfg.min_required_version,
+            forget_device=save_sync_service.forget_device,
         ),
     )
 

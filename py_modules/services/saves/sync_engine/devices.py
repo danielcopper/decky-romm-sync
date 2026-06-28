@@ -110,12 +110,29 @@ class DeviceRegistry:
         """Drop the cached device id so the next :meth:`get_device_id` re-reads.
 
         For the rare case where ``kv_config["device_id"]`` is mutated outside
-        this registry (registration is the only in-process writer, so today
-        this is reached only from test backdoors that seed the row directly) —
+        this registry (registration and :meth:`forget_device` are the only
+        in-process writers and both keep the cache coherent, so today this is
+        reached only from test backdoors that seed the row directly) —
         invalidating keeps the cache from serving a stale value.
         """
         self._cached_device_id = None
         self._device_id_loaded = False
+
+    def forget_device(self) -> None:
+        """Drop the registered server device id (``kv_config`` row + cache).
+
+        Called on a sign-in whose server origin changed: the device id is
+        bound to the origin it was minted against, so a foreign id makes
+        RomM's ``negotiate`` hard-404. Deleting the row lets the next
+        :meth:`ensure_device_registered` re-register against the new server,
+        and the cache is set coherent (the id is now absent, not stale).
+        Local-only — the row on the old server is left for RomM's machine-id
+        dedup to reconcile on a later re-registration.
+        """
+        with self._uow_factory() as uow:
+            uow.kv_config.delete("device_id")
+        self._cached_device_id = None
+        self._device_id_loaded = True
 
     def _set_device_id(self, device_id: str) -> None:
         with self._uow_factory() as uow:
