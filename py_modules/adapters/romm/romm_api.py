@@ -1,4 +1,4 @@
-"""RomM API adapter — requires RomM >= 4.8.1.
+"""RomM API adapter — requires RomM >= 4.9.0.
 
 Single adapter covering the full RomM REST surface. All methods map
 directly to HTTP endpoints via RommHttpAdapter.
@@ -32,7 +32,7 @@ _TOKEN_SCOPES = [
 
 
 class RommApiAdapter:
-    """Concrete RomM API adapter for RomM >= 4.8.1."""
+    """Concrete RomM API adapter for RomM >= 4.9.0."""
 
     def __init__(self, client: RommHttpAdapter) -> None:
         self._client = client

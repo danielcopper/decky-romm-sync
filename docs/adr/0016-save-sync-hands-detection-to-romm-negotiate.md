@@ -59,12 +59,21 @@ agreement, and the conflict branch is untested server-side. The clean "pair once
 
 ## Decision
 
-**Adopt the negotiate transport behind a ≥4.9 capability gate; keep our resolution/slot/path brain layered on top
-(Option B — hybrid). Retain the legacy `list_saves` path for <4.9 servers and legacy `slot:null` saves.**
+**Adopt the negotiate transport; keep our resolution/slot/path brain layered on top (Option B — hybrid). Require RomM
+≥4.9.0 as the hard minimum (`_MIN_REQUIRED_VERSION`) rather than a soft per-server capability gate — a breaking change
+taken while still beta (#1234 phase 0b) — and retain the legacy `list_saves` path only for legacy `slot:null` saves
+(RomM cannot address `slot:null` through the negotiate inventory param).**
 
-- **Detection moves server-side.** When the server is ≥4.9 and a ROM has a non-legacy slot, the sync run is driven by
-  `negotiate`'s operation list instead of `compute_sync_action`. The client builds a `(rom_id, slot)` inventory, POSTs
-  it, and executes the returned `upload` / `download` / `no_op` ops with the existing executors.
+> **0b refinement (supersedes the original "soft ≥4.9 capability gate" framing).** The first cut of this ADR kept
+> `_MIN_REQUIRED_VERSION` at 4.8.1 and gated negotiate as a per-server capability, retaining the legacy path for both
+> `<4.9` servers and `slot:null` saves. That was reversed: `_MIN_REQUIRED_VERSION` gates the **whole** plugin, so a soft
+> gate bought no benefit (≥4.9 users get negotiate either way) while a hard bump only evicts ≤4.8 users — and the legacy
+> path cannot be deleted regardless, because `slot:null` still needs it. So the floor is bumped to 4.9.0 and the
+> `<4.9-server` capability dimension is dropped; the legacy path survives **only** for `slot:null`.
+
+- **Detection moves server-side.** When a ROM has a non-legacy slot, the sync run is driven by `negotiate`'s operation
+  list instead of `compute_sync_action`. The client builds a `(rom_id, slot)` inventory, POSTs it, and executes the
+  returned `upload` / `download` / `no_op` ops with the existing executors.
 - **Resolution stays the client's.** A `conflict` operation routes into our existing resolution UX (`keep_local` /
   `use_server`) and `.romm-backup` quarantine — the server gives no resolution directive.
 - **The wizard gates the inventory.** Only ROMs with `slot_confirmed=True` and a resolved `active_slot` enter the
@@ -78,21 +87,24 @@ agreement, and the conflict branch is untested server-side. The clean "pair once
   ([#1235](https://github.com/danielcopper/decky-romm-sync/issues/1235)).
 - **Slots survive as a client-side UX dimension** over negotiate's `slot` field; `active_slot` / `source:local` /
   `slot_confirmed` / `default_slot` have no server analog and are unaffected.
-- Once min RomM ≥ 4.9 on the negotiate path, the v4.8.1 `confirm_download` / PUT-bump bookkeeping is dead and is removed
-  ([#748](https://github.com/danielcopper/decky-romm-sync/issues/748)); `is_current` is read from the server watermark.
+- On the negotiate path (the min is now a hard RomM ≥ 4.9.0), the v4.8.1 `confirm_download` / PUT-bump bookkeeping is
+  dead and is removed ([#748](https://github.com/danielcopper/decky-romm-sync/issues/748)); `is_current` is read from
+  the server watermark.
 
 ## Consequences
 
 - **(+)** Interop with the first-party protocol (Argosy/Grout, web/EmulatorJS); the server becomes the authoritative
   source of cross-device sync bookkeeping; the `confirm_download` ack and PUT-bump tricks die.
 - **(−)** New surface to build and maintain: device-id threading into negotiate, the session lifecycle, per-device
-  serialization, the capability gate + legacy fallback, and exact zip-hash parity. Net code change is roughly flat —
-  small deletions offset by new wiring.
-- **Reversible:** capability-gated with the legacy path retained; the detection kernel can be restored if the protocol
-  regresses.
-- **A real existing blocker must be fixed first:** `establish_token` never clears `device_id` on origin change
-  (`connection.py:262-268`), so a server switch leaves a stale device id and negotiate hard-404s a foreign `device_id`.
-  Fixing per-origin device identity is a prerequisite (ties into
+  serialization, the `slot:null` legacy fallback, and exact zip-hash parity. Net code change is roughly flat — small
+  deletions offset by new wiring.
+- **(−)** Breaking change: the `_MIN_REQUIRED_VERSION` bump to 4.9.0 evicts ≤4.8 servers from the whole plugin (not only
+  save sync). Acceptable while pre-1.0/beta; surfaced as a `BREAKING CHANGE` in the release notes.
+- **Reversible:** the floor can be lowered again and the detection kernel restored if the protocol regresses; the legacy
+  path stays on disk for `slot:null` regardless.
+- **A real existing blocker, fixed first (phase 0a, #1258):** `establish_token` never cleared `device_id` on origin
+  change, so a server switch left a stale device id and negotiate hard-404s a foreign `device_id`. Per-origin device
+  identity now forgets the id on an origin change (ties into
   [#163](https://github.com/danielcopper/decky-romm-sync/issues/163)).
 - **On-device (Game Mode) verification required** — the negotiate round-trip, serialization under rapid Sync/Cancel, and
   zip-save convergence can't be unit-tested alone.

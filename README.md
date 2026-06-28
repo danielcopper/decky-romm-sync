@@ -45,7 +45,7 @@ documentation site. This README is just the quick tour.
 ## Requirements
 
 - [Decky Loader](https://decky.xyz/) on your Steam Deck or Linux HTPC
-- A running [RomM](https://github.com/rommapp/romm) server, **version 4.8.1 or newer** (the plugin stays inert against
+- A running [RomM](https://github.com/rommapp/romm) server, **version 4.9.0 or newer** (the plugin stays inert against
   older servers)
 - [RetroDECK](https://retrodeck.net/) for launching games
 

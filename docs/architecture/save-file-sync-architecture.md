@@ -15,7 +15,7 @@ Phase 7.
 
 ## RomM Save API
 
-Requires RomM >= 4.8.1. The plugin rejects servers below 4.8.1 with `reason: "version_error"`.
+Requires RomM >= 4.9.0. The plugin rejects servers below 4.9.0 with `reason: "version_error"`.
 
 | Endpoint                                                 | Method | Notes                                                                                                                                                                                                                              |
 | -------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -173,7 +173,7 @@ uploaded each save.
 
 ### Why `/etc/machine-id` is the fingerprint
 
-RomM ≥4.8.1 dedupes devices by fingerprint — `mac_address`, OR `hostname` + `platform` — and returns the existing device
+RomM dedupes devices by fingerprint — `mac_address`, OR `hostname` + `platform` — and returns the existing device
 instead of minting a duplicate (`allow_existing` defaults true). The `name` field is **not** fingerprinted, so without a
 stable fingerprint every local-state wipe (the SQLite reinstall path) would create a fresh duplicate device on each
 reinstall.
@@ -182,8 +182,7 @@ The plugin sends `/etc/machine-id` as the RomM `hostname`: it is machine-derived
 device (two Steam Decks stay distinct), and stable. The real OS hostname is deliberately **not** sent — two stock Steam
 Decks both report `steamdeck`, so a `hostname` + `platform` fingerprint built from the OS hostname would collide them
 into one server device. The friendly OS hostname remains the display-only `name`. When `/etc/machine-id` is unreadable
-the `hostname` field is omitted entirely, degrading to the pre-4.8.1 no-fingerprint behaviour rather than sending a
-colliding value.
+the `hostname` field is omitted entirely, degrading to no-fingerprint behaviour rather than sending a colliding value.
 
 ### RomM account requirement
 
@@ -676,7 +675,7 @@ navigation between the buttons uses `Focusable` with `flow-children="right"` for
 ## Server Capabilities
 
 The capabilities system (`get_server_capabilities` callable) has been removed. Since the plugin now requires RomM >=
-4.8.1, all features (device sync, version history, slot deletion, device management) are unconditionally available. The
+4.9.0, all features (device sync, version history, slot deletion, device management) are unconditionally available. The
 frontend no longer fetches or checks capability flags.
 
 ## Conflict Resolution

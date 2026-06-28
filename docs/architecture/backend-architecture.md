@@ -549,7 +549,7 @@ package, organised topically (consumers always deep-import `from services.protoc
 Protocol names carry a suffix that signals shape (`…Reader`, `…Provider`/`…Fn`, `…Store`, `…Cache`, `…Persister`; bare
 names for pervasive primitives like `Clock`).
 
-`RommApiAdapter` implements `RommApi` over `RommHttpAdapter`, targeting RomM 4.8.1+ endpoints.
+`RommApiAdapter` implements `RommApi` over `RommHttpAdapter`, targeting RomM 4.9.0+ endpoints.
 
 ## Boundary Enforcement
 

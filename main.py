@@ -38,7 +38,7 @@ class Plugin:
     _steam_config: Any
     _retrodeck_paths: Any
 
-    _MIN_REQUIRED_VERSION = (4, 8, 1)
+    _MIN_REQUIRED_VERSION = (4, 9, 0)
 
     # -- logging ---------------------------------------------------------------
     #

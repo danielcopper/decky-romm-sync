@@ -193,7 +193,7 @@ class TestConnection:
         plugin.loop = asyncio.get_event_loop()
         plugin.settings["romm_url"] = "http://romm.local"
         plugin.settings["romm_api_token"] = "rmm_token"
-        plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.1"}}
+        plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.9.0"}}
         plugin._romm_api.list_platforms.return_value = [{"id": 1, "slug": "n64"}]
         # Rebuild connection service with the live event loop so executor
         # callbacks dispatch on the same loop the test awaits.
@@ -210,7 +210,7 @@ class TestConnection:
         )
         result = await plugin.test_connection()
         assert result["success"] is True
-        plugin._romm_api.set_version.assert_called_once_with("4.8.1")
+        plugin._romm_api.set_version.assert_called_once_with("4.9.0")
 
 
 class TestLogLevel:

@@ -60,8 +60,9 @@ silent omission. The CI check enforces this.
   rom_id↔appId comes from the backend `get_app_id_rom_id_map()` (`roms.shortcut_app_id`). launch_options is written at
   sync (installed ROMs), at download-complete, and re-resolved on RetroDECK-home migration (`migration_relaunch_options`
   event). See [ADR-0009](docs/adr/0009-launcher-pure-exec-wrapper-baked-launch-options.md).
-- **RomM minimum version**: Requires RomM >= 4.8.1. Hard-rejected in `test_connection()` — plugin is inert until server
-  is updated. `_MIN_REQUIRED_VERSION` tuple in `main.py`.
+- **RomM minimum version**: Requires RomM >= 4.9.0. Hard-rejected in `test_connection()` — plugin is inert until server
+  is updated. `_MIN_REQUIRED_VERSION` tuple in `main.py`. The 4.9.0 floor is the release that ships RomM's Device Sync
+  (`negotiate`) save-sync transport (#1234 / ADR-0016); bumped from 4.8.1 as a breaking change while still beta.
 - **Token-host binding**: A Client API Token is bound to the server origin it was minted against
   (`romm_api_token_origin` — canonical `scheme://host[:port]` via `lib/url_host`; `https://h` and `http://h` are
   different origins). The bearer is sent only when `romm_url`'s origin matches; a mismatch raises

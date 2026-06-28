@@ -12,7 +12,7 @@ import pytest
 from lib.errors import RommAuthError, RommConnectionError, RommForbiddenError, RommServerError
 from services.connection import ConnectionService, ConnectionServiceConfig
 
-_MIN_VERSION = (4, 8, 1)
+_MIN_VERSION = (4, 9, 0)
 
 
 @pytest.fixture
@@ -30,7 +30,7 @@ def logger() -> logging.Logger:
 @pytest.fixture
 def romm_api() -> MagicMock:
     api = MagicMock()
-    api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.1"}}
+    api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.9.0"}}
     api.list_platforms.return_value = [{"id": 1, "slug": "n64"}]
     api.mint_client_token.return_value = {"id": 42, "raw_token": "rmm_minted"}
     return api
@@ -70,18 +70,18 @@ class TestTestConnectionHappyPath:
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
         assert result["success"] is True
-        assert result["message"] == "Connected to RomM 4.8.1"
-        assert result["romm_version"] == "4.8.1"
-        romm_api.set_version.assert_called_once_with("4.8.1")
+        assert result["message"] == "Connected to RomM 4.9.0"
+        assert result["romm_version"] == "4.9.0"
+        romm_api.set_version.assert_called_once_with("4.9.0")
 
     def test_version_exact_minimum_succeeds(self, event_loop, romm_api, logger):
         """Version equal to minimum tuple is accepted (>= comparison)."""
         settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
-        romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.1"}}
+        romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.9.0"}}
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
         assert result["success"] is True
-        assert result["romm_version"] == "4.8.1"
+        assert result["romm_version"] == "4.9.0"
 
 
 class TestTestConnectionBadPath:
@@ -157,13 +157,13 @@ class TestTestConnectionVersionGate:
         assert result["success"] is False
         assert result["reason"] == "version_error"
         assert result["romm_version"] == "4.5.0"
-        assert "4.8.1" in result["message"]
+        assert "4.9.0" in result["message"]
         assert "4.5.0" in result["message"]
 
-    def test_version_one_patch_below_minimum_rejected(self, event_loop, romm_api, logger):
-        """4.8.0 is below 4.8.1 — must be rejected."""
+    def test_former_minimum_now_rejected(self, event_loop, romm_api, logger):
+        """4.8.1 (the former minimum) is below 4.9.0 — must now be rejected."""
         settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
-        romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.0"}}
+        romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.1"}}
         service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.test_connection())
         assert result["reason"] == "version_error"
@@ -239,7 +239,7 @@ class TestEstablishTokenHappyPath:
         )
         result = event_loop.run_until_complete(service.establish_token("http://romm.local", "alice", "secret"))
         assert result["success"] is True
-        assert result["romm_version"] == "4.8.1"
+        assert result["romm_version"] == "4.9.0"
         assert settings["romm_api_token"] == "rmm_minted"
         assert settings["romm_api_token_id"] == 42
         # The token's minting origin is stamped from the trimmed URL.
@@ -659,7 +659,7 @@ class TestEstablishTokenSnapshotRestore:
         def _capture_heartbeat():
             seen["token_during_probe"] = settings.get("romm_api_token")
             seen["origin_during_probe"] = settings.get("romm_api_token_origin")
-            return {"SYSTEM": {"VERSION": "4.8.1"}}
+            return {"SYSTEM": {"VERSION": "4.9.0"}}
 
         romm_api.heartbeat.side_effect = _capture_heartbeat
         settings = _working_settings()

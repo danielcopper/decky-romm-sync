@@ -251,7 +251,7 @@ class TestWireServices:
             "sleeper": FakeSleeper(),
             "hostname_provider": FakeHostnameReader(),
             "machine_id_provider": FakeMachineIdReader(),
-            "min_required_version": (4, 8, 1),
+            "min_required_version": (4, 9, 0),
             "retrodeck_paths": FakeRetroDeckPaths(
                 saves=str(tmp_path / "saves"),
                 roms=str(tmp_path / "retrodeck" / "roms"),

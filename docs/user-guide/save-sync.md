@@ -218,10 +218,11 @@ You have two options:
 
 ## RomM Version Compatibility
 
-The plugin requires **RomM >= 4.8.1**. Servers below 4.8.1 are rejected at connection time with a full error page in
-both the QAM panel and the game detail view. The plugin uses v4.7+ features including server-side device tracking,
-content hashing, save slots, and `device_syncs` for conflict detection. The 4.8.1 minimum is set because that is the
-version the plugin has been tested against.
+The plugin requires **RomM >= 4.9.0**. Servers below 4.9.0 are rejected at connection time with a full error page in
+both the QAM panel and the game detail view. The plugin uses server-side device tracking, content hashing, save slots,
+and `device_syncs` for conflict detection. The 4.9.0 minimum is set because that is the release that ships RomM's Device
+Sync (`negotiate`) save-sync transport — the direction adopted in
+[ADR-0016](../adr/0016-save-sync-hands-detection-to-romm-negotiate.md).
 
 For technical details on how save sync works internally (three-way conflict detection, state schema, session detection),
 see the [Save File Sync Architecture](../architecture/save-file-sync-architecture.md) technical reference.

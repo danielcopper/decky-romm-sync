@@ -1056,13 +1056,13 @@ class TestTestConnectionErrors:
 
         _setup_plugin(plugin)
         plugin.loop = asyncio.get_event_loop()
-        plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.1"}, "status": "ok"}
+        plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.9.0"}, "status": "ok"}
         plugin._romm_api.list_platforms.return_value = [{"id": 1, "slug": "n64"}]
         result = await plugin.test_connection()
         assert result["success"] is True
-        assert "Connected to RomM 4.8.1" in result["message"]
-        assert result["romm_version"] == "4.8.1"
-        plugin._romm_api.set_version.assert_called_with("4.8.1")
+        assert "Connected to RomM 4.9.0" in result["message"]
+        assert result["romm_version"] == "4.9.0"
+        plugin._romm_api.set_version.assert_called_with("4.9.0")
 
     @pytest.mark.asyncio
     async def test_server_reachable_but_api_failed(self, plugin):
@@ -1071,7 +1071,7 @@ class TestTestConnectionErrors:
 
         _setup_plugin(plugin)
         plugin.loop = asyncio.get_event_loop()
-        plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.1"}}
+        plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.9.0"}}
         plugin._romm_api.list_platforms.side_effect = RommServerError("500", status_code=500)
         result = await plugin.test_connection()
         assert result["success"] is False
@@ -1089,15 +1089,15 @@ class TestVersionDetection:
 
         _setup_plugin(plugin)
         plugin.loop = asyncio.get_event_loop()
-        plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.1"}}
+        plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.9.0"}}
         plugin._romm_api.list_platforms.return_value = []
         result = await plugin.test_connection()
-        assert result["romm_version"] == "4.8.1"
-        plugin._romm_api.set_version.assert_called_with("4.8.1")
+        assert result["romm_version"] == "4.9.0"
+        plugin._romm_api.set_version.assert_called_with("4.9.0")
 
     @pytest.mark.asyncio
     async def test_old_version_rejected(self, plugin):
-        """Versions below 4.8.1 are rejected with version_error."""
+        """Versions below 4.9.0 are rejected with version_error."""
         import asyncio
 
         _setup_plugin(plugin)
@@ -1111,7 +1111,7 @@ class TestVersionDetection:
 
     @pytest.mark.asyncio
     async def test_46_version_rejected(self, plugin):
-        """RomM 4.6.x is below the 4.8.1 minimum and is rejected."""
+        """RomM 4.6.x is below the 4.9.0 minimum and is rejected."""
         import asyncio
 
         _setup_plugin(plugin)
@@ -1124,7 +1124,7 @@ class TestVersionDetection:
 
     @pytest.mark.asyncio
     async def test_47_version_rejected(self, plugin):
-        """RomM 4.7.x is below the 4.8.1 minimum and is rejected."""
+        """RomM 4.7.x is below the 4.9.0 minimum and is rejected."""
         import asyncio
 
         _setup_plugin(plugin)
@@ -1136,25 +1136,25 @@ class TestVersionDetection:
         assert result["reason"] == "version_error"
 
     @pytest.mark.asyncio
-    async def test_48_minimum_version_accepted(self, plugin):
-        """RomM 4.8.1 meets the minimum version requirement."""
+    async def test_minimum_version_accepted(self, plugin):
+        """RomM 4.9.0 meets the minimum version requirement."""
         import asyncio
 
         _setup_plugin(plugin)
         plugin.loop = asyncio.get_event_loop()
-        plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.1"}}
+        plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.9.0"}}
         plugin._romm_api.list_platforms.return_value = []
         result = await plugin.test_connection()
         assert result["success"] is True
 
     @pytest.mark.asyncio
-    async def test_480_patch_below_minimum_rejected(self, plugin):
-        """RomM 4.8.0 is below the 4.8.1 patch minimum and is rejected."""
+    async def test_former_minimum_now_rejected(self, plugin):
+        """RomM 4.8.1 (the former minimum) is below 4.9.0 and is now rejected."""
         import asyncio
 
         _setup_plugin(plugin)
         plugin.loop = asyncio.get_event_loop()
-        plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.0"}}
+        plugin._romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.8.1"}}
         plugin._romm_api.list_platforms.return_value = []
         result = await plugin.test_connection()
         assert result["success"] is False
@@ -1193,7 +1193,7 @@ class TestVersionDetection:
 
         _setup_plugin(plugin)
         plugin.loop = asyncio.get_event_loop()
-        plugin._romm_api.get_version.return_value = "4.8.1"  # previously detected
+        plugin._romm_api.get_version.return_value = "4.9.0"  # previously detected
         plugin._romm_api.heartbeat.side_effect = RommConnectionError("refused")
         result = await plugin.test_connection()
         assert result["success"] is False
