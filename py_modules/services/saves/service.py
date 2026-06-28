@@ -112,6 +112,7 @@ class SaveService:
                 machine_id_provider=config.machine_id_provider,
                 detect_sort_change=config.detect_sort_change,
                 is_retrodeck_migration_pending=config.is_retrodeck_migration_pending,
+                build_inventory=self.build_save_inventory,
             ),
         )
 
@@ -392,7 +393,7 @@ class SaveService:
     # Negotiate inventory (Phase 1c)
     # ------------------------------------------------------------------
 
-    def build_save_inventory(self) -> list[ClientSaveState]:
+    def build_save_inventory(self, rom_id: int | None = None) -> list[ClientSaveState]:
         """Build the negotiate inventory of this device's local save files.
 
         Gathers one :class:`ClientSaveState` per local save file belonging to a
@@ -401,6 +402,11 @@ class SaveService:
         truthy (excludes both ``None`` and the legacy ``""``). A confirmed ROM
         with no local files contributes nothing; per-file granularity means
         each local file yields its own entry.
+
+        ``rom_id`` scopes the inventory: ``None`` (the default) builds the
+        whole-device inventory for the bulk ``sync_all_saves`` pre-negotiate; a
+        concrete id restricts it to that one ROM for the single-ROM negotiate
+        trigger. The in-scope predicate is unchanged either way.
 
         ``content_hash`` is always set via :meth:`SaveFileStore.content_hash`
         (the zip-aware RomM-parity hash — never ``checksum_md5``), and
@@ -412,17 +418,17 @@ class SaveService:
         """
         with self._uow_factory() as uow:
             confirmed = [
-                (rom_id, state)
-                for rom_id, state in uow.rom_save_states.iter_all()
-                if state.slot_confirmed and state.active_slot
+                (rid, state)
+                for rid, state in uow.rom_save_states.iter_all()
+                if state.slot_confirmed and state.active_slot and (rom_id is None or rid == rom_id)
             ]
 
         inventory: list[ClientSaveState] = []
-        for rom_id, state in confirmed:
-            for f in self._rom_info.find_save_files(rom_id):
+        for rid, state in confirmed:
+            for f in self._rom_info.find_save_files(rid):
                 path = f["path"]
                 entry: ClientSaveState = {
-                    "rom_id": rom_id,
+                    "rom_id": rid,
                     "file_name": f["filename"],
                     "slot": state.active_slot,
                     "emulator": state.emulator,

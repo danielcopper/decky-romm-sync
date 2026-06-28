@@ -11,6 +11,7 @@ if TYPE_CHECKING:
         ClientSaveState,
         SyncCompleteResponse,
         SyncNegotiateResponse,
+        SyncOperation,
         SyncPlaySessionEntry,
     )
 
@@ -48,6 +49,14 @@ class FakeSaveApi:
         self.heartbeat_raises: Exception | None = None
         self._registered_devices: list[dict[str, Any]] = []
         self._next_device_id = 1
+        # Negotiate (4.9 Device Sync): the ops the next negotiate_sync returns and
+        # the session id it opens. Default is an empty plan (no ops) — tests that
+        # drive the negotiate path stage ops via ``stage_negotiate``.
+        self._negotiate_operations: list[SyncOperation] = []
+        self._negotiate_session_id = 1
+        # When set, complete_sync_session raises this AFTER logging the call, to
+        # exercise the non-fatal session-close path without failing the run.
+        self.complete_raises: Exception | None = None
 
     def fail_on_next(self, exc: Exception) -> None:
         """Make the next call raise the given exception."""
@@ -207,16 +216,31 @@ class FakeSaveApi:
             self._save_content.pop(sid, None)
         return {"deleted": len(save_ids)}
 
+    def stage_negotiate(self, operations: list[SyncOperation], *, session_id: int = 1) -> None:
+        """Script the operations (and session id) the next ``negotiate_sync`` returns.
+
+        Each op is a plain ``SyncOperation`` dict
+        (``{"action", "rom_id", "file_name", "slot", ...}``); the negotiate path
+        dispatches them through the real executors, so an ``upload`` op POSTs/PUTs
+        a local save, a ``download`` op pulls a server save, etc.
+        """
+        self._negotiate_operations = list(operations)
+        self._negotiate_session_id = session_id
+
     def negotiate_sync(self, device_id: str, saves: list[ClientSaveState]) -> SyncNegotiateResponse:
         self.call_log.append(("negotiate_sync", (device_id, saves), {}))
         self._check_fail()
+        ops = list(self._negotiate_operations)
+        totals = {"upload": 0, "download": 0, "conflict": 0, "no_op": 0}
+        for op in ops:
+            totals[op["action"]] += 1
         return {
-            "session_id": 1,
-            "operations": [],
-            "total_upload": 0,
-            "total_download": 0,
-            "total_conflict": 0,
-            "total_no_op": 0,
+            "session_id": self._negotiate_session_id,
+            "operations": ops,
+            "total_upload": totals["upload"],
+            "total_download": totals["download"],
+            "total_conflict": totals["conflict"],
+            "total_no_op": totals["no_op"],
         }
 
     def complete_sync_session(
@@ -238,6 +262,8 @@ class FakeSaveApi:
                 },
             )
         )
+        if self.complete_raises is not None:
+            raise self.complete_raises
         self._check_fail()
         return {
             "session": {

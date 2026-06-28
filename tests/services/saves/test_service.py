@@ -1374,3 +1374,44 @@ class TestBuildSaveInventory:
         """No tracked ROMs at all → empty inventory."""
         svc, _ = make_service(tmp_path)
         assert svc.build_save_inventory() == []
+
+    def test_rom_id_scopes_inventory_to_one_rom(self, tmp_path):
+        """``build_save_inventory(rom_id=42)`` returns only rom 42's entries.
+
+        The scoped form backs the single-ROM negotiate trigger; the whole-device
+        form (``rom_id=None``) backs the bulk pre-negotiate.
+        """
+        svc, _ = make_service(tmp_path)
+        _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"a")
+        _create_save(tmp_path, system="snes", rom_name="mario", content=b"bb")
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+        _install_rom(svc, tmp_path, rom_id=99, system="snes", file_name="mario.sfc")
+
+        state42 = RomSaveState(system="gba")
+        state42.confirm_slot("A")
+        _seed_save_state(svc, 42, state42)
+        state99 = RomSaveState(system="snes")
+        state99.confirm_slot("A")
+        _seed_save_state(svc, 99, state99, platform_slug="snes")
+
+        # Whole-device inventory sees both ROMs.
+        assert {e["rom_id"] for e in svc.build_save_inventory()} == {42, 99}
+
+        # Scoped to 42 → only rom 42's entry.
+        scoped = svc.build_save_inventory(rom_id=42)
+        assert len(scoped) == 1
+        assert scoped[0]["rom_id"] == 42
+        assert scoped[0]["file_name"] == "pokemon.srm"
+
+    def test_rom_id_scope_excludes_unconfirmed_target(self, tmp_path):
+        """A scoped build still applies the in-scope predicate — an unconfirmed
+        target yields nothing."""
+        svc, _ = make_service(tmp_path)
+        _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"a")
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+
+        state = RomSaveState(system="gba")
+        state.switch_active_slot("A")  # not confirmed
+        _seed_save_state(svc, 42, state)
+
+        assert svc.build_save_inventory(rom_id=42) == []

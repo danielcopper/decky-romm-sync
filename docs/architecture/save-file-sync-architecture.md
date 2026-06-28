@@ -39,10 +39,13 @@ Requires RomM >= 4.9.0. The plugin rejects servers below 4.9.0 with `reason: "ve
   alongside it.
 
 The `negotiate` / `complete` endpoints are wired into the adapter (`RommApiAdapter.negotiate_sync` /
-`complete_sync_session`) and typed by the `models/sync.py` schemas (`ClientSaveState`, `SyncOperation`,
-`SyncNegotiateResponse`, …), but are **additive and do not yet drive sync** — the legacy decision matrix below still
-owns save-sync until the negotiate path is wired ([ADR-0016](../adr/0016-save-sync-hands-detection-to-romm-negotiate.md)
-/ #1234 phase 2).
+`complete_sync_session`), typed by the `models/sync.py` schemas (`ClientSaveState`, `SyncOperation`,
+`SyncNegotiateResponse`, …), and — as of #1234 phase 2b/2c — **drive save-sync for confirmed non-legacy ROMs**: the
+client POSTs its `(rom_id, slot)` inventory, the server returns `upload` / `download` / `conflict` / `no_op` ops, and
+the existing executors run them ([ADR-0016](../adr/0016-save-sync-hands-detection-to-romm-negotiate.md)). Legacy
+`slot:null` saves stay on the legacy decision matrix below — RomM cannot address `slot:null` through the negotiate
+inventory param, so that path never retires. See
+[Negotiate-driven sync routing](#negotiate-driven-sync-routing-romm-49-device-sync).
 
 - `device_id` — server-registered device UUID. Used to populate `device_syncs` per save.
 
@@ -59,8 +62,10 @@ The plugin reproduces this `content_hash` byte-for-byte so a save's local and se
 single-file MD5 via `SaveFileStore.checksum_md5`, and the zip per-entry scheme via `SaveFileStore.content_hash` →
 `domain.save_hash.combine_zip_entry_hashes` (sorted `name:md5(entry)` lines joined by `\n`, then MD5'd; dispatch is by
 `zipfile.is_zipfile`, a content sniff, not the extension). This hash parity is the foundation the RomM Device Sync
-negotiate transport requires ([ADR-0016](../adr/0016-save-sync-hands-detection-to-romm-negotiate.md) / #1234); the
-legacy decision matrix below still computes the single-file `checksum_md5` until the negotiate path is wired.
+negotiate transport requires ([ADR-0016](../adr/0016-save-sync-hands-detection-to-romm-negotiate.md) / #1234): the
+server compares the inventory `content_hash` against its own to plan the `upload` / `download` / `conflict` / `no_op`
+ops. The legacy decision matrix below still computes the single-file `checksum_md5` for `slot:null` saves, which
+negotiate cannot address.
 
 ### Negotiate inventory builder (`SaveService.build_save_inventory`)
 
@@ -74,9 +79,63 @@ with several local files yields one entry each. Per entry, `content_hash` is alw
 mtime rendered as a UTC ISO-8601 string (`domain.iso_time.epoch_to_iso`, the round-trip inverse of
 `parse_iso_to_epoch`).
 
-The builder is **additive and unused**: nothing POSTs the inventory yet — Phase 2 wires it into `negotiate`. It is
-single-file-first; the multi-file-per-slot collision case (several local files mapping to one slot) is a Phase 4 concern
-tracked in #1235.
+`build_save_inventory(rom_id=None)` builds the whole-device inventory (the bulk `sync_all_saves` pre-negotiate); a
+concrete `rom_id` scopes it to that one ROM (the single-ROM negotiate trigger). The in-scope predicate is identical
+either way. The builder is consumed by the negotiate routing below (#1234 phase 2b/2c). It is single-file-first; the
+multi-file-per-slot collision case (several local files mapping to one slot) is a Phase 4 concern tracked in #1235.
+
+### Negotiate-driven sync routing (RomM 4.9 Device Sync)
+
+`SyncEngine._run_rom_sync` forks per ROM after loading the `RomSaveState`
+([ADR-0016](../adr/0016-save-sync-hands-detection-to-romm-negotiate.md)):
+
+- **Legacy / unconfirmed → the decision matrix.** A ROM whose `active_slot` is the legacy `None`/`""`, or whose slot the
+  user has not yet confirmed (`not (active_slot and slot_confirmed)`), stays on `list_saves` + `compute_sync_action`
+  (`do_sync_rom_saves`) — untouched. RomM cannot address `slot:null` through the negotiate inventory param, so legacy
+  saves keep the legacy path permanently. The wizard gate (only `slot_confirmed` ROMs ever enter negotiate) keeps the
+  "user decides on ambiguity" invariant — a never-configured ROM is never silently driven by the server's newest-wins.
+- **Confirmed non-legacy → negotiate.** Detection moves server-side: the client POSTs its inventory, the server returns
+  the operation list, and `MatrixExecutor.dispatch_negotiate_ops` executes each op.
+
+**Op → action mapping.** `dispatch_negotiate_ops` maps each `SyncOperation` 1:1 onto the same action the legacy matrix
+produces, then dispatches it through the **unchanged** `_dispatch_sync_action` — so resolution, the `.romm-backup`
+quarantine, the #1062 shrink guard, and per-file baseline writes (`update_file_sync_state`) all stay exactly as the
+legacy path runs them:
+
+| Server op                | Synthesized action               | Executor                                        |
+| ------------------------ | -------------------------------- | ----------------------------------------------- |
+| `download`               | `Download(server_save)`          | GET content, quarantine + overwrite local       |
+| `upload` (int `save_id`) | `Upload(target_save_id=save_id)` | PUT to the tracked save                         |
+| `upload` (no `save_id`)  | `Upload(target_save_id=None)`    | POST a new save in the slot                     |
+| `conflict`               | `Conflict(server_save)`          | surface the `SyncConflict` modal (user decides) |
+| `no_op`                  | `Skip(reason)`                   | nothing                                         |
+
+**Slot scoping.** Only ops whose `slot` equals the ROM's `active_slot` are acted on; the server may return device-wide
+download ops for a scoped POST, but a per-ROM run owns just its own slot, so ops for any other slot are dropped. The
+save-sort migration guard from the legacy path is mirrored: a server-only download (no local file) is suppressed while a
+save-sort migration is pending (#238).
+
+**Cross-device download.** A confirmed ROM with a save on the server but **no local file here** is omitted from the
+inventory; the server then returns a `download` op for that unmentioned save, which dispatches with `local_path=None`
+and pulls the content. Because of this, the single-ROM trigger POSTs `negotiate` **even when its scoped inventory is
+empty** — otherwise a save made on another device would never be discovered.
+
+**Session lifecycle.** `negotiate` opens a session (cancelling this device's prior in-flight sessions server-side) and
+`complete` closes it, reporting `operations_completed` / `operations_failed`. The close is **non-fatal**: a session the
+server never hears closed times out and is cancelled by the next `negotiate`, so a failed `complete` never fails the
+run.
+
+- **Single-ROM triggers** (`pre_launch_sync`, `post_exit_sync`, manual `sync_rom_saves`): each builds its **ROM-scoped**
+  inventory, opens its own session, dispatches, and closes the session in a `finally`. A `negotiate` **exception** logs
+  and falls back to the legacy matrix for that ROM (so an offline / erroring server still syncs `slot:null`-style).
+- **Bulk `sync_all_saves`**: builds the **whole-device** inventory and opens **one** session for the entire sweep,
+  grouping the returned ops by `rom_id`. Each ROM dispatches its own slice while a shared `[completed, failed]` counter
+  accumulates, and the single session is completed once after the loop. On an **empty inventory or a negotiate failure**
+  no bulk session opens — every ROM is passed `negotiate_ops=None` and falls back to its own per-ROM negotiate (which
+  itself legacy-falls-back), while legacy `slot:null` ROMs in the same sweep take the legacy path regardless.
+
+The v4.8.1 `confirm_download` ack and PUT-bump bookkeeping still run on the upload executors; removing them on the
+negotiate path is phase 3a (#748), tracked separately.
 
 ## Save Slots
 

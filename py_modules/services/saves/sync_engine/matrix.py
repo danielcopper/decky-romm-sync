@@ -37,6 +37,8 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Iterator
 
+    from models.sync import SyncOperation
+
     from services.protocols import (
         Clock,
         DebugLogger,
@@ -786,6 +788,137 @@ class MatrixExecutor:
             f"[TIMING] do_sync_rom_saves({rom_id}): TOTAL {self._clock.time() - t_total:.3f}s"
             f" synced={synced} errors={len(errors)}"
         )
+        return synced, errors, conflicts
+
+    # ------------------------------------------------------------------
+    # Negotiate-path dispatch (RomM 4.9 Device Sync; ADR-0016)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _negotiate_op_to_action(op: SyncOperation) -> tuple[SyncAction, list[dict[str, Any]]]:
+        """Map one server-planned ``SyncOperation`` onto a :class:`SyncAction`.
+
+        Returns the synthesized action plus the ``server_saves`` list the upload
+        PUT path looks ``target_save_id`` up in (empty for the branches that read
+        the action's own ``server_save`` field). The mapping is 1:1 with the
+        legacy decision outcomes so the unchanged :meth:`_dispatch_sync_action`
+        executes both paths identically:
+
+        - ``download`` → :class:`Download` on the named server save (``id`` +
+          ``updated_at`` + ``content_hash``; ``file_size_bytes`` is unknown
+          without a GET, left ``None``).
+        - ``upload`` with an int ``save_id`` → :class:`Upload` PUT to that id;
+          a ``None`` ``save_id`` → :class:`Upload` POST (new save in slot).
+        - ``conflict`` → :class:`Conflict` on the named server save.
+        - ``no_op`` → :class:`Skip` carrying the server's ``reason``.
+        """
+        action = op["action"]
+        save_id = op.get("save_id")
+        if action == "download":
+            server_save: dict[str, Any] = {
+                "id": save_id,
+                "updated_at": op.get("server_updated_at") or "",
+                "file_size_bytes": None,
+                "content_hash": op.get("server_content_hash"),
+            }
+            return Download(server_save=server_save), [server_save]
+        if action == "upload":
+            if save_id is not None:
+                return Upload(target_save_id=save_id), [{"id": save_id}]
+            return Upload(target_save_id=None), []
+        if action == "conflict":
+            conflict_save: dict[str, Any] = {
+                "id": save_id,
+                "updated_at": op.get("server_updated_at") or "",
+                "file_size_bytes": None,
+            }
+            return Conflict(server_save=conflict_save), [conflict_save]
+        return Skip(reason=op.get("reason") or "synced"), []
+
+    def dispatch_negotiate_ops(
+        self,
+        rom_id: int,
+        ops: list[SyncOperation],
+        save_state: RomSaveState,
+        device_id: str | None,
+        info: dict[str, Any],
+        options: SyncRunOptions,
+        core_so: str | None,
+    ) -> tuple[int, list[str], list[dict[str, Any]]]:
+        """Execute the server-planned ops for one non-legacy ROM, mutating *save_state*.
+
+        The negotiate analog of :meth:`sync_rom_saves`: instead of running
+        ``compute_sync_action`` against ``list_saves``, each ``SyncOperation``
+        the server returned is mapped (:meth:`_negotiate_op_to_action`) onto the
+        same ``Skip`` / ``Upload`` / ``Download`` / ``Conflict`` action and
+        dispatched through the unchanged :meth:`_dispatch_sync_action`. Returns
+        ``(synced_count, errors_list, conflicts_list)``.
+
+        Only ops whose ``slot`` equals the ROM's ``active_slot`` are acted on —
+        the server may return device-wide download ops for a scoped POST, but a
+        per-ROM run owns just its own slot, so ops for any other slot are
+        dropped. A ``download`` op for a file with no local copy is the
+        cross-device case (a save made on another device) and is pulled to
+        recover the content; the server-only migration guard still suppresses it
+        while a save-sort migration is pending (#238). ``info``
+        (``get_rom_save_info``) and ``options`` are resolved by the caller;
+        *core_so* stamps the upload emulator tag. The operation entry owns the
+        surrounding read/write Unit of Work.
+        """
+        rom_id = int(rom_id)
+        system = info["system"]
+        saves_dir = info["saves_dir"]
+        active_slot = save_state.active_slot
+
+        errors: list[str] = []
+        conflicts: list[dict[str, Any]] = []
+        sink = DispatchSink(errors=errors, conflicts=conflicts)
+        synced = 0
+
+        local_by_name = {lf["filename"]: lf for lf in self._rom_info.find_save_files(rom_id)}
+        pending_migration = self._rom_info.is_save_sort_changed()
+
+        for op in ops:
+            op_slot = op.get("slot")
+            if op_slot != active_slot:
+                self._log_debug(
+                    f"dispatch_negotiate_ops({rom_id}): dropping op for slot {op_slot!r} "
+                    f"(active={active_slot!r}) {op.get('file_name')}"
+                )
+                continue
+            filename = op["file_name"]
+            local_file = local_by_name.get(filename)
+            local_path = local_file["path"] if local_file else None
+            if local_path is None and pending_migration:
+                self._log_debug(
+                    f"dispatch_negotiate_ops({rom_id}): skipping server-only {filename} — migration pending"
+                )
+                continue
+            local_hash = (
+                self._save_file_store.checksum_md5(local_path)
+                if local_path and self._save_file_store.is_file(local_path)
+                else None
+            )
+            action, server_saves = self._negotiate_op_to_action(op)
+            self._log_debug(f"dispatch_negotiate_ops({rom_id}): {op['action']} {filename} -> {type(action).__name__}")
+            if self._dispatch_sync_action(
+                action,
+                rom_id=rom_id,
+                save_state=save_state,
+                device_id=device_id,
+                filename=filename,
+                local_path=local_path,
+                local_hash=local_hash,
+                saves_dir=saves_dir,
+                system=system,
+                core_so=core_so,
+                options=options,
+                server_saves=server_saves,
+                sink=sink,
+            ):
+                synced += 1
+
+        save_state.mark_sync_evaluated(self._clock.now().isoformat())
         return synced, errors, conflicts
 
 

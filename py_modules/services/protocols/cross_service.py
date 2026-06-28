@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from models.state import InstalledRomEntry, ShortcutRegistryEntry
+    from models.sync import ClientSaveState
 
     from domain.disc_selection import Disc
     from domain.rom_install import RomInstall
@@ -289,6 +290,21 @@ class MigrationPendingFn(Protocol):
     """
 
     def __call__(self) -> bool: ...
+
+
+class SaveInventoryBuilderFn(Protocol):
+    """Scoped negotiate-inventory build consumed by SyncEngine.
+
+    The composition root satisfies this with ``SaveService.build_save_inventory``.
+    SyncEngine calls it to gather this device's local-save inventory for the
+    negotiate POST: ``rom_id=None`` builds the whole-device inventory (the bulk
+    ``sync_all_saves`` pre-negotiate), a concrete ``rom_id`` scopes it to that
+    one ROM (the single-ROM negotiate trigger). Only confirmed, non-legacy-slot
+    ROMs with local save files contribute entries — the wizard gate stays
+    upstream of negotiate (ADR-0016).
+    """
+
+    def __call__(self, rom_id: int | None = None) -> list[ClientSaveState]: ...
 
 
 class DeviceForgetFn(Protocol):

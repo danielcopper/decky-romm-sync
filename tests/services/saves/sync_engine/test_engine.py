@@ -20,8 +20,10 @@ from lib.list_result import ErrorCode
 from tests.services.saves._helpers import (
     _create_save,
     _do_sync,
+    _enable_sync_with_device,
     _get_device_id,
     _install_rom,
+    _require_save_state,
     _seed_save_state,
     _server_save,
     _set_device_id,
@@ -189,7 +191,7 @@ class TestSyncRomSaves:
 class TestSyncAllSaves:
     @pytest.mark.asyncio
     async def test_syncs_multiple_roms(self, tmp_path):
-        svc, _ = make_service(tmp_path)
+        svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
 
@@ -201,11 +203,21 @@ class TestSyncAllSaves:
         )
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
         _create_save(tmp_path, system="snes", rom_name="game2", content=b"save2")
+        # Confirmed non-legacy ROMs route through negotiate (ADR-0016): the
+        # single bulk session returns one upload op per ROM.
+        fake.stage_negotiate(
+            [
+                {"action": "upload", "rom_id": 1, "file_name": "game1.srm", "slot": "default", "reason": "new save"},
+                {"action": "upload", "rom_id": 2, "file_name": "game2.srm", "slot": "default", "reason": "new save"},
+            ]
+        )
 
         result = await svc.sync_all_saves()
         assert result["success"] is True
         assert result["synced"] == 2
         assert result["roms_checked"] == 2
+        # Exactly one whole-device negotiate session for both ROMs.
+        assert len([c for c in fake.call_log if c[0] == "negotiate_sync"]) == 1
 
     @pytest.mark.asyncio
     async def test_disabled_returns_early(self, tmp_path):
@@ -228,20 +240,23 @@ class TestSyncAllSaves:
         )
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
         _create_save(tmp_path, system="snes", rom_name="game2", content=b"save2")
+        # Both confirmed non-legacy ROMs take the negotiate path; stage an upload
+        # op for each, then make the second ROM's upload fail.
+        fake.stage_negotiate(
+            [
+                {"action": "upload", "rom_id": 1, "file_name": "game1.srm", "slot": "default", "reason": "new save"},
+                {"action": "upload", "rom_id": 2, "file_name": "game2.srm", "slot": "default", "reason": "new save"},
+            ]
+        )
 
-        # Make the second ROM's list_saves fail
-        original_list = fake.list_saves
+        original_upload = fake.upload_save
 
-        call_count = 0
-
-        def flaky_list(rom_id, *, device_id=None, slot=None):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 2:
+        def flaky_upload(rom_id, *args, **kwargs):
+            if rom_id == 2:
                 raise RommApiError("Server error")
-            return original_list(rom_id, device_id=device_id, slot=slot)
+            return original_upload(rom_id, *args, **kwargs)
 
-        fake.list_saves = flaky_list
+        fake.upload_save = flaky_upload
 
         result = await svc.sync_all_saves()
         assert result["synced"] >= 1
@@ -266,13 +281,15 @@ class TestSyncAllSaves:
         _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
 
-        orig_sync = svc._sync_engine.do_sync_rom_saves
+        # Confirmed non-legacy ROM routes through negotiate (ADR-0016) — the
+        # worker is dispatch_negotiate_ops, not do_sync_rom_saves.
+        orig_sync = svc._sync_engine.dispatch_negotiate_ops
 
         def wrapped_sync(rom_id, *args):
             call_order.append("sync")
             return orig_sync(rom_id, *args)
 
-        svc._sync_engine.do_sync_rom_saves = wrapped_sync  # type: ignore[method-assign]
+        svc._sync_engine.dispatch_negotiate_ops = wrapped_sync  # type: ignore[method-assign]
 
         result = await svc.sync_all_saves()
 
@@ -295,11 +312,12 @@ class TestSyncAllSaves:
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
 
-        # Stub internal sync to produce conflicts but no errors
+        # Stub the negotiate-path worker to produce conflicts but no errors
+        # (confirmed non-legacy ROM → dispatch_negotiate_ops, ADR-0016).
         def stub_sync(rom_id, *args):
             return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
 
-        svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
+        svc._sync_engine.dispatch_negotiate_ops = stub_sync  # type: ignore[method-assign]
 
         result = await svc.sync_all_saves()
 
@@ -322,6 +340,10 @@ class TestSyncAllSaves:
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
+        # Confirmed non-legacy → negotiate path; an upload op makes it upload.
+        fake.stage_negotiate(
+            [{"action": "upload", "rom_id": 1, "file_name": "game1.srm", "slot": "default", "reason": "new save"}]
+        )
 
         result = await svc.sync_all_saves()
 
@@ -363,6 +385,11 @@ class TestSyncAllSaves:
         # rom 2 left unconfirmed (no save state seeded).
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
         _create_save(tmp_path, system="snes", rom_name="game2", content=b"save2")
+        # Only the confirmed ROM (rom 1) enters the negotiate inventory; the
+        # staged upload op is for it alone.
+        fake.stage_negotiate(
+            [{"action": "upload", "rom_id": 1, "file_name": "game1.srm", "slot": "default", "reason": "new save"}]
+        )
 
         result = await svc.sync_all_saves()
 
@@ -1267,7 +1294,9 @@ class TestSaveSyncDeviceGate:
                 state["active"] -= 1
             return (1, [], [])
 
-        svc._sync_engine.do_sync_rom_saves = slow_sync  # type: ignore[method-assign]
+        # Confirmed non-legacy ROMs route through negotiate (ADR-0016); the
+        # device-gate serialization is the same, so stub the negotiate worker.
+        svc._sync_engine.dispatch_negotiate_ops = slow_sync  # type: ignore[method-assign]
 
         results = await asyncio.gather(svc.sync_rom_saves(1), svc.sync_rom_saves(2))
 
@@ -1276,3 +1305,426 @@ class TestSaveSyncDeviceGate:
         # Serialized: the device gate never let both worker calls run at once.
         assert state["peak"] == 1
         assert svc._sync_engine._device_gate.is_in_flight() is False
+
+
+class TestRunRomSyncNegotiate:
+    """``_run_rom_sync`` routing fork (ADR-0016).
+
+    A confirmed non-legacy ROM hands detection to the server's negotiate op
+    list; a legacy ``slot:null`` or not-yet-confirmed ROM stays on the legacy
+    ``compute_sync_action`` matrix (``list_saves``). A single-ROM trigger opens
+    and closes its own session and legacy-falls-back on a negotiate exception.
+    """
+
+    @pytest.mark.asyncio
+    async def test_confirmed_non_legacy_uses_negotiate(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, device_id="device-1")
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+        _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"local")
+        _seed_save_state(svc, 42, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        fake.stage_negotiate(
+            [{"action": "upload", "rom_id": 42, "file_name": "pokemon.srm", "slot": "default", "reason": "new save"}]
+        )
+
+        synced, errors, conflicts = await svc._sync_engine._run_rom_sync(42)
+
+        assert synced == 1
+        assert errors == []
+        assert conflicts == []
+        # Negotiate drove the run; the legacy list_saves matrix was NOT used.
+        assert any(c[0] == "negotiate_sync" for c in fake.call_log)
+        assert not any(c[0] == "list_saves" for c in fake.call_log)
+        # The single-ROM trigger opened and closed its own session.
+        assert any(c[0] == "complete_sync_session" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_legacy_null_slot_uses_compute_sync_action(self, tmp_path):
+        """A confirmed legacy (slot:null) ROM stays on list_saves; negotiate is NOT called."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, device_id="device-1")
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+        _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"local")
+        _seed_save_state(
+            svc,
+            42,
+            RomSaveState(
+                system="gba",
+                slot_confirmed=True,
+                active_slot=None,
+                slots={"": {"source": "local", "count": 0, "latest_updated_at": None}},
+            ),
+        )
+
+        synced, errors, conflicts = await svc._sync_engine._run_rom_sync(42)
+
+        assert any(c[0] == "list_saves" for c in fake.call_log)
+        assert not any(c[0] == "negotiate_sync" for c in fake.call_log)
+        # Local save, no server save → legacy POST upload.
+        assert synced == 1
+        assert errors == []
+        assert conflicts == []
+
+    @pytest.mark.asyncio
+    async def test_unconfirmed_rom_uses_legacy(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, device_id="device-1")
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+        _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"local")
+        st = RomSaveState(system="gba")
+        st.switch_active_slot("default")  # active_slot set, slot_confirmed stays False
+        _seed_save_state(svc, 42, st)
+
+        await svc._sync_engine._run_rom_sync(42)
+
+        assert any(c[0] == "list_saves" for c in fake.call_log)
+        assert not any(c[0] == "negotiate_sync" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_single_rom_negotiate_exception_falls_back_to_legacy(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, device_id="device-1")
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+        _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"local")
+        _seed_save_state(svc, 42, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        # The single-ROM negotiate POST raises; the run falls back to legacy.
+        fake.fail_on_next(RommConnectionError("negotiate down"))
+
+        synced, errors, conflicts = await svc._sync_engine._run_rom_sync(42)
+
+        assert any(c[0] == "negotiate_sync" for c in fake.call_log)
+        assert any(c[0] == "list_saves" for c in fake.call_log)
+        assert synced == 1  # legacy POST upload
+        assert errors == []
+        assert conflicts == []
+
+    @pytest.mark.asyncio
+    async def test_cross_device_download_via_single_rom_negotiate(self, tmp_path):
+        """A confirmed non-legacy ROM with NO local file still POSTs negotiate and
+        pulls the server save the plan names (cross-device download)."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, device_id="device-1")
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+        # No local save created — the scoped inventory is empty.
+        _seed_save_state(svc, 42, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        fake.set_server_save_content(888, b"other device save")
+        fake.stage_negotiate(
+            [
+                {
+                    "action": "download",
+                    "rom_id": 42,
+                    "file_name": "pokemon.srm",
+                    "slot": "default",
+                    "save_id": 888,
+                    "server_updated_at": "2026-02-17T06:00:00Z",
+                    "reason": "save made on another device",
+                }
+            ]
+        )
+
+        synced, errors, conflicts = await svc._sync_engine._run_rom_sync(42)
+
+        # Negotiate fired despite the empty inventory, returning a download op.
+        assert any(c[0] == "negotiate_sync" for c in fake.call_log)
+        assert synced == 1
+        assert errors == []
+        assert conflicts == []
+        local = tmp_path / "saves" / "gba" / "pokemon.srm"
+        assert local.exists()
+        assert local.read_bytes() == b"other device save"
+
+    @pytest.mark.asyncio
+    async def test_session_completed_with_counts(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, device_id="device-1")
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+        _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"local")
+        _seed_save_state(svc, 42, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        fake.stage_negotiate(
+            [{"action": "upload", "rom_id": 42, "file_name": "pokemon.srm", "slot": "default", "reason": "new save"}],
+            session_id=77,
+        )
+
+        await svc._sync_engine._run_rom_sync(42)
+
+        complete = [c for c in fake.call_log if c[0] == "complete_sync_session"]
+        assert len(complete) == 1
+        assert complete[0][1][0] == 77  # the negotiated session id
+        assert complete[0][2]["operations_completed"] == 1
+        assert complete[0][2]["operations_failed"] == 0
+
+    @pytest.mark.asyncio
+    async def test_malformed_negotiate_response_falls_back_to_legacy(self, tmp_path):
+        """A 200 response missing session_id / operations degrades the SAME way a
+        negotiate exception does — single-ROM falls back to the legacy matrix."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, device_id="device-1")
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+        _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"local")
+        _seed_save_state(svc, 42, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+
+        def malformed(device_id, saves):
+            return {}  # 200 body missing session_id / operations
+
+        fake.negotiate_sync = malformed  # type: ignore[method-assign]
+
+        synced, errors, conflicts = await svc._sync_engine._run_rom_sync(42)
+
+        # Fell back to legacy: list_saves ran and the local save POSTed.
+        assert any(c[0] == "list_saves" for c in fake.call_log)
+        assert synced == 1
+        assert errors == []
+        assert conflicts == []
+
+    @pytest.mark.asyncio
+    async def test_negotiate_upload_persists_baseline(self, tmp_path):
+        """A negotiate POST upload writes the per-file baseline to the PERSISTED
+        RomSaveState (launch-gate + slot-switch read it back, not the in-memory ref)."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, device_id="device-1")
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+        _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"local save")
+        _seed_save_state(svc, 42, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        fake.stage_negotiate(
+            [{"action": "upload", "rom_id": 42, "file_name": "pokemon.srm", "slot": "default", "reason": "new save"}]
+        )
+
+        await svc._sync_engine._run_rom_sync(42)
+
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
+        assert file_state.tracked_save_id is not None
+        assert file_state.last_sync_hash
+
+    @pytest.mark.asyncio
+    async def test_negotiate_download_persists_baseline(self, tmp_path):
+        """A negotiate download writes the per-file baseline (server save id + hash)
+        to the PERSISTED RomSaveState."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, device_id="device-1")
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+        _seed_save_state(svc, 42, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        fake.set_server_save_content(888, b"server save bytes")
+        fake.stage_negotiate(
+            [
+                {
+                    "action": "download",
+                    "rom_id": 42,
+                    "file_name": "pokemon.srm",
+                    "slot": "default",
+                    "save_id": 888,
+                    "server_updated_at": "2026-02-17T06:00:00Z",
+                    "reason": "cross-device",
+                }
+            ]
+        )
+
+        await svc._sync_engine._run_rom_sync(42)
+
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
+        assert file_state.last_sync_server_save_id == 888
+        assert file_state.last_sync_hash
+
+
+class TestSyncAllSavesNegotiate:
+    """``sync_all_saves`` whole-inventory pre-negotiate (Phase 2c, ADR-0016).
+
+    One negotiate session covers every confirmed non-legacy ROM; legacy
+    ``slot:null`` ROMs in the same sweep still take the legacy ``list_saves``
+    path. The single session is completed once after the loop.
+    """
+
+    @pytest.mark.asyncio
+    async def test_one_negotiate_session_for_all_non_legacy_roms(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "device-1")
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
+        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(
+            svc, 2, RomSaveState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
+        )
+        _create_save(tmp_path, system="gba", rom_name="game1", content=b"s1")
+        _create_save(tmp_path, system="snes", rom_name="game2", content=b"s2")
+        fake.stage_negotiate(
+            [
+                {"action": "upload", "rom_id": 1, "file_name": "game1.srm", "slot": "default", "reason": "new"},
+                {"action": "upload", "rom_id": 2, "file_name": "game2.srm", "slot": "default", "reason": "new"},
+            ],
+            session_id=55,
+        )
+
+        result = await svc.sync_all_saves()
+
+        assert result["synced"] == 2
+        # Exactly ONE whole-device negotiate session for both ROMs.
+        assert len([c for c in fake.call_log if c[0] == "negotiate_sync"]) == 1
+        complete = [c for c in fake.call_log if c[0] == "complete_sync_session"]
+        assert len(complete) == 1
+        assert complete[0][1][0] == 55
+        assert complete[0][2]["operations_completed"] == 2
+        assert complete[0][2]["operations_failed"] == 0
+
+    @pytest.mark.asyncio
+    async def test_legacy_rom_syncs_via_list_saves_in_bulk(self, tmp_path):
+        """A legacy slot:null ROM in the bulk run takes list_saves, alongside the
+        single negotiate session opened for the non-legacy ROM."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "device-1")
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
+        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(
+            svc,
+            2,
+            RomSaveState(
+                system="snes",
+                slot_confirmed=True,
+                active_slot=None,
+                slots={"": {"source": "local", "count": 0, "latest_updated_at": None}},
+            ),
+            platform_slug="snes",
+        )
+        _create_save(tmp_path, system="gba", rom_name="game1", content=b"s1")
+        _create_save(tmp_path, system="snes", rom_name="game2", content=b"s2")
+        fake.stage_negotiate(
+            [{"action": "upload", "rom_id": 1, "file_name": "game1.srm", "slot": "default", "reason": "new"}]
+        )
+
+        result = await svc.sync_all_saves()
+
+        # rom1 via negotiate upload; rom2 (legacy) via list_saves matrix POST.
+        assert result["synced"] == 2
+        assert len([c for c in fake.call_log if c[0] == "negotiate_sync"]) == 1
+        assert any(c[0] == "list_saves" and c[1][0] == 2 for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_cross_device_download_via_bulk(self, tmp_path):
+        """A confirmed non-legacy ROM with no local file pulls its server save via
+        the bulk session (a download op the server returns for the unmentioned save)."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "device-1")
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
+        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(
+            svc, 2, RomSaveState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
+        )
+        _create_save(tmp_path, system="gba", rom_name="game1", content=b"s1")  # rom1 only
+        fake.set_server_save_content(900, b"server save for game2")
+        fake.stage_negotiate(
+            [
+                {"action": "no_op", "rom_id": 1, "file_name": "game1.srm", "slot": "default", "reason": "synced"},
+                {
+                    "action": "download",
+                    "rom_id": 2,
+                    "file_name": "game2.srm",
+                    "slot": "default",
+                    "save_id": 900,
+                    "server_updated_at": "2026-02-17T06:00:00Z",
+                    "reason": "save made on another device",
+                },
+            ]
+        )
+
+        result = await svc.sync_all_saves()
+
+        assert result["synced"] == 1  # the cross-device download
+        local = tmp_path / "saves" / "snes" / "game2.srm"
+        assert local.exists()
+        assert local.read_bytes() == b"server save for game2"
+
+    @pytest.mark.asyncio
+    async def test_negotiate_failure_all_roms_fall_back(self, tmp_path):
+        """Bulk negotiate failure → session_id None → no bulk session completes;
+        each ROM falls back (its per-ROM negotiate fails too → legacy)."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "device-1")
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _create_save(tmp_path, system="gba", rom_name="game1", content=b"s1")
+
+        def always_fail(device_id, saves):
+            raise RommConnectionError("negotiate down")
+
+        fake.negotiate_sync = always_fail  # type: ignore[method-assign]
+
+        result = await svc.sync_all_saves()
+
+        # Fell back to the legacy matrix; no session was ever completed.
+        assert any(c[0] == "list_saves" for c in fake.call_log)
+        assert not any(c[0] == "complete_sync_session" for c in fake.call_log)
+        assert result["synced"] == 1  # legacy POST upload
+
+    @pytest.mark.asyncio
+    async def test_empty_inventory_no_negotiate_no_session(self, tmp_path):
+        """No confirmed non-legacy ROM with local saves → empty inventory → the bulk
+        negotiate is skipped and no session opens. A legacy ROM still syncs."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "device-1")
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _seed_save_state(
+            svc,
+            1,
+            RomSaveState(
+                system="gba",
+                slot_confirmed=True,
+                active_slot=None,
+                slots={"": {"source": "local", "count": 0, "latest_updated_at": None}},
+            ),
+        )
+        _create_save(tmp_path, system="gba", rom_name="game1", content=b"s1")
+
+        result = await svc.sync_all_saves()
+
+        assert not any(c[0] == "negotiate_sync" for c in fake.call_log)
+        assert not any(c[0] == "complete_sync_session" for c in fake.call_log)
+        assert any(c[0] == "list_saves" for c in fake.call_log)
+        assert result["synced"] == 1
+
+    @pytest.mark.asyncio
+    async def test_complete_failure_is_non_fatal(self, tmp_path):
+        """A failing complete_sync_session does not fail the sweep."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "device-1")
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _create_save(tmp_path, system="gba", rom_name="game1", content=b"s1")
+        fake.stage_negotiate(
+            [{"action": "upload", "rom_id": 1, "file_name": "game1.srm", "slot": "default", "reason": "new"}]
+        )
+        fake.complete_raises = RommApiError("complete failed")
+
+        result = await svc.sync_all_saves()
+
+        assert result["success"] is True
+        assert result["synced"] == 1
+        assert any(c[0] == "complete_sync_session" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_malformed_negotiate_response_falls_back(self, tmp_path):
+        """A malformed bulk negotiate response degrades like a failure — session_id
+        None, no session completed, every ROM falls back to the legacy matrix."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "device-1")
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _create_save(tmp_path, system="gba", rom_name="game1", content=b"s1")
+
+        def malformed(device_id, saves):
+            return {}  # 200 body missing session_id / operations
+
+        fake.negotiate_sync = malformed  # type: ignore[method-assign]
+
+        result = await svc.sync_all_saves()
+
+        # No session opened/completed; the ROM fell back to the legacy matrix.
+        assert not any(c[0] == "complete_sync_session" for c in fake.call_log)
+        assert any(c[0] == "list_saves" for c in fake.call_log)
+        assert result["synced"] == 1
