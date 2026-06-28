@@ -41,6 +41,14 @@ from services.saves._settings import (
     sync_after_exit,
     sync_before_launch,
 )
+from services.saves.sync_engine._gate import (
+    POST_EXIT_GATE_TIMEOUT,
+    PRE_LAUNCH_GATE_TIMEOUT,
+    SYNC_ALL_GATE_TIMEOUT,
+    SYNC_ROM_GATE_TIMEOUT,
+    SaveSyncGate,
+    SaveSyncTimeoutError,
+)
 from services.saves.sync_engine.matrix import MatrixExecutor, MatrixOutcome
 from services.saves.sync_engine.rollback import RollbackOrchestrator
 
@@ -155,6 +163,11 @@ class SyncEngine:
             log_debug=config.log_debug,
             resolve_core=self.resolve_core,
         )
+        # Device-level single-owner serialization gate: only one save-sync run
+        # in flight at a time per device. A second trigger queues behind the
+        # in-flight one, bounded so a stuck run never traps the launch path.
+        # Sits OUTSIDE the per-ROM ``rom_lock`` — wraps the whole run body.
+        self._device_gate = SaveSyncGate()
 
     def rom_lock(self, rom_id: int) -> asyncio.Lock:
         """Return the lock for this rom_id, creating it lazily."""
@@ -495,71 +508,89 @@ class SyncEngine:
     async def pre_launch_sync(self, rom_id: int) -> dict[str, Any]:
         """Download newer saves from server before game launch."""
         rom_id = int(rom_id)
-        async with self.rom_lock(rom_id):
-            if not self.is_save_sync_enabled():
-                return {"success": True, "message": SAVE_SYNC_DISABLED, "synced": 0}
+        # Cheap stateless early-out before the device gate — never queue behind
+        # an in-flight run just to report the feature is disabled.
+        if not self.is_save_sync_enabled():
+            return {"success": True, "message": SAVE_SYNC_DISABLED, "synced": 0}
 
-            # Defense in depth: block pre_launch_sync if a future caller bypasses
-            # the @migration_blocked decorator at the public callable. saves_dir
-            # would otherwise resolve under the new home and silently desync from
-            # files still living at the old home. Internal do_sync_rom_saves callers
-            # (sync_all_saves, rollback_to_version) are protected by the decorator
-            # on their own public callables — this guard is for pre_launch_sync.
-            if self._is_retrodeck_migration_pending():
+        try:
+            async with self._device_gate.bounded_run(max_wait=PRE_LAUNCH_GATE_TIMEOUT), self.rom_lock(rom_id):
+                # Defense in depth: block pre_launch_sync if a future caller bypasses
+                # the @migration_blocked decorator at the public callable. saves_dir
+                # would otherwise resolve under the new home and silently desync from
+                # files still living at the old home. Internal do_sync_rom_saves callers
+                # (sync_all_saves, rollback_to_version) are protected by the decorator
+                # on their own public callables — this guard is for pre_launch_sync.
+                if self._is_retrodeck_migration_pending():
+                    return {
+                        "success": False,
+                        "reason": "blocked_by_migration",
+                        "message": "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
+                        "synced": 0,
+                        "blocked_by_migration": True,
+                    }
+
+                # Refresh save-sort state before the migration gate — see #238.
+                await self._refresh_save_sort_state("pre_launch_sync")
+
+                # Hard-gate: saves go to the content dir — sync is impossible (#239).
+                if self._save_sync_blocked():
+                    return self._content_dir_skip()
+
+                if self._rom_info.is_save_sort_changed():
+                    return {
+                        "success": False,
+                        "reason": "save_sort_changed",
+                        "message": "RetroArch save sorting changed — migrate saves in Settings first",
+                        "synced": 0,
+                        "save_sort_changed": True,
+                    }
+
+                if not sync_before_launch(self._settings):
+                    return {"success": True, "message": "Pre-launch sync disabled", "synced": 0}
+
+                # Pre-probe reachability before any sync work — mirror post_exit_sync.
+                # A genuine reachability failure surfaces the canonical unreachable
+                # shape (plus the additive ``offline`` flag) so the launch path can
+                # warn on local drift instead of stalling on a doomed round-trip; an
+                # auth/SSL/server error instead carries its OWN classified reason so
+                # the UI stops lying about reachability (#971).
+                try:
+                    await self._loop.run_in_executor(None, self._romm_api.heartbeat)
+                except Exception as e:
+                    return self._heartbeat_failure_result("pre_launch_sync", e)
+
+                if not self.get_device_id():
+                    reg = await self.ensure_device_registered()
+                    if not reg.get("success"):
+                        return {
+                            "success": False,
+                            "reason": DEVICE_NOT_REGISTERED_REASON,
+                            "message": DEVICE_NOT_REGISTERED,
+                        }
+
+                synced, errors, conflicts = await self._run_rom_sync(rom_id)
+
+                msg = f"Downloaded {synced} save(s)"
+                if errors:
+                    msg += f", {len(errors)} error(s)"
                 return {
-                    "success": False,
-                    "reason": "blocked_by_migration",
-                    "message": "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
-                    "synced": 0,
-                    "blocked_by_migration": True,
+                    "success": len(errors) == 0,
+                    "message": msg,
+                    "synced": synced,
+                    "errors": errors,
+                    "conflicts": list(conflicts),
                 }
-
-            # Refresh save-sort state before the migration gate — see #238.
-            await self._refresh_save_sort_state("pre_launch_sync")
-
-            # Hard-gate: saves go to the content dir — sync is impossible (#239).
-            if self._save_sync_blocked():
-                return self._content_dir_skip()
-
-            if self._rom_info.is_save_sort_changed():
-                return {
-                    "success": False,
-                    "reason": "save_sort_changed",
-                    "message": "RetroArch save sorting changed — migrate saves in Settings first",
-                    "synced": 0,
-                    "save_sort_changed": True,
-                }
-
-            if not sync_before_launch(self._settings):
-                return {"success": True, "message": "Pre-launch sync disabled", "synced": 0}
-
-            # Pre-probe reachability before any sync work — mirror post_exit_sync.
-            # A genuine reachability failure surfaces the canonical unreachable
-            # shape (plus the additive ``offline`` flag) so the launch path can
-            # warn on local drift instead of stalling on a doomed round-trip; an
-            # auth/SSL/server error instead carries its OWN classified reason so
-            # the UI stops lying about reachability (#971).
-            try:
-                await self._loop.run_in_executor(None, self._romm_api.heartbeat)
-            except Exception as e:
-                return self._heartbeat_failure_result("pre_launch_sync", e)
-
-            if not self.get_device_id():
-                reg = await self.ensure_device_registered()
-                if not reg.get("success"):
-                    return {"success": False, "reason": DEVICE_NOT_REGISTERED_REASON, "message": DEVICE_NOT_REGISTERED}
-
-            synced, errors, conflicts = await self._run_rom_sync(rom_id)
-
-            msg = f"Downloaded {synced} save(s)"
-            if errors:
-                msg += f", {len(errors)} error(s)"
+        except SaveSyncTimeoutError:
+            # Another save-sync run held the device gate past the bounded wait —
+            # treat as offline so the launch path warns on local drift instead
+            # of trapping the Play button. Mirrors _heartbeat_failure_result.
             return {
-                "success": len(errors) == 0,
-                "message": msg,
-                "synced": synced,
-                "errors": errors,
-                "conflicts": list(conflicts),
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": "Save-sync busy — treating as offline",
+                "synced": 0,
+                "offline": True,
             }
 
     async def post_exit_sync(self, rom_id: int) -> dict[str, Any]:
@@ -567,109 +598,144 @@ class SyncEngine:
         self._logger.info("post_exit_sync called for rom_id=%d", rom_id)
         rom_id = int(rom_id)
 
-        async with self.rom_lock(rom_id):
-            if not self.is_save_sync_enabled():
-                self._logger.info("post_exit_sync skipped: save sync disabled")
-                return {"success": True, "message": SAVE_SYNC_DISABLED, "synced": 0}
+        # Cheap stateless early-out before the device gate — never queue behind
+        # an in-flight run just to report the feature is disabled.
+        if not self.is_save_sync_enabled():
+            self._logger.info("post_exit_sync skipped: save sync disabled")
+            return {"success": True, "message": SAVE_SYNC_DISABLED, "synced": 0}
 
-            # Defense in depth: same rationale as pre_launch_sync — internal
-            # do_sync_rom_saves callers are protected by @migration_blocked on
-            # their public callables; this guard covers post_exit_sync only.
-            if self._is_retrodeck_migration_pending():
-                self._logger.info("post_exit_sync skipped: retrodeck migration pending")
+        try:
+            async with self._device_gate.bounded_run(max_wait=POST_EXIT_GATE_TIMEOUT), self.rom_lock(rom_id):
+                # Defense in depth: same rationale as pre_launch_sync — internal
+                # do_sync_rom_saves callers are protected by @migration_blocked on
+                # their public callables; this guard covers post_exit_sync only.
+                if self._is_retrodeck_migration_pending():
+                    self._logger.info("post_exit_sync skipped: retrodeck migration pending")
+                    return {
+                        "success": False,
+                        "reason": "blocked_by_migration",
+                        "message": "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
+                        "synced": 0,
+                        "blocked_by_migration": True,
+                    }
+
+                if not sync_after_exit(self._settings):
+                    self._logger.info("post_exit_sync skipped: sync_after_exit disabled")
+                    return {"success": True, "message": "Post-exit sync disabled", "synced": 0}
+
+                # Refresh save-sort state before do_sync_rom_saves reads saves_dir — see #238.
+                await self._refresh_save_sort_state("post_exit_sync")
+
+                # Hard-gate: saves go to the content dir — sync is impossible (#239).
+                if self._save_sync_blocked():
+                    self._logger.info("post_exit_sync skipped: savefiles_in_content_dir")
+                    return self._content_dir_skip()
+
+                try:
+                    await self._loop.run_in_executor(None, self._romm_api.heartbeat)
+                except Exception as e:
+                    return self._heartbeat_failure_result("post_exit_sync", e)
+
+                if not self.get_device_id():
+                    reg = await self.ensure_device_registered()
+                    if not reg.get("success"):
+                        return {
+                            "success": False,
+                            "reason": DEVICE_NOT_REGISTERED_REASON,
+                            "message": DEVICE_NOT_REGISTERED,
+                        }
+
+                synced, errors, conflicts = await self._run_rom_sync(rom_id)
+
+                self._logger.info(
+                    "post_exit_sync complete for rom_id=%d: synced=%d, errors=%d, conflicts=%d",
+                    rom_id,
+                    synced,
+                    len(errors),
+                    len(conflicts),
+                )
+
+                msg = f"Uploaded {synced} save(s)"
+                if errors:
+                    msg += f", {len(errors)} error(s)"
+                if conflicts:
+                    msg += f", {len(conflicts)} conflict(s)"
                 return {
-                    "success": False,
-                    "reason": "blocked_by_migration",
-                    "message": "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
-                    "synced": 0,
-                    "blocked_by_migration": True,
+                    "success": len(errors) == 0,
+                    "message": msg,
+                    "synced": synced,
+                    "errors": errors,
+                    "conflicts": list(conflicts),
                 }
-
-            if not sync_after_exit(self._settings):
-                self._logger.info("post_exit_sync skipped: sync_after_exit disabled")
-                return {"success": True, "message": "Post-exit sync disabled", "synced": 0}
-
-            # Refresh save-sort state before do_sync_rom_saves reads saves_dir — see #238.
-            await self._refresh_save_sort_state("post_exit_sync")
-
-            # Hard-gate: saves go to the content dir — sync is impossible (#239).
-            if self._save_sync_blocked():
-                self._logger.info("post_exit_sync skipped: savefiles_in_content_dir")
-                return self._content_dir_skip()
-
-            try:
-                await self._loop.run_in_executor(None, self._romm_api.heartbeat)
-            except Exception as e:
-                return self._heartbeat_failure_result("post_exit_sync", e)
-
-            if not self.get_device_id():
-                reg = await self.ensure_device_registered()
-                if not reg.get("success"):
-                    return {"success": False, "reason": DEVICE_NOT_REGISTERED_REASON, "message": DEVICE_NOT_REGISTERED}
-
-            synced, errors, conflicts = await self._run_rom_sync(rom_id)
-
-            self._logger.info(
-                "post_exit_sync complete for rom_id=%d: synced=%d, errors=%d, conflicts=%d",
-                rom_id,
-                synced,
-                len(errors),
-                len(conflicts),
-            )
-
-            msg = f"Uploaded {synced} save(s)"
-            if errors:
-                msg += f", {len(errors)} error(s)"
-            if conflicts:
-                msg += f", {len(conflicts)} conflict(s)"
+        except SaveSyncTimeoutError:
+            # Another save-sync run held the device gate past the bounded wait —
+            # skip the post-exit upload rather than block on a stuck run.
+            self._logger.info("post_exit_sync skipped: save-sync busy")
             return {
-                "success": len(errors) == 0,
-                "message": msg,
-                "synced": synced,
-                "errors": errors,
-                "conflicts": list(conflicts),
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": "Save-sync busy — skipping post-exit sync",
+                "synced": 0,
+                "offline": True,
             }
 
     async def sync_rom_saves(self, rom_id: int) -> dict[str, Any]:
         """Bidirectional sync for a single ROM (manual trigger from game detail)."""
         rom_id = int(rom_id)
-        async with self.rom_lock(rom_id):
-            if not self.is_save_sync_enabled():
-                return {
-                    "success": False,
-                    "reason": SAVE_SYNC_DISABLED_REASON,
-                    "message": SAVE_SYNC_DISABLED,
-                    "synced": 0,
-                }
-
-            # Refresh save-sort state before do_sync_rom_saves reads saves_dir — see #238.
-            # Manual sync paths must observe fresh sort state too: a user could
-            # edit retroarch.cfg outside of a session and then trigger a manual
-            # sync before any detect has fired.
-            await self._refresh_save_sort_state("sync_rom_saves")
-
-            # Hard-gate: saves go to the content dir — sync is impossible (#239).
-            if self._save_sync_blocked():
-                return self._content_dir_skip()
-
-            if not self.get_device_id():
-                reg = await self.ensure_device_registered()
-                if not reg.get("success"):
-                    return {"success": False, "reason": DEVICE_NOT_REGISTERED_REASON, "message": DEVICE_NOT_REGISTERED}
-
-            synced, errors, conflicts = await self._run_rom_sync(rom_id)
-
-            msg = f"Synced {synced} save(s)"
-            if errors:
-                msg += f", {len(errors)} error(s)"
-            if conflicts:
-                msg += f", {len(conflicts)} conflict(s)"
+        # Cheap stateless early-out before the device gate — never queue behind
+        # an in-flight run just to report the feature is disabled.
+        if not self.is_save_sync_enabled():
             return {
-                "success": len(errors) == 0,
-                "message": msg,
-                "synced": synced,
-                "errors": errors,
-                "conflicts": list(conflicts),
+                "success": False,
+                "reason": SAVE_SYNC_DISABLED_REASON,
+                "message": SAVE_SYNC_DISABLED,
+                "synced": 0,
+            }
+
+        try:
+            async with self._device_gate.bounded_run(max_wait=SYNC_ROM_GATE_TIMEOUT), self.rom_lock(rom_id):
+                # Refresh save-sort state before do_sync_rom_saves reads saves_dir — see #238.
+                # Manual sync paths must observe fresh sort state too: a user could
+                # edit retroarch.cfg outside of a session and then trigger a manual
+                # sync before any detect has fired.
+                await self._refresh_save_sort_state("sync_rom_saves")
+
+                # Hard-gate: saves go to the content dir — sync is impossible (#239).
+                if self._save_sync_blocked():
+                    return self._content_dir_skip()
+
+                if not self.get_device_id():
+                    reg = await self.ensure_device_registered()
+                    if not reg.get("success"):
+                        return {
+                            "success": False,
+                            "reason": DEVICE_NOT_REGISTERED_REASON,
+                            "message": DEVICE_NOT_REGISTERED,
+                        }
+
+                synced, errors, conflicts = await self._run_rom_sync(rom_id)
+
+                msg = f"Synced {synced} save(s)"
+                if errors:
+                    msg += f", {len(errors)} error(s)"
+                if conflicts:
+                    msg += f", {len(conflicts)} conflict(s)"
+                return {
+                    "success": len(errors) == 0,
+                    "message": msg,
+                    "synced": synced,
+                    "errors": errors,
+                    "conflicts": list(conflicts),
+                }
+        except SaveSyncTimeoutError:
+            # Another save-sync run held the device gate past the bounded wait.
+            return {
+                "success": False,
+                "reason": "sync_busy",
+                "message": "Another save-sync run is in progress",
+                "synced": 0,
+                "errors": [],
+                "conflicts": [],
             }
 
     def _installed_rom_ids(self) -> list[int]:
@@ -679,6 +745,8 @@ class SyncEngine:
 
     async def sync_all_saves(self) -> dict[str, Any]:
         """Manual full sync of all ROMs with shortcuts (both directions)."""
+        # Cheap stateless early-out before the device gate — never queue behind
+        # an in-flight run just to report the feature is disabled.
         if not self.is_save_sync_enabled():
             return {
                 "success": False,
@@ -688,53 +756,73 @@ class SyncEngine:
                 "conflicts": 0,
             }
 
-        # Refresh save-sort state before do_sync_rom_saves reads saves_dir — see #238.
-        # Manual sync paths must observe fresh sort state too: a user could
-        # edit retroarch.cfg outside of a session and then trigger a manual
-        # sync before any detect has fired.
-        await self._refresh_save_sort_state("sync_all_saves")
+        try:
+            # Device gate sits OUTSIDE the per-ROM locks — it wraps the whole
+            # sweep; each ROM still takes its own rom_lock inside the loop.
+            async with self._device_gate.bounded_run(max_wait=SYNC_ALL_GATE_TIMEOUT):
+                # Refresh save-sort state before do_sync_rom_saves reads saves_dir — see #238.
+                # Manual sync paths must observe fresh sort state too: a user could
+                # edit retroarch.cfg outside of a session and then trigger a manual
+                # sync before any detect has fired.
+                await self._refresh_save_sort_state("sync_all_saves")
 
-        # Hard-gate: saves go to the content dir — sync is impossible (#239).
-        if self._save_sync_blocked():
-            return self._content_dir_skip(all_saves=True)
+                # Hard-gate: saves go to the content dir — sync is impossible (#239).
+                if self._save_sync_blocked():
+                    return self._content_dir_skip(all_saves=True)
 
-        if not self.get_device_id():
-            reg = await self.ensure_device_registered()
-            if not reg.get("success"):
-                return {"success": False, "reason": DEVICE_NOT_REGISTERED_REASON, "message": DEVICE_NOT_REGISTERED}
+                if not self.get_device_id():
+                    reg = await self.ensure_device_registered()
+                    if not reg.get("success"):
+                        return {
+                            "success": False,
+                            "reason": DEVICE_NOT_REGISTERED_REASON,
+                            "message": DEVICE_NOT_REGISTERED,
+                        }
 
-        total_synced = 0
-        total_errors: list[str] = []
-        all_conflicts: list[dict[str, Any]] = []
-        rom_count = 0
+                total_synced = 0
+                total_errors: list[str] = []
+                all_conflicts: list[dict[str, Any]] = []
+                rom_count = 0
 
-        # Only iterate installed ROMs — non-installed ROMs have no save files
-        rom_ids = await self._loop.run_in_executor(None, self._installed_rom_ids)
-        self._log_debug(f"sync_all_saves: {len(rom_ids)} ROMs to check")
+                # Only iterate installed ROMs — non-installed ROMs have no save files
+                rom_ids = await self._loop.run_in_executor(None, self._installed_rom_ids)
+                self._log_debug(f"sync_all_saves: {len(rom_ids)} ROMs to check")
 
-        for rom_id_int in rom_ids:
-            rom_count += 1
-            async with self.rom_lock(rom_id_int):
-                synced, errors, conflicts = await self._run_rom_sync(rom_id_int, require_confirmed=True)
-            total_synced += synced
-            total_errors.extend(errors)
-            all_conflicts.extend(conflicts)
+                for rom_id_int in rom_ids:
+                    rom_count += 1
+                    async with self.rom_lock(rom_id_int):
+                        synced, errors, conflicts = await self._run_rom_sync(rom_id_int, require_confirmed=True)
+                    total_synced += synced
+                    total_errors.extend(errors)
+                    all_conflicts.extend(conflicts)
 
-        conflicts_count = len(all_conflicts)
-        msg = f"Synced {total_synced} save(s) across {rom_count} ROM(s)"
-        if total_errors:
-            msg += f", {len(total_errors)} error(s)"
-        if conflicts_count:
-            msg += f", {conflicts_count} conflict(s)"
-        return {
-            "success": len(total_errors) == 0,
-            "message": msg,
-            "synced": total_synced,
-            "conflicts": conflicts_count,
-            "conflicts_list": list(all_conflicts),
-            "roms_checked": rom_count,
-            "errors": total_errors,
-        }
+                conflicts_count = len(all_conflicts)
+                msg = f"Synced {total_synced} save(s) across {rom_count} ROM(s)"
+                if total_errors:
+                    msg += f", {len(total_errors)} error(s)"
+                if conflicts_count:
+                    msg += f", {conflicts_count} conflict(s)"
+                return {
+                    "success": len(total_errors) == 0,
+                    "message": msg,
+                    "synced": total_synced,
+                    "conflicts": conflicts_count,
+                    "conflicts_list": list(all_conflicts),
+                    "roms_checked": rom_count,
+                    "errors": total_errors,
+                }
+        except SaveSyncTimeoutError:
+            # Another save-sync run held the device gate past the bounded wait.
+            return {
+                "success": False,
+                "reason": "sync_busy",
+                "message": "Another save-sync run is in progress",
+                "synced": 0,
+                "conflicts": 0,
+                "conflicts_list": [],
+                "roms_checked": 0,
+                "errors": [],
+            }
 
     async def resolve_sync_conflict(
         self,

@@ -1111,8 +1111,15 @@ class TestPerRomLockSerialization:
         assert kinds == ["enter", "exit", "enter", "exit"], events
 
     @pytest.mark.asyncio
-    async def test_per_rom_lock_does_not_block_different_rom_ids(self, tmp_path):
-        """Concurrent syncs on different rom_ids run in parallel."""
+    async def test_device_gate_serializes_different_rom_ids(self, tmp_path):
+        """Concurrent syncs on different rom_ids serialize via the device gate (#1234 2a).
+
+        The per-ROM lock alone would let different rom_ids sync in parallel, but
+        the device-level serialization gate sits OUTSIDE it and admits one
+        save-sync run at a time per device — so two public ``sync_rom_saves``
+        calls never overlap, regardless of rom_id. (Pre-2a this asserted the
+        opposite; the device gate is the new governing serializer.)
+        """
         svc, _ = make_service(tmp_path)
         _enable_sync_with_device(svc)
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
@@ -1135,11 +1142,10 @@ class TestPerRomLockSerialization:
 
         await asyncio.gather(svc.sync_rom_saves(1), svc.sync_rom_saves(2))
 
-        # Both enters must happen before either exit (proves overlap).
-        order = [(rid, kind) for rid, kind, _ts in events]
-        enters = [i for i, e in enumerate(order) if e[1] == "enter"]
-        exits = [i for i, e in enumerate(order) if e[1] == "exit"]
-        assert min(exits) > max(enters), order
+        # Strictly serialized by the device gate: the two enter/exit windows
+        # never overlap, even though the rom_ids differ.
+        kinds = [kind for _rid, kind, _ts in events]
+        assert kinds == ["enter", "exit", "enter", "exit"], events
 
 
 class TestHasTrackedSave:

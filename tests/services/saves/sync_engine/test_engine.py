@@ -6,7 +6,10 @@ device registration in tests/services/saves/sync_engine/test_devices.py;
 conflict rollback in tests/services/saves/sync_engine/test_rollback.py.
 """
 
+import asyncio
 import logging
+import threading
+import time
 
 import pytest
 
@@ -1106,3 +1109,170 @@ class TestPreLaunchSaveSortGate:
         assert result["synced"] == 0
         # No sync ran.
         assert not any(c[0] in ("upload_save", "download_save_content") for c in fake.call_log)
+
+
+class TestSaveSyncDeviceGate:
+    """Device-level single-owner serialization gate (#1234 phase 2a).
+
+    Only one save-sync run is in flight at a time per device. A second
+    trigger queues behind the in-flight one; the wait is bounded, so a stuck
+    run never traps the launch path — on expiry each trigger returns its
+    own offline/busy fallthrough. The gate sits OUTSIDE the per-ROM lock.
+    """
+
+    async def _assert_timeout_fallthrough(self, svc, monkeypatch, const_name, trigger, expected):
+        """Hold the gate + shrink the timeout, then assert the trigger's fallthrough.
+
+        Holds the engine's device-gate lock so the trigger cannot acquire it,
+        and rebinds the per-trigger timeout constant to a tiny value so the
+        bounded wait expires fast. The trigger must return *expected* verbatim.
+        """
+        engine = svc._sync_engine
+        monkeypatch.setattr(f"services.saves.sync_engine.engine.{const_name}", 0.01)
+        await engine._device_gate._lock.acquire()
+        try:
+            result = await trigger()
+        finally:
+            engine._device_gate._lock.release()
+        assert result == expected
+        # The gate is free again once the external holder released it.
+        assert engine._device_gate.is_in_flight() is False
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_times_out_to_offline(self, tmp_path, monkeypatch):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        fake.saves[100] = _server_save()
+
+        await self._assert_timeout_fallthrough(
+            svc,
+            monkeypatch,
+            "PRE_LAUNCH_GATE_TIMEOUT",
+            lambda: svc.pre_launch_sync(42),
+            {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": "Save-sync busy — treating as offline",
+                "synced": 0,
+                "offline": True,
+            },
+        )
+        # The gate fired before any sync work — no transfer was attempted.
+        assert not any(c[0] in ("download_save", "list_saves", "heartbeat") for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_post_exit_sync_times_out_to_offline(self, tmp_path, monkeypatch):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"data")
+
+        await self._assert_timeout_fallthrough(
+            svc,
+            monkeypatch,
+            "POST_EXIT_GATE_TIMEOUT",
+            lambda: svc.post_exit_sync(42),
+            {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": "Save-sync busy — skipping post-exit sync",
+                "synced": 0,
+                "offline": True,
+            },
+        )
+        assert not any(c[0] in ("upload_save", "heartbeat") for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_sync_rom_saves_times_out_to_busy(self, tmp_path, monkeypatch):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"data")
+
+        await self._assert_timeout_fallthrough(
+            svc,
+            monkeypatch,
+            "SYNC_ROM_GATE_TIMEOUT",
+            lambda: svc.sync_rom_saves(42),
+            {
+                "success": False,
+                "reason": "sync_busy",
+                "message": "Another save-sync run is in progress",
+                "synced": 0,
+                "errors": [],
+                "conflicts": [],
+            },
+        )
+        assert not any(c[0] in ("upload_save", "list_saves") for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_sync_all_saves_times_out_to_busy(self, tmp_path, monkeypatch):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
+
+        await self._assert_timeout_fallthrough(
+            svc,
+            monkeypatch,
+            "SYNC_ALL_GATE_TIMEOUT",
+            svc.sync_all_saves,
+            {
+                "success": False,
+                "reason": "sync_busy",
+                "message": "Another save-sync run is in progress",
+                "synced": 0,
+                "conflicts": 0,
+                "conflicts_list": [],
+                "roms_checked": 0,
+                "errors": [],
+            },
+        )
+        assert not any(c[0] in ("upload_save", "list_saves") for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_gate_serializes_runs_across_different_roms(self, tmp_path):
+        """Two manual syncs on DIFFERENT roms fired concurrently serialize via the gate.
+
+        The per-ROM lock does not serialize different rom_ids — only the device
+        gate does. A widening sleep in the stubbed worker would let the two
+        overlap if the gate were absent; the gate forces peak concurrency to 1.
+        Both runs complete successfully (the second waited, it did not time out).
+        """
+        svc, _ = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
+        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(
+            svc, 2, RomSaveState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
+        )
+
+        counter_lock = threading.Lock()
+        state = {"active": 0, "peak": 0}
+
+        def slow_sync(rom_id, *args):
+            with counter_lock:
+                state["active"] += 1
+                state["peak"] = max(state["peak"], state["active"])
+            time.sleep(0.05)
+            with counter_lock:
+                state["active"] -= 1
+            return (1, [], [])
+
+        svc._sync_engine.do_sync_rom_saves = slow_sync  # type: ignore[method-assign]
+
+        results = await asyncio.gather(svc.sync_rom_saves(1), svc.sync_rom_saves(2))
+
+        assert all(r["success"] is True for r in results)
+        assert all(r["synced"] == 1 for r in results)
+        # Serialized: the device gate never let both worker calls run at once.
+        assert state["peak"] == 1
+        assert svc._sync_engine._device_gate.is_in_flight() is False

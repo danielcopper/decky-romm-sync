@@ -8,6 +8,7 @@ StatusService; persistence is owned by the public callable's narrow
 Unit of Work (ADR-0006).
 """
 
+from services.saves.sync_engine._gate import SaveSyncGate, SaveSyncTimeoutError
 from services.saves.sync_engine.engine import MatrixOutcome, SyncEngine, SyncEngineConfig
 
-__all__ = ["MatrixOutcome", "SyncEngine", "SyncEngineConfig"]
+__all__ = ["MatrixOutcome", "SaveSyncGate", "SaveSyncTimeoutError", "SyncEngine", "SyncEngineConfig"]

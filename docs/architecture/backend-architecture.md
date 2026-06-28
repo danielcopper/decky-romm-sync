@@ -238,6 +238,27 @@ handler resets that flag at its own start, but an incrementally-**skipped** unit
 run could otherwise carry a stale cancel from a prior cancelled run; resetting once per run on `sync_plan` is the
 reliable reset.
 
+#### Save-sync serialization (device gate)
+
+Every save-sync run on the device passes through a single **device-level serialization gate** (`SaveSyncGate`, in
+`services/saves/sync_engine/_gate.py`). Only **one** save-sync run is in flight at a time per device: when a second
+trigger fires while one is running, it **queues** — it waits for the in-flight run to finish rather than running
+alongside it. An `asyncio.Lock` is the serializer/queue; the gate owns only the bounded-acquire discipline around it (no
+run-lifecycle state, no run ids, no cancellation — those are out of scope here).
+
+The wait is **bounded** so a stuck run never traps the launch path. Each of the four trigger methods on `SyncEngine`
+wraps its run body in `bounded_run(timeout=…)` with a per-trigger budget — `pre_launch_sync` (30 s), `post_exit_sync`
+(60 s), `sync_rom_saves` (15 s), `sync_all_saves` (60 s). If the gate can't be acquired within the budget the call
+returns its own fallthrough instead of blocking: the launch-path triggers (`pre_launch_sync` / `post_exit_sync`) return
+the `offline` shape (`reason: SERVER_UNREACHABLE`, additive `offline: True`) so the launch flow treats a busy gate like
+an unreachable server; the manual triggers (`sync_rom_saves` / `sync_all_saves`) return `reason: "sync_busy"`. The lock
+is never leaked on timeout — a timed-out acquire releases any photo-finish hold before raising.
+
+The gate sits **outside** the per-ROM lock (`SyncEngine.rom_lock(rom_id)`): the device gate admits one run at a time
+across the whole device, then each ROM still takes its own `rom_lock` for the read-mutate-write of its `RomSaveState`.
+The cheap stateless early-out (`is_save_sync_enabled()`) runs **before** the gate, so a disabled-feature call never
+queues behind an in-flight run just to report it's off.
+
 #### DownloadService notes
 
 RomM exposes three mutually exclusive file-layout flags on every ROM detail. They control how the server stores files
