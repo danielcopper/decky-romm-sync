@@ -1,6 +1,7 @@
 """Tests for SaveService aggregate root — public callable surface and cross-service coordination."""
 
 import asyncio
+import hashlib
 import logging
 import os
 import time
@@ -13,6 +14,7 @@ from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_save_api import FakeSaveApi
 from fakes.fake_settings_persister import FakeSettingsPersister
 
+from domain.iso_time import epoch_to_iso
 from domain.rom_save_state import FileSyncState, RomSaveState
 from lib.errors import RommConnectionError
 from services.saves._settings import sanitize_setting
@@ -1268,3 +1270,101 @@ class TestPluginVersionResolution:
 
         assert fake_reader.read_count == 1
         assert fake_reader.last_plugin_dir == plugin_dir
+
+
+class TestBuildSaveInventory:
+    """``build_save_inventory`` — the Phase 1c negotiate inventory builder.
+
+    Scope predicate: ``slot_confirmed`` ∧ a non-legacy (truthy) ``active_slot``.
+    Per-file granularity; ``content_hash`` is the zip-aware store hash and
+    ``updated_at`` is the local mtime as a UTC ISO string.
+    """
+
+    def test_one_confirmed_rom_one_file(self, tmp_path):
+        """A confirmed non-null slot with one local save → one fully-populated entry."""
+        svc, _ = make_service(tmp_path)
+        content = b"pokemon-save-bytes"
+        save_path = _create_save(tmp_path, system="gba", rom_name="pokemon", content=content)
+        os.utime(save_path, (1705320000.0, 1705320000.0))
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+
+        state = RomSaveState(emulator="retroarch-mgba", system="gba")
+        state.confirm_slot("A")
+        _seed_save_state(svc, 42, state)
+
+        inventory = svc.build_save_inventory()
+
+        assert inventory == [
+            {
+                "rom_id": 42,
+                "file_name": "pokemon.srm",
+                "slot": "A",
+                "emulator": "retroarch-mgba",
+                "content_hash": hashlib.md5(content).hexdigest(),
+                "updated_at": epoch_to_iso(1705320000.0),
+                "file_size_bytes": len(content),
+            }
+        ]
+
+    def test_multiple_local_files_yield_one_entry_each(self, tmp_path):
+        """Two local save files for one confirmed ROM → two entries (per-file)."""
+        svc, _ = make_service(tmp_path)
+        _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"a", ext=".srm")
+        _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"bb", ext=".rtc")
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+
+        state = RomSaveState(system="gba")
+        state.confirm_slot("A")
+        _seed_save_state(svc, 42, state)
+
+        inventory = svc.build_save_inventory()
+
+        assert len(inventory) == 2
+        assert {e["file_name"] for e in inventory} == {"pokemon.srm", "pokemon.rtc"}
+        assert all(e["rom_id"] == 42 for e in inventory)
+        assert all(e.get("slot") == "A" for e in inventory)
+
+    def test_excludes_legacy_null_slot(self, tmp_path):
+        """A confirmed ROM whose active_slot is the legacy None is excluded."""
+        svc, _ = make_service(tmp_path)
+        _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"data")
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+
+        state = RomSaveState(system="gba")
+        state.confirm_slot(None)  # slot_confirmed=True, active_slot=None (legacy)
+        assert state.slot_confirmed is True
+        assert state.active_slot is None
+        _seed_save_state(svc, 42, state)
+
+        assert svc.build_save_inventory() == []
+
+    def test_excludes_unconfirmed_slot(self, tmp_path):
+        """A ROM with a real active_slot but slot_confirmed=False is excluded."""
+        svc, _ = make_service(tmp_path)
+        _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"data")
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+
+        state = RomSaveState(system="gba")
+        state.switch_active_slot("A")  # active_slot="A", slot_confirmed stays False
+        assert state.active_slot == "A"
+        assert state.slot_confirmed is False
+        _seed_save_state(svc, 42, state)
+
+        assert svc.build_save_inventory() == []
+
+    def test_confirmed_rom_with_no_local_files_contributes_nothing(self, tmp_path):
+        """A confirmed non-null slot whose ROM has no local save files yields no entry."""
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
+        # No _create_save — the saves directory has no matching files.
+
+        state = RomSaveState(system="gba")
+        state.confirm_slot("A")
+        _seed_save_state(svc, 42, state)
+
+        assert svc.build_save_inventory() == []
+
+    def test_no_confirmed_roms_returns_empty(self, tmp_path):
+        """No tracked ROMs at all → empty inventory."""
+        svc, _ = make_service(tmp_path)
+        assert svc.build_save_inventory() == []

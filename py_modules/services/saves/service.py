@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from domain.iso_time import epoch_to_iso
 from domain.rom_save_state import RomSaveState
 from lib.list_result import ErrorCode
 from services.saves._config import SaveServiceConfig
@@ -31,6 +32,8 @@ from services.saves.sync_engine.devices import DeviceRegistry
 from services.saves.versions import VersionsService, VersionsServiceConfig
 
 if TYPE_CHECKING:
+    from models.sync import ClientSaveState
+
     from services.protocols import UnitOfWorkFactory
 
 
@@ -384,6 +387,51 @@ class SaveService:
         against the new server's negotiate.
         """
         self._device_registry.forget_device()
+
+    # ------------------------------------------------------------------
+    # Negotiate inventory (Phase 1c)
+    # ------------------------------------------------------------------
+
+    def build_save_inventory(self) -> list[ClientSaveState]:
+        """Build the negotiate inventory of this device's local save files.
+
+        Gathers one :class:`ClientSaveState` per local save file belonging to a
+        ROM whose slot is **confirmed** and whose ``active_slot`` is a real
+        (non-legacy) slot — ``slot_confirmed`` is true and ``active_slot`` is
+        truthy (excludes both ``None`` and the legacy ``""``). A confirmed ROM
+        with no local files contributes nothing; per-file granularity means
+        each local file yields its own entry.
+
+        ``content_hash`` is always set via :meth:`SaveFileStore.content_hash`
+        (the zip-aware RomM-parity hash — never ``checksum_md5``), and
+        ``updated_at`` is the local file's mtime rendered as a UTC ISO-8601
+        string.
+
+        Single-file-first: the multi-file-per-slot collision case (several local
+        files mapping to one slot) is a Phase 4 concern tracked in #1235.
+        """
+        with self._uow_factory() as uow:
+            confirmed = [
+                (rom_id, state)
+                for rom_id, state in uow.rom_save_states.iter_all()
+                if state.slot_confirmed and state.active_slot
+            ]
+
+        inventory: list[ClientSaveState] = []
+        for rom_id, state in confirmed:
+            for f in self._rom_info.find_save_files(rom_id):
+                path = f["path"]
+                entry: ClientSaveState = {
+                    "rom_id": rom_id,
+                    "file_name": f["filename"],
+                    "slot": state.active_slot,
+                    "emulator": state.emulator,
+                    "content_hash": self._save_file_store.content_hash(path),
+                    "updated_at": epoch_to_iso(self._save_file_store.get_mtime(path)),
+                    "file_size_bytes": self._save_file_store.get_size(path),
+                }
+                inventory.append(entry)
+        return inventory
 
     # ------------------------------------------------------------------
     # Bulk local-save deletion

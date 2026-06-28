@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone
 
-from domain.iso_time import parse_iso, parse_iso_to_epoch
+from domain.iso_time import epoch_to_iso, parse_iso, parse_iso_to_epoch
 
 
 class TestParseIso:
@@ -120,6 +120,26 @@ class TestParseIsoToEpoch:
         for bad in ("", None, "garbage", "2024-13-01T00:00:00Z"):
             assert parse_iso_to_epoch(bad) is None
             assert parse_iso(bad) is None
+
+
+class TestEpochToIso:
+    def test_epoch_zero_is_unix_epoch_utc(self):
+        assert epoch_to_iso(0.0) == "1970-01-01T00:00:00+00:00"
+
+    def test_known_nonzero_epoch(self):
+        # 1705320000.0 == 2024-01-15T12:00:00Z
+        assert epoch_to_iso(1705320000.0) == "2024-01-15T12:00:00+00:00"
+
+    def test_fractional_seconds_render_microseconds(self):
+        assert epoch_to_iso(1705320000.5) == "2024-01-15T12:00:00.500000+00:00"
+
+    def test_always_carries_utc_offset(self):
+        assert epoch_to_iso(1705320000.0).endswith("+00:00")
+
+    def test_round_trips_through_parse_iso_to_epoch(self):
+        """parse_iso_to_epoch(epoch_to_iso(e)) == e for concrete instants."""
+        for e in (0.0, 1705320000.0, 1705320000.5):
+            assert parse_iso_to_epoch(epoch_to_iso(e)) == e
 
 
 class TestEdgeOffsets:

@@ -62,6 +62,22 @@ single-file MD5 via `SaveFileStore.checksum_md5`, and the zip per-entry scheme v
 negotiate transport requires ([ADR-0016](../adr/0016-save-sync-hands-detection-to-romm-negotiate.md) / #1234); the
 legacy decision matrix below still computes the single-file `checksum_md5` until the negotiate path is wired.
 
+### Negotiate inventory builder (`SaveService.build_save_inventory`)
+
+The negotiate POST sends this device's local save inventory; `SaveService.build_save_inventory()` assembles it as a
+`list[ClientSaveState]`. It walks the `rom_save_states` aggregate and keeps only ROMs **in scope** — `slot_confirmed` is
+true **and** `active_slot` is a real (truthy) slot, which excludes both the unset `None` and the legacy `""` slot. For
+each in-scope ROM it enumerates the local save files via `RomInfoService.find_save_files` and emits **one
+`ClientSaveState` per file** (per-file granularity): a confirmed ROM with no local files contributes nothing, and a ROM
+with several local files yields one entry each. Per entry, `content_hash` is always set via `SaveFileStore.content_hash`
+— the zip-aware RomM-parity hash above, never the single-file `checksum_md5` — and `updated_at` is the local file's
+mtime rendered as a UTC ISO-8601 string (`domain.iso_time.epoch_to_iso`, the round-trip inverse of
+`parse_iso_to_epoch`).
+
+The builder is **additive and unused**: nothing POSTs the inventory yet — Phase 2 wires it into `negotiate`. It is
+single-file-first; the multi-file-per-slot collision case (several local files mapping to one slot) is a Phase 4 concern
+tracked in #1235.
+
 ## Save Slots
 
 RomM v4.7 introduces **save slots** — named containers for save files. This enables multi-save workflows (e.g.,

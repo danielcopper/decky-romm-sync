@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 
 def parse_iso(value: str | None) -> datetime | None:
@@ -25,3 +25,8 @@ def parse_iso_to_epoch(value: str | None) -> float | None:
     """Parse an ISO-8601 timestamp to epoch seconds (UTC), or None on failure."""
     dt = parse_iso(value)
     return dt.timestamp() if dt is not None else None
+
+
+def epoch_to_iso(epoch: float) -> str:
+    """Render epoch seconds as a UTC ISO-8601 string — round-trip inverse of parse_iso_to_epoch."""
+    return datetime.fromtimestamp(epoch, tz=UTC).isoformat()

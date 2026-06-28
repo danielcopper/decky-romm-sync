@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from hypothesis import given
 from hypothesis import strategies as st
 
-from domain.iso_time import parse_iso_to_epoch
+from domain.iso_time import epoch_to_iso, parse_iso_to_epoch
 
 # Aware UTC datetimes across a wide range; whole-second and microsecond
 # resolution both exercised by the formatting helper below.
@@ -80,3 +80,18 @@ def test_epoch_ordering_independent_of_format(earlier: datetime, later: datetime
 
     # Epoch ordering must match true instant ordering.
     assert (epoch_earlier <= epoch_later) == (e0 <= l0)
+
+
+@given(epoch=st.floats(min_value=0, max_value=4_000_000_000, allow_nan=False, allow_infinity=False))
+def test_epoch_to_iso_round_trips(epoch: float) -> None:
+    """``epoch_to_iso`` is the inverse of ``parse_iso_to_epoch`` up to microsecond
+    rounding: the rendered string parses back to the same instant (to within a
+    sub-millisecond tolerance for float/microsecond truncation) and always
+    carries a UTC ``+00:00`` offset — the inventory's ``updated_at`` is therefore
+    always an unambiguous UTC timestamp the server can compare.
+    """
+    rendered = epoch_to_iso(epoch)
+    assert rendered.endswith("+00:00")
+    recovered = parse_iso_to_epoch(rendered)
+    assert recovered is not None
+    assert abs(recovered - epoch) < 1e-3
