@@ -590,8 +590,10 @@ class MatrixExecutor:
                 return False
         except RommApiError as e:
             _code, _msg = classify_error(e)
+            self._logger.warning(f"_dispatch_sync_action({rom_id}): {filename} failed: {_msg}")
             sink.errors.append(f"{filename}: {_msg}")
         except Exception as e:
+            self._logger.warning(f"_dispatch_sync_action({rom_id}): {filename} unexpected error: {e}")
             self._handle_unexpected_error(e, filename, saves_dir, sink.errors)
         return False
 

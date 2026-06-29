@@ -1681,9 +1681,10 @@ class TestDispatchSyncActionErrorBranches:
     """_dispatch_sync_action's typed-error branches (matrix.py lines 476-481).
     RommApiError → classify + record; other Exception → _handle_unexpected_error."""
 
-    def test_dispatch_sync_action_records_rommapi_error(self, tmp_path):
+    def test_dispatch_sync_action_records_rommapi_error(self, tmp_path, caplog):
         """A RommApiError from a Download action is recorded with classify_error
-        message; no .tmp cleanup is attempted on this branch."""
+        message AND logged at WARNING (so a sync failure leaves a log trace, not
+        only an errors-list entry); no .tmp cleanup is attempted on this branch."""
         from domain.sync_action import Download
 
         svc, fake = make_service(tmp_path)
@@ -1719,6 +1720,12 @@ class TestDispatchSyncActionErrorBranches:
         assert synced is False
         assert len(errors) == 1
         assert errors[0].startswith("pokemon.srm:")
+        assert any(
+            r.levelname == "WARNING"
+            and "_dispatch_sync_action(42)" in r.getMessage()
+            and "pokemon.srm" in r.getMessage()
+            for r in caplog.records
+        )
 
 
 class TestDispatchUploadDefensiveBranches:
