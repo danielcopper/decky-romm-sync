@@ -110,8 +110,10 @@ legacy path runs them:
 | `conflict`               | `Conflict(server_save)`          | surface the `SyncConflict` modal (user decides) |
 | `no_op`                  | `Skip(reason)`                   | nothing                                         |
 
-**Slot scoping.** Only ops whose `slot` equals the ROM's `active_slot` are acted on; the server may return device-wide
-download ops for a scoped POST, but a per-ROM run owns just its own slot, so ops for any other slot are dropped. The
+**Scope filtering.** Only ops matching this run's `(rom_id, active_slot)` are acted on; a scoped single-ROM POST gets
+the server's **device-wide** download ops back (one for every server save the device lacks locally, across all ROMs),
+but a per-ROM run owns just its own ROM and slot, so ops for any other ROM or slot are dropped — otherwise a foreign
+ROM's save in the same slot would be pulled into this ROM's saves dir and tracked under the wrong `rom_id`. The
 save-sort migration guard from the legacy path is mirrored: a server-only download (no local file) is suppressed while a
 save-sort migration is pending (#238).
 

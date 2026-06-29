@@ -854,12 +854,13 @@ class MatrixExecutor:
         dispatched through the unchanged :meth:`_dispatch_sync_action`. Returns
         ``(synced_count, errors_list, conflicts_list)``.
 
-        Only ops whose ``slot`` equals the ROM's ``active_slot`` are acted on —
-        the server may return device-wide download ops for a scoped POST, but a
-        per-ROM run owns just its own slot, so ops for any other slot are
-        dropped. A ``download`` op for a file with no local copy is the
-        cross-device case (a save made on another device) and is pulled to
-        recover the content; the server-only migration guard still suppresses it
+        Only ops matching this run's ``(rom_id, active_slot)`` are acted on — a
+        scoped POST gets the server's device-wide download ops back, but a per-ROM
+        run owns just its own ROM and slot, so ops for any other ROM or slot are
+        dropped (else a foreign save would be pulled into this ROM's saves dir).
+        A ``download`` op for a file with no local copy is the cross-device case
+        (a save made on another device) and is pulled to recover the content;
+        the server-only migration guard still suppresses it
         while a save-sort migration is pending (#238). ``info``
         (``get_rom_save_info``) and ``options`` are resolved by the caller;
         *core_so* stamps the upload emulator tag. The operation entry owns the
@@ -879,6 +880,18 @@ class MatrixExecutor:
         pending_migration = self._rom_info.is_save_sort_changed()
 
         for op in ops:
+            # A scoped single-ROM negotiate POST gets the server's DEVICE-WIDE
+            # download ops back (every server save the device lacks locally), not
+            # just this ROM's. A per-ROM run owns only its own (rom_id, active_slot)
+            # pair, so drop ops for any other ROM before the slot check — otherwise
+            # a foreign ROM's save in the same slot would be pulled into this ROM's
+            # saves dir and tracked under the wrong rom_id.
+            if op.get("rom_id") != rom_id:
+                self._log_debug(
+                    f"dispatch_negotiate_ops({rom_id}): dropping op for rom {op.get('rom_id')!r} "
+                    f"(foreign ROM in device-wide negotiate response) {op.get('file_name')}"
+                )
+                continue
             op_slot = op.get("slot")
             if op_slot != active_slot:
                 self._log_debug(

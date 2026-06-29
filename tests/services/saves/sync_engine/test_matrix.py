@@ -2119,6 +2119,32 @@ class TestDispatchNegotiateOps:
         assert (synced, errors, conflicts) == (0, [], [])
         assert not any(c[0] == "download_save_content" for c in fake.call_log)
 
+    def test_op_for_foreign_rom_id_is_dropped(self, tmp_path):
+        """A download op for a DIFFERENT rom_id in the SAME slot is dropped, not
+        pulled into this ROM's saves dir (#1266 device-wide-POST leak).
+
+        A scoped single-ROM negotiate POST returns the server's device-wide
+        download ops; one for a foreign ROM that happens to share the active slot
+        passes the slot check, so the rom_id check is what stops it.
+        """
+        svc, fake = make_service(tmp_path)
+        info, save_state = self._setup(svc, tmp_path, active_slot="default", content=b"local")
+        ops: list[SyncOperation] = [
+            {
+                "action": "download",
+                "rom_id": 9999,
+                "file_name": "Other Game (USA).srm",
+                "slot": "default",
+                "save_id": 777,
+                "reason": "device-wide cross-device download",
+            }
+        ]
+
+        synced, errors, conflicts = self._dispatch(svc, ops, save_state, info)
+
+        assert (synced, errors, conflicts) == (0, [], [])
+        assert not any(c[0] == "download_save_content" for c in fake.call_log)
+
     def test_server_only_download_skipped_during_pending_migration(self, tmp_path):
         """A download op with no local file is suppressed while a save-sort
         migration is pending (mirrors the legacy server-only guard, #238)."""
