@@ -53,3 +53,21 @@ class TestMeetsMinVersion:
 
     def test_partly_numeric_returns_false(self):
         assert meets_min_version("4.8.x", MIN) is False
+
+    def test_alpha_with_number_above_minimum(self):
+        assert meets_min_version("5.0.0-alpha.1", MIN) is True
+
+    def test_alpha_without_number_above_minimum(self):
+        assert meets_min_version("5.0.0-alpha", MIN) is True
+
+    def test_beta_with_number_above_minimum(self):
+        assert meets_min_version("4.9.0-beta.3", MIN) is True
+
+    def test_beta_without_number_at_exact_minimum(self):
+        assert meets_min_version("4.8.1-beta", MIN) is True
+
+    def test_alpha_below_minimum_fails(self):
+        assert meets_min_version("4.8.0-alpha.99", MIN) is False
+
+    def test_prerelease_missing_tag_number_only(self):
+        assert meets_min_version("5.0.0-alpha.", MIN) is False
