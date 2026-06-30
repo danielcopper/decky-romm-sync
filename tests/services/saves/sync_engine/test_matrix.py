@@ -2190,3 +2190,68 @@ class TestDispatchNegotiateOps:
         assert len(errors) == 1
         assert "pokemon.srm" in errors[0]
         assert conflicts == []
+
+    def test_upload_op_with_tagged_server_filename(self, tmp_path):
+        """An upload op whose server file_name is datetime-TAGGED still targets the
+        untagged canonical local file.
+
+        RomM returns the server save's tagged ``file_name`` in the op
+        (e.g. ``pokemon [2026-06-25_05-57-58].srm``) while the local file on disk
+        is the untagged canonical ``pokemon.srm``. The executor must resolve the
+        canonical local target, find the real local file, and issue the upload for
+        it — not push a "no local file" error.
+        """
+        svc, fake = make_service(tmp_path)
+        info, save_state = self._setup(svc, tmp_path, content=b"new local")
+        ops: list[SyncOperation] = [
+            {
+                "action": "upload",
+                "rom_id": 42,
+                "file_name": "pokemon [2026-06-25_05-57-58].srm",  # TAGGED server name
+                "slot": "default",
+                "reason": "new save",
+            }
+        ]
+
+        synced, errors, conflicts = self._dispatch(svc, ops, save_state, info)
+
+        assert errors == []
+        assert synced == 1
+        assert conflicts == []
+        up = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(up) == 1
+        # The upload targets the untagged canonical local file, not the tagged name.
+        assert os.path.basename(up[0][1][1]) == "pokemon.srm"
+        assert up[0][1][1] == str(tmp_path / "saves" / "gba" / "pokemon.srm")
+        assert up[0][2]["save_id"] is None  # POST
+
+    def test_download_op_with_tagged_server_filename(self, tmp_path):
+        """A download op with a datetime-TAGGED server file_name writes content to
+        the untagged canonical local path, never a tagged-named file.
+
+        Without canonical resolution the executor would write to
+        ``pokemon [2026-06-25_05-57-58].srm`` — a name RetroArch never reads — and
+        the real ``pokemon.srm`` would be left stale.
+        """
+        svc, fake = make_service(tmp_path)
+        info, save_state = self._setup(svc, tmp_path, content=b"old local")
+        fake.set_server_save_content(555, b"server bytes")
+        ops: list[SyncOperation] = [
+            {
+                "action": "download",
+                "rom_id": 42,
+                "file_name": "pokemon [2026-06-25_05-57-58].srm",  # TAGGED server name
+                "slot": "default",
+                "save_id": 555,
+                "server_updated_at": "2026-02-17T06:00:00Z",
+                "reason": "server newer",
+            }
+        ]
+
+        synced, errors, conflicts = self._dispatch(svc, ops, save_state, info)
+
+        assert (synced, errors, conflicts) == (1, [], [])
+        saves_dir = tmp_path / "saves" / "gba"
+        # Content lands at the canonical untagged path, NOT a tagged-named file.
+        assert (saves_dir / "pokemon.srm").read_bytes() == b"server bytes"
+        assert not (saves_dir / "pokemon [2026-06-25_05-57-58].srm").exists()

@@ -497,6 +497,7 @@ class MatrixExecutor:
     ) -> bool:
         """Execute an ``Upload`` action. Returns True iff the upload was issued."""
         if local_path is None:
+            self._logger.warning(f"_dispatch_upload({rom_id}): {filename}: upload requested but no local file on disk")
             errors.append(f"{filename}: upload requested but no local file")
             return False
         if action.target_save_id is None:
@@ -837,6 +838,40 @@ class MatrixExecutor:
             return Conflict(server_save=conflict_save), [conflict_save]
         return Skip(reason=op.get("reason") or "synced"), []
 
+    @staticmethod
+    def _negotiate_op_out_of_scope(op: SyncOperation, rom_id: int, active_slot: str | None) -> str | None:
+        """Return a drop reason when *op* isn't for this run's ``(rom_id, active_slot)``, else None.
+
+        A scoped single-ROM negotiate POST gets the server's device-wide download
+        ops back; a per-ROM run owns only its own ROM and slot, so a foreign ROM
+        or a foreign slot is dropped (else it would be pulled into the wrong ROM's
+        saves dir / slot).
+        """
+        if op.get("rom_id") != rom_id:
+            return (
+                f"dropping op for rom {op.get('rom_id')!r} "
+                f"(foreign ROM in device-wide negotiate response) {op.get('file_name')}"
+            )
+        op_slot = op.get("slot")
+        if op_slot != active_slot:
+            return f"dropping op for slot {op_slot!r} (active={active_slot!r}) {op.get('file_name')}"
+        return None
+
+    @staticmethod
+    def _canonical_op_filename(op_file_name: str, rom_name: str) -> str:
+        """Resolve the untagged canonical local filename for a negotiate op.
+
+        RomM returns the server save's datetime-TAGGED ``file_name`` (e.g.
+        ``"Game (USA) [2026-06-25_05-57-58].srm"``), but the local file on disk is
+        the untagged ``"<rom_name>.<ext>"`` RetroArch reads. Resolve it the same
+        way the legacy path does (``local_save_target``, with its extension
+        sanitization) so the lookup matches and a download writes to / an upload
+        targets the canonical local file. The op carries no ``file_extension``, so
+        derive it from the tagged op name (which still carries the real extension).
+        """
+        op_ext = os.path.splitext(op_file_name)[1].lstrip(".")
+        return local_save_target({"file_extension": op_ext} if op_ext else {}, rom_name)
+
     def dispatch_negotiate_ops(
         self,
         rom_id: int,
@@ -882,26 +917,11 @@ class MatrixExecutor:
         pending_migration = self._rom_info.is_save_sort_changed()
 
         for op in ops:
-            # A scoped single-ROM negotiate POST gets the server's DEVICE-WIDE
-            # download ops back (every server save the device lacks locally), not
-            # just this ROM's. A per-ROM run owns only its own (rom_id, active_slot)
-            # pair, so drop ops for any other ROM before the slot check — otherwise
-            # a foreign ROM's save in the same slot would be pulled into this ROM's
-            # saves dir and tracked under the wrong rom_id.
-            if op.get("rom_id") != rom_id:
-                self._log_debug(
-                    f"dispatch_negotiate_ops({rom_id}): dropping op for rom {op.get('rom_id')!r} "
-                    f"(foreign ROM in device-wide negotiate response) {op.get('file_name')}"
-                )
+            drop_reason = self._negotiate_op_out_of_scope(op, rom_id, active_slot)
+            if drop_reason:
+                self._log_debug(f"dispatch_negotiate_ops({rom_id}): {drop_reason}")
                 continue
-            op_slot = op.get("slot")
-            if op_slot != active_slot:
-                self._log_debug(
-                    f"dispatch_negotiate_ops({rom_id}): dropping op for slot {op_slot!r} "
-                    f"(active={active_slot!r}) {op.get('file_name')}"
-                )
-                continue
-            filename = op["file_name"]
+            filename = self._canonical_op_filename(op["file_name"], info["rom_name"])
             local_file = local_by_name.get(filename)
             local_path = local_file["path"] if local_file else None
             if local_path is None and pending_migration:

@@ -110,6 +110,13 @@ legacy path runs them:
 | `conflict`               | `Conflict(server_save)`          | surface the `SyncConflict` modal (user decides) |
 | `no_op`                  | `Skip(reason)`                   | nothing                                         |
 
+**Canonical local target.** RomM returns the server save's datetime-**tagged** `file_name` in each op (e.g.
+`Game (USA) [2026-06-25_05-57-58].srm`), but the local file on disk is the untagged canonical `<rom_name>.<ext>` that
+RetroArch reads. `dispatch_negotiate_ops` therefore resolves the canonical local target via `local_save_target` (the
+same helper the legacy path uses — deriving the extension from the tagged op name, since the op carries no
+`file_extension`) before the local-file lookup and dispatch, so a download writes to / an upload targets the canonical
+local file rather than the server's tagged name.
+
 **Scope filtering.** Only ops matching this run's `(rom_id, active_slot)` are acted on; a scoped single-ROM POST gets
 the server's **device-wide** download ops back (one for every server save the device lacks locally, across all ROMs),
 but a per-ROM run owns just its own ROM and slot, so ops for any other ROM or slot are dropped — otherwise a foreign
