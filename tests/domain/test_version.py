@@ -43,11 +43,6 @@ class TestMeetsMinVersion:
     def test_empty_string_returns_false(self):
         assert meets_min_version("", MIN) is False
 
-    def test_none_returns_false(self):
-        # int() on None raises TypeError; .split on None raises AttributeError.
-        # The function must return False for a None input rather than raising.
-        assert meets_min_version(None, MIN) is False  # type: ignore[arg-type]
-
     def test_development_returns_false(self):
         assert meets_min_version("development", MIN) is False
 

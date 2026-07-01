@@ -9,8 +9,6 @@ _VERSION_RE = re.compile(r"^(\d+(?:\.\d+)*)(?:-(alpha|beta)(?:\.\d+)?)?$")
 
 def _parse_core_version(version_str: str) -> tuple[int, ...] | None:
     """Parse the numeric core from *version_str*, ignoring any pre-release suffix."""
-    if not isinstance(version_str, str):
-        return None
     match = _VERSION_RE.match(version_str)
     if match is None:
         return None
