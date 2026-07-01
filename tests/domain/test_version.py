@@ -43,6 +43,9 @@ class TestMeetsMinVersion:
     def test_empty_string_returns_false(self):
         assert meets_min_version("", MIN) is False
 
+    def test_none_returns_false(self):
+        assert meets_min_version(None, MIN) is False
+
     def test_development_returns_false(self):
         assert meets_min_version("development", MIN) is False
 
@@ -55,11 +58,21 @@ class TestMeetsMinVersion:
     def test_alpha_without_number_above_minimum(self):
         assert meets_min_version("5.0.0-alpha", MIN) is True
 
-    def test_beta_with_number_above_minimum(self):
-        assert meets_min_version("4.9.0-beta.3", MIN) is True
+    def test_beta_at_exact_floor_rejected(self):
+        assert meets_min_version("4.8.1-beta.3", MIN) is False
 
-    def test_beta_without_number_at_exact_minimum(self):
-        assert meets_min_version("4.8.1-beta", MIN) is True
+    def test_alpha_at_exact_floor_rejected(self):
+        assert meets_min_version("4.8.1-alpha.1", MIN) is False
+
+    def test_beta_without_number_at_exact_floor_rejected(self):
+        assert meets_min_version("4.8.1-beta", MIN) is False
+
+    def test_higher_core_prerelease_passes(self):
+        assert meets_min_version("4.8.2-beta", MIN) is True
+
+    def test_prerelease_tag_case_insensitive(self):
+        assert meets_min_version("4.8.2-BETA", MIN) is True
+        assert meets_min_version("5.0.0-ALPHA.1", MIN) is True
 
     def test_alpha_below_minimum_fails(self):
         assert meets_min_version("4.8.0-alpha.99", MIN) is False

@@ -168,6 +168,25 @@ class TestTestConnectionVersionGate:
         result = event_loop.run_until_complete(service.test_connection())
         assert result["reason"] == "version_error"
 
+    def test_prerelease_at_exact_floor_rejected(self, event_loop, romm_api, logger):
+        """4.9.0-beta ranks below 4.9.0 — pre-release tags at the floor are rejected."""
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
+        romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.9.0-beta.3"}}
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.test_connection())
+        assert result["success"] is False
+        assert result["reason"] == "version_error"
+        assert result["romm_version"] == "4.9.0-beta.3"
+
+    def test_prerelease_above_floor_accepted(self, event_loop, romm_api, logger):
+        """4.9.1-beta has a core above 4.9.0 and passes the gate."""
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
+        romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.9.1-beta"}}
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.test_connection())
+        assert result["success"] is True
+        assert result["romm_version"] == "4.9.1-beta"
+
     def test_development_version_bypasses_gate(self, event_loop, romm_api, logger):
         """``development`` version string skips the minimum-version check."""
         settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}

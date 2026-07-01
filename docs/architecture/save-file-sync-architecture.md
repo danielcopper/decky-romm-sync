@@ -15,9 +15,9 @@ Phase 7.
 
 ## RomM Save API
 
-Requires RomM >= 4.9.0. Pre-release version strings (`-alpha` / `-beta`, with an optional `.N` suffix) are accepted when
-their numeric core meets the minimum; pre-release tags are not compared. The plugin rejects servers below 4.9.0 with
-`reason: "version_error"`.
+Requires RomM >= 4.9.0 (release or higher core). Pre-releases at the exact floor (`4.9.0-beta`, `4.9.0-alpha.1`) rank
+below `4.9.0` and are rejected; a higher core with a suffix (`4.9.1-beta`) passes. The plugin rejects servers below the
+floor with `reason: "version_error"`.
 
 | Endpoint                                                 | Method | Notes                                                                                                                                                                                                                                                                          |
 | -------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
