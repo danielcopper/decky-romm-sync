@@ -158,11 +158,19 @@ jobs:
       - name: Check dependency locks satisfy their source constraints
         run: python scripts/check_lock_sync.py
 
+  # Skipped when SONAR_TOKEN is structurally unavailable: Dependabot PRs and
+  # PRs from forks (GitHub withholds secrets from `pull_request` runs whose head
+  # is not this repo). SonarSource does not support forked-PR analysis at all, so
+  # the scan would only fail auth and block the merge. Sonar still runs on
+  # push-to-main, so forked contributions are analysed once they land.
   sonarcloud:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [test, frontend-test]
-    if: github.actor != 'dependabot[bot]'
+    if: >-
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
     steps:
       - uses: actions/checkout@v7
         with:
@@ -184,18 +192,18 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-  # Branch-protection shim: the `sonarcloud` job is skipped on Dependabot PRs
-  # (no SONAR_TOKEN access), and a skipped required check never reports success,
-  # which would deadlock every Dependabot PR. This gate always reports, passing
-  # when SonarCloud succeeded or was skipped and failing only when it failed.
-  # Make THIS job the required status check instead of `sonarcloud`.
+  # Branch-protection shim: the `sonarcloud` job is skipped when SONAR_TOKEN is
+  # unavailable (Dependabot PRs and forked PRs), and a skipped required check
+  # never reports success, which would deadlock those PRs. This gate always
+  # reports, passing when SonarCloud succeeded or was skipped and failing only
+  # when it failed. Make THIS job the required status check instead of `sonarcloud`.
   sonar-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [sonarcloud]
     if: always()
     steps:
-      - name: Require SonarCloud to pass (skipped on Dependabot PRs)
+      - name: Require SonarCloud to pass (skipped on Dependabot / forked PRs)
         env:
           SONAR_RESULT: ${{ needs.sonarcloud.result }}
         run: |
