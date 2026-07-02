@@ -23,11 +23,14 @@ if TYPE_CHECKING:
 
 # Scopes requested for the minted Client API Token. Deliberately excludes
 # ``me.write`` so the token itself cannot mint or delete tokens — that
-# stays a Basic-auth-only operation.
+# stays a Basic-auth-only operation. ``roms.user.read`` is requested so the
+# token can read per-user ROM data (native play-session history — #1219 /
+# #1234 Phase 5); we already hold ``roms.user.write`` for the ingest POST.
 _TOKEN_SCOPES = [
     "me.read",
     "platforms.read",
     "roms.read",
+    "roms.user.read",
     "collections.read",
     "firmware.read",
     "assets.read",

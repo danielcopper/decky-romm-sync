@@ -844,11 +844,12 @@ class TestUpdateNote:
 
 class TestTokenScopes:
     def test_locked_scope_list(self):
-        """The 10 requested scopes are fixed and exclude ``me.write``."""
+        """The 11 requested scopes are fixed and exclude ``me.write``."""
         assert _TOKEN_SCOPES == [
             "me.read",
             "platforms.read",
             "roms.read",
+            "roms.user.read",
             "collections.read",
             "firmware.read",
             "assets.read",
@@ -858,6 +859,10 @@ class TestTokenScopes:
             "roms.user.write",
         ]
         assert "me.write" not in _TOKEN_SCOPES
+        # Read + write on per-user ROM data: read for native play-session
+        # history (#1219), write for the ingest POST.
+        assert "roms.user.read" in _TOKEN_SCOPES
+        assert "roms.user.write" in _TOKEN_SCOPES
 
 
 class TestMintClientToken:
