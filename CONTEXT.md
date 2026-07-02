@@ -186,10 +186,13 @@ disc no longer present) degrades to the default with a WARNING, never fatal.
 
 ### Save-sync slot
 
-A named channel for a ROM's saves (e.g. `default`). The active slot for a ROM is recorded on its `RomSaveState`;
-`default_slot` (a `settings.json` config value, per #822) is the slot a newly-tracked ROM starts on. Slots let the same
-ROM carry distinct save sets without clobbering one another. Confirming a slot (`confirm_slot(...)`) is an explicit
-user/flow decision — the plugin never silently adopts a foreign slot.
+A named channel for a ROM's saves (e.g. `default`). **Every slot is a real, addressable name** — the active slot for a
+ROM is recorded on its `RomSaveState`, and `default_slot` (a `settings.json` config value, per #822) is the slot a
+newly-tracked ROM starts on. Slots let the same ROM carry distinct save sets without clobbering one another. Confirming
+a slot (`confirm_slot(...)`) is an explicit user/flow decision that requires a real slot name — the plugin never
+silently adopts a foreign slot, and it never confirms a ROM onto the legacy `slot:null`. The legacy `slot:null` is
+**retired as a confirmable target** (#1276 / ADR-0017): it survives only as a one-time migration **source** — the Slot
+Setup Wizard migrates those pre-slot saves into a named slot — and is never a ROM's active slot.
 
 ### Baseline
 

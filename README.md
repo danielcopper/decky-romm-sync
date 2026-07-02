@@ -104,6 +104,12 @@ This plugin stands on the shoulders of some great projects:
   navigation patterns
 - [MetaDeck](https://github.com/EmuDeck/MetaDeck) — inspiration for store patching patterns used in metadata display on
   non-Steam shortcuts
+- [Argosy](https://github.com/rommapp/argosy-launcher) — RomM's Android device-sync client. Its baseline-anchored
+  save-conflict handling — client-side detection layered over RomM's negotiate transport, with a keep-local/keep-remote
+  prompt on genuine divergence — validated the posture this plugin's save sync takes
+- [Grout](https://github.com/rommapp/grout) — RomM's Linux handheld client. Its 409-driven upload reconciliation (POST
+  with overwrite=false, downgrading to a download when the local save is unchanged and surfacing a conflict when it
+  diverged) informed this plugin's negotiate upload and conflict path
 
 ## License
 

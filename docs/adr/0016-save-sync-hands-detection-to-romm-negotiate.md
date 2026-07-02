@@ -10,6 +10,14 @@ first-party Device Sync Protocol) and tracked for implementation by
 ([#1219](https://github.com/danielcopper/decky-romm-sync/issues/1219)) is split out as its own slice; serialization
 reuses the single-owner pattern from [#1202](https://github.com/danielcopper/decky-romm-sync/issues/1202).
 
+> **Superseded in part by [ADR-0017](0017-client-baseline-detection-authoritative-negotiate-is-transport.md)
+> ([#1276](https://github.com/danielcopper/decky-romm-sync/issues/1276)).** The **detection-authority** decision below —
+> driving a confirmed non-legacy ROM's sync from `negotiate`'s operation list — is reversed: client-side
+> `compute_sync_action` is the sole sync authority for **every** ROM, and `negotiate` is retained as **transport only**
+> (per-device session serialization + play-session ingest, its `operations` discarded). Everything else here still holds
+> — the negotiate/complete transport, the session lifecycle, exact hash parity, the wizard gate, and the
+> `_MIN_REQUIRED_VERSION ≥ 4.9.0` floor. Where this ADR says "detection moves server-side," read ADR-0017.
+
 ## Context
 
 RomM shipped a first-party **Device Sync Protocol** in 4.9 (GA 2026-06-12): `POST /api/sync/negotiate` → execute ops →
