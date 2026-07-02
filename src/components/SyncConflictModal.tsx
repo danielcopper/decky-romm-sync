@@ -1,4 +1,5 @@
 import { FC, useState } from "react";
+import { toaster } from "@decky/api";
 import { ModalRoot, DialogButton, showModal } from "@decky/ui";
 import { resolveSyncConflict, logError } from "../api/backend";
 import type { SyncConflict } from "../types";
@@ -23,7 +24,7 @@ function formatSize(bytes: number | null): string {
 
 /**
  * Controlled modal: parent owns isLoading + errorMessage. Three actions:
- *   - Keep Local  -> onResolve("keep_local")  -> backend PUTs local to server
+ *   - Keep Local  -> onResolve("keep_local")  -> backend POSTs local to server (overwrite=true)
  *   - Use Server  -> onResolve("use_server")  -> backend downloads server, overwrites local
  *   - Cancel      -> onCancel()               -> pure UI close, no backend call.
  *                                                Conflict re-fires on next sync if state still holds.
@@ -179,6 +180,11 @@ const SyncConflictModalHost: FC<SyncConflictModalHostProps> = ({ conflict, close
         setIsLoading(false);
         return;
       }
+      const successBody =
+        action === "keep_local"
+          ? "Conflict resolved — kept your local save (uploaded to server)."
+          : "Conflict resolved — used the server save · your local was backed up.";
+      toaster.toast({ title: "RomM Sync", body: successBody });
       closeModal?.();
       onDone(action);
     } catch (e) {

@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, act, cleanup } from "@testing-library/react";
 import { createElement, type ReactElement } from "react";
+import { toaster } from "@decky/api";
 import { showModal } from "@decky/ui";
 import { showSyncConflictModal, handleConflicts } from "./SyncConflictModal";
 import * as backend from "../api/backend";
@@ -200,6 +201,61 @@ describe("SyncConflictModal", () => {
         "use_server",
       );
       await expect(promise).resolves.toBe("use_server");
+    });
+  });
+
+  describe("SyncConflictModalHost — success confirmation toast", () => {
+    it("Keep Local: success → toasts the branch-specific kept-local body", async () => {
+      vi.mocked(backend.resolveSyncConflict).mockResolvedValue({ success: true });
+      detach(showSyncConflictModal(makeConflict()));
+      const { container } = render(lastShownElement());
+
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Keep Local"));
+      });
+      await flushAsync();
+
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
+        title: "RomM Sync",
+        body: "Conflict resolved — kept your local save (uploaded to server).",
+      });
+    });
+
+    it("Use Server: success → toasts the branch-specific used-server body", async () => {
+      vi.mocked(backend.resolveSyncConflict).mockResolvedValue({ success: true });
+      detach(showSyncConflictModal(makeConflict()));
+      const { container } = render(lastShownElement());
+
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Use Server"));
+      });
+      await flushAsync();
+
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
+        title: "RomM Sync",
+        body: "Conflict resolved — used the server save · your local was backed up.",
+      });
+    });
+
+    it("stale_conflict: does NOT toast — renders the inline stale error instead", async () => {
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+      vi.mocked(backend.resolveSyncConflict).mockResolvedValue({
+        success: false,
+        reason: "stale_conflict",
+        message: "out of date",
+      });
+
+      detach(showSyncConflictModal(makeConflict()));
+      const { container } = render(lastShownElement());
+
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Keep Local"));
+      });
+      await flushAsync();
+
+      expect(container.textContent).toContain("The server save has been updated by another device");
+      expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
+      logSpy.mockRestore();
     });
   });
 

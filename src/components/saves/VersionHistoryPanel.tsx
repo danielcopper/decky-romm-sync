@@ -78,8 +78,20 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({ romId, slot,
         // practice the slot only ever has one); the modal itself is
         // identical to the one launched from the play button.
         const first = result.conflicts[0];
-        if (first) await showSyncConflictModal(first);
-        toaster.toast({ title: "RomM Sync", body: "Resolve the conflict, then try again" });
+        if (first) {
+          // The modal owns the feedback — Keep Local / Use Server surface the
+          // normal save-sync resolution toast, Cancel stays silent (the state
+          // remains conflict). The panel must not stack a second toast on top.
+          await showSyncConflictModal(first);
+        } else {
+          // Degenerate: the server blocked on a conflict but sent none to
+          // show, so there is no modal to surface it — nudge the user directly
+          // instead of failing silently.
+          toaster.toast({
+            title: "RomM Sync",
+            body: "Restore blocked by a sync conflict. Sync this save, then try again.",
+          });
+        }
       } else if (result.status === "preflight_failed") {
         const detail = result.errors[0] ?? "preflight error";
         toaster.toast({ title: "RomM Sync", body: `Sync failed before restore: ${detail}` });

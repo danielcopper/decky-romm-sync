@@ -844,12 +844,16 @@ good server copy being overwritten (#1062).
 `SyncConflictModal` (`src/components/SyncConflictModal.tsx`) shows the local-save row and the picked server-save row
 side by side, each with size and timestamp. Three actions:
 
-- **Keep Local** → `resolveSyncConflict(rom_id, filename, "keep_local")` → backend PUTs local content onto the picked
-  server save.
+- **Keep Local** → `resolveSyncConflict(rom_id, filename, "keep_local")` → backend POSTs local content as a new server
+  version with `overwrite=true` (the old server save is retained, not overwritten in place).
 - **Use Server** → `resolveSyncConflict(rom_id, filename, "use_server")` → backend downloads the picked server save and
   overwrites local.
 - **Cancel** → pure UI close, no callable, no state mutation. The conflict re-fires on the next sync as long as the
   underlying state still produces matrix row 12, 6c, 11b, or 9b.
+
+On a successful resolution the modal closes and surfaces a branch-specific confirmation toast — **Keep Local** confirms
+the local save was uploaded to the server, **Use Server** confirms the server save is now in use and the prior local
+save was backed up to `.romm-backup`. Failure and stale branches stay inline in the modal instead (no toast).
 
 The modal is shown by `CustomPlayButton` during pre-launch sync, and by `VersionHistoryPanel.handleRestore` (in
 `SavesTab`) when a version-restore pre-flight returns `conflict_blocked`. Both call `showSyncConflictModal(conflict)`
@@ -911,10 +915,10 @@ self-deadlock. The peer calls a slot mutation makes while holding the lock (`con
 `_migrate_slot_saves`, `_delete_server_slot_saves`, the matrix download/upload workers) are all lock-free by design, so
 holding the lock across their server/file I/O is safe and is the intended serialization point.
 
-The realistic race the lock prevents: user clicks Keep Local → executor runs PUT + state mutation → in parallel,
-`post_exit_sync` for a game that just stopped runs and mutates the same per-file state → last-writer-wins on the
-`rom_save_states` aggregate, dropping one set of fields. The same lost-update window applies to `get_save_status`'s
-baseline-adopt write versus a concurrent pre-launch / post-exit / manual sync. The lock makes each
+The realistic race the lock prevents: user clicks Keep Local → executor runs the POST (`overwrite=true`) + state
+mutation → in parallel, `post_exit_sync` for a game that just stopped runs and mutates the same per-file state →
+last-writer-wins on the `rom_save_states` aggregate, dropping one set of fields. The same lost-update window applies to
+`get_save_status`'s baseline-adopt write versus a concurrent pre-launch / post-exit / manual sync. The lock makes each
 read-modify-write-and-persist sequence atomic relative to the others.
 
 ## Local Save File Naming

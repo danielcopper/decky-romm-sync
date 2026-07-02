@@ -241,7 +241,7 @@ describe("VersionHistoryPanel", () => {
       await waitFor(() => expect(container.textContent).toContain("▸"));
     });
 
-    it("status 'conflict_blocked' opens the sync conflict modal with the first conflict", async () => {
+    it("status 'conflict_blocked' opens the sync conflict modal and lets the modal own the feedback (no panel toast)", async () => {
       const conflict = {
         type: "sync_conflict" as const,
         rom_id: 1,
@@ -264,9 +264,9 @@ describe("VersionHistoryPanel", () => {
       await flushAsync();
       await flushAsync();
       expect(vi.mocked(showSyncConflictModal)).toHaveBeenCalledWith(conflict);
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "Resolve the conflict, then try again" }),
-      );
+      // The modal surfaces its own resolution toast (or stays silent on cancel);
+      // the panel must not stack a second, contradictory toast on top.
+      expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
     });
 
     it("status 'conflict_blocked' with empty conflicts skips the modal but still toasts", async () => {
@@ -280,7 +280,7 @@ describe("VersionHistoryPanel", () => {
       await flushAsync();
       expect(vi.mocked(showSyncConflictModal)).not.toHaveBeenCalled();
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "Resolve the conflict, then try again" }),
+        expect.objectContaining({ body: "Restore blocked by a sync conflict. Sync this save, then try again." }),
       );
     });
 
