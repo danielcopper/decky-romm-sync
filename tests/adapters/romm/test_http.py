@@ -78,6 +78,7 @@ def plugin():
             logger=decky.logger,
             min_required_version=Plugin._MIN_REQUIRED_VERSION,
             forget_device=MagicMock(),
+            clear_playtime_scope_notice=MagicMock(),
         ),
     )
     return p
@@ -656,6 +657,7 @@ def _setup_plugin(plugin):
             logger=decky.logger,
             min_required_version=Plugin._MIN_REQUIRED_VERSION,
             forget_device=MagicMock(),
+            clear_playtime_scope_notice=MagicMock(),
         ),
     )
 

@@ -12,11 +12,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from models.play_sessions import PlaySessionIngestEntry, PlaySessionIngestResponse
     from models.sync import (
         ClientSaveState,
         SyncCompleteResponse,
         SyncNegotiateResponse,
-        SyncPlaySessionEntry,
     )
 
 
@@ -109,28 +109,25 @@ class RommPlatformReader(Protocol):
 
 
 class RommPlaytimeApi(Protocol):
-    """RomM Notes API surface for playtime tracking."""
+    """RomM native play-session ingest surface for playtime tracking (ADR-0018)."""
 
-    def get_rom_with_notes(self, rom_id: int) -> object:
-        """Fetch full ROM detail including user notes.
+    def ingest_play_sessions(self, device_id: str, sessions: list[PlaySessionIngestEntry]) -> PlaySessionIngestResponse:
+        """Batch-ingest per-session windows for this device (max 100 per call).
 
-        Returns ``object`` — the JSON payload is unvalidated at this seam, so
-        the single consumer narrows it with ``isinstance`` before reading
-        ``all_user_notes``. Used for playtime tracking.
+        POST /api/play-sessions with a top-level ``device_id`` and the
+        ``sessions`` batch. The server accumulates the additive union across
+        devices and dedupes on ``(user_id, device_id, rom_id, start_time)`` so a
+        re-POST is idempotent (returned ``status: "duplicate"``).
         """
         ...
 
-    def create_note(self, rom_id: int, data: dict[str, Any]) -> dict[str, Any]:
-        """Create a note on a ROM.
+    def list_play_sessions(self, rom_id: int, limit: int = 100) -> list[dict[str, Any]]:
+        """Fetch stored play-session rows for a ROM (needs the ``roms.user.read`` scope).
 
-        Used for playtime tracking. POST /api/roms/{rom_id}/notes.
-        """
-        ...
-
-    def update_note(self, rom_id: int, note_id: int, data: dict[str, Any]) -> dict[str, Any]:
-        """Update an existing note on a ROM.
-
-        PUT /api/roms/{rom_id}/notes/{note_id}.
+        GET /api/play-sessions filtered by ``rom_id``. Returns the raw session
+        dicts (each carrying ``duration_ms``); the caller sums them for the
+        cross-device reconcile ``max()``. Degrades to local-only when the token
+        lacks the read scope.
         """
         ...
 
@@ -312,9 +309,8 @@ class RommSaveApi(Protocol):
         *,
         operations_completed: int = 0,
         operations_failed: int = 0,
-        play_sessions: list[SyncPlaySessionEntry] | None = None,
     ) -> SyncCompleteResponse:
-        """Close the negotiated session, reporting executed-op counts (and optional play sessions)."""
+        """Close the negotiated session, reporting executed-op counts."""
         ...
 
 

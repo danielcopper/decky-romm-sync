@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from domain.playtime import Playtime, parse_playtime_note_content
+from domain.playtime import PendingPlaySession, Playtime
 
 
 class TestBeginSession:
@@ -103,11 +103,126 @@ class TestRecordSession:
         assert playtime.total_seconds == 86400
 
 
-class TestLinkNote:
-    def test_link_note_sets_id(self):
+class TestEnqueueSession:
+    def test_enqueue_adds_pending_session_keyed_by_start(self):
         playtime = Playtime()
-        playtime.link_note(42)
-        assert playtime.note_id == 42
+        playtime.enqueue_session(
+            device_id="dev-1",
+            start_time="2026-05-28T10:00:00",
+            end_time="2026-05-28T11:00:00",
+            duration_ms=3_600_000,
+        )
+        assert playtime.pending_sessions == {
+            "2026-05-28T10:00:00": PendingPlaySession(
+                device_id="dev-1", end_time="2026-05-28T11:00:00", duration_ms=3_600_000
+            )
+        }
+
+    def test_enqueue_same_start_overwrites(self):
+        """Re-enqueuing the same window overwrites rather than duplicates (start is the dedup key)."""
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="dev-1", start_time="s", end_time="e1", duration_ms=100)
+        playtime.enqueue_session(device_id="dev-1", start_time="s", end_time="e2", duration_ms=200)
+        assert len(playtime.pending_sessions) == 1
+        assert playtime.pending_sessions["s"].duration_ms == 200
+
+    def test_two_distinct_starts_coexist(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="dev-1", start_time="s1", end_time="e1", duration_ms=100)
+        playtime.enqueue_session(device_id="dev-1", start_time="s2", end_time="e2", duration_ms=200)
+        assert set(playtime.pending_sessions) == {"s1", "s2"}
+
+    def test_record_session_end_can_be_enqueued(self):
+        """The typical flow: record folds duration, then enqueue captures the window."""
+        playtime = Playtime()
+        playtime.begin_session("2026-05-28T10:00:00")
+        playtime.record_session("2026-05-28T10:30:00")
+        playtime.enqueue_session(
+            device_id="dev-1",
+            start_time="2026-05-28T10:00:00",
+            end_time="2026-05-28T10:30:00",
+            duration_ms=(playtime.last_session_duration_sec or 0) * 1000,
+        )
+        assert playtime.pending_sessions["2026-05-28T10:00:00"].duration_ms == 1_800_000
+
+
+class TestMarkSessionsSent:
+    def test_dequeues_named_starts(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="d", start_time="s1", end_time="e", duration_ms=1)
+        playtime.enqueue_session(device_id="d", start_time="s2", end_time="e", duration_ms=1)
+        playtime.mark_sessions_sent(["s1"])
+        assert set(playtime.pending_sessions) == {"s2"}
+
+    def test_unknown_start_is_ignored(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="d", start_time="s1", end_time="e", duration_ms=1)
+        playtime.mark_sessions_sent(["missing"])
+        assert set(playtime.pending_sessions) == {"s1"}
+
+    def test_dequeue_all_empties_outbox(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="d", start_time="s1", end_time="e", duration_ms=1)
+        playtime.enqueue_session(device_id="d", start_time="s2", end_time="e", duration_ms=1)
+        playtime.mark_sessions_sent(["s1", "s2"])
+        assert playtime.pending_sessions == {}
+
+
+class TestRecordIngestFailure:
+    def test_increments_attempts_on_named_rows(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="d", start_time="s1", end_time="e", duration_ms=1)
+        playtime.record_ingest_failure(["s1"])
+        assert playtime.pending_sessions["s1"].attempts == 1
+        playtime.record_ingest_failure(["s1"])
+        assert playtime.pending_sessions["s1"].attempts == 2
+
+    def test_preserves_other_fields(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="dev-9", start_time="s1", end_time="e9", duration_ms=42)
+        playtime.record_ingest_failure(["s1"])
+        row = playtime.pending_sessions["s1"]
+        assert (row.device_id, row.end_time, row.duration_ms, row.attempts) == ("dev-9", "e9", 42, 1)
+
+    def test_unknown_start_is_ignored(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="d", start_time="s1", end_time="e", duration_ms=1)
+        playtime.record_ingest_failure(["missing"])
+        assert playtime.pending_sessions["s1"].attempts == 0
+
+    def test_only_named_rows_are_bumped(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="d", start_time="s1", end_time="e", duration_ms=1)
+        playtime.enqueue_session(device_id="d", start_time="s2", end_time="e", duration_ms=1)
+        playtime.record_ingest_failure(["s1"])
+        assert playtime.pending_sessions["s1"].attempts == 1
+        assert playtime.pending_sessions["s2"].attempts == 0
+
+
+class TestQuarantineSessions:
+    def test_drops_named_rows(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="d", start_time="s1", end_time="e", duration_ms=1)
+        playtime.enqueue_session(device_id="d", start_time="s2", end_time="e", duration_ms=1)
+        playtime.quarantine_sessions(["s1"])
+        assert set(playtime.pending_sessions) == {"s2"}
+
+    def test_unknown_start_is_ignored(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="d", start_time="s1", end_time="e", duration_ms=1)
+        playtime.quarantine_sessions(["missing"])
+        assert set(playtime.pending_sessions) == {"s1"}
+
+
+class TestPendingPlaySessionAttempts:
+    def test_defaults_to_zero(self):
+        row = PendingPlaySession(device_id="d", end_time="e", duration_ms=1)
+        assert row.attempts == 0
+
+    def test_enqueue_creates_row_with_zero_attempts(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="d", start_time="s", end_time="e", duration_ms=1)
+        assert playtime.pending_sessions["s"].attempts == 0
 
 
 class TestReconcileTotal:
@@ -125,17 +240,3 @@ class TestReconcileTotal:
         playtime = Playtime(total_seconds=250)
         playtime.reconcile_total(250)
         assert playtime.total_seconds == 250
-
-
-class TestParsePlaytimeNoteContent:
-    def test_parse_valid_content(self):
-        assert parse_playtime_note_content('{"seconds": 100}') == {"seconds": 100}
-
-    def test_parse_empty(self):
-        assert parse_playtime_note_content("") is None
-
-    def test_parse_invalid_json(self):
-        assert parse_playtime_note_content("not json") is None
-
-    def test_parse_non_dict(self):
-        assert parse_playtime_note_content("[1,2,3]") is None

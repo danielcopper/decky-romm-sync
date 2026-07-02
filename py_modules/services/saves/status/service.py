@@ -441,7 +441,6 @@ def _playtime_to_dict(playtime) -> dict[str, Any]:
         "session_count": playtime.session_count,
         "last_session_start": playtime.last_session_start,
         "last_session_duration_sec": playtime.last_session_duration_sec,
-        "note_id": playtime.note_id,
     }
 
 

@@ -389,6 +389,16 @@ class SaveService:
         """
         self._device_registry.forget_device()
 
+    def get_device_id(self) -> str | None:
+        """Return the registered server device id (``None`` when unregistered).
+
+        Delegates to the DeviceRegistry — the single owner of
+        ``kv_config["device_id"]``. The composition root wires this as the
+        ``DeviceIdProvider`` handed to PlaytimeService, which reads the id to
+        attribute native play-session ingests and gate the offline outbox.
+        """
+        return self._device_registry.get_device_id()
+
     # ------------------------------------------------------------------
     # Negotiate inventory (Phase 1c)
     # ------------------------------------------------------------------

@@ -50,6 +50,7 @@ def _make_service(
     settings_persister: MagicMock | None = None,
     min_required_version: tuple[int, ...] = _MIN_VERSION,
     forget_device: MagicMock | None = None,
+    clear_playtime_scope_notice: MagicMock | None = None,
 ) -> ConnectionService:
     return ConnectionService(
         config=ConnectionServiceConfig(
@@ -60,6 +61,9 @@ def _make_service(
             logger=logger,
             min_required_version=min_required_version,
             forget_device=forget_device if forget_device is not None else MagicMock(),
+            clear_playtime_scope_notice=(
+                clear_playtime_scope_notice if clear_playtime_scope_notice is not None else MagicMock()
+            ),
         ),
     )
 
@@ -357,6 +361,51 @@ class TestEstablishTokenHappyPath:
         event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p", allow_insecure_ssl=True))
         assert settings["romm_url"] == "http://romm.local"
         assert settings["romm_allow_insecure_ssl"] is True
+
+    def test_successful_sign_in_clears_playtime_scope_notice(self, event_loop, romm_api, logger):
+        """A fresh mint carries roms.user.read, so the stale re-sign-in notice is cleared."""
+        clear = MagicMock()
+        settings: dict[str, Any] = {}
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            clear_playtime_scope_notice=clear,
+        )
+        result = event_loop.run_until_complete(service.establish_token("http://romm.local", "alice", "secret"))
+        assert result["success"] is True
+        clear.assert_called_once()
+
+    def test_failed_sign_in_does_not_clear_playtime_scope_notice(self, event_loop, romm_api, logger):
+        """A failed mint persists nothing and must not clear the notice."""
+        romm_api.mint_client_token.side_effect = RommConnectionError("offline")
+        clear = MagicMock()
+        settings: dict[str, Any] = {}
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            clear_playtime_scope_notice=clear,
+        )
+        result = event_loop.run_until_complete(service.establish_token("http://romm.local", "alice", "secret"))
+        assert result["success"] is False
+        clear.assert_not_called()
+
+    def test_sign_in_succeeds_even_if_scope_notice_clear_raises(self, event_loop, romm_api, logger):
+        """The clear is best-effort: a failure never turns a successful sign-in into a failure."""
+        clear = MagicMock(side_effect=RuntimeError("db locked"))
+        settings: dict[str, Any] = {}
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            clear_playtime_scope_notice=clear,
+        )
+        result = event_loop.run_until_complete(service.establish_token("http://romm.local", "alice", "secret"))
+        assert result["success"] is True
 
 
 class TestEstablishTokenOldTokenDeletion:

@@ -516,7 +516,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         config=PlaytimeServiceConfig(
             romm_api=cfg.adapters.romm_api,
             retry=cfg.adapters.http_adapter,
-            settings=cfg.stores.settings,
+            device_id_provider=save_sync_service,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
             clock=cfg.runtime.clock,
@@ -709,6 +709,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             logger=cfg.runtime.logger,
             min_required_version=cfg.min_required_version,
             forget_device=save_sync_service.forget_device,
+            clear_playtime_scope_notice=playtime_service.clear_scope_notice,
         ),
     )
 

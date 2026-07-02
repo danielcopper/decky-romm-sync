@@ -65,3 +65,38 @@ async def test_finalize_no_active_session_leaves_total_none(harness):
     result = await harness.plugin.finalize_game_session(1, 0)
 
     assert result["total_seconds"] is None
+
+
+async def test_finalize_registered_device_ingests_play_session(harness):
+    """A registered device POSTs the closed session to RomM's native ingest on exit.
+
+    Playtime ingest is decoupled from save-sync (ADR-0018): save_sync stays OFF
+    here, yet the session is recorded for the ROM because a device id is bound.
+    """
+    seed_rom(harness, 1)
+    harness.plugin.settings["save_sync_enabled"] = False
+    with harness.uow_factory() as uow:
+        uow.kv_config.set("device_id", "device-1")
+
+    await harness.plugin.record_session_start(1)
+    harness.clock.advance(300)
+    await harness.plugin.finalize_game_session(1, 0)
+
+    stored = harness.romm.play_sessions.get(1)
+    assert stored is not None
+    assert stored[0]["device_id"] == "device-1"
+    assert stored[0]["duration_ms"] == 300_000
+
+
+async def test_finalize_unregistered_device_folds_locally_no_ingest(harness):
+    """No device id → the session is counted locally but never POSTed (decision #8)."""
+    seed_rom(harness, 1)
+    harness.plugin.settings["save_sync_enabled"] = False
+    # No device_id in kv_config — the device is unregistered.
+
+    await harness.plugin.record_session_start(1)
+    harness.clock.advance(300)
+    result = await harness.plugin.finalize_game_session(1, 0)
+
+    assert result["total_seconds"] == 300  # counted locally
+    assert harness.romm.play_sessions == {}  # nothing ingested

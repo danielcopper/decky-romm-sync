@@ -12,7 +12,6 @@ from models.sync import (
     SyncCompleteResponse,
     SyncNegotiateResponse,
     SyncOperation,
-    SyncPlaySessionEntry,
     SyncSession,
 )
 
@@ -22,7 +21,6 @@ _SCHEMAS = [
     SyncNegotiateResponse,
     SyncSession,
     SyncCompleteResponse,
-    SyncPlaySessionEntry,
 ]
 
 

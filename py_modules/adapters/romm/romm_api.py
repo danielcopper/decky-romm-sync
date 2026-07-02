@@ -6,20 +6,27 @@ directly to HTTP endpoints via RommHttpAdapter.
 
 from __future__ import annotations
 
+import logging
 import urllib.parse
 from typing import TYPE_CHECKING, Any
 
 from lib.errors import RommNotFoundError
 
 if TYPE_CHECKING:
+    from models.play_sessions import PlaySessionIngestEntry, PlaySessionIngestResponse
     from models.sync import (
         ClientSaveState,
         SyncCompleteResponse,
         SyncNegotiateResponse,
-        SyncPlaySessionEntry,
     )
 
     from adapters.romm.http import RommHttpAdapter
+
+_logger = logging.getLogger(__name__)
+
+# ``/api/play-sessions`` pagination guard: stop after this many pages so a server
+# that never returns a short page (e.g. ignores ``offset``) can't loop forever.
+_MAX_PLAY_SESSION_PAGES = 50
 
 # Scopes requested for the minted Client API Token. Deliberately excludes
 # ``me.write`` so the token itself cannot mint or delete tokens — that
@@ -260,20 +267,15 @@ class RommApiAdapter:
         *,
         operations_completed: int = 0,
         operations_failed: int = 0,
-        play_sessions: list[SyncPlaySessionEntry] | None = None,
     ) -> SyncCompleteResponse:
-        """Close the negotiated session, reporting how many ops ran.
-
-        ``play_sessions`` is the optional play-session report (#1219); omitted
-        when ``None`` so the negotiate path stays independent of play sessions.
-        """
-        payload: dict[str, Any] = {
-            "operations_completed": operations_completed,
-            "operations_failed": operations_failed,
-        }
-        if play_sessions is not None:
-            payload["play_sessions"] = play_sessions
-        return self._client.post_json(f"/api/sync/sessions/{session_id}/complete", payload)
+        """Close the negotiated session, reporting how many ops ran."""
+        return self._client.post_json(
+            f"/api/sync/sessions/{session_id}/complete",
+            {
+                "operations_completed": operations_completed,
+                "operations_failed": operations_failed,
+            },
+        )
 
     # ── Devices ───────────────────────────────────────────────────────
 
@@ -303,16 +305,52 @@ class RommApiAdapter:
         payload = {k: v for k, v in fields.items() if v is not None}
         return self._client.put_json(f"/api/devices/{urllib.parse.quote(device_id, safe='')}", payload)
 
-    # ── Notes / Playtime ──────────────────────────────────────────────
+    # ── Play sessions (native ingest, ADR-0018) ───────────────────────
 
-    def get_rom_with_notes(self, rom_id: int) -> dict[str, Any]:
-        return self._client.request(f"/api/roms/{rom_id}")
+    def ingest_play_sessions(self, device_id: str, sessions: list[PlaySessionIngestEntry]) -> PlaySessionIngestResponse:
+        return self._client.post_json("/api/play-sessions", {"device_id": device_id, "sessions": sessions})
 
-    def create_note(self, rom_id: int, data: dict[str, Any]) -> dict[str, Any]:
-        return self._client.post_json(f"/api/roms/{rom_id}/notes", data)
+    def list_play_sessions(self, rom_id: int, limit: int = 100) -> list[dict[str, Any]]:
+        """Fetch every stored play-session row for a ROM, paginating on ``offset``.
 
-    def update_note(self, rom_id: int, note_id: int, data: dict[str, Any]) -> dict[str, Any]:
-        return self._client.put_json(f"/api/roms/{rom_id}/notes/{note_id}", data)
+        Loops accumulating pages until a short/empty page (fewer than ``limit``
+        rows), so a ROM with more than ``limit`` sessions is fully summed by the
+        caller. Accepts both a bare list and a paginated ``{items, total}``
+        envelope; an unrecognized dict envelope logs a debug breadcrumb and ends
+        the scan. Capped at ``_MAX_PLAY_SESSION_PAGES`` to guard against a server
+        that never returns a short page.
+        """
+        sessions: list[dict[str, Any]] = []
+        offset = 0
+        for _ in range(_MAX_PLAY_SESSION_PAGES):
+            result = self._client.request(f"/api/play-sessions?rom_id={rom_id}&limit={limit}&offset={offset}")
+            if isinstance(result, list):
+                page = result
+            elif isinstance(result, dict):
+                items = result.get("items")
+                if isinstance(items, list):
+                    page = items
+                else:
+                    _logger.debug(
+                        "list_play_sessions: unrecognized response envelope for rom %s (keys=%s)",
+                        rom_id,
+                        sorted(result.keys()),
+                    )
+                    break
+            else:
+                break
+            sessions.extend(page)
+            if len(page) < limit:
+                break
+            offset += limit
+        else:
+            _logger.debug(
+                "list_play_sessions hit the %d-page cap for rom %s (%d rows) — possible truncation",
+                _MAX_PLAY_SESSION_PAGES,
+                rom_id,
+                len(sessions),
+            )
+        return sessions
 
     # ── Client Tokens ─────────────────────────────────────────────────
 

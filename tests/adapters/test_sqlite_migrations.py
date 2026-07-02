@@ -69,8 +69,11 @@ def _set_user_version(db_path: str, version: int) -> None:
 
 # Highest NNN in the shipped migrations dir (001_initial + 002_add_emulator_override
 # + 003_unique_shortcut_app_id + 004_add_selected_disc
-# + 005_unconfirm_legacy_slot_confirmations).
-_SHIPPED_VERSION = 5
+# + 005_unconfirm_legacy_slot_confirmations + 006_native_play_sessions).
+_SHIPPED_VERSION = 6
+
+# Tables after every shipped migration: the v1 set plus 006's play-session outbox.
+_SHIPPED_TABLES = _V1_TABLES | {"rom_playtime_sessions"}
 
 
 class TestEmptyDatabase:
@@ -83,9 +86,9 @@ class TestEmptyDatabase:
 
         assert final_version == _SHIPPED_VERSION
         assert _user_version(db_path) == _SHIPPED_VERSION
-        # 002/004 ALTER roms, 003 adds an index — none adds a table, so the
-        # table set is unchanged from v1.
-        assert _tables(db_path) == _V1_TABLES
+        # 002/004 ALTER roms, 003 adds an index; 006 adds the play-session outbox
+        # table — the only table added past v1.
+        assert _tables(db_path) == _SHIPPED_TABLES
 
     def test_creates_missing_parent_directory(self, tmp_path: Path):
         # The runtime dir may not exist yet on first run.
@@ -105,7 +108,7 @@ class TestEmptyDatabase:
         final_version = apply_migrations(db_path)
 
         assert final_version == _SHIPPED_VERSION
-        assert _tables(db_path) == _V1_TABLES
+        assert _tables(db_path) == _SHIPPED_TABLES
 
     def test_adds_emulator_override_to_roms_only(self, tmp_path: Path):
         # 002 ALTERs only roms; rom_installs (and every other table) is untouched.
@@ -403,6 +406,69 @@ class Test005UnconfirmLegacySlotConfirmations:
         assert confirmations == {1: 0, 2: 1, 3: 0}
         # The per-file baseline is preserved — 005 only flips slot_confirmed, never deletes.
         assert file_rows == [("pokemon.srm", "abc123")]
+
+
+class Test006NativePlaySessions:
+    """006 — drops rom_playtime.note_id, adds the rom_playtime_sessions outbox (#1219)."""
+
+    def test_drops_note_id_adds_outbox_preserves_totals(self, tmp_path: Path):
+        db_path = str(tmp_path / "romm_sync.db")
+        # Apply through 005, then seed a populated rom_playtime row (with note_id)
+        # before 006 runs.
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 5)))
+        assert _user_version(db_path) == 5
+        assert "note_id" in _columns(db_path, "rom_playtime")
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            _insert_rom(conn, 1, 1)
+            conn.execute(
+                "INSERT INTO rom_playtime (rom_id, total_seconds, session_count, note_id) VALUES (1, 3600, 2, 7)"
+            )
+        finally:
+            conn.close()
+
+        final_version = apply_migrations(db_path)
+        assert final_version == _SHIPPED_VERSION
+
+        # note_id gone; the outbox table exists carrying the attempts column.
+        assert "note_id" not in _columns(db_path, "rom_playtime")
+        assert "rom_playtime_sessions" in _tables(db_path)
+        assert "attempts" in _columns(db_path, "rom_playtime_sessions")
+
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute("SELECT total_seconds, session_count FROM rom_playtime WHERE rom_id = 1").fetchone()
+        finally:
+            conn.close()
+        # Totals survive the column drop untouched.
+        assert row == (3600, 2)
+
+    def test_outbox_cascades_on_parent_rom_delete(self, tmp_path: Path):
+        """Deleting the parent roms row cascades away its rom_playtime_sessions rows (#1219)."""
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path)
+        assert _user_version(db_path) == _SHIPPED_VERSION
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            _insert_rom(conn, 1, 1)
+            conn.execute("INSERT INTO rom_playtime (rom_id, total_seconds, session_count) VALUES (1, 60, 1)")
+            conn.execute(
+                "INSERT INTO rom_playtime_sessions (rom_id, start_time, device_id, end_time, duration_ms, attempts) "
+                "VALUES (1, 's1', 'dev-1', 'e1', 60000, 0)"
+            )
+            before = conn.execute("SELECT COUNT(*) FROM rom_playtime_sessions").fetchone()[0]
+            # Delete the FK parent with cascades enabled.
+            conn.execute("DELETE FROM roms WHERE rom_id = 1")
+            after = conn.execute("SELECT COUNT(*) FROM rom_playtime_sessions").fetchone()[0]
+        finally:
+            conn.close()
+
+        assert before == 1
+        assert after == 0
 
 
 def test_shipped_migrations_dir_resolves_to_real_schema():

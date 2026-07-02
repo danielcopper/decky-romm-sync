@@ -307,6 +307,20 @@ class SaveInventoryBuilderFn(Protocol):
     def __call__(self, rom_id: int | None = None) -> list[ClientSaveState]: ...
 
 
+class DeviceIdProvider(Protocol):
+    """Server device-id read consumed by PlaytimeService.
+
+    The composition root satisfies this with ``SaveService.get_device_id``
+    (which delegates to the ``DeviceRegistry``, the single owner of
+    ``kv_config["device_id"]``). PlaytimeService reads the id to attribute
+    native play-session ingests and to gate the offline outbox: a ``None``
+    return means this device is not registered yet, so the session is folded
+    locally and never enqueued (never wire an empty device id).
+    """
+
+    def get_device_id(self) -> str | None: ...
+
+
 class DeviceForgetFn(Protocol):
     """Server-device-id reset consumed by ConnectionService.
 
@@ -315,6 +329,19 @@ class DeviceForgetFn(Protocol):
     from the previous token's origin: the registered device id is bound to the
     origin it was minted against, so a server switch must drop it (negotiate
     hard-404s a foreign device id) and let the next sync re-register.
+    """
+
+    def __call__(self) -> None: ...
+
+
+class PlaytimeScopeNoticeClearFn(Protocol):
+    """Playtime read-scope re-sign-in notice reset consumed by ConnectionService.
+
+    The composition root satisfies this with ``PlaytimeService.clear_scope_notice``.
+    ConnectionService invokes it on a successful sign-in: the freshly minted token
+    carries the ``roms.user.read`` scope (#1280), so any durable "sign in again to
+    enable cross-device playtime" notice a prior 403 raised is now stale and must
+    be cleared. Best-effort + local-only — a clear failure never fails the sign-in.
     """
 
     def __call__(self) -> None: ...

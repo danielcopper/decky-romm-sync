@@ -10,7 +10,7 @@ single instance satisfies any of them via duck typing.
 
 Seed in-memory state directly on the public attributes
 (``platforms`` / ``roms`` / ``firmware_files`` / ``collections`` /
-``virtual_collections`` / ``smart_collections`` / ``notes`` / ``saves`` /
+``virtual_collections`` / ``smart_collections`` / ``play_sessions`` / ``saves`` /
 ``devices``); construct without arguments for tests that only care that
 the surface is callable.
 
@@ -36,11 +36,15 @@ from typing import TYPE_CHECKING, Any
 from fakes._romm_save_semantics import check_add_save_conflict, compute_is_current, tag_filename
 
 if TYPE_CHECKING:
+    from models.play_sessions import (
+        PlaySessionIngestEntry,
+        PlaySessionIngestResponse,
+        PlaySessionIngestResult,
+    )
     from models.sync import (
         ClientSaveState,
         SyncCompleteResponse,
         SyncNegotiateResponse,
-        SyncPlaySessionEntry,
     )
 
 
@@ -60,7 +64,11 @@ class FakeRommApi:
         self.collections: list[dict[str, Any]] = []
         self.virtual_collections: dict[str, list[dict[str, Any]]] = {}
         self.smart_collections: list[dict[str, Any]] = []
-        self.notes: dict[int, list[dict[str, Any]]] = {}
+        # Native play-session store (ADR-0018): rom_id -> stored session dicts.
+        # Seed history directly for reconcile tests; ``ingest_play_sessions``
+        # appends here and dedupes on ``(device_id, rom_id, start_time)``.
+        self.play_sessions: dict[int, list[dict[str, Any]]] = {}
+        self._play_session_ledger: set[tuple[str, int, str]] = set()
         self.saves: dict[int, dict[str, Any]] = {}
         self.devices: list[dict[str, Any]] = []
         self.current_user: dict[str, Any] = {"id": 1, "username": "tester"}
@@ -108,9 +116,8 @@ class FakeRommApi:
         self.download_range_supported: bool = False
         self.download_cover_side_effect: Exception | None = None
         self.get_current_user_side_effect: Exception | None = None
-        self.get_rom_with_notes_side_effect: Exception | None = None
-        self.create_note_side_effect: Exception | None = None
-        self.update_note_side_effect: Exception | None = None
+        self.ingest_play_sessions_side_effect: Exception | None = None
+        self.list_play_sessions_side_effect: Exception | None = None
         self.register_device_side_effect: Exception | None = None
         self.list_devices_side_effect: Exception | None = None
         self.update_device_side_effect: Exception | None = None
@@ -134,7 +141,7 @@ class FakeRommApi:
 
         # Internal id counters for synthesised entities.
         self._next_save_id = 1000
-        self._next_note_id = 2000
+        self._next_play_session_id = 3000
         self._next_device_id = 1
 
     # ------------------------------------------------------------------
@@ -355,34 +362,45 @@ class FakeRommApi:
         self._materialize_download(dest, payload)
 
     # ------------------------------------------------------------------
-    # RommPlaytimeApi
+    # RommPlaytimeApi (native play-session ingest, ADR-0018)
     # ------------------------------------------------------------------
 
-    def get_rom_with_notes(self, rom_id: int) -> dict[str, Any]:
-        self._log("get_rom_with_notes", (rom_id,))
-        self._check_fail(self.get_rom_with_notes_side_effect)
-        detail = dict(self.roms.get(rom_id, {"id": rom_id}))
-        detail["all_user_notes"] = [dict(n) for n in self.notes.get(rom_id, [])]
-        return detail
+    def ingest_play_sessions(self, device_id: str, sessions: list[PlaySessionIngestEntry]) -> PlaySessionIngestResponse:
+        self._log("ingest_play_sessions", (device_id, sessions))
+        self._check_fail(self.ingest_play_sessions_side_effect)
+        results: list[PlaySessionIngestResult] = []
+        created = 0
+        skipped = 0
+        for index, session in enumerate(sessions):
+            rom_id = session["rom_id"]
+            start_time = session["start_time"]
+            key = (device_id, rom_id, start_time)
+            if key in self._play_session_ledger:
+                # Idempotent re-POST: already stored, a successful no-op.
+                results.append({"index": index, "status": "duplicate", "id": None})
+                skipped += 1
+                continue
+            self._play_session_ledger.add(key)
+            session_id = self._next_play_session_id
+            self._next_play_session_id += 1
+            self.play_sessions.setdefault(rom_id, []).append(
+                {
+                    "id": session_id,
+                    "rom_id": rom_id,
+                    "device_id": device_id,
+                    "start_time": start_time,
+                    "end_time": session["end_time"],
+                    "duration_ms": session["duration_ms"],
+                }
+            )
+            results.append({"index": index, "status": "created", "id": session_id})
+            created += 1
+        return {"results": results, "created_count": created, "skipped_count": skipped}
 
-    def create_note(self, rom_id: int, data: dict[str, Any]) -> dict[str, Any]:
-        self._log("create_note", (rom_id, data))
-        self._check_fail(self.create_note_side_effect)
-        note_id = self._next_note_id
-        self._next_note_id += 1
-        note = {"id": note_id, "rom_id": rom_id, **data}
-        self.notes.setdefault(rom_id, []).append(note)
-        return dict(note)
-
-    def update_note(self, rom_id: int, note_id: int, data: dict[str, Any]) -> dict[str, Any]:
-        self._log("update_note", (rom_id, note_id, data))
-        self._check_fail(self.update_note_side_effect)
-        for notes in self.notes.values():
-            for note in notes:
-                if note.get("id") == note_id:
-                    note.update(data)
-                    return dict(note)
-        return {"id": note_id, "rom_id": rom_id, **data}
+    def list_play_sessions(self, rom_id: int, limit: int = 100) -> list[dict[str, Any]]:
+        self._log("list_play_sessions", (rom_id,), {"limit": limit})
+        self._check_fail(self.list_play_sessions_side_effect)
+        return [dict(s) for s in self.play_sessions.get(rom_id, [])[:limit]]
 
     # ------------------------------------------------------------------
     # RommDeviceApi
@@ -596,7 +614,6 @@ class FakeRommApi:
         *,
         operations_completed: int = 0,
         operations_failed: int = 0,
-        play_sessions: list[SyncPlaySessionEntry] | None = None,
     ) -> SyncCompleteResponse:
         self._log(
             "complete_sync_session",
@@ -604,7 +621,6 @@ class FakeRommApi:
             {
                 "operations_completed": operations_completed,
                 "operations_failed": operations_failed,
-                "play_sessions": play_sessions,
             },
         )
         self._check_fail()

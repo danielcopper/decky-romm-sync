@@ -1,0 +1,54 @@
+"""TypedDicts for RomM's standalone play-session ingest wire protocol.
+
+The dict shapes exchanged with ``POST /api/play-sessions`` (the additive
+per-session ingest of ADR-0018): the per-session entries the client batches
+under a top-level ``device_id`` (``PlaySessionIngestEntry``) and the server's
+per-entry ingest verdict (``PlaySessionIngestResult`` / ``PlaySessionIngestResponse``).
+Kept separate from ``models/sync.py`` — this ingest is decoupled from the
+save-sync ``negotiate`` session lifecycle. Runtime dicts; these describe the
+wire contract without changing their identity.
+
+The request envelope (``{"device_id", "sessions"}``) is assembled inline at the
+adapter, not modeled here; the ``GET`` history response is a bare
+``list[dict[str, Any]]`` (unvalidated at the seam, summed by ``duration_ms``).
+"""
+
+from __future__ import annotations
+
+from typing import Literal, NotRequired, TypedDict
+
+
+class PlaySessionIngestEntry(TypedDict):
+    """One play-session window in the batch the client POSTs to ``/api/play-sessions``.
+
+    ``start_time`` / ``end_time`` are the ISO-8601 session window; ``duration_ms``
+    is the suspend-adjusted screen-on time (our counted seconds x 1000). The
+    server dedupes on ``(user_id, device_id, rom_id, start_time)``.
+    """
+
+    rom_id: int
+    start_time: str
+    end_time: str
+    duration_ms: int
+
+
+class PlaySessionIngestResult(TypedDict):
+    """The server's verdict for one submitted session, correlated by ``index``.
+
+    ``index`` is the entry's position in the submitted ``sessions`` batch;
+    ``status`` is ``created`` (newly stored), ``duplicate`` (already present, a
+    no-op — still a successful ingest), or ``error``. ``id`` is the stored
+    session row id when created.
+    """
+
+    index: int
+    status: Literal["created", "duplicate", "error"]
+    id: NotRequired[int | None]
+
+
+class PlaySessionIngestResponse(TypedDict):
+    """The server's response to ``POST /api/play-sessions``."""
+
+    results: list[PlaySessionIngestResult]
+    created_count: int
+    skipped_count: int

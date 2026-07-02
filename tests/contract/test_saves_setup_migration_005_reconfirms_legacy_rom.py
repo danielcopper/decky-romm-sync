@@ -23,10 +23,19 @@ def _db_path(harness) -> str:
     return str(harness.tmp_path / "runtime" / "romm_sync.db")
 
 
-def _set_user_version(db_path: str, version: int) -> None:
+def _rewind_to_v4(db_path: str) -> None:
+    """Rewind the bootstrapped DB to the true pre-005 state (version + schema).
+
+    Bootstrap stamps the DB at the latest version with the full schema. To replay
+    the real 005 upgrade path the runner must see a genuine v4 database: the
+    version stamp AND the pre-006 schema (006's play-session outbox table absent,
+    ``note_id`` present) so the sequential 005→006 re-run applies cleanly.
+    """
     conn = sqlite3.connect(db_path, isolation_level=None)
     try:
-        conn.execute(f"PRAGMA user_version = {version}")
+        conn.execute("DROP TABLE IF EXISTS rom_playtime_sessions")
+        conn.execute("ALTER TABLE rom_playtime ADD COLUMN note_id INTEGER")
+        conn.execute("PRAGMA user_version = 4")
     finally:
         conn.close()
 
@@ -50,10 +59,10 @@ async def test_migration_005_reconfirms_legacy_rom(harness):
     before = await harness.plugin.is_save_tracking_configured(42)
     assert before["configured"] is True
 
-    # Bootstrap already stamped the DB at the latest version, so re-run the
-    # runner from just before 005 to exercise the real migration path.
+    # Bootstrap already stamped the DB at the latest version, so rewind to just
+    # before 005 to exercise the real migration path (005 then 006).
     db_path = _db_path(harness)
-    _set_user_version(db_path, 4)
+    _rewind_to_v4(db_path)
     apply_migrations(db_path)
 
     # The legacy confirmation is flipped back; files + slots are untouched.

@@ -64,6 +64,19 @@ class TestDeviceRegistration:
         assert result.get("disabled") is True
 
 
+class TestGetDeviceId:
+    """``get_device_id`` delegates to the DeviceRegistry (the ``DeviceIdProvider`` seam)."""
+
+    def test_returns_registered_id(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        _set_device_id(svc, "device-7")
+        assert svc.get_device_id() == "device-7"
+
+    def test_returns_none_when_unregistered(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        assert svc.get_device_id() is None
+
+
 class TestDeviceRegistrationServer:
     @pytest.mark.asyncio
     async def test_registers_with_server(self, tmp_path):

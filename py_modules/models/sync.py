@@ -17,7 +17,7 @@ remain the typed wire shape of the response, not a decision input.
 
 from __future__ import annotations
 
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 
 class ClientSaveState(TypedDict):
@@ -66,16 +66,6 @@ class SyncNegotiateResponse(TypedDict):
     total_no_op: int
 
 
-class SyncPlaySessionEntry(TypedDict):
-    """One play-session window reported alongside session completion (#1219)."""
-
-    start_time: str
-    end_time: str
-    duration_ms: int
-    rom_id: NotRequired[int | None]
-    save_slot: NotRequired[str | None]
-
-
 class SyncSession(TypedDict):
     """A sync session's server record (RomM ``SyncSessionSchema``)."""
 
@@ -94,11 +84,6 @@ class SyncSession(TypedDict):
 
 
 class SyncCompleteResponse(TypedDict):
-    """The server's response to ``POST /api/sync/sessions/{id}/complete``.
-
-    ``play_session_ingest`` is the optional play-session ingest summary (#1219),
-    typed loosely until play sessions are wired.
-    """
+    """The server's response to ``POST /api/sync/sessions/{id}/complete``."""
 
     session: SyncSession
-    play_session_ingest: NotRequired[dict[str, Any] | None]

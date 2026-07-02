@@ -456,6 +456,14 @@ export const getSettingsResetNotice = callable<[], { pending: boolean; backed_up
 // persists, so the QAM banner + game-detail cards stay down across reloads.
 export const dismissSettingsResetNotice = callable<[], { success: boolean }>("dismiss_settings_reset_notice");
 
+// Durable "re-sign-in for cross-device playtime" notice. The backend persists a
+// flag when a playtime reconcile is rejected because the Client API Token lacks
+// the `roms.user.read` scope; pending:true means the user should sign in again
+// to mint a scoped token. The flag clears itself once the scope is present (a
+// later successful reconcile, or a fresh sign-in), so this read is non-consuming
+// and pull-only — no backend dismiss callable, the QAM banner's Dismiss is local.
+export const getPlaytimeScopeNotice = callable<[], { pending: boolean }>("get_playtime_scope_notice");
+
 // End-of-session orchestration — collapses recordSessionEnd + syncAchievementsAfterSession
 // + postExitSync + refreshMigrationState into a single backend round-trip.
 // See SessionLifecycleService in py_modules/services/session_lifecycle.py.

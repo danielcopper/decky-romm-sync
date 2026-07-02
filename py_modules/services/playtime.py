@@ -1,49 +1,74 @@
-"""PlaytimeService — playtime tracking via RomM Notes API.
+"""PlaytimeService — playtime tracking via RomM's native play-session ingest.
 
 Owns per-ROM play sessions: opening a session, folding its duration into the
-``Playtime`` aggregate on close, and reconciling the local total with the
-shared RomM record (stored in a ROM note, since RomM has no playtime API). All
-durable state lives in the ``rom_playtime`` table behind the Unit of Work; all
-RomM communication goes through ``RommPlaytimeApi``. No ``import decky``.
+``Playtime`` aggregate on close, holding closed sessions in a durable outbox,
+flushing them to RomM's native ``/api/play-sessions`` (best-effort, offline-safe),
+and reconciling the local cumulative total against the cross-device server union
+(ADR-0018). It also owns the durable "re-sign-in to enable cross-device playtime"
+notice: a reconcile GET that 403s (the token predates the ``roms.user.read``
+scope) raises the flag; a later successful GET, or a fresh sign-in, clears it.
+All durable state lives in the ``rom_playtime`` / ``rom_playtime_sessions`` tables
+and the ``kv_config`` scalar surface behind the Unit of Work; all RomM
+communication goes through ``RommPlaytimeApi``. No ``import decky``.
 """
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from domain.playtime import Playtime, parse_playtime_note_content
+from domain.playtime import Playtime
+from lib.errors import RommForbiddenError
 from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
     import asyncio
     import logging
 
+    from models.play_sessions import PlaySessionIngestEntry
+
+    from domain.playtime import PendingSessionRow
     from services.protocols import (
         Clock,
         DebugLogger,
+        DeviceIdProvider,
         RetryStrategy,
         RommPlaytimeApi,
         UnitOfWorkFactory,
     )
+
+# RomM accepts at most 100 sessions per ingest POST. A larger backlog (offline
+# for many sessions) flushes incrementally: each launch/session-end/reconcile
+# drains up to this many, so a >100 outbox catches up across successive flushes.
+_FLUSH_BATCH_LIMIT = 100
+
+# A single outbox row that keeps drawing an ``error`` ingest verdict is
+# quarantined (dropped — only playtime is lost) once it reaches this many
+# failures, so one permanently-rejected session cannot wedge the whole outbox.
+_MAX_INGEST_ATTEMPTS = 5
+
+# Durable ``kv_config`` flag: set when a reconcile GET 403s (the token lacks the
+# ``roms.user.read`` scope), cleared on a later 200 or a fresh sign-in. The QAM
+# banner reads it via ``get_playtime_scope_notice``.
+_SCOPE_NOTICE_KEY = "playtime_scope_notice"
 
 
 @dataclass(frozen=True)
 class PlaytimeServiceConfig:
     """Frozen wiring bundle handed to ``PlaytimeService.__init__``.
 
-    Holds the Protocol-typed RomM adapter and retry strategy, the live
-    ``settings.json`` dict (home of the device label stamped onto synced
-    playtime notes), runtime infrastructure, the clock/debug-logger seams,
-    and the SQLite Unit-of-Work factory (the transactional seam over the
-    ``rom_playtime`` aggregate this service reads and writes).
+    Holds the Protocol-typed RomM adapter and retry strategy, the device-id
+    provider (the server identity that attributes native play-session ingests),
+    runtime infrastructure, the clock/debug-logger seams, and the SQLite
+    Unit-of-Work factory (the transactional seam over the ``rom_playtime``
+    aggregate and the ``kv_config`` scope-notice flag this service reads and
+    writes).
     """
 
     romm_api: RommPlaytimeApi
     retry: RetryStrategy
-    settings: dict[str, Any]
+    device_id_provider: DeviceIdProvider
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     clock: Clock
@@ -56,15 +81,32 @@ def _empty_reconcile_result(*, server_query_failed: bool) -> dict[str, Any]:
     return {"total_seconds": 0, "session_count": 0, "server_query_failed": server_query_failed}
 
 
-class PlaytimeService:
-    """Playtime tracking: record sessions and reconcile with RomM notes."""
+def _coerce_duration_ms(row: object) -> int:
+    """Return a server play-session row's ``duration_ms`` as an int, else ``0``.
 
-    PLAYTIME_NOTE_TITLE = "romm-sync:playtime"
+    The cross-device union spans every Device-Sync client, so a stored row may
+    carry ``duration_ms: null`` or a non-numeric value (or not be a dict at all).
+    Coercing defensively keeps one malformed row from crashing the whole reconcile
+    sum — this never raises. Booleans are treated as non-numeric so ``True`` does
+    not silently count as 1ms.
+    """
+    if not isinstance(row, dict):
+        return 0
+    value = row.get("duration_ms")
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    return 0
+
+
+class PlaytimeService:
+    """Playtime tracking: record sessions, flush the outbox, and reconcile with RomM."""
 
     def __init__(self, *, config: PlaytimeServiceConfig) -> None:
         self._romm_api = config.romm_api
         self._retry = config.retry
-        self._settings = config.settings
+        self._device_id_provider = config.device_id_provider
         self._loop = config.loop
         self._logger = config.logger
         self._clock = config.clock
@@ -72,117 +114,7 @@ class PlaytimeService:
         self._uow_factory = config.uow_factory
 
     # ------------------------------------------------------------------
-    # Playtime Notes API Helpers
-    # ------------------------------------------------------------------
-
-    def _get_playtime_note(self, rom_id: int) -> dict[str, Any] | None:
-        """Fetch the playtime note for a ROM via the save API protocol.
-
-        Reads ``all_user_notes`` from ROM detail and filters by title.
-        """
-        rom_detail = self._romm_api.get_rom_with_notes(rom_id)
-        if not isinstance(rom_detail, dict):
-            return None
-        notes = rom_detail.get("all_user_notes", [])
-        if not isinstance(notes, list):
-            return None
-        for note in notes:
-            if note.get("title") == self.PLAYTIME_NOTE_TITLE:
-                return note
-        return None
-
-    def _create_playtime_note(self, rom_id: int, playtime_data: dict[str, Any]) -> dict[str, Any]:
-        """Create a new playtime note for a ROM."""
-        return self._romm_api.create_note(
-            rom_id,
-            {
-                "title": self.PLAYTIME_NOTE_TITLE,
-                "content": json.dumps(playtime_data),
-                "is_public": False,
-            },
-        )
-
-    def _update_playtime_note(self, rom_id: int, note_id: int, playtime_data: dict[str, Any]) -> dict[str, Any]:
-        """Update an existing playtime note."""
-        return self._romm_api.update_note(
-            rom_id,
-            note_id,
-            {"content": json.dumps(playtime_data)},
-        )
-
-    def _sync_playtime_to_romm_io(self, rom_id: int, session_duration_sec: int) -> None:
-        """Push playtime to RomM via the Notes API after a session.
-
-        Reads the current local total from its own short read UoW, fetches the
-        server note, merges (server baseline plus this session, or the local
-        total, whichever is higher), and creates/updates the note — all RomM
-        I/O happens outside any transaction. A single short write UoW then
-        links the created note id and reconciles the aggregate's total to the
-        merged value. Best-effort — errors are logged, not raised.
-
-        Synchronous worker: the SQLite connection has thread affinity, so the
-        UoW must run inside the ``run_in_executor`` worker, not on the loop.
-        """
-        rom_id = int(rom_id)
-
-        with self._uow_factory() as uow:
-            entry = uow.playtime.get(rom_id)
-        if not entry:
-            return
-
-        local_total = entry.total_seconds
-        device_name = self._settings.get("device_name") or ""
-
-        try:
-            note = self._retry.with_retry(self._get_playtime_note, rom_id)
-            server_seconds = 0
-            note_id = None
-
-            if note:
-                note_id = note.get("id")
-                server_data = parse_playtime_note_content(note.get("content", ""))
-                if server_data:
-                    server_seconds = int(server_data.get("seconds", 0))
-
-            # Merge: server baseline + this session, or local total, whichever is higher
-            new_total = max(local_total, server_seconds + session_duration_sec)
-
-            playtime_data = {
-                "seconds": new_total,
-                "updated": self._clock.now().isoformat(),
-                "device": device_name,
-            }
-
-            created_note_id = None
-            if note_id:
-                self._retry.with_retry(self._update_playtime_note, rom_id, note_id, playtime_data)
-            else:
-                result = self._retry.with_retry(self._create_playtime_note, rom_id, playtime_data)
-                if isinstance(result, dict) and result.get("id"):
-                    created_note_id = result["id"]
-
-            self._commit_reconciled_total(rom_id, new_total, created_note_id)
-
-        except Exception as e:
-            self._log_debug(f"Failed to sync playtime to RomM for rom {rom_id}: {e}")
-
-    def _commit_reconciled_total(self, rom_id: int, new_total: int, created_note_id: int | None) -> None:
-        """Fold the merged total (and any freshly-created note id) into the aggregate.
-
-        Re-reads the aggregate inside its own short write UoW — if the row was
-        removed between the RomM round-trip and now, this is a no-op.
-        """
-        with self._uow_factory() as uow:
-            entry = uow.playtime.get(rom_id)
-            if entry is None:
-                return
-            if created_note_id is not None:
-                entry.link_note(created_note_id)
-            entry.reconcile_total(new_total)
-            uow.playtime.save(rom_id, entry)
-
-    # ------------------------------------------------------------------
-    # Public methods
+    # Session recording
     # ------------------------------------------------------------------
 
     def record_session_start(self, rom_id: int) -> dict[str, Any]:
@@ -210,9 +142,9 @@ class PlaytimeService:
         Only handles playtime — save sync is handled separately. ``suspended_seconds``
         is the wall-clock time the device spent suspended during the session; it
         is subtracted from the raw elapsed span so suspend time is not counted as
-        play. The work runs in an executor: the durable fold happens in a short
-        write UoW (the SQLite connection has thread affinity), then the RomM note
-        push runs best-effort outside any transaction.
+        play. The work runs in an executor: the durable fold + outbox enqueue
+        happen in a short write UoW (the SQLite connection has thread affinity),
+        then the native ingest flush runs best-effort outside any transaction.
         """
         return await self._loop.run_in_executor(None, self._record_session_end_io, int(rom_id), suspended_seconds)
 
@@ -220,40 +152,61 @@ class PlaytimeService:
         """Synchronous twin of :meth:`record_session_end` (runs in the executor).
 
         Phase A — fold the closed session (minus ``suspended_seconds``) into the
-        aggregate in a short write UoW. Phase B — push the merged total to RomM
-        outside the transaction (best-effort). Returns the same dict shape the
-        frontend consumes: ``success`` plus ``duration_sec`` / ``total_seconds`` /
-        ``session_count`` on the happy path, or ``success: False`` with a
-        ``message`` otherwise.
+        aggregate and, when this device is registered, enqueue the session into
+        the outbox, both in one short write UoW. Phase B — flush the outbox to
+        RomM's native ingest outside the transaction (best-effort). Returns the
+        same dict shape the frontend consumes: ``success`` plus ``duration_sec``
+        / ``total_seconds`` / ``session_count`` on the happy path, or
+        ``success: False`` with a ``message`` otherwise.
         """
+        ended_at = self._clock.now().isoformat()
+        # Read the device id BEFORE opening the write UoW: get_device_id opens its
+        # own DeviceRegistry UoW, and a nested BEGIN IMMEDIATE inside our open
+        # write transaction would self-deadlock on the write lock.
+        device_id = self._device_id_provider.get_device_id()
         try:
             with self._uow_factory() as uow:
                 entry = uow.playtime.get(rom_id)
                 if entry is None or not entry.last_session_start:
                     return {"success": False, "reason": "no_active_session", "message": "No active session"}
+                # Capture the start BEFORE record_session clears it — it keys the
+                # outbox row and RomM's dedup.
+                started_at = entry.last_session_start
                 try:
-                    entry.record_session(self._clock.now().isoformat(), suspended_seconds=suspended_seconds)
+                    entry.record_session(ended_at, suspended_seconds=suspended_seconds)
                 except ValueError:
                     return {
                         "success": False,
                         "reason": ErrorCode.UNKNOWN.value,
                         "message": "Failed to calculate session duration",
                     }
-                uow.playtime.save(rom_id, entry)
                 duration = entry.last_session_duration_sec or 0
+                if device_id:
+                    entry.enqueue_session(
+                        device_id=device_id,
+                        start_time=started_at,
+                        end_time=ended_at,
+                        duration_ms=duration * 1000,
+                    )
+                else:
+                    # Unregistered device: fold locally, never enqueue (an empty
+                    # device id must never reach the wire, ADR-0018 decision #8).
+                    self._log_debug(f"record_session_end: rom {rom_id} not enqueued — device unregistered")
+                uow.playtime.save(rom_id, entry)
                 total_seconds = entry.total_seconds
                 session_count = entry.session_count
         except sqlite3.IntegrityError as e:
             self._log_debug(f"Failed to record session end for rom {rom_id}: {e}")
             return {"success": False, "reason": "unknown_rom", "message": "Unknown ROM"}
 
-        # Best-effort sync playtime to RomM server notes (outside the UoW). A
-        # failure here is non-fatal (the local total is already persisted), but
-        # log it at debug so the swallow leaves a breadcrumb (#971).
+        # Best-effort native-ingest flush (outside the UoW). _flush_pending_sessions_io
+        # is itself never-raising, but the outer catch stays as defence-in-depth so a
+        # future regression there can never escape and discard this successful record
+        # (the local total and the outbox are already persisted; #971 breadcrumb).
         try:
-            self._sync_playtime_to_romm_io(rom_id, duration)
+            self._flush_pending_sessions_io()
         except Exception as e:
-            self._log_debug(f"record_session_end: playtime-to-RomM sync failed (non-fatal) for rom {rom_id}: {e}")
+            self._log_debug(f"record_session_end: play-session flush failed (non-fatal) for rom {rom_id}: {e}")
 
         return {
             "success": True,
@@ -261,6 +214,173 @@ class PlaytimeService:
             "total_seconds": total_seconds,
             "session_count": session_count,
         }
+
+    # ------------------------------------------------------------------
+    # Outbox flush (native ingest)
+    # ------------------------------------------------------------------
+
+    async def flush_pending_sessions(self) -> None:
+        """Flush the pending-session outbox to RomM's native ingest (best-effort).
+
+        Scheduled as a fire-and-forget background task (e.g. on session start)
+        so an offline backlog catches up on the next reconnect. Not a Decky
+        callable — internal orchestration only.
+        """
+        await self._loop.run_in_executor(None, self._flush_pending_sessions_io)
+
+    def _flush_pending_sessions_io(self) -> None:
+        """Synchronous twin of :meth:`flush_pending_sessions` (runs in the executor).
+
+        Never raises: a flush is best-effort and offline-safe, so any failure
+        (a locked UoW, a transport error, a malformed response) is logged at
+        debug and swallowed — the outbox stays intact and catches up on the next
+        flush. The actual gather/POST/dequeue work lives in
+        :meth:`_flush_pending_sessions_worker`; this wrapper is the single
+        never-raise boundary both callers (session-end, reconcile) rely on.
+        """
+        try:
+            self._flush_pending_sessions_worker()
+        except Exception as e:
+            self._log_debug(f"Play-session flush failed (non-fatal): {e}")
+
+    def _flush_pending_sessions_worker(self) -> None:
+        """Gather → POST-per-device → dequeue the outbox (may raise; wrapped above).
+
+        Reads up to ``_FLUSH_BATCH_LIMIT`` outbox rows directly (O(pending), not
+        O(library)), groups them by the row's stored ``device_id`` (each ingest
+        POST carries exactly one device_id), and for each group POSTs to
+        ``/api/play-sessions`` strictly between the two UoWs (never holding a
+        transaction across network I/O, ADR-0006). Accepted rows (``created`` /
+        ``duplicate``) dequeue; ``error`` rows increment their attempt counter
+        and are quarantined once they exhaust ``_MAX_INGEST_ATTEMPTS``; rows
+        absent from the response stay queued untouched.
+        """
+        with self._uow_factory() as uow:
+            rows = uow.playtime.iter_pending_sessions(_FLUSH_BATCH_LIMIT)
+        if not rows:
+            return
+
+        groups: dict[str, list[PendingSessionRow]] = {}
+        for row in rows:
+            groups.setdefault(row.device_id, []).append(row)
+
+        sent_by_rom: dict[int, list[str]] = {}
+        failed_by_rom: dict[int, list[str]] = {}
+        quarantine_by_rom: dict[int, list[str]] = {}
+        undrained: list[PendingSessionRow] = []
+
+        for device_id, group in groups.items():
+            self._flush_device_group(
+                device_id,
+                group,
+                sent_by_rom=sent_by_rom,
+                failed_by_rom=failed_by_rom,
+                quarantine_by_rom=quarantine_by_rom,
+                undrained=undrained,
+            )
+
+        if undrained:
+            undrained_roms = sorted({row.rom_id for row in undrained})
+            self._log_debug(
+                f"Play-session flush: {len(undrained)} submitted session(s) not accepted; roms {undrained_roms}"
+            )
+
+        if not (sent_by_rom or failed_by_rom or quarantine_by_rom):
+            return
+
+        self._apply_flush_outcome(sent_by_rom, failed_by_rom, quarantine_by_rom)
+
+    def _flush_device_group(
+        self,
+        device_id: str,
+        group: list[PendingSessionRow],
+        *,
+        sent_by_rom: dict[int, list[str]],
+        failed_by_rom: dict[int, list[str]],
+        quarantine_by_rom: dict[int, list[str]],
+        undrained: list[PendingSessionRow],
+    ) -> None:
+        """POST one device's batch and sort each row into sent / failed / quarantine.
+
+        A transport failure on the POST is non-fatal (mirrors
+        ``_close_negotiate_session``): the group's rows stay queued and retry on
+        the next flush. Per-row verdicts are correlated back by the response
+        ``index`` (position in this group's submitted batch).
+        """
+        batch: list[PlaySessionIngestEntry] = [
+            {
+                "rom_id": row.rom_id,
+                "start_time": row.start_time,
+                "end_time": row.end_time,
+                "duration_ms": row.duration_ms,
+            }
+            for row in group
+        ]
+        try:
+            response = self._romm_api.ingest_play_sessions(device_id, batch)
+        except Exception as e:
+            # No service-level retry wrap — a flush failure is non-fatal and
+            # catches up next time. The whole group stays queued.
+            self._log_debug(f"Play-session ingest failed (non-fatal): {e}")
+            undrained.extend(group)
+            return
+
+        status_by_index: dict[int, str] = {}
+        for result in response.get("results", []):
+            index = result.get("index", -1)
+            if 0 <= index < len(group):
+                # ``status`` is the per-row verdict; a malformed row missing it
+                # falls through to "not accepted" (stays queued) below.
+                status_by_index[index] = result.get("status")
+
+        for index, row in enumerate(group):
+            status = status_by_index.get(index)
+            if status in ("created", "duplicate"):
+                # Both are successful ingests — dequeue.
+                sent_by_rom.setdefault(row.rom_id, []).append(row.start_time)
+                continue
+            undrained.append(row)
+            if status == "error":
+                if row.attempts + 1 >= _MAX_INGEST_ATTEMPTS:
+                    quarantine_by_rom.setdefault(row.rom_id, []).append(row.start_time)
+                    self._logger.warning(
+                        f"Dropping play session for rom {row.rom_id} (start={row.start_time}) after "
+                        f"{row.attempts + 1} failed ingest attempts — unrecoverable, only playtime is lost"
+                    )
+                else:
+                    failed_by_rom.setdefault(row.rom_id, []).append(row.start_time)
+            # A row absent from the response (no status) stays queued untouched —
+            # a transient omission, not a rejection, so its attempt count is not bumped.
+
+    def _apply_flush_outcome(
+        self,
+        sent_by_rom: dict[int, list[str]],
+        failed_by_rom: dict[int, list[str]],
+        quarantine_by_rom: dict[int, list[str]],
+    ) -> None:
+        """Persist the flush verdicts in one short write UoW.
+
+        For each affected ROM: dequeue accepted sessions, drop quarantined ones,
+        and bump the attempt counter on the rest. Each start_time falls into
+        exactly one bucket, so the three mutations never contend for a row.
+        """
+        rom_ids = set(sent_by_rom) | set(failed_by_rom) | set(quarantine_by_rom)
+        with self._uow_factory() as uow:
+            for rid in rom_ids:
+                pt = uow.playtime.get(rid)
+                if pt is None:
+                    continue
+                if rid in sent_by_rom:
+                    pt.mark_sessions_sent(sent_by_rom[rid])
+                if rid in quarantine_by_rom:
+                    pt.quarantine_sessions(quarantine_by_rom[rid])
+                if rid in failed_by_rom:
+                    pt.record_ingest_failure(failed_by_rom[rid])
+                uow.playtime.save(rid, pt)
+
+    # ------------------------------------------------------------------
+    # Reads
+    # ------------------------------------------------------------------
 
     def get_all_playtime(self) -> dict[str, Any]:
         """Return all local playtime entries keyed by rom_id string.
@@ -278,53 +398,95 @@ class PlaytimeService:
                 }
             }
 
-    async def reconcile_playtime(self, rom_id: int) -> dict[str, Any]:
-        """Pull the shared RomM-note total into the local row on detail-page view.
+    def get_scope_notice(self) -> dict[str, bool]:
+        """Report whether the playtime read-scope re-sign-in notice is pending.
 
-        Read-only against the server: fetches the playtime note and folds its
-        total into the ``Playtime`` aggregate via ``reconcile_total`` (the clamp
-        never regresses local play). Unlike the session-end path this never
-        writes a note — it only catches the local row up to a server record that
-        moved ahead on another device. The work runs in an executor (the SQLite
-        connection has thread affinity).
+        Reads the durable ``kv_config`` flag set when a reconcile GET 403s (the
+        token predates the ``roms.user.read`` scope). Non-consuming — the flag
+        survives a reload and is cleared only by a later successful GET or a fresh
+        sign-in — so the QAM banner stays up until the user re-authenticates.
+        """
+        with self._uow_factory() as uow:
+            pending = uow.kv_config.get(_SCOPE_NOTICE_KEY) is not None
+        return {"pending": pending}
+
+    def clear_scope_notice(self) -> None:
+        """Clear the durable playtime read-scope re-sign-in notice (idempotent).
+
+        Public seam so ConnectionService can drop the flag on a fresh sign-in
+        (the new token carries ``roms.user.read``); reconcile also calls it after
+        a successful GET. Reads first and only deletes when set, so a clean state
+        adds no needless write.
+        """
+        with self._uow_factory() as uow:
+            if uow.kv_config.get(_SCOPE_NOTICE_KEY) is not None:
+                uow.kv_config.delete(_SCOPE_NOTICE_KEY)
+
+    def _set_scope_notice(self) -> None:
+        """Raise the durable playtime read-scope re-sign-in notice."""
+        with self._uow_factory() as uow:
+            uow.kv_config.set(_SCOPE_NOTICE_KEY, "1")
+
+    async def reconcile_playtime(self, rom_id: int) -> dict[str, Any]:
+        """Pull the cross-device server total into the local row on detail-page view.
+
+        Flushes the outbox first, then reads the ROM's native play-session
+        history and folds its summed total into the ``Playtime`` aggregate via
+        ``reconcile_total`` (the clamp never regresses local play — ``max()``).
+        Read-only against the aggregate's server view; it never ingests here.
+        The work runs in an executor (the SQLite connection has thread affinity).
         """
         return await self._loop.run_in_executor(None, self._reconcile_playtime_io, int(rom_id))
 
     def _reconcile_playtime_io(self, rom_id: int) -> dict[str, Any]:
         """Synchronous twin of :meth:`reconcile_playtime` (runs in the executor).
 
-        Fetches the note outside any transaction, then folds its total into the
+        Flushes the outbox (so freshly-recorded local sessions are in the server
+        union), fetches the ROM's play-session history outside any transaction,
+        sums ``duration_ms`` into whole seconds, then folds that into the
         aggregate in a short write UoW. Returns the partial-success shape
-        ``{total_seconds, session_count, server_query_failed}``: ``total``/
+        ``{total_seconds, session_count, server_query_failed}``: ``total`` /
         ``count`` come from the resulting (or existing) local row, and
         ``server_query_failed`` flags an unreachable server. Never raises out of
-        the callable — a fetch failure or an orphan ``rom_id`` (no ``roms`` row)
-        degrades to the local row's values.
+        the callable — a fetch failure, a not-yet-scoped token (403 → durable
+        re-sign-in notice, local-only degrade), or an orphan ``rom_id`` (no
+        ``roms`` row) reports the local row's values.
         """
+        # Drain the outbox so a session recorded moments ago is already part of
+        # the server union we are about to read back. The flush never raises.
+        self._flush_pending_sessions_io()
+
         try:
-            note = self._retry.with_retry(self._get_playtime_note, rom_id)
+            sessions = self._retry.with_retry(self._romm_api.list_play_sessions, rom_id)
+        except RommForbiddenError:
+            # The token predates the roms.user.read scope (#1280): the GET is
+            # forbidden, not merely unreachable. Raise the durable re-sign-in
+            # notice and degrade to local-only.
+            self._set_scope_notice()
+            self._log_debug(
+                f"Reconcile for rom {rom_id}: token lacks roms.user.read — re-sign-in needed for cross-device playtime"
+            )
+            return self._local_playtime_result(rom_id, server_query_failed=True)
         except Exception as e:
             self._log_debug(f"Failed to reconcile playtime for rom {rom_id}: {e}")
             return self._local_playtime_result(rom_id, server_query_failed=True)
 
-        if note is None:
-            # No server record — do not seed an empty row; report the local row.
-            result = self._local_playtime_result(rom_id, server_query_failed=False)
-            self._log_debug(
-                f"Reconciled playtime for rom {rom_id}: no server note, kept local total={result['total_seconds']}s"
-            )
-            return result
+        # A successful GET means the token now carries the read scope — clear any
+        # stale re-sign-in notice a prior 403 left behind.
+        self.clear_scope_notice()
 
-        server_data = parse_playtime_note_content(note.get("content", ""))
-        server_seconds = int(server_data.get("seconds", 0)) if server_data else 0
-        note_id = note.get("id")
+        server_total_seconds = sum(_coerce_duration_ms(s) for s in sessions) // 1000
 
         try:
             with self._uow_factory() as uow:
-                pt = uow.playtime.get(rom_id) or Playtime()
-                pt.reconcile_total(server_seconds)
-                if note_id is not None:
-                    pt.link_note(note_id)
+                entry = uow.playtime.get(rom_id)
+                if server_total_seconds == 0 and entry is None:
+                    # No server data and no local row — report zero, do not seed
+                    # an empty ``rom_playtime`` row.
+                    self._log_debug(f"Reconciled playtime for rom {rom_id}: no server sessions, no local row")
+                    return _empty_reconcile_result(server_query_failed=False)
+                pt = entry or Playtime()
+                pt.reconcile_total(server_total_seconds)
                 uow.playtime.save(rom_id, pt)
                 total_seconds = pt.total_seconds
                 session_count = pt.session_count
@@ -335,8 +497,7 @@ class PlaytimeService:
             return _empty_reconcile_result(server_query_failed=False)
 
         self._log_debug(
-            f"Reconciled playtime for rom {rom_id}: server={server_seconds}s "
-            f"note_id={note_id} -> total={total_seconds}s"
+            f"Reconciled playtime for rom {rom_id}: server={server_total_seconds}s -> total={total_seconds}s"
         )
         return {
             "total_seconds": total_seconds,

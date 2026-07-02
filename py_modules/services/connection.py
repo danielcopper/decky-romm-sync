@@ -27,7 +27,12 @@ if TYPE_CHECKING:
     import asyncio
     import logging
 
-    from services.protocols import DeviceForgetFn, RommConnectionApi, SettingsPersister
+    from services.protocols import (
+        DeviceForgetFn,
+        PlaytimeScopeNoticeClearFn,
+        RommConnectionApi,
+        SettingsPersister,
+    )
 
 
 _FORBIDDEN_TOKEN_MESSAGE = (
@@ -42,10 +47,11 @@ class ConnectionServiceConfig:
 
     Carries the live settings dict, the RomM API Protocol, the settings
     persister, the runtime infrastructure (event loop, logger), the
-    minimum-version policy tuple, and the device-forget callback fired on a
-    server-origin change. Bundled here so the ctor stays within the S107
-    parameter budget and so the version constant stays declared once at the
-    plugin entrypoint.
+    minimum-version policy tuple, the device-forget callback fired on a
+    server-origin change, and the playtime scope-notice clear callback fired on
+    a fresh sign-in. Bundled here so the ctor stays within the S107 parameter
+    budget and so the version constant stays declared once at the plugin
+    entrypoint.
     """
 
     settings: dict[str, Any]
@@ -55,6 +61,7 @@ class ConnectionServiceConfig:
     logger: logging.Logger
     min_required_version: tuple[int, ...]
     forget_device: DeviceForgetFn
+    clear_playtime_scope_notice: PlaytimeScopeNoticeClearFn
 
 
 class ConnectionService:
@@ -68,6 +75,7 @@ class ConnectionService:
         self._logger = config.logger
         self._min_required_version = config.min_required_version
         self._forget_device = config.forget_device
+        self._clear_playtime_scope_notice = config.clear_playtime_scope_notice
 
     async def test_connection(self) -> dict[str, Any]:
         """Probe the configured server and return a frontend-shaped result dict.
@@ -227,8 +235,22 @@ class ConnectionService:
             return error_response(e)
 
         await self._forget_device_on_origin_change(old_token_origin, trimmed)
+        await self._clear_playtime_scope_notice_best_effort()
 
         return self._success_result(version)
+
+    async def _clear_playtime_scope_notice_best_effort(self) -> None:
+        """Clear the durable playtime read-scope notice after a fresh sign-in.
+
+        The freshly minted token carries ``roms.user.read`` (#1280), so any "sign
+        in again to enable cross-device playtime" notice a prior 403 raised is now
+        stale. Best-effort + local-only: a clear failure must never turn a
+        successful sign-in into a failure.
+        """
+        try:
+            await self._loop.run_in_executor(None, self._clear_playtime_scope_notice)
+        except Exception as e:
+            self._logger.warning(f"Could not clear playtime scope notice after sign-in: {e}")
 
     async def _forget_device_on_origin_change(self, old_token_origin: str | None, new_url: str) -> None:
         """Forget the registered device id when the sign-in origin changed.

@@ -35,6 +35,7 @@ import { scrollToTop } from "../utils/scrollHelpers";
 import { getDownloadState } from "../utils/downloadStore";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
 import { getSettingsResetState, onSettingsResetChange } from "../utils/settingsResetStore";
+import { getPlaytimeScopeState, onPlaytimeScopeChange, fetchPlaytimeScopeState } from "../utils/playtimeScopeStore";
 import {
   getSaveSortMigrationState,
   onSaveSortMigrationChange,
@@ -47,6 +48,7 @@ import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { WarningCard } from "./WarningCard";
 import { MigrationBlockedPage } from "./MigrationBlockedPage";
 import { SettingsResetBanner } from "./SettingsResetBanner";
+import { PlaytimeScopeBanner } from "./PlaytimeScopeBanner";
 import type {
   SyncProgress,
   SyncStage,
@@ -190,6 +192,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [retrodeckBanner, setRetrodeckBanner] = useState<RetroDeckBanner | null>(null);
   const [migration, setMigration] = useState<MigrationStatus>(getMigrationState());
   const [settingsReset, setSettingsReset] = useState(getSettingsResetState());
+  const [playtimeScope, setPlaytimeScope] = useState(getPlaytimeScopeState());
   const [saveSortMigration, setSaveSortMigration] = useState(getSaveSortMigrationState());
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -232,6 +235,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       .then((s) => setRetrodeckBanner(retroDeckBanner(s.status, s)))
       .catch((e) => logError(`Failed to query RetroDECK status: ${e}`));
 
+    // Cross-device playtime scope notice. The backend sets a durable flag when a
+    // playtime reconcile is rejected for a token missing `roms.user.read`; it
+    // self-clears once a scoped token is minted, so we re-read it on every mount.
+    fetchPlaytimeScopeState().catch((e) => logError(`Failed to check playtime scope notice: ${e}`));
+
     // Backend is authoritative for in-flight sync state. Seed the module
     // store from get_sync_status() so a QAM close/reopen recovers the live
     // run rather than guessing from the event-fed store alone.
@@ -273,11 +281,13 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
 
     const unsubMigration = onMigrationChange(() => setMigration(getMigrationState()));
     const unsubSettingsReset = onSettingsResetChange(() => setSettingsReset(getSettingsResetState()));
+    const unsubPlaytimeScope = onPlaytimeScopeChange(() => setPlaytimeScope(getPlaytimeScopeState()));
     const unsubSaveSort = onSaveSortMigrationChange(() => setSaveSortMigration(getSaveSortMigrationState()));
     return () => {
       unsubProgress();
       unsubMigration();
       unsubSettingsReset();
+      unsubPlaytimeScope();
       unsubSaveSort();
       if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
       if (downloadPollRef.current) clearInterval(downloadPollRef.current);
@@ -610,6 +620,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   return (
     <>
       {settingsReset.pending && <SettingsResetBanner backedUpTo={settingsReset.backedUpTo} />}
+      {playtimeScope.pending && <PlaytimeScopeBanner />}
       <PanelSection title="Status">
         {retrodeckBanner && (
           <PanelSectionRow>

@@ -158,14 +158,25 @@ message, re-enter your server URL and sign in again in the plugin settings.
 The plugin tracks playtime per game. Session start and end times are recorded, and device suspend/resume is accounted
 for (sleep time is excluded). Playtime is displayed on the game detail page next to the save sync status.
 
+Each finished session is sent to RomM's built-in play-session store, so your `last_played` time shows correctly in the
+RomM web UI. This is separate from save sync — playtime is recorded for **every** game on every exit, even when save
+sync is off. If RomM is unreachable, the session is queued locally and uploaded automatically the next time you launch a
+game or reconnect (nothing is lost).
+
 The displayed playtime refreshes live: when you finish a session the PLAYTIME value updates on the same detail page
 without needing to navigate away and back. Opening a game's detail page also reconciles playtime with RomM — if you
-played the same game on another device, that device's total is folded in (the higher of the two totals wins, so playtime
-never goes backwards) and shown as soon as the page loads. This reconcile is pull-only and never overwrites the server's
-record; it works independently of whether save sync is enabled. When RomM is unreachable the displayed value stays on
-your local total.
+played the same game on another device, that device's play is folded in (the total only ever goes up, never backwards)
+and shown as soon as the page loads. Cross-device reconcile needs a RomM server version that grants the play-session
+read scope and a fresh sign-in; until then the displayed value is your local total. **After upgrading, sign in again to
+enable cross-device playtime** — the plugin shows a banner in the QAM panel prompting this whenever your saved login
+predates the play-session read scope. When RomM is unreachable the displayed value stays on your local total.
 
 Steam also tracks playtime natively for non-Steam shortcuts, so you'll see playtime in the standard Steam UI as well.
+
+> **Upgrading from an older version:** earlier releases stored playtime in a hidden RomM note named
+> `romm-sync:playtime`. The plugin no longer uses these notes and starts fresh with the native store — your local total
+> is preserved and keeps showing until the server re-accumulates. The old notes are left on the server, harmless; you
+> can delete them yourself from RomM if you like.
 
 ## Save File Location
 

@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from fakes.fake_romm_api import FakeRommApi
+
+if TYPE_CHECKING:
+    from models.play_sessions import PlaySessionIngestEntry
 from services.protocols.transport import (
     RommAchievementsApi,
     RommConnectionApi,
@@ -33,7 +38,7 @@ class TestConstruction:
         assert api.virtual_collections == {}
         assert api.devices == []
         assert api.saves == {}
-        assert api.notes == {}
+        assert api.play_sessions == {}
         assert api.call_log == []
 
     def test_call_log_records_method_calls(self) -> None:
@@ -119,13 +124,43 @@ class TestSeededReads:
         api = FakeRommApi()
         assert api.get_rom(42) == {"id": 42}
 
-    def test_get_rom_with_notes_includes_seeded_notes(self) -> None:
+    def test_list_play_sessions_returns_seeded_history(self) -> None:
         api = FakeRommApi()
-        api.roms = {1: {"id": 1, "name": "Tetris"}}
-        api.notes = {1: [{"id": 100, "rom_id": 1, "user_id": 7, "note_raw_markdown": "hi"}]}
-        detail = api.get_rom_with_notes(1)
-        assert detail["name"] == "Tetris"
-        assert detail["all_user_notes"][0]["id"] == 100
+        api.play_sessions = {1: [{"id": 100, "rom_id": 1, "duration_ms": 900}]}
+        assert api.list_play_sessions(1) == [{"id": 100, "rom_id": 1, "duration_ms": 900}]
+
+
+class TestPlaySessionIngest:
+    """The native play-session ingest stores, dedupes, and reads back."""
+
+    def test_ingest_creates_and_lists(self) -> None:
+        api = FakeRommApi()
+        sessions: list[PlaySessionIngestEntry] = [
+            {"rom_id": 1, "start_time": "s1", "end_time": "e1", "duration_ms": 600}
+        ]
+        resp = api.ingest_play_sessions("dev-1", sessions)
+        assert resp["created_count"] == 1
+        assert resp["skipped_count"] == 0
+        assert resp["results"][0] == {"index": 0, "status": "created", "id": 3000}
+        assert api.list_play_sessions(1)[0]["duration_ms"] == 600
+
+    def test_reingest_same_window_is_duplicate(self) -> None:
+        api = FakeRommApi()
+        entry: PlaySessionIngestEntry = {"rom_id": 1, "start_time": "s1", "end_time": "e1", "duration_ms": 600}
+        api.ingest_play_sessions("dev-1", [entry])
+        resp = api.ingest_play_sessions("dev-1", [entry])
+        assert resp["skipped_count"] == 1
+        assert resp["results"][0]["status"] == "duplicate"
+        # No second stored row for the duplicate.
+        assert len(api.list_play_sessions(1)) == 1
+
+    def test_different_device_same_window_is_additive(self) -> None:
+        api = FakeRommApi()
+        entry: PlaySessionIngestEntry = {"rom_id": 1, "start_time": "s1", "end_time": "e1", "duration_ms": 600}
+        api.ingest_play_sessions("dev-1", [entry])
+        resp = api.ingest_play_sessions("dev-2", [entry])
+        assert resp["created_count"] == 1
+        assert len(api.list_play_sessions(1)) == 2
 
 
 class TestDownloads:

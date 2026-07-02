@@ -1,4 +1,4 @@
-"""In-memory ``RommSaveApi`` (save/note methods) implementation for service tests."""
+"""In-memory ``RommSaveApi`` + ``RommPlaytimeApi`` implementation for service tests."""
 
 from __future__ import annotations
 
@@ -9,21 +9,25 @@ from typing import TYPE_CHECKING, Any
 from fakes._romm_save_semantics import check_add_save_conflict, compute_is_current, tag_filename
 
 if TYPE_CHECKING:
+    from models.play_sessions import (
+        PlaySessionIngestEntry,
+        PlaySessionIngestResponse,
+        PlaySessionIngestResult,
+    )
     from models.sync import (
         ClientSaveState,
         SyncCompleteResponse,
         SyncNegotiateResponse,
         SyncOperation,
-        SyncPlaySessionEntry,
     )
 
     from services.protocols import SaveFileStore
 
 
 class FakeSaveApi:
-    """In-memory fake that satisfies ``RommSaveApi`` save/note methods without HTTP.
+    """In-memory fake that satisfies ``RommSaveApi`` save methods without HTTP.
 
-    Only save, note, and download_save methods are implemented.
+    Only save/download/negotiate/device methods are implemented.
     ROM, firmware, and platform methods raise NotImplementedError — use MagicMock()
     when those methods are needed.
 
@@ -38,8 +42,6 @@ class FakeSaveApi:
     def __init__(self, save_file_store: SaveFileStore | None = None) -> None:
         self.save_file_store: SaveFileStore | None = save_file_store
         self.saves: dict[int, dict[str, Any]] = {}  # save_id -> save dict
-        self.roms: dict[int, dict[str, Any]] = {}  # rom_id -> rom detail dict
-        self.notes: dict[int, list[dict[str, Any]]] = {}  # rom_id -> [note dicts]
         self.uploaded_files: dict[int, str] = {}  # save_id -> source file_path (log only)
         self.downloaded_files: dict[int, str] = {}  # save_id -> dest_path (log only)
         self._save_content: dict[int, bytes] = {}  # save_id -> server-side bytes
@@ -48,9 +50,14 @@ class FakeSaveApi:
         # each save's ``device_syncs`` (and is_current) from it, and the
         # add_save 409 gate reads it. Seed directly via ``stage_device_sync``.
         self._device_sync_ledger: dict[tuple[str, int], str] = {}
+        # Native play-session store (ADR-0018): rom_id -> stored session dicts.
+        # ``ingest_play_sessions`` appends here and dedupes on
+        # ``(device_id, rom_id, start_time)``.
+        self.play_sessions: dict[int, list[dict[str, Any]]] = {}
+        self._play_session_ledger: set[tuple[str, int, str]] = set()
         self.call_log: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
         self._next_save_id = 1000
-        self._next_note_id = 2000
+        self._next_play_session_id = 3000
         self._fail_on_next: Exception | None = None
         self._fail_download_on: dict[int, Exception] = {}  # save_id -> exc for download_save_content
         self.heartbeat_raises: Exception | None = None
@@ -340,7 +347,6 @@ class FakeSaveApi:
         *,
         operations_completed: int = 0,
         operations_failed: int = 0,
-        play_sessions: list[SyncPlaySessionEntry] | None = None,
     ) -> SyncCompleteResponse:
         self.call_log.append(
             (
@@ -349,7 +355,6 @@ class FakeSaveApi:
                 {
                     "operations_completed": operations_completed,
                     "operations_failed": operations_failed,
-                    "play_sessions": play_sessions,
                 },
             )
         )
@@ -573,30 +578,42 @@ class FakeSaveApi:
         self.downloaded_files[save_id] = dest_path
         self._materialize_download(save_id, dest_path)
 
-    def get_rom_with_notes(self, rom_id: int) -> dict[str, Any]:
-        self.call_log.append(("get_rom_with_notes", (rom_id,), {}))
-        self._check_fail()
-        detail = self.roms.get(rom_id, {"id": rom_id})
-        # Attach notes
-        detail = dict(detail)
-        detail["all_user_notes"] = self.notes.get(rom_id, [])
-        return detail
+    # ------------------------------------------------------------------
+    # RommPlaytimeApi (native play-session ingest, ADR-0018)
+    # ------------------------------------------------------------------
 
-    def create_note(self, rom_id: int, data: dict[str, Any]) -> dict[str, Any]:
-        self.call_log.append(("create_note", (rom_id, data), {}))
+    def ingest_play_sessions(self, device_id: str, sessions: list[PlaySessionIngestEntry]) -> PlaySessionIngestResponse:
+        self.call_log.append(("ingest_play_sessions", (device_id, sessions), {}))
         self._check_fail()
-        note_id = self._next_note_id
-        self._next_note_id += 1
-        note = {"id": note_id, "rom_id": rom_id, **data}
-        self.notes.setdefault(rom_id, []).append(note)
-        return dict(note)
+        results: list[PlaySessionIngestResult] = []
+        created = 0
+        skipped = 0
+        for index, session in enumerate(sessions):
+            rom_id = session["rom_id"]
+            start_time = session["start_time"]
+            key = (device_id, rom_id, start_time)
+            if key in self._play_session_ledger:
+                results.append({"index": index, "status": "duplicate", "id": None})
+                skipped += 1
+                continue
+            self._play_session_ledger.add(key)
+            session_id = self._next_play_session_id
+            self._next_play_session_id += 1
+            self.play_sessions.setdefault(rom_id, []).append(
+                {
+                    "id": session_id,
+                    "rom_id": rom_id,
+                    "device_id": device_id,
+                    "start_time": start_time,
+                    "end_time": session["end_time"],
+                    "duration_ms": session["duration_ms"],
+                }
+            )
+            results.append({"index": index, "status": "created", "id": session_id})
+            created += 1
+        return {"results": results, "created_count": created, "skipped_count": skipped}
 
-    def update_note(self, rom_id: int, note_id: int, data: dict[str, Any]) -> dict[str, Any]:
-        self.call_log.append(("update_note", (rom_id, note_id, data), {}))
+    def list_play_sessions(self, rom_id: int, limit: int = 100) -> list[dict[str, Any]]:
+        self.call_log.append(("list_play_sessions", (rom_id,), {"limit": limit}))
         self._check_fail()
-        for notes in self.notes.values():
-            for note in notes:
-                if note.get("id") == note_id:
-                    note.update(data)
-                    return dict(note)
-        return {"id": note_id, "rom_id": rom_id, **data}
+        return [dict(s) for s in self.play_sessions.get(rom_id, [])[:limit]]

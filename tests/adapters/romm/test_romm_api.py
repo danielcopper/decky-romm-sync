@@ -11,7 +11,8 @@ from adapters.romm.romm_api import _TOKEN_SCOPES, RommApiAdapter
 from lib.errors import RommNotFoundError, RommServerError
 
 if TYPE_CHECKING:
-    from models.sync import ClientSaveState, SyncPlaySessionEntry
+    from models.play_sessions import PlaySessionIngestEntry
+    from models.sync import ClientSaveState
 
 
 def _make_api():
@@ -796,50 +797,104 @@ class TestCompleteSyncSession:
             {"operations_completed": 3, "operations_failed": 1},
         )
 
-    def test_omits_play_sessions_when_none(self):
+    def test_defaults_to_zero_counts(self):
         api, client = _make_api()
         client.post_json.return_value = {"session": {}}
         api.complete_sync_session(7)
         payload = client.post_json.call_args[0][1]
-        assert "play_sessions" not in payload
         assert payload == {"operations_completed": 0, "operations_failed": 0}
 
-    def test_includes_play_sessions_when_provided(self):
+
+class TestIngestPlaySessions:
+    def test_posts_device_id_and_sessions(self):
         api, client = _make_api()
-        client.post_json.return_value = {"session": {}}
-        play_sessions: list[SyncPlaySessionEntry] = [{"start_time": "t0", "end_time": "t1", "duration_ms": 100}]
-        api.complete_sync_session(7, play_sessions=play_sessions)
-        payload = client.post_json.call_args[0][1]
-        assert payload["play_sessions"] == play_sessions
+        client.post_json.return_value = {"results": [], "created_count": 0, "skipped_count": 0}
+        sessions: list[PlaySessionIngestEntry] = [
+            {"rom_id": 1, "start_time": "t0", "end_time": "t1", "duration_ms": 100}
+        ]
+        result = api.ingest_play_sessions("dev-1", sessions)
+        client.post_json.assert_called_once_with(
+            "/api/play-sessions",
+            {"device_id": "dev-1", "sessions": sessions},
+        )
+        assert result["created_count"] == 0
 
-
-class TestGetRomWithNotes:
-    def test_calls_rom_endpoint(self):
+    def test_propagates_http_error(self):
         api, client = _make_api()
-        client.request.return_value = {"id": 42, "all_user_notes": []}
-        result = api.get_rom_with_notes(42)
-        client.request.assert_called_once_with("/api/roms/42")
-        assert result["all_user_notes"] == []
+        client.post_json.side_effect = RommServerError("boom", status_code=500)
+        with pytest.raises(RommServerError):
+            api.ingest_play_sessions("dev-1", [])
 
 
-class TestCreateNote:
-    def test_posts_to_notes_endpoint(self):
+class TestListPlaySessions:
+    def test_single_short_page_stops_after_one_request(self):
         api, client = _make_api()
-        data = {"raw_markdown": "played 30 min"}
-        client.post_json.return_value = {"id": 1}
-        result = api.create_note(42, data)
-        client.post_json.assert_called_once_with("/api/roms/42/notes", data)
-        assert result["id"] == 1
+        # A page shorter than the limit is the last page — no second request.
+        client.request.return_value = [{"id": 1, "rom_id": 42, "duration_ms": 100}]
+        result = api.list_play_sessions(42)
+        client.request.assert_called_once_with("/api/play-sessions?rom_id=42&limit=100&offset=0")
+        assert result[0]["duration_ms"] == 100
 
-
-class TestUpdateNote:
-    def test_puts_to_note_endpoint(self):
+    def test_custom_limit_is_passed_with_offset(self):
         api, client = _make_api()
-        data = {"raw_markdown": "updated"}
-        client.put_json.return_value = {"id": 7}
-        result = api.update_note(42, 7, data)
-        client.put_json.assert_called_once_with("/api/roms/42/notes/7", data)
-        assert result["id"] == 7
+        client.request.return_value = []
+        api.list_play_sessions(42, limit=5)
+        client.request.assert_called_once_with("/api/play-sessions?rom_id=42&limit=5&offset=0")
+
+    def test_paginates_and_accumulates_across_full_pages(self):
+        """A full page (== limit) triggers the next offset; a short page ends the scan (FIX 2)."""
+        api, client = _make_api()
+        page1 = [{"id": i, "duration_ms": 1000} for i in range(3)]  # full (== limit 3)
+        page2 = [{"id": 100, "duration_ms": 500}]  # short → last page
+        client.request.side_effect = [page1, page2]
+        result = api.list_play_sessions(42, limit=3)
+        assert client.request.call_count == 2
+        assert client.request.call_args_list[0].args[0] == "/api/play-sessions?rom_id=42&limit=3&offset=0"
+        assert client.request.call_args_list[1].args[0] == "/api/play-sessions?rom_id=42&limit=3&offset=3"
+        # All 4 rows across both pages are returned (>limit fully summed by the caller).
+        assert [s["id"] for s in result] == [0, 1, 2, 100]
+
+    def test_empty_first_page_stops_immediately(self):
+        api, client = _make_api()
+        client.request.return_value = []
+        result = api.list_play_sessions(42, limit=3)
+        assert result == []
+        client.request.assert_called_once_with("/api/play-sessions?rom_id=42&limit=3&offset=0")
+
+    def test_unwraps_paginated_items_envelope(self):
+        api, client = _make_api()
+        client.request.return_value = {"items": [{"id": 1, "duration_ms": 50}], "total": 1}
+        result = api.list_play_sessions(42)
+        assert result == [{"id": 1, "duration_ms": 50}]
+
+    def test_items_envelope_paginates_too(self):
+        api, client = _make_api()
+        full = {"items": [{"id": i} for i in range(2)], "total": 3}  # full (== limit 2)
+        short = {"items": [{"id": 9}], "total": 3}  # short → last
+        client.request.side_effect = [full, short]
+        result = api.list_play_sessions(42, limit=2)
+        assert [s["id"] for s in result] == [0, 1, 9]
+
+    def test_unrecognized_envelope_returns_empty_and_logs(self, caplog):
+        """A dict with no ``items`` key ends the scan and leaves a debug breadcrumb (FIX 5)."""
+        api, client = _make_api()
+        client.request.return_value = {"unexpected": True}
+        with caplog.at_level("DEBUG", logger="adapters.romm.romm_api"):
+            assert api.list_play_sessions(42) == []
+        assert any("unrecognized response envelope" in r.message for r in caplog.records)
+
+    def test_page_cap_guards_against_infinite_loop(self, caplog):
+        """A server that always returns a full page stops at the page cap and logs (FIX 2)."""
+        from adapters.romm.romm_api import _MAX_PLAY_SESSION_PAGES
+
+        api, client = _make_api()
+        # Every page is exactly ``limit`` rows → never short → the cap is the only stop.
+        client.request.return_value = [{"id": 1}, {"id": 2}]
+        with caplog.at_level("DEBUG", logger="adapters.romm.romm_api"):
+            result = api.list_play_sessions(42, limit=2)
+        assert client.request.call_count == _MAX_PLAY_SESSION_PAGES
+        assert len(result) == _MAX_PLAY_SESSION_PAGES * 2
+        assert any("page cap" in r.message for r in caplog.records)
 
 
 class TestTokenScopes:

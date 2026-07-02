@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
     from domain.bios_file import BiosFile
     from domain.firmware_cache import FirmwareCacheEntry
-    from domain.playtime import Playtime
+    from domain.playtime import PendingSessionRow, Playtime
     from domain.rom import Rom
     from domain.rom_install import RomInstall
     from domain.rom_metadata import RomMetadata
@@ -160,6 +160,10 @@ class PlaytimeRepository(Protocol):
 
     def iter_all(self) -> Iterator[tuple[int, Playtime]]:
         """Iterate ``(rom_id, playtime)`` for every ROM. (playtime.py get_all_playtime, saves/state.py)"""
+        ...
+
+    def iter_pending_sessions(self, limit: int) -> list[PendingSessionRow]:
+        """Return up to *limit* outbox rows directly (cheapest-first). (playtime.py flush)"""
         ...
 
 

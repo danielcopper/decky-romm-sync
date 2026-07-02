@@ -38,6 +38,14 @@ class Plugin:
     _steam_config: Any
     _retrodeck_paths: Any
 
+    # Strong refs to the fire-and-forget play-session flush tasks. ``create_task``
+    # alone is not enough — without a strong ref the loop is free to GC the task
+    # before it completes. ``add_done_callback`` prunes finished entries and
+    # ``_unload`` cancels any still in-flight (mirrors SessionLifecycleService).
+    # Lazily created on first schedule so a bare ``Plugin()`` (test/harness that
+    # skips ``_main``) still tracks tasks.
+    _playtime_flush_tasks: set[asyncio.Task[None]]
+
     _MIN_REQUIRED_VERSION = (4, 9, 0)
 
     # -- logging ---------------------------------------------------------------
@@ -153,7 +161,22 @@ class Plugin:
         await self._download_service.shutdown()
         await self._migration_service.shutdown()
         await self._session_lifecycle_service.shutdown()
+        await self._cancel_playtime_flush_tasks()
         decky.logger.info("RomM Sync plugin unloaded")
+
+    async def _cancel_playtime_flush_tasks(self):
+        """Cancel and await any in-flight play-session flush tasks on unload.
+
+        Mirrors ``SessionLifecycleService.shutdown`` so a detached flush
+        coroutine does not leak across the plugin-unload boundary. No-op when
+        none are pending (or the set was never created).
+        """
+        tasks = getattr(self, "_playtime_flush_tasks", None)
+        if not tasks:
+            return
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     # ── Callables ──────────────────────────────────────────────────────
     # All methods below are exposed to the frontend via Decky's callable()
@@ -489,13 +512,47 @@ class Plugin:
         return await self._save_sync_service.rollback_to_version(rom_id, slot, save_id)
 
     async def record_session_start(self, rom_id):
-        return self._playtime_service.record_session_start(rom_id)
+        result = self._playtime_service.record_session_start(rom_id)
+        # Fire-and-forget: drain any offline play-session backlog into RomM's
+        # native ingest on the next launch; returns immediately so the launch is
+        # never blocked on the round-trip. flush_pending_sessions owns its own
+        # error handling (best-effort, offline-safe).
+        self._schedule_playtime_flush()
+        return result
+
+    def _schedule_playtime_flush(self):
+        """Kick off the offline play-session flush as a tracked background task.
+
+        Keeps a strong ref in ``_playtime_flush_tasks`` so the loop cannot GC the
+        task mid-flush, prunes it on completion, and lets ``_unload`` cancel any
+        still pending. The set is created lazily so a bare ``Plugin()`` works too.
+        """
+        tasks = getattr(self, "_playtime_flush_tasks", None)
+        if tasks is None:
+            tasks = set()
+            self._playtime_flush_tasks = tasks
+        task = self.loop.create_task(self._playtime_service.flush_pending_sessions())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
 
     async def get_all_playtime(self):
         return self._playtime_service.get_all_playtime()
 
     async def reconcile_playtime(self, rom_id):
         return await self._playtime_service.reconcile_playtime(int(rom_id))
+
+    async def get_playtime_scope_notice(self):
+        """Report whether the token lacks the play-session read scope.
+
+        Returns ``{"pending": bool}``. ``pending`` is set when a reconcile GET
+        403'd because the stored token predates the ``roms.user.read`` scope
+        (#1280) — the frontend surfaces a persistent "sign in again to enable
+        cross-device playtime" banner. Non-consuming (mirrors
+        ``get_settings_reset_notice``): the durable flag is cleared only by a
+        later successful reconcile GET or a fresh sign-in, so the banner stays up
+        across reloads until the user re-authenticates.
+        """
+        return self._playtime_service.get_scope_notice()
 
     # ── SGDB delegation to SteamGridService ───────────────────────
 

@@ -108,6 +108,7 @@ def plugin():
             logger=decky.logger,
             min_required_version=Plugin._MIN_REQUIRED_VERSION,
             forget_device=MagicMock(),
+            clear_playtime_scope_notice=MagicMock(),
         ),
     )
 
@@ -206,6 +207,7 @@ class TestConnection:
                 logger=decky.logger,
                 min_required_version=Plugin._MIN_REQUIRED_VERSION,
                 forget_device=MagicMock(),
+                clear_playtime_scope_notice=MagicMock(),
             ),
         )
         result = await plugin.test_connection()
@@ -798,6 +800,7 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "record_session_end",
     "get_all_playtime",
     "reconcile_playtime",
+    "get_playtime_scope_notice",
     # SteamGridDB / Steam shortcut artwork (Steam-side, not retrodeck).
     "get_sgdb_artwork_base64",
     "verify_sgdb_api_key",
@@ -1085,3 +1088,58 @@ class TestRetroDeckStatus:
         plugin._retrodeck_paths = FakeRetroDeckPaths(health=RetroDeckConfigHealth.ABSENT)
         result = await plugin.get_retrodeck_status()
         assert result["status"] == "absent"
+
+
+class TestPlaytimeFlushTaskLifecycle:
+    """FIX 8 — the fire-and-forget play-session flush task is strong-reffed on
+    schedule, pruned on completion, and cancelled+awaited on unload."""
+
+    def _plugin_with_playtime(self):
+        p = Plugin()
+        p.loop = asyncio.get_event_loop()
+        p._playtime_service = MagicMock()
+        p._playtime_service.record_session_start.return_value = {"success": True}
+        return p
+
+    @pytest.mark.asyncio
+    async def test_record_start_schedules_and_prunes_flush_task(self):
+        """record_session_start kicks off flush and the task self-prunes when done."""
+        p = self._plugin_with_playtime()
+        p._playtime_service.flush_pending_sessions = AsyncMock(return_value=None)
+
+        result = await p.record_session_start(7)
+
+        assert result == {"success": True}
+        assert len(p._playtime_flush_tasks) == 1
+        # Let the scheduled flush run to completion; the done-callback prunes it.
+        await asyncio.gather(*p._playtime_flush_tasks)
+        assert p._playtime_flush_tasks == set()
+        p._playtime_service.flush_pending_sessions.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_unload_cancels_pending_flush_task(self):
+        """A still-in-flight flush is cancelled and awaited on unload (no leak)."""
+        started = asyncio.Event()
+
+        async def _never_finishing():
+            started.set()
+            await asyncio.Event().wait()  # blocks until cancelled
+
+        p = self._plugin_with_playtime()
+        p._playtime_service.flush_pending_sessions = _never_finishing
+
+        await p.record_session_start(7)
+        await started.wait()  # ensure the task is running
+        assert len(p._playtime_flush_tasks) == 1
+        (task,) = tuple(p._playtime_flush_tasks)
+
+        await p._cancel_playtime_flush_tasks()
+
+        assert task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_cancel_is_noop_when_no_tasks(self):
+        """Unload with no scheduled flush (bare plugin) is a safe no-op."""
+        p = self._plugin_with_playtime()
+        # No record_session_start called → the set was never created.
+        await p._cancel_playtime_flush_tasks()  # must not raise
