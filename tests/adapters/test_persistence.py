@@ -41,13 +41,13 @@ class TestLocking:
         assert os.path.exists(lock_path)
 
     def test_save_settings_atomic_write(self, adapter):
-        data = {"romm_url": "http://example.com", "romm_user": "testuser"}
+        data = {"romm_url": "http://example.com", "device_name": "Test Deck"}
         adapter.save_settings(data)
         settings_path = os.path.join(adapter._settings_dir, "settings.json")
         with open(settings_path) as f:
             loaded = json.load(f)
         assert loaded["romm_url"] == "http://example.com"
-        assert loaded["romm_user"] == "testuser"
+        assert loaded["device_name"] == "Test Deck"
 
     def test_locked_write_concurrent(self, adapter):
         """Two threads writing simultaneously — final file must be valid JSON."""
@@ -84,8 +84,13 @@ class TestLocking:
 class TestSettingsSchema:
     """Schema-level expectations for the settings defaults + version stamp."""
 
-    def test_settings_version_is_8(self):
-        assert _SETTINGS_VERSION == 8
+    def test_settings_version_is_9(self):
+        assert _SETTINGS_VERSION == 9
+
+    def test_default_settings_omit_retired_credential_keys(self):
+        """The retired legacy-credential keys must not be re-seeded on load."""
+        assert "romm_user" not in DEFAULT_SETTINGS
+        assert "romm_pass" not in DEFAULT_SETTINGS
 
     def test_default_settings_carry_token_slots(self):
         assert DEFAULT_SETTINGS["romm_api_token"] is None
@@ -109,7 +114,7 @@ class TestVersionStampingOnSave:
         with open(settings_path) as f:
             loaded = json.load(f)
         assert loaded["version"] == _SETTINGS_VERSION
-        assert loaded["version"] == 8
+        assert loaded["version"] == 9
 
 
 # ── Loading edge cases ─────────────────────────────────────────────────────────

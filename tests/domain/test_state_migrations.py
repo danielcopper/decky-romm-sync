@@ -6,6 +6,7 @@ from domain.state_migrations import (
     _migrate_v5_to_v6,
     _migrate_v6_to_v7,
     _migrate_v7_to_v8,
+    _migrate_v8_to_v9,
     fold_legacy_save_sync_settings,
     migrate_settings,
 )
@@ -17,28 +18,28 @@ class TestMigrateSettings:
         result = migrate_settings(data)
         assert result["steam_input_mode"] == "force_off"
         assert "disable_steam_input" not in result
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_migrate_settings_v0_disable_steam_input_false(self):
         data = {"version": 0, "disable_steam_input": False}
         result = migrate_settings(data)
         assert "disable_steam_input" not in result
         assert "steam_input_mode" not in result  # False → no override set
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_migrate_settings_v0_debug_logging_true(self):
         data = {"version": 0, "debug_logging": True}
         result = migrate_settings(data)
         assert result["log_level"] == "debug"
         assert "debug_logging" not in result
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_migrate_settings_v0_debug_logging_false(self):
         data = {"version": 0, "debug_logging": False}
         result = migrate_settings(data)
         assert "debug_logging" not in result
         assert "log_level" not in result  # False → no log_level override set
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_migrate_settings_v0_both_deprecated(self):
         data = {"version": 0, "disable_steam_input": True, "debug_logging": True}
@@ -47,16 +48,16 @@ class TestMigrateSettings:
         assert result["log_level"] == "debug"
         assert "disable_steam_input" not in result
         assert "debug_logging" not in result
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_migrate_settings_v0_no_deprecated_keys(self):
         data = {"version": 0, "romm_url": "http://example.com"}
         result = migrate_settings(data)
         assert result["romm_url"] == "http://example.com"
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_migrate_settings_v3_advances_through_token_seeding(self):
-        """v3 → v8: version stamp advances and the token slots are seeded.
+        """v3 → v9: version stamp advances and the token slots are seeded.
 
         The cross-file save-sync fold (v3 → v4) is orchestrated in
         bootstrap, not here, so this step only bumps the version; the
@@ -68,7 +69,7 @@ class TestMigrateSettings:
         data = {"version": 3, "romm_url": "http://example.com", "log_level": "warn"}
         result = migrate_settings(data)
         assert result == {
-            "version": 8,
+            "version": 9,
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": None,
@@ -81,7 +82,7 @@ class TestMigrateSettings:
         data = {"version": 4, "romm_url": "http://example.com", "log_level": "warn"}
         result = migrate_settings(data)
         assert result == {
-            "version": 8,
+            "version": 9,
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": None,
@@ -91,7 +92,7 @@ class TestMigrateSettings:
         }
 
     def test_migrate_settings_v5_only_bumps_version(self):
-        """v5 → v8 with a token but no legacy creds advances the version + seeds the new slots."""
+        """v5 → v9 with a token but no legacy creds advances the version + seeds the new slots."""
         data = {
             "version": 5,
             "romm_url": "http://example.com",
@@ -101,7 +102,7 @@ class TestMigrateSettings:
         }
         result = migrate_settings(data)
         assert result == {
-            "version": 8,
+            "version": 9,
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": "rmm_existing",
@@ -111,7 +112,7 @@ class TestMigrateSettings:
         }
 
     def test_migrate_settings_v6_seeds_platform_cores(self):
-        """v6 → v8 seeds the per-platform core map + token origin and bumps the version."""
+        """v6 → v9 seeds the per-platform core map + token origin and bumps the version."""
         data = {
             "version": 6,
             "romm_url": "http://example.com",
@@ -121,7 +122,7 @@ class TestMigrateSettings:
         }
         result = migrate_settings(data)
         assert result == {
-            "version": 8,
+            "version": 9,
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": "rmm_existing",
@@ -142,7 +143,7 @@ class TestMigrateSettings:
         }
         result = migrate_settings(data)
         assert result == {
-            "version": 8,
+            "version": 9,
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": "rmm_existing",
@@ -151,9 +152,9 @@ class TestMigrateSettings:
             "romm_api_token_origin": None,
         }
 
-    def test_migrate_settings_v8_no_change(self):
+    def test_migrate_settings_v9_no_change(self):
         data = {
-            "version": 8,
+            "version": 9,
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": "rmm_existing",
@@ -170,7 +171,7 @@ class TestMigrateSettings:
         result = migrate_settings(data)
         assert result["romm_api_token"] == "rmm_keep"
         assert result["romm_api_token_id"] == 3
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_migrate_settings_v0_to_v5_seeds_token_slots(self):
         """A pre-versioning file runs the whole chain and ends with token slots."""
@@ -178,12 +179,12 @@ class TestMigrateSettings:
         result = migrate_settings(data)
         assert result["romm_api_token"] is None
         assert result["romm_api_token_id"] is None
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_migrate_settings_fresh_empty(self):
         data = {}
         result = migrate_settings(data)
-        assert result["version"] == 8
+        assert result["version"] == 9
         assert "disable_steam_input" not in result
         assert "debug_logging" not in result
 
@@ -191,7 +192,7 @@ class TestMigrateSettings:
         data = {"romm_url": "http://example.com", "disable_steam_input": True}
         result = migrate_settings(data)
         assert result["steam_input_mode"] == "force_off"
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_migrate_settings_debug_logging_true_overrides_log_level(self):
         """When debug_logging=True is being migrated, log_level is set to 'debug' unconditionally.
@@ -203,7 +204,7 @@ class TestMigrateSettings:
         result = migrate_settings(data)
         assert result["log_level"] == "debug"
         assert "debug_logging" not in result
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_migrate_settings_idempotent(self):
         data = {"version": 0, "disable_steam_input": True, "debug_logging": True}
@@ -226,7 +227,7 @@ class TestMigrateSettingsV5Token:
         result = migrate_settings(data)
         assert result["romm_api_token"] is None
         assert result["romm_api_token_id"] is None
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_idempotent_across_two_runs(self):
         data = {"version": 4, "romm_url": "x"}
@@ -293,7 +294,7 @@ class TestMigrateSettingsV6LegacyCredentials:
         assert result["version"] == 6
 
     def test_full_migrate_settings_v4_with_creds_no_token_keeps_creds(self):
-        """A v4 install with legacy creds and no token ends at v7 with creds intact.
+        """A v4 install with legacy creds and no token ends at v9 with creds intact.
 
         The schema step seeds the token slots to ``None``, so the v5 → v6
         credential wipe is a no-op — the creds are retired later at runtime
@@ -301,7 +302,7 @@ class TestMigrateSettingsV6LegacyCredentials:
         """
         data = {"version": 4, "romm_url": "http://example.com", "romm_user": "alice", "romm_pass": "secret"}
         result = migrate_settings(data)
-        assert result["version"] == 8
+        assert result["version"] == 9
         assert result["romm_api_token"] is None
         assert result["romm_user"] == "alice"
         assert result["romm_pass"] == "secret"
@@ -379,7 +380,7 @@ class TestMigrateSettingsV8TokenOrigin:
         data = {"version": 0, "romm_url": "http://example.com"}
         result = migrate_settings(data)
         assert result["romm_api_token_origin"] is None
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_idempotent_via_full_chain(self):
         data = {"version": 7, "romm_api_token_origin": "https://romm.local"}
@@ -387,6 +388,86 @@ class TestMigrateSettingsV8TokenOrigin:
         twice = migrate_settings(once.copy())
         assert once == twice
         assert once["romm_api_token_origin"] == "https://romm.local"
+
+
+class TestMigrateSettingsV9PurgeCredentials:
+    """v8 → v9 migration: purge the retired ``romm_user`` / ``romm_pass`` keys.
+
+    The keys survive only for a legacy, token-less install whose real password
+    ``migrate_legacy_credentials`` still needs to mint from; every other shape
+    (token present, or an empty placeholder) is dropped.
+    """
+
+    def test_token_present_drops_both_credentials(self):
+        data = {"version": 8, "romm_api_token": "rmm_x", "romm_user": "alice", "romm_pass": "secret"}
+        result = _migrate_v8_to_v9(data)
+        assert "romm_user" not in result
+        assert "romm_pass" not in result
+        assert result["romm_api_token"] == "rmm_x"
+        assert result["version"] == 9
+
+    def test_token_present_drops_empty_placeholders(self):
+        """The exact steady-state shape this fix targets: token + empty ``""`` keys."""
+        data = {"version": 8, "romm_api_token": "rmm_x", "romm_user": "", "romm_pass": ""}
+        result = _migrate_v8_to_v9(data)
+        assert "romm_user" not in result
+        assert "romm_pass" not in result
+
+    def test_no_token_real_password_kept_for_legacy_mint(self):
+        data = {"version": 8, "romm_api_token": None, "romm_user": "alice", "romm_pass": "secret"}
+        result = _migrate_v8_to_v9(data)
+        assert result["romm_user"] == "alice"
+        assert result["romm_pass"] == "secret"
+
+    def test_no_token_only_username_dropped(self):
+        """A lone username without a password cannot mint — drop it."""
+        data = {"version": 8, "romm_api_token": None, "romm_user": "alice"}
+        result = _migrate_v8_to_v9(data)
+        assert "romm_user" not in result
+
+    def test_no_token_empty_password_dropped(self):
+        """An empty-string password is not a real credential — drop it."""
+        data = {"version": 8, "romm_user": "alice", "romm_pass": ""}
+        result = _migrate_v8_to_v9(data)
+        assert "romm_user" not in result
+        assert "romm_pass" not in result
+
+    def test_empty_string_token_keeps_real_credentials(self):
+        """An empty-string token is falsy → a real password is kept (mirrors v5→v6)."""
+        data = {"version": 8, "romm_api_token": "", "romm_user": "alice", "romm_pass": "secret"}
+        result = _migrate_v8_to_v9(data)
+        assert result["romm_user"] == "alice"
+        assert result["romm_pass"] == "secret"
+
+    def test_always_stamps_version_9(self):
+        data = {"version": 8}
+        result = _migrate_v8_to_v9(data)
+        assert result["version"] == 9
+
+    def test_full_chain_v8_token_install_purges_placeholders(self):
+        """A real steady-state file: token set, empty legacy keys → purged, v9."""
+        data = {
+            "version": 8,
+            "romm_url": "http://example.com",
+            "romm_user": "",
+            "romm_pass": "",
+            "romm_api_token": "rmm_existing",
+            "romm_api_token_id": 7,
+            "romm_api_token_origin": "http://example.com",
+            "platform_cores": {},
+        }
+        result = migrate_settings(data)
+        assert "romm_user" not in result
+        assert "romm_pass" not in result
+        assert result["version"] == 9
+
+    def test_full_chain_tokenless_real_password_survives(self):
+        """A token-less legacy install keeps its real creds for the startup mint."""
+        data = {"version": 8, "romm_url": "http://example.com", "romm_user": "alice", "romm_pass": "secret"}
+        result = migrate_settings(data)
+        assert result["romm_user"] == "alice"
+        assert result["romm_pass"] == "secret"
+        assert result["version"] == 9
 
 
 class TestMigrateSettingsV3Collections:
@@ -400,7 +481,7 @@ class TestMigrateSettingsV3Collections:
             "smart": {},
             "franchise": {},
         }
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_base64_keys_move_to_franchise_bucket(self):
         b64 = "eyJuYW1lIjogIkFuIFRoZSBNYXJpbyJ9"
@@ -422,7 +503,7 @@ class TestMigrateSettingsV3Collections:
             "smart": {},
             "franchise": {b64: True},
         }
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_smart_bucket_always_starts_empty(self):
         """Pre-v3 users had no smart collections — bucket must start empty."""
@@ -440,7 +521,7 @@ class TestMigrateSettingsV3Collections:
         data = {"version": 1, "romm_url": "x"}
         result = migrate_settings(data)
         assert "enabled_collections" not in result
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_already_nested_value_passes_through_unchanged(self):
         """Defensive: a half-stamped v3-shaped value must not be re-split."""
@@ -452,7 +533,7 @@ class TestMigrateSettingsV3Collections:
         data = {"version": 1, "enabled_collections": already_nested}
         result = migrate_settings(data)
         assert result["enabled_collections"] == already_nested
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_partial_nested_value_normalized_with_missing_buckets(self):
         """A partial-nested value (only one bucket present) is normalized to all three buckets."""
@@ -463,7 +544,7 @@ class TestMigrateSettingsV3Collections:
             "smart": {},
             "franchise": {},
         }
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_partial_nested_two_buckets_fills_missing_third(self):
         """Partial-nested with two bucket keys — missing bucket is filled empty."""
@@ -477,7 +558,7 @@ class TestMigrateSettingsV3Collections:
             "smart": {},
             "franchise": {"abc": True},
         }
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_v0_to_v3_runs_both_steps(self):
         """A v0 file with both deprecated keys AND old enabled_collections gets both migrations."""
@@ -494,7 +575,7 @@ class TestMigrateSettingsV3Collections:
             "smart": {},
             "franchise": {},
         }
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_negative_numeric_string_keys_go_to_user(self):
         """``key.lstrip('-').isdigit()`` accepts ``-1`` as a numeric id."""
@@ -510,7 +591,7 @@ class TestMigrateSettingsV3Collections:
         }
         result = migrate_settings(data)
         assert result["enabled_collections"] == {"user": {"1": True}, "smart": {}, "franchise": {}}
-        assert result["version"] == 8
+        assert result["version"] == 9
 
     def test_v3_migration_does_not_mutate_caller_dict(self):
         data = {"version": 1, "enabled_collections": {"1": True, "abc": True}}

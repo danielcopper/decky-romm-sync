@@ -31,6 +31,8 @@ def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
         new_data = _migrate_v6_to_v7(new_data)
     if version < 8:
         new_data = _migrate_v7_to_v8(new_data)
+    if version < 9:
+        new_data = _migrate_v8_to_v9(new_data)
     return new_data
 
 
@@ -207,4 +209,26 @@ def _migrate_v7_to_v8(data: dict[str, Any]) -> dict[str, Any]:
     """
     data.setdefault("romm_api_token_origin", None)
     data["version"] = 8
+    return data
+
+
+def _migrate_v8_to_v9(data: dict[str, Any]) -> dict[str, Any]:
+    """v<9 → v9: purge the retired ``romm_user`` / ``romm_pass`` keys.
+
+    The Client API Token superseded stored credentials, and the password is
+    never persisted at sign-in — but ``DEFAULT_SETTINGS`` used to re-seed both
+    keys as ``""``, so token-based installs kept empty placeholders on disk
+    that contradict the "we never store the password" guarantee. Remove them.
+
+    The one case that must survive is a legacy, token-less install whose real
+    password is still needed: ``migrate_legacy_credentials`` mints from it on
+    startup. So the keys are kept only when there is no token yet **and** a
+    non-empty password remains; every other shape (token present, or an empty
+    placeholder) is dropped.
+    """
+    keep_for_legacy_mint = not data.get("romm_api_token") and bool(data.get("romm_pass"))
+    if not keep_for_legacy_mint:
+        data.pop("romm_user", None)
+        data.pop("romm_pass", None)
+    data["version"] = 9
     return data
