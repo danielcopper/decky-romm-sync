@@ -397,12 +397,13 @@ export const isSaveTrackingConfigured = callable<[number], { configured: boolean
 );
 export const getSaveSetupInfo = callable<[number], SaveSetupInfo>("get_save_setup_info");
 // confirm_slot_choice(rom_id, chosen_slot, migrate, migrate_from_slot):
-// `chosen_slot === null` confirms the legacy/no-slot mode; a non-empty string
-// is a named slot. `migrate` is an explicit boolean — the non-destructive
-// paths pass `false`; `migrate_from_slot` is `null` unless migrating (then the
-// source slot, with `null` meaning the legacy source).
+// `chosen_slot` must be a non-empty named slot — legacy `slot:null` confirmation
+// is retired (#1276), so an empty/`null` target is rejected by the backend's
+// `invalid_slot_name` guard. `migrate` is an explicit boolean — the
+// non-destructive paths pass `false`; `migrate_from_slot` is `null` unless
+// migrating (then the source slot, with `null` meaning the legacy no-slot source).
 export const confirmSlotChoice = callable<
-  [number, string | null, boolean, string | null],
+  [number, string, boolean, string | null],
   { success: boolean; needs_conflict_resolution?: boolean; message: string }
 >("confirm_slot_choice");
 export const checkCoreChange = callable<

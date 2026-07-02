@@ -426,10 +426,10 @@ describe("SlotSetupWizard", () => {
       expect(onComplete).toHaveBeenCalledOnce();
     });
 
-    it("tracks LEGACY (null) — not the default slot — when the server slot is null", async () => {
-      // #1061 regression guard: the bug was `s.slot ?? defaultSlot`, which
-      // silently re-homed the user's legacy (no-slot) saves into the default
-      // slot. A null server slot must confirm legacy mode (chosen_slot=null).
+    it("migrates the legacy (null) group into the default slot via a confirm modal", async () => {
+      // #1276: legacy (no-slot) saves can no longer be tracked as-is. The null
+      // server group's Track button offers to migrate them into the default
+      // slot — confirmSlotChoice(rid, defaultSlot, migrate=true, from=null).
       const info = makeSetupInfo({
         default_slot: "fallback",
         server_slots: [{ slot: null, saves: [], count: 1, latest_updated_at: null }],
@@ -440,13 +440,22 @@ describe("SlotSetupWizard", () => {
       const { getByText } = render(<SlotSetupWizard {...defaultProps({ romId: 5 })} />);
       await flushAsync();
 
+      // Clicking Track on the legacy group opens the migrate-confirm modal.
+      fireEvent.click(getByText("Track"));
+      expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
+      const migrateModal = confirmModalPropsAt(0);
+      expect(migrateModal?.strTitle).toBe("Migrate Legacy Saves?");
+      expect(migrateModal?.strDescription).toContain("fallback");
+
+      // OK migrates the legacy saves into the default slot.
       await act(async () => {
-        fireEvent.click(getByText("Track"));
+        await migrateModal?.onOK?.();
         await Promise.resolve();
       });
 
-      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(5, null, false, null);
-      expect(vi.mocked(backend.confirmSlotChoice)).not.toHaveBeenCalledWith(5, "fallback", false, null);
+      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(5, "fallback", true, null);
+      // The legacy null slot is never confirmed as-is (retired, #1276).
+      expect(vi.mocked(backend.confirmSlotChoice)).not.toHaveBeenCalledWith(5, null, false, null);
     });
 
     it("surfaces a failed confirmSlotChoice via the inline error", async () => {
@@ -652,12 +661,15 @@ describe("SlotSetupWizard", () => {
       sub.unmount();
     });
 
-    it("opens the legacy-mode ConfirmModal when the user OKs with an empty input", async () => {
+    it("sends an empty custom name straight to the backend guard (no legacy-mode modal)", async () => {
+      // #1276: an empty custom name is passed to the backend, which rejects it
+      // via invalid_slot_name — it is NEVER reinterpreted as the retired legacy
+      // no-slot mode, so no second modal opens.
       const info = makeSetupInfo({ server_slots: [] });
       vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
         deps.setInfo(info);
       });
-      const { getByText } = render(<SlotSetupWizard {...defaultProps()} />);
+      const { getByText } = render(<SlotSetupWizard {...defaultProps({ romId: 8 })} />);
       await flushAsync();
 
       fireEvent.click(getByText("Custom slot..."));
@@ -671,20 +683,16 @@ describe("SlotSetupWizard", () => {
         await Promise.resolve();
       });
 
-      // Now there are two showModal calls — index 0 is the CustomSlotModal,
-      // index 1 is the nested legacy-mode ConfirmModal (passed directly).
-      expect(vi.mocked(showModal)).toHaveBeenCalledTimes(2);
-      const legacy = confirmModalPropsAt(1);
-      expect(legacy?.strTitle).toBe("Use Legacy Mode?");
-      expect(legacy?.strDescription).toContain("Legacy mode");
+      // The empty name goes straight to the backend guard; only the one modal opened.
+      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(8, "", false, null);
+      expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
       sub.unmount();
     });
 
-    it("confirms LEGACY (null, not '') when the user types whitespace and OKs the nested legacy-mode confirm", async () => {
-      // #1008 regression guard: the legacy choice must send `chosen_slot=null`,
-      // never the empty string "". RomM stores legacy saves as slot=null and no
-      // `slot=` param value (including "") addresses them — sending "" was the
-      // bug. The wire contract is (rom_id, null, migrate=false, from=null).
+    it("sends a whitespace-only custom name as '' to the backend guard (no legacy modal)", async () => {
+      // #1276: whitespace trims to "" and is handed to the backend, which
+      // rejects it — the retired legacy no-slot mode is never offered, and no
+      // second modal opens.
       const info = makeSetupInfo({ server_slots: [] });
       vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
         deps.setInfo(info);
@@ -697,7 +705,7 @@ describe("SlotSetupWizard", () => {
       if (!modal) throw new Error("CustomSlotModal element not captured");
 
       const sub = render(<>{modal}</>);
-      // Type whitespace — trims to empty, routes through legacy-mode prompt.
+      // Type whitespace — trims to empty, handed straight to the backend guard.
       await act(async () => {
         fireEvent.change(sub.getByTestId("text-field"), { target: { value: "   " } });
       });
@@ -705,14 +713,11 @@ describe("SlotSetupWizard", () => {
         fireEvent.click(sub.getByTestId("confirm-modal-ok"));
         await Promise.resolve();
       });
-      await act(async () => {
-        await confirmModalPropsAt(1)?.onOK?.();
-      });
 
-      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(7, null, false, null);
-      // The empty string "" must never reach the backend — it cannot address
-      // RomM's null-slot legacy saves.
-      expect(vi.mocked(backend.confirmSlotChoice)).not.toHaveBeenCalledWith(7, "", false, null);
+      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(7, "", false, null);
+      // Never confirms the retired legacy null slot, and no second modal opens.
+      expect(vi.mocked(backend.confirmSlotChoice)).not.toHaveBeenCalledWith(7, null, false, null);
+      expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
       sub.unmount();
     });
   });

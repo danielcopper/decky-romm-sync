@@ -11,7 +11,6 @@ import os
 from typing import Any
 
 import pytest
-from models.sync import SyncOperation
 
 from domain.rom_save_state import RomSaveState
 from lib.errors import RommApiError
@@ -30,7 +29,6 @@ from tests.services.saves._helpers import (
     _server_save,
     _server_save_with_syncs,
     _set_device_id,
-    _set_sort_settings_previous,
     make_service,
     rom_save_state_from_dict,
 )
@@ -738,6 +736,10 @@ class TestOlderVersionSkipping:
             updated_at="2026-03-20T10:00:00",
             slot="portable",
         )
+        # This device is current on save 10 (its baseline matches) so the matrix
+        # Skips it — the only thing under test is that the portable save 20 is
+        # slot-filtered out and never downloaded.
+        fake.stage_device_sync(10, "dev-1", "2026-03-24T15:00:00")
 
         local_hash = _file_md5(tmp_path / "saves" / "gba" / "pokemon.srm")
         _seed_save_state_dict(
@@ -1159,11 +1161,12 @@ class TestAutocleanupLimitThreading:
         assert upload_calls[0][2]["autocleanup_limit"] == 25
 
     @pytest.mark.asyncio
-    async def test_put_upload_drops_autocleanup_limit(self, tmp_path):
-        """A PUT (update tracked save) upload leaves ``autocleanup_limit`` None.
+    async def test_offline_edit_upload_posts_and_carries_autocleanup_limit(self, tmp_path):
+        """The is_current offline-edit path now POSTs a new save (no longer a PUT,
+        ADR-0017) and still carries the configured ``autocleanup_limit``.
 
-        Even with the cap configured, the PUT branch sends nothing — RomM
-        updates in place and never stacks, so the cap is POST-only.
+        The device is current on the slot head, so the ``overwrite=false`` POST is
+        accepted without a 409; the retention cap rides the create.
         """
         svc, fake = make_service(tmp_path)
         _enable_sync_with_device(svc, device_id="device-1")
@@ -1172,12 +1175,13 @@ class TestAutocleanupLimitThreading:
         _create_save(tmp_path, content=b"diverged local content")
 
         # is_current=true on our device + local diverged from the baseline →
-        # Upload(target_save_id=100) → PUT.
+        # Upload. Stage the sync ledger so the slot POST is accepted (no 409).
         fake.saves[100] = _server_save_with_syncs(
             save_id=100,
             slot="default",
             device_syncs=[{"device_id": "device-1", "is_current": True}],
         )
+        fake.stage_device_sync(100, "device-1", "2026-02-17T06:00:00Z")
         _seed_save_state_dict(
             svc,
             42,
@@ -1188,27 +1192,17 @@ class TestAutocleanupLimitThreading:
                 "slot_confirmed": True,
             },
         )
-        # Confirmed non-legacy → negotiate path (ADR-0016); the server plans an
-        # upload PUT to the tracked save id 100 (offline edit, is_current).
-        fake.stage_negotiate(
-            [
-                {
-                    "action": "upload",
-                    "rom_id": 42,
-                    "file_name": "pokemon.srm",
-                    "slot": "default",
-                    "save_id": 100,
-                    "reason": "offline edit",
-                }
-            ]
-        )
+        # Confirmed non-legacy → opens a transport-only negotiate session (ADR-0017),
+        # but detection is the local matrix: is_current + local diverged → Upload,
+        # POSTed as a new save. The negotiate operations are ignored.
 
         await svc.sync_rom_saves(42)
 
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
-        assert upload_calls[0][2]["save_id"] == 100  # PUT path
-        assert upload_calls[0][2]["autocleanup_limit"] is None
+        assert upload_calls[0][2]["save_id"] is None  # POST path
+        assert upload_calls[0][2]["overwrite"] is False
+        assert upload_calls[0][2]["autocleanup_limit"] == 25
 
 
 class TestSyncRomSavesDispatch:
@@ -1374,9 +1368,11 @@ class TestSyncRomSavesDispatch:
         saves_dir = tmp_path / "saves" / "gba"
         assert (saves_dir / "pokemon.srm").exists()
 
-    def test_sync_rom_saves_upload_put_when_local_diverged(self, tmp_path):
-        """is_current=true + local hash diverges from baseline → Upload (PUT)
-        against the existing tracked save id."""
+    def test_sync_rom_saves_upload_posts_when_local_diverged(self, tmp_path):
+        """is_current=true + local hash diverges from baseline → Upload, POSTed as a
+        new save (overwrite=false). ``target_save_id`` no longer selects a PUT
+        (ADR-0017); the automatic dispatch always POSTs and relies on the 409
+        backstop for the cross-device currency race."""
         svc, fake = make_service(tmp_path)
         _enable_sync_with_device(svc)
         _install_rom(svc, tmp_path)
@@ -1409,8 +1405,9 @@ class TestSyncRomSavesDispatch:
         assert conflicts == []
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
-        # PUT — save_id is the existing server save id
-        assert upload_calls[0][2]["save_id"] == 100
+        # POST — a new save in the slot, overwrite=false so RomM's 409 can backstop.
+        assert upload_calls[0][2]["save_id"] is None
+        assert upload_calls[0][2]["overwrite"] is False
 
         file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.last_sync_hash == local_hash
@@ -1535,47 +1532,111 @@ class TestSyncRomSavesDispatch:
         saves_dir = tmp_path / "saves" / "gba"
         assert (saves_dir / "pokemon.srm").exists()
 
-    def test_dispatch_upload_put_targets_correct_save(self, tmp_path):
-        """Dispatcher PUT: target_save_id selects the right server save from
-        the candidate list and uploads against it."""
+    def test_sync_rom_saves_upload_409_downgrades_to_download(self, tmp_path):
+        """Upload POST 409 (slot head moved) + local unchanged since baseline →
+        the backstop re-fetches the slot and downloads the fresh head, no conflict."""
         svc, fake = make_service(tmp_path)
         _enable_sync_with_device(svc)
         _install_rom(svc, tmp_path)
-        save_path = _create_save(tmp_path, content=b"local-edit")
+        save_path = _create_save(tmp_path, content=b"in-sync local")
+        local_hash = _file_md5(str(save_path))
 
-        ss = _server_save_with_syncs(
-            save_id=100,
-            device_syncs=[{"device_id": "device-1", "is_current": True}],
+        # A newer save from another device this device has never synced → the POST
+        # into the slot 409s.
+        foreign = fake.seed_foreign_save(
+            42,
+            uploaded_by="device-B",
+            slot="default",
+            updated_at="2026-03-01T00:00:00Z",
+            content=b"newer from device B",
         )
-        fake.saves[100] = ss
-
-        # Build a state where compute_sync_action emits Upload(target_save_id=100)
-        # via the is_current=true + diverged hash branch.
         _seed_save_state_dict(
             svc,
             42,
             {
-                "files": {
-                    "pokemon.srm": {
-                        "tracked_save_id": 100,
-                        "last_sync_hash": "0" * 32,
-                        "last_sync_server_updated_at": ss["updated_at"],
-                    }
-                }
+                "active_slot": "default",
+                "slot_confirmed": True,
+                "files": {"pokemon.srm": {"last_sync_hash": local_hash}},
             },
         )
 
         synced, errors, conflicts = _do_sync(svc, 42)
 
-        assert synced == 1
         assert errors == []
         assert conflicts == []
+        assert synced == 1
+        # The POST was attempted overwrite=false (so RomM's 409 could fire)…
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
-        # PUT — saved against the server save id provided by the algorithm.
-        assert upload_calls[0][2]["save_id"] == 100
-        # Local was not lost.
-        assert save_path.read_bytes() == b"local-edit"
+        assert upload_calls[0][2]["overwrite"] is False
+        # …then the backstop downloaded the fresh server head into the local file.
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
+        assert [c[1][0] for c in download_calls] == [foreign["id"]]
+        assert (tmp_path / "saves" / "gba" / "pokemon.srm").read_bytes() == b"newer from device B"
+
+    def test_sync_rom_saves_upload_409_no_baseline_surfaces_conflict(self, tmp_path):
+        """Upload POST 409 with no local baseline to prove innocence → the backstop
+        surfaces a conflict; nothing is overwritten on either side."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"local unsynced edit")
+        local_hash = _file_md5(str(save_path))
+
+        foreign = fake.seed_foreign_save(
+            42,
+            uploaded_by="device-B",
+            slot="default",
+            updated_at="2026-03-01T00:00:00Z",
+            content=b"server content",
+        )
+        # No baseline (files empty) — this device has never synced the slot.
+        _seed_save_state_dict(svc, 42, {"active_slot": "default", "slot_confirmed": True, "files": {}})
+
+        synced, errors, conflicts = _do_sync(svc, 42)
+
+        assert synced == 0
+        assert errors == []
+        assert len(conflicts) == 1
+        c = conflicts[0]
+        assert c["type"] == "sync_conflict"
+        assert c["server_save_id"] == foreign["id"]
+        assert c["local_hash"] == local_hash
+        # Nothing overwritten: local file untouched, no content downloaded.
+        assert save_path.read_bytes() == b"local unsynced edit"
+        assert not any(x[0] == "download_save_content" for x in fake.call_log)
+
+    def test_handle_upload_409_empty_regroup_records_error(self, tmp_path):
+        """A 409 whose re-fetch finds no server save in the file's canonical group
+        is a non-fatal error — never a crash or a blind download."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"local")
+        # No server saves at all → the re-fetch inside the backstop returns [].
+
+        errors: list[str] = []
+        conflicts: list[dict[str, Any]] = []
+        result = svc._sync_engine._matrix._handle_upload_409(
+            rom_id=42,
+            save_state=RomSaveState(active_slot="default"),
+            device_id="device-1",
+            filename="pokemon.srm",
+            rom_name="pokemon",
+            local_path=str(save_path),
+            local_hash=_file_md5(str(save_path)),
+            last_sync_hash=None,
+            saves_dir=str(tmp_path / "saves" / "gba"),
+            system="gba",
+            options=SyncRunOptions(default_slot="default"),
+            sink=DispatchSink(errors=errors, conflicts=conflicts),
+        )
+
+        assert result is False
+        assert conflicts == []
+        assert len(errors) == 1
+        assert "pokemon.srm" in errors[0]
+        assert not any(c[0] == "download_save_content" for c in fake.call_log)
 
     def test_sync_rom_saves_persists_last_sync_check_at(self, tmp_path):
         """Every sync run records last_sync_check_at on the rom-level entry."""
@@ -1660,13 +1721,14 @@ class TestHandleUnexpectedError:
             save_state=RomSaveState(),
             device_id=None,
             filename="pokemon.srm",
+            rom_name="pokemon",
             local_path=None,
             local_hash=None,
+            last_sync_hash=None,
             saves_dir=str(saves_dir),
             system="gba",
             core_so=None,
             options=SyncRunOptions(),
-            server_saves=[],
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
 
@@ -1707,13 +1769,14 @@ class TestDispatchSyncActionErrorBranches:
             save_state=RomSaveState(),
             device_id=None,
             filename="pokemon.srm",
+            rom_name="pokemon",
             local_path=None,
             local_hash=None,
+            last_sync_hash=None,
             saves_dir=str(saves_dir),
             system="gba",
             core_so=None,
             options=SyncRunOptions(),
-            server_saves=[],
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
 
@@ -1729,68 +1792,40 @@ class TestDispatchSyncActionErrorBranches:
 
 
 class TestDispatchUploadDefensiveBranches:
-    """_dispatch_upload's defensive guards (matrix.py lines 408-409, 419-422).
-    Both paths are unreachable from the algorithm's normal output but the
-    branches exist to keep a future caller's bug from corrupting state."""
+    """_dispatch_upload's defensive no-local-file guard.
+
+    Unreachable from the algorithm's normal output (an ``Upload`` is only
+    emitted when a local file is present) but the branch exists to keep a
+    future caller's bug from POSTing a phantom save.
+    """
 
     def test_dispatch_upload_records_error_when_local_path_missing(self, tmp_path):
-        """Upload(target_save_id=None) with local_path=None records an error and skips."""
-        from domain.sync_action import Upload
-
+        """_dispatch_upload with local_path=None records an error and skips (no POST)."""
         svc, fake = make_service(tmp_path)
         _enable_sync_with_device(svc)
         _install_rom(svc, tmp_path)
 
         errors: list[str] = []
+        conflicts: list[dict[str, Any]] = []
         result = svc._sync_engine._matrix._dispatch_upload(
-            Upload(target_save_id=None),
             rom_id=42,
             save_state=RomSaveState(),
             device_id=None,
             filename="pokemon.srm",
+            rom_name="pokemon",
             local_path=None,
+            local_hash=None,
+            last_sync_hash=None,
+            saves_dir=str(tmp_path / "saves" / "gba"),
             system="gba",
             core_so=None,
             options=SyncRunOptions(),
-            server_saves=[],
-            errors=errors,
+            sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
 
         assert result is False
         assert len(errors) == 1
         assert "upload requested but no local file" in errors[0]
-        # No upload was attempted.
-        assert not any(c[0] == "upload_save" for c in fake.call_log)
-
-    def test_dispatch_upload_skips_put_when_target_save_id_vanished(self, tmp_path):
-        """Upload(target_save_id=999) with server_saves missing that id is a
-        best-effort skip — no upload, no error (vanished between read and dispatch)."""
-        from domain.sync_action import Upload
-
-        svc, fake = make_service(tmp_path)
-        _enable_sync_with_device(svc)
-        _install_rom(svc, tmp_path)
-        save_path = _create_save(tmp_path, content=b"local-edited")
-
-        errors: list[str] = []
-        # server_saves does not contain id=999.
-        result = svc._sync_engine._matrix._dispatch_upload(
-            Upload(target_save_id=999),
-            rom_id=42,
-            save_state=RomSaveState(),
-            device_id=None,
-            filename="pokemon.srm",
-            local_path=str(save_path),
-            system="gba",
-            core_so=None,
-            options=SyncRunOptions(),
-            server_saves=[{"id": 100, "file_name": "pokemon.srm"}],
-            errors=errors,
-        )
-
-        assert result is False
-        # No error recorded — this is a best-effort skip, not a failure.
-        assert errors == []
         # No upload was attempted.
         assert not any(c[0] == "upload_save" for c in fake.call_log)
 
@@ -1940,318 +1975,3 @@ class TestQuarantineBackupRetention:
         saves_dir.mkdir(parents=True, exist_ok=True)
 
         assert matrix.quarantine_local_file(str(saves_dir), "absent.srm") is False
-
-
-class TestDispatchNegotiateOps:
-    """MatrixExecutor.dispatch_negotiate_ops — the negotiate-path executor (ADR-0016).
-
-    Each server ``SyncOperation`` is mapped onto the legacy
-    ``Skip`` / ``Upload`` / ``Download`` / ``Conflict`` action and dispatched
-    through the unchanged ``_dispatch_sync_action``, scoped to the ROM's active
-    slot. Cross-device download (a server save with no local file) and the
-    drop-other-slots filter are exercised explicitly.
-    """
-
-    @staticmethod
-    def _setup(svc, tmp_path, *, active_slot: str | None = "default", make_local: bool = True, content=b"local save"):
-        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
-        if make_local:
-            _create_save(tmp_path, system="gba", rom_name="pokemon", content=content)
-        info = svc._rom_info.get_rom_save_info(42)
-        assert info is not None
-        save_state = RomSaveState(system="gba", active_slot=active_slot, slot_confirmed=True)
-        return info, save_state
-
-    @staticmethod
-    def _dispatch(svc, ops: list[SyncOperation], save_state, info, *, device_id: str | None = "device-1"):
-        return svc._sync_engine._matrix.dispatch_negotiate_ops(
-            42, ops, save_state, device_id, info, SyncRunOptions(default_slot="default"), None
-        )
-
-    def test_download_op_pulls_server_save(self, tmp_path):
-        svc, fake = make_service(tmp_path)
-        info, save_state = self._setup(svc, tmp_path, content=b"old local")
-        fake.set_server_save_content(555, b"server bytes")
-        ops: list[SyncOperation] = [
-            {
-                "action": "download",
-                "rom_id": 42,
-                "file_name": "pokemon.srm",
-                "slot": "default",
-                "save_id": 555,
-                "server_updated_at": "2026-02-17T06:00:00Z",
-                "reason": "server newer",
-            }
-        ]
-
-        synced, errors, conflicts = self._dispatch(svc, ops, save_state, info)
-
-        assert (synced, errors, conflicts) == (1, [], [])
-        dl = [c for c in fake.call_log if c[0] == "download_save_content"]
-        assert len(dl) == 1
-        assert dl[0][1][0] == 555
-        assert (tmp_path / "saves" / "gba" / "pokemon.srm").read_bytes() == b"server bytes"
-
-    def test_cross_device_download_no_local_file(self, tmp_path):
-        """A download op whose file has NO local copy is pulled (cross-device)."""
-        svc, fake = make_service(tmp_path)
-        info, save_state = self._setup(svc, tmp_path, make_local=False)
-        fake.set_server_save_content(777, b"from other device")
-        ops: list[SyncOperation] = [
-            {
-                "action": "download",
-                "rom_id": 42,
-                "file_name": "pokemon.srm",
-                "slot": "default",
-                "save_id": 777,
-                "server_updated_at": "2026-02-17T06:00:00Z",
-                "reason": "save made on another device",
-            }
-        ]
-
-        synced, errors, conflicts = self._dispatch(svc, ops, save_state, info)
-
-        assert synced == 1
-        assert errors == []
-        assert conflicts == []
-        local = tmp_path / "saves" / "gba" / "pokemon.srm"
-        assert local.exists()
-        assert local.read_bytes() == b"from other device"
-        # The pulled file becomes a tracked baseline.
-        assert "pokemon.srm" in save_state.files
-
-    def test_upload_post_op(self, tmp_path):
-        svc, fake = make_service(tmp_path)
-        info, save_state = self._setup(svc, tmp_path, content=b"new local")
-        ops: list[SyncOperation] = [
-            {"action": "upload", "rom_id": 42, "file_name": "pokemon.srm", "slot": "default", "reason": "new save"}
-        ]
-
-        synced, errors, conflicts = self._dispatch(svc, ops, save_state, info)
-
-        assert synced == 1
-        assert errors == []
-        assert conflicts == []
-        up = [c for c in fake.call_log if c[0] == "upload_save"]
-        assert len(up) == 1
-        assert up[0][2]["save_id"] is None  # POST
-
-    def test_upload_put_op(self, tmp_path):
-        svc, fake = make_service(tmp_path)
-        info, save_state = self._setup(svc, tmp_path, content=b"diverged")
-        fake.saves[100] = _server_save_with_syncs(save_id=100, slot="default")
-        ops: list[SyncOperation] = [
-            {
-                "action": "upload",
-                "rom_id": 42,
-                "file_name": "pokemon.srm",
-                "slot": "default",
-                "save_id": 100,
-                "reason": "offline edit",
-            }
-        ]
-
-        synced, errors, conflicts = self._dispatch(svc, ops, save_state, info)
-
-        assert synced == 1
-        assert errors == []
-        assert conflicts == []
-        up = [c for c in fake.call_log if c[0] == "upload_save"]
-        assert len(up) == 1
-        assert up[0][2]["save_id"] == 100  # PUT to the tracked save id
-
-    def test_conflict_op(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        info, save_state = self._setup(svc, tmp_path, content=b"diverged")
-        ops: list[SyncOperation] = [
-            {
-                "action": "conflict",
-                "rom_id": 42,
-                "file_name": "pokemon.srm",
-                "slot": "default",
-                "save_id": 200,
-                "server_updated_at": "2026-02-17T06:00:00Z",
-                "reason": "both changed",
-            }
-        ]
-
-        synced, errors, conflicts = self._dispatch(svc, ops, save_state, info)
-
-        assert synced == 0
-        assert errors == []
-        assert len(conflicts) == 1
-        assert conflicts[0]["type"] == "sync_conflict"
-        assert conflicts[0]["server_save_id"] == 200
-
-    def test_no_op(self, tmp_path):
-        svc, fake = make_service(tmp_path)
-        info, save_state = self._setup(svc, tmp_path)
-        ops: list[SyncOperation] = [
-            {"action": "no_op", "rom_id": 42, "file_name": "pokemon.srm", "slot": "default", "reason": "synced"}
-        ]
-
-        synced, errors, conflicts = self._dispatch(svc, ops, save_state, info)
-
-        assert (synced, errors, conflicts) == (0, [], [])
-        assert not any(c[0] in ("upload_save", "download_save_content") for c in fake.call_log)
-
-    def test_empty_ops_marks_evaluated(self, tmp_path):
-        svc, fake = make_service(tmp_path)
-        info, save_state = self._setup(svc, tmp_path)
-
-        synced, errors, conflicts = self._dispatch(svc, [], save_state, info)
-
-        assert (synced, errors, conflicts) == (0, [], [])
-        # The sync-check timestamp is recorded even when nothing transferred.
-        assert save_state.last_sync_check_at is not None
-        assert not any(c[0] in ("upload_save", "download_save_content") for c in fake.call_log)
-
-    def test_op_for_non_active_slot_is_dropped(self, tmp_path):
-        """An op whose slot ≠ active_slot is dropped (device-wide POST guard)."""
-        svc, fake = make_service(tmp_path)
-        info, save_state = self._setup(svc, tmp_path, active_slot="default", content=b"local")
-        ops: list[SyncOperation] = [
-            {
-                "action": "download",
-                "rom_id": 42,
-                "file_name": "pokemon.srm",
-                "slot": "B",
-                "save_id": 999,
-                "reason": "other slot",
-            }
-        ]
-
-        synced, errors, conflicts = self._dispatch(svc, ops, save_state, info)
-
-        assert (synced, errors, conflicts) == (0, [], [])
-        assert not any(c[0] == "download_save_content" for c in fake.call_log)
-
-    def test_op_for_foreign_rom_id_is_dropped(self, tmp_path):
-        """A download op for a DIFFERENT rom_id in the SAME slot is dropped, not
-        pulled into this ROM's saves dir (#1266 device-wide-POST leak).
-
-        A scoped single-ROM negotiate POST returns the server's device-wide
-        download ops; one for a foreign ROM that happens to share the active slot
-        passes the slot check, so the rom_id check is what stops it.
-        """
-        svc, fake = make_service(tmp_path)
-        info, save_state = self._setup(svc, tmp_path, active_slot="default", content=b"local")
-        ops: list[SyncOperation] = [
-            {
-                "action": "download",
-                "rom_id": 9999,
-                "file_name": "Other Game (USA).srm",
-                "slot": "default",
-                "save_id": 777,
-                "reason": "device-wide cross-device download",
-            }
-        ]
-
-        synced, errors, conflicts = self._dispatch(svc, ops, save_state, info)
-
-        assert (synced, errors, conflicts) == (0, [], [])
-        assert not any(c[0] == "download_save_content" for c in fake.call_log)
-
-    def test_server_only_download_skipped_during_pending_migration(self, tmp_path):
-        """A download op with no local file is suppressed while a save-sort
-        migration is pending (mirrors the legacy server-only guard, #238)."""
-        svc, fake = make_service(tmp_path)
-        info, save_state = self._setup(svc, tmp_path, make_local=False)
-        _set_sort_settings_previous(svc, {"sort_by_content": False, "sort_by_core": True})
-        fake.set_server_save_content(321, b"server bytes")
-        ops: list[SyncOperation] = [
-            {
-                "action": "download",
-                "rom_id": 42,
-                "file_name": "pokemon.srm",
-                "slot": "default",
-                "save_id": 321,
-                "reason": "cross-device",
-            }
-        ]
-
-        synced, errors, conflicts = self._dispatch(svc, ops, save_state, info)
-
-        assert (synced, errors, conflicts) == (0, [], [])
-        assert not any(c[0] == "download_save_content" for c in fake.call_log)
-
-    def test_executor_error_caught_into_errors(self, tmp_path):
-        """An exception during dispatch is caught onto the errors list, not raised."""
-        svc, fake = make_service(tmp_path)
-        info, save_state = self._setup(svc, tmp_path, content=b"local")
-        fake.fail_on_next(RommApiError("upload boom"))
-        ops: list[SyncOperation] = [
-            {"action": "upload", "rom_id": 42, "file_name": "pokemon.srm", "slot": "default", "reason": "new save"}
-        ]
-
-        synced, errors, conflicts = self._dispatch(svc, ops, save_state, info)
-
-        assert synced == 0
-        assert len(errors) == 1
-        assert "pokemon.srm" in errors[0]
-        assert conflicts == []
-
-    def test_upload_op_with_tagged_server_filename(self, tmp_path):
-        """An upload op whose server file_name is datetime-TAGGED still targets the
-        untagged canonical local file.
-
-        RomM returns the server save's tagged ``file_name`` in the op
-        (e.g. ``pokemon [2026-06-25_05-57-58].srm``) while the local file on disk
-        is the untagged canonical ``pokemon.srm``. The executor must resolve the
-        canonical local target, find the real local file, and issue the upload for
-        it — not push a "no local file" error.
-        """
-        svc, fake = make_service(tmp_path)
-        info, save_state = self._setup(svc, tmp_path, content=b"new local")
-        ops: list[SyncOperation] = [
-            {
-                "action": "upload",
-                "rom_id": 42,
-                "file_name": "pokemon [2026-06-25_05-57-58].srm",  # TAGGED server name
-                "slot": "default",
-                "reason": "new save",
-            }
-        ]
-
-        synced, errors, conflicts = self._dispatch(svc, ops, save_state, info)
-
-        assert errors == []
-        assert synced == 1
-        assert conflicts == []
-        up = [c for c in fake.call_log if c[0] == "upload_save"]
-        assert len(up) == 1
-        # The upload targets the untagged canonical local file, not the tagged name.
-        assert os.path.basename(up[0][1][1]) == "pokemon.srm"
-        assert up[0][1][1] == str(tmp_path / "saves" / "gba" / "pokemon.srm")
-        assert up[0][2]["save_id"] is None  # POST
-
-    def test_download_op_with_tagged_server_filename(self, tmp_path):
-        """A download op with a datetime-TAGGED server file_name writes content to
-        the untagged canonical local path, never a tagged-named file.
-
-        Without canonical resolution the executor would write to
-        ``pokemon [2026-06-25_05-57-58].srm`` — a name RetroArch never reads — and
-        the real ``pokemon.srm`` would be left stale.
-        """
-        svc, fake = make_service(tmp_path)
-        info, save_state = self._setup(svc, tmp_path, content=b"old local")
-        fake.set_server_save_content(555, b"server bytes")
-        ops: list[SyncOperation] = [
-            {
-                "action": "download",
-                "rom_id": 42,
-                "file_name": "pokemon [2026-06-25_05-57-58].srm",  # TAGGED server name
-                "slot": "default",
-                "save_id": 555,
-                "server_updated_at": "2026-02-17T06:00:00Z",
-                "reason": "server newer",
-            }
-        ]
-
-        synced, errors, conflicts = self._dispatch(svc, ops, save_state, info)
-
-        assert (synced, errors, conflicts) == (1, [], [])
-        saves_dir = tmp_path / "saves" / "gba"
-        # Content lands at the canonical untagged path, NOT a tagged-named file.
-        assert (saves_dir / "pokemon.srm").read_bytes() == b"server bytes"
-        assert not (saves_dir / "pokemon [2026-06-25_05-57-58].srm").exists()

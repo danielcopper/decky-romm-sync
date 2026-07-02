@@ -134,17 +134,23 @@ class RomSaveState:
         elif save_id not in self.own_upload_ids:
             self.own_upload_ids.append(save_id)
 
-    def confirm_slot(self, name: str | None) -> None:
+    def confirm_slot(self, name: str) -> None:
         """Confirm ``name`` as the user-chosen active slot.
 
-        Normalizes the legacy empty string to ``None``, marks the slot
-        confirmed, and ensures the slot's key exists in ``slots`` (invariant 2 —
-        legacy ``None`` uses the ``""`` key).
+        Marks the slot confirmed and ensures its key exists in ``slots``. A slot
+        must carry a non-empty name: the legacy ``slot:null`` confirmation is
+        retired (#1276), so an empty or ``None`` name raises ``ValueError``. The
+        legacy no-slot mode survives only as a migration *source* (via
+        :meth:`switch_active_slot` / direct construction), never as a confirmed
+        target.
         """
-        normalized = name or None
-        self.active_slot = normalized
+        if not name:
+            raise ValueError(
+                "confirm_slot requires a non-empty slot name — legacy slot:null confirmation is retired (#1276)"
+            )
+        self.active_slot = name
         self.slot_confirmed = True
-        self.slots.setdefault(normalized or "", {"source": "local", "count": 0, "latest_updated_at": None})
+        self.slots.setdefault(name, {"source": "local", "count": 0, "latest_updated_at": None})
 
     def switch_active_slot(self, name: str | None) -> None:
         """Switch the active slot to ``name`` without confirming it.

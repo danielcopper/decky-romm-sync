@@ -68,8 +68,9 @@ def _set_user_version(db_path: str, version: int) -> None:
 
 
 # Highest NNN in the shipped migrations dir (001_initial + 002_add_emulator_override
-# + 003_unique_shortcut_app_id + 004_add_selected_disc).
-_SHIPPED_VERSION = 4
+# + 003_unique_shortcut_app_id + 004_add_selected_disc
+# + 005_unconfirm_legacy_slot_confirmations).
+_SHIPPED_VERSION = 5
 
 
 class TestEmptyDatabase:
@@ -349,6 +350,59 @@ class TestUnreadableSource:
             apply_migrations(db_path, str(migrations_dir))
 
         assert _user_version(db_path) == 0
+
+
+def _insert_save_state(conn: sqlite3.Connection, rom_id: int, active_slot: str | None, slot_confirmed: int) -> None:
+    """Insert a minimal ``rom_save_states`` row directly (bypassing the adapter)."""
+    conn.execute(
+        "INSERT INTO rom_save_states (rom_id, active_slot, slot_confirmed) VALUES (?, ?, ?)",
+        (rom_id, active_slot, slot_confirmed),
+    )
+
+
+class Test005UnconfirmLegacySlotConfirmations:
+    """005 — un-confirms legacy (active_slot NULL) confirmations; never deletes rows (#1276)."""
+
+    def test_flips_only_legacy_confirmed_rows(self, tmp_path: Path):
+        db_path = str(tmp_path / "romm_sync.db")
+        # Apply through 004, then seed the three relevant shapes before 005 runs.
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 4)))
+        assert _user_version(db_path) == 4
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            for rid in (1, 2, 3):
+                _insert_rom(conn, rid, rid)
+            # 1: legacy + confirmed  -> must flip to 0
+            _insert_save_state(conn, 1, None, 1)
+            # 2: named + confirmed   -> must stay 1
+            _insert_save_state(conn, 2, "default", 1)
+            # 3: legacy + unconfirmed -> already 0, must stay 0
+            _insert_save_state(conn, 3, None, 0)
+            # A per-file baseline on the legacy row — must survive untouched.
+            conn.execute(
+                "INSERT INTO rom_save_files (rom_id, filename, last_sync_hash) VALUES (1, 'pokemon.srm', 'abc123')"
+            )
+        finally:
+            conn.close()
+
+        final_version = apply_migrations(db_path)
+        assert final_version == _SHIPPED_VERSION
+
+        conn = sqlite3.connect(db_path)
+        try:
+            confirmations = dict(
+                conn.execute("SELECT rom_id, slot_confirmed FROM rom_save_states ORDER BY rom_id").fetchall()
+            )
+            file_rows = conn.execute("SELECT filename, last_sync_hash FROM rom_save_files WHERE rom_id = 1").fetchall()
+        finally:
+            conn.close()
+
+        # Only the legacy-confirmed row (1) flips; named (2) and already-unconfirmed (3) are untouched.
+        assert confirmations == {1: 0, 2: 1, 3: 0}
+        # The per-file baseline is preserved — 005 only flips slot_confirmed, never deletes.
+        assert file_rows == [("pokemon.srm", "abc123")]
 
 
 def test_shipped_migrations_dir_resolves_to_real_schema():

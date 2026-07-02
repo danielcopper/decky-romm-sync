@@ -114,14 +114,6 @@ export const SaveSyncSection: FC<SaveSyncSectionProps> = ({
                   </ButtonItem>
                 </PanelSectionRow>
               )}
-              {(saveSyncSettings.default_slot === null || saveSyncSettings.default_slot === "") && (
-                <PanelSectionRow>
-                  <Field
-                    label={<span style={{ color: "#ff8800" }}>Legacy mode (no slot)</span>}
-                    description="Saves are limited to one version per game."
-                  />
-                </PanelSectionRow>
-              )}
               <PanelSectionRow>
                 <DropdownItem
                   label="Save History Limit"

@@ -33,6 +33,8 @@ import pathlib
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from fakes._romm_save_semantics import check_add_save_conflict, compute_is_current, tag_filename
+
 if TYPE_CHECKING:
     from models.sync import (
         ClientSaveState,
@@ -65,6 +67,11 @@ class FakeRommApi:
         self.heartbeat_response: dict[str, Any] = {"status": "ok"}
         self._version: str | None = None
         self._save_content: dict[int, bytes] = {}
+        # DeviceSaveSync rows: (device_id, save_id) -> last_synced_at (ISO). The
+        # server writes one on confirm/optimistic-download; list_saves computes
+        # each save's ``device_syncs`` (and is_current) from it, and the
+        # add_save 409 gate reads it. Seed directly via ``stage_device_sync``.
+        self._device_sync_ledger: dict[tuple[str, int], str] = {}
 
         # Pagination configurable per ROM listing endpoint. Tests can
         # tweak ``items_per_platform`` keyed by ``(platform_id,)``,
@@ -436,9 +443,12 @@ class FakeRommApi:
         if slot is not None:
             saves = [s for s in saves if s.get("slot") == slot]
         if device_id:
+            # ``device_id`` enriches with device_syncs (like the real server).
+            # An explicit ``device_syncs`` seeded on the save wins; else compute
+            # it per-device from the ledger (never a blanket True).
             for s in saves:
                 if "device_syncs" not in s:
-                    s["device_syncs"] = [{"device_id": device_id, "is_current": True}]
+                    s["device_syncs"] = self._device_syncs_for(s)
         return saves
 
     def upload_save(
@@ -465,27 +475,45 @@ class FakeRommApi:
             },
         )
         self._check_fail(self.upload_save_side_effect)
-        now = datetime.now(UTC).isoformat()
+        stamp = datetime.now(UTC)
+        now = stamp.isoformat()
         # Path algebra only — basename without importing os.path globally.
         last_sep = max(file_path.rfind("/"), file_path.rfind("\\"))
         filename = file_path[last_sep + 1 :] if last_sep >= 0 else file_path
 
+        # PUT path: update the tracked save in place (no new version, no gate).
         if save_id is not None and save_id in self.saves:
             entry = self.saves[save_id]
             entry["updated_at"] = now
             entry["emulator"] = emulator
             return dict(entry)
 
+        # POST path. On a slot POST the real server refuses (409) to stack onto
+        # a slot this device hasn't synced, and tags the stored filename so
+        # versions never collide. The gate runs BEFORE any mutation and lets
+        # ``RommConflictError`` propagate uncaught, exactly like the adapter.
+        stored_filename = filename
+        if slot is not None:
+            slot_saves = [s for s in self.saves.values() if s.get("rom_id") == rom_id and s.get("slot") == slot]
+            check_add_save_conflict(
+                device_id=device_id,
+                slot=slot,
+                overwrite=overwrite,
+                slot_saves=slot_saves,
+                sync_ledger=self._device_sync_ledger,
+            )
+            stored_filename = tag_filename(filename, stamp.strftime("%Y-%m-%d_%H-%M-%S"))
+
         new_save_id = self._next_save_id
         self._next_save_id += 1
         entry = {
             "id": new_save_id,
             "rom_id": rom_id,
-            "file_name": filename,
+            "file_name": stored_filename,
             "updated_at": now,
             "emulator": emulator,
             "slot": slot,
-            "download_path": f"/saves/{filename}",
+            "download_path": f"/saves/{stored_filename}",
         }
         self.saves[new_save_id] = entry
         return dict(entry)
@@ -512,10 +540,15 @@ class FakeRommApi:
         self._check_fail(self.download_save_content_side_effect)
         payload = self._save_content.get(save_id) or self.download_payloads.get(f"save:{save_id}", b"")
         self._materialize_download(dest_path, payload)
+        if optimistic:
+            # Optimistic download pre-acks the DeviceSaveSync row server-side,
+            # so this device becomes is_current on the save.
+            self._record_device_sync(save_id, device_id)
 
     def confirm_download(self, save_id: int, device_id: str) -> dict[str, Any]:
         self._log("confirm_download", (save_id, device_id))
         self._check_fail(self.confirm_download_side_effect)
+        self._record_device_sync(save_id, device_id)
         return {"status": "ok"}
 
     def get_save_summary(self, rom_id: int, device_id: str | None = None) -> dict[str, Any]:
@@ -611,3 +644,87 @@ class FakeRommApi:
     def set_server_save_content(self, save_id: int, content: bytes) -> None:
         """Stage server-side bytes returned by the next ``download_save*`` call."""
         self._save_content[save_id] = content
+
+    def stage_device_sync(self, save_id: int, device_id: str, last_synced_at: str) -> None:
+        """Record that *device_id* last synced *save_id* at *last_synced_at*.
+
+        Drives ``list_saves``' per-device ``device_syncs`` / ``is_current`` and
+        the add_save 409 gate directly, mirroring a server DeviceSaveSync row.
+        Model a *stale* device with a ``last_synced_at`` older than the save's
+        ``updated_at``; model a *never-synced* device by omitting the call.
+        """
+        self._device_sync_ledger[(device_id, save_id)] = last_synced_at
+
+    def seed_foreign_save(
+        self,
+        rom_id: int,
+        *,
+        save_id: int | None = None,
+        uploaded_by: str = "device-B",
+        slot: str | None = "default",
+        filename: str = "pokemon.srm",
+        updated_at: str = "2026-02-17T06:00:00Z",
+        content: bytes | None = b"foreign-save",
+        file_size_bytes: int | None = None,
+        last_synced_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Seed a slot save owned by another device and mark that device current.
+
+        Models the foreign-origin case: a save the local (querying) device has
+        never synced. ``uploaded_by`` is recorded as current on it via the sync
+        ledger; the local device gets no ledger entry, so its ``list_saves``
+        shows no ``is_current`` for it and an ``overwrite=false`` POST into the
+        slot 409s. Returns a copy of the seeded save dict.
+        """
+        if save_id is None:
+            save_id = self._next_save_id
+            self._next_save_id += 1
+        if file_size_bytes is None:
+            file_size_bytes = len(content) if content is not None else 0
+        entry: dict[str, Any] = {
+            "id": save_id,
+            "rom_id": rom_id,
+            "file_name": filename,
+            "slot": slot,
+            "updated_at": updated_at,
+            "file_size_bytes": file_size_bytes,
+            "emulator": "",
+            "download_path": f"/saves/{filename}",
+        }
+        self.saves[save_id] = entry
+        if content is not None:
+            self._save_content[save_id] = content
+        self.stage_device_sync(save_id, uploaded_by, last_synced_at or updated_at)
+        return dict(entry)
+
+    def _record_device_sync(self, save_id: int, device_id: str | None) -> None:
+        """Record *device_id* as having synced *save_id* at the save's updated_at.
+
+        Mirrors the server writing a DeviceSaveSync row on confirm / optimistic
+        download so a later ``list_saves`` reports ``is_current`` for this
+        device. Falls back to the current time when the save is not tracked.
+        """
+        if not device_id:
+            return
+        entry = self.saves.get(save_id)
+        updated_at = entry.get("updated_at") if entry else None
+        self._device_sync_ledger[(device_id, save_id)] = updated_at or datetime.now(UTC).isoformat()
+
+    def _device_syncs_for(self, save: dict[str, Any]) -> list[dict[str, Any]]:
+        """Compute a save's ``device_syncs`` list from the sync ledger.
+
+        One entry per device that has ever synced this save, each with its own
+        ``is_current`` relative to the save's current ``updated_at`` — multi-
+        device / foreign-origin aware, not a blanket True for the querier.
+        """
+        save_id = save.get("id")
+        updated_at = save.get("updated_at", "")
+        return [
+            {
+                "device_id": d_id,
+                "is_current": compute_is_current(last_synced_at, updated_at),
+                "last_synced_at": last_synced_at,
+            }
+            for (d_id, s_id), last_synced_at in self._device_sync_ledger.items()
+            if s_id == save_id
+        ]

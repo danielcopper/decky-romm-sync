@@ -14,6 +14,17 @@ the actual file/server transfers lives in
 lives in :mod:`services.saves.sync_engine.rollback`. SyncEngine wires
 those sub-modules together and exposes the surface peer save services
 (status, versions, slots) consume.
+
+There is a single sync code path (ADR-0017, superseding ADR-0016's
+routing fork): every ROM decides via the local ``compute_sync_action``
+matrix (driven by ``list_saves``), the sole detection authority. RomM's
+``negotiate`` operation is kept only as a session **transport** for a
+confirmed non-legacy ROM — its planned ``operations`` are ignored; the run
+opens a session for the play-session/telemetry envelope, keeps just the
+``session_id``, runs the bare matrix, then completes the session in a
+``finally``. A legacy or unconfirmed ROM runs the same matrix without a
+session wrapper. Any failure opening the session degrades to a bare
+matrix run — the session is an envelope, never a gate on sync.
 """
 
 from __future__ import annotations
@@ -49,14 +60,12 @@ from services.saves.sync_engine._gate import (
     SaveSyncGate,
     SaveSyncTimeoutError,
 )
-from services.saves.sync_engine.matrix import MatrixExecutor, MatrixOutcome, SyncRunOptions
+from services.saves.sync_engine.matrix import MatrixExecutor, MatrixOutcome
 from services.saves.sync_engine.rollback import RollbackOrchestrator
 
 if TYPE_CHECKING:
     import logging
     from collections.abc import Iterator
-
-    from models.sync import SyncOperation
 
     from domain.save_layout import SaveLayout
     from services.protocols import (
@@ -232,19 +241,6 @@ class SyncEngine:
         """Sync saves for a single ROM (delegate to :class:`MatrixExecutor`)."""
         return self._matrix.sync_rom_saves(rom_id, save_state, device_id, core_so, default_slot, autocleanup_limit)
 
-    def dispatch_negotiate_ops(
-        self,
-        rom_id: int,
-        ops: list[SyncOperation],
-        save_state: RomSaveState,
-        device_id: str | None,
-        info: dict[str, Any],
-        options: SyncRunOptions,
-        core_so: str | None,
-    ) -> tuple[int, list[str], list[dict[str, Any]]]:
-        """Execute server-planned negotiate ops for one ROM (delegate to :class:`MatrixExecutor`)."""
-        return self._matrix.dispatch_negotiate_ops(rom_id, ops, save_state, device_id, info, options, core_so)
-
     def do_download_save(
         self,
         server_save: dict[str, Any],
@@ -274,6 +270,7 @@ class SyncEngine:
         server_save: dict[str, Any] | None = None,
         default_slot: str | None = None,
         autocleanup_limit: int | None = None,
+        overwrite: bool = False,
     ) -> dict[str, Any]:
         """Upload a local save file to server (delegate to :class:`MatrixExecutor`)."""
         return self._matrix.do_upload_save(
@@ -287,6 +284,7 @@ class SyncEngine:
             server_save,
             default_slot,
             autocleanup_limit=autocleanup_limit,
+            overwrite=overwrite,
         )
 
     def iter_matrix_outcomes(
@@ -492,7 +490,7 @@ class SyncEngine:
         rom_id: int,
         *,
         require_confirmed: bool = False,
-        negotiate_ops: list[SyncOperation] | None = None,
+        session_id: int | None = None,
         session_counts: list[int] | None = None,
     ) -> tuple[int, list[str], list[dict[str, Any]]]:
         """Read inputs → sync in executor → persist, for one ROM under its lock.
@@ -511,13 +509,17 @@ class SyncEngine:
         auto-uploaded into the default slot and overwrite another device's newer
         progress (#1055). The single-ROM entry points leave it unset.
 
-        Routing fork (ADR-0016): a legacy ``slot:null`` ROM, or one whose slot
-        the user has not yet confirmed, stays on the local ``compute_sync_action``
-        matrix; a confirmed non-legacy ROM hands DETECTION to the server's
-        negotiate operation list. *negotiate_ops* (the bulk pre-negotiate's
-        per-ROM slice) and *session_counts* (the bulk run's shared
-        ``[completed, failed]`` accumulator) are set only by ``sync_all_saves``;
-        a single-ROM trigger leaves both unset and opens/closes its own session.
+        Detection is always the local ``compute_sync_action`` matrix
+        (``do_sync_rom_saves``); ADR-0017 collapsed the old routing fork. A
+        confirmed non-legacy ROM (``slot_confirmed`` + a named ``active_slot``)
+        additionally opens a transport-only ``negotiate`` session around the run —
+        its planned ``operations`` are ignored, only the ``session_id`` is kept —
+        so the session envelope (play-session / telemetry) still gets recorded.
+        A legacy/unconfirmed ROM runs the bare matrix without a session. When the
+        bulk sweep already opened one whole-device session, its *session_id* is
+        threaded in (this call does not open its own) and *session_counts* (the
+        shared ``[completed, failed]`` accumulator) collects the run's tallies;
+        the bulk run completes that session once after the loop.
         """
         info = await self._loop.run_in_executor(None, self._rom_info.get_rom_save_info, rom_id)
         if not info:
@@ -531,109 +533,49 @@ class SyncEngine:
         default_slot = resolve_default_slot(self._settings)
         cleanup_limit = autocleanup_limit(self._settings)
 
-        if not (bool(save_state.active_slot) and save_state.slot_confirmed):
-            return await self._run_legacy_rom_sync(rom_id, save_state, device_id, core_so, default_slot, cleanup_limit)
-
-        options = SyncRunOptions(default_slot=default_slot, autocleanup_limit=cleanup_limit)
-        return await self._run_negotiate_rom_sync(
-            rom_id,
-            save_state=save_state,
-            device_id=device_id,
-            core_so=core_so,
-            info=info,
-            options=options,
-            default_slot=default_slot,
-            cleanup_limit=cleanup_limit,
-            negotiate_ops=negotiate_ops,
-            session_counts=session_counts,
-        )
-
-    async def _run_legacy_rom_sync(
-        self,
-        rom_id: int,
-        save_state: RomSaveState,
-        device_id: str | None,
-        core_so: str | None,
-        default_slot: str | None,
-        cleanup_limit: int | None,
-    ) -> tuple[int, list[str], list[dict[str, Any]]]:
-        """Legacy ``compute_sync_action`` path: ``list_saves`` + matrix, then persist.
-
-        The unchanged pre-negotiate flow, kept for ``slot:null`` legacy and
-        not-yet-confirmed ROMs (and the negotiate path's fallback). RomM cannot
-        address ``slot:null`` through the negotiate inventory param, so this path
-        never retires (ADR-0016).
-        """
-        synced, errors, conflicts = await self._loop.run_in_executor(
-            None, self.do_sync_rom_saves, rom_id, save_state, device_id, core_so, default_slot, cleanup_limit
-        )
-        await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
-        return synced, errors, conflicts
-
-    async def _run_negotiate_rom_sync(
-        self,
-        rom_id: int,
-        *,
-        save_state: RomSaveState,
-        device_id: str | None,
-        core_so: str | None,
-        info: dict[str, Any],
-        options: SyncRunOptions,
-        default_slot: str | None,
-        cleanup_limit: int | None,
-        negotiate_ops: list[SyncOperation] | None,
-        session_counts: list[int] | None,
-    ) -> tuple[int, list[str], list[dict[str, Any]]]:
-        """Negotiate path for a confirmed non-legacy ROM (ADR-0016).
-
-        With *negotiate_ops* supplied (the bulk ``sync_all_saves`` pre-negotiate),
-        the ops are already fetched and the bulk run owns the session, so counts
-        accumulate into *session_counts* and no per-ROM session is opened/closed.
-        Otherwise a single-ROM trigger opens its own session: it builds the
-        ROM-scoped inventory and POSTs ``negotiate`` **unconditionally** — an
-        empty local inventory must still learn about a save another device made
-        (the cross-device download), which the server returns as a download op
-        for the unmentioned server save. Any negotiate exception falls back to
-        the legacy matrix; the single-ROM session is closed in a ``finally``.
-        """
-        if negotiate_ops is not None:
-            ops: list[SyncOperation] = negotiate_ops
-            session_id: int | None = None
-        else:
-            inventory = await self._loop.run_in_executor(None, self._build_inventory, rom_id)
-            try:
-                response = await self._loop.run_in_executor(
-                    None,
-                    lambda: self._retry.with_retry(lambda: self._romm_api.negotiate_sync(device_id or "", inventory)),
-                )
-                # Read the response keys INSIDE the guard: a 200 body missing
-                # session_id / operations must degrade the same way a transport
-                # failure does (→ legacy), not escape as a KeyError.
-                session_id = response["session_id"]
-                ops = response["operations"]
-            except Exception as e:
-                self._logger.warning(
-                    "_run_rom_sync(%s): negotiate failed (%s) — falling back to legacy sync", rom_id, e
-                )
-                return await self._run_legacy_rom_sync(
-                    rom_id, save_state, device_id, core_so, default_slot, cleanup_limit
-                )
+        # Confirmed non-legacy ROM with no caller-supplied session → open a
+        # transport-only session of our own (operations ignored, ADR-0017).
+        own_session_id: int | None = None
+        if session_id is None and save_state.slot_confirmed and save_state.active_slot:
+            own_session_id = await self._open_negotiate_session(rom_id, device_id)
 
         synced = 0
         errors: list[str] = []
         conflicts: list[dict[str, Any]] = []
         try:
             synced, errors, conflicts = await self._loop.run_in_executor(
-                None, self.dispatch_negotiate_ops, rom_id, ops, save_state, device_id, info, options, core_so
+                None, self.do_sync_rom_saves, rom_id, save_state, device_id, core_so, default_slot, cleanup_limit
             )
             await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
         finally:
-            if session_id is not None:
-                await self._close_negotiate_session(session_id, synced, len(errors))
+            if own_session_id is not None:
+                await self._close_negotiate_session(own_session_id, synced, len(errors))
             elif session_counts is not None:
                 session_counts[0] += synced
                 session_counts[1] += len(errors)
         return synced, errors, conflicts
+
+    async def _open_negotiate_session(self, rom_id: int, device_id: str | None) -> int | None:
+        """Open a transport-only negotiate session for a confirmed ROM; ``None`` on failure.
+
+        POSTs the ROM-scoped inventory to ``negotiate`` and keeps only the
+        ``session_id`` — the planned ``operations`` are intentionally discarded
+        because the local ``compute_sync_action`` matrix is the sole detection
+        authority (ADR-0017). Any failure (transport error, or a 200 body missing
+        ``session_id``) degrades to ``None``: the sync run proceeds without a
+        session envelope rather than aborting. A session the server never hears
+        completed times out server-side, so a missed close is harmless.
+        """
+        try:
+            inventory = await self._loop.run_in_executor(None, self._build_inventory, rom_id)
+            response = await self._loop.run_in_executor(
+                None,
+                lambda: self._retry.with_retry(lambda: self._romm_api.negotiate_sync(device_id or "", inventory)),
+            )
+            return response["session_id"]
+        except Exception as e:
+            self._log_debug(f"_run_rom_sync({rom_id}): negotiate session open failed ({e}) — syncing without a session")
+            return None
 
     async def _close_negotiate_session(self, session_id: int, completed: int, failed: int) -> None:
         """Close a negotiate session, reporting op counts (non-fatal).
@@ -891,39 +833,34 @@ class SyncEngine:
         with self._uow_factory() as uow:
             return sorted(install.rom_id for install in uow.rom_installs.iter_all())
 
-    async def _bulk_pre_negotiate(self, device_id: str | None) -> tuple[int | None, dict[int, list[SyncOperation]]]:
-        """Open one whole-device negotiate session for the bulk sweep (ADR-0016).
+    async def _bulk_pre_negotiate(self, device_id: str | None) -> int | None:
+        """Open one whole-device transport-only negotiate session for the bulk sweep.
 
         Builds the full ``ClientSaveState`` inventory (every confirmed non-legacy
-        ROM with local saves) and POSTs ``negotiate`` once. Returns the
-        ``session_id`` and the operations grouped by ``rom_id`` for per-ROM
-        dispatch. On an empty inventory (nothing to negotiate) or any negotiate
-        failure the session id is ``None``: each ROM then falls back to its own
-        per-ROM negotiate (which itself legacy-falls-back) and legacy ROMs take
-        the legacy path — the bulk sweep degrades, never aborts. The full
-        inventory omits ROMs with no local file, so a save another device made
-        comes back as a download op keyed by its ``rom_id`` and dispatches
-        naturally (the cross-device download).
+        ROM with local saves) and POSTs ``negotiate`` once, keeping only the
+        ``session_id`` — the planned ``operations`` are discarded because detection
+        is the local ``compute_sync_action`` matrix (ADR-0017). Returns the
+        ``session_id``, or ``None`` on an empty inventory (nothing to negotiate) or
+        any negotiate failure. When ``None``, each confirmed non-legacy ROM opens
+        its own per-ROM session inside ``_run_rom_sync`` — the sweep degrades,
+        never aborts. The sync verdicts are unaffected either way; only the
+        session envelope (one shared vs. per-ROM) differs.
         """
         full_inventory = await self._loop.run_in_executor(None, self._build_inventory, None)
         if not full_inventory:
-            return None, {}
+            return None
         try:
             response = await self._loop.run_in_executor(
                 None,
                 lambda: self._retry.with_retry(lambda: self._romm_api.negotiate_sync(device_id or "", full_inventory)),
             )
-            # Parse the response keys INSIDE the guard: a 200 body missing
-            # session_id / operations must degrade like a failure (session_id
-            # None → every ROM falls back), not abort the whole sweep.
-            session_id = response["session_id"]
-            ops_by_rom: dict[int, list[SyncOperation]] = {}
-            for op in response["operations"]:
-                ops_by_rom.setdefault(op["rom_id"], []).append(op)
+            # Read the key INSIDE the guard: a 200 body missing session_id must
+            # degrade like a failure (session_id None → per-ROM sessions), not
+            # abort the whole sweep.
+            return response["session_id"]
         except Exception as e:
-            self._logger.warning("sync_all_saves: negotiate failed (%s) — per-ROM fallback", e)
-            return None, {}
-        return session_id, ops_by_rom
+            self._logger.warning("sync_all_saves: negotiate session open failed (%s) — per-ROM sessions", e)
+            return None
 
     async def sync_all_saves(self) -> dict[str, Any]:
         """Manual full sync of all ROMs with shortcuts (both directions)."""
@@ -961,11 +898,12 @@ class SyncEngine:
                             "message": DEVICE_NOT_REGISTERED,
                         }
 
-                # One whole-device negotiate session covers every confirmed
-                # non-legacy ROM (ADR-0016); legacy/unconfirmed ROMs in the sweep
-                # still take their own legacy path inside _run_rom_sync.
+                # One whole-device transport-only negotiate session wraps the
+                # sweep (ADR-0017); when it can't open, each confirmed non-legacy
+                # ROM opens its own session inside _run_rom_sync. Detection is the
+                # local matrix for every ROM regardless.
                 device_id = self.get_device_id()
-                session_id, ops_by_rom = await self._bulk_pre_negotiate(device_id)
+                session_id = await self._bulk_pre_negotiate(device_id)
                 session_counts = [0, 0]
 
                 total_synced = 0
@@ -984,7 +922,7 @@ class SyncEngine:
                             synced, errors, conflicts = await self._run_rom_sync(
                                 rom_id_int,
                                 require_confirmed=True,
-                                negotiate_ops=ops_by_rom.get(rom_id_int, []) if session_id is not None else None,
+                                session_id=session_id,
                                 session_counts=session_counts if session_id is not None else None,
                             )
                         total_synced += synced
@@ -1044,15 +982,15 @@ class SyncEngine:
 
         ``action`` is one of:
 
-        - ``"keep_local"`` — push local to the current server save (PUT). When
-          the local content already matches the server's content hash we adopt
-          it silently without re-uploading.
+        - ``"keep_local"`` — push local to the current server save
+          (POST overwrite=true). When the local content already matches the
+          server's content hash we adopt it silently without re-uploading.
         - ``"use_server"`` — download the current server save, replacing local.
         """
         rom_id_int = int(rom_id)
         async with self.rom_lock(rom_id_int):
             # #239: RetroArch writes saves to the content dir — both keep_local
-            # (PUT after reading the local file under saves_dir) and use_server
+            # (POST after reading the local file under saves_dir) and use_server
             # (download into saves_dir) write to a directory RetroArch ignores,
             # so the resolution could not take effect. Refuse before the
             # orchestrator does any server fetch or file write.

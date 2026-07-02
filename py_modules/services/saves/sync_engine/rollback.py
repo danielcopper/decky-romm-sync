@@ -267,8 +267,8 @@ class RollbackOrchestrator:
         system: str,
         rom_name: str,
     ) -> None:
-        """Push the local file to *server* (PUT). Adopt-without-upload when the
-        local content already matches the server's content hash.
+        """Push the local file to *server* (POST overwrite=true). Adopt-without-upload
+        when the local content already matches the server's content hash.
 
         The on-disk name is resolved from the server save's ``file_extension``
         via :func:`local_save_target` — the same canonical
@@ -310,5 +310,11 @@ class RollbackOrchestrator:
             )
             return
 
-        # Upload local content as a PUT against the existing server save.
-        self._matrix.do_upload_save(rom_id, local_path, target, save_state, device_id, system, core_so, server)
+        # POST the local content as a new save in the slot with overwrite=True:
+        # the user explicitly chose to keep local, so our content must win RomM's
+        # write-time currency (409) gate rather than 409-backstop into a conflict
+        # loop (ADR-0017). The freshness of the server head was already validated
+        # by the STALE_CONFLICT check in ``resolve`` before we got here.
+        self._matrix.do_upload_save(
+            rom_id, local_path, target, save_state, device_id, system, core_so, None, overwrite=True
+        )

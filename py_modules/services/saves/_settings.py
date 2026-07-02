@@ -27,13 +27,18 @@ def sync_after_exit(settings: dict[str, Any]) -> bool:
     return bool(settings.get("sync_after_exit", True))
 
 
-def resolve_default_slot(settings: dict[str, Any]) -> str | None:
-    """The configured default slot, collapsing empty/None to ``None`` (legacy mode)."""
+def resolve_default_slot(settings: dict[str, Any]) -> str:
+    """The configured default slot, coercing blank/None/whitespace to ``"default"``.
+
+    Never returns ``None``: the legacy no-slot mode is retired (#1276), so a
+    missing, empty, or whitespace-only ``default_slot`` collapses to the
+    canonical ``"default"`` slot rather than legacy mode.
+    """
     raw_slot = settings.get("default_slot", "default")
     if raw_slot is None:
-        return None
-    slot_str = str(raw_slot)
-    return slot_str if slot_str else None
+        return "default"
+    slot_str = str(raw_slot).strip()
+    return slot_str if slot_str else "default"
 
 
 def autocleanup_limit(settings: dict[str, Any]) -> int:
@@ -56,15 +61,16 @@ def sanitize_setting(key: str, value: object) -> tuple[object, bool]:
     """Validate and coerce a single save-sync settings key/value pair.
 
     Returns ``(coerced_value, skip)`` where ``skip=True`` means the value should
-    be discarded. Mirrors the legacy ``StateService`` coercions: empty/whitespace
-    slot names collapse to ``None`` (legacy mode), ``autocleanup_limit`` is
-    clamped to a positive int, and the three booleans pass through ``bool(...)``.
+    be discarded. Empty/whitespace/None slot names collapse to ``"default"``
+    (the legacy no-slot mode is retired, #1276 — mirroring the
+    ``autocleanup_limit`` clamp philosophy), ``autocleanup_limit`` is clamped to
+    a positive int, and the three booleans pass through ``bool(...)``.
     """
     if key == "default_slot":
         if value is None:
-            return None, False  # None = legacy mode
+            return "default", False  # blank/None -> canonical "default" slot
         coerced = str(value).strip()
-        return (coerced if coerced else None), False  # empty -> None
+        return (coerced if coerced else "default"), False  # empty -> "default"
     if key == "autocleanup_limit":
         return max(1, int(value)), False  # type: ignore[arg-type]
     if key in ("save_sync_enabled", "sync_before_launch", "sync_after_exit"):

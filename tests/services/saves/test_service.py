@@ -17,7 +17,7 @@ from fakes.fake_settings_persister import FakeSettingsPersister
 from domain.iso_time import epoch_to_iso
 from domain.rom_save_state import FileSyncState, RomSaveState
 from lib.errors import RommConnectionError
-from services.saves._settings import sanitize_setting
+from services.saves._settings import resolve_default_slot, sanitize_setting
 from tests.services.saves._helpers import (
     _create_save,
     _enable_sync_with_device,
@@ -766,32 +766,45 @@ class TestSaveSyncSettingsSlotAndCleanup:
         assert result["success"] is True
         assert result["settings"]["default_slot"] == "desktop"
 
-    def test_update_default_slot_empty_string_becomes_none(self, tmp_path):
+    def test_update_default_slot_empty_string_becomes_default(self, tmp_path):
+        # Legacy no-slot mode is retired (#1276): a blank slot coerces to the
+        # canonical "default" slot rather than None/legacy.
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        svc._config.settings["default_slot"] = "default"
+        svc._config.settings["default_slot"] = "desktop"
         result = svc.update_save_sync_settings({"default_slot": ""})
-        assert result["settings"]["default_slot"] is None
+        assert result["settings"]["default_slot"] == "default"
 
-    def test_empty_string_becomes_none(self, tmp_path):
+    def test_empty_string_becomes_default(self, tmp_path):
         val, skip = sanitize_setting("default_slot", "")
-        assert val is None
+        assert val == "default"
         assert skip is False
 
-    def test_none_value_passes_through(self, tmp_path):
+    def test_none_value_becomes_default(self, tmp_path):
         val, skip = sanitize_setting("default_slot", None)
-        assert val is None
+        assert val == "default"
         assert skip is False
 
-    def test_whitespace_only_becomes_none(self, tmp_path):
+    def test_whitespace_only_becomes_default(self, tmp_path):
         val, skip = sanitize_setting("default_slot", "   ")
-        assert val is None
+        assert val == "default"
         assert skip is False
 
     def test_nonempty_string_trimmed(self, tmp_path):
         val, skip = sanitize_setting("default_slot", "  desktop  ")
         assert val == "desktop"
         assert skip is False
+
+    def test_resolve_default_slot_blank_none_whitespace_all_become_default(self, tmp_path):
+        # resolve_default_slot never returns None — legacy no-slot mode retired (#1276).
+        assert resolve_default_slot({}) == "default"
+        assert resolve_default_slot({"default_slot": None}) == "default"
+        assert resolve_default_slot({"default_slot": ""}) == "default"
+        assert resolve_default_slot({"default_slot": "   "}) == "default"
+
+    def test_resolve_default_slot_named_slot_trimmed(self, tmp_path):
+        assert resolve_default_slot({"default_slot": "desktop"}) == "desktop"
+        assert resolve_default_slot({"default_slot": "  desktop  "}) == "desktop"
 
     def test_upload_uses_none_slot_when_active_slot_is_none(self, tmp_path):
         """When active_slot key is present but value is None, .get() returns None (legacy mode)."""
@@ -1336,8 +1349,11 @@ class TestBuildSaveInventory:
         _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"data")
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
 
-        state = RomSaveState(system="gba")
-        state.confirm_slot(None)  # slot_confirmed=True, active_slot=None (legacy)
+        # Construct the legacy confirmed state directly — confirm_slot(None) is
+        # rejected now (#1276), but a pre-#1276 DB row (or one mid-migration
+        # before 005 un-confirms it) can still carry active_slot=None +
+        # slot_confirmed=True, and build_save_inventory must still exclude it.
+        state = RomSaveState(system="gba", slot_confirmed=True, active_slot=None)
         assert state.slot_confirmed is True
         assert state.active_slot is None
         _seed_save_state(svc, 42, state)

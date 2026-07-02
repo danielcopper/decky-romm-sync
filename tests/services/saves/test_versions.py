@@ -454,8 +454,13 @@ class TestRollbackToVersion:
         """
         svc, fake = make_service(tmp_path)
         _enable_sync_with_device(svc)
-        self._setup_state(svc, tmp_path, tracked_id=999, last_sync_hash="h")
+        # A genuinely-synced local file: the baseline is the real on-disk md5, so the
+        # pre-flight matrix treats local as unchanged (the placeholder "h" no longer
+        # matches under the realistic fake). Tracked save 999 is gone from the server;
+        # the pre-flight POST 409s on the newer slot head and the backstop downloads it.
         _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        self._setup_state(svc, tmp_path, tracked_id=999, last_sync_hash=local_hash)
         # Tracked save 999 does NOT exist on server. Only save 50 is present
         # (and is the rollback target).
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
@@ -466,10 +471,10 @@ class TestRollbackToVersion:
 
     @pytest.mark.asyncio
     async def test_unsynced_changes_get_uploaded_before_switch(self, tmp_path):
-        """Local diverged from last_sync_hash + we're flagged ``is_current`` on
-        the tracked save → matrix returns ``Upload(PUT)`` → pre-flight
-        silently pushes local up to the server → switch proceeds. No warning,
-        no force flag, no data loss.
+        """Local diverged from last_sync_hash + we're genuinely ``is_current`` on
+        the tracked save head → matrix returns ``Upload`` → pre-flight silently
+        POSTs local up to the server (ADR-0017 — a new save, no longer a PUT) →
+        switch proceeds. No warning, no force flag, no data loss.
         """
         svc, fake = make_service(tmp_path)
         _enable_sync_with_device(svc)
@@ -482,16 +487,19 @@ class TestRollbackToVersion:
             updated_at="2026-03-10T10:00:00Z",
             device_syncs=[{"device_id": "device-1", "is_current": True, "last_synced_at": "2026-03-10T10:00:00Z"}],
         )
+        # Genuinely current on the slot head (matches the seeded device_syncs) so
+        # the overwrite=false POST is accepted — no 409 backstop.
+        fake.stage_device_sync(100, "device-1", "2026-03-10T10:00:00Z")
         fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
 
         result = await svc.rollback_to_version(42, "default", 50)
 
         assert result["status"] == "ok"
-        # Pre-flight PUT against id=100 happened (the silent upload of local
-        # changes), then switch PUT against id=50 (the rollback bump).
+        # Pre-flight POSTs the diverged local as a new save (the silent upload of
+        # local changes), then the switch PUTs against id=50 (the rollback bump).
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         upload_targets = [c[2].get("save_id") for c in upload_calls]
-        assert 100 in upload_targets  # pre-flight PUT
+        assert None in upload_targets  # pre-flight POST (new save)
         assert 50 in upload_targets  # switch PUT
 
     @pytest.mark.asyncio

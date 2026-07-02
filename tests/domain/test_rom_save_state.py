@@ -191,19 +191,20 @@ class TestConfirmSlot:
         assert state.slot_confirmed is True
         assert state.slots["manual"] == {"source": "local", "count": 0, "latest_updated_at": None}
 
-    def test_none_uses_empty_string_key(self):
+    def test_none_raises_legacy_retired(self):
+        # Legacy slot:null confirmation is retired (#1276): confirm_slot rejects
+        # None outright rather than confirming the no-slot mode.
         state = RomSaveState()
-        state.confirm_slot(None)
+        with pytest.raises(ValueError, match="non-empty slot name"):
+            state.confirm_slot(None)  # type: ignore[arg-type]
+        assert state.slot_confirmed is False
         assert state.active_slot is None
-        assert state.slot_confirmed is True
-        assert state.slots[""] == {"source": "local", "count": 0, "latest_updated_at": None}
 
-    def test_empty_string_normalizes_to_none(self):
+    def test_empty_string_raises_legacy_retired(self):
         state = RomSaveState()
-        state.confirm_slot("")
-        assert state.active_slot is None
-        assert state.slot_confirmed is True
-        assert "" in state.slots
+        with pytest.raises(ValueError, match="non-empty slot name"):
+            state.confirm_slot("")
+        assert state.slot_confirmed is False
 
     def test_does_not_overwrite_existing_slot_entry(self):
         state = RomSaveState()

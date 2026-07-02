@@ -207,9 +207,10 @@ class SetupWizard:
 
         Sets slot_confirmed=true and active_slot in state.
 
-        ``chosen_slot`` selects the slot: ``None`` confirms the LEGACY slot
-        (active_slot=None), a non-empty string confirms that named slot, and a
-        string that strips to ``""`` is rejected as an invalid slot name.
+        ``chosen_slot`` must be a non-empty named slot. ``None`` and a string
+        that strips to ``""`` are both rejected as an invalid slot name: the
+        legacy no-slot mode can no longer be confirmed as a target (#1276) — it
+        survives only as a migration *source*.
 
         When ``migrate`` is true, migrates saves from ``migrate_from_slot``
         (``None`` = the legacy no-slot source) into ``chosen_slot``: upload local
@@ -224,19 +225,26 @@ class SetupWizard:
         persisted. The non-migration path is never gated (no file write).
         """
         rom_id = int(rom_id)
-        # ``None`` is the legacy slot — confirm_slot(None) sets active_slot=None +
-        # slot_confirmed=True. A string is stripped; an empty result is rejected.
+        # Legacy ``slot:null`` confirmation is retired (#1276): a slot must carry
+        # a non-empty name. ``None`` is rejected outright — the aggregate's
+        # ``confirm_slot`` would raise on it, so we guard before the call — and a
+        # string that strips to ``""`` is rejected the same way. The legacy
+        # no-slot mode can no longer be confirmed as a target.
         if chosen_slot is None:
-            normalized_slot: str | None = None
-        else:
-            normalized_slot = str(chosen_slot).strip()
-            if not normalized_slot:
-                return {
-                    "success": False,
-                    "reason": "invalid_slot_name",
-                    "needs_conflict_resolution": False,
-                    "message": "Slot name cannot be empty",
-                }
+            return {
+                "success": False,
+                "reason": "invalid_slot_name",
+                "needs_conflict_resolution": False,
+                "message": "Slot name cannot be empty",
+            }
+        normalized_slot = str(chosen_slot).strip()
+        if not normalized_slot:
+            return {
+                "success": False,
+                "reason": "invalid_slot_name",
+                "needs_conflict_resolution": False,
+                "message": "Slot name cannot be empty",
+            }
 
         # The read→confirm→(migrate)→write of the RomSaveState aggregate must
         # serialise against every other path that touches this ROM's state.
@@ -263,8 +271,8 @@ class SetupWizard:
                         "needs_conflict_resolution": False,
                         "message": SAVE_SYNC_IN_CONTENT_DIR,
                     }
-                # migrate_from_slot can be None (legacy no-slot) or a string slot name;
-                # normalized_slot is None for a legacy target (uploads omit the param).
+                # normalized_slot is always a non-empty named target now (#1276);
+                # migrate_from_slot can be None (legacy no-slot source) or a named slot.
                 try:
                     await self._migrate_slot_saves(rom_id, normalized_slot, migrate_from_slot)
                 except Exception as e:

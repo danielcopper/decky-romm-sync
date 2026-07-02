@@ -122,13 +122,15 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
     };
   }, [romId]);
 
-  const handleConfirm = async (slot: string | null) => {
+  const handleConfirm = async (slot: string, migrate = false, migrateFrom: string | null = null) => {
     setConfirming(true);
     setError(null);
     try {
-      // No migration — just set the slot (null = legacy/no-slot mode). The user
-      // must explicitly choose migration later, so migrate=false, from=null.
-      const result = await confirmSlotChoice(romId, slot, false, null);
+      // Confirm a non-empty named slot (legacy slot:null is retired, #1276).
+      // Defaults are the non-destructive path (migrate=false, from=null); the
+      // legacy-group Track button passes migrate=true, from=null to carry the
+      // legacy saves into the target slot.
+      const result = await confirmSlotChoice(romId, slot, migrate, migrateFrom);
       if (!result.success) {
         setError(result.message || "Slot confirmation failed");
         setConfirming(false);
@@ -227,6 +229,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
   if (info.server_slots.length > 0) {
     info.server_slots.forEach((s) => {
       const slotKey = s.slot ?? "__null__";
+      const isLegacyGroup = s.slot === null || s.slot === "";
       rightChildren.push(
         <div
           key={`slot-${slotKey}`}
@@ -253,9 +256,22 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
             className="romm-wizard-btn"
             style={btnStyle}
             onClick={() => {
-              // A null server slot tracks LEGACY (no-slot) — never silently
-              // substitute the default slot for the user's legacy saves.
-              detach(handleConfirm(s.slot ?? null));
+              if (isLegacyGroup) {
+                // Legacy (no-slot) saves can no longer be tracked as-is (#1276).
+                // Offer to migrate them into the default slot rather than
+                // confirming the retired legacy mode.
+                showModal(
+                  createElement(ConfirmModal, {
+                    strTitle: "Migrate Legacy Saves?",
+                    strDescription: `Migrate legacy saves into ‘${defaultSlot}’?`,
+                    onOK: () => {
+                      detach(handleConfirm(defaultSlot, true, null));
+                    },
+                  }),
+                );
+              } else {
+                detach(handleConfirm(s.slot as string));
+              }
             }}
             onFocus={scrollFocusedToCenter}
           >
@@ -307,21 +323,10 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
           showModal(
             createElement(CustomSlotModal, {
               onSubmit: (trimmed: string) => {
-                if (trimmed) {
-                  detach(handleConfirm(trimmed));
-                } else {
-                  // Legacy mode
-                  showModal(
-                    createElement(ConfirmModal, {
-                      strTitle: "Use Legacy Mode?",
-                      strDescription: "Legacy mode (no slot) limits saves to one version per game. Are you sure?",
-                      onOK: () => {
-                        // Legacy/no-slot mode — null is the legacy choice, never "".
-                        detach(handleConfirm(null));
-                      },
-                    }),
-                  );
-                }
+                // An empty custom name is rejected by the backend's
+                // invalid_slot_name guard — never reinterpret it as the retired
+                // legacy no-slot mode (#1276).
+                detach(handleConfirm(trimmed));
               },
             }),
           );

@@ -1,0 +1,17 @@
+-- =============================================================================
+-- 005_unconfirm_legacy_slot_confirmations.sql — retire legacy slot:null confirmations
+-- Issue #1276 (client baseline authoritative; negotiate is transport; legacy slot:null retired)
+-- =============================================================================
+--
+-- The legacy no-slot mode (active_slot IS NULL, confirmed) can no longer be
+-- confirmed as a target (confirm_slot now requires a non-empty name). Any ROM
+-- already confirmed into legacy mode is un-confirmed here so the first-sync
+-- setup wizard reappears and the user picks a named slot (or migrates the
+-- legacy saves into one). This only flips slot_confirmed back to 0 — it NEVER
+-- deletes rows, per-file baselines (rom_save_files), or the slots read-model:
+-- the legacy server saves survive as a migration source until the user chooses.
+--
+-- Transaction-safe DDL/DML only — the runner (adapters/sqlite_migrations.py)
+-- wraps BEGIN/COMMIT and stamps PRAGMA user_version = 5.
+-- -----------------------------------------------------------------------------
+UPDATE rom_save_states SET slot_confirmed = 0 WHERE active_slot IS NULL AND slot_confirmed = 1;

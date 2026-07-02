@@ -55,10 +55,11 @@ const CONFIRM_FAILED_TOAST_BODY = "Couldn't configure save sync — open the Sav
 export interface LaunchGateSetupDeps {
   /** ROM id passed to `confirmSlotChoice` on the auto-confirm branch. */
   rid: number;
-  /** Resolves the user's chosen save slot on the backend. */
+  /** Resolves the user's chosen save slot on the backend. `slot` is a non-empty
+   *  named slot — legacy `slot:null` confirmation is retired (#1276). */
   confirmSlotChoice: (
     rid: number,
-    slot: string | null,
+    slot: string,
     migrate: boolean,
     migrateFrom: string | null,
   ) => Promise<{ success?: boolean; message?: string } | undefined>;
@@ -105,9 +106,11 @@ export async function applyLaunchGateSetupOutcome(
  *  pass spies. */
 export interface WizardSetupDeps {
   romId: number;
+  /** `slot` is a non-empty named slot — legacy `slot:null` confirmation is
+   *  retired (#1276). */
   confirmSlotChoice: (
     rid: number,
-    slot: string | null,
+    slot: string,
     migrate: boolean,
     migrateFrom: string | null,
   ) => Promise<{ success?: boolean; message?: string } | undefined>;

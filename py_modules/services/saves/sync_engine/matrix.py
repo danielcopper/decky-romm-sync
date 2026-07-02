@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from domain.emulator_tag import build_emulator_tag
+from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_state import FileSyncState, RomSaveState
 from domain.save_backup import backup_name, select_backups_to_prune
 from domain.save_slot import save_in_slot
@@ -29,15 +30,14 @@ from domain.sync_action import (
     SyncAction,
     Upload,
     compute_sync_action,
+    resolve_upload_conflict,
 )
-from lib.errors import RommApiError, classify_error
+from lib.errors import RommApiError, RommConflictError, classify_error
 from services.saves._helpers import local_save_target
 
 if TYPE_CHECKING:
     import logging
     from collections.abc import Iterator
-
-    from models.sync import SyncOperation
 
     from services.protocols import (
         Clock,
@@ -345,6 +345,7 @@ class MatrixExecutor:
         server_save: dict[str, Any] | None = None,
         default_slot: str | None = None,
         autocleanup_limit: int | None = None,
+        overwrite: bool = False,
     ) -> dict[str, Any]:
         """Upload a local save file to server.
 
@@ -354,6 +355,11 @@ class MatrixExecutor:
         resolved once by the caller so this worker stays free of installed-rom
         reads. *autocleanup_limit* caps server-retained versions — the adapter
         honors it on the POST (create) path only, so PUT callers leave it None.
+        *overwrite* forces RomM's ``add_save`` to skip its write-time currency
+        (409) gate — used only when the caller has already decided our content
+        must win (the ``keep_local`` conflict resolution); the automatic sync
+        dispatch leaves it ``False`` so the 409 backstop can catch a stale-current
+        race (ADR-0017).
         """
         save_id = server_save.get("id") if server_save else None
         emulator = build_emulator_tag(core_so)
@@ -369,6 +375,7 @@ class MatrixExecutor:
                 save_id,
                 device_id=device_id,
                 slot=slot,
+                overwrite=overwrite,
                 autocleanup_limit=autocleanup_limit,
             )
         )
@@ -482,26 +489,40 @@ class MatrixExecutor:
 
     def _dispatch_upload(
         self,
-        action: Upload,
         *,
         rom_id: int,
         save_state: RomSaveState,
         device_id: str | None,
         filename: str,
+        rom_name: str,
         local_path: str | None,
+        local_hash: str | None,
+        last_sync_hash: str | None,
+        saves_dir: str,
         system: str,
         core_so: str | None,
         options: SyncRunOptions,
-        server_saves: list[dict[str, Any]],
-        errors: list[str],
+        sink: DispatchSink,
     ) -> bool:
-        """Execute an ``Upload`` action. Returns True iff the upload was issued."""
+        """Execute an ``Upload`` action by POSTing a new save, with a 409 backstop.
+
+        Every automatic upload POSTs a new save in the slot (``server_save=None``,
+        ``overwrite=False``); ``Upload.target_save_id`` no longer selects a PUT
+        (ADR-0017). The POST is planned against a ``list_saves`` snapshot that can
+        be stale by the time it lands — another device may have moved the slot head
+        past our last sync in between. RomM answers that race with a 409;
+        :meth:`_handle_upload_409` re-fetches the slot and lets
+        ``resolve_upload_conflict`` decide from hashes alone (download the fresh
+        head when local is provably unchanged, else surface a conflict). Any other
+        ``RommApiError`` propagates to the generic handler in
+        :meth:`_dispatch_sync_action`. Returns True iff a transfer was issued.
+        """
         if local_path is None:
             self._logger.warning(f"_dispatch_upload({rom_id}): {filename}: upload requested but no local file on disk")
-            errors.append(f"{filename}: upload requested but no local file")
+            sink.errors.append(f"{filename}: upload requested but no local file")
             return False
-        if action.target_save_id is None:
-            # POST path: brand-new save in slot. The retention cap is POST-only —
+        try:
+            # POST (create) a new save in the slot. The retention cap is POST-only —
             # RomM stacks versions on create, so the limit is sent here alone.
             self.do_upload_save(
                 rom_id,
@@ -514,22 +535,67 @@ class MatrixExecutor:
                 None,
                 options.default_slot,
                 autocleanup_limit=options.autocleanup_limit,
+                overwrite=False,
             )
             return True
-        # PUT path: re-upload to update the tracked save (local diverged while
-        # is_current=true). PUT updates in place and never stacks, so the
-        # autocleanup cap is left at its None default.
-        server_save = next((s for s in server_saves if s.get("id") == action.target_save_id), None)
-        if server_save is None:
-            # Picked save vanished between read and dispatch — best-effort.
-            self._log_debug(
-                f"_dispatch_sync_action: target_save_id={action.target_save_id} not in server_saves; skipping",
+        except RommConflictError:
+            return self._handle_upload_409(
+                rom_id=rom_id,
+                save_state=save_state,
+                device_id=device_id,
+                filename=filename,
+                rom_name=rom_name,
+                local_path=local_path,
+                local_hash=local_hash,
+                last_sync_hash=last_sync_hash,
+                saves_dir=saves_dir,
+                system=system,
+                options=options,
+                sink=sink,
             )
+
+    def _handle_upload_409(
+        self,
+        *,
+        rom_id: int,
+        save_state: RomSaveState,
+        device_id: str | None,
+        filename: str,
+        rom_name: str,
+        local_path: str,
+        local_hash: str | None,
+        last_sync_hash: str | None,
+        saves_dir: str,
+        system: str,
+        options: SyncRunOptions,
+        sink: DispatchSink,
+    ) -> bool:
+        """Re-decide an upload rejected by RomM's write-time 409.
+
+        The POST proved the slot head moved past our last sync since the
+        ``list_saves`` snapshot that planned it. Re-fetch the slot, regroup to
+        this file's canonical target (the same grouping
+        :meth:`iter_matrix_outcomes` uses), pick the newest, and let
+        ``resolve_upload_conflict`` decide purely from hashes: a provably-unchanged
+        local downloads the fresh head; anything else is a genuine two-sided
+        divergence the user must resolve. An empty regroup (the head vanished
+        again between the 409 and the re-fetch) is recorded as a non-fatal error.
+        """
+        server_saves = self._retry.with_retry(lambda: self._romm_api.list_saves(rom_id, device_id=device_id))
+        server_in_slot = self.filter_server_saves_to_slot(server_saves, save_state.active_slot)
+        group = [ss for ss in server_in_slot if local_save_target(ss, rom_name) == filename]
+        if not group:
+            self._logger.warning(
+                f"_handle_upload_409({rom_id}): {filename}: 409 on POST but no server save in slot on re-fetch"
+            )
+            sink.errors.append(f"{filename}: upload rejected by server and no server save found to reconcile")
             return False
-        self.do_upload_save(
-            rom_id, local_path, filename, save_state, device_id, system, core_so, server_save, options.default_slot
-        )
-        return True
+        fresh = max(group, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
+        if resolve_upload_conflict(local_hash, last_sync_hash, fresh.get("content_hash")) == "download":
+            self.do_download_save(fresh, saves_dir, filename, save_state, device_id, system, options.default_slot)
+            return True
+        sink.conflicts.append(self.build_sync_conflict_entry(rom_id, filename, fresh, local_path, local_hash))
+        return False
 
     def _dispatch_sync_action(
         self,
@@ -539,13 +605,14 @@ class MatrixExecutor:
         save_state: RomSaveState,
         device_id: str | None,
         filename: str,
+        rom_name: str,
         local_path: str | None,
         local_hash: str | None,
+        last_sync_hash: str | None,
         saves_dir: str,
         system: str,
         core_so: str | None,
         options: SyncRunOptions,
-        server_saves: list[dict[str, Any]],
         sink: DispatchSink,
     ) -> bool:
         """Execute one ``SyncAction`` outcome. Returns True if a transfer happened.
@@ -553,7 +620,8 @@ class MatrixExecutor:
         Centralises the I/O dispatch so ``sync_rom_saves`` stays declarative.
         Errors are caught and pushed onto ``sink.errors`` so a single failure
         can't abort the whole rom-level sync; conflicts land on
-        ``sink.conflicts``.
+        ``sink.conflicts``. ``rom_name`` + ``last_sync_hash`` are threaded through
+        for the upload 409 backstop (canonical-target regroup + hash re-decision).
         """
         try:
             if isinstance(action, Skip):
@@ -567,17 +635,19 @@ class MatrixExecutor:
                 return False
             if isinstance(action, Upload):
                 return self._dispatch_upload(
-                    action,
                     rom_id=rom_id,
                     save_state=save_state,
                     device_id=device_id,
                     filename=filename,
+                    rom_name=rom_name,
                     local_path=local_path,
+                    local_hash=local_hash,
+                    last_sync_hash=last_sync_hash,
+                    saves_dir=saves_dir,
                     system=system,
                     core_so=core_so,
                     options=options,
-                    server_saves=server_saves,
-                    errors=sink.errors,
+                    sink=sink,
                 )
             if isinstance(action, Download):
                 self.do_download_save(
@@ -773,13 +843,14 @@ class MatrixExecutor:
                 save_state=save_state,
                 device_id=device_id,
                 filename=outcome.filename,
+                rom_name=info["rom_name"],
                 local_path=outcome.local_path,
                 local_hash=outcome.local_hash,
+                last_sync_hash=outcome.file_state.last_sync_hash,
                 saves_dir=saves_dir,
                 system=system,
                 core_so=core_so,
                 options=options,
-                server_saves=outcome.server_candidates,
                 sink=sink,
             ):
                 synced += 1
@@ -791,169 +862,6 @@ class MatrixExecutor:
             f"[TIMING] do_sync_rom_saves({rom_id}): TOTAL {self._clock.time() - t_total:.3f}s"
             f" synced={synced} errors={len(errors)}"
         )
-        return synced, errors, conflicts
-
-    # ------------------------------------------------------------------
-    # Negotiate-path dispatch (RomM 4.9 Device Sync; ADR-0016)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _negotiate_op_to_action(op: SyncOperation) -> tuple[SyncAction, list[dict[str, Any]]]:
-        """Map one server-planned ``SyncOperation`` onto a :class:`SyncAction`.
-
-        Returns the synthesized action plus the ``server_saves`` list the upload
-        PUT path looks ``target_save_id`` up in (empty for the branches that read
-        the action's own ``server_save`` field). The mapping is 1:1 with the
-        legacy decision outcomes so the unchanged :meth:`_dispatch_sync_action`
-        executes both paths identically:
-
-        - ``download`` → :class:`Download` on the named server save (``id`` +
-          ``updated_at`` + ``content_hash``; ``file_size_bytes`` is unknown
-          without a GET, left ``None``).
-        - ``upload`` with an int ``save_id`` → :class:`Upload` PUT to that id;
-          a ``None`` ``save_id`` → :class:`Upload` POST (new save in slot).
-        - ``conflict`` → :class:`Conflict` on the named server save.
-        - ``no_op`` → :class:`Skip` carrying the server's ``reason``.
-        """
-        action = op["action"]
-        save_id = op.get("save_id")
-        if action == "download":
-            server_save: dict[str, Any] = {
-                "id": save_id,
-                "updated_at": op.get("server_updated_at") or "",
-                "file_size_bytes": None,
-                "content_hash": op.get("server_content_hash"),
-            }
-            return Download(server_save=server_save), [server_save]
-        if action == "upload":
-            if save_id is not None:
-                return Upload(target_save_id=save_id), [{"id": save_id}]
-            return Upload(target_save_id=None), []
-        if action == "conflict":
-            conflict_save: dict[str, Any] = {
-                "id": save_id,
-                "updated_at": op.get("server_updated_at") or "",
-                "file_size_bytes": None,
-            }
-            return Conflict(server_save=conflict_save), [conflict_save]
-        return Skip(reason=op.get("reason") or "synced"), []
-
-    @staticmethod
-    def _negotiate_op_out_of_scope(op: SyncOperation, rom_id: int, active_slot: str | None) -> str | None:
-        """Return a drop reason when *op* isn't for this run's ``(rom_id, active_slot)``, else None.
-
-        A scoped single-ROM negotiate POST gets the server's device-wide download
-        ops back; a per-ROM run owns only its own ROM and slot, so a foreign ROM
-        or a foreign slot is dropped (else it would be pulled into the wrong ROM's
-        saves dir / slot).
-        """
-        if op.get("rom_id") != rom_id:
-            return (
-                f"dropping op for rom {op.get('rom_id')!r} "
-                f"(foreign ROM in device-wide negotiate response) {op.get('file_name')}"
-            )
-        op_slot = op.get("slot")
-        if op_slot != active_slot:
-            return f"dropping op for slot {op_slot!r} (active={active_slot!r}) {op.get('file_name')}"
-        return None
-
-    @staticmethod
-    def _canonical_op_filename(op_file_name: str, rom_name: str) -> str:
-        """Resolve the untagged canonical local filename for a negotiate op.
-
-        RomM returns the server save's datetime-TAGGED ``file_name`` (e.g.
-        ``"Game (USA) [2026-06-25_05-57-58].srm"``), but the local file on disk is
-        the untagged ``"<rom_name>.<ext>"`` RetroArch reads. Resolve it the same
-        way the legacy path does (``local_save_target``, with its extension
-        sanitization) so the lookup matches and a download writes to / an upload
-        targets the canonical local file. The op carries no ``file_extension``, so
-        derive it from the tagged op name (which still carries the real extension).
-        """
-        op_ext = os.path.splitext(op_file_name)[1].lstrip(".")
-        return local_save_target({"file_extension": op_ext} if op_ext else {}, rom_name)
-
-    def dispatch_negotiate_ops(
-        self,
-        rom_id: int,
-        ops: list[SyncOperation],
-        save_state: RomSaveState,
-        device_id: str | None,
-        info: dict[str, Any],
-        options: SyncRunOptions,
-        core_so: str | None,
-    ) -> tuple[int, list[str], list[dict[str, Any]]]:
-        """Execute the server-planned ops for one non-legacy ROM, mutating *save_state*.
-
-        The negotiate analog of :meth:`sync_rom_saves`: instead of running
-        ``compute_sync_action`` against ``list_saves``, each ``SyncOperation``
-        the server returned is mapped (:meth:`_negotiate_op_to_action`) onto the
-        same ``Skip`` / ``Upload`` / ``Download`` / ``Conflict`` action and
-        dispatched through the unchanged :meth:`_dispatch_sync_action`. Returns
-        ``(synced_count, errors_list, conflicts_list)``.
-
-        Only ops matching this run's ``(rom_id, active_slot)`` are acted on — a
-        scoped POST gets the server's device-wide download ops back, but a per-ROM
-        run owns just its own ROM and slot, so ops for any other ROM or slot are
-        dropped (else a foreign save would be pulled into this ROM's saves dir).
-        A ``download`` op for a file with no local copy is the cross-device case
-        (a save made on another device) and is pulled to recover the content;
-        the server-only migration guard still suppresses it
-        while a save-sort migration is pending (#238). ``info``
-        (``get_rom_save_info``) and ``options`` are resolved by the caller;
-        *core_so* stamps the upload emulator tag. The operation entry owns the
-        surrounding read/write Unit of Work.
-        """
-        rom_id = int(rom_id)
-        system = info["system"]
-        saves_dir = info["saves_dir"]
-        active_slot = save_state.active_slot
-
-        errors: list[str] = []
-        conflicts: list[dict[str, Any]] = []
-        sink = DispatchSink(errors=errors, conflicts=conflicts)
-        synced = 0
-
-        local_by_name = {lf["filename"]: lf for lf in self._rom_info.find_save_files(rom_id)}
-        pending_migration = self._rom_info.is_save_sort_changed()
-
-        for op in ops:
-            drop_reason = self._negotiate_op_out_of_scope(op, rom_id, active_slot)
-            if drop_reason:
-                self._log_debug(f"dispatch_negotiate_ops({rom_id}): {drop_reason}")
-                continue
-            filename = self._canonical_op_filename(op["file_name"], info["rom_name"])
-            local_file = local_by_name.get(filename)
-            local_path = local_file["path"] if local_file else None
-            if local_path is None and pending_migration:
-                self._log_debug(
-                    f"dispatch_negotiate_ops({rom_id}): skipping server-only {filename} — migration pending"
-                )
-                continue
-            local_hash = (
-                self._save_file_store.checksum_md5(local_path)
-                if local_path and self._save_file_store.is_file(local_path)
-                else None
-            )
-            action, server_saves = self._negotiate_op_to_action(op)
-            self._log_debug(f"dispatch_negotiate_ops({rom_id}): {op['action']} {filename} -> {type(action).__name__}")
-            if self._dispatch_sync_action(
-                action,
-                rom_id=rom_id,
-                save_state=save_state,
-                device_id=device_id,
-                filename=filename,
-                local_path=local_path,
-                local_hash=local_hash,
-                saves_dir=saves_dir,
-                system=system,
-                core_so=core_so,
-                options=options,
-                server_saves=server_saves,
-                sink=sink,
-            ):
-                synced += 1
-
-        save_state.mark_sync_evaluated(self._clock.now().isoformat())
         return synced, errors, conflicts
 
 

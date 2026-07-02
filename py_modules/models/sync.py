@@ -7,6 +7,12 @@ The dict shapes exchanged with ``POST /api/sync/negotiate`` and
 shipped RomM 4.9.2 OpenAPI schema field-for-field — required keys are plain,
 server-optional / nullable keys are ``NotRequired[... | None]``. Runtime dicts;
 these describe the wire contract without changing their identity.
+
+Note (ADR-0017): ``negotiate`` is kept only as a session **transport**. The
+save-sync engine reads its response solely for ``session_id`` (the session
+envelope) and intentionally ignores the planned ``operations`` — detection is the
+local ``compute_sync_action`` matrix. ``SyncOperation`` / ``SyncNegotiateResponse``
+remain the typed wire shape of the response, not a decision input.
 """
 
 from __future__ import annotations

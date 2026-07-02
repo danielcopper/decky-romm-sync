@@ -16,6 +16,7 @@ from domain.sync_action import (
     Skip,
     Upload,
     compute_sync_action,
+    resolve_upload_conflict,
 )
 
 DEVICE_ID = "device-abc"
@@ -45,13 +46,19 @@ def _server_save(
     updated_at: str = "2024-01-01T12:00:00+00:00",
     slot: int = 0,
     device_syncs: list[dict[str, Any]] | None = None,
+    content_hash: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    save: dict[str, Any] = {
         "id": save_id,
         "slot": slot,
         "updated_at": updated_at,
         "device_syncs": device_syncs or [],
     }
+    # Older / migrated server saves may lack ``content_hash``; only stamp it when
+    # a caller supplies one, so the missing-key path stays exercisable.
+    if content_hash is not None:
+        save["content_hash"] = content_hash
+    return save
 
 
 # ---------------------------------------------------------------------------
@@ -212,19 +219,46 @@ def test_no_baseline_is_current_true_returns_skip_with_adopt_baseline():
     assert result == Skip(reason="synced", adopt_baseline=True)
 
 
-def test_no_baseline_is_current_false_returns_download():
-    """Row 11 — is_current=false + local present + no baseline → Download.
-    Without a baseline we cannot claim drift, so the server wins outright
-    (no mtime split here)."""
-    server = _server_save(device_syncs=[_device_sync(DEVICE_ID, is_current=False)])
+def test_no_baseline_is_current_false_content_identical_returns_download():
+    """Row 11a (#1276) — is_current=false + local present + no baseline, and the
+    picked server save's ``content_hash`` equals ``local_hash`` (byte-identical).
+    The local bytes already exist on the moved-past server head, so adopting via
+    Download is harmless and re-establishes the baseline + is_current — no
+    spurious Conflict.
+    """
+    server = _server_save(
+        content_hash="same-hash",
+        device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
+    )
     result = compute_sync_action(
         local_file=_local(),
         server_saves_in_slot=[server],
         files_state={},
         device_id=DEVICE_ID,
-        local_hash="abc",
+        local_hash="same-hash",  # byte-identical to the server content_hash
     )
     assert result == Download(server_save=server)
+
+
+def test_no_baseline_is_current_false_content_differs_returns_conflict():
+    """Row 11b (#1276) — is_current=false + local present + no baseline, and the
+    picked server save's ``content_hash`` differs from ``local_hash``. Without a
+    baseline we cannot prove the local is unchanged, and it is NOT byte-identical
+    to the moved-past head, so silently downloading would clobber an unbacked
+    local edit. This is the "no assumptions, user decides" case → Conflict.
+    """
+    server = _server_save(
+        content_hash="server-hash",
+        device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
+    )
+    result = compute_sync_action(
+        local_file=_local(),
+        server_saves_in_slot=[server],
+        files_state={},
+        device_id=DEVICE_ID,
+        local_hash="local-hash",  # differs from the server content_hash
+    )
+    assert result == Conflict(server_save=server)
 
 
 def test_server_changed_local_unchanged_returns_download():
@@ -263,9 +297,13 @@ def test_no_device_entry_no_local_returns_download():
     assert result == Download(server_save=server)
 
 
-def test_no_device_entry_local_newer_returns_upload_post():
-    """Row 6a — no entry for our device + local mtime >= server.updated_at →
-    POST our local as a new save (target_save_id=None)."""
+def test_no_device_entry_no_baseline_local_newer_returns_conflict():
+    """Branch 6 / #1276 — no entry for our device, a present local with a real
+    hash but NO baseline, not byte-identical to the head (the server save carries
+    no ``content_hash``). Even though local mtime >= server.updated_at, the
+    unknown-provenance local is the "user decides" case → ``Conflict`` (branch-5
+    parity), not a silent mtime-based ``Upload(POST)``.
+    """
     server_updated_at = "2024-01-01T12:00:00+00:00"
     server_epoch = datetime.fromisoformat(server_updated_at).timestamp()
     server = _server_save(
@@ -279,10 +317,15 @@ def test_no_device_entry_local_newer_returns_upload_post():
         device_id=DEVICE_ID,
         local_hash="abc",
     )
-    assert result == Upload(target_save_id=None)
+    assert result == Conflict(server_save=server)
 
 
-def test_no_device_entry_local_older_returns_download():
+def test_no_device_entry_no_baseline_local_older_returns_conflict():
+    """Branch 6 / #1276 — same no-baseline differing-local slice, local mtime
+    older than the head. Mtime direction is irrelevant: the unknown-provenance
+    local → ``Conflict`` (branch-5 parity), never a silent ``Download`` that
+    would overwrite the unbacked local edit.
+    """
     server_updated_at = "2024-01-01T12:00:00+00:00"
     server_epoch = datetime.fromisoformat(server_updated_at).timestamp()
     server = _server_save(
@@ -296,7 +339,7 @@ def test_no_device_entry_local_older_returns_download():
         device_id=DEVICE_ID,
         local_hash="abc",
     )
-    assert result == Download(server_save=server)
+    assert result == Conflict(server_save=server)
 
 
 def test_multiple_server_saves_picks_newest():
@@ -353,7 +396,10 @@ def test_last_sync_hash_none_skips_divergence_check():
 
     is_current=true: Skip with adopt_baseline=True so the missing baseline
     gets recorded for next time.
-    is_current=false: Download (server wins; no claim of divergence possible).
+    is_current=false (#1276): with no baseline AND no proof the local is
+    byte-identical to the moved-past server head (the save here carries no
+    ``content_hash``), silently downloading would clobber an unbacked local
+    edit — so this is a Conflict, not a silent Download.
     """
     # is_current=true branch
     server_current = _server_save(device_syncs=[_device_sync(DEVICE_ID, is_current=True)])
@@ -366,7 +412,8 @@ def test_last_sync_hash_none_skips_divergence_check():
     )
     assert result_current == Skip(reason="synced", adopt_baseline=True)
 
-    # is_current=false branch (server moved): silent download, no conflict
+    # is_current=false branch (server moved), no content_hash to prove identity:
+    # cannot silently overwrite an unbacked local → Conflict.
     server_moved = _server_save(device_syncs=[_device_sync(DEVICE_ID, is_current=False)])
     result_moved = compute_sync_action(
         local_file=_local(),
@@ -375,11 +422,16 @@ def test_last_sync_hash_none_skips_divergence_check():
         device_id=DEVICE_ID,
         local_hash="abc",
     )
-    assert result_moved == Download(server_save=server_moved)
+    assert result_moved == Conflict(server_save=server_moved)
 
 
 def test_zulu_timestamp_is_parsed_for_local_newer_comparison():
-    """`updated_at` ending in Z must be normalized before fromisoformat."""
+    """`updated_at` ending in Z must be normalized before fromisoformat.
+
+    Exercised on the trailing mtime path (``local_hash=None`` — the unknown-local
+    case the mtime fallback still handles after #1276): the Z-suffixed server
+    ``updated_at`` is parsed so the local-newer comparison lands on ``Upload``.
+    """
     server = _server_save(
         updated_at="2024-01-01T12:00:00Z",
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
@@ -390,7 +442,7 @@ def test_zulu_timestamp_is_parsed_for_local_newer_comparison():
         server_saves_in_slot=[server],
         files_state={},
         device_id=DEVICE_ID,
-        local_hash="abc",
+        local_hash=None,
     )
     assert result == Upload(target_save_id=None)
 
@@ -398,6 +450,11 @@ def test_zulu_timestamp_is_parsed_for_local_newer_comparison():
 def test_no_device_entry_local_mtime_equals_server_epoch_returns_upload_post():
     """Boundary: `local_mtime == server_epoch` must satisfy the `>=` semantics
     and result in Upload(target=None) (POST), not Download.
+
+    Exercised on the trailing mtime path with ``local_hash=None`` — the
+    unknown-local case the mtime fallback still handles after #1276 (a present
+    local with a real, differing hash now routes to ``Conflict`` before reaching
+    this comparison).
     """
     server_updated_at = "2026-04-01T12:00:00+00:00"
     server_epoch = datetime.fromisoformat(server_updated_at).timestamp()
@@ -410,7 +467,7 @@ def test_no_device_entry_local_mtime_equals_server_epoch_returns_upload_post():
         server_saves_in_slot=[server],
         files_state={},
         device_id=DEVICE_ID,
-        local_hash="abc",
+        local_hash=None,
     )
     assert result == Upload(target_save_id=None)
 
@@ -496,15 +553,17 @@ def test_no_device_entry_baseline_matches_preserves_mtime_behavior():
     assert result_newer == Upload(target_save_id=None)
 
 
-def test_no_device_entry_no_baseline_preserves_mtime_behavior():
-    """Branch 6 / #1059 — no entry, NO baseline (last_sync_hash absent). Without a
-    baseline we cannot claim drift, so the Conflict guard must NOT fire and the
-    mtime path is unchanged: Download when local older, Upload(None) when newer.
+def test_no_device_entry_no_baseline_differing_local_returns_conflict_both_directions():
+    """Branch 6 / #1276 — no entry, NO baseline, a present local with a real hash
+    not byte-identical to the head (no ``content_hash`` to dedup against). The
+    unknown-provenance local is the "user decides" case in BOTH mtime directions:
+    ``Conflict`` whether local is older or newer than the head — never a silent
+    mtime-based Download (older) or Upload (newer). Branch-5 parity.
     """
     server_updated_at = "2024-01-01T12:00:00+00:00"
     server_epoch = datetime.fromisoformat(server_updated_at).timestamp()
 
-    # local older → Download
+    # local older → Conflict (was a silent Download before #1276)
     server_a = _server_save(
         updated_at=server_updated_at,
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
@@ -516,9 +575,9 @@ def test_no_device_entry_no_baseline_preserves_mtime_behavior():
         device_id=DEVICE_ID,
         local_hash="DIFFERENT",
     )
-    assert result_older == Download(server_save=server_a)
+    assert result_older == Conflict(server_save=server_a)
 
-    # local newer-or-equal → Upload(None) (POST)
+    # local newer → Conflict (was Upload(None) before #1276)
     server_b = _server_save(
         updated_at=server_updated_at,
         device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
@@ -530,7 +589,7 @@ def test_no_device_entry_no_baseline_preserves_mtime_behavior():
         device_id=DEVICE_ID,
         local_hash="DIFFERENT",
     )
-    assert result_newer == Upload(target_save_id=None)
+    assert result_newer == Conflict(server_save=server_b)
 
 
 def test_no_device_entry_identical_content_returns_skip_adopt_baseline():
@@ -558,10 +617,12 @@ def test_no_device_entry_identical_content_returns_skip_adopt_baseline():
     assert result == Skip(reason="synced", adopt_baseline=True)
 
 
-def test_no_device_entry_different_content_returns_upload_post():
-    """Branch 6 / #1013 — no entry, local present, server ``content_hash`` differs
-    from ``local_hash``, local mtime >= server. The dedup guard must NOT fire on a
-    hash mismatch; the existing mtime path is preserved → ``Upload(None)`` (POST).
+def test_no_device_entry_no_baseline_different_content_returns_conflict():
+    """Branch 6 / #1013 + #1276 — no entry, local present with NO baseline, server
+    ``content_hash`` differs from ``local_hash``, local mtime >= server. The dedup
+    guard must NOT fire on a hash mismatch; without a baseline the differing local
+    is unknown-provenance → ``Conflict`` (branch-5 parity), not a silent
+    mtime-based ``Upload(None)``.
     """
     server_updated_at = "2024-01-01T12:00:00+00:00"
     server_epoch = datetime.fromisoformat(server_updated_at).timestamp()
@@ -577,14 +638,17 @@ def test_no_device_entry_different_content_returns_upload_post():
         device_id=DEVICE_ID,
         local_hash="local-hash",  # differs → not a duplicate
     )
-    assert result == Upload(target_save_id=None)
+    assert result == Conflict(server_save=server)
 
 
-def test_no_device_entry_missing_content_hash_falls_back_to_mtime():
-    """Branch 6 / #1013 — no entry, local present, the server save carries NO
-    ``content_hash`` key (older / migrated saves may lack it). The dedup check is
-    skipped and the existing mtime path is unchanged: local mtime >= server →
-    ``Upload(None)`` (POST). The known fallback gap — no slow-path content fetch.
+def test_no_device_entry_no_baseline_missing_content_hash_returns_conflict():
+    """Branch 6 / #1013 + #1276 — no entry, local present with NO baseline, the
+    server save carries NO ``content_hash`` key (older / migrated saves may lack
+    it). The dedup check is skipped, but without a baseline the present local of
+    unknown provenance can't be silently mtime-picked → ``Conflict`` (branch-5
+    parity), even though local mtime >= server. The mtime fallback's remaining
+    duplicate-POST gap now applies only when local matches a held baseline (see
+    ``test_no_device_entry_baseline_matches_preserves_mtime_behavior``).
     """
     server_updated_at = "2024-01-01T12:00:00+00:00"
     server_epoch = datetime.fromisoformat(server_updated_at).timestamp()
@@ -600,7 +664,7 @@ def test_no_device_entry_missing_content_hash_falls_back_to_mtime():
         device_id=DEVICE_ID,
         local_hash="abc",
     )
-    assert result == Upload(target_save_id=None)
+    assert result == Conflict(server_save=server)
 
 
 def test_no_device_entry_diverged_baseline_with_different_content_hash_returns_conflict():
@@ -629,6 +693,10 @@ def test_no_device_entry_diverged_baseline_with_different_content_hash_returns_c
 def test_no_device_entry_garbled_server_updated_at_returns_download():
     """Parse-failure path: unparseable server `updated_at` → server effectively
     wins (Download), per the conservative-fallthrough contract.
+
+    Exercised on the trailing mtime path (``local_hash=None`` — the unknown-local
+    case the mtime fallback still handles after #1276; a present local with a
+    real hash and no baseline routes to ``Conflict`` before this comparison).
     """
     server = _server_save(
         updated_at="not a date",
@@ -639,7 +707,7 @@ def test_no_device_entry_garbled_server_updated_at_returns_download():
         server_saves_in_slot=[server],
         files_state={},
         device_id=DEVICE_ID,
-        local_hash="abc",
+        local_hash=None,
     )
     assert result == Download(server_save=server)
 
@@ -647,6 +715,9 @@ def test_no_device_entry_garbled_server_updated_at_returns_download():
 def test_no_device_entry_non_numeric_local_mtime_returns_download():
     """Parse-failure path: local mtime is a string instead of a number → server
     effectively wins (Download).
+
+    Exercised on the trailing mtime path (``local_hash=None``), the unknown-local
+    case the mtime fallback still handles after #1276.
     """
     server = _server_save(
         updated_at="2024-01-01T12:00:00+00:00",
@@ -663,6 +734,77 @@ def test_no_device_entry_non_numeric_local_mtime_returns_download():
         server_saves_in_slot=[server],
         files_state={},
         device_id=DEVICE_ID,
-        local_hash="abc",
+        local_hash=None,
     )
     assert result == Download(server_save=server)
+
+
+# ---------------------------------------------------------------------------
+# resolve_upload_conflict — the 409 write-time backstop (ADR-0017 / #1276)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_upload_conflict_local_matches_baseline_downloads():
+    """Local unchanged since our own recorded baseline (``local_hash ==
+    last_sync_hash``) → nothing of ours to protect, adopt the server via
+    ``"download"``.
+    """
+    assert resolve_upload_conflict("abc", "abc", None) == "download"
+
+
+def test_resolve_upload_conflict_local_matches_server_content_downloads():
+    """Local diverged from our recorded baseline but is byte-identical to what
+    the server now holds (``local_hash == server_content_hash``, ``!=
+    last_sync_hash``) → still nothing of ours to protect → ``"download"``.
+    """
+    assert resolve_upload_conflict("abc", "old-baseline", "abc") == "download"
+
+
+def test_resolve_upload_conflict_diverged_from_both_conflicts():
+    """Local matches neither our baseline nor the server's current content →
+    two-sided divergence (which the 409 proves) → ``"conflict"``.
+    """
+    assert resolve_upload_conflict("local", "baseline", "server") == "conflict"
+
+
+def test_resolve_upload_conflict_local_hash_none_conflicts():
+    """Missing ``local_hash`` → we cannot prove the local is unchanged, so the
+    safe default under uncertainty is ``"conflict"`` — never ``"download"`` even
+    when the baseline and server content agree.
+    """
+    assert resolve_upload_conflict(None, "abc", "abc") == "conflict"
+
+
+def test_resolve_upload_conflict_no_baseline_no_server_content_conflicts():
+    """``last_sync_hash`` and ``server_content_hash`` both ``None`` → no evidence
+    the local is unchanged → ``"conflict"``.
+    """
+    assert resolve_upload_conflict("abc", None, None) == "conflict"
+
+
+def test_resolve_upload_conflict_empty_local_hash_does_not_match_none():
+    """An empty-string hash (``""``) can never read as "provably unchanged".
+
+    ``""`` is a degenerate value: with the old ``is not None`` guards an empty
+    ``local_hash`` against a ``None`` baseline/server stayed ``"conflict"``, but
+    an empty ``local_hash`` matching an empty baseline would have read as equal
+    and downloaded. The truthiness guards forbid any empty-string match, so every
+    combination involving an empty hash stays ``"conflict"``.
+    """
+    assert resolve_upload_conflict("", None, None) == "conflict"
+    assert resolve_upload_conflict("", "abc", "def") == "conflict"
+
+
+def test_resolve_upload_conflict_empty_local_and_baseline_conflicts():
+    """Empty ``local_hash`` AND empty ``last_sync_hash`` must not coincidentally
+    match as "unchanged" — the truthiness guard keeps it ``"conflict"`` (the
+    old ``is not None`` guards would have equated ``"" == ""`` → ``"download"``).
+    """
+    assert resolve_upload_conflict("", "", None) == "conflict"
+
+
+def test_resolve_upload_conflict_empty_local_and_server_content_conflicts():
+    """Empty ``local_hash`` AND empty ``server_content_hash`` must not
+    coincidentally match — the truthiness guard keeps it ``"conflict"``.
+    """
+    assert resolve_upload_conflict("", None, "") == "conflict"

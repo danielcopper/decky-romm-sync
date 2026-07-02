@@ -36,19 +36,24 @@ async def test_confirm_named_slot_no_migration(harness):
     assert not any(c[0] == "delete_server_saves" for c in harness.romm.call_log)
 
 
-async def test_confirm_legacy_slot_none(harness):
-    """chosen_slot=None confirms the legacy slot: active_slot None, slot_confirmed True."""
+async def test_confirm_legacy_slot_none_rejected(harness):
+    """chosen_slot=None is rejected — legacy slot:null confirmation is retired (#1276).
+
+    The no-slot mode can no longer be confirmed as a target: the callable returns
+    the canonical ``invalid_slot_name`` failure and never persists a confirmed
+    legacy state.
+    """
     enable_save_sync(harness)
     seed_rom(harness, 42)
 
     result = await harness.plugin.confirm_slot_choice(42, None, False, None)
 
-    assert result["success"] is True
-    assert result["needs_conflict_resolution"] is False
+    assert result["success"] is False
+    assert result["reason"] == "invalid_slot_name"
+    assert isinstance(result["message"], str)
     with harness.uow_factory() as uow:
         state = uow.rom_save_states.get(42)
-    assert state is not None
-    assert state.active_slot is None
-    assert state.slot_confirmed is True
+    # Nothing confirmed — no rom_save_states row written.
+    assert state is None
     # No migration delete fired.
     assert not any(c[0] == "delete_server_saves" for c in harness.romm.call_log)

@@ -31,6 +31,21 @@ Invariants encoded here:
 - Inv6 (#1062): branch-4 (is_current=true) never emits an in-place PUT for a
   0-byte / implausibly-shrunken diverged local save — that would overwrite the
   only good server copy with no recoverable version; it is a ``Conflict``.
+- Inv7 (#1276): branch-5 (is_current=false) with a present local and NO recorded
+  baseline never returns ``Download`` unless the local content is provably
+  byte-identical to the chosen server save (``local_hash ==
+  server.content_hash``) — otherwise it is a ``Conflict``, never a silent
+  overwrite of an unbacked local edit.
+- Inv8 (#1276): ``resolve_upload_conflict`` (the 409 write-time backstop) never
+  returns ``"download"`` unless ``local_hash`` is non-None and equal to the
+  recorded baseline or the server's current content; a missing ``local_hash``
+  always yields ``"conflict"``.
+- Inv9 (#1276): branch-6 (no ``device_syncs`` entry for our device) with a
+  present local and NO recorded baseline returns ``Conflict`` whenever the local
+  is not byte-identical to the chosen head — never a silent mtime-based
+  ``Download`` / ``Upload`` of an unbacked local edit; a byte-identical local is
+  adopted (``Skip(adopt_baseline=True)``), never a duplicate POST. Branch-5
+  parity.
 """
 
 from __future__ import annotations
@@ -49,6 +64,7 @@ from domain.sync_action import (
     SyncAction,
     Upload,
     compute_sync_action,
+    resolve_upload_conflict,
 )
 
 DEVICE_ID = "device-abc"
@@ -107,13 +123,19 @@ def _device_syncs(draw: st.DrawFn) -> list[dict[str, Any]]:
 @st.composite
 def _server_saves(draw: st.DrawFn) -> dict[str, Any]:
     epoch = draw(_epochs)
-    return {
+    save: dict[str, Any] = {
         "id": draw(st.integers(min_value=1, max_value=9999)),
         "slot": 0,
         "updated_at": _epoch_to_iso(epoch, zulu=draw(st.booleans()), micros=draw(st.booleans())),
         "file_extension": "srm",
         "device_syncs": draw(_device_syncs()),
     }
+    # RomM stamps most saves with a ``content_hash`` (mirrors ``_hashes``); older
+    # / migrated saves may omit it, so ``None`` leaves the key absent.
+    content_hash = draw(_opt_hashes)
+    if content_hash is not None:
+        save["content_hash"] = content_hash
+    return save
 
 
 _server_lists = st.lists(_server_saves(), min_size=0, max_size=5)
@@ -271,16 +293,18 @@ def test_idempotent_after_branch6_upload_and_baseline_adoption(
 ) -> None:
     """Branch-6 → adopt → Skip replay invariance (the #1013 no-loop property).
 
-    Step 1: a save with no ``device_syncs`` entry for our device and a local
-    mtime at-or-after the server's ``updated_at`` dispatches ``Upload(None)``
-    (POST a new save).
+    Step 1: a save with no ``device_syncs`` entry for our device, a held baseline
+    the local still matches (``last_sync_hash == local_hash`` — unchanged since
+    our last sync, so #1276 does NOT route it to a conflict), a server head with
+    no ``content_hash`` to dedup against, and a local mtime at-or-after the
+    server's ``updated_at`` dispatches ``Upload(None)`` (POST a new save over a
+    head we never synced).
 
     Step 2: the service adopts the baseline — the server save now carries our
     ``device_syncs`` entry with ``is_current=True`` and
-    ``files_state["last_sync_hash"]`` equals the local hash. Re-running the
-    kernel on those updated inputs MUST return ``Skip("synced")``, never
-    another ``Upload`` — otherwise sync churns out duplicate server saves on
-    every pass.
+    ``files_state["last_sync_hash"]`` still equals the local hash. Re-running the
+    kernel on those updated inputs MUST return ``Skip("synced")``, never another
+    ``Upload`` — otherwise sync churns out duplicate server saves on every pass.
     """
     # Local mtime at-or-after server updated_at so step 1 is the POST branch.
     local_file = {**local_file, "mtime": server_epoch + 3600}
@@ -292,8 +316,11 @@ def test_idempotent_after_branch6_upload_and_baseline_adoption(
         "device_syncs": [{"device_id": OTHER_DEVICE_ID, "is_current": True}],
     }
 
-    step1 = _action(local_file, [server], {}, local_hash)
-    assume(isinstance(step1, Upload) and step1.target_save_id is None)
+    # Local unchanged since our last sync (baseline matches) → the #1276 guard
+    # does not fire, so branch 6 still POSTs a new version by mtime.
+    files_state = {"last_sync_hash": local_hash}
+    step1 = _action(local_file, [server], files_state, local_hash)
+    assert step1 == Upload(target_save_id=None)
 
     # Service adopts baseline: our device entry is now current, and the
     # recorded baseline hash matches the local content.
@@ -301,7 +328,7 @@ def test_idempotent_after_branch6_upload_and_baseline_adoption(
         **server,
         "device_syncs": [{"device_id": DEVICE_ID, "is_current": True}],
     }
-    step2 = _action(local_file, [adopted_server], {"last_sync_hash": local_hash}, local_hash)
+    step2 = _action(local_file, [adopted_server], files_state, local_hash)
     assert step2 == Skip(reason="synced")
 
 
@@ -423,3 +450,143 @@ def test_is_current_implausible_local_never_puts_in_place(
     else:
         # Plausible divergent edit → the normal in-place PUT.
         assert result == Upload(target_save_id=7)
+
+
+# ---------------------------------------------------------------------------
+# Invariant 7 (#1276): branch-5 no-baseline downloads only on proven identity.
+# ---------------------------------------------------------------------------
+
+
+@st.composite
+def _head_not_current_no_baseline(draw: st.DrawFn) -> dict[str, Any]:
+    """A single server head on which our device is present but is_current=False.
+
+    Built directly (not by assume-filtering a random list) so the property never
+    trips Hypothesis's ``filter_too_much`` health check — every generated example
+    lands squarely in the branch-5 no-baseline slice.
+    """
+    server: dict[str, Any] = {
+        "id": draw(st.integers(min_value=1, max_value=9999)),
+        "slot": 0,
+        "updated_at": _epoch_to_iso(draw(_epochs), zulu=draw(st.booleans()), micros=draw(st.booleans())),
+        "device_syncs": [{"device_id": DEVICE_ID, "is_current": False}],
+    }
+    content_hash = draw(_opt_hashes)
+    if content_hash is not None:
+        server["content_hash"] = content_hash
+    return server
+
+
+@given(
+    local_file=_local_files(),
+    server=_head_not_current_no_baseline(),
+    local_hash=_opt_hashes,
+)
+def test_not_current_no_baseline_downloads_only_when_content_identical(
+    local_file: dict[str, Any],
+    server: dict[str, Any],
+    local_hash: str | None,
+) -> None:
+    """Branch 5 / #1276 — our device is present but ``is_current=false`` on the
+    chosen server head, a local file is present, and we hold NO recorded baseline
+    (``files_state`` has no ``last_sync_hash``). In that slice the kernel returns
+    ``Download`` ONLY when the local content is provably byte-identical to the
+    chosen save (``local_hash == server.content_hash``); every other case is a
+    ``Conflict``, never a silent overwrite of an unbacked local edit. This is the
+    row-11 fix stated directly.
+    """
+    result = _action(local_file, [server], {}, local_hash)
+
+    if isinstance(result, Download):
+        assert local_hash is not None
+        assert server.get("content_hash") == local_hash
+
+
+# ---------------------------------------------------------------------------
+# Invariant 8 (#1276): the 409 backstop never downloads unless provably unchanged.
+# ---------------------------------------------------------------------------
+
+
+@given(
+    local_hash=_opt_hashes,
+    last_sync_hash=_opt_hashes,
+    server_content_hash=_opt_hashes,
+)
+def test_resolve_upload_conflict_never_downloads_unless_provably_unchanged(
+    local_hash: str | None,
+    last_sync_hash: str | None,
+    server_content_hash: str | None,
+) -> None:
+    """Branch 409 / #1276 — ``resolve_upload_conflict`` maps a write-time 409 to
+    an action. It returns ``"download"`` (adopt the server) ONLY when
+    ``local_hash`` is non-None and equals either our recorded baseline
+    (``last_sync_hash``) or the server's current content (``server_content_hash``);
+    a missing ``local_hash`` always yields ``"conflict"``. Missing evidence never
+    downgrades to a data-losing download.
+    """
+    result = resolve_upload_conflict(local_hash, last_sync_hash, server_content_hash)
+    assert result in ("download", "conflict")
+
+    if local_hash is None:
+        assert result == "conflict"
+
+    if result == "download":
+        assert local_hash is not None
+        assert local_hash in (last_sync_hash, server_content_hash)
+
+
+# ---------------------------------------------------------------------------
+# Invariant 9 (#1276): branch-6 no-baseline differing local is always a Conflict.
+# ---------------------------------------------------------------------------
+
+
+@st.composite
+def _head_no_entry(draw: st.DrawFn) -> dict[str, Any]:
+    """A single server head with NO ``device_syncs`` entry for our device.
+
+    Built directly (not by assume-filtering a random list) so the property never
+    trips Hypothesis's ``filter_too_much`` health check — every generated example
+    lands squarely in the branch-6 slice. Our device is absent from
+    ``device_syncs`` (empty, or only the other device present).
+    """
+    device_syncs: list[dict[str, Any]] = []
+    if draw(st.booleans()):
+        device_syncs.append({"device_id": OTHER_DEVICE_ID, "is_current": draw(st.booleans())})
+    server: dict[str, Any] = {
+        "id": draw(st.integers(min_value=1, max_value=9999)),
+        "slot": 0,
+        "updated_at": _epoch_to_iso(draw(_epochs), zulu=draw(st.booleans()), micros=draw(st.booleans())),
+        "file_extension": "srm",
+        "device_syncs": device_syncs,
+    }
+    content_hash = draw(_opt_hashes)
+    if content_hash is not None:
+        server["content_hash"] = content_hash
+    return server
+
+
+@given(
+    local_file=_local_files(),
+    server=_head_no_entry(),
+    local_hash=_hashes,
+)
+def test_no_entry_no_baseline_differing_local_is_conflict(
+    local_file: dict[str, Any],
+    server: dict[str, Any],
+    local_hash: str,
+) -> None:
+    """Branch 6 / #1276 — no ``device_syncs`` entry for our device, a present
+    local with a real hash, and NO recorded baseline (``files_state`` has no
+    ``last_sync_hash``). When the local content is not byte-identical to the
+    chosen head (``local_hash != server.content_hash``, or the head carries no
+    ``content_hash``) the kernel returns ``Conflict`` — never a silent
+    mtime-based ``Download`` or ``Upload`` of an unbacked local edit. When it IS
+    byte-identical the head is adopted (``Skip(adopt_baseline=True)``), never a
+    duplicate POST. Branch-5 parity, stated directly.
+    """
+    result = _action(local_file, [server], {}, local_hash)
+
+    if server.get("content_hash") == local_hash:
+        assert result == Skip(reason="synced", adopt_baseline=True)
+    else:
+        assert result == Conflict(server_save=server)

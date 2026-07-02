@@ -91,9 +91,10 @@ def resolve_chosen_server(action: object, candidates: list[dict[str, Any]]) -> d
       continue to display the server save's metadata).
     - ``Upload(target_save_id=None)`` (POST-as-new) has no server reference
       yet → ``None``.
-    - ``Upload(target_save_id=int)`` (PUT) targets an existing save in
-      *candidates* — fall back to the newest so the status panel still
-      shows the server-side metadata while the upload is pending.
+    - ``Upload(target_save_id=int)`` echoes the existing save it supersedes
+      (status display only — every upload POSTs; the id no longer selects an
+      HTTP verb) — fall back to the newest in *candidates* so the status panel
+      still shows the server-side metadata while the upload is pending.
     """
     if isinstance(action, Download | Conflict):
         return action.server_save

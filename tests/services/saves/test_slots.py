@@ -564,20 +564,22 @@ class TestConfirmSlotChoice:
         assert state.slot_confirmed is True
 
     @pytest.mark.asyncio
-    async def test_confirm_legacy_slot_none(self, tmp_path):
-        """``chosen_slot=None`` confirms the legacy slot: active_slot None, slot_confirmed True.
+    async def test_confirm_legacy_slot_none_rejected(self, tmp_path):
+        """``chosen_slot=None`` is rejected — legacy slot:null confirmation is retired (#1276).
 
-        Was impossible before #1008 — ``None`` collided with the empty-name
-        guard. The explicit contract routes ``None`` to ``confirm_slot(None)``.
+        The no-slot mode can no longer be confirmed as a target; ``None`` is
+        guarded before the aggregate call and returns the canonical
+        ``invalid_slot_name`` failure, never leaving a confirmed legacy state.
         """
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _seed_rom(svc, 42)
         result = await svc.confirm_slot_choice(42, None, False, None)
-        assert result["success"] is True
-        state = _require_save_state(svc, 42)
-        assert state.active_slot is None
-        assert state.slot_confirmed is True
+        assert result["success"] is False
+        assert result["reason"] == "invalid_slot_name"
+        assert isinstance(result["message"], str)
+        # No confirmed legacy state was persisted.
+        assert _get_save_state(svc, 42) is None
 
     @pytest.mark.asyncio
     async def test_confirm_no_migration_by_default(self, tmp_path):

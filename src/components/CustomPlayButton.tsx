@@ -25,6 +25,7 @@ import {
   removeRom,
   debugLog,
   preLaunchSync,
+  getSaveStatus,
   logError,
   isSaveTrackingConfigured,
   getSaveSetupInfo,
@@ -572,14 +573,32 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     }
   };
 
+  // Resolve the conflict the button is already showing. This is a READ, not a
+  // re-sync: it pulls the already-known conflict via `getSaveStatus` and hands
+  // it to the shared resolution modal. Re-running the act-capable
+  // `preLaunchSync` here (the pre-#1276 behavior) could upload/download OTHER
+  // files in the ROM as a side effect and re-derive the conflict through a
+  // different path than the one that set the button to "conflict" — so the
+  // launch path keeps `preLaunchSync`, but conflict resolution must not act.
   const handleResolveConflict = async () => {
     if (!romId) return;
     setState("syncing");
     try {
       const result = await Promise.race([
-        preLaunchSync(romId),
+        getSaveStatus(romId),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 15000)),
       ]);
+
+      // A connectivity blip during the status read leaves every file "unknown"
+      // and an empty server list; treating that as "resolved" would drop the
+      // user back to Play believing the conflict was cleared. Surface it and
+      // stay in conflict, exactly like the network-throw catch below (#1276).
+      if (result.server_query_failed) {
+        detach(debugLog(`CustomPlayButton: resolve conflict — server query failed for rom ${romId}`));
+        toaster.toast({ title: "RomM Sync", body: "Couldn't reach server to resolve conflict" });
+        setState("conflict");
+        return;
+      }
 
       if (result.conflicts && result.conflicts.length > 0) {
         const conflictResult = await handleConflicts(result.conflicts);
@@ -588,19 +607,8 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           return;
         }
       }
-      // A resolved failure without conflicts (DEVICE_NOT_REGISTERED,
-      // save_sort_changed, blocked_by_migration) must not masquerade as
-      // "resolved" — surface it and stay in the conflict state instead of
-      // dispatching a refresh and dropping back to play (#1050).
-      if (!result.success) {
-        detach(
-          debugLog(`CustomPlayButton: resolve conflict sync failed: reason=${result.reason ?? ""} message=${result.message}`),
-        );
-        toaster.toast({ title: "RomM Save Sync", body: result.message || "Couldn't resolve conflict — try again." });
-        setState("conflict");
-        return;
-      }
-      // Resolved or no conflicts left — notify siblings and go back to play
+      // Resolved here, or the conflict was already cleared elsewhere (empty/
+      // absent conflicts) — notify siblings and go back to play.
       globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
       setState("play");
     } catch (e) {

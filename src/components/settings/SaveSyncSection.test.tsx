@@ -289,27 +289,6 @@ describe("SaveSyncSection", () => {
     });
   });
 
-  describe("legacy-mode warning", () => {
-    it("is hidden for a normal slot like 'default'", () => {
-      const { container } = render(<SaveSyncSection {...defaultProps()} />);
-      expect(container.textContent).not.toContain("Legacy mode");
-    });
-
-    it("renders when default_slot is null", () => {
-      const { container } = render(
-        <SaveSyncSection {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: null }) })} />,
-      );
-      expect(container.textContent).toContain("Legacy mode (no slot)");
-    });
-
-    it("renders when default_slot is the empty string", () => {
-      const { container } = render(
-        <SaveSyncSection {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: "" }) })} />,
-      );
-      expect(container.textContent).toContain("Legacy mode (no slot)");
-    });
-  });
-
   describe("history limit dropdown", () => {
     it("renders the four canonical limit options", () => {
       render(<SaveSyncSection {...defaultProps()} />);

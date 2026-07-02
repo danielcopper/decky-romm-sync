@@ -175,7 +175,7 @@ CREATE TABLE rom_playtime (
 -- -----------------------------------------------------------------------------
 CREATE TABLE rom_save_states (
     rom_id             INTEGER PRIMARY KEY REFERENCES roms(rom_id) ON DELETE CASCADE,
-    active_slot        TEXT,                        -- NULL = legacy "no slots" mode (meaningful, #6)
+    active_slot        TEXT,                        -- NULL = legacy "no slots" mode (meaningful, #6); no longer confirmable — 005 un-confirms legacy rows (#1276)
     slot_confirmed     INTEGER NOT NULL DEFAULT 0 CHECK (slot_confirmed IN (0, 1)),  -- bool
     emulator           TEXT NOT NULL DEFAULT 'retroarch',
     system             TEXT NOT NULL DEFAULT '',    -- system the ROM runs under (save-path resolution)

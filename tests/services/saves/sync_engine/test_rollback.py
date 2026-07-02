@@ -60,8 +60,8 @@ class TestResolveSyncConflict:
         assert file_state.last_sync_hash == local_hash
 
     @pytest.mark.asyncio
-    async def test_resolve_keep_local_hash_mismatch_uploads_put(self, tmp_path):
-        """Local differs from server content → PUT against existing save id."""
+    async def test_resolve_keep_local_hash_mismatch_reposts_with_overwrite(self, tmp_path):
+        """Local differs from server content → POST a new save with overwrite=true."""
         svc, fake = make_service(tmp_path)
         _enable_sync_with_device(svc)
         _install_rom(svc, tmp_path)
@@ -87,8 +87,9 @@ class TestResolveSyncConflict:
         assert result["success"] is True
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
-        # PUT — save_id was passed
-        assert upload_calls[0][2]["save_id"] == 100
+        # keep_local POSTs a new save with overwrite=true — the user's content wins.
+        assert upload_calls[0][2]["save_id"] is None
+        assert upload_calls[0][2]["overwrite"] is True
 
         file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.last_sync_hash == local_hash
@@ -144,8 +145,9 @@ class TestResolveSyncConflict:
         # the PUT upload path to have run.
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
-        # PUT — save_id was passed (existing save id, not None).
-        assert upload_calls[0][2]["save_id"] == 100
+        # keep_local POSTs a new save with overwrite=true (not a PUT to the head).
+        assert upload_calls[0][2]["save_id"] is None
+        assert upload_calls[0][2]["overwrite"] is True
         # download_save was attempted exactly once (the one that raised).
         download_calls = [c for c in fake.call_log if c[0] == "download_save"]
         assert len(download_calls) == 1
@@ -507,7 +509,8 @@ class TestResolveSyncConflictStaleConflict:
         assert result["action"] == "keep_local"
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
-        assert upload_calls[0][2]["save_id"] == 100
+        assert upload_calls[0][2]["save_id"] is None
+        assert upload_calls[0][2]["overwrite"] is True
         file_state = _require_save_state(svc, 42).files["pokemon.srm"]
         assert file_state.last_sync_hash == local_hash
 
