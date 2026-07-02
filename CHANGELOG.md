@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.25.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.24.2...decky-romm-sync-v0.25.0) (2026-07-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **saves:** legacy slot:null confirmation is retired. Migration 005 un-confirms any ROM previously confirmed in legacy mode — no save data is deleted — and the first-sync wizard reappears to pick a named slot.
+* **connection:** The plugin now requires a RomM server running 4.9.0 or newer. Servers on 4.8.x are rejected at connection time and the plugin stays inert until the server is upgraded. Update your RomM server to 4.9.0 or newer before updating the plugin.
+
+### Features
+
+* add support for alpha and beta romm server versions ([#1272](https://github.com/danielcopper/decky-romm-sync/issues/1272)) ([f6323ad](https://github.com/danielcopper/decky-romm-sync/commit/f6323ad0c43d5405855cbc8994554513c6ff47c4))
+* **connection:** require RomM 4.9.0 (drop 4.8.x support) ([#1259](https://github.com/danielcopper/decky-romm-sync/issues/1259)) ([cbe44fb](https://github.com/danielcopper/decky-romm-sync/commit/cbe44fb41b1bd4a466db3693030e4f8d3775f402))
+* **saves:** device-level save-sync serialization gate ([#1234](https://github.com/danielcopper/decky-romm-sync/issues/1234) phase 2a) ([#1265](https://github.com/danielcopper/decky-romm-sync/issues/1265)) ([ec06332](https://github.com/danielcopper/decky-romm-sync/commit/ec06332d1849f4e24df246c926967b44512cc15e))
+* **saves:** drive sync from RomM negotiate ops for non-legacy slots ([#1234](https://github.com/danielcopper/decky-romm-sync/issues/1234) phase 2b/2c) ([#1266](https://github.com/danielcopper/decky-romm-sync/issues/1266)) ([0b745af](https://github.com/danielcopper/decky-romm-sync/commit/0b745af9051e0df7cbab50dc9e15609c875d17aa))
+* **saves:** negotiate inventory builder from confirmed-slot saves ([#1234](https://github.com/danielcopper/decky-romm-sync/issues/1234) phase 1c) ([#1264](https://github.com/danielcopper/decky-romm-sync/issues/1264)) ([345655b](https://github.com/danielcopper/decky-romm-sync/commit/345655b6cdc9b84952fa39b205ddfeca8c957ba0))
+* **saves:** negotiate-sync adapter surface + wire schemas ([#1234](https://github.com/danielcopper/decky-romm-sync/issues/1234) phase 1a) ([#1261](https://github.com/danielcopper/decky-romm-sync/issues/1261)) ([08acb9a](https://github.com/danielcopper/decky-romm-sync/commit/08acb9a088cbf3ca0ddf433d811f1b40187642ed))
+* **saves:** zip-aware content_hash matching RomM's per-entry scheme ([#1234](https://github.com/danielcopper/decky-romm-sync/issues/1234) phase 1b) ([#1260](https://github.com/danielcopper/decky-romm-sync/issues/1260)) ([9d38e8d](https://github.com/danielcopper/decky-romm-sync/commit/9d38e8ded666ca26d05b1bb187bfcadd3a5deb78))
+
+
+### Bug Fixes
+
+* **ci:** enforce deliberate version ceilings in Renovate + document where versions live ([#1253](https://github.com/danielcopper/decky-romm-sync/issues/1253)) ([1d6639b](https://github.com/danielcopper/decky-romm-sync/commit/1d6639b901273986c6b8d796626a9876e900dfdb))
+* **ci:** pin denoland/setup-deno comment to v2.0.4 to clear Renovate digest warning ([#1233](https://github.com/danielcopper/decky-romm-sync/issues/1233)) ([734c257](https://github.com/danielcopper/decky-romm-sync/commit/734c25787143432a15d2af7fc6b825e229c9d1e2))
+* **ci:** use uv --output-file= so Renovate can recompile the locks ([#1231](https://github.com/danielcopper/decky-romm-sync/issues/1231)) ([38d14e1](https://github.com/danielcopper/decky-romm-sync/commit/38d14e16dedf71213b2c0f1b063f8f8dcc930947))
+* **deps:** prune 5 obsolete pnpm overrides ([#1255](https://github.com/danielcopper/decky-romm-sync/issues/1255)) ([e5a2d4d](https://github.com/danielcopper/decky-romm-sync/commit/e5a2d4d44285d2b6a74593f58d1c889c889a2ed3))
+* **saves:** client-authoritative conflict detection over negotiate ([#1234](https://github.com/danielcopper/decky-romm-sync/issues/1234)) ([#1277](https://github.com/danielcopper/decky-romm-sync/issues/1277)) ([52cfc54](https://github.com/danielcopper/decky-romm-sync/commit/52cfc54baa69b4248df69afbe26bab9af91f8641))
+* **saves:** drop foreign-rom negotiate ops in dispatch_negotiate_ops ([#1234](https://github.com/danielcopper/decky-romm-sync/issues/1234)) ([#1268](https://github.com/danielcopper/decky-romm-sync/issues/1268)) ([9bfeb59](https://github.com/danielcopper/decky-romm-sync/commit/9bfeb596d44844aa1be490684e5646db5c0ee6fd))
+* **saves:** forget device id on server-origin change ([#1234](https://github.com/danielcopper/decky-romm-sync/issues/1234) phase 0a) ([#1258](https://github.com/danielcopper/decky-romm-sync/issues/1258)) ([78eb8f3](https://github.com/danielcopper/decky-romm-sync/commit/78eb8f362f1ed35314f657bea622c54e3efdf4dc))
+* **saves:** log dispatch-action sync errors ([#1234](https://github.com/danielcopper/decky-romm-sync/issues/1234)) ([#1269](https://github.com/danielcopper/decky-romm-sync/issues/1269)) ([c932937](https://github.com/danielcopper/decky-romm-sync/commit/c93293717f7e7fc60c61fad808cef781b1325258))
+* **saves:** resolve canonical local target in dispatch_negotiate_ops ([#1234](https://github.com/danielcopper/decky-romm-sync/issues/1234)) ([#1271](https://github.com/danielcopper/decky-romm-sync/issues/1271)) ([e50d3bd](https://github.com/danielcopper/decky-romm-sync/commit/e50d3bd860eae977d1086796223426680cda956f))
+
 ## [0.24.2](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.24.1...decky-romm-sync-v0.24.2) (2026-06-27)
 
 
