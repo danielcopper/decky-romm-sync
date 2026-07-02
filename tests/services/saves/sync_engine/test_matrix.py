@@ -14,7 +14,7 @@ import pytest
 
 from domain.rom_save_state import RomSaveState
 from lib.errors import RommApiError
-from services.saves.sync_engine.matrix import DispatchSink, SyncRunOptions
+from services.saves.sync_engine.matrix import DispatchSink, RomDispatchContext, SyncRunOptions
 from tests.services.saves._helpers import (
     _create_save,
     _do_sync,
@@ -1618,16 +1618,19 @@ class TestSyncRomSavesDispatch:
         errors: list[str] = []
         conflicts: list[dict[str, Any]] = []
         result = svc._sync_engine._matrix._handle_upload_409(
-            rom_id=42,
-            save_state=RomSaveState(active_slot="default"),
-            device_id="device-1",
+            ctx=RomDispatchContext(
+                rom_id=42,
+                save_state=RomSaveState(active_slot="default"),
+                device_id="device-1",
+                rom_name="pokemon",
+                saves_dir=str(tmp_path / "saves" / "gba"),
+                system="gba",
+                core_so=None,
+            ),
             filename="pokemon.srm",
-            rom_name="pokemon",
             local_path=str(save_path),
             local_hash=_file_md5(str(save_path)),
             last_sync_hash=None,
-            saves_dir=str(tmp_path / "saves" / "gba"),
-            system="gba",
             options=SyncRunOptions(default_slot="default"),
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
@@ -1717,17 +1720,19 @@ class TestHandleUnexpectedError:
         action = Download(server_save={"id": 100, "file_name": "pokemon.srm"})
         synced = svc._sync_engine._matrix._dispatch_sync_action(
             action,
-            rom_id=42,
-            save_state=RomSaveState(),
-            device_id=None,
+            ctx=RomDispatchContext(
+                rom_id=42,
+                save_state=RomSaveState(),
+                device_id=None,
+                rom_name="pokemon",
+                saves_dir=str(saves_dir),
+                system="gba",
+                core_so=None,
+            ),
             filename="pokemon.srm",
-            rom_name="pokemon",
             local_path=None,
             local_hash=None,
             last_sync_hash=None,
-            saves_dir=str(saves_dir),
-            system="gba",
-            core_so=None,
             options=SyncRunOptions(),
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
@@ -1765,17 +1770,19 @@ class TestDispatchSyncActionErrorBranches:
         action = Download(server_save={"id": 100, "file_name": "pokemon.srm"})
         synced = svc._sync_engine._matrix._dispatch_sync_action(
             action,
-            rom_id=42,
-            save_state=RomSaveState(),
-            device_id=None,
+            ctx=RomDispatchContext(
+                rom_id=42,
+                save_state=RomSaveState(),
+                device_id=None,
+                rom_name="pokemon",
+                saves_dir=str(saves_dir),
+                system="gba",
+                core_so=None,
+            ),
             filename="pokemon.srm",
-            rom_name="pokemon",
             local_path=None,
             local_hash=None,
             last_sync_hash=None,
-            saves_dir=str(saves_dir),
-            system="gba",
-            core_so=None,
             options=SyncRunOptions(),
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
@@ -1808,17 +1815,19 @@ class TestDispatchUploadDefensiveBranches:
         errors: list[str] = []
         conflicts: list[dict[str, Any]] = []
         result = svc._sync_engine._matrix._dispatch_upload(
-            rom_id=42,
-            save_state=RomSaveState(),
-            device_id=None,
+            ctx=RomDispatchContext(
+                rom_id=42,
+                save_state=RomSaveState(),
+                device_id=None,
+                rom_name="pokemon",
+                saves_dir=str(tmp_path / "saves" / "gba"),
+                system="gba",
+                core_so=None,
+            ),
             filename="pokemon.srm",
-            rom_name="pokemon",
             local_path=None,
             local_hash=None,
             last_sync_hash=None,
-            saves_dir=str(tmp_path / "saves" / "gba"),
-            system="gba",
-            core_so=None,
             options=SyncRunOptions(),
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )

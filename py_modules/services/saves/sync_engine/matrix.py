@@ -103,6 +103,25 @@ class SyncRunOptions:
     autocleanup_limit: int | None = None
 
 
+@dataclass(frozen=True)
+class RomDispatchContext:
+    """The ROM-level constants threaded through one ROM's sync dispatch.
+
+    Built once per ``do_sync_rom_saves`` run and passed to
+    ``_dispatch_sync_action`` and its sub-dispatchers, so the remaining
+    per-call args stay to the values that actually vary per file (mirrors
+    ``DispatchSink`` / ``SyncRunOptions``).
+    """
+
+    rom_id: int
+    save_state: RomSaveState
+    device_id: str | None
+    rom_name: str
+    saves_dir: str
+    system: str
+    core_so: str | None
+
+
 class MatrixExecutor:
     """Newest-wins matrix executor + per-file sync I/O dispatch.
 
@@ -490,17 +509,11 @@ class MatrixExecutor:
     def _dispatch_upload(
         self,
         *,
-        rom_id: int,
-        save_state: RomSaveState,
-        device_id: str | None,
+        ctx: RomDispatchContext,
         filename: str,
-        rom_name: str,
         local_path: str | None,
         local_hash: str | None,
         last_sync_hash: str | None,
-        saves_dir: str,
-        system: str,
-        core_so: str | None,
         options: SyncRunOptions,
         sink: DispatchSink,
     ) -> bool:
@@ -518,20 +531,22 @@ class MatrixExecutor:
         :meth:`_dispatch_sync_action`. Returns True iff a transfer was issued.
         """
         if local_path is None:
-            self._logger.warning(f"_dispatch_upload({rom_id}): {filename}: upload requested but no local file on disk")
+            self._logger.warning(
+                f"_dispatch_upload({ctx.rom_id}): {filename}: upload requested but no local file on disk"
+            )
             sink.errors.append(f"{filename}: upload requested but no local file")
             return False
         try:
             # POST (create) a new save in the slot. The retention cap is POST-only —
             # RomM stacks versions on create, so the limit is sent here alone.
             self.do_upload_save(
-                rom_id,
+                ctx.rom_id,
                 local_path,
                 filename,
-                save_state,
-                device_id,
-                system,
-                core_so,
+                ctx.save_state,
+                ctx.device_id,
+                ctx.system,
+                ctx.core_so,
                 None,
                 options.default_slot,
                 autocleanup_limit=options.autocleanup_limit,
@@ -540,16 +555,11 @@ class MatrixExecutor:
             return True
         except RommConflictError:
             return self._handle_upload_409(
-                rom_id=rom_id,
-                save_state=save_state,
-                device_id=device_id,
+                ctx=ctx,
                 filename=filename,
-                rom_name=rom_name,
                 local_path=local_path,
                 local_hash=local_hash,
                 last_sync_hash=last_sync_hash,
-                saves_dir=saves_dir,
-                system=system,
                 options=options,
                 sink=sink,
             )
@@ -557,16 +567,11 @@ class MatrixExecutor:
     def _handle_upload_409(
         self,
         *,
-        rom_id: int,
-        save_state: RomSaveState,
-        device_id: str | None,
+        ctx: RomDispatchContext,
         filename: str,
-        rom_name: str,
         local_path: str,
         local_hash: str | None,
         last_sync_hash: str | None,
-        saves_dir: str,
-        system: str,
         options: SyncRunOptions,
         sink: DispatchSink,
     ) -> bool:
@@ -581,37 +586,33 @@ class MatrixExecutor:
         divergence the user must resolve. An empty regroup (the head vanished
         again between the 409 and the re-fetch) is recorded as a non-fatal error.
         """
-        server_saves = self._retry.with_retry(lambda: self._romm_api.list_saves(rom_id, device_id=device_id))
-        server_in_slot = self.filter_server_saves_to_slot(server_saves, save_state.active_slot)
-        group = [ss for ss in server_in_slot if local_save_target(ss, rom_name) == filename]
+        server_saves = self._retry.with_retry(lambda: self._romm_api.list_saves(ctx.rom_id, device_id=ctx.device_id))
+        server_in_slot = self.filter_server_saves_to_slot(server_saves, ctx.save_state.active_slot)
+        group = [ss for ss in server_in_slot if local_save_target(ss, ctx.rom_name) == filename]
         if not group:
             self._logger.warning(
-                f"_handle_upload_409({rom_id}): {filename}: 409 on POST but no server save in slot on re-fetch"
+                f"_handle_upload_409({ctx.rom_id}): {filename}: 409 on POST but no server save in slot on re-fetch"
             )
             sink.errors.append(f"{filename}: upload rejected by server and no server save found to reconcile")
             return False
         fresh = max(group, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
         if resolve_upload_conflict(local_hash, last_sync_hash, fresh.get("content_hash")) == "download":
-            self.do_download_save(fresh, saves_dir, filename, save_state, device_id, system, options.default_slot)
+            self.do_download_save(
+                fresh, ctx.saves_dir, filename, ctx.save_state, ctx.device_id, ctx.system, options.default_slot
+            )
             return True
-        sink.conflicts.append(self.build_sync_conflict_entry(rom_id, filename, fresh, local_path, local_hash))
+        sink.conflicts.append(self.build_sync_conflict_entry(ctx.rom_id, filename, fresh, local_path, local_hash))
         return False
 
     def _dispatch_sync_action(
         self,
         action: object,
         *,
-        rom_id: int,
-        save_state: RomSaveState,
-        device_id: str | None,
+        ctx: RomDispatchContext,
         filename: str,
-        rom_name: str,
         local_path: str | None,
         local_hash: str | None,
         last_sync_hash: str | None,
-        saves_dir: str,
-        system: str,
-        core_so: str | None,
         options: SyncRunOptions,
         sink: DispatchSink,
     ) -> bool:
@@ -620,52 +621,53 @@ class MatrixExecutor:
         Centralises the I/O dispatch so ``sync_rom_saves`` stays declarative.
         Errors are caught and pushed onto ``sink.errors`` so a single failure
         can't abort the whole rom-level sync; conflicts land on
-        ``sink.conflicts``. ``rom_name`` + ``last_sync_hash`` are threaded through
-        for the upload 409 backstop (canonical-target regroup + hash re-decision).
+        ``sink.conflicts``. ``ctx.rom_name`` + ``last_sync_hash`` are threaded
+        through for the upload 409 backstop (canonical-target regroup + hash
+        re-decision).
         """
         try:
             if isinstance(action, Skip):
                 self._dispatch_skip(
                     action,
-                    rom_id=rom_id,
-                    save_state=save_state,
+                    rom_id=ctx.rom_id,
+                    save_state=ctx.save_state,
                     filename=filename,
                     local_hash=local_hash,
                 )
                 return False
             if isinstance(action, Upload):
                 return self._dispatch_upload(
-                    rom_id=rom_id,
-                    save_state=save_state,
-                    device_id=device_id,
+                    ctx=ctx,
                     filename=filename,
-                    rom_name=rom_name,
                     local_path=local_path,
                     local_hash=local_hash,
                     last_sync_hash=last_sync_hash,
-                    saves_dir=saves_dir,
-                    system=system,
-                    core_so=core_so,
                     options=options,
                     sink=sink,
                 )
             if isinstance(action, Download):
                 self.do_download_save(
-                    action.server_save, saves_dir, filename, save_state, device_id, system, options.default_slot
+                    action.server_save,
+                    ctx.saves_dir,
+                    filename,
+                    ctx.save_state,
+                    ctx.device_id,
+                    ctx.system,
+                    options.default_slot,
                 )
                 return True
             if isinstance(action, Conflict):
                 sink.conflicts.append(
-                    self.build_sync_conflict_entry(rom_id, filename, action.server_save, local_path, local_hash)
+                    self.build_sync_conflict_entry(ctx.rom_id, filename, action.server_save, local_path, local_hash)
                 )
                 return False
         except RommApiError as e:
             _code, _msg = classify_error(e)
-            self._logger.warning(f"_dispatch_sync_action({rom_id}): {filename} failed: {_msg}")
+            self._logger.warning(f"_dispatch_sync_action({ctx.rom_id}): {filename} failed: {_msg}")
             sink.errors.append(f"{filename}: {_msg}")
         except Exception as e:
-            self._logger.warning(f"_dispatch_sync_action({rom_id}): {filename} unexpected error: {e}")
-            self._handle_unexpected_error(e, filename, saves_dir, sink.errors)
+            self._logger.warning(f"_dispatch_sync_action({ctx.rom_id}): {filename} unexpected error: {e}")
+            self._handle_unexpected_error(e, filename, ctx.saves_dir, sink.errors)
         return False
 
     def adopt_baseline_hash(self, save_state: RomSaveState, filename: str, local_hash: str) -> None:
@@ -822,6 +824,15 @@ class MatrixExecutor:
         conflicts: list[dict[str, Any]] = []
         sink = DispatchSink(errors=errors, conflicts=conflicts)
         options = SyncRunOptions(default_slot=default_slot, autocleanup_limit=autocleanup_limit)
+        ctx = RomDispatchContext(
+            rom_id=rom_id,
+            save_state=save_state,
+            device_id=device_id,
+            rom_name=info["rom_name"],
+            saves_dir=saves_dir,
+            system=system,
+            core_so=core_so,
+        )
         synced = 0
 
         pending_migration = self._rom_info.is_save_sort_changed()
@@ -839,17 +850,11 @@ class MatrixExecutor:
                 continue
             if self._dispatch_sync_action(
                 outcome.action,
-                rom_id=rom_id,
-                save_state=save_state,
-                device_id=device_id,
+                ctx=ctx,
                 filename=outcome.filename,
-                rom_name=info["rom_name"],
                 local_path=outcome.local_path,
                 local_hash=outcome.local_hash,
                 last_sync_hash=outcome.file_state.last_sync_hash,
-                saves_dir=saves_dir,
-                system=system,
-                core_so=core_so,
                 options=options,
                 sink=sink,
             ):
