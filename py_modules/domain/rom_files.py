@@ -151,6 +151,62 @@ def detect_launch_file(files: list[tuple[str, int]], m3u_supported: bool) -> str
     return max(files, key=lambda t: t[1])[0]
 
 
+# Folder-boot systems launch the game *directory*, not the nested launch file
+# ``detect_launch_file`` picks. Each marker is the trailing component run that
+# identifies such a layout; it is matched case-sensitively (the on-disk layout
+# is standardised uppercase) and stripped to yield the game root. A future
+# folder-boot system is a data-only addition here.
+FOLDER_BOOT_MARKERS: tuple[tuple[str, ...], ...] = (("PS3_GAME", "USRDIR", "EBOOT.BIN"),)
+
+
+def folder_boot_root(launch_path: str, rom_dir: str | None) -> str | None:
+    """Return the game-root directory to bake for a folder-boot ROM, or ``None``.
+
+    Some emulators boot a game **directory** rather than the nested launch file
+    ``detect_launch_file`` selects: RPCS3 rejects ``…/PS3_GAME/USRDIR/EBOOT.BIN``
+    and wants the folder that contains ``PS3_GAME``. When *launch_path*'s trailing
+    components match a folder-boot marker (:data:`FOLDER_BOOT_MARKERS`), those
+    components are stripped and the remaining game root is returned. This also
+    collapses a one-level-deeper extract
+    (``rom_dir/<Game>/PS3_GAME/USRDIR/EBOOT.BIN`` → ``rom_dir/<Game>``).
+
+    The root is returned only when *rom_dir* is set — a single-file ROM owns no
+    folder and is never a folder-boot game — **and** the derived root is
+    inside-or-equal *rom_dir*, so a bare ``<roms>/<system>/PS3_GAME/USRDIR/EBOOT.BIN``
+    sitting directly in the shared system directory never bakes that shared
+    directory as the launch target. Returns ``None`` when no marker matches or the
+    containment guard fails; the caller then keeps the launch file unchanged.
+
+    Pure path algebra, stdlib only.
+    """
+    if rom_dir is None:
+        return None
+    rom_dir_norm = os.path.normpath(rom_dir)
+    for marker in FOLDER_BOOT_MARKERS:
+        root = _strip_marker_components(launch_path, marker)
+        if root is None:
+            continue
+        root_norm = os.path.normpath(root)
+        if root_norm == rom_dir_norm or root_norm.startswith(rom_dir_norm + os.sep):
+            return root
+    return None
+
+
+def _strip_marker_components(path: str, marker: tuple[str, ...]) -> str | None:
+    """Strip a trailing *marker* component run from *path*, or ``None`` if it does not match.
+
+    The marker components are compared against *path*'s trailing basenames in
+    order, case-sensitively. Returns the surviving prefix (the game root) when
+    every component matches, ``None`` on the first mismatch.
+    """
+    root = path
+    for expected in reversed(marker):
+        if os.path.basename(root) != expected:
+            return None
+        root = os.path.dirname(root)
+    return root
+
+
 def es_de_collapse_rename(rom_dir: str, launch_file: str) -> tuple[str, str] | None:
     """Return ``(new_rom_dir, new_launch_file)`` renaming *rom_dir* after the launch file.
 

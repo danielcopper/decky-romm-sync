@@ -286,12 +286,14 @@ and resolves the persisted `selected_disc` over them (`domain/disc_selection.res
 ```text
 resolve_for_install(install, selected_disc):
   discs = enumerate_discs(scan(install.rom_dir), supported_extensions(install.system))
-  if len(discs) < 2:                    ── not multi-disc → file_path unchanged
-      return install.file_path
-  if selected_disc names a disc:        ── valid pin
-      return that disc's path
-  # NULL, or a stale pin (warn + degrade):
-  return install.file_path if it ends .m3u else discs[0].path   ── the default
+  path =
+    if len(discs) < 2:                    ── not multi-disc → file_path unchanged
+        install.file_path
+    elif selected_disc names a disc:      ── valid pin
+        that disc's path
+    else:                                 ── NULL, or a stale pin (warn + degrade)
+        install.file_path if it ends .m3u else discs[0].path   ── the default
+  return folder_boot_root(path, install.rom_dir) or path   ── folder-boot override (ADR-0019)
 ```
 
 A **non-multi-disc ROM resolves to its own `file_path`** — zero behavior change for the overwhelming majority of games.
@@ -299,6 +301,24 @@ A **stale pin** (the selected disc no longer present) degrades to the default wi
 `ActiveCoreResolver`'s stale-label handling. Crucially, the resolver **never rewrites `file_path`**: it returns the path
 to bake, and `file_path`-derived values (save path, core, displayed filename) stay stable — the same bake-time
 path-override layering the `-e` core override uses.
+
+### Folder-boot launch target
+
+Some systems boot a game **directory**, not the nested launch file. A PS3 game installs as a folder whose payload is
+`…/PS3_GAME/USRDIR/EBOOT.BIN`, and `detect_launch_file` picks that EBOOT as `file_path` — correct as the launch _file_
+identity, but RPCS3's directory-boot rejects it and wants the folder that contains `PS3_GAME`
+([#1212](https://github.com/danielcopper/decky-romm-sync/issues/1212)). This is a second bake-time path override,
+layered **after** disc resolution in the same `resolve_bake_path` seam: `folder_boot_root(path, install.rom_dir)`
+(`domain/rom_files.py`) strips a hardcoded `FOLDER_BOOT_MARKERS` run (`PS3_GAME/USRDIR/EBOOT.BIN`, matched
+case-sensitively) from the resolved path and returns the game root, guarded so it fires only when `rom_dir` is set and
+the derived root stays inside `rom_dir` (a bare EBOOT in the shared system dir never bakes that shared dir). Because it
+triggers only when the resolved path still carries the marker, it composes with disc resolution — a resolved disc path
+(`…(Disc 2).cue`) has no marker, so a multi-disc ROM is never folder-stripped, and the folder rule applies only when
+disc resolution returned `file_path`. `RomInstall.file_path` stays the EBOOT (the
+[ADR-0008](../adr/0008-rom-install-launch-file-and-rom-dir.md) anchor), so save-path, core, and displayed-filename
+derivations are untouched; only the baked argument becomes the folder. The override lives in the one seam, so **every**
+bake site (the three below plus the download-complete, core set/clear, and startup-reconcile bakes) inherits it, and a
+PS3 ROM synced before this change self-heals on its next bake. See [ADR-0019](../adr/0019-folder-as-launch-target.md).
 
 ### The same three bake sites — disc path composes with the core
 

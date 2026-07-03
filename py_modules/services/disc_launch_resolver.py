@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.disc_selection import Disc, enumerate_discs, resolve_launch_path
+from domain.rom_files import folder_boot_root
 
 if TYPE_CHECKING:
     import logging
@@ -86,6 +87,13 @@ class DiscLaunchResolver:
         unpinned ROM both resolve to the default (the ``.m3u`` when ``file_path``
         is one, else disc 1), a valid pin resolves to that disc, and a stale pin
         degrades to the default with a WARNING — never fatal, never a bogus path.
+
+        A final folder-boot override layer (``folder_boot_root``) then bakes the
+        game **directory** for a system whose emulator boots a folder rather than
+        the nested launch file (PS3/RPCS3 — ``…/PS3_GAME/USRDIR/EBOOT.BIN`` →
+        ``…``, ADR-0019). It only fires when the resolved path still carries a
+        folder-boot marker, so a resolved disc path is never rewritten;
+        ``file_path`` itself is left untouched.
         """
         path, stale = resolve_launch_path(install.file_path, discs, selected_disc)
         if stale:
@@ -95,7 +103,8 @@ class DiscLaunchResolver:
                 selected_disc,
                 install.rom_id,
             )
-        return path
+        root = folder_boot_root(path, install.rom_dir)
+        return root or path
 
     def resolve_for_install(self, install: RomInstall, selected_disc: str | None) -> str:
         """Enumerate *install* and resolve the launch-bake path in one call.

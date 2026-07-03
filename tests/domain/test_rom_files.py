@@ -9,6 +9,7 @@ from domain.rom_files import (
     build_m3u_content,
     detect_launch_file,
     es_de_collapse_rename,
+    folder_boot_root,
     is_multi_file_download,
     needs_m3u,
     resolve_local_file_name,
@@ -343,6 +344,46 @@ class TestEsDeCollapseRename:
         rom_dir = "/roms/wiiu/Game"
         launch_file = "/roms/wiiu/Game/code/Game.rpx"
         assert es_de_collapse_rename(rom_dir, launch_file) is None
+
+
+class TestFolderBootRoot:
+    """Tests for folder_boot_root — the PS3-style folder-as-launch-target override."""
+
+    def test_ps3_marker_strips_to_game_root(self):
+        # …/PS3_GAME/USRDIR/EBOOT.BIN → the game folder (the dir holding PS3_GAME).
+        rom_dir = "/roms/ps3/MyGame"
+        launch = "/roms/ps3/MyGame/PS3_GAME/USRDIR/EBOOT.BIN"
+        assert folder_boot_root(launch, rom_dir) == rom_dir
+
+    def test_nested_one_level_deeper_extract_strips_to_inner_game_root(self):
+        # An extract that nests the PS3_GAME tree one level below rom_dir still
+        # resolves to the folder that holds PS3_GAME, which stays inside rom_dir.
+        rom_dir = "/roms/ps3/MyGame"
+        launch = "/roms/ps3/MyGame/InnerGame/PS3_GAME/USRDIR/EBOOT.BIN"
+        assert folder_boot_root(launch, rom_dir) == "/roms/ps3/MyGame/InnerGame"
+
+    def test_none_rom_dir_returns_none(self):
+        # A single-file ROM owns no folder → never a folder-boot game.
+        launch = "/roms/ps3/MyGame/PS3_GAME/USRDIR/EBOOT.BIN"
+        assert folder_boot_root(launch, None) is None
+
+    def test_non_marker_eboot_elsewhere_returns_none(self):
+        # An EBOOT.BIN not under the full PS3_GAME/USRDIR run does not match.
+        rom_dir = "/roms/ps3/MyGame"
+        assert folder_boot_root("/roms/ps3/MyGame/EBOOT.BIN", rom_dir) is None
+
+    def test_derived_root_escaping_rom_dir_returns_none(self):
+        # The stripped root is the shared system dir (rom_dir's parent), so the
+        # containment guard rejects it — never bake the shared directory.
+        rom_dir = "/roms/ps3/MyGame"
+        launch = "/roms/ps3/PS3_GAME/USRDIR/EBOOT.BIN"
+        assert folder_boot_root(launch, rom_dir) is None
+
+    def test_lowercase_marker_directory_does_not_match(self):
+        # The layout is standardised uppercase; lowercase ps3_game must not match.
+        rom_dir = "/roms/ps3/MyGame"
+        launch = "/roms/ps3/MyGame/ps3_game/USRDIR/EBOOT.BIN"
+        assert folder_boot_root(launch, rom_dir) is None
 
 
 class TestResolveLocalFileName:

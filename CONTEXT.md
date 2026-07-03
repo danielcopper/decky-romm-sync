@@ -113,11 +113,16 @@ on-disk artifact.
 
 The two path fields on `RomInstall` (`domain/rom_install.py`) answer different questions and must not be conflated:
 
-- **`file_path`** — the **launch target**: the single file RetroDECK is handed. It is baked into the Steam shortcut's
-  `launch_options` (`flatpak run … "<file_path>"`) and the `rom-launcher` exec wrapper runs that command (per
-  [ADR-0009](docs/adr/0009-launcher-pure-exec-wrapper-baked-launch-options.md), which superseded the dynamic SQLite read
-  of [ADR-0005](docs/adr/0005-launcher-resolves-path-from-sqlite.md)). Present for every ROM. Save-path resolution,
-  ES-DE core resolution, and the displayed filename all derive from it.
+- **`file_path`** — the **launch file**: the single file that is the ROM's launch identity. Present for every ROM;
+  save-path resolution, ES-DE core resolution, and the displayed filename all derive from it. It is the **default**
+  launch target baked into the Steam shortcut's `launch_options` (`flatpak run … "<file_path>"`, run by the
+  `rom-launcher` exec wrapper per [ADR-0009](docs/adr/0009-launcher-pure-exec-wrapper-baked-launch-options.md), which
+  superseded the dynamic SQLite read of [ADR-0005](docs/adr/0005-launcher-resolves-path-from-sqlite.md)) — but the baked
+  launch **target** may be **overridden at bake time** without rewriting `file_path`: a multi-disc pin bakes the
+  selected disc's path
+  ([ADR-0014](docs/adr/0014-per-game-disc-selection-in-db-applied-as-bake-time-launch-path-override.md)), and a
+  folder-boot system (PS3/RPCS3) bakes the game **directory** rather than the nested launch file
+  ([ADR-0019](docs/adr/0019-folder-as-launch-target.md)). `file_path` stays the launch **file** anchor in every case.
 - **`rom_dir`** — the **dedicated per-ROM directory**, present only for folder-backed (multi-file) ROMs. **NULL for
   single-file ROMs**, which live as a bare file directly in the shared `<roms>/<system>/` directory and own no dedicated
   folder.

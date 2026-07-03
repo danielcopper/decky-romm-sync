@@ -300,6 +300,15 @@ multi-disc game shows in ES-DE as a folder plus loose disc files. The launch fil
 collision (target already exists) the rename is skipped and the staging folder is kept — never clobbered or merged.
 Existing installs from before this feature keep their old folder layout until re-downloaded.
 
+**Folder-boot launch target (PS3)**: for a PS3 folder game `detect_launch_file` picks the nested
+`…/PS3_GAME/USRDIR/EBOOT.BIN` as the install's `file_path` — the correct launch _file_ identity (save path, core, and
+displayed filename all derive from it). But RPCS3's directory-boot wants the game **folder**, not the EBOOT, so the
+baked `launch_options` carries the game directory instead. This is a bake-time path override (`folder_boot_root`,
+`domain/rom_files.py`) applied in the `DiscLaunchResolver` seam, never a `file_path` rewrite: `file_path` stays the
+EBOOT anchor while only the argument baked into the shortcut becomes the folder
+([ADR-0019](../adr/0019-folder-as-launch-target.md), see
+[Core and Emulator Selection](core-emulator-selection.md#folder-boot-launch-target)).
+
 **M3U generation rule** (`needs_m3u` in `domain/rom_files.py`): a game-named `<fs_name_no_ext>.m3u` is auto-generated
 (when no `.m3u` already exists) for **multi-disc** ROMs — two or more disc files of any kind (`.cue`/`.chd`/`.iso`) — so
 the emulator can switch discs, **and** for **single-disc bin/cue** ROMs — exactly one `.cue` — so the extract dir is

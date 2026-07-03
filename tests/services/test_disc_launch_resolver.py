@@ -189,3 +189,45 @@ class TestResolveForInstall:
         resolver = _build(FakeFileLister(), FakeSystemExtensions(), logger)
         install = _install(file_path="/roms/snes/game.sfc", rom_dir=None)
         assert resolver.resolve_for_install(install, None) == "/roms/snes/game.sfc"
+
+
+class TestFolderBootTarget:
+    """The PS3-style folder-as-launch-target override layered over disc resolution.
+
+    A folder-boot ROM (PS3/RPCS3) bakes the game **directory**, not the nested
+    ``…/PS3_GAME/USRDIR/EBOOT.BIN`` launch file. The override rides on top of disc
+    resolution: it fires only when the resolved path still carries the folder-boot
+    marker, so a resolved disc path (multi-disc) or a single-file ROM is never
+    touched. See ADR-0019.
+    """
+
+    def test_ps3_folder_install_bakes_the_game_root(self, logger):
+        # PS3 folder game: no disc images, so disc resolution returns file_path
+        # (the EBOOT), then the folder-boot override strips to the game folder.
+        rom_dir = "/roms/ps3/MyGame"
+        eboot = f"{rom_dir}/PS3_GAME/USRDIR/EBOOT.BIN"
+        files = {rom_dir: [eboot]}
+        resolver = _build(FakeFileLister(files), FakeSystemExtensions(), logger)
+        install = _install(file_path=eboot, rom_dir=rom_dir, system="ps3")
+        assert resolver.resolve_for_install(install, None) == rom_dir
+
+    def test_resolved_disc_path_is_never_folder_stripped(self, logger):
+        # Precedence: the folder rule applies only when disc resolution returned
+        # file_path. A pinned multi-disc ROM resolves to its disc path, which
+        # carries no folder-boot marker, so the override is a no-op.
+        files = {
+            "/roms/psx/game": [
+                "/roms/psx/game/Game (Disc 1).cue",
+                "/roms/psx/game/Game (Disc 2).cue",
+            ]
+        }
+        resolver = _build(FakeFileLister(files), FakeSystemExtensions(), logger)
+        install = _install(file_path="/roms/psx/game/Game (Disc 1).cue", rom_dir="/roms/psx/game")
+        assert resolver.resolve_for_install(install, "Game (Disc 2).cue") == "/roms/psx/game/Game (Disc 2).cue"
+
+    def test_single_file_install_unaffected_by_folder_rule(self, logger):
+        # rom_dir is None → the override is skipped by construction; regression
+        # guard that the folder rule cannot perturb a bare single-file ROM.
+        resolver = _build(FakeFileLister(), FakeSystemExtensions(), logger)
+        install = _install(file_path="/roms/snes/game.sfc", rom_dir=None)
+        assert resolver.resolve_for_install(install, None) == "/roms/snes/game.sfc"

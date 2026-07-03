@@ -7,6 +7,11 @@ Accepted. Refines the `RomInstall` aggregate (introduced for the per-ROM split i
 the JSON→SQLite remodel (#784) introduced, and records the **per-file `RomFile[]` model as the committed but deferred
 target**.
 
+> **Refined by [ADR-0019](0019-folder-as-launch-target.md)
+> ([#1212](https://github.com/danielcopper/decky-romm-sync/issues/1212)).** For a folder-boot system (PS3/RPCS3) the
+> baked launch **target** is the game directory, not `file_path` — applied as a bake-time override that leaves
+> `file_path` (the launch **file** anchor decided below) unchanged.
+
 ## Context
 
 The legacy JSON install record (`InstalledRomEntry`) carried `file_path` always, plus `rom_dir: NotRequired[str]` —
