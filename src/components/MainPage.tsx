@@ -458,7 +458,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   if (preview) {
     const hasChanges =
       preview.summary.new_count + preview.summary.changed_count + preview.summary.remove_count > 0 ||
-      preview.summary.collection_diff?.has_changes ||
+      !!(preview.summary.collection_diff?.added.length || preview.summary.collection_diff?.removed.length) ||
       preview.summary.platform_collection_diff?.has_changes;
     syncBody = (
       <>

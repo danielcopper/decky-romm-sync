@@ -971,6 +971,39 @@ describe("MainPage", () => {
       expect(buttonByExactText(container, "Apply Sync")).toBeNull();
     });
 
+    it("collection enabled but zero add/remove delta: Dismiss only, no Apply, 'up to date' (#1147)", async () => {
+      // collection_diff.has_changes is True whenever any collection is enabled
+      // (the backend pins it via an `or current` term so first-sync still
+      // applies), yet an empty added/removed delta means there is nothing to
+      // apply. The gate must key off the real add/remove delta so the button
+      // matches the "Everything is up to date." description.
+      vi.mocked(backend.syncPreview).mockResolvedValue({
+        success: true,
+        summary: {
+          new_count: 0,
+          changed_count: 0,
+          unchanged_count: 0,
+          remove_count: 0,
+          disabled_platform_remove_count: 0,
+          collection_diff: { has_changes: true, added: [], removed: [] },
+        },
+        new_names: [],
+        changed_names: [],
+        preview_id: "preview-1147",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(buttonByExactText(container, "Dismiss")).not.toBeNull();
+      expect(buttonByExactText(container, "Apply Sync")).toBeNull();
+      const descs = Array.from(container.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
+      expect(descs).toContain("Everything is up to date.");
+    });
+
     it("syncPreview success=false surfaces result.message into status field", async () => {
       vi.mocked(backend.syncPreview).mockResolvedValue({
         success: false,
