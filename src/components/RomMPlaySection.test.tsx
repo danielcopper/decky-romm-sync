@@ -1096,6 +1096,26 @@ describe("RomMPlaySection", () => {
       expect(container.textContent).toContain("lp:1111111111");
       expect(container.textContent).not.toContain("lp:NaN");
     });
+
+    it("keeps OUR restored last_played across a later romm_playtime_changed signal (onPlaytimeChanged branch)", async () => {
+      const iso = "2023-06-15T10:00:00.000Z";
+      const ourSecs = Math.floor(Date.parse(iso) / 1000);
+      const { container } = mountReconciled(iso, 1111111111);
+      await flushAsync();
+      // Restored value adopted on reconcile.
+      expect(container.textContent).toContain(`lp:${ourSecs}`);
+
+      // A later playtime signal (session end / bulk write) raises Steam's
+      // device-local rt to a DIFFERENT value and fires the chokepoint signal.
+      // The reactive handler must keep the restored value — Steam's synthesized
+      // rt must NOT win.
+      stubAppStore({ [testAppId]: { rt_last_time_played: 2222222222, minutes_playtime_forever: 120 } });
+      act(() => {
+        globalThis.dispatchEvent(new CustomEvent("romm_playtime_changed", { detail: { appId: testAppId } }));
+      });
+      expect(container.textContent).toContain(`lp:${ourSecs}`);
+      expect(container.textContent).not.toContain("lp:2222222222");
+    });
   });
 
   // ------------------------------------------------------------------
