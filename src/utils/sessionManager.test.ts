@@ -10,7 +10,9 @@ vi.mock("../api/backend", () => ({
   getAppIdRomIdMap: vi.fn(),
   finalizeGameSession: vi.fn(),
   logInfo: vi.fn(),
+  logWarn: vi.fn(),
   logError: vi.fn(),
+  debugLog: vi.fn(),
 }));
 
 vi.mock("./migrationStore", () => ({ setMigrationStatus: vi.fn() }));
@@ -490,5 +492,162 @@ describe("sessionManager reload adoption", () => {
     await expect(initSessionManager()).resolves.toBeUndefined();
 
     expect(backend.logError).toHaveBeenCalledWith(expect.stringContaining("Session adoption error"));
+  });
+});
+
+// #1148: on-device the suspend/resume hooks never fired, so decision C's
+// suspend-subtraction shipped dormant. These cover the registration diagnostics
+// that a Game-Mode run will surface — the API-missing headline, a throwing
+// registration, and the availability probe — plus the happy-path handle report.
+describe("sessionManager suspend-hook diagnostics", () => {
+  // `system` is intentionally allowed to be undefined so a test can model a
+  // SteamClient with no `System` namespace at all (the #1148 crash-proofness case).
+  const stubSteamClient = (system: Record<string, unknown> | undefined, user?: Record<string, unknown>) => {
+    const client: Record<string, unknown> = {
+      GameSessions: {
+        RegisterForAppLifetimeNotifications: vi.fn(() => ({ unregister: vi.fn() })),
+      },
+      System: system,
+    };
+    if (user) client.User = user;
+    vi.stubGlobal("SteamClient", client);
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({ [String(APP_ID)]: ROM_ID });
+    vi.mocked(backend.recordSessionStart).mockResolvedValue({ success: true });
+    vi.stubGlobal("Router", { MainRunningApp: null });
+  });
+
+  afterEach(() => {
+    destroySessionManager();
+  });
+
+  it("warns at headline level when both suspend/resume members are missing, and init still completes", async () => {
+    stubSteamClient({}); // System exposes neither Register* member
+
+    await expect(initSessionManager()).resolves.toBeUndefined();
+
+    // Actionable headline names both absent members (booleans false).
+    expect(backend.logWarn).toHaveBeenCalledWith(
+      "Suspend/resume hooks missing on this build: RegisterForOnSuspendRequest=false RegisterForOnResumeFromSuspend=false",
+    );
+    // Never attempted registration → no throw path was taken.
+    expect(backend.logWarn).not.toHaveBeenCalledWith(expect.stringContaining("registration threw"));
+    // No hooks were registered, so teardown must not throw on null handles.
+    expect(() => destroySessionManager()).not.toThrow();
+  });
+
+  it("warns only about the missing member when suspend exists but resume does not", async () => {
+    stubSteamClient({ RegisterForOnSuspendRequest: vi.fn(() => ({ unregister: vi.fn() })) });
+
+    await expect(initSessionManager()).resolves.toBeUndefined();
+
+    expect(backend.logWarn).toHaveBeenCalledWith(
+      "Suspend/resume hooks missing on this build: RegisterForOnSuspendRequest=true RegisterForOnResumeFromSuspend=false",
+    );
+  });
+
+  it("catches and warns when registration throws, and init still completes", async () => {
+    stubSteamClient({
+      RegisterForOnSuspendRequest: vi.fn(() => {
+        throw new Error("boom");
+      }),
+      RegisterForOnResumeFromSuspend: vi.fn(() => ({ unregister: vi.fn() })),
+    });
+
+    await expect(initSessionManager()).resolves.toBeUndefined();
+
+    // Members present → no "missing" headline; the throw is caught and warned.
+    expect(backend.logWarn).not.toHaveBeenCalledWith(expect.stringContaining("hooks missing"));
+    expect(backend.logWarn).toHaveBeenCalledWith(expect.stringContaining("Suspend/resume registration threw"));
+    expect(backend.logWarn).toHaveBeenCalledWith(expect.stringContaining("boom"));
+  });
+
+  it("debug-logs the handle shape on a clean registration", async () => {
+    stubSteamClient({
+      RegisterForOnSuspendRequest: vi.fn(() => ({ unregister: vi.fn() })),
+      RegisterForOnResumeFromSuspend: vi.fn(() => ({ unregister: vi.fn() })),
+    });
+
+    await initSessionManager();
+
+    // No headline warning on a healthy build; the debug tier reports both
+    // handles carry an `unregister` function.
+    expect(backend.logWarn).not.toHaveBeenCalled();
+    expect(backend.debugLog).toHaveBeenCalledWith(
+      "Suspend/resume registration: suspend={unregister:fn} resume={unregister:fn}",
+    );
+  });
+
+  it("probes SteamClient for suspend/resume/sleep/wake members and excludes unrelated ones", async () => {
+    stubSteamClient(
+      {
+        RegisterForOnSuspendRequest: vi.fn(() => ({ unregister: vi.fn() })),
+        RegisterForOnResumeFromSuspend: vi.fn(() => ({ unregister: vi.fn() })),
+        RegisterForOnResumeFromSleep: vi.fn(), // matches /sleep/ — a candidate alternative
+        GetSystemInfo: vi.fn(), // unrelated — must be excluded
+      },
+      {
+        RegisterForPrepareForSystemSuspendProgress: vi.fn(), // matches /suspend/ under User
+        RegisterForShutdownStart: vi.fn(), // unrelated — must be excluded
+      },
+    );
+
+    await initSessionManager();
+
+    const probeCall = vi
+      .mocked(backend.debugLog)
+      .mock.calls.find((c) => String(c[0]).startsWith("SteamClient suspend/resume surface:"));
+    expect(probeCall).toBeDefined();
+    const surface = String(probeCall?.[0]);
+    expect(surface).toContain("System.RegisterForOnSuspendRequest");
+    expect(surface).toContain("System.RegisterForOnResumeFromSuspend");
+    expect(surface).toContain("System.RegisterForOnResumeFromSleep");
+    expect(surface).toContain("User.RegisterForPrepareForSystemSuspendProgress");
+    expect(surface).not.toContain("GetSystemInfo");
+    expect(surface).not.toContain("RegisterForShutdownStart");
+  });
+
+  it("survives an absent SteamClient.System: warns, still runs adoption, no crash", async () => {
+    stubSteamClient(undefined); // SteamClient has no `System` namespace at all
+    // A running RomM game with no breadcrumb → adoption case (a′) records a
+    // session. That only fires if init got PAST the presence read without
+    // throwing — the guard this test pins. (On the pre-fix commit the presence
+    // read `typeof SteamClient.System.RegisterForOnSuspendRequest` throws a
+    // TypeError that escapes init, so none of the asserts below hold.)
+    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+
+    await expect(initSessionManager()).resolves.toBeUndefined();
+
+    // System absent → both members read as false → headline warns.
+    expect(backend.logWarn).toHaveBeenCalledWith(
+      "Suspend/resume hooks missing on this build: RegisterForOnSuspendRequest=false RegisterForOnResumeFromSuspend=false",
+    );
+    // The surface probe still emits (init reached it, never threw).
+    expect(backend.debugLog).toHaveBeenCalledWith("SteamClient suspend/resume surface: (none)");
+    // Adoption still ran — init did not abort before it.
+    expect(backend.recordSessionStart).toHaveBeenCalledWith(ROM_ID);
+    // Nothing registered → teardown must not throw on null handles.
+    expect(() => destroySessionManager()).not.toThrow();
+  });
+
+  it("describes an undefined registration handle by type, not as a thrown registration", async () => {
+    // A build where the member exists but returns undefined instead of a handle.
+    stubSteamClient({
+      RegisterForOnSuspendRequest: vi.fn(() => undefined),
+      RegisterForOnResumeFromSuspend: vi.fn(() => ({ unregister: vi.fn() })),
+    });
+
+    await expect(initSessionManager()).resolves.toBeUndefined();
+
+    // describeHandle must classify the undefined handle by type rather than
+    // dereferencing it — otherwise the throw is misattributed as "registration
+    // threw" (the pre-fix behavior this test pins).
+    expect(backend.logWarn).not.toHaveBeenCalledWith(expect.stringContaining("registration threw"));
+    expect(backend.debugLog).toHaveBeenCalledWith(
+      "Suspend/resume registration: suspend=type=undefined resume={unregister:fn}",
+    );
   });
 });

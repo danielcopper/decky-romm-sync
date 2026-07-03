@@ -7,10 +7,19 @@
  */
 
 import { toaster } from "@decky/api";
-import { recordSessionStart, getAppIdRomIdMap, finalizeGameSession, logInfo, logError } from "../api/backend";
+import {
+  recordSessionStart,
+  getAppIdRomIdMap,
+  finalizeGameSession,
+  logInfo,
+  logWarn,
+  logError,
+  debugLog,
+} from "../api/backend";
 import { setMigrationStatus } from "./migrationStore";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
+import { detach } from "./detach";
 
 declare let Router: {
   MainRunningApp: { appid: number; display_name: string } | null;
@@ -295,6 +304,60 @@ async function adoptOrphanedSession(): Promise<void> {
 }
 
 /**
+ * Read `SteamClient.System` as a plain record, tolerating a runtime where it is
+ * absent, not an object, or a throwing getter — any of which yields an empty
+ * record. Keeps the #1148 presence check from throwing out of
+ * `initSessionManager` (before adoption) when SteamClient is malformed.
+ */
+function readSystemApi(): Record<string, unknown> {
+  try {
+    const system = (SteamClient as unknown as Record<string, unknown>).System;
+    if (system !== null && typeof system === "object") return system as Record<string, unknown>;
+  } catch {
+    // Odd SteamClient shape (e.g. a throwing getter) — fall through to {}.
+  }
+  return {};
+}
+
+/**
+ * Report an unregister handle's runtime shape without trusting its declared
+ * type — the whole point of the #1148 probe is that the runtime may not match
+ * the `.d.ts`, so the handle is typed `unknown` and every shape is handled:
+ * `null`, a non-object (e.g. a build that returns `undefined`), or an object
+ * that may or may not carry an `unregister` function.
+ */
+function describeHandle(handle: unknown): string {
+  if (handle === null) return "null";
+  if (typeof handle !== "object") return `type=${typeof handle}`;
+  const rec = handle as Record<string, unknown>;
+  return `{unregister:${typeof rec.unregister === "function" ? "fn" : "missing"}}`;
+}
+
+/**
+ * Enumerate the suspend/resume/sleep/wake members `SteamClient` actually exposes
+ * at runtime (#1148 investigation point 3 — is there a newer/alternative API on
+ * this SteamOS build?). Never throws: an odd or absent SteamClient shape degrades
+ * to a marker string that still gets logged.
+ */
+function probeSuspendSurface(): string {
+  try {
+    const client = SteamClient as unknown as Record<string, unknown>;
+    const pattern = /suspend|resume|sleep|wake/i;
+    const matches: string[] = [];
+    for (const namespace of ["System", "User"]) {
+      const ns = client[namespace];
+      if (ns === null || typeof ns !== "object") continue;
+      for (const key of Object.keys(ns)) {
+        if (pattern.test(key)) matches.push(`${namespace}.${key}`);
+      }
+    }
+    return matches.length > 0 ? matches.join(", ") : "(none)";
+  } catch (e) {
+    return `probe failed: ${e}`;
+  }
+}
+
+/**
  * Initialize session manager — registers all lifecycle hooks.
  * Call once during plugin load.
  */
@@ -326,13 +389,40 @@ export async function initSessionManager(): Promise<void> {
       });
   });
 
-  // Suspend/resume for accurate playtime
-  try {
-    suspendHook = SteamClient.System.RegisterForOnSuspendRequest(handleSuspend);
-    resumeHook = SteamClient.System.RegisterForOnResumeFromSuspend(handleResume);
-  } catch (e) {
-    console.warn("[romm-sync] Suspend/resume hooks unavailable:", e);
+  // Suspend/resume for accurate playtime. #1148 diagnostics: on-device these
+  // hooks never fired, so decision C's suspend-subtraction shipped dormant.
+  // Probe presence, registration outcome, and the returned handle shape once per
+  // init so a single Game-Mode run tells us whether the API is missing, throwing,
+  // or registering but never firing. The typed SteamClient claims the members
+  // always exist, so presence is read through an `unknown` view — the runtime is
+  // the authority here, not the `.d.ts`. `SteamClient.System` itself is read
+  // defensively (absent, non-object, or a throwing getter → empty record) so a
+  // broken SteamClient still emits the "hooks missing" headline + surface probe
+  // and lets init reach the #1054 adoption, rather than throwing before either.
+  const systemApi = readSystemApi();
+  const hasSuspendReg = typeof systemApi.RegisterForOnSuspendRequest === "function";
+  const hasResumeReg = typeof systemApi.RegisterForOnResumeFromSuspend === "function";
+  if (!hasSuspendReg || !hasResumeReg) {
+    // Actionable headline — the members decision C depends on are absent on this
+    // build. Warn so it lands even at the default log level.
+    logWarn(
+      `Suspend/resume hooks missing on this build: RegisterForOnSuspendRequest=${hasSuspendReg} RegisterForOnResumeFromSuspend=${hasResumeReg}`,
+    );
   }
+  try {
+    if (hasSuspendReg) suspendHook = SteamClient.System.RegisterForOnSuspendRequest(handleSuspend);
+    if (hasResumeReg) resumeHook = SteamClient.System.RegisterForOnResumeFromSuspend(handleResume);
+    detach(
+      debugLog(
+        `Suspend/resume registration: suspend=${describeHandle(suspendHook)} resume=${describeHandle(resumeHook)}`,
+      ),
+    );
+  } catch (e) {
+    logWarn(`Suspend/resume registration threw: ${e}`);
+  }
+  // Investigation point 3 — enumerate the suspend/resume members SteamClient
+  // actually exposes at runtime. Debug-gated; never throws.
+  detach(debugLog(`SteamClient suspend/resume surface: ${probeSuspendSurface()}`));
 
   // Adopt a session orphaned by a plugin reload mid-game. Serialized on the
   // lifecycle chain so a stop notification arriving during adoption finalizes
