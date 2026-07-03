@@ -235,6 +235,7 @@ describe("computeSyncSummary", () => {
       session_count: 0,
       last_session_start: null,
       last_session_duration_sec: null,
+      last_played: null,
     },
     device_id: "dev",
     last_sync_check_at: null,

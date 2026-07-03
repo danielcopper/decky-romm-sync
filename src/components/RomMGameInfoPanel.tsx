@@ -226,7 +226,13 @@ function saveStatusFromCache(
       server_size: null,
       last_sync_at: f.last_sync_at ?? null,
     })),
-    playtime: { total_seconds: 0, session_count: 0, last_session_start: null, last_session_duration_sec: null },
+    playtime: {
+      total_seconds: 0,
+      session_count: 0,
+      last_session_start: null,
+      last_session_duration_sec: null,
+      last_played: null,
+    },
     device_id: "",
     last_sync_check_at: cachedSave.last_sync_check_at ?? null,
   };

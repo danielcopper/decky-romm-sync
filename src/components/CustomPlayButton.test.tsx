@@ -853,7 +853,13 @@ describe("CustomPlayButton — resolve conflict reads the known conflict (#1276)
   const saveStatus = (overrides: Partial<SaveStatus> = {}): SaveStatus => ({
     rom_id: 42,
     files: [],
-    playtime: { total_seconds: 0, session_count: 0, last_session_start: null, last_session_duration_sec: null },
+    playtime: {
+      total_seconds: 0,
+      session_count: 0,
+      last_session_start: null,
+      last_session_duration_sec: null,
+      last_played: null,
+    },
     device_id: "dev-1",
     last_sync_check_at: null,
     ...overrides,

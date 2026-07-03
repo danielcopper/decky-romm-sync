@@ -62,6 +62,7 @@ interface PlaytimeEntry {
   session_count: number;
   last_session_start: string | null;
   last_session_duration_sec: number | null;
+  last_played: string | null;
 }
 
 export interface SaveSyncDisplay {
