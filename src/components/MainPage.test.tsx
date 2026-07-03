@@ -648,31 +648,63 @@ describe("MainPage", () => {
   // D2. Backend bootstrap failure — the retry-exhausted failure state (#1045)
   // ===========================================================================
   describe("backend bootstrap failure (#1045)", () => {
-    it("falls to an explicit backend-failure state when every connection attempt fails (retries exhausted)", async () => {
+    it("shows 'Backend error' only when the backend itself is dead (testConnection AND getSettings both fail)", async () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
-        // The backend never answers (bootstrap aborted) — every test_connection
-        // attempt rejects, across the whole backoff window.
+        // Bootstrap aborted: the whole RPC bridge is dead, so BOTH the
+        // test_connection probes AND the get_settings liveness ping fail.
         vi.mocked(backend.testConnection).mockRejectedValue(new Error("backend down"));
+        vi.mocked(backend.getSettings).mockRejectedValue(new Error("backend down"));
         const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
         const { container } = render(<MainPage onNavigate={vi.fn()} />);
-        // Drive the full retry schedule (2+5+10+15+20s of backoff) to exhaustion.
+        // Drive the full retry schedule (2+5+10+15+20s of backoff) + the ping.
         await act(async () => {
           await vi.advanceTimersByTimeAsync(60_000);
         });
-        // The connection row lands on the explicit failure — not an eternal
-        // "Checking…" spinner (the #1045 bug).
+        // The row lands on the explicit failure — not an eternal "Checking…"
+        // spinner (the #1045 bug), and not the false "Not connected".
         expect(container.textContent).toContain("Backend error");
         expect(container.textContent).toContain("Plugin backend failed to start — check Decky logs.");
         expect(container.textContent).not.toContain("Checking...");
+        expect(container.textContent).not.toContain("Not connected");
         // Sync is gated off while the backend is down.
         const sync = buttonByExactText(container, "Sync Library");
         expect(sync).not.toBeNull();
         expect(sync!.disabled).toBe(true);
-        // Non-vacuous catch coverage: the exhaustion branch logs to console.error
-        // (logError is itself a callable and would hang against a dead backend).
-        expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("test_connection unreachable"), expect.anything());
+        // Non-vacuous catch coverage: the dead-backend branch logs the liveness
+        // ping failure to console.error (logError itself would hang here).
+        expect(errSpy).toHaveBeenCalledWith(
+          expect.stringContaining("backend RPC bridge unreachable"),
+          expect.anything(),
+        );
         errSpy.mockRestore();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("shows 'Not connected' (NOT 'Backend error') when the backend is alive but the server is unreachable-by-timeout", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        // Healthy backend, hanging RomM server: test_connection never answers
+        // within any per-attempt deadline (the backend heartbeat outlives it),
+        // but the get_settings liveness ping resolves — the backend IS alive.
+        vi.mocked(backend.testConnection).mockImplementation(
+          () =>
+            new Promise(() => {
+              /* never resolves — server round-trip hangs past every deadline */
+            }),
+        );
+        vi.mocked(backend.getSettings).mockResolvedValue(defaultSettings());
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        // Drive every 5s per-attempt timeout + backoff to exhaustion, then the ping.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(90_000);
+        });
+        // Truthful state for an unreachable server — the backend didn't fail.
+        expect(container.textContent).toContain("Not connected");
+        expect(container.textContent).not.toContain("Backend error");
+        expect(container.textContent).not.toContain("Checking...");
       } finally {
         vi.useRealTimers();
       }

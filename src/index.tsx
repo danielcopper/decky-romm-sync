@@ -59,18 +59,12 @@ import type {
 } from "./types";
 import { removeShortcut, setLaunchOptionsConfirmed } from "./utils/steamShortcuts";
 import { batchConfirmLaunchOptions } from "./utils/launchOptionsReconcile";
+import { withTimeout } from "./utils/withTimeout";
 
 type Page = "main" | "settings" | "library" | "data" | "downloads" | "system";
 
 // Module-level page state survives QAM remounts (e.g. after modal close)
 let currentPage: Page = "main";
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`callable timed out after ${ms}ms`)), ms)),
-  ]);
-}
 
 const QAMPanel: FC = () => {
   const [page, setPageState] = useState<Page>(currentPage); // NOSONAR(typescript:S6754) — setter intentionally renamed; setPage wraps it below to provide custom navigation behavior.

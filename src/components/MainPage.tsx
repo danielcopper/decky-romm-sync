@@ -59,6 +59,7 @@ import type {
   MigrationStatus,
 } from "../types";
 import { detach } from "../utils/detach";
+import { withTimeout } from "../utils/withTimeout";
 
 type Page = "settings" | "library" | "data" | "downloads" | "system";
 
@@ -79,14 +80,6 @@ const CONNECTION_CALLABLE_TIMEOUT = 5000;
 
 /** Backend never answered after the retry budget — distinct from `false` ("not connected"). */
 type BackendFailed = "backend_failed";
-
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer!: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`callable timed out after ${ms}ms`)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
 
 function formatChanges(pairs: [number, string][]): string {
   return pairs
@@ -265,13 +258,28 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           setConnected(r.success);
           setVersionError(r.reason === "version_error" ? r.message : null);
           return;
-        } catch (e) {
+        } catch {
           if (isCancelled()) return;
           if (attempt >= CONNECTION_RETRY_DELAYS.length) {
-            setConnected("backend_failed");
-            // logError is itself a callable and would hang against a dead
-            // backend — log to the console instead.
-            console.error(`[RomM] test_connection unreachable after ${attempt + 1} attempts:`, e);
+            // Retry budget exhausted. test_connection() also waits out the
+            // server round-trip — a hanging RomM server keeps the backend's
+            // retrying heartbeat busy for up to ~90s, far past our per-attempt
+            // deadline — so an exhausted budget alone can't tell a dead backend
+            // from an unreachable server. Ping get_settings (a pure in-memory
+            // read that resolves iff the backend RPC bridge is alive) to decide:
+            // alive ⇒ the server is merely unreachable ("Not connected");
+            // dead ⇒ the backend never came up ("Backend error").
+            try {
+              await withTimeout(getSettings(), CONNECTION_CALLABLE_TIMEOUT);
+              if (isCancelled()) return;
+              setConnected(false);
+            } catch (pingErr) {
+              if (isCancelled()) return;
+              setConnected("backend_failed");
+              // logError is itself a callable and would hang against a dead
+              // backend — log to the console instead.
+              console.error("[RomM] backend RPC bridge unreachable (get_settings ping failed):", pingErr);
+            }
             return;
           }
           await new Promise<void>((resolve) => {
