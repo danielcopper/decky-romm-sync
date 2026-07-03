@@ -5,8 +5,8 @@ import {
   ButtonItem,
   Field,
   Focusable,
-  DropdownItem,
   ConfirmModal,
+  showContextMenu,
   showModal,
 } from "@decky/ui";
 import {
@@ -21,6 +21,8 @@ import {
 import type { FirmwarePlatformExt } from "../types";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
+import { getEventTarget } from "../utils/events";
+import { buildEmulatorMenu } from "../utils/emulatorMenu";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 
 /**
@@ -179,10 +181,12 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     );
   };
 
-  const handleSystemCoreChange = async (platform: FirmwarePlatformExt, optionData: string) => {
-    const defaultCore = platform.available_cores?.find((c) => c.is_default);
-    const label = optionData === defaultCore?.label ? "" : optionData;
-    detach(debugLog(`setSystemCore: slug=${platform.platform_slug} label=${label} (selected=${optionData})`));
+  const handleSystemCoreChange = async (platform: FirmwarePlatformExt, pickedLabel: string) => {
+    // Picking the default-marked emulator clears the per-platform override
+    // (empty label → follow the es_systems default); any other pins it.
+    const defaultEmulator = platform.emulators?.find((e) => e.is_default);
+    const label = pickedLabel === defaultEmulator?.label ? "" : pickedLabel;
+    detach(debugLog(`setSystemCore: slug=${platform.platform_slug} label=${label} (selected=${pickedLabel})`));
     try {
       const result = await setSystemCore(platform.platform_slug, label);
       detach(debugLog(`setSystemCore: result success=${result.success}`));
@@ -220,6 +224,25 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     } catch (e) {
       detach(debugLog(`setSystemCore: error: ${e}`));
     }
+  };
+
+  // The per-platform emulator picker shares the game-detail menu builder
+  // (utils/emulatorMenu, #1210). No "Use System Override" reset item and no
+  // "(system)" marker here — this page IS the system level, so picking the
+  // default-marked emulator is itself the clear-to-empty-label action.
+  const showSystemCoreMenu = (platform: FirmwarePlatformExt, e: Event) => {
+    showContextMenu(
+      buildEmulatorMenu({
+        emulators: platform.emulators ?? [],
+        emulatorDataAvailable: platform.emulator_data_available ?? true,
+        activeLabel: platform.active_core_label ?? null,
+        platformCoreLabel: null,
+        onPick: (label) => {
+          detach(handleSystemCoreChange(platform, label));
+        },
+      }),
+      getEventTarget(e),
+    );
   };
 
   // Only currently-synced systems are shown (#956): a platform counts as synced
@@ -261,7 +284,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     const hasRequiredMissing = requiredCount > 0 && !requiredReady;
     const hasOptionalMissing = optionalMissing > 0;
 
-    const hasMultipleCores = !!platform.available_cores && platform.available_cores.length > 1;
+    const hasMultipleCores = !!platform.emulators && platform.emulators.length > 1;
 
     return (
       <PanelSection
@@ -269,22 +292,15 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
         title={`${platform.platform_slug}${needsAttention ? " — BIOS needed" : ""}`}
       >
         {/* Emulator core selection is the primary per-system concern (#923),
-            shown above the BIOS file management. */}
+            shown above the BIOS file management. The picker opens the shared
+            context menu so libretro AND standalone emulators (and disabled
+            un-bakeable entries with their reason) render identically to the
+            game-detail menu (#1210). */}
         {hasMultipleCores && (
           <PanelSectionRow>
-            <DropdownItem
-              label="Emulator Core"
-              rgOptions={[
-                ...platform.available_cores!.map((c) => ({
-                  data: c.label,
-                  label: c.is_default ? `${c.label} (default)` : c.label,
-                })),
-              ]}
-              selectedOption={
-                platform.active_core_label || platform.available_cores!.find((c) => c.is_default)?.label || ""
-              }
-              onChange={(option: { data: string }) => detach(handleSystemCoreChange(platform, option.data))}
-            />
+            <ButtonItem layout="below" onClick={(e: Event) => showSystemCoreMenu(platform, e)}>
+              {`Emulator Core: ${platform.active_core_label ?? "Default"}`}
+            </ButtonItem>
           </PanelSectionRow>
         )}
         {platform.active_core_label && !hasMultipleCores && (

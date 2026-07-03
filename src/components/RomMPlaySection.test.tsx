@@ -82,11 +82,13 @@ vi.mock("../utils/playSection", () => ({
       active_core_label?: string | null;
       platform_core_label?: string | null;
       has_game_override?: boolean;
-      cores?: unknown[];
+      emulator_data_available?: boolean;
+      emulators?: unknown[];
     }) => ({
       activeCoreLabel: c.active_core_label ?? null,
       activeCoreIsDefault: true,
-      availableCores: c.cores ?? [],
+      emulators: c.emulators ?? [],
+      emulatorDataAvailable: c.emulator_data_available ?? true,
       platformCoreLabel: c.platform_core_label ?? null,
       hasGameOverride: c.has_game_override ?? false,
     }),
@@ -269,7 +271,8 @@ describe("RomMPlaySection", () => {
     vi.mocked(playSectionUtils.extractCoreInfo).mockReturnValue({
       activeCoreLabel: null,
       activeCoreIsDefault: true,
-      availableCores: [],
+      emulatorDataAvailable: true,
+      emulators: [],
       platformCoreLabel: null,
       hasGameOverride: false,
     });
@@ -280,7 +283,8 @@ describe("RomMPlaySection", () => {
     vi.mocked(sectionRefresh.refreshCoreInfoInBackground).mockImplementation((_romId, cancelled, setter) => {
       if (cancelled()) return;
       const coreFields = playSectionUtils.extractCoreInfo({
-        cores: [],
+        emulator_data_available: true,
+        emulators: [],
         active_core: null,
         active_core_label: null,
         platform_core_label: null,
@@ -297,7 +301,8 @@ describe("RomMPlaySection", () => {
     vi.mocked(setLaunchOptionsConfirmed).mockResolvedValue(true);
     // Default core-info path — empty cores. Tests opt into specific shapes.
     vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
-      cores: [],
+      emulator_data_available: true,
+      emulators: [],
       active_core: null,
       active_core_label: null,
       platform_core_label: null,
@@ -1221,9 +1226,17 @@ describe("RomMPlaySection", () => {
         active_core_label: "BlastEm",
         platform_core_label: null,
         has_game_override: false,
-        cores: [
-          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        emulator_data_available: true,
+        emulators: [
+          { label: "Snes9x", kind: "libretro", core_so: "snes9x.so", is_default: true, bakeable: true, reason: null },
+          {
+            label: "BlastEm",
+            kind: "libretro",
+            core_so: "blastem.so",
+            is_default: false,
+            bakeable: true,
+            reason: null,
+          },
         ],
       });
       // BIOS level/label come from the (now core-free) BIOS status.
@@ -1273,9 +1286,17 @@ describe("RomMPlaySection", () => {
         active_core_label: "BlastEm",
         platform_core_label: null,
         has_game_override: false,
-        cores: [
-          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        emulator_data_available: true,
+        emulators: [
+          { label: "Snes9x", kind: "libretro", core_so: "snes9x.so", is_default: true, bakeable: true, reason: null },
+          {
+            label: "BlastEm",
+            kind: "libretro",
+            core_so: "blastem.so",
+            is_default: false,
+            bakeable: true,
+            reason: null,
+          },
         ],
       });
       vi.mocked(backend.getBiosStatus).mockResolvedValue({
@@ -2185,17 +2206,33 @@ describe("RomMPlaySection", () => {
         active_core_label: "Snes9x",
         platform_core_label: null,
         has_game_override: false,
-        cores: [
-          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        emulator_data_available: true,
+        emulators: [
+          { label: "Snes9x", kind: "libretro", core_so: "snes9x.so", is_default: true, bakeable: true, reason: null },
+          {
+            label: "BlastEm",
+            kind: "libretro",
+            core_so: "blastem.so",
+            is_default: false,
+            bakeable: true,
+            reason: null,
+          },
         ],
       });
       vi.mocked(playSectionUtils.extractCoreInfo).mockReturnValue({
         activeCoreLabel: "Snes9x",
         activeCoreIsDefault: true,
-        availableCores: [
-          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        emulatorDataAvailable: true,
+        emulators: [
+          { label: "Snes9x", kind: "libretro", core_so: "snes9x.so", is_default: true, bakeable: true, reason: null },
+          {
+            label: "BlastEm",
+            kind: "libretro",
+            core_so: "blastem.so",
+            is_default: false,
+            bakeable: true,
+            reason: null,
+          },
         ],
         platformCoreLabel: null,
         hasGameOverride: false,
@@ -2418,9 +2455,17 @@ describe("RomMPlaySection", () => {
         active_core_label: "BlastEm",
         platform_core_label: null,
         has_game_override: true,
-        cores: [
-          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        emulator_data_available: true,
+        emulators: [
+          { label: "Snes9x", kind: "libretro", core_so: "snes9x.so", is_default: true, bakeable: true, reason: null },
+          {
+            label: "BlastEm",
+            kind: "libretro",
+            core_so: "blastem.so",
+            is_default: false,
+            bakeable: true,
+            reason: null,
+          },
         ],
       });
       // A per-game core (BlastEm) is pinned (hasGameOverride=true), so the
@@ -2428,9 +2473,17 @@ describe("RomMPlaySection", () => {
       vi.mocked(playSectionUtils.extractCoreInfo).mockReturnValue({
         activeCoreLabel: "BlastEm",
         activeCoreIsDefault: false,
-        availableCores: [
-          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        emulatorDataAvailable: true,
+        emulators: [
+          { label: "Snes9x", kind: "libretro", core_so: "snes9x.so", is_default: true, bakeable: true, reason: null },
+          {
+            label: "BlastEm",
+            kind: "libretro",
+            core_so: "blastem.so",
+            is_default: false,
+            bakeable: true,
+            reason: null,
+          },
         ],
         platformCoreLabel: null,
         hasGameOverride: true,
@@ -2633,9 +2686,17 @@ describe("RomMPlaySection", () => {
       const items = await setupCoreMenuStructure({
         activeCoreLabel: "Snes9x",
         activeCoreIsDefault: true,
-        availableCores: [
-          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        emulatorDataAvailable: true,
+        emulators: [
+          { label: "Snes9x", kind: "libretro", core_so: "snes9x.so", is_default: true, bakeable: true, reason: null },
+          {
+            label: "BlastEm",
+            kind: "libretro",
+            core_so: "blastem.so",
+            is_default: false,
+            bakeable: true,
+            reason: null,
+          },
         ],
         platformCoreLabel: null,
         hasGameOverride: false,
@@ -2658,9 +2719,17 @@ describe("RomMPlaySection", () => {
       const items = await setupCoreMenuStructure({
         activeCoreLabel: "BlastEm",
         activeCoreIsDefault: false,
-        availableCores: [
-          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        emulatorDataAvailable: true,
+        emulators: [
+          { label: "Snes9x", kind: "libretro", core_so: "snes9x.so", is_default: true, bakeable: true, reason: null },
+          {
+            label: "BlastEm",
+            kind: "libretro",
+            core_so: "blastem.so",
+            is_default: false,
+            bakeable: true,
+            reason: null,
+          },
         ],
         platformCoreLabel: null,
         hasGameOverride: true,
@@ -2681,9 +2750,17 @@ describe("RomMPlaySection", () => {
       const items = await setupCoreMenuStructure({
         activeCoreLabel: "Snes9x",
         activeCoreIsDefault: true,
-        availableCores: [
-          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        emulatorDataAvailable: true,
+        emulators: [
+          { label: "Snes9x", kind: "libretro", core_so: "snes9x.so", is_default: true, bakeable: true, reason: null },
+          {
+            label: "BlastEm",
+            kind: "libretro",
+            core_so: "blastem.so",
+            is_default: false,
+            bakeable: true,
+            reason: null,
+          },
         ],
         platformCoreLabel: "BlastEm",
         hasGameOverride: false,
@@ -2702,9 +2779,17 @@ describe("RomMPlaySection", () => {
       const items = await setupCoreMenuStructure({
         activeCoreLabel: "BlastEm",
         activeCoreIsDefault: false,
-        availableCores: [
-          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        emulatorDataAvailable: true,
+        emulators: [
+          { label: "Snes9x", kind: "libretro", core_so: "snes9x.so", is_default: true, bakeable: true, reason: null },
+          {
+            label: "BlastEm",
+            kind: "libretro",
+            core_so: "blastem.so",
+            is_default: false,
+            bakeable: true,
+            reason: null,
+          },
         ],
         platformCoreLabel: "BlastEm",
         hasGameOverride: false,
@@ -2719,9 +2804,17 @@ describe("RomMPlaySection", () => {
       const items = await setupCoreMenuStructure({
         activeCoreLabel: "BlastEm",
         activeCoreIsDefault: false,
-        availableCores: [
-          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        emulatorDataAvailable: true,
+        emulators: [
+          { label: "Snes9x", kind: "libretro", core_so: "snes9x.so", is_default: true, bakeable: true, reason: null },
+          {
+            label: "BlastEm",
+            kind: "libretro",
+            core_so: "blastem.so",
+            is_default: false,
+            bakeable: true,
+            reason: null,
+          },
         ],
         platformCoreLabel: "BlastEm",
         hasGameOverride: false,
@@ -2740,9 +2833,17 @@ describe("RomMPlaySection", () => {
       const items = await setupCoreMenuStructure({
         activeCoreLabel: "BlastEm",
         activeCoreIsDefault: false,
-        availableCores: [
-          { core_so: "snes9x.so", label: "Snes9x", is_default: true },
-          { core_so: "blastem.so", label: "BlastEm", is_default: false },
+        emulatorDataAvailable: true,
+        emulators: [
+          { label: "Snes9x", kind: "libretro", core_so: "snes9x.so", is_default: true, bakeable: true, reason: null },
+          {
+            label: "BlastEm",
+            kind: "libretro",
+            core_so: "blastem.so",
+            is_default: false,
+            bakeable: true,
+            reason: null,
+          },
         ],
         platformCoreLabel: "BlastEm",
         hasGameOverride: true,
@@ -2934,7 +3035,10 @@ describe("RomMPlaySection", () => {
       vi.mocked(playSectionUtils.extractCoreInfo).mockReturnValue({
         activeCoreLabel: "OnlyOne",
         activeCoreIsDefault: true,
-        availableCores: [{ core_so: "x.so", label: "OnlyOne", is_default: true }],
+        emulatorDataAvailable: true,
+        emulators: [
+          { label: "OnlyOne", kind: "libretro", core_so: "x.so", is_default: true, bakeable: true, reason: null },
+        ],
         platformCoreLabel: null,
         hasGameOverride: false,
       });

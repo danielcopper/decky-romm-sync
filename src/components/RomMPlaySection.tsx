@@ -54,7 +54,8 @@ import {
 } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
-import type { BiosStatus, SaveStatus } from "../types";
+import { buildEmulatorMenu } from "../utils/emulatorMenu";
+import type { BiosStatus, EmulatorOption, SaveStatus } from "../types";
 import type { RommDataChangedDetail } from "../types/events";
 import { formatLastPlayed, formatPlaytime } from "../utils/formatters";
 import { biosColorForLevel } from "../utils/biosColor";
@@ -119,7 +120,8 @@ interface InfoState {
   biosLabel: string;
   activeCoreLabel: string | null;
   activeCoreIsDefault: boolean;
-  availableCores: Array<{ core_so: string; label: string; is_default: boolean }>;
+  emulators: EmulatorOption[];
+  emulatorDataAvailable: boolean;
   platformCoreLabel: string | null;
   hasGameOverride: boolean;
   activeSlot: string | null;
@@ -254,7 +256,8 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     biosLabel: "",
     activeCoreLabel: null,
     activeCoreIsDefault: true,
-    availableCores: [],
+    emulators: [],
+    emulatorDataAvailable: true,
     platformCoreLabel: null,
     hasGameOverride: false,
     activeSlot: "default",
@@ -892,69 +895,29 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   };
 
   const showCoreMenu = (e: Event) => {
+    // Both pickers share the builder in utils/emulatorMenu. The game-detail menu
+    // carries the "Use System Override" reset item (the only clear path, #211);
+    // every bakeable emulator entry PINS the per-game override.
     showContextMenu(
-      createElement(
-        Menu,
-        { label: "Emulator Core" },
-        createElement(
-          MenuItem,
-          { key: "core-compat", disabled: true },
-          "Switching cores may affect save compatibility",
-        ),
-        createElement(MenuSeparator, { key: "core-sep" }),
-        // "Use System Override" is the dedicated reset item: selecting it CLEARS
-        // the per-game pin so the game follows the per-platform/system core. The
-        // fallback label (the core the game falls back to with no pin) is the
-        // per-platform override when set, else the es_systems default. The
-        // checkmark sits here when there is NO per-game override — i.e. the
-        // game already follows the system. "System Override" deliberately
-        // differs from the "(default)" core marker so the menu never shows two
-        // "defaults" (#211).
-        (() => {
-          const defaultLabel = info.availableCores.find((c) => c.is_default)?.label;
-          const fallbackLabel = info.platformCoreLabel ?? defaultLabel ?? null;
-          const fallbackSuffix = fallbackLabel ? ` (${fallbackLabel})` : "";
-          // ✓ when the game already follows the system (no per-game pin).
-          const followsSystemMark = info.hasGameOverride ? "" : " ✓";
-          return createElement(
-            MenuItem,
-            {
-              key: "core-follow-system",
-              onClick: () => {
-                detach(handleResetGameCore());
-              },
-            },
-            `Use System Override${fallbackSuffix}${followsSystemMark}`,
-          );
-        })(),
-        createElement(MenuSeparator, { key: "core-follow-sep" }),
-        ...info.availableCores.map((c) => {
-          // The active marker sits on the ACTIVE core: the default-marked entry
-          // when no override is pinned, otherwise the pinned core (#945).
-          const isActive = info.activeCoreIsDefault ? c.is_default : info.activeCoreLabel === c.label;
-          // The (system) marker sits on the per-platform override set on the
-          // System page (settings.json platform_cores). A core can carry both
-          // "(default) (system)" and "(system) ✓" — all three roles are
-          // independent (#954).
-          const isPlatformCore = info.platformCoreLabel !== null && c.label === info.platformCoreLabel;
-          return createElement(
-            MenuItem,
-            {
-              key: `core-${c.core_so}`,
-              // Every core PINS the per-game override, including the
-              // default-marked one. The dedicated "Use System Override" item
-              // above is the only clear path (#211).
-              onClick: () => {
-                detach(handleChangeGameCore(c.label));
-              },
-            },
-            `${c.label}${c.is_default ? " (default)" : ""}${isPlatformCore ? " (system)" : ""}${isActive ? " \u2713" : ""}`,
-          );
-        }),
-      ),
+      buildEmulatorMenu({
+        emulators: info.emulators,
+        emulatorDataAvailable: info.emulatorDataAvailable,
+        activeLabel: info.activeCoreLabel,
+        platformCoreLabel: info.platformCoreLabel,
+        followSystem: {
+          hasGameOverride: info.hasGameOverride,
+          onFollowSystem: () => {
+            detach(handleResetGameCore());
+          },
+        },
+        onPick: (label) => {
+          detach(handleChangeGameCore(label));
+        },
+      }),
       getEventTarget(e),
     );
   };
+
 
   const showRomMMenu = (e: Event) => {
     showContextMenu(
@@ -1268,8 +1231,8 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         },
         createElement(FaGamepad, { size: 18, color: "#553e98" }),
       ),
-      // Core selection button (only when multiple cores available)
-      ...(info.availableCores.length > 1
+      // Core selection button (only when multiple emulators to choose between)
+      ...(info.emulators.length > 1
         ? [
             createElement(
               DialogButton,

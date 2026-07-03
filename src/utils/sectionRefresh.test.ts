@@ -7,6 +7,8 @@ import {
   refreshAchievementsInBackground,
 } from "./sectionRefresh";
 import * as backend from "../api/backend";
+import { libretroEmu } from "../test-utils/coreFixtures";
+import type { EmulatorOption } from "../types";
 
 interface ActiveSlotState {
   activeSlot: string | null;
@@ -23,7 +25,8 @@ interface BiosState {
 interface CoreState {
   activeCoreLabel: string | null;
   activeCoreIsDefault: boolean;
-  availableCores: Array<{ core_so: string; label: string; is_default: boolean }>;
+  emulators: EmulatorOption[];
+  emulatorDataAvailable: boolean;
   platformCoreLabel: string | null;
   hasGameOverride: boolean;
   unrelated: string;
@@ -233,9 +236,10 @@ describe("refreshCoreInfoInBackground", () => {
       active_core_label: "ParaLLEl N64",
       platform_core_label: null,
       has_game_override: false,
-      cores: [
-        { core_so: "mupen64plus_next_libretro.so", label: "Mupen64Plus-Next", is_default: true },
-        { core_so: "parallel_n64_libretro.so", label: "ParaLLEl N64", is_default: false },
+      emulator_data_available: true,
+      emulators: [
+        libretroEmu("mupen64plus_next_libretro.so", "Mupen64Plus-Next", true),
+        libretroEmu("parallel_n64_libretro.so", "ParaLLEl N64"),
       ],
     });
 
@@ -250,7 +254,8 @@ describe("refreshCoreInfoInBackground", () => {
     const next = setter.mock.calls[0]![0]({
       activeCoreLabel: null,
       activeCoreIsDefault: true,
-      availableCores: [],
+      emulators: [],
+      emulatorDataAvailable: true,
       platformCoreLabel: null,
       hasGameOverride: false,
       unrelated: "keep",
@@ -258,7 +263,7 @@ describe("refreshCoreInfoInBackground", () => {
     expect(next.activeCoreLabel).toBe("ParaLLEl N64");
     // Active core differs from the default → not default.
     expect(next.activeCoreIsDefault).toBe(false);
-    expect(next.availableCores).toHaveLength(2);
+    expect(next.emulators).toHaveLength(2);
     expect(next.unrelated).toBe("keep");
   });
 
@@ -268,7 +273,8 @@ describe("refreshCoreInfoInBackground", () => {
       active_core_label: null,
       platform_core_label: null,
       has_game_override: false,
-      cores: [],
+      emulator_data_available: true,
+      emulators: [],
     });
     const setter = vi.fn();
     refreshCoreInfoInBackground(404, () => true, setter);
@@ -292,7 +298,8 @@ describe("refreshCoreInfoInBackground", () => {
       active_core_label: null,
       platform_core_label: null,
       has_game_override: false,
-      cores: [],
+      emulator_data_available: true,
+      emulators: [],
     });
     await flushMicrotasks();
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { resolveSaveSyncLabel, applySaveSyncDisplay, extractBiosInfo, extractCoreInfo, timeoutMs } from "./playSection";
+import { libretroEmu } from "../test-utils/coreFixtures";
 import type { CoreInfo, SaveStatus, SaveSyncDisplay } from "../types";
 
 describe("resolveSaveSyncLabel", () => {
@@ -101,9 +102,10 @@ describe("extractCoreInfo", () => {
     active_core_label: "Mupen64Plus-Next",
     platform_core_label: null,
     has_game_override: false,
-    cores: [
-      { core_so: "mupen64plus_next_libretro.so", label: "Mupen64Plus-Next", is_default: true },
-      { core_so: "parallel_n64_libretro.so", label: "ParaLLEl N64", is_default: false },
+    emulator_data_available: true,
+    emulators: [
+      libretroEmu("mupen64plus_next_libretro.so", "Mupen64Plus-Next", true),
+      libretroEmu("parallel_n64_libretro.so", "ParaLLEl N64"),
     ],
   };
 
@@ -111,7 +113,8 @@ describe("extractCoreInfo", () => {
     const result = extractCoreInfo(baseCoreInfo);
     expect(result.activeCoreLabel).toBe("Mupen64Plus-Next");
     expect(result.activeCoreIsDefault).toBe(true);
-    expect(result.availableCores).toHaveLength(2);
+    expect(result.emulators).toHaveLength(2);
+    expect(result.emulatorDataAvailable).toBe(true);
     expect(result.platformCoreLabel).toBeNull();
     expect(result.hasGameOverride).toBe(false);
   });
@@ -147,15 +150,17 @@ describe("extractCoreInfo", () => {
     expect(result.platformCoreLabel).toBeNull();
   });
 
-  it("defaults availableCores to [] when cores missing", () => {
+  it("defaults emulators to [] when the list is empty", () => {
     const result = extractCoreInfo({
       active_core: null,
       active_core_label: null,
       platform_core_label: null,
       has_game_override: false,
-      cores: [],
+      emulator_data_available: false,
+      emulators: [],
     });
-    expect(result.availableCores).toEqual([]);
+    expect(result.emulators).toEqual([]);
+    expect(result.emulatorDataAvailable).toBe(false);
   });
 });
 

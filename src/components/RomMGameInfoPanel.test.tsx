@@ -230,7 +230,8 @@ describe("RomMGameInfoPanel", () => {
     // Core info comes from the dedicated get_platform_core_info path (#923),
     // decoupled from BIOS status. Default: no cores. Tests opt into shapes.
     vi.mocked(backend.getPlatformCoreInfo).mockResolvedValue({
-      cores: [],
+      emulator_data_available: true,
+      emulators: [],
       active_core: null,
       active_core_label: null,
       platform_core_label: null,
@@ -1155,7 +1156,17 @@ describe("RomMGameInfoPanel", () => {
         active_core_label: "FROM_CORE_CHANGED",
         platform_core_label: null,
         has_game_override: false,
-        cores: [{ core_so: "from_core_changed.so", label: "FROM_CORE_CHANGED", is_default: true }],
+        emulator_data_available: true,
+        emulators: [
+          {
+            label: "FROM_CORE_CHANGED",
+            kind: "libretro",
+            core_so: "from_core_changed.so",
+            is_default: true,
+            bakeable: true,
+            reason: null,
+          },
+        ],
       });
       await act(async () => {
         globalThis.dispatchEvent(
@@ -1207,7 +1218,17 @@ describe("RomMGameInfoPanel", () => {
         active_core_label: "INITIAL_CORE",
         platform_core_label: null,
         has_game_override: false,
-        cores: [{ core_so: "initial_core.so", label: "INITIAL_CORE", is_default: true }],
+        emulator_data_available: true,
+        emulators: [
+          {
+            label: "INITIAL_CORE",
+            kind: "libretro",
+            core_so: "initial_core.so",
+            is_default: true,
+            bakeable: true,
+            reason: null,
+          },
+        ],
       });
       const view = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
@@ -1951,7 +1972,17 @@ describe("RomMGameInfoPanel", () => {
         active_core_label: "Snes9x",
         platform_core_label: null,
         has_game_override: false,
-        cores: [{ core_so: "snes9x_libretro", label: "Snes9x", is_default: true }],
+        emulator_data_available: true,
+        emulators: [
+          {
+            label: "Snes9x",
+            kind: "libretro",
+            core_so: "snes9x_libretro",
+            is_default: true,
+            bakeable: true,
+            reason: null,
+          },
+        ],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
@@ -2002,9 +2033,24 @@ describe("RomMGameInfoPanel", () => {
         active_core_label: "Beetle PSX HW",
         platform_core_label: null,
         has_game_override: false,
-        cores: [
-          { core_so: "beetle_psx_hw_libretro", label: "Beetle PSX HW", is_default: true },
-          { core_so: "swanstation_libretro", label: "SwanStation", is_default: false },
+        emulator_data_available: true,
+        emulators: [
+          {
+            label: "Beetle PSX HW",
+            kind: "libretro",
+            core_so: "beetle_psx_hw_libretro",
+            is_default: true,
+            bakeable: true,
+            reason: null,
+          },
+          {
+            label: "SwanStation",
+            kind: "libretro",
+            core_so: "swanstation_libretro",
+            is_default: false,
+            bakeable: true,
+            reason: null,
+          },
         ],
       });
       const { getByText } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -2059,9 +2105,24 @@ describe("RomMGameInfoPanel", () => {
         active_core_label: null,
         platform_core_label: null,
         has_game_override: false,
-        cores: [
-          { core_so: "beetle_psx_hw_libretro", label: "Beetle PSX HW", is_default: false },
-          { core_so: "swanstation_libretro", label: "SwanStation", is_default: false },
+        emulator_data_available: true,
+        emulators: [
+          {
+            label: "Beetle PSX HW",
+            kind: "libretro",
+            core_so: "beetle_psx_hw_libretro",
+            is_default: false,
+            bakeable: true,
+            reason: null,
+          },
+          {
+            label: "SwanStation",
+            kind: "libretro",
+            core_so: "swanstation_libretro",
+            is_default: false,
+            bakeable: true,
+            reason: null,
+          },
         ],
       });
       const { getByText } = render(<RomMGameInfoPanel appId={testAppId} />);
@@ -2114,7 +2175,17 @@ describe("RomMGameInfoPanel", () => {
         active_core_label: "Beetle PSX HW",
         platform_core_label: null,
         has_game_override: false,
-        cores: [{ core_so: "beetle_psx_hw_libretro", label: "Beetle PSX HW", is_default: true }],
+        emulator_data_available: true,
+        emulators: [
+          {
+            label: "Beetle PSX HW",
+            kind: "libretro",
+            core_so: "beetle_psx_hw_libretro",
+            is_default: true,
+            bakeable: true,
+            reason: null,
+          },
+        ],
       });
       const { getByText } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();
@@ -2291,7 +2362,10 @@ describe("RomMGameInfoPanel", () => {
         active_core_label: "MyCore",
         platform_core_label: null,
         has_game_override: false,
-        cores: [{ core_so: "mycore.so", label: "MyCore", is_default: true }],
+        emulator_data_available: true,
+        emulators: [
+          { label: "MyCore", kind: "libretro", core_so: "mycore.so", is_default: true, bakeable: true, reason: null },
+        ],
       });
       const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
       await flushAsync();

@@ -20,22 +20,35 @@ interface FirmwarePlatform {
   files: FirmwareFile[];
 }
 
-export interface AvailableCore {
-  core_so: string;
+/**
+ * One ES-DE `<command>` classified for launch-bakeability (#1210), the shape the
+ * backend `get_emulator_options` / picker payloads carry. `kind` is `"libretro"`
+ * (`core_so` set to the bare core name) or `"standalone"` (`core_so` null).
+ * `bakeable` is false for the `needs_setup` (`reason: "inject"`) and un-bakeable
+ * forms; `reason` names why the frontend can't offer it as a clickable pick.
+ */
+export interface EmulatorOption {
   label: string;
+  kind: "libretro" | "standalone";
+  core_so: string | null;
   is_default: boolean;
+  bakeable: boolean;
+  reason: string | null;
 }
 
 /**
  * Response shape of the `get_platform_core_info` callable — the dedicated
- * single-platform core-info path, decoupled from the per-game BIOS payload
+ * single-platform emulator-info path, decoupled from the per-game BIOS payload
  * (#923). The per-game detail page (`RomMPlaySection` / `RomMGameInfoPanel`)
- * reads core data from here. The System page's multi-platform overview instead
- * reads core data off the `get_firmware_status` payload (`FirmwarePlatformExt`),
+ * reads emulator data from here. The System page's multi-platform overview
+ * instead reads it off the `get_firmware_status` payload (`FirmwarePlatformExt`),
  * which enumerates every platform in one call — see that interface below.
+ * `emulator_data_available` is false when `es_systems.xml` cannot be read
+ * (RetroDECK not detected), so the picker can say so instead of an empty list.
  */
 export interface CoreInfo {
-  cores: AvailableCore[];
+  emulators: EmulatorOption[];
+  emulator_data_available: boolean;
   active_core: string | null;
   active_core_label: string | null;
   platform_core_label: string | null;
@@ -54,7 +67,8 @@ export interface FirmwarePlatformExt extends FirmwarePlatform {
   all_downloaded?: boolean;
   active_core?: string;
   active_core_label?: string;
-  available_cores?: AvailableCore[];
+  emulators?: EmulatorOption[];
+  emulator_data_available?: boolean;
   // Per-platform BIOS aggregates computed by the backend from the same
   // core-aware enriched files (`compute_bios_level`), so the System page reads
   // the ok/partial/missing decision and display counts off the payload instead

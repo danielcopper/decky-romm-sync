@@ -868,9 +868,11 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     );
 
     // Build core_so -> label lookup from the dedicated core-info path (#923).
+    // Only libretro emulators carry a core_so (a standalone emulator has none),
+    // so filter those in for the per-core BIOS lines.
     const coreLabelMap: Record<string, string> = {};
-    for (const c of state.coreInfo?.cores ?? []) {
-      coreLabelMap[c.core_so] = c.label;
+    for (const e of state.coreInfo?.emulators ?? []) {
+      if (e.core_so) coreLabelMap[e.core_so] = e.label;
     }
 
     // Filter out unknown files (not in registry) — they're noise from the server

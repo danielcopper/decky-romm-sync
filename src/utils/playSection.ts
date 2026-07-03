@@ -7,7 +7,7 @@
  * sectionRefresh.ts. Anything stateful belongs in the component itself.
  */
 
-import type { AvailableCore, CoreInfo, SaveStatus, SaveSyncDisplay } from "../types";
+import type { CoreInfo, EmulatorOption, SaveStatus, SaveSyncDisplay } from "../types";
 import { hasAnySaveConflict } from "./saveStatus";
 import { formatTimeAgo } from "./formatters";
 
@@ -25,7 +25,8 @@ export interface BiosInfoFields {
 export interface CoreInfoFields {
   activeCoreLabel: string | null;
   activeCoreIsDefault: boolean;
-  availableCores: AvailableCore[];
+  emulators: EmulatorOption[];
+  emulatorDataAvailable: boolean;
   platformCoreLabel: string | null;
   hasGameOverride: boolean;
 }
@@ -77,17 +78,18 @@ export function extractBiosInfo(level: "ok" | "partial" | "missing" | null, labe
 
 /** Project a CoreInfo response (from the dedicated `get_platform_core_info`
  *  path, #923) into the core-selection fields the play-section row needs. The
- *  active core is "default" when it equals the platform default or no override
+ *  active core is "default" when it equals the default emulator or no override
  *  is set. */
 export function extractCoreInfo(coreInfo: CoreInfo): CoreInfoFields {
   const activeCoreLabel = coreInfo.active_core_label ?? null;
-  const availableCores = coreInfo.cores;
-  const defaultCore = availableCores.find((c) => c.is_default);
-  const activeCoreIsDefault = !activeCoreLabel || activeCoreLabel === defaultCore?.label;
+  const emulators = coreInfo.emulators;
+  const defaultEmulator = emulators.find((e) => e.is_default);
+  const activeCoreIsDefault = !activeCoreLabel || activeCoreLabel === defaultEmulator?.label;
   return {
     activeCoreLabel,
     activeCoreIsDefault,
-    availableCores,
+    emulators,
+    emulatorDataAvailable: coreInfo.emulator_data_available,
     platformCoreLabel: coreInfo.platform_core_label ?? null,
     hasGameOverride: coreInfo.has_game_override,
   };

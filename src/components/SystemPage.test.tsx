@@ -30,20 +30,11 @@ vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
 // driveable without a real Steam client.
 vi.mock("../utils/steamShortcuts", () => ({ setLaunchOptionsConfirmed: vi.fn() }));
 
-// DropdownItem in the global @decky/ui stub is a passthrough <select> with no
-// rgOptions / onChange capture. SystemPage uses DropdownItem for per-platform
-// core selection; we need to drive its onChange callback to test the
-// setSystemCore flow. Re-mock @decky/ui locally to expose DropdownItem props on
-// a shared captured-array — every other component mirrors the global stub so the
-// rest of the tree behaves identically.
-interface CapturedDropdown {
-  label?: string;
-  rgOptions?: Array<{ data: unknown; label: string }>;
-  selectedOption?: unknown;
-  onChange?: (option: { data: string; label: string }) => void | Promise<void>;
-}
-const capturedDropdowns: CapturedDropdown[] = [];
-
+// SystemPage drives most of its tree through the global @decky/ui stub, but the
+// per-platform emulator picker (#1210) is a ButtonItem that opens a context menu
+// via buildEmulatorMenu — mocked separately below. Re-mock @decky/ui locally so
+// ButtonItem renders a real <button> the tests can click, and showContextMenu is
+// a sink; every other component mirrors the global stub.
 vi.mock("@decky/ui", async () => {
   const { createElement: ce } = await import("react");
   type AnyProps = Record<string, unknown> & { children?: unknown };
@@ -67,22 +58,29 @@ vi.mock("@decky/ui", async () => {
         ce("span", { "data-testid": "field-desc" }, p.description as never),
       ),
     Focusable: passthrough("div"),
-    DropdownItem: (p: CapturedDropdown) => {
-      capturedDropdowns.push(p);
-      return ce(
-        "div",
-        { "data-testid": "dropdown" },
-        ce("span", { "data-testid": "dropdown-label" }, p.label as never),
-      );
-    },
     Spinner: () => ce("div", { "data-testid": "spinner" }),
     // ConfirmModal is passed to showModal as a created element; the test reads
     // its props (strTitle / onOK) off the captured showModal call rather than
     // rendering it, mirroring DangerZone.test.tsx.
     ConfirmModal: passthrough("div"),
     showModal: vi.fn(),
+    // The per-platform emulator picker opens a context menu; the menu element is
+    // built by the mocked buildEmulatorMenu below, so this is just a sink.
+    showContextMenu: vi.fn(),
   };
 });
+
+// The per-platform emulator picker (#1210) opens the shared menu builder. Mock
+// it to capture the config SystemPage hands it, so a test can drive its
+// ``onPick(label)`` — the direct replacement for the old dropdown ``onChange``.
+import type { EmulatorMenuConfig } from "../utils/emulatorMenu";
+const capturedMenuConfigs: EmulatorMenuConfig[] = [];
+vi.mock("../utils/emulatorMenu", () => ({
+  buildEmulatorMenu: vi.fn((config: EmulatorMenuConfig) => {
+    capturedMenuConfigs.push(config);
+    return { __menu: true };
+  }),
+}));
 
 // Props of the ConfirmModal element handed to the most recent showModal() call.
 interface ConfirmModalProps {
@@ -102,6 +100,28 @@ function lastConfirmModalProps(): ConfirmModalProps | null {
 // Flush mount-time + chained promise resolutions.
 const flushAsync = () =>
   act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+// Find the "Emulator Core: …" ButtonItem (the #1210 picker trigger) and click
+// it so SystemPage builds the menu config (captured via the mocked
+// buildEmulatorMenu). Returns the captured config.
+function openCoreMenu(container: HTMLElement): EmulatorMenuConfig {
+  const btn = [...container.querySelectorAll("button")].find((b) => b.textContent.startsWith("Emulator Core:"));
+  if (!btn) throw new Error("Emulator Core button not found");
+  fireEvent.click(btn);
+  const config = capturedMenuConfigs[capturedMenuConfigs.length - 1];
+  if (!config) throw new Error("buildEmulatorMenu was not called");
+  return config;
+}
+
+// Open the picker and drive its onPick(label) — the direct replacement for the
+// old dropdown onChange — then flush the fire-and-forget handler.
+const pickCore = (container: HTMLElement, label: string) =>
+  act(async () => {
+    openCoreMenu(container).onPick(label);
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
@@ -135,7 +155,7 @@ function makeBiosPlatform(overrides: Partial<FirmwarePlatformExt> = {}): Firmwar
 describe("SystemPage", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    capturedDropdowns.length = 0;
+    capturedMenuConfigs.length = 0;
     // Default callable behavior — tests override per case.
     vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
       success: true,
@@ -864,45 +884,72 @@ describe("SystemPage", () => {
   // N. setSystemCore (core dropdown)
   // ------------------------------------------------------------------
   describe("setSystemCore", () => {
-    it("does NOT render the dropdown when available_cores has <=1 entry", async () => {
+    it("does NOT render the core button when there is <=1 emulator", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
           makeBiosPlatform({
             platform_slug: "snes",
             files: [],
-            available_cores: [{ core_so: "snes9x.so", label: "snes9x", is_default: true }],
+            emulator_data_available: true,
+            emulators: [
+              {
+                label: "snes9x",
+                kind: "libretro",
+                core_so: "snes9x.so",
+                is_default: true,
+                bakeable: true,
+                reason: null,
+              },
+            ],
           }),
         ],
       });
-      render(<SystemPage onBack={vi.fn()} />);
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      expect(capturedDropdowns.length).toBe(0);
+      const coreBtn = [...container.querySelectorAll("button")].find((b) => b.textContent.startsWith("Emulator Core:"));
+      expect(coreBtn).toBeUndefined();
     });
 
-    it("renders the core dropdown when available_cores has >1 entries", async () => {
+    it("renders the core button (with the active label) when there is >1 emulator", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
           makeBiosPlatform({
             platform_slug: "snes",
             files: [],
-            available_cores: [
-              { core_so: "snes9x.so", label: "snes9x", is_default: true },
-              { core_so: "mesen-s.so", label: "mesen-s", is_default: false },
+            emulator_data_available: true,
+            emulators: [
+              {
+                label: "snes9x",
+                kind: "libretro",
+                core_so: "snes9x.so",
+                is_default: true,
+                bakeable: true,
+                reason: null,
+              },
+              {
+                label: "mesen-s",
+                kind: "libretro",
+                core_so: "mesen-s.so",
+                is_default: false,
+                bakeable: true,
+                reason: null,
+              },
             ],
             active_core_label: "snes9x",
           }),
         ],
       });
-      render(<SystemPage onBack={vi.fn()} />);
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      expect(capturedDropdowns.length).toBe(1);
-      const dropdown = capturedDropdowns[0]!;
-      expect(dropdown.label).toBe("Emulator Core");
-      expect(dropdown.rgOptions?.map((o) => o.data)).toEqual(["snes9x", "mesen-s"]);
-      expect(dropdown.rgOptions?.[0]?.label).toBe("snes9x (default)");
-      expect(dropdown.selectedOption).toBe("snes9x");
+      const config = openCoreMenu(container);
+      // The picker hands the classified emulator list + the active label + no
+      // per-platform "(system)" marker (this page IS the system level).
+      expect(config.emulators.map((e) => e.label)).toEqual(["snes9x", "mesen-s"]);
+      expect(config.activeLabel).toBe("snes9x");
+      expect(config.emulatorDataAvailable).toBe(true);
+      expect(config.platformCoreLabel).toBeNull();
     });
 
     it("calls setSystemCore with empty label when default core is selected and dispatches romm_data_changed", async () => {
@@ -912,26 +959,36 @@ describe("SystemPage", () => {
           makeBiosPlatform({
             platform_slug: "snes",
             files: [],
-            available_cores: [
-              { core_so: "snes9x.so", label: "snes9x", is_default: true },
-              { core_so: "mesen-s.so", label: "mesen-s", is_default: false },
+            emulator_data_available: true,
+            emulators: [
+              {
+                label: "snes9x",
+                kind: "libretro",
+                core_so: "snes9x.so",
+                is_default: true,
+                bakeable: true,
+                reason: null,
+              },
+              {
+                label: "mesen-s",
+                kind: "libretro",
+                core_so: "mesen-s.so",
+                is_default: false,
+                bakeable: true,
+                reason: null,
+              },
             ],
             active_core_label: "mesen-s",
           }),
         ],
       });
-      render(<SystemPage onBack={vi.fn()} />);
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
       const listener = vi.fn();
       globalThis.addEventListener("romm_data_changed", listener);
       try {
-        await act(async () => {
-          await capturedDropdowns[0]?.onChange?.({
-            data: "snes9x",
-            label: "snes9x (default)",
-          });
-        });
-        // Selecting the default core → label is "" sent to setSystemCore
+        await pickCore(container, "snes9x");
+        // Picking the default core → label is "" sent to setSystemCore.
         expect(vi.mocked(backend.setSystemCore)).toHaveBeenCalledWith("snes", "");
         expect(listener).toHaveBeenCalledTimes(1);
         const ev = listener.mock.calls[0]?.[0] as CustomEvent;
@@ -951,22 +1008,32 @@ describe("SystemPage", () => {
           makeBiosPlatform({
             platform_slug: "snes",
             files: [],
-            available_cores: [
-              { core_so: "snes9x.so", label: "snes9x", is_default: true },
-              { core_so: "mesen-s.so", label: "mesen-s", is_default: false },
+            emulator_data_available: true,
+            emulators: [
+              {
+                label: "snes9x",
+                kind: "libretro",
+                core_so: "snes9x.so",
+                is_default: true,
+                bakeable: true,
+                reason: null,
+              },
+              {
+                label: "mesen-s",
+                kind: "libretro",
+                core_so: "mesen-s.so",
+                is_default: false,
+                bakeable: true,
+                reason: null,
+              },
             ],
             active_core_label: "snes9x",
           }),
         ],
       });
-      render(<SystemPage onBack={vi.fn()} />);
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      await act(async () => {
-        await capturedDropdowns[0]?.onChange?.({
-          data: "mesen-s",
-          label: "mesen-s",
-        });
-      });
+      await pickCore(container, "mesen-s");
       expect(vi.mocked(backend.setSystemCore)).toHaveBeenCalledWith("snes", "mesen-s");
     });
 
@@ -983,27 +1050,38 @@ describe("SystemPage", () => {
           makeBiosPlatform({
             platform_slug: "snes",
             files: [],
-            available_cores: [
-              { core_so: "snes9x.so", label: "snes9x", is_default: true },
-              { core_so: "mesen-s.so", label: "mesen-s", is_default: false },
+            emulator_data_available: true,
+            emulators: [
+              {
+                label: "snes9x",
+                kind: "libretro",
+                core_so: "snes9x.so",
+                is_default: true,
+                bakeable: true,
+                reason: null,
+              },
+              {
+                label: "mesen-s",
+                kind: "libretro",
+                core_so: "mesen-s.so",
+                is_default: false,
+                bakeable: true,
+                reason: null,
+              },
             ],
             active_core_label: "snes9x",
           }),
         ],
       });
-      render(<SystemPage onBack={vi.fn()} />);
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
+      return container;
     };
 
-    const selectMesenS = () =>
-      act(async () => {
-        await capturedDropdowns[0]?.onChange?.({ data: "mesen-s", label: "mesen-s" });
-        await Promise.resolve();
-        await Promise.resolve();
-      });
+    const selectMesenS = (container: HTMLElement) => pickCore(container, "mesen-s");
 
     it("confirm-sets launch options for each rebake item after a core change", async () => {
-      await renderDualCoreSnes();
+      const container = await renderDualCoreSnes();
       vi.mocked(backend.setSystemCore).mockResolvedValue({
         success: true,
         rebake_items: [
@@ -1012,7 +1090,7 @@ describe("SystemPage", () => {
         ],
       });
 
-      await selectMesenS();
+      await selectMesenS(container);
 
       expect(vi.mocked(setLaunchOptionsConfirmed)).toHaveBeenCalledWith(
         100,
@@ -1026,11 +1104,11 @@ describe("SystemPage", () => {
     });
 
     it("does not call setLaunchOptionsConfirmed when rebake_items is empty/absent", async () => {
-      await renderDualCoreSnes();
+      const container = await renderDualCoreSnes();
       // success but no rebake_items key at all (uninstalled / unbound platform)
       vi.mocked(backend.setSystemCore).mockResolvedValue({ success: true });
 
-      await selectMesenS();
+      await selectMesenS(container);
 
       expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
       // Still refreshes + dispatches the event so the UI reflects the new core.
@@ -1042,7 +1120,7 @@ describe("SystemPage", () => {
       // observe the post-catch side effect.
       const logErrorSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       try {
-        await renderDualCoreSnes();
+        const container = await renderDualCoreSnes();
         vi.mocked(backend.setSystemCore).mockResolvedValue({
           success: true,
           rebake_items: [
@@ -1055,7 +1133,7 @@ describe("SystemPage", () => {
           return true;
         });
 
-        await selectMesenS();
+        await selectMesenS(container);
 
         // CATCH-REJECTION assert: the rejecting item's error is surfaced via logError.
         expect(logErrorSpy).toHaveBeenCalledWith(
@@ -1076,7 +1154,7 @@ describe("SystemPage", () => {
     it("logs an error when a confirm resolves false (write not confirmed)", async () => {
       const logErrorSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
       try {
-        await renderDualCoreSnes();
+        const container = await renderDualCoreSnes();
         vi.mocked(backend.setSystemCore).mockResolvedValue({
           success: true,
           rebake_items: [
@@ -1085,7 +1163,7 @@ describe("SystemPage", () => {
         });
         vi.mocked(setLaunchOptionsConfirmed).mockResolvedValue(false);
 
-        await selectMesenS();
+        await selectMesenS(container);
 
         // CATCH-REJECTION assert: the unconfirmed write surfaces a distinct logError.
         expect(logErrorSpy).toHaveBeenCalledWith(
@@ -1097,13 +1175,13 @@ describe("SystemPage", () => {
     });
 
     it("does NOT fan out when setSystemCore returns success=false even if rebake_items present", async () => {
-      await renderDualCoreSnes();
+      const container = await renderDualCoreSnes();
       vi.mocked(backend.setSystemCore).mockResolvedValue({
         success: false,
         rebake_items: [{ app_id: 999, launch_options: "should-not-apply" }],
       });
 
-      await selectMesenS();
+      await selectMesenS(container);
 
       expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
     });
@@ -1115,26 +1193,36 @@ describe("SystemPage", () => {
           makeBiosPlatform({
             platform_slug: "snes",
             files: [],
-            available_cores: [
-              { core_so: "snes9x.so", label: "snes9x", is_default: true },
-              { core_so: "mesen-s.so", label: "mesen-s", is_default: false },
+            emulator_data_available: true,
+            emulators: [
+              {
+                label: "snes9x",
+                kind: "libretro",
+                core_so: "snes9x.so",
+                is_default: true,
+                bakeable: true,
+                reason: null,
+              },
+              {
+                label: "mesen-s",
+                kind: "libretro",
+                core_so: "mesen-s.so",
+                is_default: false,
+                bakeable: true,
+                reason: null,
+              },
             ],
             active_core_label: "snes9x",
           }),
         ],
       });
       vi.mocked(backend.setSystemCore).mockResolvedValue({ success: false });
-      render(<SystemPage onBack={vi.fn()} />);
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
       const listener = vi.fn();
       globalThis.addEventListener("romm_data_changed", listener);
       try {
-        await act(async () => {
-          await capturedDropdowns[0]?.onChange?.({
-            data: "mesen-s",
-            label: "mesen-s",
-          });
-        });
+        await pickCore(container, "mesen-s");
         // refreshSystem was called once on mount; not again on failure
         expect(vi.mocked(backend.getFirmwareStatus)).toHaveBeenCalledTimes(1);
         expect(listener).not.toHaveBeenCalled();
@@ -1143,24 +1231,43 @@ describe("SystemPage", () => {
       }
     });
 
-    it("falls back to default core label when active_core_label is absent", async () => {
+    it("shows the fallback button label + null active in the picker when active_core_label is absent", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
           makeBiosPlatform({
             platform_slug: "snes",
             files: [],
-            available_cores: [
-              { core_so: "snes9x.so", label: "snes9x", is_default: true },
-              { core_so: "mesen-s.so", label: "mesen-s", is_default: false },
+            emulator_data_available: true,
+            emulators: [
+              {
+                label: "snes9x",
+                kind: "libretro",
+                core_so: "snes9x.so",
+                is_default: true,
+                bakeable: true,
+                reason: null,
+              },
+              {
+                label: "mesen-s",
+                kind: "libretro",
+                core_so: "mesen-s.so",
+                is_default: false,
+                bakeable: true,
+                reason: null,
+              },
             ],
             // No active_core_label
           }),
         ],
       });
-      render(<SystemPage onBack={vi.fn()} />);
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      expect(capturedDropdowns[0]?.selectedOption).toBe("snes9x");
+      const coreBtn = [...container.querySelectorAll("button")].find((b) => b.textContent.startsWith("Emulator Core:"));
+      // Button falls back to a "Default" hint; the picker passes a null active
+      // label so the shared menu marks the default emulator with the checkmark.
+      expect(coreBtn?.textContent).toBe("Emulator Core: Default");
+      expect(openCoreMenu(container).activeLabel).toBeNull();
     });
 
     it("logs via debugLog when setSystemCore throws", async () => {
@@ -1170,25 +1277,33 @@ describe("SystemPage", () => {
           makeBiosPlatform({
             platform_slug: "snes",
             files: [],
-            available_cores: [
-              { core_so: "snes9x.so", label: "snes9x", is_default: true },
-              { core_so: "mesen-s.so", label: "mesen-s", is_default: false },
+            emulator_data_available: true,
+            emulators: [
+              {
+                label: "snes9x",
+                kind: "libretro",
+                core_so: "snes9x.so",
+                is_default: true,
+                bakeable: true,
+                reason: null,
+              },
+              {
+                label: "mesen-s",
+                kind: "libretro",
+                core_so: "mesen-s.so",
+                is_default: false,
+                bakeable: true,
+                reason: null,
+              },
             ],
             active_core_label: "snes9x",
           }),
         ],
       });
       vi.mocked(backend.setSystemCore).mockRejectedValue(new Error("boom"));
-      render(<SystemPage onBack={vi.fn()} />);
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      await act(async () => {
-        await capturedDropdowns[0]?.onChange?.({
-          data: "mesen-s",
-          label: "mesen-s",
-        });
-        await Promise.resolve();
-        await Promise.resolve();
-      });
+      await pickCore(container, "mesen-s");
       // CATCH-REJECTION assert: error logged via debugLog
       expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith("setSystemCore: error: Error: boom");
     });
@@ -1200,15 +1315,26 @@ describe("SystemPage", () => {
           makeBiosPlatform({
             platform_slug: "snes",
             files: [],
-            available_cores: [{ core_so: "snes9x.so", label: "snes9x", is_default: true }],
+            emulator_data_available: true,
+            emulators: [
+              {
+                label: "snes9x",
+                kind: "libretro",
+                core_so: "snes9x.so",
+                is_default: true,
+                bakeable: true,
+                reason: null,
+              },
+            ],
             active_core_label: "snes9x",
           }),
         ],
       });
       const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      // No dropdown rendered, but the "Emulator Core" Field is.
-      expect(capturedDropdowns.length).toBe(0);
+      // No core picker button rendered, but the "Emulator Core" Field is.
+      const coreBtn = [...container.querySelectorAll("button")].find((b) => b.textContent.startsWith("Emulator Core:"));
+      expect(coreBtn).toBeUndefined();
       expect(container.textContent).toContain("snes9x");
     });
   });
@@ -1424,9 +1550,10 @@ describe("SystemPage", () => {
       return makeBiosPlatform({
         platform_slug: slug,
         files: [],
-        available_cores: [
-          { core_so: "a.so", label: "core-a", is_default: true },
-          { core_so: "b.so", label: "core-b", is_default: false },
+        emulator_data_available: true,
+        emulators: [
+          { label: "core-a", kind: "libretro", core_so: "a.so", is_default: true, bakeable: true, reason: null },
+          { label: "core-b", kind: "libretro", core_so: "b.so", is_default: false, bakeable: true, reason: null },
         ],
         active_core_label: "core-a",
       });
@@ -1455,8 +1582,11 @@ describe("SystemPage", () => {
       });
       const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      // Three multi-core dropdowns render, but the banner is page-level (#938).
-      expect(capturedDropdowns.length).toBe(3);
+      // Three multi-core picker buttons render, but the banner is page-level (#938).
+      const coreButtons = [...container.querySelectorAll("button")].filter((b) =>
+        b.textContent.startsWith("Emulator Core:"),
+      );
+      expect(coreButtons.length).toBe(3);
       expect(countOccurrences(container.textContent, BANNER)).toBe(1);
     });
 
