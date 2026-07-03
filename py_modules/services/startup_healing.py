@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.installed_roms import is_pending_migration_path
+from domain.migration_paths import pending_homes_from_kv
 
 if TYPE_CHECKING:
     import logging
@@ -68,10 +69,10 @@ class StartupHealingService:
         Skipped when the RetroDECK home is not yet available on disk —
         almost always a boot-time SD-card-mount race; the next plugin
         reload, with the filesystem ready, will run the prune normally.
-        Installs living under a pending migration's previous home are
-        also preserved because RetroDECK has moved away from that path
-        but the user hasn't migrated yet, so the records must survive
-        until they do.
+        Installs living under any pending migration home (the previous
+        home plus any additional hops, #1042) are also preserved because
+        RetroDECK has moved away from those paths but the user hasn't
+        migrated yet, so the records must survive until they do.
         """
         retrodeck_home = self._retrodeck_paths.retrodeck_home()
         if not retrodeck_home or not self._path_probe.exists(retrodeck_home):
@@ -82,12 +83,15 @@ class StartupHealingService:
 
         with self._uow_factory() as uow:
             installs = list(uow.rom_installs.iter_all())
-            pending_home = uow.kv_config.get("retrodeck_home_path_previous") or ""
+            pending_homes = pending_homes_from_kv(
+                uow.kv_config.get("retrodeck_home_path_previous") or "",
+                uow.kv_config.get("retrodeck_home_path_hops"),
+            )
         stale: list[int] = []
         for install in installs:
             file_path = install.file_path
             rom_dir = install.rom_dir
-            if is_pending_migration_path(file_path, rom_dir, pending_home):
+            if is_pending_migration_path(file_path, rom_dir, pending_homes):
                 self._logger.info(f"Skipping prune of {install.rom_id} ({file_path}): pending migration")
                 continue
             if (file_path and self._path_probe.exists(file_path)) or (rom_dir and self._path_probe.exists(rom_dir)):

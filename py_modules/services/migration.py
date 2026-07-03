@@ -15,13 +15,20 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from domain.migration_paths import (
+    compute_pending_home_transition,
+    match_pending_base,
+    pending_homes_from_kv,
+    remap_under_current,
+    stranded_source_candidates,
+)
 from domain.save_extensions import get_save_extensions
 from domain.save_layout import ContentDir
 from domain.save_path import resolve_save_dir
 
 if TYPE_CHECKING:
     import logging
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from models.state import SaveSortSettings
 
@@ -42,9 +49,13 @@ if TYPE_CHECKING:
 # kv_config keys for the cross-run change-detection markers MigrationService
 # diffs (ADR-0003 Bucket 2): the last-seen RetroDECK home and RetroArch
 # save-sort observation, each with a ``_previous`` companion that exists only
-# while a migration is awaiting user confirmation.
+# while a migration is awaiting user confirmation. ``_HOPS`` holds the JSON
+# array of *additional* pending homes (oldest→newest) accumulated when the
+# user changes the RetroDECK home again before migrating (#1042); it is absent
+# in the common single-hop case and deleted wherever ``_PREVIOUS`` is.
 _KV_RETRODECK_HOME = "retrodeck_home_path"
 _KV_RETRODECK_HOME_PREVIOUS = "retrodeck_home_path_previous"
+_KV_RETRODECK_HOME_HOPS = "retrodeck_home_path_hops"
 _KV_SAVE_SORT = "save_sort_settings"
 _KV_SAVE_SORT_PREVIOUS = "save_sort_settings_previous"
 
@@ -131,66 +142,83 @@ class MigrationService:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
 
     def detect_retrodeck_path_change(self) -> None:
-        """Check if RetroDECK home path changed since last run."""
-        current_home = self._retrodeck_paths.retrodeck_home()
-        with self._uow_factory() as uow:
-            stored_home = uow.kv_config.get(_KV_RETRODECK_HOME) or ""
-            stored_previous = uow.kv_config.get(_KV_RETRODECK_HOME_PREVIOUS) or ""
+        """Check if RetroDECK home path changed since last run.
 
+        Delegates the pending-home set transition to the pure
+        ``compute_pending_home_transition`` kernel: a first change records the
+        old home as pending; a change chained on top of a still-pending one
+        appends to the pending set instead of overwriting it, so files stranded
+        under an intermediate home are never lost (#1042). A revert onto the
+        sole pending home auto-clears; any other move is a ``changed``
+        transition that re-emits ``retrodeck_path_changed`` with the oldest
+        pending home as ``old_path`` (so the banner still reads "From: A →
+        To: C").
+        """
+        current_home = self._retrodeck_paths.retrodeck_home()
         if not current_home:
             return
-
         if not self._migration_file_store.is_dir(current_home):
             self._logger.warning(f"RetroDECK home path does not exist, skipping: {current_home}")
             return
 
-        if stored_home == current_home:
-            return
-
-        if not stored_home:
-            # First run — just store the current path, no migration needed
-            with self._uow_factory() as uow:
-                uow.kv_config.set(_KV_RETRODECK_HOME, current_home)
-            return
-
-        # Auto-clear: user reverted RetroDECK to the previous home before migrating.
-        # The "previous" path is now the live one — no migration needed, drop the marker.
-        if current_home == stored_previous:
-            previous = stored_previous
-            with self._uow_factory() as uow:
-                uow.kv_config.delete(_KV_RETRODECK_HOME_PREVIOUS)
-                uow.kv_config.set(_KV_RETRODECK_HOME, current_home)
-            self._logger.info(f"RetroDECK home reverted to previous path; clearing migration marker: {current_home}")
-            # Notify the frontend so any pending migration UI can dismiss itself.
-            # ``cleared: True`` lets the listener distinguish from the path-change emit.
-            self._spawn_background_task(
-                self._emit(
-                    "retrodeck_path_changed",
-                    {
-                        "old_path": previous,
-                        "new_path": current_home,
-                        "cleared": True,
-                    },
-                )
-            )
-            return
-
-        old_home = stored_home
-
-        # Path changed — store both old and new, emit event
         with self._uow_factory() as uow:
-            uow.kv_config.set(_KV_RETRODECK_HOME_PREVIOUS, old_home)
+            stored_home = uow.kv_config.get(_KV_RETRODECK_HOME) or ""
+            pending = self._read_pending_homes(uow)
+
+        transition = compute_pending_home_transition(stored_home, current_home, pending)
+        if transition.kind == "unchanged":
+            return
+        if transition.kind == "first_run":
+            with self._uow_factory() as uow:
+                uow.kv_config.set(_KV_RETRODECK_HOME, current_home)
+            return
+
+        with self._uow_factory() as uow:
             uow.kv_config.set(_KV_RETRODECK_HOME, current_home)
-        self._logger.warning(f"RetroDECK home path changed: {old_home} -> {current_home}")
-        self._spawn_background_task(
-            self._emit(
-                "retrodeck_path_changed",
-                {
-                    "old_path": old_home,
-                    "new_path": current_home,
-                },
-            )
+            self._write_pending_homes(uow, transition.pending)
+
+        payload: dict[str, Any] = {"old_path": transition.emit_old, "new_path": transition.emit_new}
+        if transition.emit_cleared:
+            self._logger.info(f"RetroDECK home reverted to previous path; clearing migration marker: {current_home}")
+            # ``cleared: True`` lets the frontend listener distinguish the
+            # auto-clear emit from a genuine path-change emit and dismiss any
+            # pending migration UI.
+            payload["cleared"] = True
+        else:
+            self._logger.warning(f"RetroDECK home path changed: {transition.emit_old} -> {transition.emit_new}")
+        self._spawn_background_task(self._emit("retrodeck_path_changed", payload))
+
+    @staticmethod
+    def _read_pending_homes(uow) -> list[str]:
+        """Read the pending-home set (oldest→newest) from kv_config.
+
+        Reassembles ``[previous, *hops]`` from the ``_previous`` marker and the
+        ``_hops`` JSON array; returns ``[]`` when no migration is pending.
+        """
+        return pending_homes_from_kv(
+            uow.kv_config.get(_KV_RETRODECK_HOME_PREVIOUS) or "",
+            uow.kv_config.get(_KV_RETRODECK_HOME_HOPS),
         )
+
+    @staticmethod
+    def _write_pending_homes(uow, pending: Sequence[str]) -> None:
+        """Persist the pending-home set, or clear both markers when it is empty.
+
+        The head becomes ``_previous`` (the marker every existing consumer
+        reads); the tail becomes the ``_hops`` JSON array, deleted when there
+        is only a single pending home so the common case stays byte-identical
+        to the pre-#1042 on-disk shape.
+        """
+        if not pending:
+            uow.kv_config.delete(_KV_RETRODECK_HOME_PREVIOUS)
+            uow.kv_config.delete(_KV_RETRODECK_HOME_HOPS)
+            return
+        uow.kv_config.set(_KV_RETRODECK_HOME_PREVIOUS, pending[0])
+        hops = list(pending[1:])
+        if hops:
+            uow.kv_config.set(_KV_RETRODECK_HOME_HOPS, json.dumps(hops))
+        else:
+            uow.kv_config.delete(_KV_RETRODECK_HOME_HOPS)
 
     def is_retrodeck_migration_pending(self) -> bool:
         """Return True if a RetroDECK home path migration is pending."""
@@ -200,10 +228,10 @@ class MigrationService:
     def dismiss_retrodeck_migration(self) -> dict[str, Any]:
         """Dismiss the RetroDECK path migration warning without migrating files."""
         with self._uow_factory() as uow:
-            uow.kv_config.delete(_KV_RETRODECK_HOME_PREVIOUS)
+            self._write_pending_homes(uow, [])
         return {"success": True}
 
-    def _collect_rom_items(self, old_home, new_home, installs, relocations):
+    def _collect_rom_items(self, pending_homes, new_home, installs, relocations):
         """Collect ROM migration items from the installed-ROM records.
 
         ``installs`` is a pre-snapshotted list of ``RomInstall`` records (the
@@ -212,24 +240,32 @@ class MigrationService:
         (``rom_dir`` set) moves the whole directory as a unit — kind
         ``"rom_dir"`` — so sibling disc/update/DLC files travel with it; a
         single-file ROM (``rom_dir`` is ``None``) moves just the launch file —
-        kind ``"rom"``. Each item carries a success-hook updater that records
-        the intended relocation into *relocations* (keyed by ``rom_id``) when
-        its move/skip succeeds; the relocations are applied to ``rom_installs``
-        in a separate write UoW after the file moves complete (ADR-0006).
+        kind ``"rom"``. Each record's stored path is matched by longest prefix
+        against every pending home (#1042), so a record left under an older home
+        by a change chained before migrating is still collected; records under
+        the current home or an unknown prefix are skipped. Each item carries a
+        success-hook updater that records the intended relocation into
+        *relocations* (keyed by ``rom_id``) when its move/skip succeeds; the
+        relocations are applied to ``rom_installs`` in a separate write UoW
+        after the file moves complete (ADR-0006).
         """
         items = []
         for install in installs:
             rom_dir = install.rom_dir
-            if rom_dir and rom_dir.startswith(old_home + os.sep):
+            if rom_dir:
+                base = match_pending_base(rom_dir, pending_homes)
+                if base is None:
+                    continue
                 # Multi-file ROM: move the whole dedicated directory as a unit.
                 # The launch file lives inside it, so its new path follows the
                 # directory's new location.
-                new_rom_dir = os.path.join(new_home, os.path.relpath(rom_dir, old_home))
+                new_rom_dir = remap_under_current(rom_dir, base, new_home)
                 new_file_path = os.path.join(new_rom_dir, os.path.relpath(install.file_path, rom_dir))
+                source = self._resolve_move_source(rom_dir, base, pending_homes, new_rom_dir)
                 items.append(
                     (
                         os.path.basename(rom_dir),
-                        rom_dir,
+                        source,
                         new_rom_dir,
                         self._make_rom_relocation_updater(relocations, install.rom_id, new_rom_dir, new_file_path),
                         "rom_dir",
@@ -238,19 +274,41 @@ class MigrationService:
             else:
                 # Single-file ROM: move only the launch file; it owns no folder.
                 file_path = install.file_path
-                if not file_path or not file_path.startswith(old_home + os.sep):
+                if not file_path:
                     continue
-                new_file_path = os.path.join(new_home, os.path.relpath(file_path, old_home))
+                base = match_pending_base(file_path, pending_homes)
+                if base is None:
+                    continue
+                new_file_path = remap_under_current(file_path, base, new_home)
+                source = self._resolve_move_source(file_path, base, pending_homes, new_file_path)
                 items.append(
                     (
                         os.path.basename(file_path),
-                        file_path,
+                        source,
                         new_file_path,
                         self._make_rom_relocation_updater(relocations, install.rom_id, None, new_file_path),
                         "rom",
                     )
                 )
         return items
+
+    def _resolve_move_source(self, stored_path, base, pending_homes, dest):
+        """Return the best on-disk source for a tracked record's move.
+
+        Normally the record's stored path *is* the source. When that path is
+        gone AND the destination is not already there, the file may have been
+        stranded under another pending home by an interrupted earlier migration
+        (#1042) — probe those homes newest-first and return the first hit. When
+        nothing is found the stored path is returned unchanged; the move loop
+        then records it as a missing record rather than moving anything.
+        """
+        if self._migration_file_store.exists(stored_path) or self._migration_file_store.exists(dest):
+            return stored_path
+        rel = os.path.relpath(stored_path, base)
+        for candidate in stranded_source_candidates(rel, base, pending_homes):
+            if self._migration_file_store.exists(candidate):
+                return candidate
+        return stored_path
 
     @staticmethod
     def _make_rom_relocation_updater(relocations, rom_id, new_rom_dir, new_file_path):
@@ -268,27 +326,33 @@ class MigrationService:
 
         return update
 
-    def _collect_tracked_bios_items(self, old_home, new_home, bios_files, relocations):
+    def _collect_tracked_bios_items(self, pending_homes, new_home, bios_files, relocations):
         """Collect tracked BIOS migration items from the ``BiosFile`` snapshot.
 
         ``bios_files`` is a pre-snapshotted list of ``BiosFile`` records (the
-        caller opens the read UoW). Each item carries a success-hook updater
-        that records the intended new ``file_path`` into *relocations* (keyed by
-        the aggregate's composite identity ``(platform_slug, file_name)``) when
-        its move/skip succeeds; the relocations are applied to ``bios_files`` in
-        a separate write UoW after the file moves complete (ADR-0006).
+        caller opens the read UoW). Each record's stored path is longest-prefix
+        matched against every pending home (#1042), mirroring the ROM records.
+        Each item carries a success-hook updater that records the intended new
+        ``file_path`` into *relocations* (keyed by the aggregate's composite
+        identity ``(platform_slug, file_name)``) when its move/skip succeeds;
+        the relocations are applied to ``bios_files`` in a separate write UoW
+        after the file moves complete (ADR-0006).
         """
         items = []
         for bios_file in bios_files:
             file_path = bios_file.file_path
-            if not file_path or not file_path.startswith(old_home + os.sep):
+            if not file_path:
                 continue
-            new_path = os.path.join(new_home, os.path.relpath(file_path, old_home))
+            base = match_pending_base(file_path, pending_homes)
+            if base is None:
+                continue
+            new_path = remap_under_current(file_path, base, new_home)
+            source = self._resolve_move_source(file_path, base, pending_homes, new_path)
             key = (bios_file.platform_slug, bios_file.file_name)
             items.append(
                 (
                     bios_file.file_name,
-                    file_path,
+                    source,
                     new_path,
                     self._make_bios_relocation_updater(relocations, key, new_path),
                     "bios",
@@ -312,63 +376,93 @@ class MigrationService:
 
         return update
 
-    def _collect_untracked_bios_items(self, old_home, tracked_file_names):
+    def _collect_untracked_bios_items(self, pending_homes, tracked_file_names):
         """Collect untracked BIOS migration items (downloaded before state tracking).
 
         ``tracked_file_names`` is the set of BIOS file names already covered by
         the ``BiosFile`` snapshot, so those tracked records aren't moved twice.
-        Untracked BIOS files have no aggregate record, so their move carries a
-        no-op updater (nothing to persist).
+        Each registry entry is probed under every pending home's ``bios/`` dir
+        newest-first (#1042); the first on-disk hit wins. Untracked BIOS files
+        have no aggregate record, so their move carries a no-op updater (nothing
+        to persist).
         """
         items = []
-        old_bios = os.path.join(old_home, "bios")
         new_bios = self._retrodeck_paths.bios_path()
-        if not self._migration_file_store.is_dir(old_bios):
-            return items
         for file_name, reg_entry in self._get_bios_files_index().items():
             if file_name in tracked_file_names:
                 continue
             firmware_path = reg_entry.get("firmware_path", file_name)
-            old_file = os.path.join(old_bios, firmware_path)
-            new_file = os.path.join(new_bios, firmware_path)
-            if not self._migration_file_store.exists(old_file):
-                continue
-            items.append((file_name, old_file, new_file, lambda: None, "bios"))
-        return items
-
-    def _collect_save_items(self, old_home):
-        """Collect save file migration items by scanning old saves directory.
-
-        Hidden directories (those whose name begins with ``.``) and the
-        files they contain are skipped: the RomM plugin's ``.romm-backup``
-        sidecars and any ad-hoc user dotdirs must not be migrated.
-        """
-        items = []
-        old_saves = os.path.join(old_home, "saves")
-        new_saves = self._retrodeck_paths.saves_path()
-        if not self._migration_file_store.is_dir(old_saves):
-            return items
-        for dirpath, _dirs, filenames in self._migration_file_store.walk_files(old_saves):
-            rel_dir = os.path.relpath(dirpath, old_saves)
-            # Skip any descendant of a hidden directory by inspecting the
-            # relative-path segments. ``rel_dir == "."`` for the saves
-            # root itself, which is never hidden.
-            if rel_dir != "." and any(part.startswith(".") for part in rel_dir.split(os.sep)):
-                continue
-            for fname in filenames:
-                if fname.startswith("."):
+            for home in reversed(pending_homes):
+                old_bios = os.path.join(home, "bios")
+                if not self._migration_file_store.is_dir(old_bios):
                     continue
-                old_file = os.path.join(dirpath, fname)
-                rel = os.path.relpath(old_file, old_saves)
-                new_file = os.path.join(new_saves, rel)
-                items.append((rel, old_file, new_file, lambda: None, "save"))
+                old_file = os.path.join(old_bios, firmware_path)
+                if not self._migration_file_store.exists(old_file):
+                    continue
+                new_file = os.path.join(new_bios, firmware_path)
+                items.append((file_name, old_file, new_file, lambda: None, "bios"))
+                break
         return items
 
-    def _collect_migration_items(self, old_home, new_home, installs, bios_files, relocations, bios_relocations):
+    def _collect_save_items(self, pending_homes):
+        """Collect save file migration items by scanning every pending saves dir.
+
+        Scans ``<home>/saves`` for each pending home (#1042) and deduplicates by
+        relative path, newest mtime winning — the same save can exist under
+        several homes if the user played while a change was pending, and only
+        the freshest copy should survive. Hidden directories (those whose name
+        begins with ``.``) and the files they contain are skipped: the RomM
+        plugin's ``.romm-backup`` sidecars and any ad-hoc user dotdirs must not
+        be migrated.
+        """
+        new_saves = self._retrodeck_paths.saves_path()
+        # rel path -> (source path, mtime); newest mtime wins across homes.
+        best: dict[str, tuple[str, float]] = {}
+        for home in pending_homes:
+            old_saves = os.path.join(home, "saves")
+            if not self._migration_file_store.is_dir(old_saves):
+                continue
+            for dirpath, _dirs, filenames in self._migration_file_store.walk_files(old_saves):
+                rel_dir = os.path.relpath(dirpath, old_saves)
+                # Skip any descendant of a hidden directory by inspecting the
+                # relative-path segments. ``rel_dir == "."`` for the saves
+                # root itself, which is never hidden.
+                if rel_dir != "." and any(part.startswith(".") for part in rel_dir.split(os.sep)):
+                    continue
+                for fname in filenames:
+                    if fname.startswith("."):
+                        continue
+                    old_file = os.path.join(dirpath, fname)
+                    rel = os.path.relpath(old_file, old_saves)
+                    mtime = self._safe_mtime(old_file)
+                    existing = best.get(rel)
+                    if existing is None or mtime >= existing[1]:
+                        best[rel] = (old_file, mtime)
+        return [
+            (rel, old_file, os.path.join(new_saves, rel), lambda: None, "save")
+            for rel, (old_file, _mtime) in best.items()
+        ]
+
+    def _safe_mtime(self, path: str) -> float:
+        """Return *path*'s mtime, or ``0.0`` when it cannot be read.
+
+        A save file walked one moment can be unreadable the next; a ``0.0``
+        fallback keeps that copy in the running for the newest-wins dedupe
+        (any readable sibling with a real mtime still wins) rather than
+        dropping it or aborting the whole scan.
+        """
+        try:
+            return self._migration_file_store.get_mtime(path)
+        except OSError:
+            return 0.0
+
+    def _collect_migration_items(self, pending_homes, new_home, installs, bios_files, relocations, bios_relocations):
         """Collect all files that need migration across ROMs, BIOS, and saves.
 
         Returns list of (label, old_path, new_path, state_update_fn, kind) tuples.
         state_update_fn is called after a successful move/skip to update state.
+        ``pending_homes`` is the set of homes a tracked record or on-disk file
+        may live under (oldest→newest, current home excluded);
         ``installs``/``bios_files`` are the pre-snapshotted ``RomInstall`` and
         ``BiosFile`` lists; ``relocations`` accumulates the per-``rom_id`` new
         paths and ``bios_relocations`` the per-``(platform_slug, file_name)`` new
@@ -376,10 +470,10 @@ class MigrationService:
         """
         tracked_bios_names = {bf.file_name for bf in bios_files}
         items = []
-        items.extend(self._collect_rom_items(old_home, new_home, installs, relocations))
-        items.extend(self._collect_tracked_bios_items(old_home, new_home, bios_files, bios_relocations))
-        items.extend(self._collect_untracked_bios_items(old_home, tracked_bios_names))
-        items.extend(self._collect_save_items(old_home))
+        items.extend(self._collect_rom_items(pending_homes, new_home, installs, relocations))
+        items.extend(self._collect_tracked_bios_items(pending_homes, new_home, bios_files, bios_relocations))
+        items.extend(self._collect_untracked_bios_items(pending_homes, tracked_bios_names))
+        items.extend(self._collect_save_items(pending_homes))
         return items
 
     def _find_conflicts(self, items):
@@ -401,6 +495,12 @@ class MigrationService:
                 state_updater()
                 if count_key:
                     counts[count_key] = counts.get(count_key, 0) + 1
+            else:
+                # The record's file exists at no known location and no
+                # destination — a lost install/BIOS, surfaced in the result
+                # so a chained migration never silently reports "nothing to do"
+                # while data is gone (#1042).
+                counts["missing"] = counts.get("missing", 0) + 1
             return
 
         if self._migration_file_store.exists(new_path):
@@ -463,7 +563,14 @@ class MigrationService:
 
     @staticmethod
     def _build_migration_result(counts, errors):
-        """Build the result dict from migration counts and errors."""
+        """Build the result dict from migration counts and errors.
+
+        ``missing`` (records whose file was found at no known location — see
+        ``_migrate_single_item``) is surfaced additively in both the message
+        and the ``missing_count`` field so a chained migration reports lost
+        files honestly instead of a bare "No files to migrate" success; it does
+        not, on its own, make the migration a failure (only ``errors`` do).
+        """
         parts = []
         if counts["rom"]:
             parts.append(f"{counts['rom']} ROM(s)")
@@ -472,6 +579,9 @@ class MigrationService:
         if counts["save"]:
             parts.append(f"{counts['save']} save(s)")
         msg = f"Migrated {', '.join(parts)}" if parts else "No files to migrate"
+        missing = counts.get("missing", 0)
+        if missing:
+            msg += f"; {missing} file(s) missing (not found at any known location)"
         if errors:
             msg += f" ({len(errors)} error(s))"
         return {
@@ -480,17 +590,24 @@ class MigrationService:
             "roms_moved": counts["rom"],
             "bios_moved": counts["bios"],
             "saves_moved": counts["save"],
+            "missing_count": missing,
             "errors": errors,
         }
 
-    def _migrate_retrodeck_files_io(self, old_home, new_home, conflict_strategy):
-        """Sync helper for migrate_retrodeck_files — FS traversal + moves in executor."""
+    def _migrate_retrodeck_files_io(self, pending_homes, new_home, conflict_strategy):
+        """Sync helper for migrate_retrodeck_files — FS traversal + moves in executor.
+
+        ``pending_homes`` is the full pending set; the current home is filtered
+        out defensively so a record already under it is never treated as a move
+        source (detection already excludes it, this belts-and-braces that).
+        """
+        homes = [h for h in pending_homes if h and h != new_home]
         with self._uow_factory() as uow:
             installs = list(uow.rom_installs.iter_all())
             bios_files = list(uow.bios_files.iter_all())
         relocations: dict[int, dict[str, str]] = {}
         bios_relocations: dict[tuple[str, str], str] = {}
-        items = self._collect_migration_items(old_home, new_home, installs, bios_files, relocations, bios_relocations)
+        items = self._collect_migration_items(homes, new_home, installs, bios_files, relocations, bios_relocations)
         conflicts = self._find_conflicts(items)
 
         # If no strategy given and there are conflicts, return them for user decision
@@ -504,7 +621,7 @@ class MigrationService:
                 "message": f"{len(conflicts)} file(s) already exist at destination",
             }
 
-        counts = {"rom": 0, "bios": 0, "save": 0}
+        counts = {"rom": 0, "bios": 0, "save": 0, "missing": 0}
         errors = []
 
         for label, old_path, new_path, state_updater, kind in items:
@@ -546,16 +663,16 @@ class MigrationService:
         return self._relaunch_options.installed_relaunch_items()
 
     def _apply_relocations(self, installs, relocations, bios_files, bios_relocations, *, clear_marker):
-        """Persist the relocated install and BIOS records (and optionally clear the marker).
+        """Persist the relocated install and BIOS records (and optionally clear the markers).
 
         Opens a single write UoW after the file moves: for every install whose
         move/skip succeeded, calls ``RomInstall.relocate`` with the new
         ``rom_dir`` (``None`` for a single-file ROM) and ``file_path``; for every
         BIOS record whose move/skip succeeded, calls ``BiosFile.relocate`` with
         the new ``file_path``. Both are saved in the same transaction. When
-        *clear_marker* is true (a fully-successful migration) the
-        ``retrodeck_home_path_previous`` marker is deleted in the same
-        transaction.
+        *clear_marker* is true (a fully-successful migration) the pending-home
+        markers — ``retrodeck_home_path_previous`` **and** every hop — are
+        deleted in the same transaction.
         """
         by_id = {install.rom_id: install for install in installs}
         by_key = {(bf.platform_slug, bf.file_name): bf for bf in bios_files}
@@ -573,7 +690,7 @@ class MigrationService:
                 bios_file.relocate(new_path)
                 uow.bios_files.save(bios_file)
             if clear_marker:
-                uow.kv_config.delete(_KV_RETRODECK_HOME_PREVIOUS)
+                self._write_pending_homes(uow, [])
 
     async def migrate_retrodeck_files(self, conflict_strategy=None):
         """Move downloaded ROMs, BIOS, and save files from old RetroDECK path to new.
@@ -584,14 +701,14 @@ class MigrationService:
                 and just update state paths.
         """
         with self._uow_factory() as uow:
-            old_home = uow.kv_config.get(_KV_RETRODECK_HOME_PREVIOUS) or ""
+            pending = self._read_pending_homes(uow)
             new_home = uow.kv_config.get(_KV_RETRODECK_HOME) or ""
 
-        if not old_home or not new_home or old_home == new_home:
+        if not pending or not new_home:
             return {"success": False, "reason": "no_migration_needed", "message": "No path migration needed"}
 
         result = await self._loop.run_in_executor(
-            None, self._migrate_retrodeck_files_io, old_home, new_home, conflict_strategy
+            None, self._migrate_retrodeck_files_io, pending, new_home, conflict_strategy
         )
         # Pop the internal relaunch payload (only present on the actual-migration
         # path, not the needs-confirmation early return) and emit it so the live
@@ -603,19 +720,24 @@ class MigrationService:
             await self._emit("migration_relaunch_options", {"items": relaunch_items})
         return result
 
-    def _get_migration_status_io(self, old_home, new_home):
-        """Sync helper for get_migration_status — FS traversal in executor."""
+    def _get_migration_status_io(self, pending, new_home):
+        """Sync helper for get_migration_status — FS traversal in executor.
+
+        ``old_path`` reports the oldest pending home (``pending[0]``), so the
+        banner still reads "From: A → To: C" across a chained pending set.
+        """
+        homes = [h for h in pending if h and h != new_home]
         with self._uow_factory() as uow:
             installs = list(uow.rom_installs.iter_all())
             bios_files = list(uow.bios_files.iter_all())
-        items = self._collect_migration_items(old_home, new_home, installs, bios_files, {}, {})
+        items = self._collect_migration_items(homes, new_home, installs, bios_files, {}, {})
         roms_count = sum(1 for _, _, _, _, kind in items if kind in ("rom", "rom_dir"))
         bios_count = sum(1 for _, _, _, _, kind in items if kind == "bios")
         saves_count = sum(1 for _, _, _, _, kind in items if kind == "save")
 
         return {
             "pending": True,
-            "old_path": old_home,
+            "old_path": pending[0],
             "new_path": new_home,
             "roms_count": roms_count,
             "bios_count": bios_count,
@@ -625,13 +747,13 @@ class MigrationService:
     async def get_migration_status(self):
         """Return whether a RetroDECK path migration is pending and file counts."""
         with self._uow_factory() as uow:
-            old_home = uow.kv_config.get(_KV_RETRODECK_HOME_PREVIOUS) or ""
+            pending = self._read_pending_homes(uow)
             new_home = uow.kv_config.get(_KV_RETRODECK_HOME) or ""
 
-        if not old_home or not new_home or old_home == new_home:
+        if not pending or not new_home:
             return {"pending": False}
 
-        return await self._loop.run_in_executor(None, self._get_migration_status_io, old_home, new_home)
+        return await self._loop.run_in_executor(None, self._get_migration_status_io, pending, new_home)
 
     # ---------------------------------------------------------------------------
     # Save sort change detection and migration
