@@ -140,6 +140,9 @@ jobs:
       - name: Check aggregate field-assignment ban
         run: python scripts/check_aggregate_field_assignment.py
 
+      - name: Check UoW-seam nesting ban
+        run: python scripts/check_uow_seam_nesting.py
+
       - name: Check failure-shape dialect gate
         run: python scripts/check_failure_shape.py --check
 

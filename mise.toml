@@ -53,6 +53,7 @@ run = [
     "python scripts/check_callable_manifest.py",
     "bash scripts/check_cosmic_call_bans.sh",
     "python scripts/check_aggregate_field_assignment.py",
+    "python scripts/check_uow_seam_nesting.py",
     "python scripts/check_failure_shape.py --check",
     "bash scripts/check_no_bare_ignores.sh",
     "python scripts/check_event_parity.py",
