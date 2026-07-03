@@ -1313,6 +1313,13 @@ drained it adopts the cross-device server union; offline / partial-flush / not-y
 regressing below local truth. The GET needs the `roms.user.read` scope (added to the minted token in #1280); without it
 the reconcile degrades to local-only — never an error.
 
+The `reconcile_playtime` result also carries the restored `last_played` (ISO-8601). The game-detail Play section
+(`RomMPlaySection`) renders it as the **LAST PLAYED** value in preference to Steam's device-local `rt_last_time_played`:
+Steam synthesizes the latter to "now" after a device cutover / fresh device, so the restored cross-device timestamp is
+the truthful one. When `last_played` is `null` (the server has no session for the ROM yet, or the reconcile ran
+local-only) the display falls back to Steam's value, so there is no regression before any server data exists. This is
+display-only — the plugin does not write the restored value back into Steam's `rt_last_time_played` (#1294).
+
 ## Save-Sync State — the `RomSaveState` aggregate
 
 Per-ROM save-sync state lives in SQLite — there is no JSON file. The per-ROM scalars are the `RomSaveState` aggregate

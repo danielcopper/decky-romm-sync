@@ -75,6 +75,21 @@ import {
 /** Track which appIds have had auto-artwork applied this session */
 const artworkApplied = new Set<number>();
 
+/** Resolve the LAST PLAYED display, preferring our restored cross-device
+ *  `last_played` (ISO-8601, from `reconcile_playtime` / native play sessions,
+ *  #1294) over Steam's device-local `rt_last_time_played`. Steam synthesizes the
+ *  latter to "now" after a device cutover, so the restored value wins whenever
+ *  it parses; a null or unparseable restored value falls back to Steam's
+ *  Unix-seconds value. Both route through `formatLastPlayed` so the rendered
+ *  format is identical either way. */
+function resolveLastPlayed(restoredIso: string | null, steamUnixSeconds: number): string {
+  if (restoredIso) {
+    const ms = Date.parse(restoredIso);
+    if (!Number.isNaN(ms)) return formatLastPlayed(Math.floor(ms / 1000));
+  }
+  return formatLastPlayed(steamUnixSeconds);
+}
+
 interface RomMPlaySectionProps {
   appId: number;
 }
@@ -86,6 +101,10 @@ interface InfoState {
   romName: string;
   platformSlug: string;
   lastPlayed: string;
+  /** Restored cross-device `last_played` (ISO-8601) from `reconcile_playtime`,
+   *  or `null` until the server yields one. Preferred over Steam's device-local
+   *  `rt_last_time_played` when rendering LAST PLAYED (#1294). */
+  restoredLastPlayed: string | null;
   playtime: string;
   saveSyncEnabled: boolean;
   saveSyncStatus: "synced" | "conflict" | "none" | null;
@@ -224,6 +243,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     romName: "",
     platformSlug: "",
     lastPlayed: initialLastPlayed,
+    restoredLastPlayed: null,
     playtime: initialPlaytime,
     saveSyncEnabled: false,
     saveSyncStatus: null,
@@ -376,6 +396,17 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         const result = await reconcilePlaytime(romId);
         if (isCancelled) return;
         if (result.server_query_failed) return;
+        // Adopt the restored cross-device last_played (#1294) and refresh the
+        // display from it. Set BEFORE updatePlaytimeDisplay so the synchronous
+        // romm_playtime_changed handler below reads the new restoredLastPlayed;
+        // also covers the sub-minute total case where updatePlaytimeDisplay
+        // emits no signal.
+        const steamSecs = appStore.GetAppOverviewByAppID(appId)?.rt_last_time_played ?? 0;
+        setInfo((prev) => ({
+          ...prev,
+          restoredLastPlayed: result.last_played,
+          lastPlayed: resolveLastPlayed(result.last_played, steamSecs),
+        }));
         updatePlaytimeDisplay(appId, result.total_seconds, false);
       } catch (e) {
         detach(debugLog(`RomMPlaySection: playtime reconcile error: ${e}`));
@@ -532,7 +563,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       setInfo((prev) => ({
         ...prev,
         playtime: formatPlaytime(ov.minutes_playtime_forever ?? 0),
-        lastPlayed: formatLastPlayed(ov.rt_last_time_played ?? 0),
+        lastPlayed: resolveLastPlayed(prev.restoredLastPlayed, ov.rt_last_time_played ?? 0),
       }));
     };
     globalThis.addEventListener("romm_playtime_changed", onPlaytimeChanged);

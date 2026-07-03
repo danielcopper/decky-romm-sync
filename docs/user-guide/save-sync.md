@@ -171,6 +171,10 @@ read scope and a fresh sign-in; until then the displayed value is your local tot
 enable cross-device playtime** — the plugin shows a banner in the QAM panel prompting this whenever your saved login
 predates the play-session read scope. When RomM is unreachable the displayed value stays on your local total.
 
+The **LAST PLAYED** date on the detail page comes from this same cross-device history, so it stays correct after you
+move to a new device — where Steam would otherwise reset it and show every game as just played. Until the server has a
+recorded session for a game (or while RomM is unreachable), the date falls back to Steam's own last-played value.
+
 Steam also tracks playtime natively for non-Steam shortcuts, so you'll see playtime in the standard Steam UI as well.
 
 > **Upgrading from an older version:** earlier releases stored playtime in a hidden RomM note named

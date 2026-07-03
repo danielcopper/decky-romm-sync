@@ -1039,6 +1039,66 @@ describe("RomMPlaySection", () => {
   });
 
   // ------------------------------------------------------------------
+  // E3. LAST PLAYED source (#1294) — the restored cross-device last_played
+  //     from reconcile_playtime wins over Steam's device-local
+  //     rt_last_time_played, which Steam synthesizes to "now" after a cutover.
+  // ------------------------------------------------------------------
+
+  describe("LAST PLAYED source (#1294)", () => {
+    // Echo the numeric timestamp so OUR (restored) date and Steam's device-local
+    // date render as distinguishable strings — the default formatLastPlayed mock
+    // collapses every non-zero value to a single "2024-01-15".
+    function applyEchoLastPlayedFormatter(): void {
+      vi.mocked(formatters.formatLastPlayed).mockImplementation((rt: number) => (rt ? `lp:${rt}` : ""));
+    }
+
+    function mountReconciled(lastPlayed: string | null, steamRt: number) {
+      applyEchoLastPlayedFormatter();
+      stubAppStore({ [testAppId]: { rt_last_time_played: steamRt, minutes_playtime_forever: 60 } });
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1294,
+        save_sync_enabled: false,
+      });
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: true, message: "ok" });
+      vi.mocked(backend.reconcilePlaytime).mockResolvedValue({
+        total_seconds: 3600,
+        session_count: 1,
+        last_played: lastPlayed,
+        server_query_failed: false,
+      });
+      return render(<RomMPlaySection appId={testAppId} />);
+    }
+
+    it("renders OUR restored last_played over Steam's rt_last_time_played", async () => {
+      const iso = "2023-06-15T10:00:00.000Z";
+      const ourSecs = Math.floor(Date.parse(iso) / 1000);
+      const { container } = mountReconciled(iso, 1111111111);
+      await flushAsync();
+      // Restored ISO routed through the SAME formatter (converted to seconds),
+      // and the Steam device-local value is NOT what's shown.
+      expect(vi.mocked(formatters.formatLastPlayed)).toHaveBeenCalledWith(ourSecs);
+      expect(container.textContent).toContain("LAST PLAYED");
+      expect(container.textContent).toContain(`lp:${ourSecs}`);
+      expect(container.textContent).not.toContain("lp:1111111111");
+    });
+
+    it("falls back to Steam's rt_last_time_played when last_played is null (no regression)", async () => {
+      const { container } = mountReconciled(null, 1111111111);
+      await flushAsync();
+      expect(container.textContent).toContain("lp:1111111111");
+    });
+
+    it("falls back safely to Steam's value when last_played is unparseable (no crash)", async () => {
+      const { container } = mountReconciled("not-a-real-date", 1111111111);
+      await flushAsync();
+      // Unparseable restored value → Steam device-local value shown, no throw.
+      expect(container.textContent).toContain("lp:1111111111");
+      expect(container.textContent).not.toContain("lp:NaN");
+    });
+  });
+
+  // ------------------------------------------------------------------
   // F. romm_data_changed DOM event handler
   // ------------------------------------------------------------------
 
