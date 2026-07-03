@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from domain import firmware_paths
 from domain.bios import collect_firmware_status, compute_bios_level, format_bios_status
 from domain.bios_file import BiosFile
-from domain.emulator_commands import options_to_payload
+from domain.emulator_commands import label_to_invocation, options_to_payload, select_default_option
 from domain.firmware_cache import FirmwareCacheEntry
 from lib.errors import error_response
 from lib.list_result import ErrorCode
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
         Clock,
         CoreInfoProvider,
         FirmwareFileStore,
+        PlatformCoreReader,
         RetroDeckPaths,
         RommFirmwareApi,
         SystemResolver,
@@ -62,6 +63,7 @@ class FirmwareServiceConfig:
     retrodeck_paths: RetroDeckPaths
     core_info: CoreInfoProvider
     resolve_system: SystemResolver
+    platform_core_reader: PlatformCoreReader
     uow_factory: UnitOfWorkFactory
 
 
@@ -82,6 +84,7 @@ class FirmwareService:
         self._retrodeck_paths = config.retrodeck_paths
         self._core_info = config.core_info
         self._resolve_system = config.resolve_system
+        self._platform_core_reader = config.platform_core_reader
         self._uow_factory = config.uow_factory
         self._bios_registry: dict[str, Any] = {}
         self._bios_files_index: dict[str, dict[str, Any]] | None = None
@@ -455,23 +458,49 @@ class FirmwareService:
         §2), so each entry's raw RomM/BIOS-folder slug is normalized before the
         ``get_active_core`` / ``get_emulator_options`` calls; ``has_games`` and
         the BIOS-folder file lookups stay on the raw slug (their own vocabulary).
-        ``active_core`` stays the libretro system default (the BIOS filter keys on
-        it); the ``emulators`` list is the full classified picker payload and
-        ``emulator_data_available`` flags whether ``es_systems.xml`` was readable.
+        ``active_core`` stays the libretro system default *core_so* (the BIOS
+        filter keys on it — the standalone-default BIOS accuracy work is deferred
+        by ADR-0020). ``active_core_label`` is the resolved **display** label the
+        System-page control shows — the per-platform override (``platform_cores``)
+        when set and still resolvable, else the es_systems default emulator label,
+        so it reflects a just-applied per-platform pick (libretro OR standalone)
+        the same way the game-detail menu does, instead of always showing the
+        libretro system default. The ``emulators`` list is the full classified
+        picker payload and ``emulator_data_available`` flags whether
+        ``es_systems.xml`` was readable.
         """
         for plat in platforms_map.values():
             slug = plat["platform_slug"]
             system = self._resolve_system(slug)
-            core_so, core_label = self._core_info.get_active_core(system)
+            core_so, _core_label = self._core_info.get_active_core(system)
             options = self._core_info.get_emulator_options(system)
             plat["active_core"] = core_so
-            plat["active_core_label"] = core_label
+            plat["active_core_label"] = self._resolve_platform_emulator_label(slug, options["options"])
             plat["emulators"] = options_to_payload(options["options"])
             plat["emulator_data_available"] = options["available"]
             plat["files"] = [self._enrich_firmware_file(f, core_so=core_so) for f in plat["files"]]
             plat["has_games"] = slug in synced_slugs
             plat["all_downloaded"] = all(f["downloaded"] for f in plat["files"])
             self._set_platform_bios_aggregates(plat, slug)
+
+    def _resolve_platform_emulator_label(self, platform_slug: str, options: list[Any]) -> str | None:
+        """Resolve the System-page active-emulator display label for a platform.
+
+        The platform-level projection of the read-path precedence
+        (``ActiveCoreResolver`` without the per-game layer): the per-platform
+        override label (``settings.json`` ``platform_cores``) when it is set and
+        still resolves to a bakeable emulator, else the es_systems default
+        emulator label (the first bakeable command). A stale/no-longer-installed
+        override degrades to the default — never fatal — mirroring the launch-bake
+        resolver so the button and the actual launch agree. ``None`` when the
+        platform has no bakeable emulator at all (empty menu / es_systems
+        unreadable), which the frontend renders as "Default".
+        """
+        override = self._platform_core_reader.get_platform_core(platform_slug)
+        if override is not None and label_to_invocation(options, override) is not None:
+            return override
+        default = select_default_option(options)
+        return default.label if default is not None else None
 
     def _set_platform_bios_aggregates(self, plat: dict[str, Any], slug: str) -> None:
         """Stamp the per-platform BIOS aggregates onto a ``get_firmware_status`` entry.

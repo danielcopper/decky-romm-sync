@@ -13,6 +13,7 @@ from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_firmware_file_store import FakeFirmwareFileStore
+from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
@@ -84,6 +85,7 @@ def _make_firmware_service(
     retrodeck_paths: FakeRetroDeckPaths | None = None,
     core_info: FakeCoreInfoProvider | None = None,
     resolve_system: FakeSystemResolver | None = None,
+    platform_core_reader: FakePlatformCoreReader | None = None,
     logger=None,
     load_registry: bool = True,
 ) -> FirmwareService:
@@ -106,6 +108,7 @@ def _make_firmware_service(
             retrodeck_paths=retrodeck_paths if retrodeck_paths is not None else FakeRetroDeckPaths(),
             core_info=core_info if core_info is not None else FakeCoreInfoProvider(),
             resolve_system=resolve_system if resolve_system is not None else FakeSystemResolver(),
+            platform_core_reader=platform_core_reader if platform_core_reader is not None else FakePlatformCoreReader(),
             uow_factory=uow_factory if uow_factory is not None else FakeUnitOfWorkFactory(),
         ),
     )
@@ -328,6 +331,64 @@ class TestGetFirmwareStatus:
         assert core_info.active_core_calls == ["dreamcast"]
         assert core_info.emulator_options_calls == ["dreamcast"]
         assert resolver.calls == [("dc", None)]
+
+    async def _psp_active_core_label(self, platform_core_reader):
+        """Run ``get_firmware_status`` for a psp platform whose default is a standalone.
+
+        Seeds a standalone-first options list (the PPSSPP flip) so the *default*
+        emulator label ("PPSSPP (Standalone)") differs from the libretro
+        ``active_core`` label ("PPSSPP") — the exact case the System-page label
+        must reflect. Returns the resolved ``active_core_label``.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from tests.fakes.fake_core_info_provider import libretro_option, standalone_option
+
+        core_info = FakeCoreInfoProvider(
+            active_core=("ppsspp_libretro", "PPSSPP"),
+            options=[
+                standalone_option("%EMULATOR_PPSSPP% -b %ROM%", "PPSSPP (Standalone)"),
+                libretro_option("ppsspp_libretro", "PPSSPP"),
+            ],
+        )
+        fw = _make_firmware_service(core_info=core_info, platform_core_reader=platform_core_reader)
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "ppsspp.bin",
+                "file_path": "bios/psp/ppsspp.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        fw._loop = MagicMock()
+        fw._loop.run_in_executor = AsyncMock(return_value=firmware_list)
+        result = await fw.get_firmware_status()
+        psp = next(p for p in result["platforms"] if p["platform_slug"] == "psp")
+        return psp["active_core_label"]
+
+    @pytest.mark.asyncio
+    async def test_active_core_label_is_default_emulator_not_libretro_core(self):
+        """No override → the label is the default EMULATOR (standalone), not the libretro core.
+
+        The libretro ``active_core`` stays "PPSSPP" (BIOS filter), but the
+        displayed label follows the bakeable default, so a standalone-default
+        system reads its standalone label instead of the libretro one (#1210).
+        """
+        label = await self._psp_active_core_label(FakePlatformCoreReader())
+        assert label == "PPSSPP (Standalone)"
+
+    @pytest.mark.asyncio
+    async def test_active_core_label_reflects_per_platform_override(self):
+        """A per-platform pin surfaces on the System-page label immediately (#1305)."""
+        label = await self._psp_active_core_label(FakePlatformCoreReader({"psp": "PPSSPP"}))
+        assert label == "PPSSPP"
+
+    @pytest.mark.asyncio
+    async def test_active_core_label_degrades_when_override_stale(self):
+        """An override that no longer resolves falls back to the default emulator label."""
+        label = await self._psp_active_core_label(FakePlatformCoreReader({"psp": "No Longer Here"}))
+        assert label == "PPSSPP (Standalone)"
 
     @pytest.mark.asyncio
     async def test_has_games_reflects_bound_roms(self, plugin, fw):

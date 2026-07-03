@@ -1037,6 +1037,63 @@ describe("SystemPage", () => {
       expect(vi.mocked(backend.setSystemCore)).toHaveBeenCalledWith("snes", "mesen-s");
     });
 
+    it("reflects the applied per-platform emulator in the button label after picking and after remount (#1305)", async () => {
+      const dualCore = (activeLabel: string) => ({
+        success: true as const,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "snes",
+            files: [],
+            emulator_data_available: true,
+            emulators: [
+              {
+                label: "snes9x",
+                kind: "libretro",
+                core_so: "snes9x.so",
+                is_default: true,
+                bakeable: true,
+                reason: null,
+              },
+              {
+                label: "mesen-s",
+                kind: "libretro",
+                core_so: "mesen-s.so",
+                is_default: false,
+                bakeable: true,
+                reason: null,
+              },
+            ],
+            active_core_label: activeLabel,
+          }),
+        ],
+      });
+      // Mount shows the default; the post-pick refresh resolves the new selection
+      // (the backend now returns it — the fix that makes get_firmware_status
+      // reflect the per-platform override).
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValueOnce(dualCore("snes9x"));
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue(dualCore("mesen-s"));
+
+      const { container, unmount } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      const coreBtn = () =>
+        [...container.querySelectorAll("button")].find((b) => b.textContent.startsWith("Emulator Core:"));
+      expect(coreBtn()?.textContent).toBe("Emulator Core: snes9x");
+
+      await pickCore(container, "mesen-s");
+      await flushAsync();
+      // The System-page control reflects the just-applied selection immediately.
+      expect(coreBtn()?.textContent).toBe("Emulator Core: mesen-s");
+
+      // Remount → the persisted per-platform selection is still reflected.
+      unmount();
+      const { container: remounted } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      const remountedBtn = [...remounted.querySelectorAll("button")].find((b) =>
+        b.textContent.startsWith("Emulator Core:"),
+      );
+      expect(remountedBtn?.textContent).toBe("Emulator Core: mesen-s");
+    });
+
     // ----------------------------------------------------------------
     // Re-bake fan-out (#947): a successful per-platform core change
     // confirm-sets fresh launch_options for every affected bound shortcut

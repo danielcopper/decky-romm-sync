@@ -12,6 +12,7 @@ from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
+from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_save_api import FakeSaveApi
@@ -144,6 +145,7 @@ def plugin(tmp_path):
             retrodeck_paths=FakeRetroDeckPaths(),
             core_info=FakeCoreInfoProvider(),
             resolve_system=lambda platform_slug, platform_fs_slug=None: platform_slug,
+            platform_core_reader=FakePlatformCoreReader(),
             uow_factory=FakeUnitOfWorkFactory(),
         ),
     )

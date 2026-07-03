@@ -618,6 +618,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             core_info=cfg.adapters.core_info_provider,
             resolve_system=cfg.adapters.http_adapter.resolve_system,
+            platform_core_reader=cfg.callbacks.platform_core_reader,
             uow_factory=cfg.callbacks.uow_factory,
         ),
     )
