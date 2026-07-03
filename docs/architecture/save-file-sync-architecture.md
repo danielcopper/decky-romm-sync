@@ -1277,14 +1277,17 @@ signals let the re-initialized `sessionManager` recover it:
 
 - **Steam running-state (liveness).** `Router.MainRunningApp` is the authority for _whether_ the game is still running
   at re-init — the durable marker (`last_session_start`) is written by `recordSessionStart` precisely so it survives the
-  reload, but only Steam can attest the session has not already ended.
+  reload, but only Steam can attest the session has not already ended. This read is **polled** (every 500ms for up to
+  15s), not one-shot: after a full `plugin_loader` restart Steam populates `MainRunningApp` only seconds later, so a
+  single early read raced the restart and wrongly orphaned a still-running session (#1054).
 - **A localStorage breadcrumb (attestation).** A single versioned row (`decky-romm-sync:active-session` →
   `{v, appId, romId, startMs, pausedMs}`) is written at start, has its `pausedMs` refreshed on each completed
   suspend→resume cycle (an in-flight suspend is deliberately **not** persisted), and is removed at stop. It is **not**
   cleared by `destroySessionManager`, so it outlives the reload. Every localStorage access is wrapped — a storage
   failure degrades to the no-attestation path, never throws.
 
-At `initSessionManager` the recovery runs on the lifecycle chain (so a racing stop event serializes after it):
+At `initSessionManager` the recovery runs on the lifecycle chain (so a stop event racing the liveness poll serializes
+after adoption — adopt first, then finalize):
 
 - **Game running + breadcrumb matches** → adopt in-memory state from the breadcrumb (`sessionStartTime`,
   `totalPausedMs`) and leave the durable marker untouched. Re-stamping would discard the pre-reload span the backend
@@ -1292,10 +1295,10 @@ At `initSessionManager` the recovery runs on the lifecycle chain (so a racing st
 - **Game running, no / mismatched / corrupt breadcrumb** → adopt and re-stamp the marker to a truthful lower bound
   (`recordSessionStart`), then write a fresh breadcrumb so a subsequent reload adopts via the matching case instead of
   re-stamping again.
-- **Breadcrumb present but nothing (or a non-RomM app) running** → the session ended while the plugin was down; a
-  truthful finalize is impossible without an observed end, so the breadcrumb is dropped and the session is logged as
-  orphaned — never a fabricated end time. A stale breadcrumb left by a reboot resolves the same way at the next init; no
-  expiry timers.
+- **Breadcrumb present but nothing running once the liveness poll times out** (or a non-RomM app is foreground) → the
+  session ended while the plugin was down; a truthful finalize is impossible without an observed end, so the breadcrumb
+  is dropped and the session is logged as orphaned — never a fabricated end time. A stale breadcrumb left by a reboot
+  resolves the same way at the next init; no expiry timers.
 
 **Attestation invariant:** every finalize fold uses a marker stamped by a start we actually observed (either the
 original `recordSessionStart` or an adoption re-stamp) — the client never invents an end time for a session whose stop
@@ -1447,7 +1450,9 @@ The callback receives:
 
 After a game starts, there is a brief window where the app ID may not be fully resolved. The session manager waits 500ms
 and then reads `Router.MainRunningApp` for a reliable `appid` and `display_name`. Falls back to `unAppID` from the
-notification if `MainRunningApp` is null.
+notification if `MainRunningApp` is null. On reload adoption the window is far longer — after a `plugin_loader` restart
+`MainRunningApp` stays null for several seconds — so the adoption path **polls** it (every 500ms up to 15s) instead of
+reading once (#1054).
 
 ### App ID to ROM ID mapping
 

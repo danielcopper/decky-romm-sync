@@ -60,6 +60,16 @@ async function stopGame(cb: LifetimeCb): Promise<void> {
   await vi.advanceTimersByTimeAsync(0);
 }
 
+// #1148: adoptOrphanedSession now polls Router.MainRunningApp for up to 15s before
+// deciding. When no running app is present, initSessionManager only settles once
+// that poll times out — drain it so the immediate-read tests still resolve.
+const ADOPTION_POLL_MAX_MS = 15_000;
+async function initDrainingAdoptionPoll(): Promise<void> {
+  const init = initSessionManager();
+  await vi.advanceTimersByTimeAsync(ADOPTION_POLL_MAX_MS);
+  await init;
+}
+
 describe("sessionManager suspend accumulator", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -99,7 +109,7 @@ describe("sessionManager suspend accumulator", () => {
   });
 
   it("forwards 0 suspended seconds when the device never suspended", async () => {
-    await initSessionManager();
+    await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
 
     await startGame(lifetime);
@@ -110,7 +120,7 @@ describe("sessionManager suspend accumulator", () => {
   });
 
   it("subtracts a single suspend cycle", async () => {
-    await initSessionManager();
+    await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
     const suspend = captureSuspendCb();
     const resume = captureResumeCb();
@@ -128,7 +138,7 @@ describe("sessionManager suspend accumulator", () => {
   });
 
   it("accumulates across multiple suspend cycles", async () => {
-    await initSessionManager();
+    await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
     const suspend = captureSuspendCb();
     const resume = captureResumeCb();
@@ -152,7 +162,7 @@ describe("sessionManager suspend accumulator", () => {
   });
 
   it("folds an in-flight suspend at stop (stopped while suspended)", async () => {
-    await initSessionManager();
+    await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
     const suspend = captureSuspendCb();
 
@@ -167,7 +177,7 @@ describe("sessionManager suspend accumulator", () => {
   });
 
   it("resets the accumulator on the next session start", async () => {
-    await initSessionManager();
+    await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
     const suspend = captureSuspendCb();
     const resume = captureResumeCb();
@@ -194,7 +204,7 @@ describe("sessionManager suspend accumulator", () => {
     // The renamed suspend hook is a PROGRESS callback that can fire several times
     // per cycle. A repeated fire must NOT re-stamp the pause start, or the
     // subtracted span shrinks (here: 60s→90s = 30s, not 70s→90s = 20s).
-    await initSessionManager();
+    await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
     const suspend = captureSuspendCb();
     const resume = captureResumeCb();
@@ -215,7 +225,7 @@ describe("sessionManager suspend accumulator", () => {
   it("folds a resume once across repeated resume-progress events", async () => {
     // Repeated resume-progress fires in the same cycle must fold only once — the
     // second fire finds no open suspend and is a no-op (not another 60→100 fold).
-    await initSessionManager();
+    await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
     const suspend = captureSuspendCb();
     const resume = captureResumeCb();
@@ -329,7 +339,8 @@ describe("sessionManager reload adoption", () => {
     seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000, pausedMs: 0 });
     vi.stubGlobal("Router", { MainRunningApp: null });
 
-    await initSessionManager();
+    // Nothing ever runs → the poll times out and the breadcrumb is orphan-cleared.
+    await initDrainingAdoptionPoll();
 
     // Case (b): orphaned — breadcrumb dropped, no adoption, no fabricated end.
     expect(readCrumb()).toBeNull();
@@ -382,7 +393,7 @@ describe("sessionManager reload adoption", () => {
 
   it("leaves no breadcrumb after a normal start then stop", async () => {
     vi.stubGlobal("Router", { MainRunningApp: null });
-    await initSessionManager();
+    await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
 
     await startGame(lifetime);
@@ -420,11 +431,12 @@ describe("sessionManager reload adoption", () => {
 
   it("survives a full reload: start, destroy, re-init, stop finalizes the original rom", async () => {
     vi.stubGlobal("Router", { MainRunningApp: null });
-    await initSessionManager();
+    // No game at first load → the adoption poll times out before init settles.
+    await initDrainingAdoptionPoll();
     const lifetime1 = captureLifetimeCb();
 
-    // Start at a non-zero time so the suspend guard (sessionStartTime) stays truthy.
-    vi.setSystemTime(1_000);
+    // Start after the poll window (times are absolute; the poll drained to 15s).
+    vi.setSystemTime(20_000);
     await startGame(lifetime1);
     expect(backend.recordSessionStart).toHaveBeenCalledTimes(1);
 
@@ -433,7 +445,8 @@ describe("sessionManager reload adoption", () => {
     destroySessionManager();
     expect(readCrumb()).not.toBeNull();
 
-    // Re-init while the game is still running — adopt via the surviving breadcrumb.
+    // Re-init while the game is still running — the poll sees MainRunningApp
+    // immediately and adopts via the surviving breadcrumb.
     vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
     await initSessionManager();
     // Case (a): durable marker preserved — no second record_session_start.
@@ -514,7 +527,11 @@ describe("sessionManager reload adoption", () => {
     });
     vi.stubGlobal("Router", { MainRunningApp: null });
 
-    await expect(initSessionManager()).resolves.toBeUndefined();
+    // Nothing running → the poll times out, then the orphaned-breadcrumb clear
+    // hits the throwing removeItem, which must be swallowed.
+    const init = initSessionManager();
+    await vi.advanceTimersByTimeAsync(ADOPTION_POLL_MAX_MS);
+    await expect(init).resolves.toBeUndefined();
 
     expect(backend.logError).toHaveBeenCalledWith(expect.stringContaining("clear session breadcrumb"));
     expect(backend.recordSessionStart).not.toHaveBeenCalled();
@@ -535,6 +552,106 @@ describe("sessionManager reload adoption", () => {
     await expect(initSessionManager()).resolves.toBeUndefined();
 
     expect(backend.logError).toHaveBeenCalledWith(expect.stringContaining("Session adoption error"));
+  });
+
+  // #1054 follow-up: after a full plugin_loader restart Router.MainRunningApp is
+  // null for several seconds while the game is still running, so a one-shot read
+  // wrongly orphaned a live session. Adoption now polls MainRunningApp.
+  it("adopts a matching breadcrumb once MainRunningApp appears mid-poll, no orphan log", async () => {
+    seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000, pausedMs: 3_000 });
+    vi.stubGlobal("Router", { MainRunningApp: null });
+
+    const init = initSessionManager();
+    // Four polls into the loader-restart window, MainRunningApp is still null.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+    // Steam finally populates the running app; the next poll sees it.
+    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    await vi.advanceTimersByTimeAsync(500);
+    await init;
+
+    // Case (a): the matching breadcrumb is adopted without a re-stamp, and the
+    // session was never logged as orphaned.
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+    expect(backend.logInfo).not.toHaveBeenCalledWith(expect.stringContaining("orphaned"));
+    expect(backend.logInfo).toHaveBeenCalledWith(expect.stringContaining("MainRunningApp appeared"));
+
+    // The adopted session finalizes on stop, carrying the breadcrumb's pausedMs.
+    const lifetime = captureLifetimeCb();
+    await stopGame(lifetime);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID, 3);
+  });
+
+  it("orphan-clears the breadcrumb after the poll times out with nothing running", async () => {
+    seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000, pausedMs: 0 });
+    vi.stubGlobal("Router", { MainRunningApp: null });
+
+    await initDrainingAdoptionPoll();
+
+    expect(readCrumb()).toBeNull();
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+    expect(backend.logInfo).toHaveBeenCalledWith(expect.stringContaining("no running app"));
+    expect(backend.logInfo).toHaveBeenCalledWith(expect.stringContaining("orphaned"));
+  });
+
+  it("stays silent when the poll times out with no breadcrumb", async () => {
+    vi.stubGlobal("Router", { MainRunningApp: null });
+
+    await initDrainingAdoptionPoll();
+
+    expect(readCrumb()).toBeNull();
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+    // No breadcrumb to orphan — the timeout is a no-op beyond the poll log.
+    expect(backend.logInfo).not.toHaveBeenCalledWith(expect.stringContaining("orphaned"));
+    expect(backend.logInfo).toHaveBeenCalledWith(expect.stringContaining("no running app"));
+  });
+
+  it("queues a racing stop behind the poll so it finalizes after adoption", async () => {
+    seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 1_000, pausedMs: 2_000 });
+    vi.stubGlobal("Router", { MainRunningApp: null });
+
+    const init = initSessionManager();
+    // Let init register the lifetime hook and enter the poll.
+    await vi.advanceTimersByTimeAsync(500);
+    const lifetime = captureLifetimeCb();
+
+    // A stop arrives WHILE the poll is still running. It queues on the lifecycle
+    // chain behind the in-flight adoption task rather than interleaving with it.
+    lifetime({ bRunning: false, unAppID: APP_ID });
+
+    // The game becomes visible; the poll resolves and adoption (a) runs first.
+    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    await vi.advanceTimersByTimeAsync(500);
+    await init;
+    await vi.advanceTimersByTimeAsync(0); // flush the queued stop task
+
+    // Ordering proof: the stop finalized the ADOPTED session (carrying the
+    // breadcrumb's 2000ms paused → 2s). Had the stop run before adoption,
+    // activeRomId would still be null and handleGameStop a no-op (no finalize).
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID, 2);
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+  });
+
+  it("aborts an in-flight adoption poll when destroy tears the manager down", async () => {
+    // Nothing running yet → the poll is mid-flight when destroy fires. A game that
+    // appears AFTER teardown must not be adopted: the aborted poll writes no
+    // breadcrumb, records no session, and takes no adoption action (#1148 LOW-1).
+    vi.stubGlobal("Router", { MainRunningApp: null });
+
+    const init = initSessionManager();
+    await vi.advanceTimersByTimeAsync(2_000); // poll running, nothing found yet
+    destroySessionManager(); // tears down mid-poll → bumps the epoch
+    // A running game appears after teardown; the still-pending poll would adopt it
+    // (case a′ → recordSessionStart + breadcrumb) if it did not check the epoch.
+    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    await vi.advanceTimersByTimeAsync(500);
+    await init;
+
+    expect(backend.debugLog).toHaveBeenCalledWith("adoption: cancelled by destroy");
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+    expect(readCrumb()).toBeNull(); // no breadcrumb written by the aborted adoption
+    expect(backend.logInfo).not.toHaveBeenCalledWith(expect.stringContaining("Adopted"));
+    expect(backend.logInfo).not.toHaveBeenCalledWith(expect.stringContaining("MainRunningApp appeared"));
   });
 });
 
@@ -560,7 +677,10 @@ describe("sessionManager suspend-hook diagnostics", () => {
     vi.clearAllMocks();
     vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({ [String(APP_ID)]: ROM_ID });
     vi.mocked(backend.recordSessionStart).mockResolvedValue({ success: true });
-    vi.stubGlobal("Router", { MainRunningApp: null });
+    // A running (non-RomM) app so the #1148 adoption poll returns on its first read
+    // and init settles under real timers — these tests exercise hook registration,
+    // not adoption, so the app is inert background (999 is not in the rom map).
+    vi.stubGlobal("Router", { MainRunningApp: { appid: 999, display_name: "background" } });
   });
 
   afterEach(() => {
@@ -784,7 +904,8 @@ describe("sessionManager suspend subtraction via the User.* fallback (#1148)", (
         }),
       },
     });
-    // Router.MainRunningApp stays null; startGame drives the session via unAppID.
+    // No game at load → the adoption poll drains before init settles; startGame
+    // then drives the session via unAppID (Router.MainRunningApp stays null).
     vi.stubGlobal("Router", { MainRunningApp: null });
     vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({ [String(APP_ID)]: ROM_ID });
     vi.mocked(backend.recordSessionStart).mockResolvedValue({ success: true });
@@ -809,7 +930,7 @@ describe("sessionManager suspend subtraction via the User.* fallback (#1148)", (
   });
 
   it("captures the User.* callbacks and subtracts a suspend cycle delivered through them", async () => {
-    await initSessionManager();
+    await initDrainingAdoptionPoll();
     expect(userSuspend).toBeTypeOf("function");
     expect(userResume).toBeTypeOf("function");
 
@@ -826,7 +947,7 @@ describe("sessionManager suspend subtraction via the User.* fallback (#1148)", (
   });
 
   it("does not double-count repeated User.* suspend/resume progress fires", async () => {
-    await initSessionManager();
+    await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
     await startGame(lifetime);
 
@@ -856,7 +977,7 @@ describe("sessionManager suspend subtraction via the User.* fallback (#1148)", (
       },
     });
 
-    await initSessionManager();
+    await initDrainingAdoptionPoll();
     destroySessionManager();
 
     expect(suspendUnregister).toHaveBeenCalledTimes(1);

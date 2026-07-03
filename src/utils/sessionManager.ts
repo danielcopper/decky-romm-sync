@@ -38,6 +38,12 @@ let totalPausedMs = 0;
 // Serialization chain — ensures lifecycle events don't interleave
 let lifecycleChain: Promise<void> = Promise.resolve();
 
+// Bumped by destroySessionManager. The adoption poll can run for up to 15s, past
+// a teardown; adoption captures this at entry and re-checks it after the poll so a
+// destroy mid-poll aborts before mutating any module state, the breadcrumb, or the
+// backend.
+let sessionEpoch = 0;
+
 // Hook handles for cleanup
 let lifetimeHook: { unregister: () => void } | null = null;
 let suspendHook: { unregister: () => void } | null = null;
@@ -249,6 +255,35 @@ function handleResume(): void {
   }
 }
 
+/** Read Steam's running-app, guarding the undeclared `Router` SP global. */
+function readMainRunningApp(): { appid: number; display_name: string } | null {
+  return typeof Router === "undefined" ? null : Router.MainRunningApp; // NOSONAR(typescript:S7741) — Router is an undeclared Steam SP global; direct === undefined would throw ReferenceError.
+}
+
+// Adoption polls Steam's running-app before deciding a session's fate: after a
+// full `plugin_loader` restart `Router.MainRunningApp` is not yet populated for
+// several seconds even though the game is still running (#1054 device evidence),
+// so a single early read wrongly orphaned a live session. Poll until it appears
+// or the window elapses.
+const ADOPTION_POLL_INTERVAL_MS = 500;
+const ADOPTION_POLL_MAX_MS = 15_000;
+
+/**
+ * Poll `Router.MainRunningApp` until a running app appears or the window elapses.
+ * Returns the app (any app, RomM or not — the caller applies the adoption matrix)
+ * or `null` on timeout. Does not read `.appid`, so a throwing-getter running-app
+ * surfaces in the caller's adoption decision, not here.
+ */
+async function pollForRunningApp(): Promise<{ appid: number; display_name: string } | null> {
+  const started = Date.now();
+  for (;;) {
+    const running = readMainRunningApp();
+    if (running) return running;
+    if (Date.now() - started >= ADOPTION_POLL_MAX_MS) return null;
+    await delay(ADOPTION_POLL_INTERVAL_MS);
+  }
+}
+
 /**
  * Adopt a play session orphaned by a plugin reload mid-game.
  *
@@ -258,9 +293,25 @@ function handleResume(): void {
  * (`Router.MainRunningApp`) is the liveness authority; the localStorage
  * breadcrumb is the attestation of a start we actually observed. Every finalize
  * fold thus stays anchored to a marker stamped by an observed start.
+ *
+ * The liveness read is POLLED (not a single read): after a loader restart Steam
+ * populates `MainRunningApp` only seconds later, so a one-shot read raced the
+ * restart and wrongly orphaned a still-running session (#1054).
  */
 async function adoptOrphanedSession(): Promise<void> {
-  const running = typeof Router === "undefined" ? null : Router.MainRunningApp; // NOSONAR(typescript:S7741) — Router is an undeclared Steam SP global; direct === undefined would throw ReferenceError.
+  const epoch = sessionEpoch;
+  const pollStart = Date.now();
+  const running = await pollForRunningApp();
+  if (epoch !== sessionEpoch) {
+    // destroySessionManager ran while the poll was in flight — abort before
+    // touching module state, the breadcrumb, or the backend.
+    detach(debugLog("adoption: cancelled by destroy"));
+    return;
+  }
+  const waitedMs = Date.now() - pollStart;
+  logInfo(
+    running ? `adoption: MainRunningApp appeared after ${waitedMs}ms` : `adoption: no running app after ${waitedMs}ms`,
+  );
   const runningRomId = running ? getRomIdForApp(running.appid) : null;
   const crumb = readSessionBreadcrumb();
 
@@ -393,7 +444,7 @@ export async function initSessionManager(): Promise<void> {
         if (update.bRunning) {
           // Game started — wait for Router.MainRunningApp to populate
           await delay(500);
-          const running = typeof Router === "undefined" ? null : Router.MainRunningApp; // NOSONAR(typescript:S7741) — Router is an undeclared Steam SP global; direct === undefined would throw ReferenceError.
+          const running = readMainRunningApp();
           const appId = running?.appid ?? update.unAppID;
           if (appId) {
             // Refresh map in case a sync happened since init
@@ -506,6 +557,8 @@ export function destroySessionManager(): void {
   suspendedAt = null;
   totalPausedMs = 0;
   lifecycleChain = Promise.resolve();
+  // Signal any in-flight adoption poll to abort instead of mutating torn-down state.
+  sessionEpoch++;
 
   logInfo("Session manager destroyed");
 }
