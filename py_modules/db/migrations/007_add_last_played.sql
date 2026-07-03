@@ -1,0 +1,16 @@
+-- =============================================================================
+-- 007_add_last_played.sql — restore last-played across a device cutover
+-- Issue #903 / ADR-0018 (native play-session tracking, additive per-session ingest)
+-- =============================================================================
+--
+-- Adds ``last_played TEXT`` to ``rom_playtime`` (the Playtime aggregate's scalar
+-- row). ``session_count`` already exists; this closes the remaining #903 gap so a
+-- fresh device restores the last-played timestamp — not just the cumulative total
+-- — from RomM's native play-session history (reconcile derives it as the newest
+-- server ``end_time``). NULL until a session is recorded or a reconcile folds a
+-- server value in; NULL means "never played / not yet known".
+--
+-- Transaction-safe DDL only — the runner (adapters/sqlite_migrations.py) wraps
+-- BEGIN/COMMIT and stamps PRAGMA user_version = 7.
+-- -----------------------------------------------------------------------------
+ALTER TABLE rom_playtime ADD COLUMN last_played TEXT;

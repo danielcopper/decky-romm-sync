@@ -2,13 +2,13 @@
 
 One Playtime per Rom (referenced by id). Tracks cumulative play seconds and
 session count, the open session's start timestamp (durable so a session
-survives a plugin reload mid-game), the most recent session's duration, and a
-pending-session outbox (closed sessions awaiting ingest into RomM's native
-``/api/play-sessions``, keyed by start timestamp). Individual completed sessions
-are not entities once ingested — only their start (while open), their folded-in
-result, and the still-unsent outbox rows persist. RomM's native play-session
-store is the shared additive record (ADR-0018); this aggregate is the local
-durable + cumulative read model that reconciles with it.
+survives a plugin reload mid-game), the most recent session's duration, the
+last-played timestamp, and a pending-session outbox (closed sessions awaiting
+ingest into RomM's native ``/api/play-sessions``, keyed by start timestamp).
+Individual completed sessions are not entities once ingested — only their start
+(while open), their folded-in result, and the still-unsent outbox rows persist.
+RomM's native play-session store is the shared additive record (ADR-0018); this
+aggregate is the local durable + cumulative read model that reconciles with it.
 """
 
 from __future__ import annotations
@@ -67,6 +67,7 @@ class Playtime:
     session_count: int = 0
     last_session_start: str | None = None
     last_session_duration_sec: int | None = None
+    last_played: str | None = None
     pending_sessions: dict[str, PendingPlaySession] = field(default_factory=dict)
 
     def begin_session(self, at: str) -> None:
@@ -81,8 +82,9 @@ class Playtime:
         during the session (a negative value is treated as 0), clamped to
         ``[0, 24h]``. The suspend subtraction happens before the 24h cap, so a
         long session minus suspend still respects the cap and never goes
-        negative. Raises ``ValueError`` if no session is open or either
-        timestamp is unusable.
+        negative. Also stamps ``last_played`` with ``ended_at`` (the session
+        just ended, so it is the newest play instant). Raises ``ValueError`` if
+        no session is open or either timestamp is unusable.
         """
         if self.last_session_start is None:
             raise ValueError("no open session to record")
@@ -99,6 +101,7 @@ class Playtime:
         self.total_seconds += seconds
         self.session_count += 1
         self.last_session_duration_sec = seconds
+        self.last_played = ended_at
         self.last_session_start = None
 
     def enqueue_session(self, *, device_id: str, start_time: str, end_time: str, duration_ms: int) -> None:
@@ -149,3 +152,40 @@ class Playtime:
         that lags behind local play, e.g. an unflushed outbox) is ignored.
         """
         self.total_seconds = max(self.total_seconds, seconds)
+
+    def reconcile_session_count(self, count: int) -> None:
+        """Raise the session count to ``count`` if it is higher (monotonic max-clamp).
+
+        The cross-device union session count from a native play-session GET is
+        folded in here, mirroring :meth:`reconcile_total`: the clamp never
+        regresses the local count. Accepted caveat (the same one ADR-0018's
+        ``total_seconds`` handling carries): once two devices are both active
+        their per-device counts accumulate independently, so ``max()``
+        under-counts the true union whenever local and server diverge — the
+        monotonic clamp trades exactness for never-regressing.
+        """
+        self.session_count = max(self.session_count, count)
+
+    def reconcile_last_played(self, ts: str | None) -> None:
+        """Adopt ``ts`` as the last-played timestamp when it is strictly newer.
+
+        Compared by parsed datetime (``domain.iso_time.parse_iso``), never
+        lexically — two differing ISO formats/offsets would misorder a raw
+        string compare. An unparseable or ``None`` ``ts`` is ignored; a
+        currently-unset or unparseable local value is overwritten by any
+        parseable ``ts``. A naive/aware mismatch (the two instants cannot be
+        ordered) keeps the current value rather than risk a wrong regression.
+        The original ``ts`` string is stored verbatim on adoption.
+        """
+        incoming = parse_iso(ts)
+        if incoming is None:
+            return
+        current = parse_iso(self.last_played)
+        if current is None:
+            self.last_played = ts
+            return
+        try:
+            if incoming > current:
+                self.last_played = ts
+        except TypeError:  # naive/aware mismatch — uncomparable, keep current
+            pass

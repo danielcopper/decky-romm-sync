@@ -41,15 +41,25 @@ class TestRoundTrip:
             session_count=4,
             last_session_start="2026-03-03T10:00:00Z",
             last_session_duration_sec=900,
+            last_played="2026-03-03T10:15:00Z",
             pending_sessions={"2026-03-03T10:00:00Z": _pending()},
         )
         uow.playtime.save(5, playtime)
 
         assert uow.playtime.get(5) == playtime
 
+    def test_last_played_round_trips(self, uow: SqliteUnitOfWork):
+        """The ``last_played`` column (migration 007) survives save → get (#903)."""
+        _seed_rom(uow, 5)
+        uow.playtime.save(5, Playtime(total_seconds=60, session_count=1, last_played="2026-03-03T11:00:00Z"))
+
+        loaded = uow.playtime.get(5)
+        assert loaded is not None
+        assert loaded.last_played == "2026-03-03T11:00:00Z"
+
     def test_nullable_fields_preserved(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 5)
-        playtime = Playtime()  # all defaults: open-session/duration None, empty outbox
+        playtime = Playtime()  # all defaults: open-session/duration/last-played None, empty outbox
         uow.playtime.save(5, playtime)
 
         loaded = uow.playtime.get(5)
@@ -57,6 +67,7 @@ class TestRoundTrip:
         assert loaded.total_seconds == 0
         assert loaded.last_session_start is None
         assert loaded.last_session_duration_sec is None
+        assert loaded.last_played is None
         assert loaded.pending_sessions == {}
 
 

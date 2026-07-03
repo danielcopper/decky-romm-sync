@@ -411,19 +411,21 @@ export const checkCoreChange = callable<
   { changed: boolean; old_core?: string; new_core?: string; old_label?: string; new_label?: string }
 >("check_core_change");
 
-// Bulk playtime for plugin-load UI update
+// Bulk playtime for plugin-load UI update. last_played is the ISO end time of
+// the newest recorded/reconciled session (null until one exists).
 export const getAllPlaytime = callable<
   [],
-  { playtime: Record<string, { total_seconds: number; session_count: number }> }
+  { playtime: Record<string, { total_seconds: number; session_count: number; last_played: string | null }> }
 >("get_all_playtime");
 
-// Pull-only playtime reconcile-on-view — folds the RomM playtime note total in
-// (max) so a session played on another device shows up the moment the detail
-// page is opened. server_query_failed=true means the server was unreachable and
-// total_seconds/session_count are the local fallback.
+// Pull-only playtime reconcile-on-view — folds RomM's native play-session
+// history in (monotonic max) so a session played on another device shows up the
+// moment the detail page is opened. Restores total_seconds, session_count AND
+// last_played across a device cutover (#903, ADR-0018). server_query_failed=true
+// means the server was unreachable and these are the local fallback.
 export const reconcilePlaytime = callable<
   [number],
-  { total_seconds: number; session_count: number; server_query_failed: boolean }
+  { total_seconds: number; session_count: number; last_played: string | null; server_query_failed: boolean }
 >("reconcile_playtime");
 
 // RetroDECK path-resolution health for the QAM banner — discriminated status

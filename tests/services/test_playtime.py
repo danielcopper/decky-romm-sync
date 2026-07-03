@@ -440,17 +440,21 @@ class TestFlushPendingSessions:
 
 class TestGetPlaytime:
     @pytest.mark.asyncio
-    async def test_get_all_playtime_minimal_wire_shape(self):
+    async def test_get_all_playtime_wire_shape(self):
         svc, _, uow = make_service()
-        _seed_playtime(uow, 42, Playtime(total_seconds=100, session_count=2))
-        _seed_playtime(uow, 99, Playtime(total_seconds=200, session_count=5))
+        _seed_playtime(uow, 42, Playtime(total_seconds=100, session_count=2, last_played="2026-04-01T09:00:00Z"))
+        _seed_playtime(uow, 99, Playtime(total_seconds=200, session_count=5))  # never-reconciled: last_played None
 
         result = svc.get_all_playtime()
 
         assert set(result.keys()) == {"playtime"}
-        assert result["playtime"]["42"] == {"total_seconds": 100, "session_count": 2}
-        assert result["playtime"]["99"] == {"total_seconds": 200, "session_count": 5}
-        assert set(result["playtime"]["42"].keys()) == {"total_seconds", "session_count"}
+        assert result["playtime"]["42"] == {
+            "total_seconds": 100,
+            "session_count": 2,
+            "last_played": "2026-04-01T09:00:00Z",
+        }
+        assert result["playtime"]["99"] == {"total_seconds": 200, "session_count": 5, "last_played": None}
+        assert set(result["playtime"]["42"].keys()) == {"total_seconds", "session_count", "last_played"}
 
     @pytest.mark.asyncio
     async def test_get_all_playtime_empty(self):
@@ -473,22 +477,90 @@ def _seed_server_sessions(fake: FakeRommApi, rom_id: int, *durations_ms: int) ->
     ]
 
 
+def _seed_server_sessions_dated(fake: FakeRommApi, rom_id: int, *rows: tuple[int, str]) -> None:
+    """Stage server rows carrying both ``duration_ms`` and an ``end_time`` (for last_played)."""
+    fake.play_sessions[rom_id] = [
+        {"id": 4000 + i, "rom_id": rom_id, "duration_ms": d, "end_time": end} for i, (d, end) in enumerate(rows)
+    ]
+
+
 class TestReconcilePlaytime:
     @pytest.mark.asyncio
     async def test_server_ahead_raises_local_total(self):
         """Local < Σ server → reconcile raises the local total to the server union."""
         svc, fake, uow = make_service()
         _seed_playtime(uow, 42, Playtime(total_seconds=100, session_count=2))
-        _seed_server_sessions(fake, 42, 300_000, 200_000)  # 500s total
+        _seed_server_sessions(fake, 42, 300_000, 200_000)  # 500s total, 2 sessions
 
         result = await svc.reconcile_playtime(42)
 
         assert result["total_seconds"] == 500
-        assert result["session_count"] == 2  # untouched by a pull
+        assert result["session_count"] == 2  # max(local 2, server 2) — clamp holds equal
+        assert result["last_played"] is None  # seeded rows carry no end_time
         assert result["server_query_failed"] is False
         entry = uow.playtime.get(42)
         assert entry is not None
         assert entry.total_seconds == 500
+
+    @pytest.mark.asyncio
+    async def test_server_more_sessions_raises_count(self):
+        """Server has more sessions than local → session_count is raised to the server count."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(total_seconds=100, session_count=1))
+        _seed_server_sessions(fake, 42, 300_000, 200_000, 100_000)  # 3 sessions
+
+        result = await svc.reconcile_playtime(42)
+
+        assert result["session_count"] == 3  # max(local 1, server 3)
+        assert result["total_seconds"] == 600
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.session_count == 3
+
+    @pytest.mark.asyncio
+    async def test_local_more_sessions_is_not_regressed(self):
+        """Local session_count exceeds the server count → the pull never lowers it."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(total_seconds=900, session_count=10))
+        _seed_server_sessions(fake, 42, 300_000)  # 1 session
+
+        result = await svc.reconcile_playtime(42)
+
+        assert result["session_count"] == 10  # never regressed below local
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.session_count == 10
+
+    @pytest.mark.asyncio
+    async def test_folds_newest_server_end_time_into_last_played(self):
+        """last_played adopts the newest server ``end_time`` (compared by instant, not order)."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(total_seconds=0, session_count=0))
+        _seed_server_sessions_dated(
+            fake,
+            42,
+            (100_000, "2026-01-01T10:00:00Z"),
+            (100_000, "2026-01-03T10:00:00Z"),  # newest, out of order
+            (100_000, "2026-01-02T10:00:00Z"),
+        )
+
+        result = await svc.reconcile_playtime(42)
+
+        assert result["last_played"] == "2026-01-03T10:00:00Z"
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.last_played == "2026-01-03T10:00:00Z"
+
+    @pytest.mark.asyncio
+    async def test_local_last_played_not_regressed_by_older_server(self):
+        """A newer local last_played is kept when the server's newest end_time is older."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(total_seconds=0, session_count=1, last_played="2026-06-01T10:00:00Z"))
+        _seed_server_sessions_dated(fake, 42, (100_000, "2026-01-01T10:00:00Z"))  # older
+
+        result = await svc.reconcile_playtime(42)
+
+        assert result["last_played"] == "2026-06-01T10:00:00Z"
 
     @pytest.mark.asyncio
     async def test_local_ahead_is_noop(self):
@@ -529,14 +601,15 @@ class TestReconcilePlaytime:
 
         assert result["total_seconds"] == 0
         assert result["session_count"] == 0
+        assert result["last_played"] is None
         assert result["server_query_failed"] is False
         assert uow.playtime.get(42) is None
 
     @pytest.mark.asyncio
     async def test_server_unreachable_returns_local_total(self):
-        """Fetch raises → server_query_failed True, returns the local row's total."""
+        """Fetch raises → server_query_failed True, returns the local row's total + last_played."""
         svc, fake, uow = make_service()
-        _seed_playtime(uow, 42, Playtime(total_seconds=250, session_count=3))
+        _seed_playtime(uow, 42, Playtime(total_seconds=250, session_count=3, last_played="2026-05-01T00:00:00Z"))
         fake.fail_on_next(RommApiError("unreachable"))
 
         result = await svc.reconcile_playtime(42)
@@ -544,6 +617,7 @@ class TestReconcilePlaytime:
         assert result["server_query_failed"] is True
         assert result["total_seconds"] == 250
         assert result["session_count"] == 3
+        assert result["last_played"] == "2026-05-01T00:00:00Z"  # local-only degrade carries it
 
     @pytest.mark.asyncio
     async def test_orphan_rom_id_is_graceful_noop(self):

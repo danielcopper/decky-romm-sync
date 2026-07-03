@@ -24,6 +24,20 @@ class TestRecordSession:
         assert playtime.last_session_duration_sec == 3600
         assert playtime.last_session_start is None
 
+    def test_stamps_last_played_with_ended_at(self):
+        playtime = Playtime()
+        playtime.begin_session("2026-05-28T10:00:00")
+        playtime.record_session("2026-05-28T11:00:00")
+        assert playtime.last_played == "2026-05-28T11:00:00"
+
+    def test_second_cycle_advances_last_played(self):
+        playtime = Playtime()
+        playtime.begin_session("2026-05-28T10:00:00")
+        playtime.record_session("2026-05-28T11:00:00")
+        playtime.begin_session("2026-05-28T12:00:00")
+        playtime.record_session("2026-05-28T12:30:00")
+        assert playtime.last_played == "2026-05-28T12:30:00"
+
     def test_two_cycles_accumulate(self):
         playtime = Playtime()
         playtime.begin_session("2026-05-28T10:00:00")
@@ -240,3 +254,79 @@ class TestReconcileTotal:
         playtime = Playtime(total_seconds=250)
         playtime.reconcile_total(250)
         assert playtime.total_seconds == 250
+
+
+class TestReconcileSessionCount:
+    def test_raises_count_to_larger_value(self):
+        playtime = Playtime(session_count=2)
+        playtime.reconcile_session_count(5)
+        assert playtime.session_count == 5
+
+    def test_ignores_smaller_value(self):
+        playtime = Playtime(session_count=5)
+        playtime.reconcile_session_count(2)
+        assert playtime.session_count == 5
+
+    def test_equal_value_is_a_noop(self):
+        playtime = Playtime(session_count=3)
+        playtime.reconcile_session_count(3)
+        assert playtime.session_count == 3
+
+    def test_from_zero_adopts_server_count(self):
+        playtime = Playtime()  # session_count defaults to 0
+        playtime.reconcile_session_count(4)
+        assert playtime.session_count == 4
+
+
+class TestReconcileLastPlayed:
+    def test_adopts_strictly_newer_timestamp(self):
+        playtime = Playtime(last_played="2026-05-28T10:00:00Z")
+        playtime.reconcile_last_played("2026-05-28T12:00:00Z")
+        assert playtime.last_played == "2026-05-28T12:00:00Z"
+
+    def test_ignores_older_timestamp(self):
+        playtime = Playtime(last_played="2026-05-28T12:00:00Z")
+        playtime.reconcile_last_played("2026-05-28T10:00:00Z")
+        assert playtime.last_played == "2026-05-28T12:00:00Z"
+
+    def test_equal_instant_is_a_noop(self):
+        playtime = Playtime(last_played="2026-05-28T12:00:00Z")
+        playtime.reconcile_last_played("2026-05-28T12:00:00Z")
+        assert playtime.last_played == "2026-05-28T12:00:00Z"
+
+    def test_none_incoming_is_ignored(self):
+        playtime = Playtime(last_played="2026-05-28T12:00:00Z")
+        playtime.reconcile_last_played(None)
+        assert playtime.last_played == "2026-05-28T12:00:00Z"
+
+    def test_unparseable_incoming_is_ignored(self):
+        playtime = Playtime(last_played="2026-05-28T12:00:00Z")
+        playtime.reconcile_last_played("not-a-date")
+        assert playtime.last_played == "2026-05-28T12:00:00Z"
+
+    def test_unset_local_adopts_any_parseable_incoming(self):
+        playtime = Playtime()  # last_played defaults to None
+        playtime.reconcile_last_played("2026-05-28T12:00:00Z")
+        assert playtime.last_played == "2026-05-28T12:00:00Z"
+
+    def test_unparseable_local_is_overwritten(self):
+        playtime = Playtime(last_played="garbage")
+        playtime.reconcile_last_played("2026-05-28T12:00:00Z")
+        assert playtime.last_played == "2026-05-28T12:00:00Z"
+
+    def test_compares_by_instant_not_lexically(self):
+        """A newer instant that sorts EARLIER as a raw string is still adopted.
+
+        current 10:00+02:00 == 08:00 UTC; incoming 09:00Z == 09:00 UTC is later,
+        yet "2026-05-28T09..." < "2026-05-28T10..." as strings — a lexical compare
+        would wrongly reject it. Parsing to an instant gets the order right.
+        """
+        playtime = Playtime(last_played="2026-05-28T10:00:00+02:00")
+        playtime.reconcile_last_played("2026-05-28T09:00:00Z")
+        assert playtime.last_played == "2026-05-28T09:00:00Z"
+
+    def test_naive_aware_mismatch_keeps_current(self):
+        """An uncomparable naive/aware pair keeps the current value (never regress)."""
+        playtime = Playtime(last_played="2026-05-28T10:00:00")  # naive
+        playtime.reconcile_last_played("2026-05-29T10:00:00Z")  # aware
+        assert playtime.last_played == "2026-05-28T10:00:00"

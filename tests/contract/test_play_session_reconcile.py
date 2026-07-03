@@ -44,6 +44,31 @@ async def test_reconcile_flushes_outbox_then_unions_server(harness):
     # Server union is our 300s + the foreign 500s = 800s; max(local 300, 800) = 800.
     assert result["total_seconds"] == 800
     assert result["server_query_failed"] is False
+    # session_count folds in as len(server rows) = local + foreign = 2; last_played is
+    # the newest server end_time (only our ingested session carries one here).
+    local_end = next(s["end_time"] for s in harness.romm.play_sessions[1] if s.get("end_time"))
+    assert result["session_count"] == 2
+    assert result["last_played"] == local_end
+
+
+async def test_reconcile_restores_session_count_and_last_played_from_server(harness):
+    """A fresh device with no local play restores session_count + last_played from the server union (#903)."""
+    seed_rom(harness, 1)
+    await _register(harness)
+    harness.plugin.settings["save_sync_enabled"] = False
+
+    # The server already holds a prior device's two sessions — the cutover history.
+    harness.romm.play_sessions[1] = [
+        {"id": 9001, "rom_id": 1, "device_id": "device-B", "duration_ms": 600_000, "end_time": "2026-02-01T10:00:00Z"},
+        {"id": 9002, "rom_id": 1, "device_id": "device-B", "duration_ms": 300_000, "end_time": "2026-02-03T10:00:00Z"},
+    ]
+
+    result = await harness.plugin.reconcile_playtime(1)
+
+    assert result["total_seconds"] == 900  # 600s + 300s union
+    assert result["session_count"] == 2  # restored from the server rows, not 0
+    assert result["last_played"] == "2026-02-03T10:00:00Z"  # newest server end_time
+    assert result["server_query_failed"] is False
 
 
 async def test_reconcile_local_ahead_is_not_regressed(harness):

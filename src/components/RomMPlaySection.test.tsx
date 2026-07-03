@@ -332,6 +332,7 @@ describe("RomMPlaySection", () => {
     vi.mocked(backend.reconcilePlaytime).mockResolvedValue({
       total_seconds: 0,
       session_count: 0,
+      last_played: null,
       server_query_failed: true,
     });
     // refreshCoverArtwork defaults to success so the artwork-refresh action
@@ -884,6 +885,7 @@ describe("RomMPlaySection", () => {
       vi.mocked(backend.reconcilePlaytime).mockResolvedValue({
         total_seconds: 7200,
         session_count: 4,
+        last_played: null,
         server_query_failed: false,
       });
       render(<RomMPlaySection appId={testAppId} />);
@@ -903,6 +905,7 @@ describe("RomMPlaySection", () => {
       vi.mocked(backend.reconcilePlaytime).mockResolvedValue({
         total_seconds: 3600,
         session_count: 1,
+        last_played: null,
         server_query_failed: false,
       });
       render(<RomMPlaySection appId={testAppId} />);
@@ -937,6 +940,7 @@ describe("RomMPlaySection", () => {
       vi.mocked(backend.reconcilePlaytime).mockResolvedValue({
         total_seconds: 0,
         session_count: 0,
+        last_played: null,
         server_query_failed: true,
       });
       const { container } = render(<RomMPlaySection appId={testAppId} />);
@@ -1006,6 +1010,7 @@ describe("RomMPlaySection", () => {
       vi.mocked(backend.reconcilePlaytime).mockResolvedValue({
         total_seconds: 7200, // 120 min
         session_count: 4,
+        last_played: null,
         server_query_failed: false,
       });
       // Simulate the real chokepoint: when the section pushes the reconciled

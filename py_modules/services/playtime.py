@@ -18,6 +18,7 @@ import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from domain.iso_time import parse_iso
 from domain.playtime import Playtime
 from lib.errors import RommForbiddenError
 from lib.list_result import ErrorCode
@@ -77,8 +78,13 @@ class PlaytimeServiceConfig:
 
 
 def _empty_reconcile_result(*, server_query_failed: bool) -> dict[str, Any]:
-    """The reconcile result for a missing local row — zero totals."""
-    return {"total_seconds": 0, "session_count": 0, "server_query_failed": server_query_failed}
+    """The reconcile result for a missing local row — zero totals, no last-played."""
+    return {
+        "total_seconds": 0,
+        "session_count": 0,
+        "last_played": None,
+        "server_query_failed": server_query_failed,
+    }
 
 
 def _coerce_duration_ms(row: object) -> int:
@@ -98,6 +104,38 @@ def _coerce_duration_ms(row: object) -> int:
     if isinstance(value, (int, float)):
         return int(value)
     return 0
+
+
+def _latest_end_time(sessions: list[Any]) -> str | None:
+    """Return the newest parseable ``end_time`` across server play-session rows, else ``None``.
+
+    Mirrors ``_coerce_duration_ms``'s defensive coercion: a row that is not a
+    dict, lacks a string ``end_time``, or carries an unparseable timestamp is
+    skipped, so one malformed row never crashes the reconcile. Compared by
+    parsed datetime (never lexically), and a naive/aware mismatch between two
+    server rows is skipped rather than raised. The original string of the newest
+    row is returned so the stored ``last_played`` keeps the server's format.
+    """
+    latest_raw: str | None = None
+    latest_dt = None
+    for row in sessions:
+        if not isinstance(row, dict):
+            continue
+        raw = row.get("end_time")
+        if not isinstance(raw, str):
+            continue
+        parsed = parse_iso(raw)
+        if parsed is None:
+            continue
+        if latest_dt is None:
+            latest_raw, latest_dt = raw, parsed
+            continue
+        try:
+            if parsed > latest_dt:
+                latest_raw, latest_dt = raw, parsed
+        except TypeError:  # naive/aware mismatch between rows — skip the outlier
+            continue
+    return latest_raw
 
 
 class PlaytimeService:
@@ -385,15 +423,20 @@ class PlaytimeService:
     def get_all_playtime(self) -> dict[str, Any]:
         """Return all local playtime entries keyed by rom_id string.
 
-        Wire shape is the minimal pair the frontend types and reads:
-        ``{playtime: {rom_id_str: {total_seconds, session_count}}}``.
-        Callable-only, so its own short read UoW is safe (no in-transaction
-        caller).
+        Wire shape the frontend types and reads:
+        ``{playtime: {rom_id_str: {total_seconds, session_count, last_played}}}``.
+        ``last_played`` is the ISO end time of the newest recorded/reconciled
+        session (``None`` until one exists). Callable-only, so its own short read
+        UoW is safe (no in-transaction caller).
         """
         with self._uow_factory() as uow:
             return {
                 "playtime": {
-                    str(rom_id): {"total_seconds": pt.total_seconds, "session_count": pt.session_count}
+                    str(rom_id): {
+                        "total_seconds": pt.total_seconds,
+                        "session_count": pt.session_count,
+                        "last_played": pt.last_played,
+                    }
                     for rom_id, pt in uow.playtime.iter_all()
                 }
             }
@@ -428,13 +471,17 @@ class PlaytimeService:
             uow.kv_config.set(_SCOPE_NOTICE_KEY, "1")
 
     async def reconcile_playtime(self, rom_id: int) -> dict[str, Any]:
-        """Pull the cross-device server total into the local row on detail-page view.
+        """Pull the cross-device server history into the local row on detail-page view.
 
         Flushes the outbox first, then reads the ROM's native play-session
-        history and folds its summed total into the ``Playtime`` aggregate via
-        ``reconcile_total`` (the clamp never regresses local play — ``max()``).
-        Read-only against the aggregate's server view; it never ingests here.
-        The work runs in an executor (the SQLite connection has thread affinity).
+        history and folds three values derived from it into the ``Playtime``
+        aggregate — the summed total (``reconcile_total``), the row count
+        (``reconcile_session_count``) and the newest end time
+        (``reconcile_last_played``). Each is a monotonic clamp that never
+        regresses local play, so a fresh device restores ``session_count`` and
+        ``last_played`` alongside ``total_seconds`` (#903). Read-only against the
+        aggregate's server view; it never ingests here. The work runs in an
+        executor (the SQLite connection has thread affinity).
         """
         return await self._loop.run_in_executor(None, self._reconcile_playtime_io, int(rom_id))
 
@@ -443,14 +490,15 @@ class PlaytimeService:
 
         Flushes the outbox (so freshly-recorded local sessions are in the server
         union), fetches the ROM's play-session history outside any transaction,
-        sums ``duration_ms`` into whole seconds, then folds that into the
-        aggregate in a short write UoW. Returns the partial-success shape
-        ``{total_seconds, session_count, server_query_failed}``: ``total`` /
-        ``count`` come from the resulting (or existing) local row, and
-        ``server_query_failed`` flags an unreachable server. Never raises out of
-        the callable — a fetch failure, a not-yet-scoped token (403 → durable
-        re-sign-in notice, local-only degrade), or an orphan ``rom_id`` (no
-        ``roms`` row) reports the local row's values.
+        derives the summed seconds, the session count, and the newest end time,
+        then folds all three into the aggregate in a short write UoW. Returns the
+        partial-success shape ``{total_seconds, session_count, last_played,
+        server_query_failed}``: the first three come from the resulting (or
+        existing) local row, and ``server_query_failed`` flags an unreachable
+        server. Never raises out of the callable — a fetch failure, a
+        not-yet-scoped token (403 → durable re-sign-in notice, local-only
+        degrade), or an orphan ``rom_id`` (no ``roms`` row) reports the local
+        row's values.
         """
         # Drain the outbox so a session recorded moments ago is already part of
         # the server union we are about to read back. The flush never raises.
@@ -475,21 +523,30 @@ class PlaytimeService:
         # stale re-sign-in notice a prior 403 left behind.
         self.clear_scope_notice()
 
+        # Three values derived from the SAME session list: the summed cross-device
+        # duration, the row count, and the newest session end. All three fold into
+        # the aggregate via monotonic reconcile verbs so a fresh device restores
+        # total_seconds AND session_count AND last_played, not the total alone (#903).
         server_total_seconds = sum(_coerce_duration_ms(s) for s in sessions) // 1000
+        server_session_count = len(sessions)
+        server_last_played = _latest_end_time(sessions)
 
         try:
             with self._uow_factory() as uow:
                 entry = uow.playtime.get(rom_id)
-                if server_total_seconds == 0 and entry is None:
+                if server_session_count == 0 and entry is None:
                     # No server data and no local row — report zero, do not seed
                     # an empty ``rom_playtime`` row.
                     self._log_debug(f"Reconciled playtime for rom {rom_id}: no server sessions, no local row")
                     return _empty_reconcile_result(server_query_failed=False)
                 pt = entry or Playtime()
                 pt.reconcile_total(server_total_seconds)
+                pt.reconcile_session_count(server_session_count)
+                pt.reconcile_last_played(server_last_played)
                 uow.playtime.save(rom_id, pt)
                 total_seconds = pt.total_seconds
                 session_count = pt.session_count
+                last_played = pt.last_played
         except sqlite3.IntegrityError as e:
             # Orphan FK (rom_id absent from roms): the commit rolls back, so no
             # row exists to report — a graceful 0/0 no-op.
@@ -502,11 +559,12 @@ class PlaytimeService:
         return {
             "total_seconds": total_seconds,
             "session_count": session_count,
+            "last_played": last_played,
             "server_query_failed": False,
         }
 
     def _local_playtime_result(self, rom_id: int, *, server_query_failed: bool) -> dict[str, Any]:
-        """Build the reconcile result from the existing local row (0/0 when absent)."""
+        """Build the reconcile result from the existing local row (zeros/None when absent)."""
         with self._uow_factory() as uow:
             entry = uow.playtime.get(rom_id)
         if entry is None:
@@ -514,5 +572,6 @@ class PlaytimeService:
         return {
             "total_seconds": entry.total_seconds,
             "session_count": entry.session_count,
+            "last_played": entry.last_played,
             "server_query_failed": server_query_failed,
         }

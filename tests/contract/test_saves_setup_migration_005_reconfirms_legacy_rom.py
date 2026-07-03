@@ -28,13 +28,15 @@ def _rewind_to_v4(db_path: str) -> None:
 
     Bootstrap stamps the DB at the latest version with the full schema. To replay
     the real 005 upgrade path the runner must see a genuine v4 database: the
-    version stamp AND the pre-006 schema (006's play-session outbox table absent,
-    ``note_id`` present) so the sequential 005→006 re-run applies cleanly.
+    version stamp AND the pre-006/007 schema (006's play-session outbox table
+    absent and ``note_id`` present, 007's ``last_played`` column absent) so the
+    sequential 005→006→007 re-run applies cleanly.
     """
     conn = sqlite3.connect(db_path, isolation_level=None)
     try:
         conn.execute("DROP TABLE IF EXISTS rom_playtime_sessions")
         conn.execute("ALTER TABLE rom_playtime ADD COLUMN note_id INTEGER")
+        conn.execute("ALTER TABLE rom_playtime DROP COLUMN last_played")
         conn.execute("PRAGMA user_version = 4")
     finally:
         conn.close()
@@ -60,7 +62,7 @@ async def test_migration_005_reconfirms_legacy_rom(harness):
     assert before["configured"] is True
 
     # Bootstrap already stamped the DB at the latest version, so rewind to just
-    # before 005 to exercise the real migration path (005 then 006).
+    # before 005 to exercise the real migration path (005, then 006, then 007).
     db_path = _db_path(harness)
     _rewind_to_v4(db_path)
     apply_migrations(db_path)
