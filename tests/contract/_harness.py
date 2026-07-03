@@ -109,6 +109,10 @@ class ContractHarness:
     # to seed relational state (roms / rom_installs / rom_save_states / kv_config)
     # exactly as the services read it — same database, same connection contract.
     uow_factory: Any
+    # The real RetroDECK paths provider bound onto the plugin. A migration test
+    # swaps a controllable fake onto ``plugin._migration_service._retrodeck_paths``
+    # to drive RetroDECK-home changes through detection.
+    retrodeck_paths: Any
 
 
 def _single_attempt_pass_through(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -213,4 +217,5 @@ def build_contract_harness(tmp_path: Any) -> ContractHarness:
         clock=fake_clock,
         tmp_path=tmp_path,
         uow_factory=result.callbacks.uow_factory,
+        retrodeck_paths=result.callbacks.retrodeck_paths,
     )

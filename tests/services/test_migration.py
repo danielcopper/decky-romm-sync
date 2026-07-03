@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from datetime import UTC, datetime
 from typing import Any
@@ -1523,7 +1524,7 @@ class TestMigrationFailureInjection:
 
         service = self._make_service(fake, uow=uow)
 
-        result = service._migrate_retrodeck_files_io(old_home, new_home, None)
+        result = service._migrate_retrodeck_files_io([old_home], new_home, None)
 
         assert result["success"] is False
         assert len(result["errors"]) == 1
@@ -1772,3 +1773,443 @@ class TestBackgroundTaskTracking:
         await plugin._migration_service.shutdown()
 
         assert plugin._migration_service._background_tasks == set()
+
+
+def _read_pending(uow) -> tuple[str, list[str]]:
+    """Return ``(previous, hops)`` as persisted in kv_config."""
+    previous = uow.kv_config.get("retrodeck_home_path_previous") or ""
+    hops_raw = uow.kv_config.get("retrodeck_home_path_hops")
+    return previous, (json.loads(hops_raw) if hops_raw else [])
+
+
+class TestChainedPathChangeDetection:
+    """Detection when the RetroDECK home changes AGAIN before migrating (#1042).
+
+    The pending set must accumulate every left-behind home rather than
+    overwriting the ``_previous`` marker, so files under an intermediate home
+    are never stranded.
+    """
+
+    async def _detect_at(self, plugin, home: str) -> None:
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(home=home)
+        plugin._migration_service.detect_retrodeck_path_change()
+        # Drain the spawned ``retrodeck_path_changed`` emit coroutine.
+        await asyncio.sleep(0)
+
+    async def test_chained_change_appends_hop_and_keeps_previous(self, plugin, tmp_path):
+        """A→B→C before migrating: previous stays A, B lands in hops, home is C."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        a, b, c = (str(tmp_path / x) for x in ("A", "B", "C"))
+        for d in (a, b, c):
+            os.makedirs(d, exist_ok=True)
+
+        with plugin._uow as uow:
+            uow.kv_config.set("retrodeck_home_path", a)
+
+        await self._detect_at(plugin, b)
+        await self._detect_at(plugin, c)
+
+        with plugin._uow as uow:
+            assert uow.kv_config.get("retrodeck_home_path") == c
+            previous, hops = _read_pending(uow)
+        assert previous == a
+        assert hops == [b]
+        # The re-emit still points the banner at the ORIGINAL home → current.
+        event, args = plugin._migration_service._emit.calls[-1]
+        assert event == "retrodeck_path_changed"
+        assert (args[0]["old_path"], args[0]["new_path"]) == (a, c)
+        assert "cleared" not in args[0]
+
+    async def test_triple_chain_accumulates_all_homes(self, plugin, tmp_path):
+        """A→B→C→D: previous stays A, hops = [B, C]."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        a, b, c, d = (str(tmp_path / x) for x in ("A", "B", "C", "D"))
+        for path in (a, b, c, d):
+            os.makedirs(path, exist_ok=True)
+
+        with plugin._uow as uow:
+            uow.kv_config.set("retrodeck_home_path", a)
+        await self._detect_at(plugin, b)
+        await self._detect_at(plugin, c)
+        await self._detect_at(plugin, d)
+
+        with plugin._uow as uow:
+            assert uow.kv_config.get("retrodeck_home_path") == d
+            previous, hops = _read_pending(uow)
+        assert previous == a
+        assert hops == [b, c]
+
+    async def test_simple_revert_still_auto_clears(self, plugin, tmp_path):
+        """A→B then back to A (no hops) still fully clears — shipped UX preserved."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        a, b = (str(tmp_path / x) for x in ("A", "B"))
+        for path in (a, b):
+            os.makedirs(path, exist_ok=True)
+
+        with plugin._uow as uow:
+            uow.kv_config.set("retrodeck_home_path", a)
+        await self._detect_at(plugin, b)
+        await self._detect_at(plugin, a)
+
+        with plugin._uow as uow:
+            assert uow.kv_config.get("retrodeck_home_path") == a
+            previous, hops = _read_pending(uow)
+        assert previous == ""
+        assert hops == []
+        assert plugin._migration_service._emit.calls[-1][1][0]["cleared"] is True
+
+    async def test_chained_revert_keeps_pending(self, plugin, tmp_path):
+        """A→B→C then back to A while B remains a hop → NOT cleared; pending = [B, C]."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        a, b, c = (str(tmp_path / x) for x in ("A", "B", "C"))
+        for path in (a, b, c):
+            os.makedirs(path, exist_ok=True)
+
+        with plugin._uow as uow:
+            uow.kv_config.set("retrodeck_home_path", a)
+        await self._detect_at(plugin, b)
+        await self._detect_at(plugin, c)
+        await self._detect_at(plugin, a)
+
+        with plugin._uow as uow:
+            assert uow.kv_config.get("retrodeck_home_path") == a
+            previous, hops = _read_pending(uow)
+        assert previous == b
+        assert hops == [c]
+        assert "cleared" not in plugin._migration_service._emit.calls[-1][1][0]
+
+    async def test_move_back_to_hop_removes_it(self, plugin, tmp_path):
+        """A→B→C then back to B: B leaves the pending set, pending = [A, C]."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        a, b, c = (str(tmp_path / x) for x in ("A", "B", "C"))
+        for path in (a, b, c):
+            os.makedirs(path, exist_ok=True)
+
+        with plugin._uow as uow:
+            uow.kv_config.set("retrodeck_home_path", a)
+        await self._detect_at(plugin, b)
+        await self._detect_at(plugin, c)
+        await self._detect_at(plugin, b)
+
+        with plugin._uow as uow:
+            assert uow.kv_config.get("retrodeck_home_path") == b
+            previous, hops = _read_pending(uow)
+        assert previous == a
+        assert hops == [c]
+
+
+class TestChainedMigration:
+    """Migrating a chained pending set (#1042) — files drain from every home."""
+
+    @staticmethod
+    def _relaunch_emit(plugin):
+        for event, args in plugin._migration_service._emit.calls:
+            if event == "migration_relaunch_options":
+                return args[0]
+        return None
+
+    @staticmethod
+    def _set_pending(uow, *, previous: str, hops: list[str], home: str) -> None:
+        uow.kv_config.set("retrodeck_home_path_previous", previous)
+        if hops:
+            uow.kv_config.set("retrodeck_home_path_hops", json.dumps(hops))
+        uow.kv_config.set("retrodeck_home_path", home)
+
+    @pytest.mark.asyncio
+    async def test_rows_and_files_at_oldest_home_migrate_to_current(self, plugin, tmp_path):
+        """Headline #1042 fix: rows+files at A after A→B→C reach C, both keys cleared."""
+        import decky
+
+        from domain.shortcut_data import build_launch_options, resolve_emulator_invocation
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        a, b, c = (str(tmp_path / x) for x in ("A", "B", "C"))
+        old_rom = os.path.join(a, "roms", "n64", "zelda.z64")
+        new_rom = os.path.join(c, "roms", "n64", "zelda.z64")
+        os.makedirs(os.path.dirname(old_rom))
+        with open(old_rom, "w") as f:
+            f.write("rom data")
+
+        with plugin._uow as uow:
+            self._set_pending(uow, previous=a, hops=[b], home=c)
+        _seed_install(plugin._uow, 1, file_path=old_rom, system="n64", app_id=4242)
+
+        result = await plugin.migrate_retrodeck_files()
+
+        assert result["success"] is True
+        assert result["roms_moved"] == 1
+        assert os.path.exists(new_rom)
+        assert not os.path.exists(old_rom)
+        with plugin._uow as uow:
+            assert uow.rom_installs.get(1).file_path == new_rom
+            # BOTH markers gone after a clean migration.
+            previous, hops = _read_pending(uow)
+        assert previous == ""
+        assert hops == []
+        # Relaunch options rebaked at the NEW (C) path.
+        payload = self._relaunch_emit(plugin)
+        assert payload is not None
+        expected = build_launch_options(resolve_emulator_invocation({"id": 1}), new_rom)
+        assert payload["items"] == [{"app_id": 4242, "launch_options": expected}]
+
+    @pytest.mark.asyncio
+    async def test_file_already_at_current_is_bookkept(self, plugin, tmp_path):
+        """Row says A but the file is already at C → DB path updated, counted, no move error."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        a, b, c = (str(tmp_path / x) for x in ("A", "B", "C"))
+        old_rom = os.path.join(a, "roms", "n64", "zelda.z64")
+        new_rom = os.path.join(c, "roms", "n64", "zelda.z64")
+        os.makedirs(os.path.dirname(new_rom))
+        with open(new_rom, "w") as f:
+            f.write("already here")
+
+        with plugin._uow as uow:
+            self._set_pending(uow, previous=a, hops=[b], home=c)
+        _seed_install(plugin._uow, 1, file_path=old_rom, system="n64")
+
+        result = await plugin.migrate_retrodeck_files()
+
+        assert result["success"] is True
+        assert result["roms_moved"] == 1
+        assert result["missing_count"] == 0
+        with plugin._uow as uow:
+            assert uow.rom_installs.get(1).file_path == new_rom
+
+    @pytest.mark.asyncio
+    async def test_file_stranded_at_hop_is_found_and_moved(self, plugin, tmp_path):
+        """Row says A but the file physically sits at hop B → probed, moved A-mapped path to C."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        a, b, c = (str(tmp_path / x) for x in ("A", "B", "C"))
+        recorded_rom = os.path.join(a, "roms", "n64", "zelda.z64")  # DB path (missing on disk)
+        stranded_rom = os.path.join(b, "roms", "n64", "zelda.z64")  # actual location
+        new_rom = os.path.join(c, "roms", "n64", "zelda.z64")
+        os.makedirs(os.path.dirname(stranded_rom))
+        with open(stranded_rom, "w") as f:
+            f.write("stranded data")
+
+        with plugin._uow as uow:
+            self._set_pending(uow, previous=a, hops=[b], home=c)
+        _seed_install(plugin._uow, 1, file_path=recorded_rom, system="n64")
+
+        result = await plugin.migrate_retrodeck_files()
+
+        assert result["success"] is True
+        assert result["roms_moved"] == 1
+        assert result["missing_count"] == 0
+        assert os.path.exists(new_rom)
+        assert not os.path.exists(stranded_rom)
+        with open(new_rom) as f:
+            assert f.read() == "stranded data"
+        with plugin._uow as uow:
+            assert uow.rom_installs.get(1).file_path == new_rom
+
+    @pytest.mark.asyncio
+    async def test_file_missing_everywhere_is_surfaced_marker_cleared(self, plugin, tmp_path):
+        """Row exists but the file is at no known home → missing surfaced, marker still clears."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        a, b, c = (str(tmp_path / x) for x in ("A", "B", "C"))
+
+        with plugin._uow as uow:
+            self._set_pending(uow, previous=a, hops=[b], home=c)
+        _seed_install(plugin._uow, 1, file_path=os.path.join(a, "roms", "n64", "gone.z64"), system="n64")
+
+        result = await plugin.migrate_retrodeck_files()
+
+        assert result["success"] is True
+        assert result["roms_moved"] == 0
+        assert result["missing_count"] == 1
+        assert "missing" in result["message"]
+        with plugin._uow as uow:
+            previous, hops = _read_pending(uow)
+        assert previous == ""
+        assert hops == []
+
+    @pytest.mark.asyncio
+    async def test_mixed_rows_at_two_homes_drained_in_one_run(self, plugin, tmp_path):
+        """One row under A, another under hop B → both drain to C in a single migrate."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        a, b, c = (str(tmp_path / x) for x in ("A", "B", "C"))
+        rom_a = os.path.join(a, "roms", "n64", "a.z64")
+        rom_b = os.path.join(b, "roms", "n64", "b.z64")
+        new_a = os.path.join(c, "roms", "n64", "a.z64")
+        new_b = os.path.join(c, "roms", "n64", "b.z64")
+        os.makedirs(os.path.dirname(rom_a))
+        os.makedirs(os.path.dirname(rom_b))
+        with open(rom_a, "w") as f:
+            f.write("a")
+        with open(rom_b, "w") as f:
+            f.write("b")
+
+        with plugin._uow as uow:
+            self._set_pending(uow, previous=a, hops=[b], home=c)
+        _seed_install(plugin._uow, 1, file_path=rom_a, system="n64")
+        _seed_install(plugin._uow, 2, file_path=rom_b, system="n64")
+
+        result = await plugin.migrate_retrodeck_files()
+
+        assert result["success"] is True
+        assert result["roms_moved"] == 2
+        assert os.path.exists(new_a)
+        assert os.path.exists(new_b)
+        with plugin._uow as uow:
+            assert uow.rom_installs.get(1).file_path == new_a
+            assert uow.rom_installs.get(2).file_path == new_b
+
+    @pytest.mark.asyncio
+    async def test_same_save_under_two_homes_newest_wins(self, plugin, tmp_path):
+        """Same save rel-path under A and B → only the newest-mtime copy migrates."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        a, b, c = (str(tmp_path / x) for x in ("A", "B", "C"))
+        save_a = os.path.join(a, "saves", "gba", "game.srm")
+        save_b = os.path.join(b, "saves", "gba", "game.srm")
+        new_save = os.path.join(c, "saves", "gba", "game.srm")
+        os.makedirs(os.path.dirname(save_a))
+        os.makedirs(os.path.dirname(save_b))
+        with open(save_a, "w") as f:
+            f.write("stale")
+        with open(save_b, "w") as f:
+            f.write("fresh")
+        # A is older, B is newer.
+        os.utime(save_a, (1_700_000_000, 1_700_000_000))
+        os.utime(save_b, (1_700_000_500, 1_700_000_500))
+
+        with plugin._uow as uow:
+            self._set_pending(uow, previous=a, hops=[b], home=c)
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(saves=os.path.join(c, "saves"))
+
+        result = await plugin.migrate_retrodeck_files()
+
+        assert result["success"] is True
+        assert result["saves_moved"] == 1
+        with open(new_save) as f:
+            assert f.read() == "fresh"
+
+    @pytest.mark.asyncio
+    async def test_untracked_bios_probed_across_homes(self, plugin, tmp_path):
+        """An untracked BIOS file living under a hop home is found and migrated."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        a, b, c = (str(tmp_path / x) for x in ("A", "B", "C"))
+        bios_b = os.path.join(b, "bios", "scph5501.bin")
+        new_bios = os.path.join(c, "bios", "scph5501.bin")
+        os.makedirs(os.path.dirname(bios_b))
+        with open(bios_b, "w") as f:
+            f.write("bios")
+
+        # Controlled registry so the probe has exactly one entry to find.
+        plugin._migration_service._get_bios_files_index = lambda: {"scph5501.bin": {"firmware_path": "scph5501.bin"}}
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(bios=os.path.join(c, "bios"))
+
+        with plugin._uow as uow:
+            self._set_pending(uow, previous=a, hops=[b], home=c)
+
+        result = await plugin.migrate_retrodeck_files()
+
+        assert result["success"] is True
+        assert result["bios_moved"] == 1
+        assert os.path.exists(new_bios)
+
+    @pytest.mark.asyncio
+    async def test_status_counts_across_homes(self, plugin, tmp_path):
+        """get_migration_status counts a row under A and a save under B; old_path = A."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        a, b, c = (str(tmp_path / x) for x in ("A", "B", "C"))
+        rom_a = os.path.join(a, "roms", "n64", "a.z64")
+        save_b = os.path.join(b, "saves", "gba", "game.srm")
+        os.makedirs(os.path.dirname(rom_a))
+        os.makedirs(os.path.dirname(save_b))
+        with open(rom_a, "w") as f:
+            f.write("a")
+        with open(save_b, "w") as f:
+            f.write("s")
+
+        with plugin._uow as uow:
+            self._set_pending(uow, previous=a, hops=[b], home=c)
+        _seed_install(plugin._uow, 1, file_path=rom_a, system="n64")
+        plugin._migration_service._retrodeck_paths = FakeRetroDeckPaths(saves=os.path.join(c, "saves"))
+
+        status = await plugin.get_migration_status()
+
+        assert status["pending"] is True
+        assert status["old_path"] == a
+        assert status["new_path"] == c
+        assert status["roms_count"] == 1
+        assert status["saves_count"] == 1
+
+    def test_dismiss_clears_both_keys(self, plugin):
+        """Dismiss drops the previous marker AND the hops array."""
+        with plugin._uow as uow:
+            uow.kv_config.set("retrodeck_home_path_previous", "/a")
+            uow.kv_config.set("retrodeck_home_path_hops", json.dumps(["/b"]))
+
+        result = plugin._migration_service.dismiss_retrodeck_migration()
+
+        assert result == {"success": True}
+        with plugin._uow as uow:
+            previous, hops = _read_pending(uow)
+        assert previous == ""
+        assert hops == []
+
+    @pytest.mark.asyncio
+    async def test_rerun_converges_to_no_migration_needed(self, plugin, tmp_path):
+        """After a clean migrate clears the markers, a second run is a no-op."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        a, b, c = (str(tmp_path / x) for x in ("A", "B", "C"))
+        old_rom = os.path.join(a, "roms", "n64", "zelda.z64")
+        os.makedirs(os.path.dirname(old_rom))
+        with open(old_rom, "w") as f:
+            f.write("rom")
+
+        with plugin._uow as uow:
+            self._set_pending(uow, previous=a, hops=[b], home=c)
+        _seed_install(plugin._uow, 1, file_path=old_rom, system="n64")
+
+        first = await plugin.migrate_retrodeck_files()
+        assert first["success"] is True
+
+        second = await plugin.migrate_retrodeck_files()
+        assert second["success"] is False
+        assert second["reason"] == "no_migration_needed"

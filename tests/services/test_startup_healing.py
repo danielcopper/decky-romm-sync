@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 import pytest
@@ -149,6 +150,23 @@ class TestPruneStaleInstalledRoms:
             service.prune_stale_installed_roms()
         assert uow.rom_installs.get(1) is not None
         assert any("Skipping prune" in rec.message and "/old/retrodeck" in rec.message for rec in caplog.records)
+
+    def test_preserve_pending_migration_hop_entry(self, logger, caplog):
+        """Install under a pending-migration HOP home (not just the previous one) → preserved (#1042).
+
+        A→B→C chained before migrating leaves ``_previous=A`` and ``_hops=[B]``;
+        an install still recorded under B must survive the prune until migration.
+        """
+        uow = FakeUnitOfWork()
+        _seed_install(uow, 1, file_path="/hop/retrodeck/roms/n64/zelda.z64")
+        with uow:
+            uow.kv_config.set("retrodeck_home_path_previous", "/old/retrodeck")
+            uow.kv_config.set("retrodeck_home_path_hops", json.dumps(["/hop/retrodeck"]))
+        service = _make_service(logger=logger, uow=uow)
+        with caplog.at_level(logging.INFO):
+            service.prune_stale_installed_roms()
+        assert uow.rom_installs.get(1) is not None
+        assert any("Skipping prune" in rec.message and "/hop/retrodeck" in rec.message for rec in caplog.records)
 
     def test_no_prune_does_not_write(self, logger):
         """When no record is pruned, no write UoW is opened."""
