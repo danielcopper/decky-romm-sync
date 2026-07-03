@@ -31,10 +31,22 @@ def classify_roms(
     """Bucket fetched ROMs against the saved shortcut registry.
 
     Returns the ROMs split into new (not in registry), changed (registry
-    entry exists but name/platform_name/platform_slug/fs_name differs),
-    unchanged_ids (registry matches exactly), stale (in registry but not in
-    the current fetch), and the count of stale ROMs whose stored platform
-    no longer appears in fetched_platform_names.
+    entry exists but a *persisted* identity field — name, platform_slug, or
+    fs_name — differs), unchanged_ids (registry matches exactly), stale (in
+    registry but not in the current fetch), and the count of stale ROMs whose
+    stored platform no longer appears in fetched_platform_names.
+
+    ``platform_name`` is deliberately excluded from the changed comparison:
+    it is a derived display field, never persisted on the ``roms`` row. The
+    registry side resolves it from the enabled-platforms-only slug→name map
+    (falling back to the bare slug for a disabled platform), while the fetch
+    side gets RomM's full display name, so a divergence between the two can
+    never be healed by an apply (the upsert writes only
+    platform_slug/name/fs_name) — comparing it produced a permanent phantom
+    "changed" delta (#1292). Platform display renames are diffed separately by
+    ``compute_platform_collection_diff``. ``platform_name`` is still read here
+    for the disabled-platform stale count, which intentionally keys on the
+    live-resolved display name.
 
     Changed ROMs are returned as fresh dicts with an added ``existing_app_id``
     key — the caller's shortcuts_data is not mutated.
@@ -47,9 +59,11 @@ def classify_roms(
         reg = registry.get(str(sd["rom_id"]))
         if not reg or not reg.get("app_id"):
             new.append(sd)
+        # Compare only persisted identity fields. platform_name is a derived
+        # display field (never on the roms row) — comparing it produced a
+        # permanent phantom "changed" delta (#1292); see the docstring.
         elif (
             reg.get("name") != sd["name"]
-            or reg.get("platform_name") != sd.get("platform_name")
             or reg.get("platform_slug") != sd.get("platform_slug")
             or reg.get("fs_name") != sd.get("fs_name", "")
         ):
