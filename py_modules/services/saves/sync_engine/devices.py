@@ -205,7 +205,11 @@ class DeviceRegistry:
                 heartbeat = await loop.run_in_executor(None, self._romm_api.heartbeat)
                 with contextlib.suppress(AttributeError, TypeError):
                     version = heartbeat.get("SYSTEM", {}).get("VERSION")
-                    if version:
+                    # SYSTEM.VERSION is server-controlled and untrusted: only cache
+                    # a real, non-empty version string. A truthy non-str (e.g. numeric
+                    # 4.9) is treated as absent — never cached — so the adapter's
+                    # version stays a real string or None. See _probe_version (#1275).
+                    if isinstance(version, str) and version:
                         self._romm_api.set_version(version)
             except Exception as e:
                 self._logger.debug(f"ensure_device_registered: version probe failed (non-fatal): {e}")

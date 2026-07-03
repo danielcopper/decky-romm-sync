@@ -61,6 +61,9 @@ class FakeSaveApi:
         self._fail_on_next: Exception | None = None
         self._fail_download_on: dict[int, Exception] = {}  # save_id -> exc for download_save_content
         self.heartbeat_raises: Exception | None = None
+        # Overrides the default heartbeat body when set, so a test can inject a
+        # SYSTEM.VERSION (or a malformed one) into the version-probe path.
+        self.heartbeat_payload: dict[str, Any] | None = None
         self._registered_devices: list[dict[str, Any]] = []
         self._next_device_id = 1
         # Negotiate (4.9 Device Sync): the ops the next negotiate_sync returns and
@@ -241,13 +244,13 @@ class FakeSaveApi:
         self.call_log.append(("heartbeat", (), {}))
         if self.heartbeat_raises is not None:
             raise self.heartbeat_raises
-        return {"status": "ok"}
+        return self.heartbeat_payload if self.heartbeat_payload is not None else {"status": "ok"}
 
     def heartbeat_once(self) -> dict[str, Any]:
         self.call_log.append(("heartbeat_once", (), {}))
         if self.heartbeat_raises is not None:
             raise self.heartbeat_raises
-        return {"status": "ok"}
+        return self.heartbeat_payload if self.heartbeat_payload is not None else {"status": "ok"}
 
     def list_platforms(self) -> list[dict[str, Any]]:
         raise NotImplementedError

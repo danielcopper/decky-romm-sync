@@ -132,6 +132,37 @@ class TestEnsureDeviceRegisteredFingerprint:
         assert _register_call(fake) is None
 
 
+class TestEnsureDeviceRegisteredVersionProbe:
+    """The pre-registration probe caches SYSTEM.VERSION onto the API adapter, but
+    the value is server-controlled: only a real, non-empty version string is
+    cached; a truthy non-str (e.g. numeric 4.9) is treated as absent (#1275)."""
+
+    @pytest.mark.asyncio
+    async def test_non_string_version_not_cached(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        # No device_id + no cached version → the pre-register version probe runs.
+        fake.heartbeat_payload = {"SYSTEM": {"VERSION": 4.9}}
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is True
+        # The truthy non-str version was NOT cached — the adapter stays version-less.
+        assert fake.get_version() is None
+
+    @pytest.mark.asyncio
+    async def test_string_version_is_cached(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        fake.heartbeat_payload = {"SYSTEM": {"VERSION": "4.9.0"}}
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is True
+        # A real version string is cached as before — existing behavior unchanged.
+        assert fake.get_version() == "4.9.0"
+
+
 class TestEnsureDeviceRegisteredFailurePaths:
     """When register_device fails, the four sync callables must surface
     DEVICE_NOT_REGISTERED instead of proceeding with a missing device_id
