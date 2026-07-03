@@ -400,4 +400,95 @@ describe("sessionManager reload adoption", () => {
 
     expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID, 0);
   });
+
+  it("treats a wrong-version breadcrumb as unusable and re-stamps (a′)", async () => {
+    // A breadcrumb from a future schema (v2) fails isSessionBreadcrumb.
+    seedBreadcrumb({ v: 2, appId: APP_ID, romId: ROM_ID, startMs: 5_000, pausedMs: 9_000 });
+    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+
+    await initSessionManager();
+
+    expect(backend.recordSessionStart).toHaveBeenCalledTimes(1);
+    expect(backend.recordSessionStart).toHaveBeenCalledWith(ROM_ID);
+    // Overwritten with a fresh v1 breadcrumb; the stale pausedMs=9000 is discarded.
+    expect(readCrumb()).toMatchObject({ v: 1, appId: APP_ID, romId: ROM_ID, pausedMs: 0 });
+  });
+
+  it("treats a non-object breadcrumb JSON as unusable and re-stamps (a′)", async () => {
+    // Valid JSON but not an object — isSessionBreadcrumb rejects it.
+    localStorage.setItem(BREADCRUMB_KEY, JSON.stringify(42));
+    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+
+    await initSessionManager();
+
+    expect(backend.recordSessionStart).toHaveBeenCalledTimes(1);
+    expect(readCrumb()).toMatchObject({ v: 1, appId: APP_ID, romId: ROM_ID, pausedMs: 0 });
+  });
+
+  it("survives a rejected recordSessionStart during adoption", async () => {
+    vi.mocked(backend.recordSessionStart).mockRejectedValueOnce(new Error("network down"));
+    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+
+    // (a′) awaits recordSessionStart; its rejection is caught, not surfaced.
+    await expect(initSessionManager()).resolves.toBeUndefined();
+    expect(backend.logError).toHaveBeenCalledWith(expect.stringContaining("record session start on adoption"));
+
+    // The breadcrumb is written before the failing call, and the session is
+    // still adopted — a subsequent stop finalizes the original rom.
+    expect(readCrumb()).toMatchObject({ v: 1, appId: APP_ID, romId: ROM_ID, pausedMs: 0 });
+    const lifetime = captureLifetimeCb();
+    await stopGame(lifetime);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID, 0);
+  });
+
+  it("clears a live breadcrumb when a non-RomM app is in the foreground", async () => {
+    seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000, pausedMs: 0 });
+    vi.stubGlobal("Router", { MainRunningApp: { appid: 999, display_name: "Other" } });
+
+    await initSessionManager();
+
+    // The RomM game is not the foreground app → its session is orphaned, its
+    // breadcrumb dropped, and nothing is adopted or finalized.
+    expect(readCrumb()).toBeNull();
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+    const lifetime = captureLifetimeCb();
+    await stopGame(lifetime);
+    expect(backend.finalizeGameSession).not.toHaveBeenCalled();
+  });
+
+  it("swallows a localStorage failure while clearing an orphaned breadcrumb", async () => {
+    // Live breadcrumb present, nothing running (case b) → clear is attempted,
+    // but removeItem throws. The failure must be contained, not surfaced.
+    vi.stubGlobal("localStorage", {
+      getItem: () => JSON.stringify({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000, pausedMs: 0 }),
+      setItem: vi.fn(),
+      removeItem: () => {
+        throw new Error("storage blocked");
+      },
+      clear: vi.fn(),
+    });
+    vi.stubGlobal("Router", { MainRunningApp: null });
+
+    await expect(initSessionManager()).resolves.toBeUndefined();
+
+    expect(backend.logError).toHaveBeenCalledWith(expect.stringContaining("clear session breadcrumb"));
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+  });
+
+  it("contains an unexpected throw in the adoption path", async () => {
+    // Steam's running-app accessor faulting must not crash init — the lifecycle
+    // chain's .catch logs and lets initialization complete.
+    vi.stubGlobal("Router", {
+      MainRunningApp: {
+        get appid(): number {
+          throw new Error("running-app read failed");
+        },
+        display_name: "Game",
+      },
+    });
+
+    await expect(initSessionManager()).resolves.toBeUndefined();
+
+    expect(backend.logError).toHaveBeenCalledWith(expect.stringContaining("Session adoption error"));
+  });
 });
