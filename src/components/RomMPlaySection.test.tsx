@@ -92,6 +92,9 @@ vi.mock("../utils/playSection", () => ({
     }),
   ),
   resolveSaveSyncLabel: vi.fn(() => "synced label"),
+  // Version label defaults to "" (VERSION row hidden). Tests opt into a
+  // populated label to assert the row renders.
+  formatVersionLabel: vi.fn(() => ""),
   // timeoutMs returns a Promise that never resolves — Promise.race with
   // testConnection always wins. Tests can override per-case to drive the
   // timeout branch.
@@ -291,6 +294,7 @@ describe("RomMPlaySection", () => {
       });
     });
     vi.mocked(playSectionUtils.resolveSaveSyncLabel).mockReturnValue("synced label");
+    vi.mocked(playSectionUtils.formatVersionLabel).mockReturnValue("");
     vi.mocked(playSectionUtils.timeoutMs).mockImplementation(() => new Promise(() => {}));
     // Default: the re-baked launch_options confirm-set succeeds. Tests opt into
     // the unconfirmed (false) branch per case.
@@ -563,6 +567,51 @@ describe("RomMPlaySection", () => {
       expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
         expect.stringContaining("Background metadata fetch error"),
       );
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // C2. Version row (#1295)
+  // ------------------------------------------------------------------
+
+  describe("version row", () => {
+    it("renders the VERSION row when formatVersionLabel returns a non-empty label", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 12,
+        regions: ["USA", "Europe"],
+        languages: ["En", "Fr"],
+        revision: "1",
+        tags: ["Demo"],
+      });
+      vi.mocked(playSectionUtils.formatVersionLabel).mockReturnValue("USA/Europe · En, Fr · Rev 1 · Demo");
+
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      // The formatter is fed the cached payload's version dimensions.
+      expect(vi.mocked(playSectionUtils.formatVersionLabel)).toHaveBeenCalledWith(
+        expect.objectContaining({ regions: ["USA", "Europe"], languages: ["En", "Fr"], revision: "1", tags: ["Demo"] }),
+      );
+      expect(container.textContent).toContain("VERSION");
+      expect(container.textContent).toContain("USA/Europe · En, Fr · Rev 1 · Demo");
+    });
+
+    it("hides the VERSION row when formatVersionLabel returns an empty string", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 13,
+        regions: [],
+        languages: [],
+        revision: "",
+        tags: [],
+      });
+      vi.mocked(playSectionUtils.formatVersionLabel).mockReturnValue("");
+
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      expect(container.textContent).not.toContain("VERSION");
     });
   });
 

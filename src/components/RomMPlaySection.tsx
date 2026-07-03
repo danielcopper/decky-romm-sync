@@ -62,6 +62,7 @@ import {
   applySaveSyncDisplay,
   extractBiosInfo,
   extractCoreInfo,
+  formatVersionLabel,
   resolveSaveSyncLabel,
   timeoutMs,
 } from "../utils/playSection";
@@ -85,6 +86,9 @@ interface InfoState {
   romId: number | null;
   romName: string;
   platformSlug: string;
+  /** Pre-joined RomM version label (regions/languages/revision/tags, ADR-0019);
+   *  "" hides the VERSION row. */
+  versionLabel: string;
   lastPlayed: string;
   playtime: string;
   saveSyncEnabled: boolean;
@@ -145,6 +149,7 @@ async function loadCached(
       romId,
       romName: cached.rom_name || "",
       platformSlug: cached.platform_slug || "",
+      versionLabel: formatVersionLabel(cached),
       saveSyncEnabled: cached.save_sync_enabled ?? false,
       saveSyncStatus,
       saveSyncLabel,
@@ -223,6 +228,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     romId: null,
     romName: "",
     platformSlug: "",
+    versionLabel: "",
     lastPlayed: initialLastPlayed,
     playtime: initialPlaytime,
     saveSyncEnabled: false,
@@ -1059,6 +1065,12 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   // Playtime
   if (info.playtime) {
     infoItems.push(infoItem("playtime", "PLAYTIME", info.playtime));
+  }
+
+  // Version (region/language/revision/tags) — display-only, hidden when the ROM
+  // carries no version metadata (ADR-0019).
+  if (info.versionLabel) {
+    infoItems.push(infoItem("version", "VERSION", info.versionLabel));
   }
 
   // Achievements badge (only when RA data available)

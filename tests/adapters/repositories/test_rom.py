@@ -235,6 +235,117 @@ class TestUpsert:
         assert uow.roms.count() == 1
 
 
+class TestVersionMetadata:
+    """The sibling-group key + version dimensions round-trip through JSON columns
+    and — being server-derived (ADR-0019) — REFRESH on a re-sync (the opposite of
+    the user-pin columns)."""
+
+    def test_round_trips_all_version_fields(self, uow: SqliteUnitOfWork):
+        rom = Rom(
+            rom_id=1,
+            platform_slug="snes",
+            name="Chrono Trigger",
+            fs_name="ct.sfc",
+            shortcut_app_id=1000,
+            last_synced_at="2026-01-01T00:00:00Z",
+            sibling_group_key="igdb:3404:57",
+            regions=("USA", "Europe"),
+            languages=("En", "Fr"),
+            revision="1",
+            tags=("Demo",),
+            is_main_sibling=True,
+        )
+        uow.roms.save(rom)
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded == rom
+        # The JSON columns decode back to tuples, not lists.
+        assert loaded.regions == ("USA", "Europe")
+        assert loaded.languages == ("En", "Fr")
+        assert loaded.tags == ("Demo",)
+        assert loaded.is_main_sibling is True
+
+    def test_defaults_when_absent(self, uow: SqliteUnitOfWork):
+        # A Rom built with no version metadata (the aggregate defaults) reads back
+        # empty tuples / blank revision / False / NULL group key.
+        uow.roms.save(_rom(1))
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.sibling_group_key is None
+        assert loaded.regions == ()
+        assert loaded.languages == ()
+        assert loaded.revision == ""
+        assert loaded.tags == ()
+        assert loaded.is_main_sibling is False
+
+    def test_resync_refreshes_version_metadata(self, uow: SqliteUnitOfWork):
+        # Version metadata rides the sync UPSERT — a re-sync with new server facts
+        # OVERWRITES the prior values (a sibling joining/leaving a group, a region
+        # re-tag). Contrast TestResyncPreservesOverride, which pins user columns.
+        v1 = Rom(
+            rom_id=1,
+            platform_slug="snes",
+            name="Game",
+            fs_name="game.sfc",
+            shortcut_app_id=100,
+            last_synced_at="2026-01-01T00:00:00Z",
+            sibling_group_key="romm:1:57",
+            regions=("Japan",),
+            revision="0",
+            is_main_sibling=False,
+        )
+        uow.roms.save(v1)
+
+        v2 = Rom(
+            rom_id=1,
+            platform_slug="snes",
+            name="Game",
+            fs_name="game.sfc",
+            shortcut_app_id=100,
+            last_synced_at="2026-02-01T00:00:00Z",
+            sibling_group_key="igdb:3404:57",
+            regions=("USA", "Europe"),
+            languages=("En",),
+            revision="1",
+            tags=("Rev A",),
+            is_main_sibling=True,
+        )
+        uow.roms.save(v2)
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.sibling_group_key == "igdb:3404:57"
+        assert loaded.regions == ("USA", "Europe")
+        assert loaded.languages == ("En",)
+        assert loaded.revision == "1"
+        assert loaded.tags == ("Rev A",)
+        assert loaded.is_main_sibling is True
+
+    def test_backfill_null_group_key_becomes_populated_on_resync(self, uow: SqliteUnitOfWork):
+        # A pre-migration row (NULL group key) is backfilled when a later sync
+        # re-saves it with a computed key.
+        uow.roms.save(_rom(1))
+        before = uow.roms.get(1)
+        assert before is not None
+        assert before.sibling_group_key is None
+
+        refreshed = Rom(
+            rom_id=1,
+            platform_slug="snes",
+            name="Game 1",
+            fs_name="game_1.sfc",
+            shortcut_app_id=1000,
+            last_synced_at="2026-01-01T00:00:00Z",
+            sibling_group_key="igdb:99:5",
+        )
+        uow.roms.save(refreshed)
+
+        after = uow.roms.get(1)
+        assert after is not None
+        assert after.sibling_group_key == "igdb:99:5"
+
+
 class TestEmulatorOverride:
     def test_round_trips_via_get(self, uow: SqliteUnitOfWork):
         uow.roms.save(_rom(1))

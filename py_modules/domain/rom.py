@@ -14,7 +14,16 @@ from domain._aggregate import cosmic_aggregate
 
 @cosmic_aggregate
 class Rom:
-    """One ROM as the plugin tracks it locally (identity + shortcut binding)."""
+    """One ROM as the plugin tracks it locally (identity + shortcut binding).
+
+    ``sibling_group_key`` and the version dimensions (``regions`` / ``languages``
+    / ``revision`` / ``tags`` / ``is_main_sibling``) are server-derived facts
+    RomM supplies per ROM — the sibling group this dump belongs to and how it
+    differs from its siblings (region/language/revision variants). They are set
+    at construction from the fetch and refreshed on every sync (they ride the
+    sync UPSERT, unlike the user-pin ``emulator_override`` / ``selected_disc``);
+    no mutation verbs, as no local flow changes them independently of a sync.
+    """
 
     rom_id: int
     platform_slug: str
@@ -28,6 +37,12 @@ class Rom:
     ra_id: int | None = None
     emulator_override: str | None = None
     selected_disc: str | None = None
+    sibling_group_key: str | None = None
+    regions: tuple[str, ...] = ()
+    languages: tuple[str, ...] = ()
+    revision: str = ""
+    tags: tuple[str, ...] = ()
+    is_main_sibling: bool = False
 
     @classmethod
     def synced(
@@ -40,6 +55,12 @@ class Rom:
         shortcut_app_id: int,
         synced_at: str,
         igdb_id: int | None = None,
+        sibling_group_key: str | None = None,
+        regions: tuple[str, ...] = (),
+        languages: tuple[str, ...] = (),
+        revision: str = "",
+        tags: tuple[str, ...] = (),
+        is_main_sibling: bool = False,
     ) -> Rom:
         """Build a Rom synced from RomM at ISO timestamp ``synced_at``."""
         if rom_id <= 0:
@@ -54,6 +75,12 @@ class Rom:
             shortcut_app_id=shortcut_app_id,
             last_synced_at=synced_at,
             igdb_id=igdb_id,
+            sibling_group_key=sibling_group_key,
+            regions=regions,
+            languages=languages,
+            revision=revision,
+            tags=tags,
+            is_main_sibling=is_main_sibling,
         )
 
     def update_cover_path(self, path: str) -> None:

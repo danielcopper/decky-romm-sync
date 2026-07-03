@@ -335,3 +335,71 @@ class TestBuildShortcutsData:
         for item in result:
             for field in required_fields:
                 assert field in item, f"Missing field '{field}' in shortcut data"
+
+
+class TestBuildShortcutsDataVersionMetadata:
+    """build_shortcuts_data derives the sibling-group key + version dimensions (#1295)."""
+
+    def test_carries_group_key_and_version_dimensions(self):
+        roms = [
+            {
+                "id": 1,
+                "name": "Game A",
+                "platform_id": 57,
+                "igdb_id": 3404,
+                "regions": ["USA", "Europe"],
+                "languages": ["En", "Fr"],
+                "revision": "1",
+                "tags": ["Demo"],
+                "rom_user": {"is_main_sibling": True},
+            }
+        ]
+        result = build_shortcuts_data(roms, "/plugin", {}, {})
+        assert result[0]["sibling_group_key"] == "igdb:3404:57"
+        assert result[0]["regions"] == ["USA", "Europe"]
+        assert result[0]["languages"] == ["En", "Fr"]
+        assert result[0]["revision"] == "1"
+        assert result[0]["tags"] == ["Demo"]
+        assert result[0]["is_main_sibling"] is True
+
+    def test_unmatched_rom_gets_fallback_group_key(self):
+        roms = [{"id": 4409, "name": "Solo", "platform_id": 57}]
+        result = build_shortcuts_data(roms, "/plugin", {}, {})
+        assert result[0]["sibling_group_key"] == "romm:4409:57"
+
+    def test_missing_version_fields_default_empty(self):
+        # A ROM with no version metadata at all: empty arrays, blank revision,
+        # is_main_sibling False (rom_user absent → the `or {}` guard).
+        roms = [{"id": 5, "name": "Minimal", "platform_id": 9}]
+        result = build_shortcuts_data(roms, "/plugin", {}, {})
+        assert result[0]["regions"] == []
+        assert result[0]["languages"] == []
+        assert result[0]["revision"] == ""
+        assert result[0]["tags"] == []
+        assert result[0]["is_main_sibling"] is False
+
+    def test_null_rom_user_is_not_main_sibling(self):
+        # Defensive guard: a missing or null rom_user (whatever the server
+        # schema promises) must degrade to False without raising.
+        roms = [{"id": 6, "name": "Untouched", "platform_id": 9, "rom_user": None}]
+        result = build_shortcuts_data(roms, "/plugin", {}, {})
+        assert result[0]["is_main_sibling"] is False
+
+    def test_null_version_arrays_default_empty(self):
+        # RomM can send explicit nulls for the array dimensions.
+        roms = [
+            {
+                "id": 7,
+                "name": "Nulls",
+                "platform_id": 9,
+                "regions": None,
+                "languages": None,
+                "tags": None,
+                "revision": None,
+            }
+        ]
+        result = build_shortcuts_data(roms, "/plugin", {}, {})
+        assert result[0]["regions"] == []
+        assert result[0]["languages"] == []
+        assert result[0]["tags"] == []
+        assert result[0]["revision"] == ""

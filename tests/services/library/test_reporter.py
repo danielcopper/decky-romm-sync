@@ -285,6 +285,56 @@ class TestCommitUnitResults:
         assert rom.sgdb_id == 999
         assert rom.ra_id == 777
 
+    def test_commit_persists_version_metadata_from_pending(self, plugin):
+        """The sibling-group key + version dimensions ride the pending entry onto
+        the upserted ``Rom`` (#1295)."""
+        uow = plugin._uow
+        plugin._sync_service._box.pending_sync[42] = {
+            "name": "Game",
+            "fs_name": "game.z64",
+            "platform_slug": "gb",
+            "cover_path": "",
+            "sibling_group_key": "igdb:3404:57",
+            "regions": ["USA", "Europe"],
+            "languages": ["En"],
+            "revision": "1",
+            "tags": ["Demo"],
+            "is_main_sibling": True,
+        }
+
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [])
+
+        with uow:
+            rom = uow.roms.get(42)
+        assert rom is not None
+        assert rom.sibling_group_key == "igdb:3404:57"
+        assert rom.regions == ("USA", "Europe")
+        assert rom.languages == ("En",)
+        assert rom.revision == "1"
+        assert rom.tags == ("Demo",)
+        assert rom.is_main_sibling is True
+
+    def test_commit_defaults_version_metadata_when_pending_omits_it(self, plugin):
+        """A pending entry with no version fields upserts a Rom carrying the
+        aggregate defaults — never raises on the missing keys."""
+        uow = plugin._uow
+        plugin._sync_service._box.pending_sync[42] = {
+            "name": "Game",
+            "fs_name": "game.z64",
+            "platform_slug": "gb",
+            "cover_path": "",
+        }
+
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [])
+
+        with uow:
+            rom = uow.roms.get(42)
+        assert rom is not None
+        assert rom.sibling_group_key is None
+        assert rom.regions == ()
+        assert rom.revision == ""
+        assert rom.is_main_sibling is False
+
     def test_commit_stamps_cover_path_when_present(self, plugin):
         """A finalized cover path is recorded on the upserted ROM row."""
         uow = plugin._uow

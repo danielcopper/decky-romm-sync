@@ -83,6 +83,13 @@ export interface CachedGameDetail {
   bios_label?: string | null;
   save_sync_display?: SaveSyncDisplay | null;
   stale_fields?: string[];
+  // Version metadata (ADR-0019) — the RomM sibling-group dimensions, rendered
+  // read-only in the play-section "Version" row.
+  regions?: string[];
+  languages?: string[];
+  revision?: string;
+  tags?: string[];
+  is_main_sibling?: boolean;
 }
 
 // get_cached_game_detail wiring lives in utils/cachedGameDetailStore.ts so the

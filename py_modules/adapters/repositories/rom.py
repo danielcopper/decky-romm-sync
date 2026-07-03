@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 from adapters.repositories._base import BaseRepository
@@ -17,7 +18,9 @@ if TYPE_CHECKING:
 # deliberately NOT here — they are per-game deviations, not synced identity:
 # each is read in SELECT but written only via its own set_*() method, never by
 # save(), so a re-sync (which builds a fresh Rom with both = None) cannot wipe a
-# user's pin.
+# user's pin. The version-metadata columns (sibling_group_key + the version
+# dimensions) ARE here — they are server-derived facts that must refresh on
+# every sync (ADR-0019), the opposite of the user pins.
 _SYNC_COLUMNS = (
     "rom_id",
     "platform_slug",
@@ -29,6 +32,12 @@ _SYNC_COLUMNS = (
     "igdb_id",
     "sgdb_id",
     "ra_id",
+    "sibling_group_key",
+    "regions",
+    "languages",
+    "revision",
+    "tags",
+    "is_main_sibling",
 )
 
 # Read set: the synced columns plus the pin-only emulator_override and selected_disc.
@@ -40,6 +49,8 @@ _UPDATE_ASSIGNMENTS = ", ".join(f"{col} = excluded.{col}" for col in _SYNC_COLUM
 
 
 def _row_to_rom(row: sqlite3.Row) -> Rom:
+    # The JSON-array columns are NOT NULL DEFAULT '[]', so json.loads is always
+    # safe; is_main_sibling is a STRICT 0/1 INTEGER mapped back to bool.
     return Rom(
         rom_id=row["rom_id"],
         platform_slug=row["platform_slug"],
@@ -53,6 +64,12 @@ def _row_to_rom(row: sqlite3.Row) -> Rom:
         ra_id=row["ra_id"],
         emulator_override=row["emulator_override"],
         selected_disc=row["selected_disc"],
+        sibling_group_key=row["sibling_group_key"],
+        regions=tuple(json.loads(row["regions"])),
+        languages=tuple(json.loads(row["languages"])),
+        revision=row["revision"],
+        tags=tuple(json.loads(row["tags"])),
+        is_main_sibling=bool(row["is_main_sibling"]),
     )
 
 
@@ -116,6 +133,12 @@ class SqliteRomRepository(BaseRepository):
                 rom.igdb_id,
                 rom.sgdb_id,
                 rom.ra_id,
+                rom.sibling_group_key,
+                json.dumps(list(rom.regions)),
+                json.dumps(list(rom.languages)),
+                rom.revision,
+                json.dumps(list(rom.tags)),
+                int(rom.is_main_sibling),
             ),
         )
 
