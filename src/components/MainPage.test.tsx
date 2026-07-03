@@ -540,13 +540,15 @@ describe("MainPage", () => {
       logSpy.mockRestore();
     });
 
-    it("logs the failure when testConnection rejects on mount", async () => {
+    it("keeps the connection row in 'Checking…' after a single testConnection rejection (retrying, not failed) (#1045)", async () => {
+      // A lone rejection is treated as transient — the probe retries rather than
+      // declaring the backend dead. Before any backoff elapses (only microtasks
+      // flushed) the row must still read "Checking…", never the failure state.
       vi.mocked(backend.testConnection).mockRejectedValue(new Error("net"));
-      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
-      render(<MainPage onNavigate={vi.fn()} />);
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to test connection"));
-      logSpy.mockRestore();
+      expect(container.textContent).toContain("Checking...");
+      expect(container.textContent).not.toContain("Backend error");
     });
 
     it("logs the failure when getSettings rejects on mount", async () => {
@@ -610,7 +612,7 @@ describe("MainPage", () => {
   });
 
   // ===========================================================================
-  // D. ConnectionIndicator — 3 states (covered via top-level rendering)
+  // D. ConnectionIndicator — 4 states (covered via top-level rendering)
   // ===========================================================================
   describe("ConnectionIndicator", () => {
     it("connected=null (testConnection never resolves) renders 'Checking...' + Spinner", async () => {
@@ -639,6 +641,61 @@ describe("MainPage", () => {
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
       expect(container.textContent).toContain("Not connected");
+    });
+  });
+
+  // ===========================================================================
+  // D2. Backend bootstrap failure — the retry-exhausted failure state (#1045)
+  // ===========================================================================
+  describe("backend bootstrap failure (#1045)", () => {
+    it("falls to an explicit backend-failure state when every connection attempt fails (retries exhausted)", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        // The backend never answers (bootstrap aborted) — every test_connection
+        // attempt rejects, across the whole backoff window.
+        vi.mocked(backend.testConnection).mockRejectedValue(new Error("backend down"));
+        const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        // Drive the full retry schedule (2+5+10+15+20s of backoff) to exhaustion.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(60_000);
+        });
+        // The connection row lands on the explicit failure — not an eternal
+        // "Checking…" spinner (the #1045 bug).
+        expect(container.textContent).toContain("Backend error");
+        expect(container.textContent).toContain("Plugin backend failed to start — check Decky logs.");
+        expect(container.textContent).not.toContain("Checking...");
+        // Sync is gated off while the backend is down.
+        const sync = buttonByExactText(container, "Sync Library");
+        expect(sync).not.toBeNull();
+        expect(sync!.disabled).toBe(true);
+        // Non-vacuous catch coverage: the exhaustion branch logs to console.error
+        // (logError is itself a callable and would hang against a dead backend).
+        expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("test_connection unreachable"), expect.anything());
+        errSpy.mockRestore();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("recovers to 'Connected' when a retry succeeds after a slow start (no false backend-failure)", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        // The backend is merely slow: the first two probes reject, the third
+        // resolves. The row must recover, never showing the failure state.
+        vi.mocked(backend.testConnection)
+          .mockRejectedValueOnce(new Error("starting"))
+          .mockRejectedValueOnce(new Error("starting"))
+          .mockResolvedValue({ success: true, message: "" });
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(10_000);
+        });
+        expect(container.textContent).toContain("Connected");
+        expect(container.textContent).not.toContain("Backend error");
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

@@ -2,6 +2,18 @@
 
 Common issues and how to fix them.
 
+## Plugin Backend Won't Start
+
+### Connection shows "Backend error"
+
+**Symptom**: The RomM Sync QAM panel's **Connection** row shows a "Backend error" badge with the note "Plugin backend
+failed to start — check Decky logs", and the Sync buttons are disabled.
+
+**Fix**: The plugin's Python backend aborted during startup — most often a failed data migration after an update — so
+the UI can't reach it. Open the Decky plugin log to find the underlying error, then reload RomM Sync from the Decky
+plugin list. If it still fails after a reload, restart Steam (or the Steam Deck); if the error persists, include the log
+output when you report it.
+
 ## Games Won't Launch
 
 ### BIOS files missing
