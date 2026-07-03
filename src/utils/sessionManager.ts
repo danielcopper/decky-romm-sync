@@ -68,6 +68,67 @@ async function refreshAppIdMap(): Promise<void> {
   }
 }
 
+// Durable attestation of the open session — survives a plugin reload so the
+// re-initialized manager can adopt the still-running game and finalize its
+// stop. A single versioned localStorage row; every access is wrapped so a
+// storage failure degrades to the no-attestation path instead of throwing.
+const SESSION_BREADCRUMB_KEY = "decky-romm-sync:active-session";
+const SESSION_BREADCRUMB_VERSION = 1;
+
+interface SessionBreadcrumb {
+  v: number;
+  appId: number;
+  romId: number;
+  startMs: number;
+  pausedMs: number;
+}
+
+function isSessionBreadcrumb(value: unknown): value is SessionBreadcrumb {
+  if (typeof value !== "object" || value === null) return false;
+  const c = value as Record<string, unknown>;
+  return (
+    c.v === SESSION_BREADCRUMB_VERSION &&
+    typeof c.appId === "number" &&
+    typeof c.romId === "number" &&
+    typeof c.startMs === "number" &&
+    typeof c.pausedMs === "number"
+  );
+}
+
+function readSessionBreadcrumb(): SessionBreadcrumb | null {
+  try {
+    const raw = localStorage.getItem(SESSION_BREADCRUMB_KEY);
+    if (raw === null) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return isSessionBreadcrumb(parsed) ? parsed : null;
+  } catch (e) {
+    logError(`Failed to read session breadcrumb: ${e}`);
+    return null;
+  }
+}
+
+function writeSessionBreadcrumb(crumb: SessionBreadcrumb): void {
+  try {
+    localStorage.setItem(SESSION_BREADCRUMB_KEY, JSON.stringify(crumb));
+  } catch (e) {
+    logError(`Failed to write session breadcrumb: ${e}`);
+  }
+}
+
+function clearSessionBreadcrumb(): void {
+  try {
+    localStorage.removeItem(SESSION_BREADCRUMB_KEY);
+  } catch (e) {
+    logError(`Failed to clear session breadcrumb: ${e}`);
+  }
+}
+
+/** Persist the running suspend accumulator onto the open breadcrumb (no-op if none). */
+function updateSessionBreadcrumbPaused(pausedMs: number): void {
+  const crumb = readSessionBreadcrumb();
+  if (crumb) writeSessionBreadcrumb({ ...crumb, pausedMs });
+}
+
 async function handleGameStart(appId: number): Promise<void> {
   const romId = getRomIdForApp(appId);
   if (!romId) return; // Not a RomM shortcut
@@ -77,6 +138,9 @@ async function handleGameStart(appId: number): Promise<void> {
   sessionStartTime = Date.now();
   suspendedAt = null;
   totalPausedMs = 0;
+
+  // Attest the open session so a reload mid-game can adopt and finalize it.
+  writeSessionBreadcrumb({ v: SESSION_BREADCRUMB_VERSION, appId, romId, startMs: sessionStartTime, pausedMs: 0 });
 
   // Record session start for playtime tracking
   try {
@@ -100,11 +164,13 @@ async function handleGameStop(): Promise<void> {
   }
   const suspendedSeconds = Math.round(totalPausedMs / 1000);
 
-  // Clear active session immediately to avoid double-processing
+  // Clear active session immediately to avoid double-processing. The breadcrumb
+  // goes with it — the stop is observed, so there is nothing left to adopt.
   activeRomId = null;
   sessionStartTime = null;
   suspendedAt = null;
   totalPausedMs = 0;
+  clearSessionBreadcrumb();
 
   try {
     const result = await finalizeGameSession(romId, suspendedSeconds);
@@ -161,6 +227,70 @@ function handleResume(): void {
     totalPausedMs += pauseDuration;
     logInfo(`Device resumed, paused for ${Math.round(pauseDuration / 1000)}s`);
     suspendedAt = null;
+    // Persist the completed suspend cycle so an adopted session keeps it. An
+    // in-flight suspend (still open at reload) is intentionally not persisted.
+    updateSessionBreadcrumbPaused(totalPausedMs);
+  }
+}
+
+/**
+ * Adopt a play session orphaned by a plugin reload mid-game.
+ *
+ * `destroySessionManager` wipes the in-memory session on unload, so the
+ * game-stop after a reload would otherwise never finalize — the pre-reload
+ * playtime is lost and the post-exit sync never runs. Steam's running-state
+ * (`Router.MainRunningApp`) is the liveness authority; the localStorage
+ * breadcrumb is the attestation of a start we actually observed. Every finalize
+ * fold thus stays anchored to a marker stamped by an observed start.
+ */
+async function adoptOrphanedSession(): Promise<void> {
+  const running = typeof Router === "undefined" ? null : Router.MainRunningApp; // NOSONAR(typescript:S7741) — Router is an undeclared Steam SP global; direct === undefined would throw ReferenceError.
+  const runningRomId = running ? getRomIdForApp(running.appid) : null;
+  const crumb = readSessionBreadcrumb();
+
+  if (running && runningRomId !== null) {
+    const appId = running.appid;
+    if (crumb && crumb.appId === appId && crumb.romId === runningRomId) {
+      // (a) The breadcrumb attests this exact running session. Restore the
+      // in-memory state and leave the durable marker untouched — re-stamping it
+      // would discard the pre-reload playtime the backend already holds.
+      activeRomId = runningRomId;
+      sessionStartTime = crumb.startMs;
+      suspendedAt = null;
+      totalPausedMs = crumb.pausedMs;
+      logInfo(`Adopted running session from breadcrumb: romId=${runningRomId}, appId=${appId}`);
+    } else {
+      // (a′) A game is running but no usable breadcrumb (missing / mismatched /
+      // corrupt). Adopt it and re-stamp the marker to a truthful lower bound
+      // from now, then attest with a fresh breadcrumb so a later reload adopts
+      // via (a) rather than re-stamping again.
+      activeRomId = runningRomId;
+      sessionStartTime = Date.now();
+      suspendedAt = null;
+      totalPausedMs = 0;
+      writeSessionBreadcrumb({
+        v: SESSION_BREADCRUMB_VERSION,
+        appId,
+        romId: runningRomId,
+        startMs: sessionStartTime,
+        pausedMs: 0,
+      });
+      try {
+        await recordSessionStart(runningRomId);
+      } catch (e) {
+        logError(`Failed to record session start on adoption: ${e}`);
+      }
+      logInfo(`Adopted running session without breadcrumb, re-stamped marker: romId=${runningRomId}, appId=${appId}`);
+    }
+    return;
+  }
+
+  // No RomM game is running (nothing running, or a non-RomM app). A breadcrumb
+  // here names a session whose stop we never saw — a truthful finalize is
+  // impossible without an observed end, so drop it rather than fabricate one.
+  if (crumb) {
+    clearSessionBreadcrumb();
+    logInfo(`Session orphaned — playtime not recorded (romId=${crumb.romId})`);
   }
 }
 
@@ -203,6 +333,17 @@ export async function initSessionManager(): Promise<void> {
   } catch (e) {
     console.warn("[romm-sync] Suspend/resume hooks unavailable:", e);
   }
+
+  // Adopt a session orphaned by a plugin reload mid-game. Serialized on the
+  // lifecycle chain so a stop notification arriving during adoption finalizes
+  // after it rather than interleaving with the in-memory state it restores.
+  const adoption = lifecycleChain
+    .then(() => adoptOrphanedSession())
+    .catch((e) => {
+      logError(`Session adoption error: ${e}`);
+    });
+  lifecycleChain = adoption;
+  await adoption;
 
   logInfo("Session manager initialized");
 }

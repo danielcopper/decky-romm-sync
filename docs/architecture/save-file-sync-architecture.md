@@ -1157,7 +1157,10 @@ Triggered automatically when a game stops (if `sync_after_exit` is enabled).
 1. `RegisterForAppLifetimeNotifications` fires with `bRunning: false`.
 2. `sessionManager.handleGameStop` makes a single `finalizeGameSession(romId)` call; the backend
    `SessionLifecycleService.finalize` orchestrates playtime record → post-exit save sync → migration refresh and returns
-   one typed payload (the old `recordSessionEnd` / `postExitSync` frontend callables were collapsed into it).
+   one typed payload (the old `recordSessionEnd` / `postExitSync` frontend callables were collapsed into it). If the
+   plugin was reloaded mid-session, `handleGameStop` still fires for the adopted session — see
+   [Surviving a plugin reload mid-session](#surviving-a-plugin-reload-mid-session) — so the post-exit sync is not
+   skipped.
 3. Backend runs `do_sync_rom_saves`. For most rows the local file's hash will differ from `last_sync_hash` (the user
    just played), so the typical action is `Upload` — matrix row 9 — POSTed as a new version (`overwrite=false`,
    409-backstopped).
@@ -1262,6 +1265,38 @@ Playtime is **additive, not a conflict** — the union of per-device session str
 newest-wins / conflict / `.romm-backup` machinery. The server dedupes on `(user_id, device_id, rom_id, start_time)`, so
 a re-POST of a queued session is idempotent; the outbox dequeues on a `created` or `duplicate` result and stays queued
 only on `error` (ADR-0018).
+
+### Surviving a plugin reload mid-session
+
+`destroySessionManager` wipes the in-memory session on unload, so a plugin reload while a game is running would leave
+the next game-stop with nothing to finalize — the pre-reload playtime is lost and the post-exit sync never runs. Two
+signals let the re-initialized `sessionManager` recover it:
+
+- **Steam running-state (liveness).** `Router.MainRunningApp` is the authority for _whether_ the game is still running
+  at re-init — the durable marker (`last_session_start`) is written by `recordSessionStart` precisely so it survives the
+  reload, but only Steam can attest the session has not already ended.
+- **A localStorage breadcrumb (attestation).** A single versioned row (`decky-romm-sync:active-session` →
+  `{v, appId, romId, startMs, pausedMs}`) is written at start, has its `pausedMs` refreshed on each completed
+  suspend→resume cycle (an in-flight suspend is deliberately **not** persisted), and is removed at stop. It is **not**
+  cleared by `destroySessionManager`, so it outlives the reload. Every localStorage access is wrapped — a storage
+  failure degrades to the no-attestation path, never throws.
+
+At `initSessionManager` the recovery runs on the lifecycle chain (so a racing stop event serializes after it):
+
+- **Game running + breadcrumb matches** → adopt in-memory state from the breadcrumb (`sessionStartTime`,
+  `totalPausedMs`) and leave the durable marker untouched. Re-stamping would discard the pre-reload span the backend
+  already holds.
+- **Game running, no / mismatched / corrupt breadcrumb** → adopt and re-stamp the marker to a truthful lower bound
+  (`recordSessionStart`), then write a fresh breadcrumb so a subsequent reload adopts via the matching case instead of
+  re-stamping again.
+- **Breadcrumb present but nothing (or a non-RomM app) running** → the session ended while the plugin was down; a
+  truthful finalize is impossible without an observed end, so the breadcrumb is dropped and the session is logged as
+  orphaned — never a fabricated end time. A stale breadcrumb left by a reboot resolves the same way at the next init; no
+  expiry timers.
+
+**Attestation invariant:** every finalize fold uses a marker stamped by a start we actually observed (either the
+original `recordSessionStart` or an adoption re-stamp) — the client never invents an end time for a session whose stop
+it did not see.
 
 ### Steam display
 
