@@ -119,11 +119,35 @@ def pending_homes_from_kv(previous: str, hops_raw: str | None) -> list[str]:
     under ``retrodeck_home_path_hops`` (the additional pending homes,
     oldest→newest), or ``None`` when absent (the common single-hop case).
     Returns ``[]`` when nothing is pending.
+
+    A corrupt or unexpectedly-shaped ``_hops`` value degrades to "no hops"
+    (the ``previous`` marker is still honoured) rather than propagating — see
+    :func:`_decode_hops`.
     """
     if not previous:
         return []
-    hops = json.loads(hops_raw) if hops_raw else []
-    return [previous, *hops]
+    return [previous, *_decode_hops(hops_raw)]
+
+
+def _decode_hops(hops_raw: str | None) -> list[str]:
+    """Decode the ``_hops`` JSON array defensively into a list of homes.
+
+    This runs on every plugin startup (the detect path and the install prune),
+    so a hand-edited or truncated kv value must never crash the load. Returns
+    ``[]`` on any of: absent value, JSON decode error, a decoded value that is
+    not a list, or a list carrying a non-string / empty-string entry. In
+    particular a bare JSON string (``'"str"'``) decodes to a str and is
+    rejected here rather than being spread into single characters upstream.
+    """
+    if not hops_raw:
+        return []
+    try:
+        value = json.loads(hops_raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(value, list) or not all(isinstance(home, str) and home for home in value):
+        return []
+    return value
 
 
 def match_pending_base(path: str, pending_homes: list[str]) -> str | None:

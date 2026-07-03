@@ -160,6 +160,26 @@ class TestPendingHomesFromKv:
     def test_empty_hops_array(self):
         assert pending_homes_from_kv(A, "[]") == [A]
 
+    def test_corrupt_json_degrades_to_previous_without_raising(self):
+        """Truncated / invalid JSON is ignored — the previous marker is kept."""
+        assert pending_homes_from_kv(A, "{bad") == [A]
+
+    def test_numeric_hops_degrades_to_previous(self):
+        assert pending_homes_from_kv(A, "123") == [A]
+
+    def test_null_hops_degrades_to_previous(self):
+        assert pending_homes_from_kv(A, "null") == [A]
+
+    def test_quoted_string_hops_is_not_spread_into_characters(self):
+        """A bare JSON string must NOT become one hop per character — degrade to previous."""
+        assert pending_homes_from_kv(A, '"/rogue"') == [A]
+
+    def test_list_with_non_string_entry_degrades_to_previous(self):
+        assert pending_homes_from_kv(A, json.dumps([B, 1])) == [A]
+
+    def test_list_with_empty_string_entry_degrades_to_previous(self):
+        assert pending_homes_from_kv(A, json.dumps([B, ""])) == [A]
+
 
 # --- Hypothesis safety property ------------------------------------------------
 

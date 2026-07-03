@@ -33,6 +33,7 @@ export interface MigrationResult {
   roms_moved?: number;
   bios_moved?: number;
   saves_moved?: number;
+  missing_count?: number;
   errors?: string[];
 }
 

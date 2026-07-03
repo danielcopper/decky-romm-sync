@@ -22,7 +22,9 @@ files from whichever home each one actually lives under and brings them all to t
 - **The banner always reads "From: A → To: C"** — it names the _oldest_ pending home and your _current_ one, so you can
   see the full span of the move at a glance.
 - **Reverting is handled.** If you move straight back to the home you just came from (A → B → A), the plugin recognizes
-  it, drops the pending migration, and the banners disappear — there is nothing to migrate.
+  it, drops the pending migration, and the banners disappear — there is nothing to migrate. Note that reverting only
+  clears the pending migration; any files you created under the home you visited (for example, saves written while
+  playing under B) are not automatically pulled back and stay where they were written.
 - **Missing files are reported, not hidden.** If a file the plugin tracked can no longer be found at any of the homes it
   knows about (for example, you deleted it manually), the migration completes and its result tells you how many files
   were missing rather than silently declaring success.
