@@ -118,13 +118,18 @@ class RomRemovalService:
 
         return {"success": True, "message": "ROM removed"}
 
-    def _uninstall_all_roms_io(self) -> tuple[int, list[dict[str, str]]]:
+    def _uninstall_all_roms_io(self) -> tuple[int, list[dict[str, str]], list[int]]:
         """Sync helper for uninstall_all_roms — bulk file deletion (outside UoW) then row deletes in a write UoW.
 
         Reads every install record in a short read UoW, deletes files outside
         any transaction (collecting per-ROM errors), then drops the install
         rows for the ROMs whose files were deleted in one write UoW. Per
         ADR-0007 the ``roms`` rows, playtime, saves, and metadata survive.
+
+        Also returns the bound ``shortcut_app_id`` of each ROM whose files were
+        deleted (unbound rows contribute none), so the frontend can reset those
+        kept shortcuts' now-stale ``launch_options`` to the uninstalled
+        placeholder (#1146).
         """
         with self._uow_factory() as uow:
             installs = list(uow.rom_installs.iter_all())
@@ -141,25 +146,33 @@ class RomRemovalService:
                 errors.append({"rom_id": str(install.rom_id), "error": str(e)})
                 self._logger.error(f"Failed to delete ROM {install.rom_id}: {e}")
 
+        app_ids: list[int] = []
         with self._uow_factory() as uow:
             for rom_id in successfully_deleted:
                 uow.rom_installs.delete(rom_id)
-        return count, errors
+                rom = uow.roms.get(rom_id)
+                if rom is not None and rom.shortcut_app_id is not None:
+                    app_ids.append(rom.shortcut_app_id)
+        return count, errors, app_ids
 
     async def uninstall_all_roms(self) -> dict[str, Any]:
         """Remove all installed ROMs: delete files and drop their install records.
 
         Returns ``success`` (True only when every per-ROM deletion
         succeeded), ``removed_count`` (number of ROMs whose files were
-        deleted), and ``errors`` (one ``{"rom_id", "error"}`` entry per
-        failed deletion). Install records for partially-failed bulk runs
+        deleted), ``errors`` (one ``{"rom_id", "error"}`` entry per
+        failed deletion), and ``app_ids`` (the bound Steam ``shortcut_app_id``
+        of each ROM whose files were deleted) so the frontend can reset those
+        kept shortcuts' now-stale ``launch_options`` to the uninstalled
+        placeholder (#1146). Install records for partially-failed bulk runs
         are left intact for the failing entries so the user can retry.
         """
-        count, errors = await self._loop.run_in_executor(None, self._uninstall_all_roms_io)
+        count, errors, app_ids = await self._loop.run_in_executor(None, self._uninstall_all_roms_io)
         if self._download_queue_cleanup is not None:
             self._download_queue_cleanup.clear()
         return {
             "success": len(errors) == 0,
             "removed_count": count,
             "errors": errors,
+            "app_ids": app_ids,
         }

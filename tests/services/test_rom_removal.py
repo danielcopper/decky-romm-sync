@@ -63,14 +63,18 @@ async def _sync_loop(service):
     service._loop = asyncio.get_event_loop()
 
 
-def _make_rom(rom_id: int, *, platform_slug: str = "n64") -> Rom:
-    """Build the FK-parent ``roms`` row so a child ``rom_installs`` write commits."""
+def _make_rom(rom_id: int, *, platform_slug: str = "n64", bound: bool = True) -> Rom:
+    """Build the FK-parent ``roms`` row so a child ``rom_installs`` write commits.
+
+    Bound rows carry ``shortcut_app_id = 1000 + rom_id`` (a live Steam
+    shortcut); ``bound=False`` leaves it ``None`` (no shortcut to reset).
+    """
     return Rom(
         rom_id=rom_id,
         platform_slug=platform_slug,
         name=f"Game {rom_id}",
         fs_name=f"game_{rom_id}.z64",
-        shortcut_app_id=1000 + rom_id,
+        shortcut_app_id=(1000 + rom_id) if bound else None,
         last_synced_at="2025-01-01T00:00:00",
     )
 
@@ -461,6 +465,74 @@ class TestUninstallAllRoms:
         assert result["success"] is True
         assert result["removed_count"] == 0
         assert result["errors"] == []
+
+
+class TestUninstallAllRomsAppIds:
+    """The ``app_ids`` field the frontend uses to reset kept shortcuts' launch_options (#1146)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_bound_app_ids_for_deleted_roms(self, service, uow, rom_files):
+        """Happy path: each deleted ROM's bound ``shortcut_app_id`` is returned so the frontend can reset it."""
+        file_a = f"{_ROMS_BASE}/n64/game_a.z64"
+        file_b = f"{_ROMS_BASE}/n64/game_b.z64"
+        rom_files.files[file_a] = b"\x00" * 100
+        rom_files.files[file_b] = b"\x00" * 100
+        with uow:
+            uow.roms.save(_make_rom(1))
+            uow.roms.save(_make_rom(2))
+            uow.rom_installs.save(_make_install(1, file_path=file_a))
+            uow.rom_installs.save(_make_install(2, file_path=file_b))
+
+        result = await service.uninstall_all_roms()
+
+        assert result["success"] is True
+        assert sorted(result["app_ids"]) == [1001, 1002]
+
+    @pytest.mark.asyncio
+    async def test_omits_app_id_for_unbound_rom(self, service, uow, rom_files):
+        """Edge: a deleted ROM with no bound shortcut (``shortcut_app_id`` is None) contributes no app_id."""
+        file_a = f"{_ROMS_BASE}/n64/game_a.z64"
+        file_b = f"{_ROMS_BASE}/n64/game_b.z64"
+        rom_files.files[file_a] = b"\x00" * 100
+        rom_files.files[file_b] = b"\x00" * 100
+        with uow:
+            uow.roms.save(_make_rom(1))  # bound → 1001
+            uow.roms.save(_make_rom(2, bound=False))  # unbound → no app_id
+            uow.rom_installs.save(_make_install(1, file_path=file_a))
+            uow.rom_installs.save(_make_install(2, file_path=file_b))
+
+        result = await service.uninstall_all_roms()
+
+        assert result["success"] is True
+        assert result["app_ids"] == [1001]
+
+    @pytest.mark.asyncio
+    async def test_app_ids_only_for_successfully_deleted(self, service, uow, rom_files):
+        """Bad path: a ROM whose file deletion raised contributes no app_id — only deleted ones are reset."""
+        file_a = f"{_ROMS_BASE}/n64/game_a.z64"
+        file_b = f"{_ROMS_BASE}/n64/game_b.z64"
+        file_c = f"{_ROMS_BASE}/n64/game_c.z64"
+        for p in (file_a, file_b, file_c):
+            rom_files.files[p] = b"\x00" * 100
+        rom_files.remove_file_failures.add(file_b)
+        with uow:
+            for rid, fp in ((1, file_a), (2, file_b), (3, file_c)):
+                uow.roms.save(_make_rom(rid))
+                uow.rom_installs.save(_make_install(rid, file_path=fp))
+
+        result = await service.uninstall_all_roms()
+
+        assert result["success"] is False
+        # ROM 2's deletion raised → its app_id (1002) is absent; the deleted 1 and 3 are present.
+        assert sorted(result["app_ids"]) == [1001, 1003]
+
+    @pytest.mark.asyncio
+    async def test_empty_state_returns_empty_app_ids(self, service, uow):
+        """Edge: no installed ROMs → ``app_ids`` is empty."""
+        _ = uow
+        result = await service.uninstall_all_roms()
+
+        assert result["app_ids"] == []
 
 
 class TestDownloadQueueCleanup:

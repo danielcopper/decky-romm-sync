@@ -6,18 +6,21 @@
 // over keeping one with zero expects.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { render, fireEvent, act, waitFor } from "@testing-library/react";
 import { createElement, type ReactElement } from "react";
 import { DangerZone } from "./DangerZone";
 import * as backend from "../api/backend";
 import { showModal } from "@decky/ui";
-import { removeShortcut } from "../utils/steamShortcuts";
+import { removeShortcut, setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { clearPlatformCollection, clearAllRomMCollections } from "../utils/collections";
 import { formatUninstallStatus } from "../utils/formatters";
 import { stubCollectionStore, stubAppStore } from "../test-utils/steamStubs";
 
 vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
-vi.mock("../utils/steamShortcuts", () => ({ removeShortcut: vi.fn() }));
+// setLaunchOptionsConfirmed is exercised through the real batchConfirmLaunchOptions
+// (launchOptionsReconcile stays unmocked) — mock the leaf so the bulk-uninstall
+// launch-options reset (#1146) is asserted without touching SteamClient.
+vi.mock("../utils/steamShortcuts", () => ({ removeShortcut: vi.fn(), setLaunchOptionsConfirmed: vi.fn() }));
 vi.mock("../utils/collections", () => ({
   clearPlatformCollection: vi.fn(),
   clearAllRomMCollections: vi.fn(),
@@ -87,7 +90,9 @@ describe("DangerZone", () => {
       success: true,
       removed_count: 0,
       errors: [],
+      app_ids: [],
     });
+    vi.mocked(setLaunchOptionsConfirmed).mockResolvedValue(true);
     vi.mocked(backend.deletePlatformSaves).mockResolvedValue({
       success: true,
       deleted_count: 0,
@@ -691,6 +696,7 @@ describe("DangerZone", () => {
         success: true,
         removed_count: 7,
         errors: [],
+        app_ids: [],
       });
       const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
@@ -738,6 +744,7 @@ describe("DangerZone", () => {
           { rom_id: "1", error: "x" },
           { rom_id: "2", error: "y" },
         ],
+        app_ids: [],
       });
       const { getByText } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
@@ -748,6 +755,69 @@ describe("DangerZone", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(formatUninstallStatus)).toHaveBeenCalledWith(4, 2);
+    });
+  });
+
+  describe("ShortcutRemovalSection — bulk uninstall resets kept shortcut launch_options (#1146)", () => {
+    // Two clicks: first arms the confirm, second fires uninstallAllRoms + the reset.
+    async function confirmUninstall(getByText: (t: string) => HTMLElement): Promise<void> {
+      fireEvent.click(getByText("Uninstall All Installed ROMs"));
+      await act(async () => {
+        fireEvent.click(getByText("Confirm: delete all ROM files?"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    }
+
+    it("resets each kept shortcut's launch command to the '' placeholder for every returned app_id", async () => {
+      vi.mocked(backend.uninstallAllRoms).mockResolvedValue({
+        success: true,
+        removed_count: 2,
+        errors: [],
+        app_ids: [100, 200],
+      });
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+
+      await confirmUninstall(getByText);
+
+      // Every kept shortcut is reset to "" so a raced-past not_installed can't
+      // exec a stale command into the now-deleted ROM path.
+      await waitFor(() => {
+        expect(vi.mocked(setLaunchOptionsConfirmed)).toHaveBeenCalledWith(100, "");
+        expect(vi.mocked(setLaunchOptionsConfirmed)).toHaveBeenCalledWith(200, "");
+      });
+      expect(vi.mocked(setLaunchOptionsConfirmed)).toHaveBeenCalledTimes(2);
+      // The final status is surfaced only after the reset completes (it is awaited).
+      expect(container.textContent).toContain("Removed 2, 0 errors");
+    });
+
+    it("resets no launch_options when no kept shortcut is bound (empty app_ids)", async () => {
+      vi.mocked(backend.uninstallAllRoms).mockResolvedValue({
+        success: true,
+        removed_count: 1,
+        errors: [],
+        app_ids: [],
+      });
+      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+
+      await confirmUninstall(getByText);
+
+      expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
+    });
+
+    it("does not reset launch_options when the bulk uninstall call rejects", async () => {
+      vi.mocked(backend.uninstallAllRoms).mockRejectedValue(new Error("io"));
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+
+      await confirmUninstall(getByText);
+
+      // The reset lives after the awaited uninstall inside the try — a rejection
+      // short-circuits to the catch, leaving every shortcut untouched.
+      expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("Failed to uninstall ROMs");
     });
   });
 

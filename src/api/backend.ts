@@ -222,7 +222,7 @@ export const reconcileShortcuts = callable<
 >("reconcile_shortcuts");
 export const uninstallAllRoms = callable<
   [],
-  { success: boolean; removed_count: number; errors: { rom_id: string; error: string }[] }
+  { success: boolean; removed_count: number; errors: { rom_id: string; error: string }[]; app_ids: number[] }
 >("uninstall_all_roms");
 export const saveSgdbApiKey = callable<[string], { success: boolean; message: string }>("save_sgdb_api_key");
 export const verifySgdbApiKey = callable<[string], { success: boolean; message: string }>("verify_sgdb_api_key");
