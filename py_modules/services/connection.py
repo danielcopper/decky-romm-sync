@@ -345,13 +345,17 @@ class ConnectionService:
     def _probe_version(self) -> str | None:
         """Heartbeat the server, cache the detected version, and return it.
 
-        Runs on the executor thread. A missing/malformed ``SYSTEM.VERSION``
-        yields ``None`` (and clears the cached version).
+        Runs on the executor thread. ``SYSTEM.VERSION`` is server-controlled and
+        untrusted: a missing, non-string, or otherwise malformed value yields
+        ``None`` (and clears the cached version), so the version gate downstream
+        only ever sees a real version string or ``None``.
         """
         heartbeat = self._romm_api.heartbeat()
         version: str | None = None
         with contextlib.suppress(AttributeError, TypeError):
-            version = heartbeat.get("SYSTEM", {}).get("VERSION")
+            raw = heartbeat.get("SYSTEM", {}).get("VERSION")
+            if isinstance(raw, str):
+                version = raw
         self._romm_api.set_version(version)
         if version:
             self._logger.info(f"RomM server version: {version}")

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+import pytest
+
 from domain.version import meets_min_version
 
 MIN = (4, 8, 1)
@@ -45,6 +49,12 @@ class TestMeetsMinVersion:
 
     def test_none_returns_false(self):
         assert meets_min_version(None, MIN) is False
+
+    @pytest.mark.parametrize("bad_value", [4.9, 5, True, [4, 9, 0], {"version": "4.9.0"}])
+    def test_non_string_input_returns_false(self, bad_value: Any):
+        # SYSTEM.VERSION is server-controlled: a truthy non-str (e.g. numeric 4.9)
+        # must be rejected by the isinstance guard, never raise TypeError.
+        assert meets_min_version(bad_value, MIN) is False
 
     def test_development_returns_false(self):
         assert meets_min_version("development", MIN) is False

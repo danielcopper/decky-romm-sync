@@ -233,6 +233,22 @@ class TestTestConnectionEdgeCases:
         assert result["success"] is True
         romm_api.set_version.assert_called_once_with(None)
 
+    def test_heartbeat_with_non_string_version_normalized_to_none(self, event_loop, romm_api, logger):
+        """A numeric (non-string) SYSTEM.VERSION is normalized to None at the boundary.
+
+        The value is server-controlled: a malformed server sending numeric ``4.9``
+        must not reach the version gate as a non-str. It is coerced to None
+        (treated as absent) → gate bypassed → success, mirroring the
+        SYSTEM-not-a-dict case, so downstream never sees a non-str.
+        """
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
+        romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": 4.9}}
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.test_connection())
+        assert result["success"] is True
+        assert "romm_version" not in result
+        romm_api.set_version.assert_called_once_with(None)
+
     def test_min_required_version_injected(self, event_loop, romm_api, logger):
         """Service uses the injected minimum, not a hard-coded tuple."""
         settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}

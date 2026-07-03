@@ -41,9 +41,12 @@ def meets_min_version(version_str: str | None, minimum: tuple[int, ...]) -> bool
     the result is ``False`` regardless of suffix.
 
     Returns ``False`` for any input that cannot be parsed (empty string, non-numeric
-    parts, unsupported pre-release tags, ``None``). Non-numeric sentinel strings like
-    ``"development"`` also return ``False`` — callers that want to bypass the check
-    for development builds must test for them before invoking this function.
+    parts, unsupported pre-release tags, ``None``, or any non-``str`` type). The input
+    is server-controlled, so a numeric or structured value is rejected by the
+    ``isinstance`` guard in :func:`_parse_version` rather than raising. Non-numeric
+    sentinel strings like ``"development"`` also return ``False`` — callers that want
+    to bypass the check for development builds must test for them before invoking this
+    function.
     """
     parsed = _parse_version(version_str)
     if parsed is None:
