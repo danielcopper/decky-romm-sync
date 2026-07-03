@@ -11,7 +11,9 @@ from domain.rom_files import (
     es_de_collapse_rename,
     is_multi_file_download,
     needs_m3u,
+    resolve_extract_dir_name,
     resolve_local_file_name,
+    synthetic_rom_name,
 )
 
 
@@ -390,3 +392,45 @@ class TestResolveLocalFileName:
         name, inconsistent = resolve_local_file_name(rom_detail)
         assert name == "parent"
         assert inconsistent is True
+
+
+class TestSyntheticRomName:
+    def test_uses_id(self):
+        assert synthetic_rom_name({"id": 4778}) == "rom_4778"
+
+    def test_missing_id_uses_unknown(self):
+        assert synthetic_rom_name({}) == "rom_unknown"
+
+
+class TestResolveExtractDirName:
+    def test_prefers_fs_name_no_ext(self):
+        rom_detail = {"fs_name_no_ext": "Metal Gear Solid 4", "fs_name": "Metal Gear Solid 4.zip"}
+        assert resolve_extract_dir_name(rom_detail) == "Metal Gear Solid 4"
+
+    def test_never_uses_files_zero(self):
+        """The MGS4 regression: a nested-single folder game's files[0] is an
+        arbitrary inner asset — the dir name must come from the ROM identity."""
+        rom_detail = {
+            "fs_name_no_ext": "Metal Gear Solid 4",
+            "fs_name": "Metal Gear Solid 4",
+            "has_nested_single_file": True,
+            "files": [
+                {"file_name": "AttackoftheDwarfGekko.dbm"},
+                {"file_name": "PS3_GAME/USRDIR/EBOOT.BIN"},
+            ],
+        }
+        result = resolve_extract_dir_name(rom_detail)
+        assert result == "Metal Gear Solid 4"
+        assert result != "AttackoftheDwarfGekko"
+
+    def test_falls_back_to_splitext_fs_name(self):
+        assert resolve_extract_dir_name({"fs_name": "FF7.zip"}) == "FF7"
+
+    def test_empty_fs_name_no_ext_falls_back(self):
+        assert resolve_extract_dir_name({"fs_name_no_ext": "", "fs_name": "FF7.zip"}) == "FF7"
+
+    def test_missing_fs_name_uses_id_fallback(self):
+        assert resolve_extract_dir_name({"id": 4778}) == "rom_4778"
+
+    def test_missing_fs_name_and_id_uses_unknown_fallback(self):
+        assert resolve_extract_dir_name({}) == "rom_unknown"

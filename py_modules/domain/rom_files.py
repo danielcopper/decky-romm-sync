@@ -193,6 +193,18 @@ def es_de_collapse_rename(rom_dir: str, launch_file: str) -> tuple[str, str] | N
     return (new_rom_dir, new_launch_file)
 
 
+def synthetic_rom_name(rom_detail: dict[str, Any]) -> str:
+    """Last-resort identity name for a ROM whose ``fs_name`` is missing or unusable.
+
+    ``rom_<id>`` (or ``rom_unknown`` when ``id`` is also absent). Shared by the
+    local-filename and extract-dir resolvers as the fallback so a ROM without a
+    usable server-supplied name still lands under a single, stable identity — and
+    used again by the download service as the substitute when a server-supplied
+    name coerces to a degenerate path component.
+    """
+    return f"rom_{rom_detail.get('id', 'unknown')}"
+
+
 def resolve_local_file_name(rom_detail: dict[str, Any]) -> tuple[str, bool]:
     """Resolve the on-disk filename for a ROM.
 
@@ -211,10 +223,33 @@ def resolve_local_file_name(rom_detail: dict[str, Any]) -> tuple[str, bool]:
         inconsistent state the resolved name still falls back to
         ``fs_name``.
     """
-    fs_name = rom_detail.get("fs_name", f"rom_{rom_detail.get('id', 'unknown')}")
+    fs_name = rom_detail.get("fs_name", synthetic_rom_name(rom_detail))
     if not rom_detail.get("has_nested_single_file"):
         return (fs_name, False)
     files = rom_detail.get("files") or []
     if not files:
         return (fs_name, True)
     return (files[0].get("file_name") or fs_name, False)
+
+
+def resolve_extract_dir_name(rom_detail: dict[str, Any]) -> str:
+    """Resolve the directory name for an extracted multi-file ROM.
+
+    The extract directory must carry the ROM's own identity, because
+    everything downstream inherits it — the launch ``file_path``, the
+    ``rom_dir`` install record, and any folder-boot launch bake. RomM reports
+    the extensionless ROM name as ``fs_name_no_ext``; when that is absent the
+    extension is stripped from ``fs_name``, and when ``fs_name`` is also
+    missing the synthetic ``rom_<id>`` (or ``rom_unknown``) mirrors
+    ``resolve_local_file_name``.
+
+    Deliberately never reads ``files[0]``: for a ``has_nested_single_file``
+    ROM that RomM serves as a ZIP (a folder game such as a PS3 title),
+    ``files[0]`` is an arbitrary inner asset, so naming the directory after it
+    would misname the whole install.
+    """
+    fs_name_no_ext = rom_detail.get("fs_name_no_ext")
+    if fs_name_no_ext:
+        return fs_name_no_ext
+    fs_name = rom_detail.get("fs_name", synthetic_rom_name(rom_detail))
+    return os.path.splitext(fs_name)[0]

@@ -22,13 +22,15 @@ from domain.rom_files import (
     es_de_collapse_rename,
     is_multi_file_download,
     needs_m3u,
+    resolve_extract_dir_name,
     resolve_local_file_name,
+    synthetic_rom_name,
 )
 from domain.rom_install import RomInstall
 from domain.shortcut_data import EmulatorInvocation, build_launch_options, resolve_emulator_invocation
 from lib.errors import error_response
 from lib.list_result import ErrorCode
-from lib.path_safety import PathTraversalError, safe_join
+from lib.path_safety import PathTraversalError, coerce_safe_component, safe_join
 
 if TYPE_CHECKING:
     import logging
@@ -283,9 +285,12 @@ class DownloadService:
                 self._logger.warning(
                     f"has_nested_single_file=true but files list is empty; falling back to fs_name='{file_name}'"
                 )
-            # Fix 1: Sanitize fs_name to prevent path traversal
-            safe_name = os.path.basename(file_name)
-            if safe_name != file_name:
+            # Coerce the server-supplied name to a single safe component: strip
+            # any directory portion and reject a degenerate result (``..`` would
+            # escape the platform dir, ``.``/``""`` would resolve to it) — falling
+            # back to the synthetic rom_<id> identity.
+            safe_name, name_changed = coerce_safe_component(file_name, synthetic_rom_name(rom_detail))
+            if name_changed:
                 self._logger.warning(f"Sanitized fs_name from '{file_name}' to '{safe_name}'")
                 file_name = safe_name
             file_size = rom_detail.get("fs_size_bytes", 0)
@@ -405,15 +410,36 @@ class DownloadService:
             uow.rom_installs.save(install)
         return file_path, None
 
-    def _post_download_multi_io(self, rom_id, rom_detail, target_path, file_name, system):
+    def _resolve_safe_extract_dir_name(self, rom_detail: dict[str, Any]) -> str:
+        """Resolve the sanitized base name for a multi-file ROM's extract dir.
+
+        Names the directory after the ROM's identity via
+        ``resolve_extract_dir_name`` (never ``files[0]``), then coerces the
+        server-supplied value to a single safe path component
+        (``coerce_safe_component``): a directory portion (``../evil``, an
+        absolute path) is stripped to its basename, AND a degenerate result
+        (``..``/``.``/empty/whitespace — which would resolve to the roms root
+        or the platform dir and turn a later ``remove_tree`` into a
+        library-wide delete) falls back to the synthetic ``rom_<id>`` identity.
+        Mirrors the ``file_name`` guard in ``_begin_download``.
+        """
+        raw = resolve_extract_dir_name(rom_detail)
+        safe, changed = coerce_safe_component(raw, synthetic_rom_name(rom_detail))
+        if changed:
+            self._logger.warning(f"Sanitized extract dir name from '{raw}' to '{safe}'")
+        return safe
+
+    def _post_download_multi_io(self, rom_id, rom_detail, target_path, file_name, system, extract_dir_name):
         """Sync helper for _do_download multi-file — extraction + renames in executor.
 
-        Returns ``(launch_file, error)``. ``error`` is a string when the RomM
-        data fails the ``RomInstall`` invariant — the extracted directory is
-        removed and nothing is persisted — otherwise ``None``.
+        *extract_dir_name* is the ROM-identity-derived, sanitized base name for
+        the extract directory (``_resolve_safe_extract_dir_name``) — never a
+        name derived from ``files[0]``. Returns ``(launch_file, error)``.
+        ``error`` is a string when the RomM data fails the ``RomInstall``
+        invariant — the extracted directory is removed and nothing is
+        persisted — otherwise ``None``.
         """
-        rom_dir_name = os.path.splitext(file_name)[0]
-        extract_dir = os.path.join(os.path.dirname(target_path), rom_dir_name)
+        extract_dir = os.path.join(os.path.dirname(target_path), extract_dir_name)
         self._download_file_store.make_dirs(extract_dir)
         roms_base = self._retrodeck_paths.roms_path()
         tmp_zip = target_path + _ZIP_TMP_EXT
@@ -792,6 +818,12 @@ class DownloadService:
         rom_name = rom_detail.get("name", file_name)
         platform_name = rom_detail.get("platform_name", rom_detail.get("platform_slug", ""))
         has_multiple = is_multi_file_download(rom_detail)
+        # Name the extract dir from the ROM's identity, not files[0] (which may be
+        # an arbitrary inner asset for a nested-single folder game). Computed once
+        # here and threaded to both the extraction and the cleanup so the dir a
+        # failure tears down matches the dir extraction created. Only multi-file
+        # ROMs own a dedicated dir, so single-file skips the derivation.
+        extract_dir_name = self._resolve_safe_extract_dir_name(rom_detail) if has_multiple else ""
         progress_callback = self._make_progress_callback(rom_id, rom_name, platform_name, file_name, control)
         on_meta = self._make_on_meta(rom_id, rom_name, platform_name, file_name)
         # Tracks the resolved launch path once extraction returns it, so a
@@ -846,7 +878,14 @@ class DownloadService:
                         ),
                     )
                     post_io_future = self._loop.run_in_executor(
-                        None, self._post_download_multi_io, rom_id, rom_detail, target_path, file_name, system
+                        None,
+                        self._post_download_multi_io,
+                        rom_id,
+                        rom_detail,
+                        target_path,
+                        file_name,
+                        system,
+                        extract_dir_name,
                     )
                     # Shield the commit await: a cancel here must propagate to this
                     # coroutine WITHOUT cancelling the underlying future, so
@@ -921,7 +960,7 @@ class DownloadService:
             else:
                 entry = self._download_queue[rom_id]
                 entry["status"] = "cancelled"
-                self._cleanup_partial_download(target_path, has_multiple, file_name, final_path)
+                self._cleanup_partial_download(target_path, has_multiple, extract_dir_name, final_path)
                 # #1017: emit a terminal frame so the frontend resets the button
                 # out of its downloading state (the global cancel path was silent).
                 await self._emit(
@@ -944,7 +983,7 @@ class DownloadService:
         except Exception as e:
             self._download_queue[rom_id]["status"] = "failed"
             self._download_queue[rom_id]["error"] = str(e)
-            self._cleanup_partial_download(target_path, has_multiple, file_name, final_path)
+            self._cleanup_partial_download(target_path, has_multiple, extract_dir_name, final_path)
             self._logger.error(f"Download failed for {rom_name}: {e}")
             await self._emit(
                 "download_failed",
@@ -1013,7 +1052,7 @@ class DownloadService:
         result = detect_launch_file(all_files, m3u_supported)
         return result if result is not None else extract_dir
 
-    def _cleanup_partial_download(self, target_path, has_multiple, file_name, final_path=None):
+    def _cleanup_partial_download(self, target_path, has_multiple, extract_dir_name, final_path=None):
         """Clean up partial download files. Each step is independent so one failure doesn't block others.
 
         Only ever called for a download that did NOT commit an install (the
@@ -1034,6 +1073,11 @@ class DownloadService:
         ``None`` until extraction returns it) lets cleanup tear down whichever
         of the two dir names exists — the staging name *and* the renamed dir
         (``os.path.dirname(final_path)``) — so no failure path orphans a dir.
+
+        *extract_dir_name* is the same ROM-identity-derived base name extraction
+        created the staging dir under (``_resolve_safe_extract_dir_name``), so
+        cleanup targets exactly that dir rather than re-deriving it from a stale
+        source (unused for single-file ROMs, which own no dir).
         """
         paths_to_remove = [
             target_path + _ZIP_TMP_EXT,
@@ -1045,7 +1089,7 @@ class DownloadService:
             except Exception as e:
                 self._logger.warning(f"Cleanup failed for {path}: {e}")
         if has_multiple:
-            staging_dir = os.path.join(os.path.dirname(target_path), os.path.splitext(file_name)[0])
+            staging_dir = os.path.join(os.path.dirname(target_path), extract_dir_name)
             dirs_to_remove = {staging_dir}
             if final_path:
                 dirs_to_remove.add(os.path.dirname(final_path))

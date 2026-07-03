@@ -1343,6 +1343,153 @@ class TestDoDownloadMultiFile:
         assert plugin._download_service._download_queue[99]["status"] == "failed"
 
     @pytest.mark.asyncio
+    async def test_nested_multi_file_names_dir_from_identity_not_files_zero(self, plugin, tmp_path):
+        """#1292: a folder game served as a nested-single ZIP (PS3 MGS4) must name
+        its extract dir after the ROM identity, never after ``files[0]``.
+
+        For ``has_nested_single_file`` ROMs ``resolve_local_file_name`` returns
+        ``files[0].file_name`` — an arbitrary inner asset ("AttackoftheDwarfGekko.dbm",
+        a music file). Deriving the extract dir from it named the whole install
+        after that asset and corrupted the folder-boot launch target. The dir must
+        come from ``fs_name_no_ext`` ("Metal Gear Solid 4") instead.
+        """
+        import zipfile as zf
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        plugin._rom_removal_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "ps3"
+        roms_dir.mkdir(parents=True)
+        # target_path is derived from files[0] (the nested-single filename) — for a
+        # multi-file ROM it only ever names the transient .zip.tmp, never the dir.
+        target_path = str(roms_dir / "AttackoftheDwarfGekko.dbm")
+
+        # ZIP mirroring RomM's mod_zip output: PS3_GAME at the root (no wrapper
+        # folder) plus the arbitrary asset RomM lists first.
+        zip_content_path = tmp_path / "source.zip"
+        with zf.ZipFile(str(zip_content_path), "w") as z:
+            z.writestr("AttackoftheDwarfGekko.dbm", b"\x00" * 32)
+            z.writestr("PS3_GAME/USRDIR/EBOOT.BIN", b"\x00" * 64)
+            z.writestr("PS3_GAME/PARAM.SFO", b"\x00" * 16)
+        zip_bytes = zip_content_path.read_bytes()
+
+        rom_detail = {
+            "id": 4778,
+            "name": "Metal Gear Solid 4",
+            "fs_name": "Metal Gear Solid 4",
+            "fs_name_no_ext": "Metal Gear Solid 4",
+            "platform_slug": "ps3",
+            "platform_name": "PlayStation 3",
+            "has_multiple_files": False,
+            "has_nested_single_file": True,
+            "files": [
+                {"file_name": "AttackoftheDwarfGekko.dbm"},
+                {"file_name": "PS3_GAME/USRDIR/EBOOT.BIN"},
+                {"file_name": "PS3_GAME/PARAM.SFO"},
+            ],
+        }
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
+            with open(dest, "wb") as f:
+                f.write(zip_bytes)
+
+        _seed_rom(plugin._uow, 4778, platform_slug="ps3")
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[4778] = {"rom_id": 4778, "status": "downloading", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(
+                4778, rom_detail, target_path, "ps3", "AttackoftheDwarfGekko.dbm"
+            )
+
+        # The extract dir carries the ROM identity, NOT the files[0] asset name.
+        extract_dir = roms_dir / "Metal Gear Solid 4"
+        assert extract_dir.is_dir()
+        assert (extract_dir / "PS3_GAME" / "USRDIR" / "EBOOT.BIN").exists()
+        # The files[0]-derived dir must NEVER exist.
+        assert not (roms_dir / "AttackoftheDwarfGekko").exists()
+        # EBOOT.BIN is nested, so no ES-DE collapse rename — the dir keeps the
+        # identity name and the launch file points inside it.
+        installed = plugin._uow.rom_installs.get(4778)
+        assert installed is not None
+        assert installed.rom_dir == str(extract_dir)
+        assert installed.file_path == str(extract_dir / "PS3_GAME" / "USRDIR" / "EBOOT.BIN")
+        assert plugin._download_service._download_queue[4778]["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_nested_multi_file_cleanup_targets_identity_dir_not_files_zero(self, plugin, tmp_path):
+        """#1292: a failed folder-game download tears down the identity-named
+        extract dir, not a ``files[0]``-derived stale name.
+
+        The extract dir is created and cleaned up from the SAME
+        ROM-identity base name, so a failure never orphans the real dir while
+        removing a phantom one.
+        """
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        plugin._rom_removal_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "ps3"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "AttackoftheDwarfGekko.dbm")
+
+        # Pre-seed the identity-named extract dir as if extraction had partially run.
+        extract_dir = roms_dir / "Metal Gear Solid 4"
+        extract_dir.mkdir()
+        (extract_dir / "PS3_GAME").mkdir()
+
+        rom_detail = {
+            "id": 4778,
+            "name": "Metal Gear Solid 4",
+            "fs_name": "Metal Gear Solid 4",
+            "fs_name_no_ext": "Metal Gear Solid 4",
+            "platform_slug": "ps3",
+            "platform_name": "PlayStation 3",
+            "has_multiple_files": False,
+            "has_nested_single_file": True,
+            "files": [
+                {"file_name": "AttackoftheDwarfGekko.dbm"},
+                {"file_name": "PS3_GAME/USRDIR/EBOOT.BIN"},
+            ],
+        }
+
+        def fake_download(_rom_id, _filename, _dest, _progress_callback=None, *, resume=False, on_meta=None):
+            raise OSError("network died mid-download")
+
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[4778] = {"rom_id": 4778, "status": "downloading", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(
+                4778, rom_detail, target_path, "ps3", "AttackoftheDwarfGekko.dbm"
+            )
+
+        # The identity-named dir is torn down; the files[0]-derived name was never
+        # the target, so nothing orphans.
+        assert not extract_dir.exists()
+        assert plugin._download_service._download_queue[4778]["status"] == "failed"
+
+    @pytest.mark.asyncio
     async def test_multi_file_emits_extracting_progress(self, plugin, tmp_path):
         """A multi-file download emits ``download_progress`` ``status:"extracting"``
         frames after the byte transfer, then ``download_complete`` after.
@@ -2256,6 +2403,49 @@ class TestPathTraversalFsName:
         # The coroutine was created — just verify the queue entry is safe
         assert ".." not in queue_entry["file_name"]
 
+    @pytest.mark.asyncio
+    async def test_fs_name_degenerate_falls_back_to_synthetic(self, plugin, tmp_path):
+        """A degenerate fs_name ("..") basenames to ".." — the file_name guard
+        must fall back to the synthetic rom_<id>, so target_path can never
+        resolve to the platform dir's parent (the roms root)."""
+        from unittest.mock import AsyncMock
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        plugin._rom_removal_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+        )
+
+        rom_detail = {
+            "id": 77,
+            "name": "Evil ROM",
+            "fs_name": "..",
+            "fs_size_bytes": 1024,
+            "platform_slug": "n64",
+            "platform_name": "Nintendo 64",
+        }
+
+        plugin._download_service._loop = MagicMock()
+        plugin._download_service._loop.run_in_executor = AsyncMock(return_value=rom_detail)
+
+        def _close_coro_task(coro):
+            coro.close()
+            return MagicMock()
+
+        plugin._download_service._loop.create_task = _close_coro_task
+        plugin._download_service._download_file_store.disk_free = lambda _path: 500 * 1024 * 1024
+
+        result = await plugin.start_download(77)
+
+        assert result["success"] is True
+        queue_entry = plugin._download_service._download_queue[77]
+        assert queue_entry["file_name"] == "rom_77"
+
 
 class TestPathTraversalPlatformSlug:
     """#967: an unmapped server platform slug must not escape roms_path."""
@@ -2318,7 +2508,8 @@ class TestCleanupPartialDownload:
         tmp_file = tmp_path / "game.z64.tmp"
         tmp_file.write_text("partial")
 
-        plugin._download_service._cleanup_partial_download(target, False, "game.z64")
+        # Single-file: no extract dir, so extract_dir_name is unused ("").
+        plugin._download_service._cleanup_partial_download(target, False, "")
         assert not tmp_file.exists()
 
     def test_cleans_zip_tmp_multi(self, plugin, tmp_path):
@@ -2326,7 +2517,7 @@ class TestCleanupPartialDownload:
         zip_tmp = tmp_path / "game.zip.zip.tmp"
         zip_tmp.write_text("partial zip")
 
-        plugin._download_service._cleanup_partial_download(target, True, "game.zip")
+        plugin._download_service._cleanup_partial_download(target, True, "game")
         assert not zip_tmp.exists()
 
     def test_cleans_extract_dir(self, plugin, tmp_path):
@@ -2335,28 +2526,75 @@ class TestCleanupPartialDownload:
         extract_dir.mkdir()
         (extract_dir / "disc1.bin").write_bytes(b"\x00" * 100)
 
-        plugin._download_service._cleanup_partial_download(target, True, "game.zip")
+        plugin._download_service._cleanup_partial_download(target, True, "game")
         assert not extract_dir.exists()
 
     def test_cleanup_errors_are_caught(self, plugin, tmp_path):
         """Cleanup should not raise even if files don't exist."""
         target = str(tmp_path / "nonexistent.z64")
         # Should not raise
-        plugin._download_service._cleanup_partial_download(target, False, "nonexistent.z64")
-        plugin._download_service._cleanup_partial_download(target, True, "nonexistent.zip")
+        plugin._download_service._cleanup_partial_download(target, False, "")
+        plugin._download_service._cleanup_partial_download(target, True, "nonexistent")
 
     def test_cleans_renamed_extract_dir_via_final_path(self, plugin, tmp_path):
         """A failure after the ES-DE collapse rename must clean the renamed dir, not just the staging name."""
         target = str(tmp_path / "game.zip")
-        # The staging dir (splitext of file_name) no longer exists — it was
-        # renamed. Only the renamed dir, derived from final_path, is on disk.
+        # The staging dir (the ROM-identity extract_dir_name) no longer exists —
+        # it was renamed. Only the renamed dir, derived from final_path, is on disk.
         renamed_dir = tmp_path / "game.m3u"
         renamed_dir.mkdir()
         (renamed_dir / "game.m3u").write_text("disc1.cue\n")
         final_path = str(renamed_dir / "game.m3u")
 
-        plugin._download_service._cleanup_partial_download(target, True, "game.zip", final_path)
+        plugin._download_service._cleanup_partial_download(target, True, "game", final_path)
         assert not renamed_dir.exists()
+
+
+class TestResolveSafeExtractDirName:
+    """#1292: the extract-dir base name is ROM-identity-derived and traversal-safe."""
+
+    def test_returns_fs_name_no_ext(self, plugin):
+        name = plugin._download_service._resolve_safe_extract_dir_name({"fs_name_no_ext": "Metal Gear Solid 4"})
+        assert name == "Metal Gear Solid 4"
+
+    def test_sanitizes_relative_traversal(self, plugin, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="test_romm"):
+            name = plugin._download_service._resolve_safe_extract_dir_name({"fs_name_no_ext": "../../etc/pwned"})
+        assert name == "pwned"
+        assert any("Sanitized extract dir name" in rec.message for rec in caplog.records)
+
+    def test_sanitizes_absolute_path(self, plugin, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="test_romm"):
+            name = plugin._download_service._resolve_safe_extract_dir_name({"fs_name": "/etc/passwd"})
+        assert name == "passwd"
+        assert any("Sanitized extract dir name" in rec.message for rec in caplog.records)
+
+    @pytest.mark.parametrize("degenerate", ["..", ".", "foo/", "   "])
+    def test_degenerate_component_falls_back_to_synthetic(self, plugin, caplog, degenerate):
+        """A server-supplied name that basenames to ``..``/``.``/empty/whitespace
+        must NOT resolve to the roms root or platform dir — it falls back to the
+        synthetic rom_<id> identity + one warning (the HIGH-severity guard)."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="test_romm"):
+            name = plugin._download_service._resolve_safe_extract_dir_name({"id": 4778, "fs_name_no_ext": degenerate})
+        assert name == "rom_4778"
+        assert any("Sanitized extract dir name" in rec.message for rec in caplog.records)
+
+    def test_empty_fs_name_no_ext_yields_synthetic_without_warning(self, plugin, caplog):
+        """An empty ``fs_name_no_ext`` is upstream-handled by
+        ``resolve_extract_dir_name`` (it falls through to the synthetic name), so
+        the guard sees an already-clean component — safe result, no coercion warning."""
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="test_romm"):
+            name = plugin._download_service._resolve_safe_extract_dir_name({"id": 4778, "fs_name_no_ext": ""})
+        assert name == "rom_4778"
+        assert not any("Sanitized extract dir name" in rec.message for rec in caplog.records)
 
 
 class TestDoDownloadCancelled:
@@ -3516,7 +3754,7 @@ class TestCleanupPartialDownloadFailureInjection:
         plugin._download_service._download_file_store = fake
 
         with caplog.at_level(logging.WARNING, logger="test_romm"):
-            plugin._download_service._cleanup_partial_download(target, False, "game.z64")
+            plugin._download_service._cleanup_partial_download(target, False, "")
 
         # The failing transient is still in the fake (remove raised); the
         # other transient was successfully removed.
@@ -3547,7 +3785,7 @@ class TestCleanupPartialDownloadFailureInjection:
 
         with caplog.at_level(logging.WARNING, logger="test_romm"):
             # Must NOT raise even though remove_tree raises.
-            plugin._download_service._cleanup_partial_download(target, True, "game.zip")
+            plugin._download_service._cleanup_partial_download(target, True, "game")
 
         # The dir is still present (remove_tree raised before clearing).
         assert extract_dir in fake.dirs
@@ -3922,12 +4160,12 @@ class TestDoDownloadCancelReconcile:
         started = threading.Event()
         release = threading.Event()
 
-        def blocking_post_io_multi(rom_id, _detail, tpath, fname, system):
+        def blocking_post_io_multi(rom_id, _detail, tpath, _fname, system, extract_dir_name):
             # Faithful post-condition of a committed multi-file install: an extract
             # dir with a launch file + a saved RomInstall row.
             started.set()
             release.wait(timeout=5)
-            rom_dir = os.path.join(os.path.dirname(tpath), os.path.splitext(fname)[0])
+            rom_dir = os.path.join(os.path.dirname(tpath), extract_dir_name)
             os.makedirs(rom_dir, exist_ok=True)
             launch_file = os.path.join(rom_dir, "game.m3u")
             with open(launch_file, "wb") as f:

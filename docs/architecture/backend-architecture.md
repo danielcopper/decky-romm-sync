@@ -290,15 +290,20 @@ a ZIP. Keying on `has_multiple_files` alone would take the single-file path and 
 unreadable `.nsp`. The boolean is kept as a defensive fallback for payloads that omit `files`; a genuine nested-single
 ROM has `len(files) == 1` and correctly stays on the flat single-file path.
 
-**ES-DE directory-collapse rename**: a multi-file ROM is extracted into a staging folder named after the ZIP
-(`fs_name_no_ext`), but the per-game folder is then renamed after the **detected launch file including its extension**
-(e.g. `Final Fantasy VII (USA).m3u/` containing `Final Fantasy VII (USA).m3u`). ES-DE only collapses a directory into a
-single game entry when the folder name matches the launch file's full name with extension; without the rename a
-multi-disc game shows in ES-DE as a folder plus loose disc files. The launch file is only known after extraction (an
-`.m3u` may be auto-generated — see below), so the rename happens last, after launch-file detection, via
-`es_de_collapse_rename` (`domain/rom_files.py`) + the `DownloadFileStore.move_dir` whole-directory move. On a name
-collision (target already exists) the rename is skipped and the staging folder is kept — never clobbered or merged.
-Existing installs from before this feature keep their old folder layout until re-downloaded.
+**ES-DE directory-collapse rename**: a multi-file ROM is extracted into a staging folder named after the **ROM's
+identity** — `fs_name_no_ext`, falling back to `splitext(fs_name)` (`resolve_extract_dir_name` in `domain/rom_files.py`)
+— **never** after `files[0]`. That distinction matters for a `has_nested_single_file` folder game served as a ZIP (a PS3
+title whose first listed file is an arbitrary inner asset like a music file): `resolve_local_file_name` returns that
+asset's name for the local _filename_, but the extract _directory_ must carry the game's identity or the whole install —
+launch `file_path`, `rom_dir`, and the folder-boot launch bake — inherits the wrong name. The staging folder is then
+renamed after the **detected launch file including its extension** (e.g. `Final Fantasy VII (USA).m3u/` containing
+`Final Fantasy VII (USA).m3u`). ES-DE only collapses a directory into a single game entry when the folder name matches
+the launch file's full name with extension; without the rename a multi-disc game shows in ES-DE as a folder plus loose
+disc files. The launch file is only known after extraction (an `.m3u` may be auto-generated — see below), so the rename
+happens last, after launch-file detection, via `es_de_collapse_rename` (`domain/rom_files.py`) + the
+`DownloadFileStore.move_dir` whole-directory move. On a name collision (target already exists) the rename is skipped and
+the staging folder is kept — never clobbered or merged. Existing installs from before this feature keep their old folder
+layout until re-downloaded.
 
 **M3U generation rule** (`needs_m3u` in `domain/rom_files.py`): a game-named `<fs_name_no_ext>.m3u` is auto-generated
 (when no `.m3u` already exists) for **multi-disc** ROMs — two or more disc files of any kind (`.cue`/`.chd`/`.iso`) — so
