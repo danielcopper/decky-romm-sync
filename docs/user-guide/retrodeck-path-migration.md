@@ -12,6 +12,21 @@ move tool or manually relocate your `retrodeck/` directory.
 The plugin does not move your RetroDECK files — RetroDECK handles that. What the plugin migrates are the files _it_
 manages: downloaded ROMs, BIOS files, and save files that it tracks for sync purposes.
 
+## Moving Again Before Migrating
+
+You do not have to migrate right away, and you will not lose anything if you move RetroDECK a second time before you get
+around to it. If you go from A → B and then B → C without running the migration in between, the plugin remembers
+**every** home you left behind (A _and_ B), not just the most recent one. When you finally migrate, it collects your
+files from whichever home each one actually lives under and brings them all to the current home (C) in a single pass.
+
+- **The banner always reads "From: A → To: C"** — it names the _oldest_ pending home and your _current_ one, so you can
+  see the full span of the move at a glance.
+- **Reverting is handled.** If you move straight back to the home you just came from (A → B → A), the plugin recognizes
+  it, drops the pending migration, and the banners disappear — there is nothing to migrate.
+- **Missing files are reported, not hidden.** If a file the plugin tracked can no longer be found at any of the homes it
+  knows about (for example, you deleted it manually), the migration completes and its result tells you how many files
+  were missing rather than silently declaring success.
+
 ## Warning Banners
 
 Until the migration is completed, a yellow warning banner appears in two places:

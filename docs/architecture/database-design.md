@@ -260,11 +260,14 @@ rule) maps 1:1 onto these tables.
 
 `SyncRun` carries its own invariants, so per CONTEXT.md it gets a typed table rather than untyped `kv_config` rows. The
 full live `kv_config` key set is `device_id` (the server-issued device identity), `platform_names` (the JSON-encoded
-`platform_slug → display_name` cache), `retrodeck_home_path` (+ its pending-migration `_previous`), and
-`save_sort_settings` (+ `_previous`) — the truly miscellaneous singleton scalars. The `platform_names` cache is a single
-JSON blob the library sync refreshes every run so offline reads (the DangerZone label, the game-detail platform name)
-show "Nintendo 64" rather than the bare `n64` slug when RomM is unreachable. The schema version is **not** a `kv_config`
-key — it is tracked in `PRAGMA user_version` by the [migration runner](#the-migration-framework)
+`platform_slug → display_name` cache), `retrodeck_home_path` (+ its pending-migration `_previous`, and — when the home
+is changed _again_ before the migration runs — a `_hops` JSON array of the additional pending homes, oldest→newest, so
+files under an intermediate home are never stranded,
+[#1042](https://github.com/danielcopper/decky-romm-sync/issues/1042)), and `save_sort_settings` (+ `_previous`) — the
+truly miscellaneous singleton scalars. The `platform_names` cache is a single JSON blob the library sync refreshes every
+run so offline reads (the DangerZone label, the game-detail platform name) show "Nintendo 64" rather than the bare `n64`
+slug when RomM is unreachable. The schema version is **not** a `kv_config` key — it is tracked in `PRAGMA user_version`
+by the [migration runner](#the-migration-framework)
 ([#781](https://github.com/danielcopper/decky-romm-sync/issues/781)).
 
 `SyncRun` is a **history** table, not a single "last run" row: a 1-row table would let a newly-started run
