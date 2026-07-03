@@ -1,11 +1,12 @@
 """Tests for ActiveCoreResolver — the single per-ROM active-core read seam.
 
-Covers the four-layer precedence: a resolvable per-game override wins; a
-per-platform ``settings.json`` core beats the es_systems default; the per-game
-override beats the per-platform core; a NULL override with no per-platform core
-delegates to the es_systems default; a stale per-game or per-platform label
-degrades to the next layer without raising or emitting a bogus ``.so``; and the
-retired ES-DE gamelist is never consulted.
+Covers the three-layer precedence: a resolvable per-game override wins; a
+per-platform ``settings.json`` core beats the live es_systems default; the
+per-game override beats the per-platform core; a NULL override with no
+per-platform core delegates to the es_systems default; a stale per-game or
+per-platform label degrades to the next layer without raising or emitting a
+bogus ``-e`` override; a per-game/per-platform label may name a **standalone**
+emulator; and the retired ES-DE gamelist is never consulted.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_core_info_provider import FakeCoreInfoProvider, standalone_option
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 
 from domain.rom import Rom
@@ -136,7 +137,7 @@ def test_resolvable_override_normalizes_platform_slug_to_system() -> None:
     resolver.active_core_for_rom(7)
     # The available-cores read seam must receive the resolved system, not the raw slug.
     assert resolve_system.calls == [("gba", None)]
-    assert core_info.available_cores_calls == ["gba"]
+    assert core_info.emulator_options_calls == ["gba"]
 
 
 # --- override NULL → returns the system-default (delegation works) -------------
@@ -393,3 +394,61 @@ def test_unresolvable_platform_returns_none() -> None:
     resolver, _ = _make_resolver(uow=uow, core_info=core_info)
 
     assert resolver.active_emulator_for_rom(54) is None
+
+
+# --- per-game / per-platform pin to a STANDALONE emulator label (#1210) --------
+
+_RPCS3_COMMAND = "%EMULATOR_RPCS3% --no-gui %ROM%"
+_RPCS3_LABEL = "RPCS3 Directory (Standalone)"
+_RPCS3 = EmulatorInvocation.standalone(_RPCS3_COMMAND, _RPCS3_LABEL)
+
+
+def test_per_game_pin_to_standalone_label_resolves_standalone() -> None:
+    """A per-game pin naming a bakeable STANDALONE emulator resolves to it."""
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=60, platform_slug="ps3", emulator_override=_RPCS3_LABEL)
+    core_info = FakeCoreInfoProvider(options=[standalone_option(_RPCS3_COMMAND, _RPCS3_LABEL)])
+    resolver, _ = _make_resolver(uow=uow, core_info=core_info)
+
+    assert resolver.active_emulator_for_rom(60) == _RPCS3
+    # The .so-space projection is (None, label) — read-path consumers degrade.
+    assert resolver.active_core_for_rom(60) == (None, _RPCS3_LABEL)
+
+
+def test_per_platform_standalone_label_resolves_standalone() -> None:
+    """A per-platform pin naming a bakeable STANDALONE emulator resolves to it."""
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=61, platform_slug="ps3", emulator_override=None)
+    core_info = FakeCoreInfoProvider(options=[standalone_option(_RPCS3_COMMAND, _RPCS3_LABEL)])
+    platform_reader = FakePlatformCoreReader(mapping={"ps3": "RPCS3 Directory (Standalone)"})
+    resolver, _ = _make_resolver(uow=uow, core_info=core_info, platform_core_reader=platform_reader)
+
+    assert resolver.active_emulator_for_rom(61) == _RPCS3
+
+
+def test_stale_standalone_pin_degrades_to_default(caplog: pytest.LogCaptureFixture) -> None:
+    """A per-game pin to a standalone label that is now un-bakeable degrades + warns.
+
+    ``label_to_invocation`` returns ``None`` for a matched-but-un-bakeable option
+    exactly as for an unknown label, so the degrade path is uniform across
+    libretro and standalone kinds.
+    """
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=62, platform_slug="ps3", emulator_override="RPCS3 Shortcut (Standalone)")
+    core_info = FakeCoreInfoProvider(
+        # The pinned label exists but is now un-bakeable (a shortcut form).
+        options=[
+            standalone_option(
+                "%ENABLESHORTCUTS% %ROM%", "RPCS3 Shortcut (Standalone)", status="unbakeable", reason="shortcut_script"
+            )
+        ],
+        standalone={"ps3": _RPCS3},
+    )
+    resolver, _ = _make_resolver(uow=uow, core_info=core_info)
+
+    with caplog.at_level(logging.WARNING, logger="test"):
+        result = resolver.active_emulator_for_rom(62)
+
+    # Degrades to the system default (the bakeable RPCS3 Directory), never raises.
+    assert result == _RPCS3
+    assert any("RPCS3 Shortcut (Standalone)" in r.message and "degrading" in r.message for r in caplog.records)

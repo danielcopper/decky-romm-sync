@@ -65,23 +65,28 @@ class CoreResolverFn(Protocol):
 
 
 class CoreInfoProvider(Protocol):
-    """Core resolution for ES-DE configured systems, consumed by services.
+    """Emulator resolution for ES-DE configured systems, consumed by services.
 
-    Exposes the read seam services need to ask "which RetroArch core is
-    the system-layer default for this system?" without depending on the
-    concrete adapter. Resolution is system-layer only (es_systems default
-    → ``core_defaults``); the plugin-owned per-platform and per-game core
-    selections are layered on top by ``active_core_for_rom``, not here.
-    Implementations own the underlying file reads and may cache parse
-    results; ``reset_cache`` lets writers invalidate the cache after a
-    per-platform core write.
+    Exposes the read seam services need to answer, from the live
+    ``es_systems.xml`` alone, "which emulator is the system-layer default
+    for this system, and what else could it launch with?" without depending
+    on the concrete adapter. Resolution is system-layer only; the plugin-owned
+    per-platform and per-game selections are layered on top by
+    ``active_emulator_for_rom``, not here. Implementations own the underlying
+    file reads and may cache parse results; ``reset_cache`` lets writers
+    invalidate the cache after a per-platform core write.
+
+    ``get_active_core`` stays libretro-only — it feeds the firmware layer's
+    system-level BIOS filter, which keys on a RetroArch core. The launch-layer
+    default (``get_default_emulator``) and the full picker
+    (``get_emulator_options``) are emulator-kind-aware (libretro OR standalone).
     """
 
     def get_active_core(self, system_name: str) -> tuple[str | None, str | None]: ...
 
     def get_default_emulator(self, system_name: str) -> EmulatorInvocation | None: ...
 
-    def get_available_cores(self, system_name: str) -> list[dict[str, Any]]: ...
+    def get_emulator_options(self, system_name: str) -> dict[str, Any]: ...
 
     def reset_cache(self) -> None: ...
 

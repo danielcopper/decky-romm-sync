@@ -21,10 +21,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from domain.emulator_commands import label_to_invocation, options_to_payload
 from domain.shortcut_data import (
     EmulatorInvocation,
     build_launch_options,
-    label_to_core_so,
     resolve_emulator_invocation,
 )
 from lib.list_result import ErrorCode
@@ -88,39 +88,46 @@ class CoreService:
         self._active_core = config.active_core
         self._disc_resolver = config.disc_resolver
 
-    async def get_available_cores(self, rom_id: int) -> dict[str, Any]:
-        """Return the cores available for ``rom_id``'s platform + the active one.
+    async def get_platform_core_info(self, rom_id: int) -> dict[str, Any]:
+        """Return the emulators available for ``rom_id``'s platform + the active one.
 
-        The available-cores list is platform-wide (system-level); the active
-        selection is the per-ROM resolution from :class:`ActiveCoreResolver`, so
-        a pinned ``emulator_override`` (or per-platform core) surfaces over the
-        system default and the menu can highlight the active core (or offer
-        Reset). ``platform_core_label`` carries the per-platform override label
-        (``settings.json`` ``platform_cores``) so the menu can mark the
-        system-level selection distinctly from the active core.
-        ``has_game_override`` reports whether a per-game pin is set — the menu
-        can't infer this from the active core alone (pinning the same core as
-        the per-platform override is indistinguishable), so the flag drives the
-        "follow the system" reset item's checkmark. When ``rom_id`` is unknown
-        the cores list is empty and the active core is ``(None, None)``.
+        The emulator list is platform-wide (system-level): every ES-DE
+        ``<command>`` for the ROM's system, each annotated ``{label, kind,
+        core_so, is_default, bakeable, reason}`` (libretro AND standalone). The
+        active selection is the per-ROM resolution from
+        :class:`ActiveCoreResolver`, so a pinned ``emulator_override`` (or
+        per-platform core) surfaces over the system default and the menu can
+        highlight the active emulator (or offer Reset). ``platform_core_label``
+        carries the per-platform override label (``settings.json``
+        ``platform_cores``) so the menu can mark the system-level selection
+        distinctly from the active emulator. ``has_game_override`` reports
+        whether a per-game pin is set — the menu can't infer this from the active
+        emulator alone (pinning the same emulator as the per-platform override is
+        indistinguishable), so the flag drives the "follow the system" reset
+        item's checkmark. ``emulator_data_available`` is ``False`` when
+        ``es_systems.xml`` cannot be read (RetroDECK not detected), so the menu
+        can say so instead of showing an empty list. When ``rom_id`` is unknown
+        the emulator list is empty and the active emulator is ``(None, None)``.
         """
-        return await self._loop.run_in_executor(None, self._available_cores_io, rom_id)
+        return await self._loop.run_in_executor(None, self._platform_core_info_io, rom_id)
 
-    def _available_cores_io(self, rom_id: int) -> dict[str, Any]:
+    def _platform_core_info_io(self, rom_id: int) -> dict[str, Any]:
         rom = self._read_rom(rom_id)
         if rom is None:
             return {
-                "cores": [],
+                "emulators": [],
+                "emulator_data_available": True,
                 "active_core": None,
                 "active_core_label": None,
                 "platform_core_label": None,
                 "has_game_override": False,
             }
         system = self._resolve_system(rom.platform_slug)
-        cores = self._core_info.get_available_cores(system)
+        options = self._core_info.get_emulator_options(system)
         active_so, active_label = self._active_core.active_core_for_rom(rom_id)
         return {
-            "cores": cores,
+            "emulators": options_to_payload(options["options"]),
+            "emulator_data_available": options["available"],
             "active_core": active_so,
             "active_core_label": active_label,
             "platform_core_label": self._settings.get("platform_cores", {}).get(rom.platform_slug),
@@ -214,19 +221,21 @@ class CoreService:
             return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": str(e)}
 
     async def set_game_core(self, rom_id: int, label: str) -> dict[str, Any]:
-        """Pin the per-game emulator/core override for ``rom_id`` to *label*.
+        """Pin the per-game emulator override for ``rom_id`` to *label*.
 
-        The picked LABEL is resolved to its ``.so`` FIRST (against the cores
-        available for the ROM's platform). An unresolvable label is a hard
-        failure — the canonical ``{"success": False, "reason": ..., "message":
-        ...}`` shape is returned and **nothing is written**, so the DB never
-        holds a label that no consumer can resolve. On success the pin is
-        written via the Unit-of-Work and the response carries the freshly-baked
-        ``launch_options`` (the ``-e`` override form) and ``app_id`` for the
-        frontend to confirm-set on the live Steam shortcut. When the ROM is not
-        installed or not bound to a shortcut there is nothing to update live:
-        the pin still lands and ``launch_options``/``app_id`` are ``None`` (the
-        override applies on the next download).
+        The picked LABEL is resolved to a bakeable :class:`EmulatorInvocation`
+        FIRST (against the emulators ES-DE lists for the ROM's platform, libretro
+        OR standalone). A label that does not resolve to a bakeable emulator —
+        unknown, ``needs_setup``, or otherwise un-bakeable — is a hard failure:
+        the canonical ``{"success": False, "reason": ..., "message": ...}`` shape
+        is returned and **nothing is written**, so the DB never holds a label no
+        consumer can bake. On success the pin is written via the Unit-of-Work and
+        the response carries the freshly-baked ``launch_options`` (the ``-e``
+        override form) and ``app_id`` for the frontend to confirm-set on the live
+        Steam shortcut. When the ROM is not installed or not bound to a shortcut
+        there is nothing to update live: the pin still lands and
+        ``launch_options``/``app_id`` are ``None`` (the override applies on the
+        next download).
         """
         return await self._loop.run_in_executor(None, self._set_game_core_io, rom_id, label)
 
@@ -240,14 +249,14 @@ class CoreService:
                     "message": f"ROM {rom_id} is not tracked",
                 }
             system = self._resolve_system(rom.platform_slug)
-            core_so = label_to_core_so(self._core_info.get_available_cores(system), label)
-            if core_so is None:
-                # B4: hard-fail BEFORE any write — never persist a label no
-                # consumer can resolve to a .so.
+            invocation = label_to_invocation(self._core_info.get_emulator_options(system)["options"], label)
+            if invocation is None:
+                # Hard-fail BEFORE any write — never persist a label that does not
+                # resolve to a bakeable emulator (unknown / needs_setup / un-bakeable).
                 return {
                     "success": False,
                     "reason": "core_unavailable",
-                    "message": f"Core '{label}' is not available for {rom.platform_slug}",
+                    "message": f"Emulator '{label}' is not available for {rom.platform_slug}",
                 }
             # Enforce the aggregate invariant (strip / reject blank) via the
             # verb method, then persist the resulting label through the pin-only
@@ -256,9 +265,9 @@ class CoreService:
             uow.roms.set_emulator_override(rom_id, rom.emulator_override)
             install = uow.rom_installs.get(rom_id)
         # Bake outside the committed write UoW, uniform with the clear path (the
-        # pinned override is the just-resolved libretro core, so there is no
-        # resolver read and no commit-ordering subtlety here).
-        launch_options, app_id = self._launch_options_for(rom, install, EmulatorInvocation.libretro(core_so, label))
+        # pinned override is the just-resolved emulator, so there is no resolver
+        # read and no commit-ordering subtlety here).
+        launch_options, app_id = self._launch_options_for(rom, install, invocation)
         return {"success": True, "launch_options": launch_options, "app_id": app_id}
 
     async def clear_game_core(self, rom_id: int) -> dict[str, Any]:

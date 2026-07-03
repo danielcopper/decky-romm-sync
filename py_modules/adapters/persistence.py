@@ -7,6 +7,7 @@ feeds the settings fold. Migration logic lives in
 """
 
 import contextlib
+import copy
 import fcntl
 import json
 import logging
@@ -182,7 +183,11 @@ class PersistenceAdapter:
             settings = {}
 
         for key, default in DEFAULT_SETTINGS.items():
-            settings.setdefault(key, default)
+            # deepcopy so a mutable default (e.g. the ``platform_cores`` / enabled-*
+            # maps) is never aliased to the shared DEFAULT_SETTINGS object — a later
+            # in-place mutation (a per-platform core write) would otherwise leak back
+            # into the module-level template and contaminate the next load.
+            settings.setdefault(key, copy.deepcopy(default))
 
         # Backfill version=0 to signal pre-versioning file to migration layer
         settings.setdefault("version", 0)

@@ -77,10 +77,10 @@ mkdir -p "$DEST/dist" "$DEST/bin" "$DEST/defaults" "$DEST/py_modules"
 rsync -a --delete dist/ "$DEST/dist/"
 rsync -a --delete bin/ "$DEST/bin/"
 rsync -a --delete defaults/ "$DEST/defaults/"
-# A prior release install places the defaults/ snapshots (core_defaults.json,
-# config.json, bios_registry.json) at the plugin ROOT, where the loaders look
-# FIRST (root, then defaults/). A dev deploy only refreshes defaults/, so a stale
-# root copy from an earlier release would shadow the freshly-deployed snapshot.
+# A prior release install places the defaults/ snapshots (config.json,
+# bios_registry.json) at the plugin ROOT, where the loaders look FIRST (root,
+# then defaults/). A dev deploy only refreshes defaults/, so a stale root copy
+# from an earlier release would shadow the freshly-deployed snapshot.
 # Drop any root-level namesake so a dev deploy always reads the just-deployed defaults/.
 for f in defaults/*; do rm -f "$DEST/$(basename "$f")"; done
 rsync -a --delete py_modules/ "$DEST/py_modules/"

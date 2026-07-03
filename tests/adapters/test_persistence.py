@@ -100,6 +100,22 @@ class TestSettingsSchema:
     def test_default_settings_carry_empty_platform_cores(self):
         assert DEFAULT_SETTINGS["platform_cores"] == {}
 
+    def test_mutable_default_is_not_aliased_to_template(self, adapter):
+        """A missing key is backfilled with a COPY of its mutable default.
+
+        Otherwise a later in-place write (a per-platform core selection) would
+        mutate the shared ``DEFAULT_SETTINGS`` template and leak into the next
+        load — the isolation defect #1210's contract tests surfaced.
+        """
+        result = adapter.load_settings()
+        result["platform_cores"]["gba"] = "mGBA"
+        result["enabled_platforms"]["snes"] = True
+        # The module-level template stays pristine for the next load.
+        assert DEFAULT_SETTINGS["platform_cores"] == {}
+        assert DEFAULT_SETTINGS["enabled_platforms"] == {}
+        # A fresh load sees none of the previous mutation.
+        assert adapter.load_settings()["platform_cores"] == {}
+
     def test_load_settings_backfills_token_slots(self, adapter):
         result = adapter.load_settings()
         assert result["romm_api_token"] is None

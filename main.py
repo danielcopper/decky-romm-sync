@@ -249,7 +249,7 @@ class Plugin:
         return await self._core_service.clear_game_core(rom_id)
 
     async def get_platform_core_info(self, rom_id):
-        return await self._core_service.get_available_cores(rom_id)
+        return await self._core_service.get_platform_core_info(rom_id)
 
     # ── Disc picker delegation to DiscService ──────────────
 

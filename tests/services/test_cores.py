@@ -8,14 +8,16 @@ from typing import Any
 
 import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
-from fakes.fake_core_info_provider import FakeCoreInfoProvider
+from fakes.fake_core_info_provider import FakeCoreInfoProvider, libretro_option, standalone_option
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 
 from domain.disc_selection import Disc
+from domain.emulator_commands import options_to_payload
 from domain.rom import Rom
 from domain.rom_install import RomInstall
+from domain.shortcut_data import EmulatorInvocation
 from services.cores import CoreService, CoreServiceConfig
 
 
@@ -192,15 +194,16 @@ def service(
     )
 
 
-# ── get_available_cores (rom_id-keyed core menu) ───────────────────────
+# ── get_platform_core_info (rom_id-keyed emulator menu) ────────────────
 
 
-class TestGetAvailableCores:
+class TestGetPlatformCoreInfo:
     def test_happy_path(self, event_loop, service, core_info, uow):
         _seed_rom(uow, rom_id=42, platform_slug="snes")
-        result = event_loop.run_until_complete(service.get_available_cores(42))
+        result = event_loop.run_until_complete(service.get_platform_core_info(42))
         assert result == {
-            "cores": core_info.available_cores,
+            "emulators": options_to_payload(core_info.options),
+            "emulator_data_available": True,
             "active_core": "snes9x_libretro",
             "active_core_label": "Snes9x",
             "platform_core_label": None,
@@ -208,17 +211,27 @@ class TestGetAvailableCores:
         }
 
     def test_unknown_rom_returns_empty(self, event_loop, service, core_info):
-        # No ROM seeded for rom_id=7 → empty cores + no active core, and the
-        # platform-wide core enumeration is never reached.
-        result = event_loop.run_until_complete(service.get_available_cores(7))
+        # No ROM seeded for rom_id=7 → empty emulators + no active core, and the
+        # platform-wide enumeration is never reached.
+        result = event_loop.run_until_complete(service.get_platform_core_info(7))
         assert result == {
-            "cores": [],
+            "emulators": [],
+            "emulator_data_available": True,
             "active_core": None,
             "active_core_label": None,
             "platform_core_label": None,
             "has_game_override": False,
         }
-        assert core_info.available_cores_calls == []
+        assert core_info.emulator_options_calls == []
+
+    def test_emulator_data_unavailable_surfaces_flag(self, event_loop, service, core_info, uow):
+        # es_systems.xml unreadable → emulator_data_available False, empty list.
+        _seed_rom(uow, rom_id=42, platform_slug="snes")
+        core_info.available = False
+        core_info.options = []
+        result = event_loop.run_until_complete(service.get_platform_core_info(42))
+        assert result["emulator_data_available"] is False
+        assert result["emulators"] == []
 
     def test_platform_core_label_surfaces_per_platform_override(self, event_loop, service, uow, settings):
         # A per-platform override set on the System page (settings.json
@@ -226,7 +239,7 @@ class TestGetAvailableCores:
         # the system-level selection distinctly from the active core (#954).
         _seed_rom(uow, rom_id=42, platform_slug="snes")
         settings["platform_cores"]["snes"] = "bsnes"
-        result = event_loop.run_until_complete(service.get_available_cores(42))
+        result = event_loop.run_until_complete(service.get_platform_core_info(42))
         assert result["platform_core_label"] == "bsnes"
 
     def test_platform_core_label_none_when_platform_absent(self, event_loop, service, uow, settings):
@@ -234,7 +247,7 @@ class TestGetAvailableCores:
         # even when OTHER platforms carry one.
         _seed_rom(uow, rom_id=42, platform_slug="snes")
         settings["platform_cores"]["gba"] = "mGBA"
-        result = event_loop.run_until_complete(service.get_available_cores(42))
+        result = event_loop.run_until_complete(service.get_platform_core_info(42))
         assert result["platform_core_label"] is None
 
     def test_active_marker_reflects_pin(self, event_loop, service, uow, active_core):
@@ -242,7 +255,7 @@ class TestGetAvailableCores:
         # not the system default — the menu highlights the pin.
         _seed_rom(uow, rom_id=42, platform_slug="snes", emulator_override="bsnes")
         active_core.per_rom[42] = ("bsnes_libretro", "bsnes")
-        result = event_loop.run_until_complete(service.get_available_cores(42))
+        result = event_loop.run_until_complete(service.get_platform_core_info(42))
         assert result["active_core"] == "bsnes_libretro"
         assert result["active_core_label"] == "bsnes"
         assert active_core.calls == [42]
@@ -253,14 +266,14 @@ class TestGetAvailableCores:
         # frontend can't infer this from the active core — pinning the same core
         # as the per-platform override would be indistinguishable.
         _seed_rom(uow, rom_id=42, platform_slug="snes", emulator_override="bsnes")
-        result = event_loop.run_until_complete(service.get_available_cores(42))
+        result = event_loop.run_until_complete(service.get_platform_core_info(42))
         assert result["has_game_override"] is True
 
     def test_has_game_override_false_when_rom_unpinned(self, event_loop, service, uow):
         # An unpinned ROM (NULL override) follows the system → has_game_override
         # is False so the reset item carries the ✓ (#211).
         _seed_rom(uow, rom_id=42, platform_slug="snes")
-        result = event_loop.run_until_complete(service.get_available_cores(42))
+        result = event_loop.run_until_complete(service.get_platform_core_info(42))
         assert result["has_game_override"] is False
 
     def test_active_marker_falls_back_to_system_default(self, event_loop, service, uow, active_core):
@@ -268,15 +281,15 @@ class TestGetAvailableCores:
         # resolver — the same seam, no divergence from the launched core.
         _seed_rom(uow, rom_id=42, platform_slug="snes")
         active_core.default = ("snes9x_libretro", "Snes9x")
-        result = event_loop.run_until_complete(service.get_available_cores(42))
+        result = event_loop.run_until_complete(service.get_platform_core_info(42))
         assert result["active_core"] == "snes9x_libretro"
         assert result["active_core_label"] == "Snes9x"
 
-    def test_empty_cores_list(self, event_loop, service, core_info, uow):
+    def test_empty_emulators_list(self, event_loop, service, core_info, uow):
         _seed_rom(uow, rom_id=42, platform_slug="snes")
-        core_info.available_cores = []
-        result = event_loop.run_until_complete(service.get_available_cores(42))
-        assert result["cores"] == []
+        core_info.options = []
+        result = event_loop.run_until_complete(service.get_platform_core_info(42))
+        assert result["emulators"] == []
 
     @pytest.mark.parametrize(
         ("slug", "system"),
@@ -287,13 +300,13 @@ class TestGetAvailableCores:
             ("snes", "snes"),  # identity: slug already equals system
         ],
     )
-    def test_resolves_system_for_available_cores(
+    def test_resolves_system_for_emulator_options(
         self, event_loop, service, core_info, resolve_system, uow, slug, system
     ):
         _seed_rom(uow, rom_id=42, platform_slug=slug)
-        event_loop.run_until_complete(service.get_available_cores(42))
+        event_loop.run_until_complete(service.get_platform_core_info(42))
         # The platform-wide enumeration receives the NORMALIZED system.
-        assert core_info.available_cores_calls == [system]
+        assert core_info.emulator_options_calls == [system]
         assert resolve_system.calls == [(slug, None)]
 
 
@@ -318,6 +331,20 @@ class TestSetGameCore:
         # The pin landed on the Rom aggregate.
         assert uow.roms.get(42).emulator_override == "bsnes"
 
+    def test_pins_standalone_emulator_and_bakes_verbatim_command(self, event_loop, service, uow, core_info):
+        # A per-game pin may name a STANDALONE emulator (#1210); the bake carries
+        # the full ES-DE command verbatim in the -e override, not an -L core path.
+        core_info.options = [standalone_option("%EMULATOR_PCSX2% -batch %ROM%", "PCSX2 (Standalone)")]
+        _seed_rom(uow, rom_id=42, platform_slug="ps2", shortcut_app_id=99)
+        _seed_install(uow, rom_id=42, file_path="/roms/ps2/gt4.iso", platform_slug="ps2")
+        result = event_loop.run_until_complete(service.set_game_core(42, "PCSX2 (Standalone)"))
+        assert result["success"] is True
+        assert result["app_id"] == 99
+        assert result["launch_options"] == (
+            'flatpak run net.retrodeck.retrodeck -e "%EMULATOR_PCSX2% -batch %ROM%" "/roms/ps2/gt4.iso"'
+        )
+        assert uow.roms.get(42).emulator_override == "PCSX2 (Standalone)"
+
     def test_uninstalled_pins_without_live_launch(self, event_loop, service, uow):
         # Bound but NOT installed → pin stored, but no shortcut to update live.
         _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99)
@@ -338,14 +365,14 @@ class TestSetGameCore:
         assert uow.roms.get(42).emulator_override == "bsnes"
 
     def test_unresolvable_label_fails_and_writes_nothing(self, event_loop, service, uow):
-        # B4 + #10: an unavailable core hard-fails BEFORE any write — the DB
-        # must never hold a label no consumer can resolve.
+        # An un-bakeable / unknown label hard-fails BEFORE any write — the DB
+        # must never hold a label no consumer can bake.
         _seed_rom(uow, rom_id=42, platform_slug="snes", shortcut_app_id=99)
         _seed_install(uow, rom_id=42, file_path="/roms/snes/mario.sfc")
         result = event_loop.run_until_complete(service.set_game_core(42, "Genesis Plus GX"))
         assert result["success"] is False
         assert result["reason"] == "core_unavailable"
-        assert result["message"] == "Core 'Genesis Plus GX' is not available for snes"
+        assert result["message"] == "Emulator 'Genesis Plus GX' is not available for snes"
         # No pin written.
         assert uow.roms.get(42).emulator_override is None
 
@@ -356,15 +383,15 @@ class TestSetGameCore:
         assert "7" in result["message"]
 
     def test_resolves_system_before_label_lookup(self, event_loop, service, uow, core_info, resolve_system):
-        # The slug→system normalization runs before the available-cores read so
+        # The slug→system normalization runs before the emulator-options read so
         # label resolution keys off the RetroDECK system, not the raw slug.
         _seed_rom(uow, rom_id=42, platform_slug="dc", shortcut_app_id=99)
         _seed_install(uow, rom_id=42, file_path="/roms/dc/sonic.gdi", platform_slug="dc")
-        core_info.available_cores = [{"core_so": "flycast_libretro", "label": "Flycast", "is_default": True}]
+        core_info.options = [libretro_option("flycast_libretro", "Flycast")]
         result = event_loop.run_until_complete(service.set_game_core(42, "Flycast"))
         assert result["success"] is True
         assert ("dc", None) in resolve_system.calls
-        assert core_info.available_cores_calls == ["dreamcast"]
+        assert core_info.emulator_options_calls == ["dreamcast"]
 
 
 # ── clear_game_core (Reset / Follow default) ───────────────────────────
@@ -503,6 +530,20 @@ class TestSetSystemCoreFanOut:
                 '"%EMULATOR_RETROARCH% -L /var/config/retroarch/cores/bsnes_libretro.so %ROM%" '
                 '"/roms/snes/b.sfc"'
             ),
+        }
+
+    def test_fan_out_bakes_standalone_e_form(self, event_loop, service, uow, active_core):
+        # A per-platform pick may resolve to a STANDALONE emulator (#1210); the
+        # re-bake carries the full ES-DE command verbatim, not an -L core path.
+        _seed_rom(uow, rom_id=1, platform_slug="ps2", shortcut_app_id=101)
+        _seed_install(uow, rom_id=1, file_path="/roms/ps2/a.iso", platform_slug="ps2")
+        active_core.per_rom_emulator[1] = EmulatorInvocation.standalone(
+            "%EMULATOR_PCSX2% -batch %ROM%", "PCSX2 (Standalone)"
+        )
+        result = event_loop.run_until_complete(service.set_system_core("ps2", "PCSX2 (Standalone)"))
+        items = {item["app_id"]: item["launch_options"] for item in result["rebake_items"]}
+        assert items == {
+            101: 'flatpak run net.retrodeck.retrodeck -e "%EMULATOR_PCSX2% -batch %ROM%" "/roms/ps2/a.iso"',
         }
 
     def test_skips_per_game_overridden_rom(self, event_loop, service, uow, active_core):

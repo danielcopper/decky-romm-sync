@@ -3,7 +3,7 @@
 import logging
 import os
 import tempfile
-from typing import Any, ClassVar
+from typing import ClassVar
 from unittest import mock
 
 import pytest
@@ -230,9 +230,10 @@ class TestParseEsSystems:
         finally:
             os.unlink(path)
 
-    def test_first_command_label_records_es_de_default_emulator(self, resolver):
-        # ``first_command_label`` is ES-DE's true default emulator — the FIRST
-        # <command>, even when that command is a standalone (no %CORE_RETROARCH%).
+    def test_standalone_first_keeps_libretro_default_core(self, resolver):
+        # ``commands`` records EVERY <command> in document order (standalone
+        # first here), while the libretro ``default_core`` capture stays the
+        # first LIBRETRO command regardless of a preceding standalone.
         xml = """\
 <?xml version="1.0"?>
 <systemList>
@@ -247,9 +248,7 @@ class TestParseEsSystems:
         try:
             result = resolver.parse_es_systems(path)
             ps2 = result["ps2"]
-            # ES-DE's default emulator is the standalone, but the libretro
-            # ``default_core`` capture stays the first LIBRETRO command.
-            assert ps2["first_command_label"] == "PCSX2 (Standalone)"
+            assert list(ps2["commands"]) == ["PCSX2 (Standalone)", "LRPS2"]
             assert ps2["default_core"] == "pcsx2_libretro"
             assert ps2["commands"]["PCSX2 (Standalone)"] == "%EMULATOR_PCSX2% -batch %ROM%"
         finally:
@@ -363,188 +362,175 @@ class TestGoldenEsSystems:
         assert psx_labels == {"SwanStation", "Beetle PSX"}
 
 
+# An es_systems.xml excerpt exercising the classification branches for
+# get_default_emulator / get_emulator_options: a plain libretro system (gba), a
+# standalone-first system whose libretro core comes second (gc: env-prefixed
+# Dolphin Standalone selected over dolphin_libretro), and a system whose first
+# commands are un-bakeable so the first bakeable wins (ps3: shortcut → inject →
+# directory) plus one with nothing bakeable (apple2: quoted libretro + MAME).
+RULE_ES_SYSTEMS_XML = """\
+<?xml version="1.0"?>
+<systemList>
+  <system>
+    <name>gba</name>
+    <command label="mGBA">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mgba_libretro.so %ROM%</command>
+    <command label="VBA-M">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/vbam_libretro.so %ROM%</command>
+  </system>
+  <system>
+    <name>gc</name>
+    <command label="Dolphin (Standalone)">env QT_QPA_PLATFORM=xcb %EMULATOR_DOLPHIN% -b -e %ROM%</command>
+    <command label="Dolphin">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/dolphin_libretro.so %ROM%</command>
+  </system>
+  <system>
+    <name>ps3</name>
+    <command label="RPCS3 Shortcut (Standalone)">%ENABLESHORTCUTS% %EMULATOR_OS-SHELL% %ROM%</command>
+    <command label="RPCS3 Serial (Standalone)">%EMULATOR_RPCS3% --no-gui %INJECT%=%BASENAME%.ps3</command>
+    <command label="RPCS3 Directory (Standalone)">%EMULATOR_RPCS3% --no-gui %ROM%</command>
+  </system>
+  <system>
+    <name>apple2</name>
+    <command label="MAME - Current">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mame_libretro.so "apple2 %ROM%"</command>
+    <command label="MAME (Standalone)">%STARTDIR%=~/.mame %EMULATOR_MAME% -rompath %GAMEDIR%\\;%ROMPATH% %ROM%</command>
+  </system>
+</systemList>
+"""
+
+
 class TestGetActiveCore:
-    GBA_SYSTEM_INFO: ClassVar[dict[str, Any]] = {
-        "gba": {
-            "default_core": "mgba_libretro",
-            "default_label": "mGBA",
-            "cores": {
-                "mgba_libretro": "mGBA",
-                "gpsp_libretro": "gpSP",
-                "vbam_libretro": "VBA-M",
-            },
-            "label_to_core": {
-                "mGBA": "mgba_libretro",
-                "gpSP": "gpsp_libretro",
-                "VBA-M": "vbam_libretro",
-            },
-        }
-    }
+    """``get_active_core`` returns the first LIBRETRO command (BIOS filter)."""
 
-    def test_default_core_from_live_xml(self):
-        resolver = _make_resolver()
-        with mock.patch.object(CoreResolver, "_load_es_systems", return_value=self.GBA_SYSTEM_INFO):
-            result = resolver.get_active_core("gba")
-        assert result == ("mgba_libretro", "mGBA")
+    def test_default_core_is_first_libretro_command(self, resolver):
+        path = _write_temp_xml(RULE_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                assert resolver.get_active_core("gba") == ("mgba_libretro", "mGBA")
+                # gc's FIRST command is the standalone Dolphin, but the libretro
+                # active core stays the first %CORE_RETROARCH% command.
+                assert resolver.get_active_core("gc") == ("dolphin_libretro", "Dolphin")
+        finally:
+            os.unlink(path)
 
-    def test_fallback_to_core_defaults(self):
+    def test_returns_none_when_es_systems_absent(self):
         resolver = _make_resolver()
-        defaults = {
-            "gba": {
-                "default_core": "mgba_libretro",
-                "default_label": "mGBA",
-                "cores": {"mgba_libretro": "mGBA"},
-            }
-        }
-        with (
-            mock.patch.object(CoreResolver, "_load_es_systems", return_value={}),
-            mock.patch.object(CoreResolver, "_load_core_defaults", return_value=defaults),
-        ):
-            result = resolver.get_active_core("gba")
-        assert result == ("mgba_libretro", "mGBA")
+        with mock.patch.object(CoreResolver, "_load_es_systems", return_value={}):
+            assert resolver.get_active_core("gba") == (None, None)
 
-    def test_returns_none_when_all_fail(self):
-        resolver = _make_resolver()
-        with (
-            mock.patch.object(CoreResolver, "_load_es_systems", return_value={}),
-            mock.patch.object(CoreResolver, "_load_core_defaults", return_value={}),
-        ):
-            result = resolver.get_active_core("gba")
-        assert result == (None, None)
+    def test_unknown_system_returns_none(self, resolver):
+        path = _write_temp_xml(RULE_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                assert resolver.get_active_core("totally_unknown_system") == (None, None)
+        finally:
+            os.unlink(path)
 
-    def test_unknown_system_returns_none(self):
-        resolver = _make_resolver()
-        with (
-            mock.patch.object(CoreResolver, "_load_es_systems", return_value=self.GBA_SYSTEM_INFO),
-            mock.patch.object(CoreResolver, "_load_core_defaults", return_value={}),
-        ):
-            result = resolver.get_active_core("totally_unknown_system")
-        assert result == (None, None)
+    def test_standalone_only_system_has_no_active_core(self, resolver):
+        # ps3 carries no bakeable libretro command → (None, None) for the BIOS filter.
+        path = _write_temp_xml(RULE_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                assert resolver.get_active_core("ps3") == (None, None)
+        finally:
+            os.unlink(path)
 
 
 class TestGetDefaultEmulator:
-    """The standalone-aware system layer (#129).
+    """The default emulator is the first *safely-bakeable* command (live only)."""
 
-    A system with a curated ``standalone`` block in ``core_defaults.json`` bakes
-    that emulator (preferring the live ``es_systems.xml`` command for the curated
-    label, falling back to the bundled command); a system without one projects
-    the libretro ``get_active_core`` default; an unresolvable system → ``None``.
-    """
+    def test_plain_libretro_system_selects_first_core(self, resolver):
+        path = _write_temp_xml(RULE_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                assert resolver.get_default_emulator("gba") == EmulatorInvocation.libretro("mgba_libretro", "mGBA")
+        finally:
+            os.unlink(path)
 
-    def test_standalone_pref_prefers_live_es_systems_command(self):
+    def test_standalone_first_selected_over_later_libretro(self, resolver):
+        # gc: the env-prefixed Dolphin Standalone is bakeable and comes first, so
+        # it wins over the later dolphin_libretro core (the gc/wii save-mover flip).
+        path = _write_temp_xml(RULE_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                assert resolver.get_default_emulator("gc") == EmulatorInvocation.standalone(
+                    "env QT_QPA_PLATFORM=xcb %EMULATOR_DOLPHIN% -b -e %ROM%", "Dolphin (Standalone)"
+                )
+        finally:
+            os.unlink(path)
+
+    def test_first_bakeable_wins_over_earlier_unbakeable(self, resolver):
+        # ps3: Shortcut (script) → Game Serial (inject) → Directory (bakeable).
+        path = _write_temp_xml(RULE_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                assert resolver.get_default_emulator("ps3") == EmulatorInvocation.standalone(
+                    "%EMULATOR_RPCS3% --no-gui %ROM%", "RPCS3 Directory (Standalone)"
+                )
+        finally:
+            os.unlink(path)
+
+    def test_nothing_bakeable_returns_none(self, resolver):
+        # apple2: quoted libretro (no_rom_target) + MAME standalone (quoting) →
+        # nothing bakeable → plain launch (the caller lets RetroDECK resolve it).
+        path = _write_temp_xml(RULE_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                assert resolver.get_default_emulator("apple2") is None
+        finally:
+            os.unlink(path)
+
+    def test_returns_none_when_es_systems_absent(self):
         resolver = _make_resolver()
-        defaults = {
-            "ps3": {
-                "standalone": {"label": "RPCS3 Directory (Standalone)", "command": "%EMULATOR_RPCS3% --bundled %ROM%"}
-            }
-        }
-        live = {"ps3": {"commands": {"RPCS3 Directory (Standalone)": "%EMULATOR_RPCS3% --no-gui %ROM%"}}}
-        with (
-            mock.patch.object(CoreResolver, "_load_core_defaults", return_value=defaults),
-            mock.patch.object(CoreResolver, "_load_es_systems", return_value=live),
-        ):
-            result = resolver.get_default_emulator("ps3")
-        # Live command for the curated label wins over the bundled fallback.
-        assert result == EmulatorInvocation.standalone(
-            "%EMULATOR_RPCS3% --no-gui %ROM%", "RPCS3 Directory (Standalone)"
-        )
+        with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=None):
+            assert resolver.get_default_emulator("gba") is None
 
-    def test_standalone_pref_falls_back_to_bundled_command(self):
+
+class TestGetEmulatorOptions:
+    """``get_emulator_options`` returns the classified, document-ordered list."""
+
+    def test_available_and_ordered_with_default_marked(self, resolver):
+        path = _write_temp_xml(RULE_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                result = resolver.get_emulator_options("ps3")
+        finally:
+            os.unlink(path)
+        assert result["available"] is True
+        labels = [o.label for o in result["options"]]
+        # Document order preserved.
+        assert labels == [
+            "RPCS3 Shortcut (Standalone)",
+            "RPCS3 Serial (Standalone)",
+            "RPCS3 Directory (Standalone)",
+        ]
+        statuses = {o.label: o.status for o in result["options"]}
+        assert statuses["RPCS3 Shortcut (Standalone)"] == "unbakeable"
+        assert statuses["RPCS3 Serial (Standalone)"] == "needs_setup"
+        assert statuses["RPCS3 Directory (Standalone)"] == "bakeable"
+
+    def test_unavailable_when_es_systems_absent(self):
         resolver = _make_resolver()
-        defaults = {
-            "ps3": {
-                "standalone": {"label": "RPCS3 Directory (Standalone)", "command": "%EMULATOR_RPCS3% --no-gui %ROM%"}
-            }
-        }
-        # es_systems.xml absent (or lacks the curated label) → bundled command.
-        with (
-            mock.patch.object(CoreResolver, "_load_core_defaults", return_value=defaults),
-            mock.patch.object(CoreResolver, "_load_es_systems", return_value={}),
-        ):
-            result = resolver.get_default_emulator("ps3")
-        assert result == EmulatorInvocation.standalone(
-            "%EMULATOR_RPCS3% --no-gui %ROM%", "RPCS3 Directory (Standalone)"
-        )
+        with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=None):
+            result = resolver.get_emulator_options("gba")
+        assert result == {"available": False, "options": []}
 
-    def test_no_standalone_pref_projects_libretro_default(self):
-        resolver = _make_resolver()
-        live = {
-            "gba": {
-                "default_core": "mgba_libretro",
-                "default_label": "mGBA",
-                "cores": {"mgba_libretro": "mGBA"},
-            }
-        }
-        with (
-            mock.patch.object(CoreResolver, "_load_core_defaults", return_value={}),
-            mock.patch.object(CoreResolver, "_load_es_systems", return_value=live),
-        ):
-            result = resolver.get_default_emulator("gba")
-        assert result == EmulatorInvocation.libretro("mgba_libretro", "mGBA")
+    def test_unavailable_when_parse_fails(self, resolver):
+        # A corrupt es_systems.xml parses to {} → unavailable, no fallback data.
+        path = _write_temp_xml("this is not xml {{{")
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                result = resolver.get_emulator_options("gba")
+        finally:
+            os.unlink(path)
+        assert result == {"available": False, "options": []}
 
-    def test_unresolvable_system_returns_none(self):
-        resolver = _make_resolver()
-        with (
-            mock.patch.object(CoreResolver, "_load_core_defaults", return_value={}),
-            mock.patch.object(CoreResolver, "_load_es_systems", return_value={}),
-        ):
-            result = resolver.get_default_emulator("totally_unknown_system")
-        assert result is None
-
-
-class TestGetAvailableCores:
-    GBA_SYSTEM_INFO: ClassVar[dict[str, Any]] = {
-        "gba": {
-            "default_core": "mgba_libretro",
-            "default_label": "mGBA",
-            "cores": {
-                "mgba_libretro": "mGBA",
-                "gpsp_libretro": "gpSP",
-                "vbam_libretro": "VBA-M",
-            },
-            "label_to_core": {
-                "mGBA": "mgba_libretro",
-                "gpSP": "gpsp_libretro",
-                "VBA-M": "vbam_libretro",
-            },
-        }
-    }
-
-    def test_returns_cores_from_live_xml(self, resolver):
-        with mock.patch.object(CoreResolver, "_load_es_systems", return_value=self.GBA_SYSTEM_INFO):
-            result = resolver.get_available_cores("gba")
-        assert len(result) == 3
-        labels = [c["label"] for c in result]
-        assert "mGBA" in labels
-        assert "gpSP" in labels
-        assert "VBA-M" in labels
-        # Check is_default
-        default = [c for c in result if c["is_default"]]
-        assert len(default) == 1
-        assert default[0]["core_so"] == "mgba_libretro"
-
-    def test_falls_back_to_core_defaults(self, resolver):
-        defaults = {
-            "gba": {
-                "default_core": "mgba_libretro",
-                "default_label": "mGBA",
-                "cores": {"mgba_libretro": "mGBA", "gpsp_libretro": "gpSP"},
-            }
-        }
-        with (
-            mock.patch.object(CoreResolver, "_load_es_systems", return_value={}),
-            mock.patch.object(CoreResolver, "_load_core_defaults", return_value=defaults),
-        ):
-            result = resolver.get_available_cores("gba")
-        assert len(result) == 2
-
-    def test_unknown_system_returns_empty(self, resolver):
-        with (
-            mock.patch.object(CoreResolver, "_load_es_systems", return_value={}),
-            mock.patch.object(CoreResolver, "_load_core_defaults", return_value={}),
-        ):
-            result = resolver.get_available_cores("unknown_system")
-        assert result == []
+    def test_available_but_empty_for_unknown_system(self, resolver):
+        # es_systems readable but the system has no commands → available, empty.
+        path = _write_temp_xml(RULE_ES_SYSTEMS_XML)
+        try:
+            with mock.patch.object(CoreResolver, "find_es_systems_xml", return_value=path):
+                result = resolver.get_emulator_options("totally_unknown_system")
+        finally:
+            os.unlink(path)
+        assert result == {"available": True, "options": []}
 
 
 # An es_systems.xml excerpt carrying <extension> lists: psx WITH .m3u (disc

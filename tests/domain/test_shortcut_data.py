@@ -96,9 +96,9 @@ class TestResolveEmulatorInvocation:
         assert "None" not in resolve_emulator_invocation({"id": 1}, None)
 
 
-# Shape mirrors CoreInfoProvider.get_available_cores():
+# The available-cores shape ``label_to_core_so`` accepts:
 # [{"core_so": str, "label": str, "is_default": bool}, ...]. core_so is the BARE
-# core name (no ".so") as the es_systems parser and core_defaults.json yield it.
+# core name (no ".so") as the es_systems parser yields it.
 _AVAILABLE_CORES = [
     {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": True},
     {"core_so": "mednafen_psx_hw_libretro", "label": "Beetle PSX HW", "is_default": False},

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from domain import firmware_paths
 from domain.bios import collect_firmware_status, compute_bios_level, format_bios_status
 from domain.bios_file import BiosFile
+from domain.emulator_commands import options_to_payload
 from domain.firmware_cache import FirmwareCacheEntry
 from lib.errors import error_response
 from lib.list_result import ErrorCode
@@ -452,16 +453,21 @@ class FirmwareService:
 
         The core read seams key by the resolved RetroDECK ``system`` (ADR-0010
         §2), so each entry's raw RomM/BIOS-folder slug is normalized before the
-        ``get_active_core`` / ``get_available_cores`` calls; ``has_games`` and the
-        BIOS-folder file lookups stay on the raw slug (their own vocabulary).
+        ``get_active_core`` / ``get_emulator_options`` calls; ``has_games`` and
+        the BIOS-folder file lookups stay on the raw slug (their own vocabulary).
+        ``active_core`` stays the libretro system default (the BIOS filter keys on
+        it); the ``emulators`` list is the full classified picker payload and
+        ``emulator_data_available`` flags whether ``es_systems.xml`` was readable.
         """
         for plat in platforms_map.values():
             slug = plat["platform_slug"]
             system = self._resolve_system(slug)
             core_so, core_label = self._core_info.get_active_core(system)
+            options = self._core_info.get_emulator_options(system)
             plat["active_core"] = core_so
             plat["active_core_label"] = core_label
-            plat["available_cores"] = self._core_info.get_available_cores(system)
+            plat["emulators"] = options_to_payload(options["options"])
+            plat["emulator_data_available"] = options["available"]
             plat["files"] = [self._enrich_firmware_file(f, core_so=core_so) for f in plat["files"]]
             plat["has_games"] = slug in synced_slugs
             plat["all_downloaded"] = all(f["downloaded"] for f in plat["files"])

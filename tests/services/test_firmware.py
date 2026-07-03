@@ -281,13 +281,15 @@ class TestGetFirmwareStatus:
         ``_enrich_platform_map`` keys ``platform_slug`` / ``has_games`` /
         BIOS-folder file lookups on the raw RomM/BIOS-folder slug (ADR-0010 §4)
         but must feed the resolved RetroDECK system to the ``get_active_core`` /
-        ``get_available_cores`` seams (ADR-0010 §2).
+        ``get_emulator_options`` seams (ADR-0010 §2).
         """
         from unittest.mock import AsyncMock, MagicMock
 
+        from tests.fakes.fake_core_info_provider import libretro_option
+
         core_info = FakeCoreInfoProvider(
             active_core=("flycast_libretro", "Flycast"),
-            available_cores=[{"label": "Flycast", "so": "flycast_libretro"}],
+            options=[libretro_option("flycast_libretro", "Flycast")],
         )
         resolver = FakeSystemResolver(mapping={"dc": "dreamcast"})
         fw = _make_firmware_service(core_info=core_info, resolve_system=resolver)
@@ -311,10 +313,20 @@ class TestGetFirmwareStatus:
         assert dc_plat["platform_slug"] == "dc"
         # Active-core data resolved under the NORMALIZED system surfaces on the entry.
         assert dc_plat["active_core"] == "flycast_libretro"
-        assert dc_plat["available_cores"] == [{"label": "Flycast", "so": "flycast_libretro"}]
+        assert dc_plat["emulator_data_available"] is True
+        assert dc_plat["emulators"] == [
+            {
+                "label": "Flycast",
+                "kind": "libretro",
+                "core_so": "flycast_libretro",
+                "is_default": True,
+                "bakeable": True,
+                "reason": None,
+            }
+        ]
         # Both core read seams received the NORMALIZED system, not the raw slug.
         assert core_info.active_core_calls == ["dreamcast"]
-        assert core_info.available_cores_calls == ["dreamcast"]
+        assert core_info.emulator_options_calls == ["dreamcast"]
         assert resolver.calls == [("dc", None)]
 
     @pytest.mark.asyncio
@@ -1421,7 +1433,7 @@ class TestCheckPlatformBiosSlugNormalization:
         # The active-core read seam received the NORMALIZED system.
         assert core_info.active_core_calls == [system]
         # The BIOS path no longer reads available cores at all.
-        assert core_info.available_cores_calls == []
+        assert core_info.emulator_options_calls == []
         assert resolver.calls == [(slug, None)]
 
 
@@ -1462,7 +1474,7 @@ class TestCheckPlatformBiosNoCoreFields:
         assert "active_core_label" not in result
         assert "available_cores" not in result
         # The BIOS path never reads the available-cores seam.
-        assert core_info.available_cores_calls == []
+        assert core_info.emulator_options_calls == []
 
     @pytest.mark.asyncio
     async def test_offline_no_registry_omits_core_fields(self, plugin, fw):
@@ -1485,7 +1497,7 @@ class TestCheckPlatformBiosNoCoreFields:
         assert result == {"needs_bios": False}
         assert "active_core" not in result
         assert "available_cores" not in result
-        assert core_info.available_cores_calls == []
+        assert core_info.emulator_options_calls == []
 
     @pytest.mark.asyncio
     async def test_needs_bios_true_omits_core_fields(self, tmp_path):
@@ -1537,7 +1549,7 @@ class TestCheckPlatformBiosNoCoreFields:
         assert "active_core" not in result
         assert "active_core_label" not in result
         assert "available_cores" not in result
-        assert core_info.available_cores_calls == []
+        assert core_info.emulator_options_calls == []
 
 
 class TestDownloadRequiredFirmware:
@@ -2653,7 +2665,7 @@ class TestCheckPlatformBiosCached:
         assert "active_core" not in result
         assert "active_core_label" not in result
         assert "available_cores" not in result
-        assert core_info.available_cores_calls == []
+        assert core_info.emulator_options_calls == []
 
     def test_returns_bios_status_from_cache(self, tmp_path):
         """Cache populated with matching firmware → BIOS status with cached_at, no core fields."""
@@ -2684,7 +2696,7 @@ class TestCheckPlatformBiosCached:
         assert "active_core" not in result
         assert "active_core_label" not in result
         assert "available_cores" not in result
-        assert core_info.available_cores_calls == []
+        assert core_info.emulator_options_calls == []
         assert len(result["files"]) == 1
         assert result["files"][0]["file_name"] == "gba_bios.bin"
 
@@ -2754,7 +2766,7 @@ class TestCheckPlatformBiosCached:
         # The active-core read seam received the NORMALIZED system.
         assert core_info.active_core_calls == [system]
         # The BIOS path no longer reads available cores at all.
-        assert core_info.available_cores_calls == []
+        assert core_info.emulator_options_calls == []
         assert resolver.calls == [(slug, None)]
 
 

@@ -228,15 +228,15 @@ class TestCoreCallableDelegation:
 
     @pytest.mark.asyncio
     async def test_get_platform_core_info_delegates(self, plugin):
-        # Core info is served via its OWN path (CoreService.get_available_cores),
+        # Core info is served via its OWN path (CoreService.get_platform_core_info),
         # keyed by rom_id so the per-game active core (override or system default)
         # surfaces, independent of the BIOS firmware status (#923).
-        plugin._core_service.get_available_cores = AsyncMock(
-            return_value={"cores": [], "active_core": "snes9x_libretro", "active_core_label": "Snes9x"}
+        plugin._core_service.get_platform_core_info = AsyncMock(
+            return_value={"emulators": [], "active_core": "snes9x_libretro", "active_core_label": "Snes9x"}
         )
         result = await plugin.get_platform_core_info(42)
-        plugin._core_service.get_available_cores.assert_awaited_once_with(42)
-        assert result == {"cores": [], "active_core": "snes9x_libretro", "active_core_label": "Snes9x"}
+        plugin._core_service.get_platform_core_info.assert_awaited_once_with(42)
+        assert result == {"emulators": [], "active_core": "snes9x_libretro", "active_core_label": "Snes9x"}
 
 
 class TestFirmwareCallableDelegation:

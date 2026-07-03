@@ -1,9 +1,14 @@
 """ES-DE configuration adapter.
 
-Owns the read-only I/O for resolving RetroArch cores from ES-DE's
-``es_systems.xml`` and the bundled ``core_defaults.json``. The system-layer
-active core is the es_systems default with ``core_defaults`` as fallback; the
-retired ES-DE gamelist is never read or written. The plugin-owned deviations
+Owns the read-only I/O for resolving emulators from ES-DE's live
+``es_systems.xml``. That file is the single source of truth: the system-layer
+default emulator is the first *safely-bakeable* command in document order, the
+picker offers every command annotated with its bakeability, and the libretro
+active core (for the firmware BIOS filter) is the first RetroArch command. There
+is no offline snapshot — RetroDECK is a hard prerequisite, so when
+``es_systems.xml`` cannot be read there is no emulator to launch into and the
+adapter reports "unavailable" rather than inventing a fallback. The retired
+ES-DE gamelist is never read or written; the plugin-owned deviations
 (per-platform core in ``settings.json``, per-game pin in the ``roms`` store) are
 layered on top by :class:`services.active_core_resolver.ActiveCoreResolver`, not
 here.
@@ -11,16 +16,17 @@ here.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 from typing import TYPE_CHECKING, Any
 
 from adapters.flatpak_install import flatpak_app_files_dirs
-from domain.shortcut_data import EmulatorInvocation
+from domain.emulator_commands import classify_command, option_to_invocation, select_default_option
 
 if TYPE_CHECKING:
     import logging
+
+    from domain.shortcut_data import EmulatorInvocation
 
 _CORE_SO_RE = re.compile(r"%CORE_RETROARCH%/([\w-]+_libretro)\.so")
 
@@ -43,15 +49,15 @@ _ES_SYSTEMS_SUFFIXES = (
 
 
 class CoreResolver:
-    """Resolves the system-layer active RetroArch core for ES-DE systems.
+    """Resolves the system-layer emulator for ES-DE systems from live es_systems.
 
-    Reads ``es_systems.xml`` from the RetroDECK flatpak install and falls back
-    to a bundled ``core_defaults.json``. This is the system layer only — the
-    es_systems default, ``core_defaults`` fallback, and the available-cores
-    enumeration. The plugin-owned per-platform/per-game deviations are layered
-    on top by :class:`services.active_core_resolver.ActiveCoreResolver`. Caches
-    its file reads as instance attributes; call :meth:`reset_cache` to force a
-    re-read.
+    Reads ``es_systems.xml`` from the RetroDECK flatpak install — the single
+    source of truth. This is the system layer only: the libretro active core
+    (for the firmware BIOS filter), the default emulator (first safely-bakeable
+    command), and the full classified command list for the picker. The
+    plugin-owned per-platform/per-game deviations are layered on top by
+    :class:`services.active_core_resolver.ActiveCoreResolver`. Caches its file
+    read as an instance attribute; call :meth:`reset_cache` to force a re-read.
 
     Implements the ``CoreInfoProvider`` Protocol structurally.
     """
@@ -68,125 +74,74 @@ class CoreResolver:
         self._es_systems_cache: dict[str, Any] | None = None
         self._es_systems_mtime: float | None = None
         self._es_systems_path: str | None = None
-        self._core_defaults_cache: dict[str, Any] | None = None
-        self._core_defaults_mtime: float | None = None
-        self._core_defaults_path: str | None = None
 
     def reset_cache(self) -> None:
-        """Drop cached ``es_systems.xml`` and ``core_defaults.json`` reads.
+        """Drop the cached ``es_systems.xml`` parse.
 
         Call after a per-platform core write so the next resolution re-reads
-        from disk instead of returning a stale parse. The mtime guards in the
-        loaders already re-read on a flatpak update; this forces it eagerly.
+        from disk instead of returning a stale parse. The mtime guard in the
+        loader already re-reads on a flatpak update; this forces it eagerly.
         """
         self._es_systems_cache = None
         self._es_systems_mtime = None
         self._es_systems_path = None
-        self._core_defaults_cache = None
-        self._core_defaults_mtime = None
-        self._core_defaults_path = None
 
     # -- public API ----------------------------------------------------------
 
     def get_active_core(self, system_name):
-        """Resolve the system-layer active core for a system.
+        """Resolve the system-layer libretro active core for a system.
 
-        Resolution chain:
-        1. Live es_systems.xml default
-        2. Static core_defaults.json fallback
-        3. (None, None) if both fail
-
-        Returns: (core_so_name, label) or (None, None).
+        The first RetroArch ``<command>`` in ``es_systems.xml`` (the libretro
+        ``default_core``). Libretro-only by design — this feeds the firmware
+        layer's system-level BIOS filter, which keys on a RetroArch core, not
+        the launch-layer default (which may be a standalone emulator). Returns
+        ``(core_so_name, label)`` or ``(None, None)`` when the system is unknown
+        or ``es_systems.xml`` cannot be read.
         """
-        es_systems = self._load_es_systems()
-        system_info = es_systems.get(system_name)
-
-        # Use live es_systems.xml default
+        system_info = self._load_es_systems().get(system_name)
         if system_info and system_info.get("default_core"):
             return (system_info["default_core"], system_info["default_label"])
-
-        # Fallback to core_defaults.json
-        defaults = self._load_core_defaults()
-        default_info = defaults.get(system_name, {})
-        if default_info.get("default_core"):
-            return (default_info["default_core"], default_info.get("default_label"))
-
         return (None, None)
 
     def get_default_emulator(self, system_name: str) -> EmulatorInvocation | None:
         """Resolve the system-layer default **emulator** (libretro OR standalone).
 
-        Some systems (PS2, PS3, …) launch on a **standalone** emulator, not a
-        RetroArch core, so the libretro-only :meth:`get_active_core` cannot
-        describe them. This is the standalone-aware system layer:
-
-        1. If ``core_defaults.json`` marks this system with a curated
-           ``standalone`` preference (``{"label", "command"}``), bake that
-           emulator — preferring the **live** ``es_systems.xml`` command text for
-           that label (so a RetroDECK update is picked up) and falling back to the
-           bundled command. A curated label is needed because ES-DE's *first*
-           command isn't always the right one to bake (e.g. PS3's first command is
-           the shortcut form, not the direct ``--no-gui`` launch).
-        2. Otherwise fall back to the libretro default (:meth:`get_active_core`).
-        3. ``None`` when neither resolves — the caller bakes the plain launch.
+        The first *safely-bakeable* command in ``es_systems.xml`` document order
+        (:func:`domain.emulator_commands.select_default_option`) rendered into an
+        :class:`EmulatorInvocation` — a libretro core or a standalone emulator,
+        whichever ES-DE lists first that the plugin can bake. Returns ``None``
+        when nothing is bakeable (or ``es_systems.xml`` cannot be read); the
+        caller bakes the plain RetroDECK launch and lets RetroDECK resolve the
+        emulator itself.
 
         Keeps the read-path/launch-path invariant: the resolved emulator is both
         what the ROM launches with and what derived values key on.
         """
-        defaults = self._load_core_defaults()
-        pref = defaults.get(system_name, {}).get("standalone")
-        if pref and pref.get("label"):
-            live = self._load_es_systems().get(system_name)
-            command = (live or {}).get("commands", {}).get(pref["label"]) or pref.get("command")
-            if command:
-                return EmulatorInvocation.standalone(command, pref["label"])
+        result = self.get_emulator_options(system_name)
+        if not result["available"]:
+            return None
+        return option_to_invocation(select_default_option(result["options"]))
 
-        core_so, label = self.get_active_core(system_name)
-        if core_so:
-            return EmulatorInvocation.libretro(core_so, label)
-        return None
+    def get_emulator_options(self, system_name: str) -> dict[str, Any]:
+        """Return every ES-DE ``<command>`` for a system, classified for bakeability.
 
-    def get_available_cores(self, system_name):
-        """Return available RetroArch cores for a system.
-
-        Merges live es_systems.xml data with core_defaults.json fallback.
-        Returns: [{"core_so": str, "label": str, "is_default": bool}, ...]
-        Empty list if system is unknown.
+        Returns ``{"available": bool, "options": [EmulatorOption, ...]}``.
+        ``available`` is ``False`` when ``es_systems.xml`` cannot be found or
+        parsed — the caller surfaces that as "emulator list unavailable" (the
+        launch-gate / health-banner owns the failure UX) rather than seeing an
+        empty list it can't distinguish from a system with no commands.
+        ``options`` preserves ES-DE's document order, so the first bakeable entry
+        is the system default. An unknown system on a readable file yields
+        ``available: True`` with an empty list.
         """
         es_systems = self._load_es_systems()
+        if not es_systems:
+            return {"available": False, "options": []}
         system_info = es_systems.get(system_name)
-
-        if system_info and system_info.get("cores"):
-            default_core = system_info.get("default_core")
-            cores = [
-                {"core_so": core_so, "label": label, "is_default": core_so == default_core}
-                for core_so, label in system_info["cores"].items()
-            ]
-            self._logger.debug(
-                "es_de_config: get_available_cores(%s) -> %d cores from es_systems.xml",
-                system_name,
-                len(cores),
-            )
-            return cores
-
-        # Fallback to core_defaults.json
-        defaults = self._load_core_defaults()
-        default_info = defaults.get(system_name, {})
-        if default_info.get("cores"):
-            default_core = default_info.get("default_core")
-            cores = [
-                {"core_so": core_so, "label": label, "is_default": core_so == default_core}
-                for core_so, label in default_info["cores"].items()
-            ]
-            self._logger.debug(
-                "es_de_config: get_available_cores(%s) -> %d cores from core_defaults.json (fallback)",
-                system_name,
-                len(cores),
-            )
-            return cores
-
-        self._logger.debug("es_de_config: get_available_cores(%s) -> no cores found", system_name)
-        return []
+        if not system_info:
+            return {"available": True, "options": []}
+        options = [classify_command(label, text) for label, text in system_info["commands"].items()]
+        return {"available": True, "options": options}
 
     def system_supports_m3u(self, system_name: str) -> bool:
         """True iff ES-DE lists ``.m3u`` as a supported extension for *system_name*.
@@ -249,7 +204,6 @@ class CoreResolver:
                 "cores": {},
                 "label_to_core": {},
                 "commands": {},
-                "first_command_label": None,
                 "extensions": set(),
             }
         elif name == "command":
@@ -275,17 +229,15 @@ class CoreResolver:
         """Handle </command> inside a <system> — capture the command + any core info.
 
         Records EVERY ``<command>`` (libretro AND standalone) as ``label →
-        command text`` in ``commands``, and remembers the FIRST command's label
-        (ES-DE's true default emulator) in ``first_command_label``. Standalone
-        commands (PCSX2, RPCS3, …) carry no ``%CORE_RETROARCH%/<core>.so`` token,
-        so they don't populate the libretro ``cores`` / ``default_core`` maps —
-        those stay libretro-only for the BIOS/save/menu read-paths — but their
-        command text is now available for the standalone launch bake.
+        command text`` in ``commands`` (in document order — the classifier reads
+        that order to pick the default emulator). Standalone commands (PCSX2,
+        RPCS3, …) carry no ``%CORE_RETROARCH%/<core>.so`` token, so they don't
+        populate the libretro ``cores`` / ``default_core`` maps — those stay
+        libretro-only for the firmware BIOS filter — but their command text
+        feeds the standalone launch bake and the picker.
         """
         label = state["current_label"]
         sys["commands"][label] = text
-        if sys["first_command_label"] is None:
-            sys["first_command_label"] = label
 
         match = _CORE_SO_RE.search(text)
         if not match:
@@ -308,7 +260,6 @@ class CoreResolver:
                 "cores": sys["cores"],
                 "label_to_core": sys["label_to_core"],
                 "commands": sys["commands"],
-                "first_command_label": sys["first_command_label"],
                 "extensions": sys["extensions"],
             }
         state["current_system"] = None
@@ -340,12 +291,12 @@ class CoreResolver:
 
         Returns: ``{system_name: {"default_core": str | None, "default_label":
         str | None, "cores": {core_so: label}, "label_to_core": {label:
-        core_so}, "commands": {label: command_text}, "first_command_label": str |
-        None, "extensions": set[str]}}``. ``cores``/``default_core`` are
-        libretro-only; ``commands`` holds every ``<command>`` (libretro AND
-        standalone) and ``first_command_label`` is ES-DE's true default emulator.
-        ``extensions`` holds the lowercased ``<extension>`` tokens ES-DE uses to
-        decide directory-collapse.
+        core_so}, "commands": {label: command_text}, "extensions": set[str]}}``.
+        ``cores``/``default_core`` are libretro-only (the firmware BIOS filter);
+        ``commands`` holds every ``<command>`` (libretro AND standalone) in
+        document order — the classifier reads that order to pick the default
+        emulator. ``extensions`` holds the lowercased ``<extension>`` tokens
+        ES-DE uses to decide directory-collapse.
 
         Returns empty dict if file can't be parsed or fails structural validation.
         """
@@ -396,41 +347,6 @@ class CoreResolver:
 
     # -- internal cache methods ----------------------------------------------
 
-    def _load_core_defaults(self) -> dict[str, Any]:
-        """Load the static core_defaults.json fallback.
-
-        Re-reads from disk if the file's mtime has changed (handles plugin updates).
-        """
-        # Check plugin root first (Decky CLI moves defaults/ contents to root),
-        # then defaults/ subdirectory (dev deploys via mise run deploy)
-        root_path = os.path.join(self._plugin_dir, "core_defaults.json")
-        dev_path = os.path.join(self._plugin_dir, "defaults", "core_defaults.json")
-        defaults_path = root_path if os.path.exists(root_path) else dev_path
-
-        try:
-            current_mtime = os.path.getmtime(defaults_path)
-        except OSError:
-            current_mtime = None
-
-        if (
-            self._core_defaults_cache is not None
-            and self._core_defaults_path == defaults_path
-            and self._core_defaults_mtime == current_mtime
-        ):
-            return self._core_defaults_cache
-
-        try:
-            with open(defaults_path) as f:
-                data = json.load(f)
-            self._core_defaults_cache = data.get("systems", {})
-        except (OSError, json.JSONDecodeError) as e:
-            self._logger.warning("es_de_config: failed to load core_defaults.json: %s", e)
-            self._core_defaults_cache = {}
-
-        self._core_defaults_path = defaults_path
-        self._core_defaults_mtime = current_mtime
-        return self._core_defaults_cache or {}
-
     def _load_es_systems(self) -> dict[str, Any]:
         """Load and cache es_systems.xml parse result.
 
@@ -455,7 +371,10 @@ class CoreResolver:
             self._es_systems_mtime = current_mtime
         else:
             if self._es_systems_cache is None:
-                self._logger.info("es_de_config: es_systems.xml not found, using core_defaults.json fallback")
+                self._logger.info(
+                    "es_de_config: es_systems.xml not found — emulator resolution unavailable "
+                    "(RetroDECK installation not detected)"
+                )
             self._es_systems_cache = {}
             self._es_systems_path = None
             self._es_systems_mtime = None

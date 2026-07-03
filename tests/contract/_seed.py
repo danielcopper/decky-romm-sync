@@ -13,7 +13,6 @@ is called by the child seeders.
 
 from __future__ import annotations
 
-import json
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -147,26 +146,54 @@ def seed_server_save(harness: ContractHarness, **kwargs: Any) -> dict[str, Any]:
     return entry
 
 
-_DEFAULT_CORE_DEFAULTS: dict[str, Any] = {
-    "gba": {
-        "default_core": "mgba_libretro",
-        "default_label": "mGBA",
-        "cores": {"mgba_libretro": "mGBA", "vba_next_libretro": "VBA Next"},
-    }
-}
+# A minimal, real-shaped es_systems.xml: one ``gba`` system with an mGBA
+# default (first %CORE_RETROARCH% command) and a VBA Next alternative — two
+# bakeable libretro cores a core-selection contract test can pin/clear between.
+_DEFAULT_ES_SYSTEMS_XML = """\
+<?xml version="1.0"?>
+<systemList>
+  <system>
+    <name>gba</name>
+    <command label="mGBA">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/mgba_libretro.so %ROM%</command>
+    <command label="VBA Next">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/vba_next_libretro.so %ROM%</command>
+  </system>
+</systemList>
+"""
 
 
-def seed_core_defaults(harness: ContractHarness, systems: dict[str, Any] | None = None) -> None:
-    """Write ``<plugin_dir>/core_defaults.json`` for the real ``CoreResolver`` to read.
+def seed_es_systems(harness: ContractHarness, xml: str | None = None) -> None:
+    """Write a real-shaped ``es_systems.xml`` for the real ``CoreResolver`` to read.
 
-    The harness roots ``plugin_dir`` at ``tmp_path/plugin`` and no
-    ``es_systems.xml`` exists there, so :class:`CoreResolver` resolves every
-    system through this bundled fallback (``resolve_system`` passes an unmapped
-    slug through unchanged, so ``"gba"`` keys directly). The default seeds a
-    single ``gba`` system with an mGBA default and a VBA Next alternative — two
-    resolvable cores a core-selection contract test can pin/clear between.
+    The harness roots ``user_home`` at ``tmp_path/home``; the resolver probes the
+    per-user flatpak files tree under it (the contract conftest repoints the
+    system root away, so this seed is the only source). The file lands at the
+    ``…/systems/linux/es_systems.xml`` path ES-DE ships. The default seeds a
+    single ``gba`` system with an mGBA default and a VBA Next alternative.
     """
-    plugin_dir = os.path.join(str(harness.tmp_path), "plugin")
-    os.makedirs(plugin_dir, exist_ok=True)
-    with open(os.path.join(plugin_dir, "core_defaults.json"), "w") as f:
-        json.dump({"systems": systems if systems is not None else _DEFAULT_CORE_DEFAULTS}, f)
+    files_dir = os.path.join(
+        str(harness.tmp_path),
+        "home",
+        ".local",
+        "share",
+        "flatpak",
+        "app",
+        "net.retrodeck.retrodeck",
+        "current",
+        "active",
+        "files",
+    )
+    dest = os.path.join(
+        files_dir,
+        "retrodeck",
+        "components",
+        "es-de",
+        "share",
+        "es-de",
+        "resources",
+        "systems",
+        "linux",
+        "es_systems.xml",
+    )
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with open(dest, "w") as f:
+        f.write(xml if xml is not None else _DEFAULT_ES_SYSTEMS_XML)
