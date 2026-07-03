@@ -175,6 +175,21 @@ skips it and bakes the next command (the direct `--no-gui` launch): the shortcut
 standalone invocation. The kind is `libretro` when the command matches the strict RetroArch shape
 (`%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/<core>_libretro.so %ROM%`), else `standalone`.
 
+**Existence probe (a bakeable standalone whose emulator is not installed → `needs_setup` `not_installed`).** RetroDECK
+lists more standalone emulators in `es_systems.xml` than it bundles, so a system's bakeable default could name an
+emulator that is not on disk (Ryubing on `switch`, any un-installed external component) — baking it produces a shortcut
+that dies in ~0.4 s. To prevent that regression the adapter probes existence against the sibling `es_find_rules.xml`: it
+maps a standalone command's `%EMULATOR_<NAME>%` token to the find-rule entry, checks whether any of that entry's
+`staticpath` locations exist on disk (mapping the sandbox `/app` and `/var/{data,config}` prefixes to their host paths,
+glob-aware), and hands the verdict to the pure `downgrade_if_not_installed(option, installed)` rule — which turns a
+bakeable **standalone** whose emulator is absent into `needs_setup` with reason `not_installed`. It then drops out of
+`select_default_option` (the system plain-launches, as it did before #1210) and shows disabled in the picker. The probe
+is **absence-only** — it downgrades only on positive evidence that a RetroDECK component (`retrodeck/components/…` or
+`retrodeck/external_components/…`) is missing; a `systempath`-only emulator (binary on RetroDECK's sandbox `PATH`, not
+visible from outside), an emulator with no find rule, and the whole `es_find_rules.xml`-unreadable case are all assumed
+installed, so it never falsely downgrades. Libretro is always installed (RetroArch ships with RetroDECK), so libretro
+options are never downgraded. See [ADR-0020](../adr/0020-live-es-systems-emulator-resolution.md) §2.
+
 `get_emulator_options(system)` returns `{"available": bool, "options": [EmulatorOption, ...]}`. **`available` is `False`
 when `es_systems.xml` cannot be found or parsed** — the picker surfaces that as "Emulator list unavailable" rather than
 an empty list it cannot distinguish from a system with no commands; the launch degrades to plain. `options_to_payload`
@@ -427,6 +442,17 @@ The frontend confirm-sets each `rebake_items` entry on its live Steam shortcut t
 per-platform core change applies **immediately** to every installed game on the platform — no sync required. Because the
 `PlatformCoreReaderAdapter` holds the live settings dict, the fan-out resolves the value just written rather than a
 stale snapshot.
+
+The System page reads its per-platform data from the multi-platform `get_firmware_status` payload (not
+`get_platform_core_info`, which is the game-detail path). Each entry's **`active_core_label`** is the resolved display
+label the Emulator Core button shows: the per-platform override (`platform_cores`) when it is set and still resolves to
+a bakeable emulator, else the es_systems **default emulator** label (the first bakeable command — libretro _or_
+standalone). This is the platform-level projection of the read-path precedence (`FirmwareService`'s
+`_resolve_platform_emulator_label`, injected the same `PlatformCoreReader` the resolver uses), so after a per-platform
+pick the button reflects the applied selection on the next `refreshSystem` — the same way the game-detail menu does —
+and a standalone default reads its standalone label rather than the libretro system default. It is intentionally
+distinct from the payload's `active_core` (`core_so`), which stays the **libretro** system default the BIOS filter keys
+on (standalone-default BIOS accuracy is deferred by ADR-0020).
 
 ## Why the plugin always bakes the core, never the gamelist
 

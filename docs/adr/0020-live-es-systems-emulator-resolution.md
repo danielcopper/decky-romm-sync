@@ -84,6 +84,29 @@ the default, no curation. `get_default_emulator` renders that into the existing 
 form or a standalone command baked verbatim), and `get_emulator_options` ships the full classified list to the picker so
 un-bakeable commands are shown disabled with their reason rather than silently dropped.
 
+**The standalone existence probe.** RetroDECK lists more standalone emulators in `es_systems.xml` than it bundles — an
+emulator like Ryubing (switch), Eden, or any user-installed external component may be named by a `<command>` but not
+present on disk. Baking such a command produces a shortcut that dies in ~0.4 s (the emulator binary is missing), which
+is a regression for any system whose new bakeable default is a not-installed standalone (before #1210 those systems
+plain- launched and let RetroDECK resolve their emulator). So the adapter probes existence: alongside `es_systems.xml`
+it parses the sibling `es_find_rules.xml` (same systems dir, same mtime-cache), resolves each standalone command's
+`%EMULATOR_<NAME>%` token to its find-rule entry, and checks whether any of that entry's `staticpath` locations exist on
+disk — mapping the sandbox-relative prefixes to their host paths (`/app` → the RetroDECK flatpak `files` tree,
+`/var/{data,config}` → the app's `~/.var/app/net.retrodeck.retrodeck` trees, `~` → the user home, glob-aware). The pure
+`domain.emulator_commands.downgrade_if_not_installed(option, installed)` rule (adapter passes the verdict in, domain
+stays I/O-free) then turns a bakeable **standalone** whose emulator is absent into a `needs_setup` option with reason
+`not_installed`, so it drops out of `select_default_option` (the system plain-launches again) and shows disabled in the
+picker. Libretro options are never downgraded — RetroArch ships with RetroDECK, always installed.
+
+The probe is honest about its limits and **absence-only** — it never falsely downgrades an emulator it cannot verify. It
+reports "not installed" **only** on positive evidence that a RetroDECK-managed component is missing: the emulator has a
+`retrodeck/components/…` (bundled) or `retrodeck/external_components/…` (user-installed) `staticpath` and **none** of
+its staticpaths exist. It cannot check `systempath` entries (binaries on RetroDECK's own sandbox `PATH`, not visible
+from outside the sandbox), so a `systempath`-only emulator — or one whose find rule is absent, or one with only
+host-native staticpaths that are missing — is assumed installed. And when `es_find_rules.xml` itself cannot be read,
+nothing is downgraded. This keeps the probe purely additive: a normal RetroDECK install classifies exactly as before,
+minus the genuinely-missing standalones.
+
 ### 3. The precedence chain drops the snapshot layer; pins may name a standalone
 
 `ActiveCoreResolver.active_emulator_for_rom(rom_id)` is now a **three-layer** chain, then the plain launch:
@@ -115,9 +138,9 @@ Both pickers share one builder (`src/utils/emulatorMenu.ts` → `buildEmulatorMe
 (`RomMPlaySection`) and the System-page control (`SystemPage`, now a `ButtonItem` that opens the same context menu
 instead of a `DropdownItem`). Menu keys are the emulator LABEL. Bakeable entries are clickable, the default is marked
 `(default)`, and un-bakeable entries are **disabled** with reason copy — `inject` → "needs setup files (launch via ES-DE
-once)", `shortcut_script` → "script/shortcut form", everything else → "not launchable from Steam". When
-`emulator_data_available` is `false` the menu shows a single disabled "Emulator list unavailable — RetroDECK
-installation not found". The per-game "Use System Override" reset item is unchanged.
+once)", `not_installed` → "emulator not installed", `shortcut_script` → "script/shortcut form", everything else → "not
+launchable from Steam". When `emulator_data_available` is `false` the menu shows a single disabled "Emulator list
+unavailable — RetroDECK installation not found". The per-game "Use System Override" reset item is unchanged.
 
 ## Consequences
 
@@ -134,8 +157,14 @@ installation not found". The per-game "Use System Override" reset item is unchan
   shortcut (ADR-0012), a new RetroDECK default only reaches existing shortcuts on a full re-bake; a normal sync skips
   unchanged platforms. Unchanged from ADR-0012, restated because #1210 makes external default changes more frequent (any
   RetroDECK emulator addition can move a default).
-- **Some baked commands can point at an emulator binary the user has not installed** (see Deferred). The launch fails
-  the same way a plain launch would, so this is no worse than before — but it is now reachable for more systems.
+- **A not-installed standalone default degrades to a plain launch, not a dead shortcut.** The `es_find_rules.xml`
+  existence probe catches a standalone default whose emulator is missing (Ryubing on a switch that never installed it,
+  any un-installed external component) and downgrades it to `needs_setup`/`not_installed`, so the system falls back to
+  the next bakeable command or the plain RetroDECK launch — restoring the pre-#1210 behavior for that system instead of
+  baking a shortcut that dies in ~0.4 s. The probe is absence-only and cannot see `systempath` binaries inside
+  RetroDECK's sandbox, so an emulator installed only that way is (correctly) still treated as available; the residual
+  gap is a standalone that is genuinely missing **and** has only a `systempath` find rule, which the probe cannot prove
+  absent.
 
 ## Alternatives considered
 
@@ -155,10 +184,6 @@ installation not found". The per-game "Use System Override" reset item is unchan
 
 ## Deferred (deliberately)
 
-- **A binary-existence probe for user-supplied emulators.** Some standalone emulators (PICO-8, and any XRoar / Ryubing /
-  Cemu the user has not installed) are baked as the default even when the binary is absent. A plain launch would fail
-  the same way, so this is not a regression — but a probe that checks whether the emulator binary exists could degrade
-  gracefully to the next bakeable option instead. Not built until a real case surfaces.
 - **`%STARTDIR%` support.** Needs an upstream `run_game.sh` change (honor the directory) or a plugin-side wrapper that
   `cd`s before exec. Until then, `%STARTDIR%` commands are un-bakeable and, if they are a system's only command, the ROM
   plain-launches.
@@ -200,6 +225,15 @@ directory than the libretro core it replaces.
 | tanodragon | XRoar (Standalone)             |
 | triforce   | Dolphin (Standalone)           |
 | wiiu       | Cemu (Standalone)              |
+
+**Caveat (the existence probe gates each B flip on the emulator being installed).** Each of these is a flip **only when
+the standalone emulator is actually installed in RetroDECK**. The `es_find_rules.xml` existence probe (see Decision §2)
+re-checks this per install: on the machine this list was generated against, every emulator above is bundled **except**
+Ryubing — RetroDECK ships `switch`'s Ryubing command but not the binary — so `switch` does **not** flip there and stays
+a plain launch until the user installs Ryubing. The other eight flip because their emulators (XRoar, Ruffle, PrimeHack,
+Solarus, Dolphin, Cemu) are RetroDECK-bundled and resolve on disk. A later RetroDECK update that bundles Ryubing (or a
+user who installs it as an external component) turns `switch` into a real flip with no code change — the probe follows
+the install, the same way the default follows `es_systems.xml`.
 
 **C. baked (generic, likely broken) libretro → plain launch (12):** the platform's only libretro command is a quoted
 MAME template that cannot be baked, and the standalone MAME uses `\;` / `%STARTDIR%` — both un-bakeable, so the default

@@ -8,7 +8,7 @@ from unittest import mock
 
 import pytest
 
-from adapters.es_de_config import CoreResolver
+from adapters.es_de_config import CoreResolver, _emulator_token
 from domain.shortcut_data import EmulatorInvocation
 
 # conftest.py patches decky before this import.
@@ -741,3 +741,207 @@ class TestMtimeInvalidation:
                 assert result1 == result2
         finally:
             os.unlink(path)
+
+
+# es_systems with three standalone-default systems whose emulators the probe
+# classifies differently: switch (Ryubing — RetroDECK component), psp (PPSSPP —
+# RetroDECK component), and atari8 (Atari800 — systempath-only, unverifiable).
+PROBE_ES_SYSTEMS_XML = """\
+<?xml version="1.0"?>
+<systemList>
+  <system>
+    <name>switch</name>
+    <command label="Ryubing (Standalone)">%EMULATOR_RYUBING% %ROM%</command>
+  </system>
+  <system>
+    <name>psp</name>
+    <command label="PPSSPP (Standalone)">%EMULATOR_PPSSPP% -b %ROM%</command>
+    <command label="PPSSPP">%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/ppsspp_libretro.so %ROM%</command>
+  </system>
+  <system>
+    <name>atari8</name>
+    <command label="Atari800 (Standalone)">%EMULATOR_ATARI800% %ROM%</command>
+  </system>
+  <system>
+    <name>flash</name>
+    <command label="Ruffle (Standalone)">%EMULATOR_RUFFLE% %ROM%</command>
+  </system>
+</systemList>
+"""
+
+# es_find_rules mixing the shapes the probe must reason about: a RetroDECK
+# component with both a bundled (/app) and an external (/var/data) staticpath
+# (RYUBING, PPSSPP, RUFFLE), and a systempath-only emulator with no staticpath at
+# all (ATARI800 — unverifiable from outside the sandbox → assumed installed).
+PROBE_ES_FIND_RULES_XML = """\
+<?xml version="1.0"?>
+<ruleList>
+  <emulator name="RYUBING">
+    <rule type="systempath">
+      <entry>ryubing</entry>
+    </rule>
+    <rule type="staticpath">
+      <entry>/app/retrodeck/components/ryubing/component_launcher.sh</entry>
+      <entry>/var/data/retrodeck/external_components/ryubing/component_launcher.sh</entry>
+    </rule>
+  </emulator>
+  <emulator name="PPSSPP">
+    <rule type="staticpath">
+      <entry>/app/retrodeck/components/ppsspp/component_launcher.sh</entry>
+    </rule>
+  </emulator>
+  <emulator name="RUFFLE">
+    <rule type="staticpath">
+      <entry>/app/retrodeck/components/ruffle/component_launcher.sh</entry>
+      <entry>/var/data/retrodeck/external_components/ruffle/component_launcher.sh</entry>
+    </rule>
+  </emulator>
+  <emulator name="ATARI800">
+    <rule type="systempath">
+      <entry>atari800</entry>
+    </rule>
+  </emulator>
+</ruleList>
+"""
+
+
+def _es_find_rules_path(files_dir, *, flavor: str) -> str:
+    """``es_find_rules.xml`` path beside ``es_systems.xml`` for *flavor*."""
+    return os.path.join(os.path.dirname(_es_systems_path(files_dir, flavor=flavor)), "es_find_rules.xml")
+
+
+def _component_launcher(files_dir, component: str) -> str:
+    """Bundled RetroDECK component launcher path under the flatpak files tree."""
+    return os.path.join(files_dir, "retrodeck", "components", component, "component_launcher.sh")
+
+
+def _external_component_launcher(user_home, component: str) -> str:
+    """User-installed external RetroDECK component launcher (sandbox ``/var/data``)."""
+    return os.path.join(
+        user_home,
+        ".var",
+        "app",
+        "net.retrodeck.retrodeck",
+        "data",
+        "retrodeck",
+        "external_components",
+        component,
+        "component_launcher.sh",
+    )
+
+
+def _touch(path: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write("#!/bin/sh\n")
+
+
+class TestStandaloneInstalledProbe:
+    """``get_emulator_options`` downgrades bakeable standalones whose emulator is absent.
+
+    Exercises the real ``find_es_systems_xml`` → ``find_es_find_rules_xml`` →
+    on-disk probe path over a fabricated per-user flatpak tree (no mocking of the
+    resolution seams), so the sandbox ``/app`` and ``/var/data`` prefix mappings
+    are validated against real files.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_system_root(self, tmp_path):
+        with mock.patch("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", str(tmp_path / "nonexistent_system_root")):
+            yield
+
+    def _seed(self, tmp_path, *, installed_components=(), external_components=()):
+        """Lay down es_systems.xml + es_find_rules.xml and the named component launchers."""
+        files_dir = str(_user_files_dir(tmp_path))
+        linux_systems = _es_systems_path(files_dir, flavor="linux")
+        os.makedirs(os.path.dirname(linux_systems))
+        with open(linux_systems, "w") as f:
+            f.write(PROBE_ES_SYSTEMS_XML)
+        with open(_es_find_rules_path(files_dir, flavor="linux"), "w") as f:
+            f.write(PROBE_ES_FIND_RULES_XML)
+        for component in installed_components:
+            _touch(_component_launcher(files_dir, component))
+        for component in external_components:
+            _touch(_external_component_launcher(str(tmp_path), component))
+        return _make_resolver(user_home=str(tmp_path))
+
+    def _status(self, resolver, system, label):
+        option = next(o for o in resolver.get_emulator_options(system)["options"] if o.label == label)
+        return option.status, option.reason
+
+    def test_missing_retrodeck_component_downgrades_to_not_installed(self, tmp_path):
+        # Only ppsspp is installed; ryubing's bundled + external component are both absent.
+        resolver = self._seed(tmp_path, installed_components=["ppsspp"])
+        assert self._status(resolver, "switch", "Ryubing (Standalone)") == ("needs_setup", "not_installed")
+
+    def test_switch_default_falls_back_to_plain_launch(self, tmp_path):
+        # switch's only bakeable command is the missing Ryubing → no default → plain launch.
+        resolver = self._seed(tmp_path, installed_components=["ppsspp"])
+        assert resolver.get_default_emulator("switch") is None
+
+    def test_installed_bundled_component_stays_bakeable(self, tmp_path):
+        resolver = self._seed(tmp_path, installed_components=["ppsspp"])
+        assert self._status(resolver, "psp", "PPSSPP (Standalone)") == ("bakeable", None)
+        assert resolver.get_default_emulator("psp") == EmulatorInvocation.standalone(
+            "%EMULATOR_PPSSPP% -b %ROM%", "PPSSPP (Standalone)"
+        )
+
+    def test_external_component_counts_as_installed(self, tmp_path):
+        # ryubing installed as a user external component under /var/data → installed.
+        resolver = self._seed(tmp_path, installed_components=["ppsspp"], external_components=["ryubing"])
+        assert self._status(resolver, "switch", "Ryubing (Standalone)") == ("bakeable", None)
+
+    def test_systempath_only_emulator_assumed_installed(self, tmp_path):
+        # ATARI800 has no staticpath rule — unverifiable from outside the sandbox,
+        # so it is never downgraded (the probe only acts on positive absence).
+        resolver = self._seed(tmp_path)
+        assert self._status(resolver, "atari8", "Atari800 (Standalone)") == ("bakeable", None)
+
+    def test_libretro_option_never_downgraded(self, tmp_path):
+        # psp's libretro command stays bakeable regardless of standalone probing.
+        resolver = self._seed(tmp_path)
+        assert self._status(resolver, "psp", "PPSSPP") == ("bakeable", None)
+
+    def test_absent_find_rules_leaves_everything_installed(self, tmp_path):
+        # es_find_rules.xml missing → cannot disprove → no downgrade (additive probe).
+        files_dir = str(_user_files_dir(tmp_path))
+        linux_systems = _es_systems_path(files_dir, flavor="linux")
+        os.makedirs(os.path.dirname(linux_systems))
+        with open(linux_systems, "w") as f:
+            f.write(PROBE_ES_SYSTEMS_XML)
+        resolver = _make_resolver(user_home=str(tmp_path))
+        assert resolver.find_es_find_rules_xml() is None
+        assert self._status(resolver, "switch", "Ryubing (Standalone)") == ("bakeable", None)
+
+    def test_find_rules_resolved_beside_es_systems(self, tmp_path):
+        resolver = self._seed(tmp_path)
+        found = resolver.find_es_find_rules_xml()
+        assert found is not None
+        assert found.endswith(os.path.join("systems", "linux", "es_find_rules.xml"))
+
+    def test_reset_cache_reprobes_after_component_appears(self, tmp_path):
+        # A downgraded standalone flips back to bakeable once the component is
+        # installed and the cache is reset (the mtime guard is per-file; reset is
+        # the eager path a per-platform write already takes).
+        resolver = self._seed(tmp_path)
+        assert self._status(resolver, "switch", "Ryubing (Standalone)") == ("needs_setup", "not_installed")
+        _touch(_component_launcher(str(_user_files_dir(tmp_path)), "ryubing"))
+        resolver.reset_cache()
+        assert self._status(resolver, "switch", "Ryubing (Standalone)") == ("bakeable", None)
+
+
+class TestEmulatorToken:
+    """``_emulator_token`` extracts the find-rule name from a command."""
+
+    @pytest.mark.parametrize(
+        ("command", "expected"),
+        [
+            ("%EMULATOR_RYUBING% %ROM%", "RYUBING"),
+            ("env QT_QPA_PLATFORM=xcb %EMULATOR_DOLPHIN% -b -e %ROM%", "DOLPHIN"),
+            ("%EMULATOR_PICO-8% -root_path %GAMEDIR% -run %ROM%", "PICO-8"),
+            ("%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/swanstation_libretro.so %ROM%", "RETROARCH"),
+            ("no token here %ROM%", None),
+        ],
+    )
+    def test_token_extraction(self, command, expected):
+        assert _emulator_token(command) == expected

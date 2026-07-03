@@ -18,6 +18,7 @@ import pytest
 from domain.emulator_commands import (
     EmulatorOption,
     classify_command,
+    downgrade_if_not_installed,
     label_to_invocation,
     option_to_invocation,
     options_to_payload,
@@ -108,6 +109,58 @@ class TestClassifyCommand:
         option = classify_command("Dolphin (Standalone)", GC_DOLPHIN_STANDALONE)
         assert option.status == "bakeable"
         assert option.kind == "standalone"
+
+
+class TestDowngradeIfNotInstalled:
+    """The pure half of the standalone existence probe (ADR-0020)."""
+
+    def test_bakeable_standalone_missing_becomes_needs_setup(self):
+        option = classify_command("Ryubing (Standalone)", "%EMULATOR_RYUBING% %ROM%")
+        result = downgrade_if_not_installed(option, emulator_installed=False)
+        assert result.status == "needs_setup"
+        assert result.reason == "not_installed"
+        # Identity fields survive the downgrade.
+        assert result.label == "Ryubing (Standalone)"
+        assert result.kind == "standalone"
+        assert result.command == "%EMULATOR_RYUBING% %ROM%"
+
+    def test_bakeable_standalone_installed_unchanged(self):
+        option = classify_command("PCSX2 (Standalone)", PS2_PCSX2_BATCH)
+        assert downgrade_if_not_installed(option, emulator_installed=True) == option
+
+    def test_libretro_never_downgraded_even_when_flagged_missing(self):
+        # RetroArch ships with RetroDECK — a libretro option is always installed,
+        # and the kind guard means the missing flag is ignored regardless.
+        option = classify_command("SwanStation", PSX_SWANSTATION)
+        assert downgrade_if_not_installed(option, emulator_installed=False) == option
+
+    def test_already_needs_setup_unchanged(self):
+        option = classify_command("Vita3K", VITA3K_INJECT_NO_ROM)
+        assert downgrade_if_not_installed(option, emulator_installed=False) == option
+
+    def test_already_unbakeable_unchanged(self):
+        option = classify_command("RPCS3 Shortcut (Standalone)", PS3_RPCS3_SHORTCUT)
+        assert downgrade_if_not_installed(option, emulator_installed=False) == option
+
+    def test_downgraded_option_drops_out_of_default_selection(self):
+        # A system whose only bakeable command is a missing standalone resolves to
+        # no default → the caller plain-launches (the pre-standalone behavior).
+        missing = downgrade_if_not_installed(
+            classify_command("Ryubing (Standalone)", "%EMULATOR_RYUBING% %ROM%"),
+            emulator_installed=False,
+        )
+        assert select_default_option([missing]) is None
+        assert label_to_invocation([missing], "Ryubing (Standalone)") is None
+
+    def test_downgraded_option_reads_disabled_with_reason_in_payload(self):
+        missing = downgrade_if_not_installed(
+            classify_command("Ryubing (Standalone)", "%EMULATOR_RYUBING% %ROM%"),
+            emulator_installed=False,
+        )
+        payload = options_to_payload([missing])
+        assert payload[0]["bakeable"] is False
+        assert payload[0]["reason"] == "not_installed"
+        assert payload[0]["is_default"] is False
 
 
 class TestSelectDefaultOption:

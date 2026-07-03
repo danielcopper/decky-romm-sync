@@ -17,7 +17,7 @@ command becomes that invocation.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from domain.shortcut_data import EmulatorInvocation
@@ -65,13 +65,16 @@ class EmulatorOption:
 
     - ``"bakeable"`` — a real emulator invocation ending in ``%ROM%`` the plugin
       can bake into a shortcut ``-e`` override (``reason`` is ``None``).
-    - ``"needs_setup"`` — a ``%INJECT%`` form that needs ES-DE to generate a
-      sidecar first; launchable from Steam only after ES-DE has run it once.
+    - ``"needs_setup"`` — a command that is well-formed but not yet launchable
+      from Steam as-is: a ``%INJECT%`` form that needs ES-DE to generate a
+      sidecar first (reason ``"inject"``), or a standalone emulator that is not
+      installed in RetroDECK (reason ``"not_installed"``, applied post-hoc by
+      :func:`downgrade_if_not_installed` from the adapter's on-disk probe).
     - ``"unbakeable"`` — cannot be baked; ``reason`` says why.
 
     ``reason`` is ``None`` when bakeable, else one of ``"inject"``,
-    ``"shortcut_script"``, ``"no_rom_target"``, ``"quoting"``, ``"startdir"``,
-    ``"unknown_placeholder"``.
+    ``"not_installed"``, ``"shortcut_script"``, ``"no_rom_target"``,
+    ``"quoting"``, ``"startdir"``, ``"unknown_placeholder"``.
     """
 
     label: str
@@ -99,6 +102,25 @@ def classify_command(label: str, text: str) -> EmulatorOption:
         status=status,
         reason=reason,
     )
+
+
+def downgrade_if_not_installed(option: EmulatorOption, emulator_installed: bool) -> EmulatorOption:
+    """Downgrade a bakeable **standalone** option whose emulator is not installed.
+
+    The pure half of ADR-0020's binary-existence probe: the adapter performs the
+    on-disk / ``es_find_rules.xml`` I/O to decide whether a standalone emulator is
+    installed in RetroDECK and passes the verdict in as *emulator_installed*; this
+    rule turns a bakeable standalone whose emulator is absent into a
+    ``needs_setup`` option with reason ``"not_installed"`` so it drops out of the
+    default selection (:func:`select_default_option`) and shows disabled in the
+    picker — a system whose only bakeable command is a missing standalone then
+    plain-launches, restoring the pre-standalone behavior. Libretro options
+    (RetroArch ships with RetroDECK, so it is always installed) and options that
+    are already non-bakeable are returned unchanged.
+    """
+    if emulator_installed or option.status != "bakeable" or option.kind != "standalone":
+        return option
+    return replace(option, status="needs_setup", reason="not_installed")
 
 
 def _bake_verdict(text: str) -> tuple[str, str | None]:
@@ -191,9 +213,10 @@ def options_to_payload(options: list[EmulatorOption]) -> list[dict[str, Any]]:
     Each entry is ``{label, kind, core_so, is_default, bakeable, reason}``.
     ``is_default`` marks the single option :func:`select_default_option` picks
     (the first bakeable one); ``bakeable`` is ``True`` only for a fully bakeable
-    option (``needs_setup`` reads as ``bakeable: False`` with ``reason:
-    "inject"`` so the picker can disable it with a distinct message). The raw
-    ``command`` text is intentionally dropped from the wire payload.
+    option (``needs_setup`` reads as ``bakeable: False`` with its ``reason`` —
+    ``"inject"`` or ``"not_installed"`` — so the picker can disable it with a
+    distinct message). The raw ``command`` text is intentionally dropped from the
+    wire payload.
     """
     default = select_default_option(options)
     return [

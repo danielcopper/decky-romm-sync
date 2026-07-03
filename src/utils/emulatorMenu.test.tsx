@@ -47,6 +47,7 @@ function baseConfig(overrides: Partial<EmulatorMenuConfig> = {}): EmulatorMenuCo
 describe("reasonCopy", () => {
   it("maps known reason slugs to distinct copy", () => {
     expect(reasonCopy("inject")).toBe("needs setup files (launch via ES-DE once)");
+    expect(reasonCopy("not_installed")).toBe("emulator not installed");
     expect(reasonCopy("shortcut_script")).toBe("script/shortcut form");
   });
 
@@ -95,6 +96,21 @@ describe("buildEmulatorMenu", () => {
     const inject = its.find((i) => i.text.startsWith("Vita3K"))!;
     expect(inject.disabled).toBe(true);
     expect(inject.text).toBe("Vita3K (Standalone) — needs setup files (launch via ES-DE once)");
+  });
+
+  it("renders a not-installed standalone emulator as disabled with its reason copy", () => {
+    const menu = buildEmulatorMenu(
+      baseConfig({
+        emulators: [
+          libretroEmu("mgba_libretro", "mGBA", true),
+          standaloneEmu("Ryubing (Standalone)", false, { bakeable: false, reason: "not_installed" }),
+        ],
+      }),
+    );
+    const ryubing = items(menu).find((i) => i.text.startsWith("Ryubing"))!;
+    expect(ryubing.disabled).toBe(true);
+    expect(ryubing.text).toBe("Ryubing (Standalone) — emulator not installed");
+    expect(ryubing.onClick).toBeUndefined();
   });
 
   it("dispatches a bakeable standalone emulator's label on pick", () => {

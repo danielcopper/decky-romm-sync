@@ -18,6 +18,8 @@ export function reasonCopy(reason: string | null): string {
   switch (reason) {
     case "inject":
       return "needs setup files (launch via ES-DE once)";
+    case "not_installed":
+      return "emulator not installed";
     case "shortcut_script":
       return "script/shortcut form";
     default:
