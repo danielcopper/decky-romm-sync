@@ -105,7 +105,11 @@ its staticpaths exist. It cannot check `systempath` entries (binaries on RetroDE
 from outside the sandbox), so a `systempath`-only emulator — or one whose find rule is absent, or one with only
 host-native staticpaths that are missing — is assumed installed. And when `es_find_rules.xml` itself cannot be read,
 nothing is downgraded. This keeps the probe purely additive: a normal RetroDECK install classifies exactly as before,
-minus the genuinely-missing standalones.
+minus the genuinely-missing standalones. A **false-positive** downgrade (marking an installed emulator absent) is
+possible only in two shapes that do not occur today: a component-marked standalone that RetroDECK launches purely via a
+sandbox `systempath` binary while its `components/<x>/` launcher is absent, or a future find rule that resolves a
+component through a `$VAR`-style `staticpath` we do not expand — and both degrade gracefully to a working plain launch,
+costing only a wrongly-disabled picker entry, never a broken one.
 
 ### 3. The precedence chain drops the snapshot layer; pins may name a standalone
 
