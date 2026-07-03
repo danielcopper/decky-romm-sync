@@ -224,13 +224,20 @@ async function handleGameStop(): Promise<void> {
 }
 
 function handleSuspend(): void {
-  if (activeRomId && sessionStartTime) {
+  // Idempotent across repeated fires: the renamed User.* hook is a PROGRESS
+  // callback that can fire several times during one suspend, so stamp only on the
+  // first (`suspendedAt === null`). Re-stamping would move the pause start forward
+  // and undercount the suspended span subtracted from playtime (#1148).
+  if (activeRomId && sessionStartTime && suspendedAt === null) {
     suspendedAt = Date.now();
     logInfo("Device suspended during session, pausing playtime");
   }
 }
 
 function handleResume(): void {
+  // Idempotent across repeated resume-progress fires: fold only while a suspend is
+  // open (`suspendedAt` set), then clear it so a second fire in the same cycle is a
+  // no-op and cannot double-count (#1148).
   if (activeRomId && suspendedAt) {
     const pauseDuration = Date.now() - suspendedAt;
     totalPausedMs += pauseDuration;
@@ -304,19 +311,33 @@ async function adoptOrphanedSession(): Promise<void> {
 }
 
 /**
- * Read `SteamClient.System` as a plain record, tolerating a runtime where it is
- * absent, not an object, or a throwing getter — any of which yields an empty
- * record. Keeps the #1148 presence check from throwing out of
- * `initSessionManager` (before adoption) when SteamClient is malformed.
+ * Read a `SteamClient` namespace (`System`, `User`, …) as a plain record,
+ * tolerating a runtime where it is absent, not an object, or a throwing getter —
+ * any of which yields an empty record. Keeps the #1148 presence check from
+ * throwing out of `initSessionManager` (before adoption) when SteamClient is
+ * malformed, and lets the suspend/resume registration probe both the legacy
+ * `System.*` surface and its renamed `User.*` successor through the same guard.
  */
-function readSystemApi(): Record<string, unknown> {
+function readClientNamespace(namespace: string): Record<string, unknown> {
   try {
-    const system = (SteamClient as unknown as Record<string, unknown>).System;
-    if (system !== null && typeof system === "object") return system as Record<string, unknown>;
+    const ns = (SteamClient as unknown as Record<string, unknown>)[namespace];
+    if (ns !== null && typeof ns === "object") return ns as Record<string, unknown>;
   } catch {
     // Odd SteamClient shape (e.g. a throwing getter) — fall through to {}.
   }
   return {};
+}
+
+/**
+ * Narrow a registration's runtime return to an unregister handle without trusting
+ * its declared type — a build may hand back `undefined` instead of a handle
+ * (#1148). Only a genuine `{ unregister: fn }` is stored as a hook, so teardown
+ * stays null-safe on every other shape.
+ */
+function isUnregisterHandle(value: unknown): value is { unregister: () => void } {
+  return (
+    typeof value === "object" && value !== null && typeof (value as Record<string, unknown>).unregister === "function"
+  );
 }
 
 /**
@@ -389,36 +410,60 @@ export async function initSessionManager(): Promise<void> {
       });
   });
 
-  // Suspend/resume for accurate playtime. #1148 diagnostics: on-device these
-  // hooks never fired, so decision C's suspend-subtraction shipped dormant.
-  // Probe presence, registration outcome, and the returned handle shape once per
-  // init so a single Game-Mode run tells us whether the API is missing, throwing,
-  // or registering but never firing. The typed SteamClient claims the members
-  // always exist, so presence is read through an `unknown` view — the runtime is
-  // the authority here, not the `.d.ts`. `SteamClient.System` itself is read
-  // defensively (absent, non-object, or a throwing getter → empty record) so a
-  // broken SteamClient still emits the "hooks missing" headline + surface probe
-  // and lets init reach the #1054 adoption, rather than throwing before either.
-  const systemApi = readSystemApi();
-  const hasSuspendReg = typeof systemApi.RegisterForOnSuspendRequest === "function";
-  const hasResumeReg = typeof systemApi.RegisterForOnResumeFromSuspend === "function";
-  if (!hasSuspendReg || !hasResumeReg) {
-    // Actionable headline — the members decision C depends on are absent on this
-    // build. Warn so it lands even at the default log level.
-    logWarn(
-      `Suspend/resume hooks missing on this build: RegisterForOnSuspendRequest=${hasSuspendReg} RegisterForOnResumeFromSuspend=${hasResumeReg}`,
-    );
+  // Suspend/resume for accurate playtime. #1148: on current SteamOS the legacy
+  // `System.RegisterForOnSuspendRequest` / `RegisterForOnResumeFromSuspend` pair
+  // was removed, so decision C's suspend-subtraction shipped dormant. Register on
+  // the legacy pair when a build still exposes it (it keeps working), else fall
+  // back to the renamed `User.*` progress successors. Both namespaces are read
+  // through an `unknown` view — the runtime is the authority here, not the
+  // `.d.ts`, which the on-device probe proved can drift; `readClientNamespace`
+  // tolerates an absent / non-object / throwing namespace so a malformed
+  // SteamClient still emits the diagnostics and reaches the #1054 adoption instead
+  // of throwing. The registration debug line names WHICH surface was used, and the
+  // surface probe enumerates every suspend/resume member the build exposes.
+  const systemApi = readClientNamespace("System");
+  const userApi = readClientNamespace("User");
+  const hasLegacySuspend = typeof systemApi.RegisterForOnSuspendRequest === "function";
+  const hasLegacyResume = typeof systemApi.RegisterForOnResumeFromSuspend === "function";
+  const hasUserSuspend = typeof userApi.RegisterForPrepareForSystemSuspendProgress === "function";
+  const hasUserResume = typeof userApi.RegisterForResumeSuspendedGamesProgress === "function";
+
+  type SuspendRegister = (handler: () => void) => unknown;
+  let surface: string | null = null;
+  let registerSuspend: SuspendRegister | null = null;
+  let registerResume: SuspendRegister | null = null;
+  if (hasLegacySuspend && hasLegacyResume) {
+    surface = "System.RegisterForOnSuspendRequest/RegisterForOnResumeFromSuspend";
+    registerSuspend = systemApi.RegisterForOnSuspendRequest as SuspendRegister;
+    registerResume = systemApi.RegisterForOnResumeFromSuspend as SuspendRegister;
+  } else if (hasUserSuspend && hasUserResume) {
+    surface = "User.RegisterForPrepareForSystemSuspendProgress/RegisterForResumeSuspendedGamesProgress";
+    registerSuspend = userApi.RegisterForPrepareForSystemSuspendProgress as SuspendRegister;
+    registerResume = userApi.RegisterForResumeSuspendedGamesProgress as SuspendRegister;
   }
-  try {
-    if (hasSuspendReg) suspendHook = SteamClient.System.RegisterForOnSuspendRequest(handleSuspend);
-    if (hasResumeReg) resumeHook = SteamClient.System.RegisterForOnResumeFromSuspend(handleResume);
-    detach(
-      debugLog(
-        `Suspend/resume registration: suspend=${describeHandle(suspendHook)} resume=${describeHandle(resumeHook)}`,
-      ),
+
+  if (surface === null || registerSuspend === null || registerResume === null) {
+    // Neither the legacy `System` pair nor the renamed `User` pair is present — the
+    // members decision C depends on are gone on this build. Warn at headline level
+    // (lands even at the default log level); the surface probe below reports
+    // whatever suspend/resume members the runtime actually exposes.
+    logWarn(
+      `Suspend/resume hooks missing on this build: legacy=${hasLegacySuspend}/${hasLegacyResume} user=${hasUserSuspend}/${hasUserResume}`,
     );
-  } catch (e) {
-    logWarn(`Suspend/resume registration threw: ${e}`);
+  } else {
+    try {
+      const suspendReturn = registerSuspend(handleSuspend);
+      const resumeReturn = registerResume(handleResume);
+      suspendHook = isUnregisterHandle(suspendReturn) ? suspendReturn : null;
+      resumeHook = isUnregisterHandle(resumeReturn) ? resumeReturn : null;
+      detach(
+        debugLog(
+          `Suspend/resume registration [${surface}]: suspend=${describeHandle(suspendReturn)} resume=${describeHandle(resumeReturn)}`,
+        ),
+      );
+    } catch (e) {
+      logWarn(`Suspend/resume registration threw: ${e}`);
+    }
   }
   // Investigation point 3 — enumerate the suspend/resume members SteamClient
   // actually exposes at runtime. Debug-gated; never throws.

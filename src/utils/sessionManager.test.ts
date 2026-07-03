@@ -189,6 +189,49 @@ describe("sessionManager suspend accumulator", () => {
 
     expect(backend.finalizeGameSession).toHaveBeenLastCalledWith(ROM_ID, 0);
   });
+
+  it("stamps suspendedAt once across repeated suspend-progress events", async () => {
+    // The renamed suspend hook is a PROGRESS callback that can fire several times
+    // per cycle. A repeated fire must NOT re-stamp the pause start, or the
+    // subtracted span shrinks (here: 60s→90s = 30s, not 70s→90s = 20s).
+    await initSessionManager();
+    const lifetime = captureLifetimeCb();
+    const suspend = captureSuspendCb();
+    const resume = captureResumeCb();
+
+    await startGame(lifetime);
+    vi.setSystemTime(60_000);
+    suspend(); // first progress fire — stamps
+    vi.setSystemTime(70_000);
+    suspend(); // repeated progress fire — must be ignored
+    vi.setSystemTime(90_000);
+    resume();
+    vi.setSystemTime(120_000);
+    await stopGame(lifetime);
+
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID, 30);
+  });
+
+  it("folds a resume once across repeated resume-progress events", async () => {
+    // Repeated resume-progress fires in the same cycle must fold only once — the
+    // second fire finds no open suspend and is a no-op (not another 60→100 fold).
+    await initSessionManager();
+    const lifetime = captureLifetimeCb();
+    const suspend = captureSuspendCb();
+    const resume = captureResumeCb();
+
+    await startGame(lifetime);
+    vi.setSystemTime(60_000);
+    suspend();
+    vi.setSystemTime(90_000);
+    resume(); // folds 30s, clears the open suspend
+    vi.setSystemTime(100_000);
+    resume(); // repeated progress fire — must be a no-op
+    vi.setSystemTime(120_000);
+    await stopGame(lifetime);
+
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID, 30);
+  });
 });
 
 describe("sessionManager reload adoption", () => {
@@ -531,7 +574,7 @@ describe("sessionManager suspend-hook diagnostics", () => {
 
     // Actionable headline names both absent members (booleans false).
     expect(backend.logWarn).toHaveBeenCalledWith(
-      "Suspend/resume hooks missing on this build: RegisterForOnSuspendRequest=false RegisterForOnResumeFromSuspend=false",
+      "Suspend/resume hooks missing on this build: legacy=false/false user=false/false",
     );
     // Never attempted registration → no throw path was taken.
     expect(backend.logWarn).not.toHaveBeenCalledWith(expect.stringContaining("registration threw"));
@@ -545,7 +588,23 @@ describe("sessionManager suspend-hook diagnostics", () => {
     await expect(initSessionManager()).resolves.toBeUndefined();
 
     expect(backend.logWarn).toHaveBeenCalledWith(
-      "Suspend/resume hooks missing on this build: RegisterForOnSuspendRequest=true RegisterForOnResumeFromSuspend=false",
+      "Suspend/resume hooks missing on this build: legacy=true/false user=false/false",
+    );
+  });
+
+  it("names the partially-present User.* pair in the missing-hooks headline", async () => {
+    // Legacy gone and only ONE User.* successor present → no usable surface, but
+    // the headline must show the partial User pair so the gap is visible at the
+    // default log level (#1148 LOW-2).
+    stubSteamClient(
+      {}, // no legacy pair
+      { RegisterForPrepareForSystemSuspendProgress: vi.fn(() => ({ unregister: vi.fn() })) }, // resume successor absent
+    );
+
+    await expect(initSessionManager()).resolves.toBeUndefined();
+
+    expect(backend.logWarn).toHaveBeenCalledWith(
+      "Suspend/resume hooks missing on this build: legacy=false/false user=true/false",
     );
   });
 
@@ -573,11 +632,11 @@ describe("sessionManager suspend-hook diagnostics", () => {
 
     await initSessionManager();
 
-    // No headline warning on a healthy build; the debug tier reports both
-    // handles carry an `unregister` function.
+    // No headline warning on a healthy build; the debug tier names the surface
+    // used and reports both handles carry an `unregister` function.
     expect(backend.logWarn).not.toHaveBeenCalled();
     expect(backend.debugLog).toHaveBeenCalledWith(
-      "Suspend/resume registration: suspend={unregister:fn} resume={unregister:fn}",
+      "Suspend/resume registration [System.RegisterForOnSuspendRequest/RegisterForOnResumeFromSuspend]: suspend={unregister:fn} resume={unregister:fn}",
     );
   });
 
@@ -623,7 +682,7 @@ describe("sessionManager suspend-hook diagnostics", () => {
 
     // System absent → both members read as false → headline warns.
     expect(backend.logWarn).toHaveBeenCalledWith(
-      "Suspend/resume hooks missing on this build: RegisterForOnSuspendRequest=false RegisterForOnResumeFromSuspend=false",
+      "Suspend/resume hooks missing on this build: legacy=false/false user=false/false",
     );
     // The surface probe still emits (init reached it, never threw).
     expect(backend.debugLog).toHaveBeenCalledWith("SteamClient suspend/resume surface: (none)");
@@ -647,7 +706,160 @@ describe("sessionManager suspend-hook diagnostics", () => {
     // threw" (the pre-fix behavior this test pins).
     expect(backend.logWarn).not.toHaveBeenCalledWith(expect.stringContaining("registration threw"));
     expect(backend.debugLog).toHaveBeenCalledWith(
-      "Suspend/resume registration: suspend=type=undefined resume={unregister:fn}",
+      "Suspend/resume registration [System.RegisterForOnSuspendRequest/RegisterForOnResumeFromSuspend]: suspend=type=undefined resume={unregister:fn}",
     );
+  });
+
+  it("falls back to the User.* surface when the legacy System hooks are absent", async () => {
+    // Current SteamOS: System.RegisterForOn* are gone; only the renamed User.*
+    // progress hooks remain. Registration must fall through to them.
+    stubSteamClient(
+      {}, // System exposes neither legacy Register* member
+      {
+        RegisterForPrepareForSystemSuspendProgress: vi.fn(() => ({ unregister: vi.fn() })),
+        RegisterForResumeSuspendedGamesProgress: vi.fn(() => ({ unregister: vi.fn() })),
+      },
+    );
+
+    await initSessionManager();
+
+    // A working surface was found → no "hooks missing" headline; the debug line
+    // names the User surface that was used.
+    expect(backend.logWarn).not.toHaveBeenCalledWith(expect.stringContaining("hooks missing"));
+    expect(backend.debugLog).toHaveBeenCalledWith(
+      "Suspend/resume registration [User.RegisterForPrepareForSystemSuspendProgress/RegisterForResumeSuspendedGamesProgress]: suspend={unregister:fn} resume={unregister:fn}",
+    );
+  });
+
+  it("prefers the legacy System surface when both surfaces are present", async () => {
+    // A build that still exposes the legacy pair keeps using it (it works), even
+    // when the User.* successors are also present.
+    stubSteamClient(
+      {
+        RegisterForOnSuspendRequest: vi.fn(() => ({ unregister: vi.fn() })),
+        RegisterForOnResumeFromSuspend: vi.fn(() => ({ unregister: vi.fn() })),
+      },
+      {
+        RegisterForPrepareForSystemSuspendProgress: vi.fn(() => ({ unregister: vi.fn() })),
+        RegisterForResumeSuspendedGamesProgress: vi.fn(() => ({ unregister: vi.fn() })),
+      },
+    );
+
+    await initSessionManager();
+
+    expect(backend.logWarn).not.toHaveBeenCalled();
+    expect(backend.debugLog).toHaveBeenCalledWith(
+      "Suspend/resume registration [System.RegisterForOnSuspendRequest/RegisterForOnResumeFromSuspend]: suspend={unregister:fn} resume={unregister:fn}",
+    );
+  });
+});
+
+// #1148: the renamed User.* progress hooks must drive the same suspend accumulator
+// as the legacy System.* pair. These exercise registration + subtraction
+// end-to-end through the fallback surface, including idempotency under the
+// repeated progress fires the User.* callbacks emit per suspend/resume cycle.
+describe("sessionManager suspend subtraction via the User.* fallback (#1148)", () => {
+  let userSuspend: (() => void) | undefined;
+  let userResume: (() => void) | undefined;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    userSuspend = undefined;
+    userResume = undefined;
+    vi.stubGlobal("SteamClient", {
+      GameSessions: {
+        RegisterForAppLifetimeNotifications: vi.fn(() => ({ unregister: vi.fn() })),
+      },
+      System: {}, // legacy System.RegisterForOn* removed on current SteamOS
+      User: {
+        RegisterForPrepareForSystemSuspendProgress: vi.fn((cb: () => void) => {
+          userSuspend = cb;
+          return { unregister: vi.fn() };
+        }),
+        RegisterForResumeSuspendedGamesProgress: vi.fn((cb: () => void) => {
+          userResume = cb;
+          return { unregister: vi.fn() };
+        }),
+      },
+    });
+    // Router.MainRunningApp stays null; startGame drives the session via unAppID.
+    vi.stubGlobal("Router", { MainRunningApp: null });
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({ [String(APP_ID)]: ROM_ID });
+    vi.mocked(backend.recordSessionStart).mockResolvedValue({ success: true });
+    vi.mocked(backend.finalizeGameSession).mockResolvedValue({
+      total_seconds: null,
+      sync: {
+        offline: false,
+        success: true,
+        synced: 0,
+        conflicts: [],
+        toast_title: null,
+        toast_body: null,
+        conflicts_toast: null,
+      },
+      migration: null,
+    });
+  });
+
+  afterEach(() => {
+    destroySessionManager();
+    vi.useRealTimers();
+  });
+
+  it("captures the User.* callbacks and subtracts a suspend cycle delivered through them", async () => {
+    await initSessionManager();
+    expect(userSuspend).toBeTypeOf("function");
+    expect(userResume).toBeTypeOf("function");
+
+    const lifetime = captureLifetimeCb();
+    await startGame(lifetime);
+    vi.setSystemTime(60_000);
+    userSuspend!();
+    vi.setSystemTime(90_000);
+    userResume!();
+    vi.setSystemTime(120_000);
+    await stopGame(lifetime);
+
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID, 30);
+  });
+
+  it("does not double-count repeated User.* suspend/resume progress fires", async () => {
+    await initSessionManager();
+    const lifetime = captureLifetimeCb();
+    await startGame(lifetime);
+
+    vi.setSystemTime(60_000);
+    userSuspend!(); // first suspend-progress — stamps
+    vi.setSystemTime(70_000);
+    userSuspend!(); // repeated progress — ignored
+    vi.setSystemTime(90_000);
+    userResume!(); // folds 30s, clears the open suspend
+    vi.setSystemTime(100_000);
+    userResume!(); // repeated progress — no-op
+    vi.setSystemTime(120_000);
+    await stopGame(lifetime);
+
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID, 30);
+  });
+
+  it("unregisters the User.* handles on destroy", async () => {
+    const suspendUnregister = vi.fn();
+    const resumeUnregister = vi.fn();
+    vi.stubGlobal("SteamClient", {
+      GameSessions: { RegisterForAppLifetimeNotifications: vi.fn(() => ({ unregister: vi.fn() })) },
+      System: {},
+      User: {
+        RegisterForPrepareForSystemSuspendProgress: vi.fn(() => ({ unregister: suspendUnregister })),
+        RegisterForResumeSuspendedGamesProgress: vi.fn(() => ({ unregister: resumeUnregister })),
+      },
+    });
+
+    await initSessionManager();
+    destroySessionManager();
+
+    expect(suspendUnregister).toHaveBeenCalledTimes(1);
+    expect(resumeUnregister).toHaveBeenCalledTimes(1);
   });
 });

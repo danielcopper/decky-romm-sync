@@ -1250,10 +1250,13 @@ Session tracking:
 1. `recordSessionStart(romId)`: backend opens the session marker (`last_session_start`) on the ROM's `rom_playtime` row
    in a short write Unit of Work, then schedules a background flush of the pending-session outbox (draining any offline
    backlog on launch)
-2. During play, the frontend `sessionManager` accumulates device-suspend wall-clock across suspend/resume cycles (via
-   `RegisterForOnSuspendRequest` / `RegisterForOnResumeFromSuspend`; an in-flight suspend still open at game-stop is
-   folded in even without a resume event), and passes the rounded `suspended_seconds` to `finalizeGameSession` at
-   session end
+2. During play, the frontend `sessionManager` accumulates device-suspend wall-clock across suspend/resume cycles. The
+   hooks are registered on the legacy `System.RegisterForOnSuspendRequest` / `RegisterForOnResumeFromSuspend` pair when
+   a build still exposes it, else on the renamed `User.RegisterForPrepareForSystemSuspendProgress` /
+   `RegisterForResumeSuspendedGamesProgress` successors — the legacy pair was removed on current SteamOS (#1148). The
+   `User.*` events are progress callbacks that can fire several times per cycle, so the handlers are idempotent (the
+   first suspend stamps; a resume folds once and clears). An in-flight suspend still open at game-stop is folded in even
+   without a resume event, and the rounded `suspended_seconds` is passed to `finalizeGameSession` at session end
 3. Session end (`finalizeGameSession(romId, suspendedSeconds)` → backend `record_session_end`): in an executor worker, a
    short write UoW folds the closed session into the aggregate (`record_session` subtracts `suspended_seconds` from the
    raw elapsed span, then clamps the result to 0–24h — subtraction before the cap, never negative — increments
@@ -1458,10 +1461,20 @@ If the launched app ID is not in the map, it is not a RomM shortcut and the sess
 
 ### Suspend/resume handling
 
-To exclude sleep time from playtime tracking:
+To exclude sleep time from playtime tracking the session manager registers a suspend and a resume hook. The surface is
+chosen at init with a fallback (#1148): the legacy `System.*` pair was removed on current SteamOS, so registration falls
+back to the renamed `User.*` progress successors.
 
-- `SteamClient.System.RegisterForOnSuspendRequest` — records the suspend timestamp
-- `SteamClient.System.RegisterForOnResumeFromSuspend` — calculates paused duration and subtracts it from the session
+- **Suspend** — `SteamClient.System.RegisterForOnSuspendRequest` when present, else
+  `SteamClient.User.RegisterForPrepareForSystemSuspendProgress`. Records the suspend timestamp once per cycle (the
+  `User.*` variant is a progress callback that can fire repeatedly, so the stamp is idempotent).
+- **Resume** — `SteamClient.System.RegisterForOnResumeFromSuspend` when present, else
+  `SteamClient.User.RegisterForResumeSuspendedGamesProgress`. Folds the paused duration into the accumulator once and
+  clears the open suspend, so a repeated resume-progress fire is a no-op; the total is subtracted from the session at
+  game-stop.
+
+The chosen surface and the returned handle shapes are logged at init; a build exposing neither pair warns loudly, and a
+runtime surface probe enumerates whatever suspend/resume members do exist.
 
 ## Native play-session ingest (ADR-0018)
 
