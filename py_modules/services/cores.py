@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     import logging
 
     from domain.rom import Rom
+    from domain.rom_install import RomInstall
     from services.protocols import (
         ActiveCoreReader,
         BiosChecker,
@@ -41,7 +42,6 @@ if TYPE_CHECKING:
         DiscResolver,
         SettingsPersister,
         SystemResolver,
-        UnitOfWork,
         UnitOfWorkFactory,
     )
 
@@ -154,7 +154,13 @@ class CoreService:
         self._settings_persister.save_settings()
         self._core_info.reset_cache()
 
-        rebake_items: list[dict[str, Any]] = []
+        # Snapshot the installed+bound, non-overridden (rom, install) pairs in one
+        # short read UoW, then close it before resolving each ROM's active core:
+        # active_emulator_for_rom opens its own UoW, and the per-connection
+        # BEGIN IMMEDIATE write lock is not re-entrant — resolving inside the
+        # iteration UoW would block on the lock until busy_timeout then raise
+        # "database is locked" (#1134). This read UoW performs no writes.
+        pending: list[tuple[Rom, RomInstall]] = []
         with self._uow_factory() as uow:
             for rom in uow.roms.iter_by_platform(platform_slug):
                 if rom.emulator_override is not None:
@@ -164,20 +170,22 @@ class CoreService:
                 install = uow.rom_installs.get(rom.rom_id)
                 if install is None:
                     continue
-                emulator = self._active_core.active_emulator_for_rom(rom.rom_id)
-                invocation = resolve_emulator_invocation({}, emulator)
-                # Fold the ROM's persisted disc pick over the install so a
-                # per-platform core change re-bakes the pinned disc, not disc 1 /
-                # the m3u. A single-disc ROM resolves to its own file_path. The
-                # rom is already loaded in this UoW, so its selected_disc is read
-                # without a nested read.
-                bake_path = self._disc_resolver.resolve_for_install(install, rom.selected_disc)
-                rebake_items.append(
-                    {
-                        "app_id": rom.shortcut_app_id,
-                        "launch_options": build_launch_options(invocation, bake_path),
-                    }
-                )
+                pending.append((rom, install))
+
+        rebake_items: list[dict[str, Any]] = []
+        for rom, install in pending:
+            emulator = self._active_core.active_emulator_for_rom(rom.rom_id)
+            invocation = resolve_emulator_invocation({}, emulator)
+            # Fold the ROM's persisted disc pick over the install so a
+            # per-platform core change re-bakes the pinned disc, not disc 1 /
+            # the m3u. A single-disc ROM resolves to its own file_path.
+            bake_path = self._disc_resolver.resolve_for_install(install, rom.selected_disc)
+            rebake_items.append(
+                {
+                    "app_id": rom.shortcut_app_id,
+                    "launch_options": build_launch_options(invocation, bake_path),
+                }
+            )
         return rebake_items
 
     async def set_system_core(self, platform_slug: str, core_label: str) -> dict[str, Any]:
@@ -246,9 +254,11 @@ class CoreService:
             # write path (never the sync UPSERT).
             rom.pin_emulator_override(label)
             uow.roms.set_emulator_override(rom_id, rom.emulator_override)
-            # The picker only offers libretro cores, so a pinned override is a
-            # libretro invocation built from the just-resolved .so.
-            launch_options, app_id = self._launch_options_for(uow, rom, EmulatorInvocation.libretro(core_so, label))
+            install = uow.rom_installs.get(rom_id)
+        # Bake outside the committed write UoW, uniform with the clear path (the
+        # pinned override is the just-resolved libretro core, so there is no
+        # resolver read and no commit-ordering subtlety here).
+        launch_options, app_id = self._launch_options_for(rom, install, EmulatorInvocation.libretro(core_so, label))
         return {"success": True, "launch_options": launch_options, "app_id": app_id}
 
     async def clear_game_core(self, rom_id: int) -> dict[str, Any]:
@@ -278,20 +288,33 @@ class CoreService:
                 }
             rom.clear_emulator_override()
             uow.roms.set_emulator_override(rom_id, rom.emulator_override)
-            # Cleared pin → follow the per-platform/system default. Resolve the
-            # ROM's full active emulator AFTER the NULL lands so a per-platform
-            # core (or a standalone system default) still bakes its -e form.
-            emulator = self._active_core.active_emulator_for_rom(rom_id)
-            launch_options, app_id = self._launch_options_for(uow, rom, emulator)
+            install = uow.rom_installs.get(rom_id)
+        # Cleared pin → follow the per-platform/system default. The write UoW has
+        # committed, so the resolver's own UoW now reads the landed NULL and
+        # returns the POST-clear core — a per-platform core (or standalone system
+        # default) still bakes its -e form. Resolving here (outside the closed
+        # UoW) is also what keeps active_emulator_for_rom's BEGIN IMMEDIATE from
+        # blocking on our write lock (#1047 / #1134). Skip the resolve entirely
+        # when there is no live shortcut to update.
+        if rom.shortcut_app_id is None or install is None:
+            return {"success": True, "launch_options": None, "app_id": None}
+        emulator = self._active_core.active_emulator_for_rom(rom_id)
+        launch_options, app_id = self._launch_options_for(rom, install, emulator)
         return {"success": True, "launch_options": launch_options, "app_id": app_id}
 
     def _launch_options_for(
         self,
-        uow: UnitOfWork,
         rom: Rom,
+        install: RomInstall | None,
         emulator: EmulatorInvocation | None,
     ) -> tuple[str | None, int | None]:
         """Bake the launch command for *rom* with *emulator*, or ``(None, None)``.
+
+        Takes the ROM's ``RomInstall`` snapshot directly (``None`` when
+        uninstalled) so the bake runs with no open Unit of Work — the callers
+        snapshot the install inside their write UoW and close it before baking,
+        since the shared active-core resolver opens its own UoW and the
+        per-connection ``BEGIN IMMEDIATE`` write lock is not re-entrant.
 
         An installed (``RomInstall`` with a ``file_path``) **and** bound
         (``shortcut_app_id`` set) ROM gets the full launch command — the ``-e``
@@ -303,16 +326,12 @@ class CoreService:
         stored pin/clear applies on the next download/sync.
         """
         app_id = rom.shortcut_app_id
-        if app_id is None:
-            return (None, None)
-        install = uow.rom_installs.get(rom.rom_id)
-        if install is None:
+        if app_id is None or install is None:
             return (None, None)
         invocation = resolve_emulator_invocation({}, emulator)
         # Fold the ROM's persisted disc pick over the install so a per-game core
         # pin/clear re-bakes the pinned disc, not disc 1 / the m3u. A single-disc
-        # ROM resolves to its own file_path. *rom* is already loaded in the open
-        # UoW, so its selected_disc is read without a nested read.
+        # ROM resolves to its own file_path.
         bake_path = self._disc_resolver.resolve_for_install(install, rom.selected_disc)
         return (build_launch_options(invocation, bake_path), app_id)
 

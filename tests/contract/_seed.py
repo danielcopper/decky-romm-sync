@@ -13,6 +13,8 @@ is called by the child seeders.
 
 from __future__ import annotations
 
+import json
+import os
 from typing import TYPE_CHECKING, Any
 
 from domain.rom import Rom
@@ -143,3 +145,28 @@ def seed_server_save(harness: ContractHarness, **kwargs: Any) -> dict[str, Any]:
     entry = server_save(**kwargs)
     harness.romm.saves[entry["id"]] = entry
     return entry
+
+
+_DEFAULT_CORE_DEFAULTS: dict[str, Any] = {
+    "gba": {
+        "default_core": "mgba_libretro",
+        "default_label": "mGBA",
+        "cores": {"mgba_libretro": "mGBA", "vba_next_libretro": "VBA Next"},
+    }
+}
+
+
+def seed_core_defaults(harness: ContractHarness, systems: dict[str, Any] | None = None) -> None:
+    """Write ``<plugin_dir>/core_defaults.json`` for the real ``CoreResolver`` to read.
+
+    The harness roots ``plugin_dir`` at ``tmp_path/plugin`` and no
+    ``es_systems.xml`` exists there, so :class:`CoreResolver` resolves every
+    system through this bundled fallback (``resolve_system`` passes an unmapped
+    slug through unchanged, so ``"gba"`` keys directly). The default seeds a
+    single ``gba`` system with an mGBA default and a VBA Next alternative — two
+    resolvable cores a core-selection contract test can pin/clear between.
+    """
+    plugin_dir = os.path.join(str(harness.tmp_path), "plugin")
+    os.makedirs(plugin_dir, exist_ok=True)
+    with open(os.path.join(plugin_dir, "core_defaults.json"), "w") as f:
+        json.dump({"systems": systems if systems is not None else _DEFAULT_CORE_DEFAULTS}, f)
