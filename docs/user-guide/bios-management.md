@@ -50,14 +50,14 @@ if your RomM server has BIOS files for them.
 
 1. From the main QAM page, tap **System**
 2. Platforms with synced games that still need required BIOS files are marked with "BIOS needed"
-3. For platforms with more than one available core, an **Emulator Core** dropdown is shown at the top of the platform's
-   section — this is the primary per-system control
+3. For platforms with more than one emulator, an **Emulator Core** button is shown at the top of the platform's section
+   — this is the primary per-system control; it opens a menu of the platform's emulators
 4. Below the core, each platform shows how many BIOS files are downloaded vs. available (e.g. "3 / 5 files")
 5. Tap **Show Files** to see the individual file list for a platform
 6. Tap **Download All** to download all missing BIOS files for a platform
 7. Tap **Delete BIOS** to remove that platform's downloaded BIOS files (see below)
 
-<!-- Screenshot: System page showing per-platform Emulator Core dropdown above BIOS download counts -->
+<!-- Screenshot: System page showing per-platform Emulator Core button above BIOS download counts -->
 
 BIOS files are downloaded to your RetroDECK bios directory (e.g. `~/retrodeck/bios/`). Some platforms use subdirectories
 — for example, Dreamcast BIOS goes into `bios/dc/` and PS2 BIOS goes into `bios/pcsx2/bios/`. The plugin handles the
@@ -114,10 +114,10 @@ you at a glance which core the plugin is filtering for.
 2. If no per-game core, the plugin checks for a **per-platform core** you set on the System page — stored by the plugin
    in its own settings, not in ES-DE.
 3. The plugin reads RetroDECK's ES-DE configuration (`es_systems.xml`) from the flatpak installation to find the default
-   emulator for each platform — the first listed RetroArch core is treated as the default
-4. If the live configuration can't be read, the plugin falls back to a shipped `core_defaults.json` with RetroDECK's
-   known defaults
-5. If all detection fails, all BIOS files for the platform are shown — the safe default
+   emulator for each platform — for BIOS filtering it uses the platform's first RetroArch core. This live file is the
+   only source; there is no bundled fallback snapshot.
+4. If a platform's default is a **standalone emulator** (no RetroArch core) or the live configuration can't be read, all
+   BIOS files for the platform are shown — the safe default
 
 Whatever this chain resolves to is the **same core the game launches on** — the plugin bakes the resolved core into the
 Steam shortcut, so the core shown for BIOS, saves, and the core badge always matches the core that runs.
@@ -138,14 +138,21 @@ directly into each game's Steam shortcut, so your choice applies reliably for an
 
 ### Per-Platform (System Page)
 
-On the **System** page, platforms with multiple available cores show an **Emulator Core** dropdown as the first control
-in the platform's section, above the BIOS file list. Changing it sets the default core for all games on that platform. A
-"Switching cores may affect save compatibility" note appears under the dropdown for platforms that offer a choice.
+On the **System** page, platforms with more than one emulator show an **Emulator Core** button as the first control in
+the platform's section, above the BIOS file list. The button opens a menu listing every emulator ES-DE offers for that
+platform — both RetroArch cores and **standalone emulators** (e.g. PCSX2, RPCS3, Dolphin, PPSSPP). Some entries appear
+**disabled** with a short reason (for example "script/shortcut form" or "needs setup files (launch via ES-DE once)")
+when the plugin can't launch them directly from Steam; those can't be picked. Picking an enabled emulator sets it as the
+default for all games on that platform. A "Switching cores may affect save compatibility" note appears at the top of the
+menu.
 
 1. Open the **System** page from the main QAM page
 2. Find the platform you want to change
-3. Use the **Emulator Core** dropdown to select a different core
-4. The BIOS file list below updates immediately to show files relevant to the new core
+3. Press the **Emulator Core** button and pick an emulator from the menu
+4. The BIOS file list below updates immediately to show files relevant to the new choice
+
+If RetroDECK can't be found (no `es_systems.xml`), the menu shows "Emulator list unavailable — RetroDECK installation
+not found" instead of a list.
 
 The plugin stores the choice in its own settings and **immediately re-applies it** to every installed game on that
 platform — the change takes effect right away, with no sync needed (games that already have a per-game core keep their
@@ -161,12 +168,14 @@ only download buttons are disabled.
 
 ### Per-Game (Game Detail Page)
 
-On the game detail page, a **CPU button** (microchip icon) appears between the RomM and Steam gear buttons when multiple
-cores are available for the game's platform.
+On the game detail page, a **CPU button** (microchip icon) appears between the RomM and Steam gear buttons when the
+game's platform offers more than one emulator. The menu lists the same emulators as the System page — RetroArch cores
+and **standalone emulators** — and shows the ones the plugin can't launch from Steam as **disabled** with a short
+reason.
 
 1. Open a game's detail page
 2. Tap the **CPU button** (microchip icon)
-3. Pick a core from the menu, or the **Use System Override** item at the top (see below)
+3. Pick an emulator from the menu, or the **Use System Override** item at the top (see below)
 4. The BIOS status, core badge, and game info panel update immediately
 
 At the top of the menu, above the core list, is a dedicated **Use System Override (X)** item. Selecting it **clears**
@@ -212,7 +221,7 @@ upgrading from an older build or who edits ES-DE directly:
 - **Per-platform cores set in ES-DE are not carried over — re-apply them once.** Earlier builds stored a per-system core
   as a `<alternativeEmulator>` in ES-DE's `gamelist.xml`; the plugin now stores per-platform cores in its own settings
   and does **not** read or import that ES-DE entry. If you had set a per-system core, re-apply it once on the **System**
-  page (the Emulator Core dropdown) and it sticks from then on.
+  page (the Emulator Core button/menu) and it sticks from then on.
 - **Per-game cores set with an older plugin build are not carried over.** Earlier builds stored per-game cores in
   ES-DE's `gamelist.xml`; the plugin now stores them itself and does not import the old entries. Re-apply any per-game
   core once through the CPU-button menu and it sticks from then on (including across uninstall/re-download).

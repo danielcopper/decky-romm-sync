@@ -13,11 +13,14 @@ BIOS-requirement filter, the save-directory name, the save-sync core tag, the co
 — is the exact core that game will launch on. A single resolver guarantees that, and the launch command is baked from
 the same resolved emulator. The plugin **owns emulator selection end to end**: it reads RetroDECK/ES-DE configuration
 for the default emulator, but its own launches never depend on ES-DE's `gamelist.xml` — it neither reads nor writes that
-file. See
+file. The **live `es_systems.xml` is the sole source** for the system-layer default and the picker's emulator list;
+there is no bundled snapshot (the curated `core_defaults.json` and its generator were deleted in #1210). See
 [ADR-0011](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0011-per-game-core-override-in-db-applied-via-e-flag.md)
-(the per-game DB override + `-e`) and
+(the per-game DB override + `-e`),
 [ADR-0012](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0012-plugin-owns-core-selection-always-e-no-gamelist.md)
-(per-platform core in `settings.json`, always `-e`, gamelist dropped) for the decision records.
+(per-platform core in `settings.json`, always `-e`, gamelist dropped), and
+[ADR-0020](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0020-live-es-systems-emulator-resolution.md)
+(live `es_systems.xml` as the only source; the default is the first safely-bakeable command) for the decision records.
 
 ### Two emulator kinds: libretro core and standalone
 
@@ -25,13 +28,18 @@ The resolved emulator is a pure value object — `domain.shortcut_data.EmulatorI
 of two payloads:
 
 - **`kind == "libretro"`** — a RetroArch core, identified by its bare `.so` name (`core_so`). Rendered as the
-  `-e "%EMULATOR_RETROARCH% -L <coresdir>/<so>.so %ROM%"` form. This is the overwhelming-majority path; per-game and
-  per-platform overrides only ever produce libretro invocations (the picker offers libretro cores).
+  `-e "%EMULATOR_RETROARCH% -L <coresdir>/<so>.so %ROM%"` form. This is the overwhelming-majority path.
 - **`kind == "standalone"`** — a standalone emulator, identified by its full ES-DE `<command>` text (already ending in
   `%ROM%`, e.g. `%EMULATOR_RPCS3% --no-gui %ROM%`). Baked verbatim into `-e`. RetroDECK resolves `%EMULATOR_*%` and
   substitutes `%ROM%` at launch, the same as the libretro form. This is the standalone-emulator seam
   ([#129](https://github.com/danielcopper/decky-romm-sync/issues/129)): a system whose working ES-DE default is a
-  standalone emulator (PS2 → PCSX2, PS3 → RPCS3) launches on that emulator instead of a deprecated/absent libretro core.
+  standalone emulator (PS2 → PCSX2, PS3 → RPCS3, GameCube/Wii → Dolphin, PSP → PPSSPP, …) launches on that emulator
+  instead of a deprecated/absent libretro core.
+
+Both kinds are first-class throughout: the **system default** may be either (whichever ES-DE lists first that the plugin
+can bake), and the per-game / per-platform picker lists both — so a pin may name a standalone emulator OR a libretro
+core (#1210). A pin is stored as the emulator **LABEL** and resolved through the same classified option list at use
+time.
 
 A standalone emulator has **no** libretro `.so`, so the read-path projection reports `core_so = None` and every
 `.so`-space consumer degrades exactly as it does for an unconfigured platform (see
@@ -49,8 +57,8 @@ absence means "follow the default."
 
 Both overrides are the plugin's own state and live in the plugin's own stores. Neither is written into ES-DE's
 `gamelist.xml` — the plugin **never writes that file**. It still **reads** the RetroDECK/ES-DE configuration it does not
-own (the es_systems default core and the available-cores list), but the per-game and per-platform deviations are layered
-on top of that read by the plugin itself.
+own (the live `es_systems.xml` — the system default emulator and the full classified command list the picker offers),
+but the per-game and per-platform deviations are layered on top of that read by the plugin itself.
 
 ## Storage: the per-game override is a LABEL on the `Rom` aggregate
 
@@ -65,10 +73,12 @@ core **LABEL** the user picked (e.g. `"Beetle PSX HW"`), exactly as ES-DE displa
   clause**, so a re-sync never wipes a user's pin.
 
 The plugin stores the **deviation** (the LABEL, or `NULL`), not a resolved core. The default and system layers are owned
-by RetroDECK/ES-DE and change externally — a RetroDECK update can ship a new default core — so a stored resolved value
-would go stale. Storing only the deviation keeps the plugin authoritative over exactly the slice it owns and re-resolves
-the rest live. The LABEL is turned into a `.so` through the es_systems `available_cores` map at use time
-(`domain.shortcut_data.label_to_core_so`).
+by RetroDECK/ES-DE and change externally — a RetroDECK update can ship a new default emulator — so a stored resolved
+value would go stale. Storing only the deviation keeps the plugin authoritative over exactly the slice it owns and
+re-resolves the rest live. The LABEL is turned into an `EmulatorInvocation` (a libretro `.so` **or** a standalone
+command) through the live-`es_systems.xml` classified option list at use time
+(`domain.emulator_commands.label_to_invocation`) — so a per-game pin may name a standalone emulator, not only a libretro
+core (#1210).
 
 ## Storage: the per-platform core is a LABEL in `settings.json`
 
@@ -89,7 +99,7 @@ write resolves the freshly-written value rather than a stale snapshot.
 ## The single read seam: `ActiveCoreResolver`
 
 `ActiveCoreResolver` (`py_modules/services/active_core_resolver.py`) is the one place that answers "which emulator will
-this ROM actually launch with?" It exposes two methods over the **same** four-layer resolution:
+this ROM actually launch with?" It exposes two methods over the **same** three-layer resolution:
 
 - **`active_emulator_for_rom(rom_id) -> EmulatorInvocation | None`** — the **launch-bake seam**. Returns the full
   resolved emulator (libretro core OR standalone), or `None` when the platform has no resolvable emulator at all.
@@ -100,59 +110,81 @@ this ROM actually launch with?" It exposes two methods over the **same** four-la
 
 The precedence is the invariant:
 
-> **per-game DB `emulator_override` (top) → per-platform `settings.json` `platform_cores` → es_systems default (live,
-> standalone-aware) → `core_defaults`.**
+> **per-game DB `emulator_override` (top) → per-platform `settings.json` `platform_cores` → live es_systems default →
+> `None` (plain launch).**
 
 ```text
 active_emulator_for_rom(rom_id):
   rom = read roms row (platform_slug + emulator_override)  ── one UoW read
   system = resolve_system(rom.platform_slug)               ── platform→system (ADR-0010)
-  available = get_available_cores(system)
-  if rom.emulator_override is not None:                    ── layer 1: per-game pin (always libretro)
-      core_so = label_to_core_so(available, override)
-      if core_so is not None:
-          return EmulatorInvocation.libretro(core_so, override)
-      # stale per-game label: warn, fall through
-  platform_label = get_platform_core(rom.platform_slug)    ── layer 2: per-platform settings.json (always libretro)
+  options = get_emulator_options(system)["options"]        ── every es_systems <command>, classified
+  if rom.emulator_override is not None:                    ── layer 1: per-game pin (libretro OR standalone)
+      inv = label_to_invocation(options, override)
+      if inv is not None:
+          return inv
+      # stale / un-bakeable per-game label: warn, fall through
+  platform_label = get_platform_core(rom.platform_slug)    ── layer 2: per-platform settings.json (libretro OR standalone)
   if platform_label is not None:
-      core_so = label_to_core_so(available, platform_label)
-      if core_so is not None:
-          return EmulatorInvocation.libretro(core_so, platform_label)
-      # stale per-platform label: warn, fall through
-  return get_default_emulator(system)                      ── layer 3/4: standalone-aware es_systems default → core_defaults
+      inv = label_to_invocation(options, platform_label)
+      if inv is not None:
+          return inv
+      # stale / un-bakeable per-platform label: warn, fall through
+  return get_default_emulator(system)                      ── layer 3: live es_systems default (may be standalone), else None
 
 active_core_for_rom(rom_id):                               ── the .so-space projection
   e = active_emulator_for_rom(rom_id)
   return (None, None) if e is None else (e.core_so, e.label)
 ```
 
-The system-layer fallback is `CoreResolver.get_default_emulator(system)` (`adapters/es_de_config.py`), the
-**standalone-aware** layer: if `core_defaults.json` marks the system with a curated `standalone` block it bakes that
-emulator (see [Standalone-emulator selection](#standalone-emulator-selection-the-curated-default)), otherwise it
-projects the libretro `get_active_core(system)` default (live `es_systems.xml` default with bundled `core_defaults.json`
-as fallback). It **no longer reads any gamelist** — neither a per-game `<altemulator>` nor a system-level
-`<alternativeEmulator>`; the gamelist is off every plugin code path. The per-platform deviation that used to live in the
-gamelist is now the `settings.json` layer above. A pinned per-game or per-platform LABEL that no longer resolves (a core
-a RetroDECK update removed) is **never fatal**: the resolver logs a WARNING and degrades to the next layer, never
-returning a bogus `None.so`.
+Layers 1 and 2 resolve their LABEL through `domain.emulator_commands.label_to_invocation`, which finds the option
+carrying that label and renders it into an `EmulatorInvocation` **only if it is bakeable** — so a pin may name a
+standalone emulator or a libretro core, and a label that is unknown, un-bakeable, or `needs_setup` reads as "this pin no
+longer resolves" and degrades to the next layer with a WARNING (never a bogus `None.so`). The system-layer fallback is
+`CoreResolver.get_default_emulator(system)` (`adapters/es_de_config.py`): **the first safely-bakeable command in the
+live `es_systems.xml` document order** (see
+[Standalone-emulator selection](#standalone-emulator-selection-first-safely-bakeable)), which may itself be standalone
+(PCSX2, RPCS3, Dolphin, …) or libretro. It reads **only** the live file — no bundled snapshot, and **no gamelist**
+(neither a per-game `<altemulator>` nor a system-level `<alternativeEmulator>`; the gamelist is off every plugin code
+path). When nothing is bakeable, or `es_systems.xml` cannot be read, it returns `None` and the caller bakes the plain
+RetroDECK launch.
 
-### Standalone-emulator selection: the curated default
+### Standalone-emulator selection: first safely-bakeable
 
-Selection of a standalone emulator is **data-driven**. A system gains a `standalone` block in
-`defaults/core_defaults.json` naming the preferred ES-DE command **label**; the live `es_systems.xml` supplies the
-command text for that label (the bundled string is the offline fallback):
+Selection is **data-derived from the live `es_systems.xml` alone** — there is no curated snapshot. The pure kernel
+`domain/emulator_commands.py` classifies each of a system's ES-DE `<command>` entries into an `EmulatorOption` (`label`,
+`kind`, `core_so`, `command`, `status`, `reason`), and `select_default_option` returns **the first `bakeable` command in
+document order**. ES-DE already lists a system's emulators in preference order, so ES-DE's own preference picks the
+default — no plugin curation, no per-system table.
 
-```json
-"ps2": { "...": "...", "standalone": { "label": "PCSX2 (Standalone)",        "command": "%EMULATOR_PCSX2% -batch %ROM%" } },
-"ps3": { "...": "...", "standalone": { "label": "RPCS3 Directory (Standalone)", "command": "%EMULATOR_RPCS3% --no-gui %ROM%" } }
-```
+A command is `bakeable` only when it is a real emulator invocation the plugin can carry verbatim into a Steam shortcut's
+`-e`. `classify_command` applies these rules in order, first match wins:
 
-A curated label is needed because ES-DE's **first** `<command>` is not always the one to bake — PS3's first command is a
-fragile shortcut form (`%ENABLESHORTCUTS% %EMULATOR_OS-SHELL% %ROM%`), not the direct `--no-gui` launch. The parser
-captures **every** `<command>` per system as `{label: command_text}` (plus the first label as ES-DE's true default), so
-`get_default_emulator` can resolve the curated label against the live file and pick up a RetroDECK update. Adding a new
-standalone system (Switch/Xbox/Vita/Wii U) once its ES-DE labels are confirmed is a **data-only** change — one
-`standalone` block, no code.
+1. contains `%INJECT%` → `needs_setup` (`"inject"`) — needs ES-DE to generate a sidecar first (Vita3K, Xemu);
+2. contains `%ENABLESHORTCUTS%` or `%EMULATOR_OS-SHELL%` → `unbakeable` (`"shortcut_script"`);
+3. does not end in `%ROM%` → `unbakeable` (`"no_rom_target"`) — trailing args after `%ROM%` break the bake;
+4. contains `"` or `\;` → `unbakeable` (`"quoting"`);
+5. any placeholder outside the whitelist (`%EMULATOR_*%`, `%ROM%`, `%CORE_RETROARCH%`, `%GAMEDIR%`, `%GAMEDIRRAW%`,
+   `%ROMPATH%`, `%BASENAME%`, `%FILENAME%`, `%ROMRAW%`, `%STARTDIR%`) → `unbakeable` (`"unknown_placeholder"`);
+6. contains `%STARTDIR%` → `unbakeable` (`"startdir"`) — RetroDECK's `run_game.sh` parses-but-drops it, so a baked
+   command would launch from the wrong directory (a v1 limitation);
+7. otherwise `bakeable`.
+
+This is why a system whose first command is a fragile shortcut form (`%ENABLESHORTCUTS% %EMULATOR_OS-SHELL% %ROM%`)
+skips it and bakes the next command (the direct `--no-gui` launch): the shortcut form is `unbakeable`, so
+`select_default_option` walks past it. A leading `env VAR=val …` prefix (the GameCube/Wii Dolphin form) is accepted as a
+standalone invocation. The kind is `libretro` when the command matches the strict RetroArch shape
+(`%EMULATOR_RETROARCH% -L %CORE_RETROARCH%/<core>_libretro.so %ROM%`), else `standalone`.
+
+`get_emulator_options(system)` returns `{"available": bool, "options": [EmulatorOption, ...]}`. **`available` is `False`
+when `es_systems.xml` cannot be found or parsed** — the picker surfaces that as "Emulator list unavailable" rather than
+an empty list it cannot distinguish from a system with no commands; the launch degrades to plain. `options_to_payload`
+projects the list to the frontend picker shape (`{label, kind, core_so, is_default, bakeable, reason}`): bakeable
+entries are clickable, the default is marked, and `needs_setup` / `unbakeable` entries are disabled with their reason.
+See [ADR-0020](../adr/0020-live-es-systems-emulator-resolution.md) — including the 27 default flips this selection rule
+produces relative to the old first-libretro default.
+
+Adding a new standalone system needs **no plugin change** — the moment a RetroDECK update lists its emulator in
+`es_systems.xml` in preference order, the plugin's default follows.
 
 **Every per-game core read consumer draws from this one seam**, so the launch core cannot diverge from any derived
 value:
@@ -354,9 +386,11 @@ game detail page:
 
 The frontend CPU-button menu on the game detail page drives two backend callables:
 
-- **`set_game_core(rom_id, label)`** resolves the LABEL to its `.so` **first**. An unresolvable label is a **hard
-  failure** — the canonical `{success: False, reason, message}` shape is returned and **nothing is written**, so the DB
-  never holds a label no consumer can resolve. On success it `pin`s the override, then re-bakes and returns the new
+- **`set_game_core(rom_id, label)`** resolves the LABEL to a **bakeable `EmulatorInvocation` (libretro or standalone)
+  first**, via `label_to_invocation` against the ROM platform's classified command list. A label that does not resolve
+  to a bakeable emulator — unknown, `needs_setup`, or otherwise un-bakeable — is a **hard failure**: the canonical
+  `{success: False, reason: "core_unavailable", message}` shape is returned and **nothing is written**, so the DB never
+  holds a label no consumer can bake. On success it `pin`s the override, then re-bakes and returns the new
   `launch_options` (the `-e` override form) + the bound `app_id` for an installed ROM.
 - **`clear_game_core(rom_id)`** (triggered by picking the **default-marked core** in the menu) `clear`s the override to
   `NULL`, then re-resolves the ROM's **full active core** through `ActiveCoreResolver` and bakes _that_ — the
@@ -375,7 +409,9 @@ next download/sync.
 
 ### Per-platform (`CoreService.set_system_core`)
 
-The System-page **Emulator Core** dropdown calls **`set_system_core(platform_slug, core_label)`**:
+The System-page **Emulator Core** picker — a menu button (`ButtonItem`) that opens the same context menu as the
+game-detail picker, so standalone emulators and disabled un-bakeable entries render identically (#1210) — calls
+**`set_system_core(platform_slug, core_label)`**:
 
 1. It writes the choice into `settings["platform_cores"]` — storing the LABEL under the slug, or popping the slug when
    the label is empty (revert to the es_systems default) — and persists `settings.json` through the injected
@@ -427,15 +463,15 @@ imported (per
 and a per-platform core previously set as a system-level `<alternativeEmulator>` is **not** imported into
 `platform_cores` either — `platform_cores` starts empty. This is by design: a gamelist-import path would revive the
 multi-root-XML parse failures and folder-collapse ambiguity the plugin-owned model was chosen to avoid. Re-apply any
-per-platform core once through the System-page dropdown and it sticks from then on.
+per-platform core once through the System-page Emulator Core picker (the menu button) and it sticks from then on.
 
 ### A frozen default needs a Force Full Sync
 
 Because the es_systems default is baked literally into every shortcut, a RetroDECK update that ships a **new default
 core for a platform** does **not** take effect on a normal sync — a normal sync skips platforms whose ROM set is
 unchanged, so the previously-baked default survives. A **Force Full Sync** re-bakes every shortcut and picks up the new
-default. A core the user sets through the plugin (per-game pin or per-platform dropdown) re-bakes immediately, so only
-an externally-changed RetroDECK default carries this caveat.
+default. A core the user sets through the plugin (per-game pin or per-platform picker) re-bakes immediately, so only an
+externally-changed RetroDECK default carries this caveat.
 
 ## RetroDECK is the V1 target
 
@@ -450,18 +486,19 @@ RetroArch `-L` form). The remaining lift ([#918](https://github.com/danielcopper
 non-RetroDECK launcher behind a `Frontend`-style port — is net-new work and is not built until a second launcher is
 concrete.
 
-Two follow-ups stay out of scope for the standalone seam as it stands: the per-game / per-platform **core picker** still
-lists only libretro cores (you cannot choose standalone PCSX2 vs the LRPS2 libretro core in the UI), and **BIOS badge /
-save-sync** for a standalone system read `active_core = None` and degrade — the launch works (BIOS already present
-on-device), but badge accuracy and standalone save-sync are separate efforts.
+The **core picker now lists standalone emulators alongside libretro cores** (#1210 / ADR-0020) — you _can_ choose
+standalone PCSX2 vs the LRPS2 libretro core in the UI, at both per-game and per-platform scope. One follow-up stays out
+of scope for the standalone seam: **BIOS badge / save-sync** for a standalone system read `active_core = None` and
+degrade — the launch works (BIOS already present on-device), but badge accuracy and standalone save-sync are separate
+efforts.
 
 ---
 
 **Related pages:**
 
 - [Backend Architecture](backend-architecture.md) — service/adapter layering, dependency diagram
-- [Config Source Parsers](config-source-parsers.md) — one-parser-per-source principle; how `es_systems.xml` and
-  `core_defaults.json` are read (the gamelist is no longer read)
+- [Config Source Parsers](config-source-parsers.md) — one-parser-per-source principle; how the live `es_systems.xml` is
+  read as the sole core/emulator source (the gamelist and the bundled `core_defaults.json` are no longer read)
 - [Steam Non-Steam Shortcuts](steam-non-steam-shortcuts.md) — AddShortcut API, `launch_options`, app-id derivation
 - [Database Design](database-design.md) — the `Rom` aggregate and the `roms` table (incl. `selected_disc`)
 - [BIOS and Emulator Cores](../user-guide/bios-management.md) — the user-facing core-selection guide

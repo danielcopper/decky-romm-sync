@@ -149,8 +149,9 @@ standalone-emulator roadmap), not speculatively.
 
 Three distinct notions in core selection, kept separate because they have different owners and lifetimes:
 
-- **Default core** — the RetroArch core RetroDECK declares for a platform (in `es_systems.xml`). RetroDECK-owned; it can
-  change on a RetroDECK update. The plugin reads it live and **never stores** it — a stored copy would go stale.
+- **Default core** — the emulator RetroDECK declares for a platform (in `es_systems.xml`) — see **default emulator** for
+  the precise selection rule, which may resolve to a RetroArch core **or** a standalone emulator. RetroDECK-owned; it
+  can change on a RetroDECK update. The plugin reads it live and **never stores** it — a stored copy would go stale.
 - **Emulator override** — a deliberate user choice to deviate from the default core, at **per-game** or **per-platform**
   scope. The plugin owns the override and stores **only the deviation**; the absence of an override means "follow the
   default." A core the user picks inside ES-DE's own UI is _not_ an emulator override in this sense — it is ES-DE's
@@ -158,6 +159,29 @@ Three distinct notions in core selection, kept separate because they have differ
 - **Active core** — the core a ROM actually launches with: the override when one exists, the default otherwise. One
   resolver answers it for both the launch and every read consumer (BIOS requirement, save path, game-detail badge), so
   the launched core never diverges from what those reads assume.
+
+### Safely-bakeable
+
+An ES-DE `<command>` the plugin can bake into a Steam shortcut's `-e` override: a real emulator invocation that **ends
+in `%ROM%`** and carries none of the forms the bake can't carry — no `%INJECT%` sidecar (that is _needs-setup_, not
+launchable from Steam until ES-DE has run it once), no `%ENABLESHORTCUTS%` / `%EMULATOR_OS-SHELL%` shortcut-script form,
+no embedded quoting (`"` or `\;`), no `%STARTDIR%` (RetroDECK's `run_game.sh` parses-but-drops it), and no placeholder
+outside the known whitelist. The classifier `domain/emulator_commands.py` decides this per command; anything not
+safely-bakeable is surfaced in the picker as **disabled** with a reason, never silently offered
+([ADR-0020](docs/adr/0020-live-es-systems-emulator-resolution.md)). The foil to **default emulator** (the first
+safely-bakeable command a system falls back to).
+
+### Default emulator
+
+The emulator a ROM launches with absent any per-game or per-platform **emulator override**: the **first
+_safely-bakeable_ command in a system's `es_systems.xml` document order**. ES-DE lists a system's emulators in
+preference order, so ES-DE's own preference picks it — the plugin adds no curation. It may be a **RetroArch core** or a
+**standalone emulator** (PCSX2, RPCS3, Dolphin, …), whichever ES-DE lists first that the plugin can bake. Resolved live
+from the sole source (`es_systems.xml`) — there is no bundled snapshot (the curated `core_defaults.json` was deleted in
+#1210). When no command is safely-bakeable (or `es_systems.xml` can't be read) there is no default emulator and the ROM
+plain-launches, letting RetroDECK resolve its own command
+([ADR-0020](docs/adr/0020-live-es-systems-emulator-resolution.md)). The foil to **emulator override** (a user deviation
+from this default).
 
 ### Disc
 
