@@ -1185,7 +1185,7 @@ class TestDoSyncPerUnit:
         decky.emit.reset_mock()
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
-        # available_cores no longer carries the pinned label → label_to_core_so → None.
+        # The options no longer carry the pinned label → label_to_invocation → None.
         plugin._core_info.available_cores = [
             {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": True},
         ]

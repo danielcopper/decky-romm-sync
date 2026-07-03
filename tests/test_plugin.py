@@ -741,7 +741,6 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "fix_retroarch_input_driver",
     # Read-only library / sync state queries.
     "get_cached_game_detail",
-    "get_available_cores",
     "get_platform_core_info",
     # Read-only disc-picker state query (the pin-write select_disc IS decorated).
     "get_disc_selection",

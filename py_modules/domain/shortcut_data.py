@@ -86,20 +86,6 @@ def resolve_emulator_invocation(rom: dict[str, Any], emulator: EmulatorInvocatio
     return RETRODECK_INVOCATION
 
 
-def label_to_core_so(available_cores: list[dict[str, Any]], label: str) -> str | None:
-    """Resolve a core *label* to its ``.so`` filename from *available_cores*.
-
-    *available_cores* is the already-parsed list the core-info reader returns:
-    ``[{"core_so": str, "label": str, "is_default": bool}, ...]``. Returns the
-    matching ``core_so`` or ``None`` when no entry carries *label* (a blank or
-    stale label resolves to ``None``, never to a bogus filename).
-    """
-    for core in available_cores:
-        if core.get("label") == label:
-            return core.get("core_so")
-    return None
-
-
 def build_launch_options(invocation: str, path: str) -> str:
     """Compose the Steam shortcut launch command from *invocation* and ROM *path*.
 

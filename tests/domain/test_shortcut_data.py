@@ -8,7 +8,6 @@ from domain.shortcut_data import (
     EmulatorInvocation,
     build_launch_options,
     build_shortcuts_data,
-    label_to_core_so,
     resolve_emulator_invocation,
 )
 
@@ -94,32 +93,6 @@ class TestResolveEmulatorInvocation:
         # B4 guard: a None core must never reach the f-string as the literal "None.so".
         assert "None.so" not in resolve_emulator_invocation({"id": 1}, None)
         assert "None" not in resolve_emulator_invocation({"id": 1}, None)
-
-
-# The available-cores shape ``label_to_core_so`` accepts:
-# [{"core_so": str, "label": str, "is_default": bool}, ...]. core_so is the BARE
-# core name (no ".so") as the es_systems parser yields it.
-_AVAILABLE_CORES = [
-    {"core_so": "pcsx_rearmed_libretro", "label": "PCSX ReARMed", "is_default": True},
-    {"core_so": "mednafen_psx_hw_libretro", "label": "Beetle PSX HW", "is_default": False},
-]
-
-
-class TestLabelToCoreSo:
-    """Tests for label_to_core_so()."""
-
-    def test_match_returns_core_so(self):
-        assert label_to_core_so(_AVAILABLE_CORES, "PCSX ReARMed") == "pcsx_rearmed_libretro"
-        assert label_to_core_so(_AVAILABLE_CORES, "Beetle PSX HW") == "mednafen_psx_hw_libretro"
-
-    def test_miss_returns_none(self):
-        assert label_to_core_so(_AVAILABLE_CORES, "No Such Core") is None
-
-    def test_empty_cores_list_returns_none(self):
-        assert label_to_core_so([], "PCSX ReARMed") is None
-
-    def test_empty_label_returns_none(self):
-        assert label_to_core_so(_AVAILABLE_CORES, "") is None
 
 
 class TestBuildLaunchOptions:

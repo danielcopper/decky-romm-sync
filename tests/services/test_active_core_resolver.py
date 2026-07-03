@@ -219,7 +219,7 @@ def test_per_game_override_beats_per_platform_core() -> None:
 def test_stale_override_degrades_to_system_default() -> None:
     uow = FakeUnitOfWork()
     _seed_rom(uow, rom_id=99, platform_slug="gba", emulator_override="Removed Core")
-    # available_cores no longer carries "Removed Core" → label_to_core_so → None.
+    # The options no longer carry "Removed Core" → label_to_invocation → None.
     core_info = FakeCoreInfoProvider(
         available_cores=[{"core_so": "mgba_libretro", "label": "mGBA", "is_default": True}],
         active_core=("mgba_libretro", "mGBA"),
