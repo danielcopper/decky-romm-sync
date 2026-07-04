@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     import asyncio
     import logging
 
-    from models.play_sessions import PlaySessionIngestEntry
+    from models.play_sessions import PlaySessionIngestEntry, PlaySessionIngestResult
 
     from domain.playtime import PendingSessionRow
     from services.protocols import (
@@ -289,9 +289,13 @@ class PlaytimeService:
         POST carries exactly one device_id), and for each group POSTs to
         ``/api/play-sessions`` strictly between the two UoWs (never holding a
         transaction across network I/O, ADR-0006). Accepted rows (``created`` /
-        ``duplicate``) dequeue; ``error`` rows increment their attempt counter
-        and are quarantined once they exhaust ``_MAX_INGEST_ATTEMPTS``; rows
-        absent from the response stay queued untouched.
+        ``duplicate``) dequeue; a ``skipped`` row — the server's explicit
+        rejection of that exact window — is dropped as terminal (the server
+        draws the same verdict forever); an ``error`` or any unknown acknowledged
+        status increments the attempt counter and is quarantined once it exhausts
+        ``_MAX_INGEST_ATTEMPTS`` (never dropping data on an ambiguous verdict);
+        rows absent from the response (or a transport failure) stay queued
+        untouched.
         """
         with self._uow_factory() as uow:
             rows = uow.playtime.iter_pending_sessions(_FLUSH_BATCH_LIMIT)
@@ -305,6 +309,7 @@ class PlaytimeService:
         sent_by_rom: dict[int, list[str]] = {}
         failed_by_rom: dict[int, list[str]] = {}
         quarantine_by_rom: dict[int, list[str]] = {}
+        rejected_by_rom: dict[int, list[str]] = {}
         undrained: list[PendingSessionRow] = []
 
         for device_id, group in groups.items():
@@ -314,6 +319,7 @@ class PlaytimeService:
                 sent_by_rom=sent_by_rom,
                 failed_by_rom=failed_by_rom,
                 quarantine_by_rom=quarantine_by_rom,
+                rejected_by_rom=rejected_by_rom,
                 undrained=undrained,
             )
 
@@ -323,10 +329,10 @@ class PlaytimeService:
                 f"Play-session flush: {len(undrained)} submitted session(s) not accepted; roms {undrained_roms}"
             )
 
-        if not (sent_by_rom or failed_by_rom or quarantine_by_rom):
+        if not (sent_by_rom or failed_by_rom or quarantine_by_rom or rejected_by_rom):
             return
 
-        self._apply_flush_outcome(sent_by_rom, failed_by_rom, quarantine_by_rom)
+        self._apply_flush_outcome(sent_by_rom, failed_by_rom, quarantine_by_rom, rejected_by_rom)
 
     def _flush_device_group(
         self,
@@ -336,9 +342,10 @@ class PlaytimeService:
         sent_by_rom: dict[int, list[str]],
         failed_by_rom: dict[int, list[str]],
         quarantine_by_rom: dict[int, list[str]],
+        rejected_by_rom: dict[int, list[str]],
         undrained: list[PendingSessionRow],
     ) -> None:
-        """POST one device's batch and sort each row into sent / failed / quarantine.
+        """POST one device's batch and sort each row into sent / failed / quarantine / rejected.
 
         A transport failure on the POST is non-fatal (mirrors
         ``_close_negotiate_session``): the group's rows stay queued and retry on
@@ -363,46 +370,72 @@ class PlaytimeService:
             undrained.extend(group)
             return
 
-        status_by_index: dict[int, str] = {}
+        verdict_by_index: dict[int, PlaySessionIngestResult] = {}
         for result in response.get("results", []):
             index = result.get("index", -1)
             if 0 <= index < len(group):
-                # ``status`` is the per-row verdict; a malformed row missing it
-                # falls through to "not accepted" (stays queued) below.
-                status_by_index[index] = result.get("status")
+                verdict_by_index[index] = result
 
         for index, row in enumerate(group):
-            status = status_by_index.get(index)
+            result = verdict_by_index.get(index)
+            status = result.get("status") if result is not None else None
+            detail = result.get("detail") if result is not None else None
             if status in ("created", "duplicate"):
                 # Both are successful ingests — dequeue.
                 sent_by_rom.setdefault(row.rom_id, []).append(row.start_time)
                 continue
+            if status is None:
+                # Absent from a 2xx response (or a malformed row missing
+                # ``status``): a transient omission, not a verdict. Stay queued
+                # untouched — no attempt bump — and retry on the next flush.
+                undrained.append(row)
+                continue
+            if status == "skipped":
+                # An EXPLICIT server rejection for this exact (device, rom,
+                # start_time) window (e.g. a sub-second launch-death rejected on
+                # validation). Re-POSTing the byte-identical row draws the same
+                # verdict forever, so draining it is the honest terminal action
+                # (only playtime is lost). Log once at info — the single line is
+                # the record. Only ``skipped`` hard-drops: an outbox session
+                # exists nowhere else, so we delete it solely on an explicit
+                # rejection, never on an ambiguous verdict.
+                rejected_by_rom.setdefault(row.rom_id, []).append(row.start_time)
+                detail_suffix = f", detail={detail}" if detail else ""
+                self._logger.info(
+                    f"play session rejected by server for rom {row.rom_id} "
+                    f"(start={row.start_time}, status={status}{detail_suffix}) — dropping from outbox"
+                )
+                continue
+            # ``error`` OR any unknown acknowledged status: bounded retry, then
+            # quarantine once the row exhausts ``_MAX_INGEST_ATTEMPTS``. An
+            # unknown verdict is not an explicit rejection, so it gets the same
+            # never-drop-data-on-ambiguity hedge as a possibly-transient error —
+            # still loop-free (it converges to quarantine after the threshold).
             undrained.append(row)
-            if status == "error":
-                if row.attempts + 1 >= _MAX_INGEST_ATTEMPTS:
-                    quarantine_by_rom.setdefault(row.rom_id, []).append(row.start_time)
-                    self._logger.warning(
-                        f"Dropping play session for rom {row.rom_id} (start={row.start_time}) after "
-                        f"{row.attempts + 1} failed ingest attempts — unrecoverable, only playtime is lost"
-                    )
-                else:
-                    failed_by_rom.setdefault(row.rom_id, []).append(row.start_time)
-            # A row absent from the response (no status) stays queued untouched —
-            # a transient omission, not a rejection, so its attempt count is not bumped.
+            if row.attempts + 1 >= _MAX_INGEST_ATTEMPTS:
+                quarantine_by_rom.setdefault(row.rom_id, []).append(row.start_time)
+                self._logger.warning(
+                    f"Dropping play session for rom {row.rom_id} (start={row.start_time}, status={status}) "
+                    f"after {row.attempts + 1} failed ingest attempts — unrecoverable, only playtime is lost"
+                )
+            else:
+                failed_by_rom.setdefault(row.rom_id, []).append(row.start_time)
 
     def _apply_flush_outcome(
         self,
         sent_by_rom: dict[int, list[str]],
         failed_by_rom: dict[int, list[str]],
         quarantine_by_rom: dict[int, list[str]],
+        rejected_by_rom: dict[int, list[str]],
     ) -> None:
         """Persist the flush verdicts in one short write UoW.
 
-        For each affected ROM: dequeue accepted sessions, drop quarantined ones,
-        and bump the attempt counter on the rest. Each start_time falls into
-        exactly one bucket, so the three mutations never contend for a row.
+        For each affected ROM: dequeue accepted sessions, drop quarantined and
+        server-rejected ones, and bump the attempt counter on the rest. Each
+        start_time falls into exactly one bucket, so the four mutations never
+        contend for a row.
         """
-        rom_ids = set(sent_by_rom) | set(failed_by_rom) | set(quarantine_by_rom)
+        rom_ids = set(sent_by_rom) | set(failed_by_rom) | set(quarantine_by_rom) | set(rejected_by_rom)
         with self._uow_factory() as uow:
             for rid in rom_ids:
                 pt = uow.playtime.get(rid)
@@ -412,6 +445,8 @@ class PlaytimeService:
                     pt.mark_sessions_sent(sent_by_rom[rid])
                 if rid in quarantine_by_rom:
                     pt.quarantine_sessions(quarantine_by_rom[rid])
+                if rid in rejected_by_rom:
+                    pt.drop_rejected_sessions(rejected_by_rom[rid])
                 if rid in failed_by_rom:
                     pt.record_ingest_failure(failed_by_rom[rid])
                 uow.playtime.save(rid, pt)

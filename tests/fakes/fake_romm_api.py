@@ -69,6 +69,10 @@ class FakeRommApi:
         # appends here and dedupes on ``(device_id, rom_id, start_time)``.
         self.play_sessions: dict[int, list[dict[str, Any]]] = {}
         self._play_session_ledger: set[tuple[str, int, str]] = set()
+        # Ingest rejects any submitted session shorter than this (ms) with a
+        # ``skipped`` verdict — models RomM refusing a sub-second launch-death.
+        # Default 0 never rejects (durations are >= 0), so existing tests stand.
+        self.reject_below_duration_ms: int = 0
         self.saves: dict[int, dict[str, Any]] = {}
         self.devices: list[dict[str, Any]] = []
         self.current_user: dict[str, Any] = {"id": 1, "username": "tester"}
@@ -378,6 +382,11 @@ class FakeRommApi:
             if key in self._play_session_ledger:
                 # Idempotent re-POST: already stored, a successful no-op.
                 results.append({"index": index, "status": "duplicate", "id": None})
+                skipped += 1
+                continue
+            if session["duration_ms"] < self.reject_below_duration_ms:
+                # Acknowledged but refused (validation) — not stored, terminal.
+                results.append({"index": index, "status": "skipped", "detail": "session too short"})
                 skipped += 1
                 continue
             self._play_session_ledger.add(key)

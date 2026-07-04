@@ -991,6 +991,116 @@ class TestFlushBoundedRetry:
 
 
 # ---------------------------------------------------------------------------
+# TestFlushTerminalRejection — server acknowledged-but-not-created verdicts
+# ---------------------------------------------------------------------------
+
+
+class TestFlushTerminalRejection:
+    @pytest.mark.asyncio
+    async def test_skipped_status_drains_row(self):
+        """A ``skipped`` verdict is terminal — the row drains, not retried forever."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending()}))
+        fake.ingest_play_sessions = _verdict_by_start({"s1": "skipped"})  # type: ignore[method-assign]
+
+        await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.pending_sessions == {}  # drained, not queued
+
+    @pytest.mark.asyncio
+    async def test_skipped_does_not_reflush_on_next_cycle(self):
+        """After a terminal drain the outbox is empty — the next cycle makes no POST."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending()}))
+        fake.ingest_play_sessions = _verdict_by_start({"s1": "skipped"})  # type: ignore[method-assign]
+
+        await svc.flush_pending_sessions()
+        fake.call_log.clear()
+        await svc.flush_pending_sessions()  # second cycle
+
+        assert not any(c[0] == "ingest_play_sessions" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_skipped_logs_once_at_info_with_detail(self, caplog):
+        """The single info line — rom_id, status, and the server's detail — is the record."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending()}))
+        fake.ingest_play_sessions = _canned_ingest(  # type: ignore[method-assign]
+            {
+                "results": [{"index": 0, "status": "skipped", "detail": "session too short"}],
+                "created_count": 0,
+                "skipped_count": 1,
+            }
+        )
+
+        with caplog.at_level("INFO"):
+            await svc.flush_pending_sessions()
+
+        rejected = [r for r in caplog.records if "rejected by server" in r.message]
+        assert len(rejected) == 1
+        assert rejected[0].levelname == "INFO"
+        assert "rom 42" in rejected[0].message
+        assert "status=skipped" in rejected[0].message
+        assert "session too short" in rejected[0].message
+
+    @pytest.mark.asyncio
+    async def test_skipped_omits_undrained_breadcrumb(self):
+        """A drained rejection is not a queued row — the noisy 'not accepted' line stops."""
+        logs: list[str] = []
+        svc, fake, uow = make_service(log_debug=logs.append)
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending()}))
+        fake.ingest_play_sessions = _verdict_by_start({"s1": "skipped"})  # type: ignore[method-assign]
+
+        await svc.flush_pending_sessions()
+
+        assert not any("not accepted" in m for m in logs)
+
+    @pytest.mark.asyncio
+    async def test_mixed_created_and_skipped_both_drain(self):
+        """A batch of one accepted + one rejected session leaves the outbox empty."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s0": _pending(), "s1": _pending()}))
+        fake.ingest_play_sessions = _verdict_by_start({"s1": "skipped"})  # type: ignore[method-assign]
+
+        await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.pending_sessions == {}  # s0 sent, s1 rejected — both gone
+
+    @pytest.mark.asyncio
+    async def test_unknown_acknowledged_status_bounded_retries_not_dropped(self):
+        """An unknown verdict is NOT an explicit rejection — it retries (attempts bump), never insta-drops."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending(attempts=0)}))
+        fake.ingest_play_sessions = _verdict_by_start({"s1": "rejected"})  # type: ignore[method-assign]
+
+        await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert set(entry.pending_sessions) == {"s1"}  # retained, not dropped
+        assert entry.pending_sessions["s1"].attempts == 1  # bounded-retry hedge
+
+    @pytest.mark.asyncio
+    async def test_unknown_acknowledged_status_quarantined_at_threshold(self, caplog):
+        """An unknown verdict converges to quarantine after the retry threshold (still loop-free)."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending(attempts=4)}))
+        fake.ingest_play_sessions = _verdict_by_start({"s1": "rejected"})  # type: ignore[method-assign]
+
+        with caplog.at_level("WARNING"):
+            await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.pending_sessions == {}  # quarantined (dropped) at threshold
+        assert any("rom 42" in r.message and "s1" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
 # TestFlushUndrainedBreadcrumb — FIX 6
 # ---------------------------------------------------------------------------
 

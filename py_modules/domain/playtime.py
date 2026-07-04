@@ -143,6 +143,19 @@ class Playtime:
         for start_time in start_times:
             self.pending_sessions.pop(start_time, None)
 
+    def drop_rejected_sessions(self, start_times: Iterable[str]) -> None:
+        """Drop outbox rows the server acknowledged but refused to store (terminal).
+
+        Distinct from :meth:`quarantine_sessions` (bounded-retry exhaustion): a
+        rejection is the server's first-contact verdict on this exact session
+        window (e.g. a ``skipped`` sub-second launch-death). Re-POSTing the
+        byte-identical row draws the same verdict forever, so the row is dropped
+        immediately rather than retried. Only playtime is lost; unknown start
+        times are ignored.
+        """
+        for start_time in start_times:
+            self.pending_sessions.pop(start_time, None)
+
     def reconcile_total(self, seconds: int) -> None:
         """Raise the cumulative total to ``seconds`` if it is higher.
 

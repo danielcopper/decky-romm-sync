@@ -404,9 +404,13 @@ wizard reappears — a pure `UPDATE`, never deleting rows or baselines (#1276).
 it creates the `rom_playtime_sessions` outbox table (STRICT, `PRIMARY KEY (rom_id, start_time)`,
 `REFERENCES roms(rom_id) ON DELETE CASCADE`, plus an `attempts INTEGER NOT NULL DEFAULT 0` bounded-retry counter) and
 drops the now-readerless `rom_playtime.note_id` column (`ALTER TABLE rom_playtime DROP COLUMN note_id;` — SQLite ≥3.35,
-the Deck ships 3.50). Existing server notes are left in place, harmless. Each outbox row's `attempts` counts consecutive
-ingest `error` verdicts; PlaytimeService quarantines (drops) a row once it reaches its retry threshold, so a
-permanently-rejected session cannot wedge the outbox (only that session's playtime is lost).
+the Deck ships 3.50). Existing server notes are left in place, harmless. The outbox has two wedge-prevention paths. A
+2xx per-session `skipped` — the server's _explicit_ rejection of that exact `(device, rom, start_time)` window (e.g. a
+sub-second launch-death it refuses on validation) — is dropped immediately via `Playtime.drop_rejected_sessions` with a
+single info log, **without** touching `attempts`: re-POSTing the byte-identical row would draw the same verdict forever.
+Separately, each outbox row's `attempts` counts consecutive ingest `error` (or unknown acknowledged) verdicts;
+PlaytimeService quarantines (drops) a row once it reaches its retry threshold, so an ambiguous never-succeeding verdict
+also cannot wedge the outbox. Either way only that session's playtime is lost.
 
 `007_add_last_played.sql` (`user_version = 7`) adds a nullable `last_played TEXT` column to `rom_playtime`
 ([ADR-0018](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0018-native-play-session-tracking-additive-ingest.md),
