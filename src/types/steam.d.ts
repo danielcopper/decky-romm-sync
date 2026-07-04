@@ -123,6 +123,25 @@ declare var appStore: {
   allApps: SteamAppOverview[];
 };
 
+// Running-app surfaces read by the defensive `utils/runningApps` reader. Steam SP
+// globals — genuinely absent (hence `undefined`) or `null` on some builds/timing,
+// so every read guards. `RunningApps` is optional: present only on builds that
+// expose it (Router.MainRunningApp stays authoritative for the foreground app).
+declare var Router:
+  | {
+      MainRunningApp: SteamAppOverview | null;
+      RunningApps?: SteamAppOverview[];
+    }
+  | null
+  | undefined;
+
+declare var SteamUIStore:
+  | {
+      RunningApps?: SteamAppOverview[];
+    }
+  | null
+  | undefined;
+
 declare var appDetailsStore: {
   GetDescriptions(appId: number): any;
   GetAssociations(appId: number): any;

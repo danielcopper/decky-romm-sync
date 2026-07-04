@@ -64,6 +64,12 @@ manager, sync, and playtime) is absent, so desktop-mode launches are entirely un
   runs the full shared gate, and on approval **relaunches** via `RunGame(gameId, "", -1, 100)`.
 - A **one-shot skip-set** (module-level `Set<appId>`, checked-and-deleted at watcher entry) exempts exactly one launch:
   the watcher's own relaunch, and the Play button's launch (which already ran the gate). This kills the double-gate.
+- An **already-running guard** (checked synchronously at watcher entry, **before** the cancel) skips the whole funnel
+  when the launched appId is the live play session (`sessionManager` `activeRomId`) or any Steam running-app source
+  (`utils/runningApps`) reports it running. A Play press on an already-running game still fires `GameActionStart`;
+  intercepting it would cancel the launch and run the pre-launch sync **mid-session** — uploading the save while the
+  emulator holds the file open — and Steam blocks the relaunch as "already running" anyway, so the cancel + re-sync is
+  pure damage. The guard lets Steam surface its own "already running" popup instead (#1148 round 2).
 - Because the watcher cancels **first** and only then does async work, **there is no race** — the defect of awaiting
   against a live launch is gone by construction.
 

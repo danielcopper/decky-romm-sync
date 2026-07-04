@@ -537,21 +537,27 @@ describe("sessionManager reload adoption", () => {
     expect(backend.recordSessionStart).not.toHaveBeenCalled();
   });
 
-  it("contains an unexpected throw in the adoption path", async () => {
-    // Steam's running-app accessor faulting must not crash init — the lifecycle
-    // chain's .catch logs and lets initialization complete.
+  it("tolerates a throwing running-app getter without erroring adoption", async () => {
+    // Steam's running-app accessor faulting must not crash init. The defensive
+    // reader catches the throw PER-SOURCE (noting it in diagnostics) so adoption
+    // proceeds against the other sources instead of erroring out (#1148 round 2) —
+    // the pre-fix single-source read let the throw escape to the adoption .catch.
     vi.stubGlobal("Router", {
-      MainRunningApp: {
-        get appid(): number {
-          throw new Error("running-app read failed");
-        },
-        display_name: "Game",
+      get MainRunningApp(): unknown {
+        throw new Error("running-app read failed");
       },
     });
 
-    await expect(initSessionManager()).resolves.toBeUndefined();
+    // Nothing else running → the poll times out and init resolves cleanly.
+    const init = initSessionManager();
+    await vi.advanceTimersByTimeAsync(ADOPTION_POLL_MAX_MS);
+    await expect(init).resolves.toBeUndefined();
 
-    expect(backend.logError).toHaveBeenCalledWith(expect.stringContaining("Session adoption error"));
+    // No adoption error surfaced; the timed-out round logged what every candidate
+    // reported, including the throwing source.
+    expect(backend.logError).not.toHaveBeenCalledWith(expect.stringContaining("Session adoption error"));
+    expect(backend.logInfo).toHaveBeenCalledWith(expect.stringContaining("threw:"));
+    expect(backend.logInfo).toHaveBeenCalledWith(expect.stringContaining("no running app"));
   });
 
   // #1054 follow-up: after a full plugin_loader restart Router.MainRunningApp is
@@ -574,7 +580,7 @@ describe("sessionManager reload adoption", () => {
     // session was never logged as orphaned.
     expect(backend.recordSessionStart).not.toHaveBeenCalled();
     expect(backend.logInfo).not.toHaveBeenCalledWith(expect.stringContaining("orphaned"));
-    expect(backend.logInfo).toHaveBeenCalledWith(expect.stringContaining("MainRunningApp appeared"));
+    expect(backend.logInfo).toHaveBeenCalledWith(expect.stringContaining("running app appeared"));
 
     // The adopted session finalizes on stop, carrying the breadcrumb's pausedMs.
     const lifetime = captureLifetimeCb();
@@ -651,7 +657,7 @@ describe("sessionManager reload adoption", () => {
     expect(backend.recordSessionStart).not.toHaveBeenCalled();
     expect(readCrumb()).toBeNull(); // no breadcrumb written by the aborted adoption
     expect(backend.logInfo).not.toHaveBeenCalledWith(expect.stringContaining("Adopted"));
-    expect(backend.logInfo).not.toHaveBeenCalledWith(expect.stringContaining("MainRunningApp appeared"));
+    expect(backend.logInfo).not.toHaveBeenCalledWith(expect.stringContaining("running app appeared"));
   });
 });
 
@@ -871,6 +877,133 @@ describe("sessionManager suspend-hook diagnostics", () => {
     expect(backend.debugLog).toHaveBeenCalledWith(
       "Suspend/resume registration [System.RegisterForOnSuspendRequest/RegisterForOnResumeFromSuspend]: suspend={unregister:fn} resume={unregister:fn}",
     );
+  });
+
+  // #1148 round 2: the renamed User.* members EXIST (typeof function) but throw
+  // "Unknown method" when INVOKED — the Steam bridge doesn't back them in our CEF
+  // context. A single try/catch that gives up on the first throw is wrong: the
+  // registration is a candidate CHAIN that logs the throw, rolls back a
+  // half-registered handle, and tries the next surface.
+  it("falls through to the next surface when the first surface's registration throws", async () => {
+    stubSteamClient(
+      {
+        RegisterForOnSuspendRequest: vi.fn(() => {
+          throw new Error("Unknown method");
+        }),
+        RegisterForOnResumeFromSuspend: vi.fn(() => ({ unregister: vi.fn() })),
+      },
+      {
+        RegisterForPrepareForSystemSuspendProgress: vi.fn(() => ({ unregister: vi.fn() })),
+        RegisterForResumeSuspendedGamesProgress: vi.fn(() => ({ unregister: vi.fn() })),
+      },
+    );
+
+    await initSessionManager();
+
+    // Legacy threw on invocation → warned with the surface + exact error, then the
+    // User surface registered cleanly.
+    expect(backend.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "registration threw on [System.RegisterForOnSuspendRequest/RegisterForOnResumeFromSuspend]",
+      ),
+    );
+    expect(backend.logWarn).toHaveBeenCalledWith(expect.stringContaining("Unknown method"));
+    expect(backend.debugLog).toHaveBeenCalledWith(
+      "Suspend/resume registration [User.RegisterForPrepareForSystemSuspendProgress/RegisterForResumeSuspendedGamesProgress]: suspend={unregister:fn} resume={unregister:fn}",
+    );
+    // A working surface was found → neither the members-missing nor the all-failed
+    // headline fires.
+    expect(backend.logWarn).not.toHaveBeenCalledWith(expect.stringContaining("hooks missing"));
+    expect(backend.logWarn).not.toHaveBeenCalledWith(expect.stringContaining("failed on all"));
+  });
+
+  it("rolls back a half-registered suspend hook when the surface's resume throws, then uses the next", async () => {
+    const legacySuspendUnreg = vi.fn();
+    stubSteamClient(
+      {
+        RegisterForOnSuspendRequest: vi.fn(() => ({ unregister: legacySuspendUnreg })),
+        RegisterForOnResumeFromSuspend: vi.fn(() => {
+          throw new Error("Unknown method");
+        }),
+      },
+      {
+        RegisterForPrepareForSystemSuspendProgress: vi.fn(() => ({ unregister: vi.fn() })),
+        RegisterForResumeSuspendedGamesProgress: vi.fn(() => ({ unregister: vi.fn() })),
+      },
+    );
+
+    await initSessionManager();
+
+    // The legacy suspend registered but its resume threw → the dangling suspend
+    // handle is unregistered (no leaked handler on the abandoned surface), and
+    // registration falls through to the User surface.
+    expect(legacySuspendUnreg).toHaveBeenCalledTimes(1);
+    expect(backend.debugLog).toHaveBeenCalledWith(
+      "Suspend/resume registration [User.RegisterForPrepareForSystemSuspendProgress/RegisterForResumeSuspendedGamesProgress]: suspend={unregister:fn} resume={unregister:fn}",
+    );
+  });
+
+  it("swallows a throwing rollback unregister and still uses the next surface", async () => {
+    stubSteamClient(
+      {
+        RegisterForOnSuspendRequest: vi.fn(() => ({
+          unregister: () => {
+            throw new Error("unregister boom");
+          },
+        })),
+        RegisterForOnResumeFromSuspend: vi.fn(() => {
+          throw new Error("Unknown method");
+        }),
+      },
+      {
+        RegisterForPrepareForSystemSuspendProgress: vi.fn(() => ({ unregister: vi.fn() })),
+        RegisterForResumeSuspendedGamesProgress: vi.fn(() => ({ unregister: vi.fn() })),
+      },
+    );
+
+    await expect(initSessionManager()).resolves.toBeUndefined();
+
+    // The rollback unregister threw but was swallowed → registration still reached
+    // and used the User surface without crashing init.
+    expect(backend.debugLog).toHaveBeenCalledWith(
+      "Suspend/resume registration [User.RegisterForPrepareForSystemSuspendProgress/RegisterForResumeSuspendedGamesProgress]: suspend={unregister:fn} resume={unregister:fn}",
+    );
+  });
+
+  it("warns that every candidate surface failed when all registrations throw", async () => {
+    stubSteamClient(
+      {
+        RegisterForOnSuspendRequest: vi.fn(() => {
+          throw new Error("legacy boom");
+        }),
+        RegisterForOnResumeFromSuspend: vi.fn(() => ({ unregister: vi.fn() })),
+      },
+      {
+        RegisterForPrepareForSystemSuspendProgress: vi.fn(() => {
+          throw new Error("user boom");
+        }),
+        RegisterForResumeSuspendedGamesProgress: vi.fn(() => ({ unregister: vi.fn() })),
+      },
+    );
+
+    await expect(initSessionManager()).resolves.toBeUndefined();
+
+    // Both candidates threw → each is warned individually, then a distinct
+    // all-failed headline (NOT the members-missing one — the members were present).
+    expect(backend.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "registration threw on [System.RegisterForOnSuspendRequest/RegisterForOnResumeFromSuspend]",
+      ),
+    );
+    expect(backend.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "registration threw on [User.RegisterForPrepareForSystemSuspendProgress/RegisterForResumeSuspendedGamesProgress]",
+      ),
+    );
+    expect(backend.logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("registration failed on all 2 candidate surface(s)"),
+    );
+    expect(backend.logWarn).not.toHaveBeenCalledWith(expect.stringContaining("hooks missing"));
   });
 });
 

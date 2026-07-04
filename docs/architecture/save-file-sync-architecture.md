@@ -1275,11 +1275,14 @@ only on `error` (ADR-0018).
 the next game-stop with nothing to finalize — the pre-reload playtime is lost and the post-exit sync never runs. Two
 signals let the re-initialized `sessionManager` recover it:
 
-- **Steam running-state (liveness).** `Router.MainRunningApp` is the authority for _whether_ the game is still running
-  at re-init — the durable marker (`last_session_start`) is written by `recordSessionStart` precisely so it survives the
-  reload, but only Steam can attest the session has not already ended. This read is **polled** (every 500ms for up to
-  15s), not one-shot: after a full `plugin_loader` restart Steam populates `MainRunningApp` only seconds later, so a
-  single early read raced the restart and wrongly orphaned a still-running session (#1054).
+- **Steam running-state (liveness).** A defensive multi-source reader (`utils/runningApps`) is the authority for
+  _whether_ the game is still running at re-init — the durable marker (`last_session_start`) is written by
+  `recordSessionStart` precisely so it survives the reload, but only Steam can attest the session has not already ended.
+  No single Steam surface is trusted: `Router.MainRunningApp` never repopulates after a full `plugin_loader` restart
+  without a fresh lifecycle event the reloaded context missed (#1054 / #1148 round 2), so the reader also consults the
+  running-apps lists (`Router.RunningApps`, `SteamUIStore.RunningApps`), each through a guard, merged + de-duped. This
+  read is **polled** (every 500ms for up to 15s), not one-shot, and a timed-out round logs the per-source `diagnostics`
+  so the on-device log names the surface that actually works on a given build.
 - **A localStorage breadcrumb (attestation).** A single versioned row (`decky-romm-sync:active-session` →
   `{v, appId, romId, startMs, pausedMs}`) is written at start, has its `pausedMs` refreshed on each completed
   suspend→resume cycle (an in-flight suspend is deliberately **not** persisted), and is removed at stop. It is **not**
@@ -1446,13 +1449,18 @@ The callback receives:
 - `bRunning: boolean` — whether the app just started (`true`) or stopped (`false`)
 - `unAppID: number` — the app ID
 
-### Router.MainRunningApp
+### Running-app detection (`utils/runningApps`)
 
 After a game starts, there is a brief window where the app ID may not be fully resolved. The session manager waits 500ms
-and then reads `Router.MainRunningApp` for a reliable `appid` and `display_name`. Falls back to `unAppID` from the
-notification if `MainRunningApp` is null. On reload adoption the window is far longer — after a `plugin_loader` restart
-`MainRunningApp` stays null for several seconds — so the adoption path **polls** it (every 500ms up to 15s) instead of
-reading once (#1054).
+and then reads the defensive running-app reader for a reliable `appid` and `display_name`, falling back to `unAppID`
+from the notification if nothing is reported. The reader consults MULTIPLE Steam surfaces — `Router.MainRunningApp` plus
+the `Router.RunningApps` / `SteamUIStore.RunningApps` lists — each through a guard (an absent, `null`, or
+throwing-getter surface degrades to "reported nothing", never a throw), merges them into one de-duped list, and returns
+a per-source `diagnostics` string. No single surface is reliable across builds/timing: after a `plugin_loader` restart
+`Router.MainRunningApp` stays null for several seconds and never repopulates without a fresh lifecycle event (#1054 /
+#1148 round 2), so the adoption path **polls** the reader (every 500ms up to 15s) instead of reading one surface once,
+and a failed round logs what every candidate reported. The same reader backs the launch interceptor's already-running
+skip ([ADR-0015](../adr/0015-single-launch-gate-cancel-then-relaunch.md)).
 
 ### App ID to ROM ID mapping
 
@@ -1467,19 +1475,23 @@ If the launched app ID is not in the map, it is not a RomM shortcut and the sess
 ### Suspend/resume handling
 
 To exclude sleep time from playtime tracking the session manager registers a suspend and a resume hook. The surface is
-chosen at init with a fallback (#1148): the legacy `System.*` pair was removed on current SteamOS, so registration falls
-back to the renamed `User.*` progress successors.
+chosen at init from an ordered candidate CHAIN (#1148): the legacy `System.*` pair first (it keeps working where a build
+still exposes it), then the renamed `User.*` progress successors. Registration is not a single try — on current SteamOS
+the `User.*` members EXIST (typeof function) but throw "Unknown method" when INVOKED (the Steam bridge does not back
+them in our CEF context, #1148 round 2). So when a candidate's registration THROWS, the surface + exact error are
+logged, any half-registered handle is rolled back, and the NEXT candidate is tried rather than giving up.
 
-- **Suspend** — `SteamClient.System.RegisterForOnSuspendRequest` when present, else
+- **Suspend** — `SteamClient.System.RegisterForOnSuspendRequest`, else
   `SteamClient.User.RegisterForPrepareForSystemSuspendProgress`. Records the suspend timestamp once per cycle (the
   `User.*` variant is a progress callback that can fire repeatedly, so the stamp is idempotent).
-- **Resume** — `SteamClient.System.RegisterForOnResumeFromSuspend` when present, else
+- **Resume** — `SteamClient.System.RegisterForOnResumeFromSuspend`, else
   `SteamClient.User.RegisterForResumeSuspendedGamesProgress`. Folds the paused duration into the accumulator once and
   clears the open suspend, so a repeated resume-progress fire is a no-op; the total is subtracted from the session at
   game-stop.
 
-The chosen surface and the returned handle shapes are logged at init; a build exposing neither pair warns loudly, and a
-runtime surface probe enumerates whatever suspend/resume members do exist.
+The chosen surface and the returned handle shapes are logged at init; a build exposing neither pair warns that the hooks
+are missing, a build where every candidate throws warns that all surfaces failed, and a runtime surface probe enumerates
+whatever suspend/resume members do exist.
 
 ## Native play-session ingest (ADR-0018)
 

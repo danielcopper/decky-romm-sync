@@ -4,6 +4,7 @@ import * as backend from "../api/backend";
 import * as gameDetailPatch from "../patches/gameDetailPatch";
 import * as launchGate from "./launchGate";
 import * as sessionManager from "./sessionManager";
+import * as runningApps from "./runningApps";
 import * as syncConflictModal from "../components/SyncConflictModal";
 import * as offlineDriftModal from "../components/OfflineDriftModal";
 import * as fallbackLaunchModal from "../components/FallbackLaunchModal";
@@ -55,6 +56,11 @@ vi.mock("./launchGate", async (importActual) => {
 
 vi.mock("./sessionManager", () => ({
   getAppIdRomIdMapSnapshot: vi.fn(() => ({ "1234": 42 })),
+  getActiveSessionRomId: vi.fn(() => null),
+}));
+
+vi.mock("./runningApps", () => ({
+  isAppRunning: vi.fn(() => false),
 }));
 
 vi.mock("./migrationStore", () => ({
@@ -148,6 +154,10 @@ describe("launchInterceptor — full funnel watcher", () => {
     });
     // Skip-set empty by default — a marked appId is set per-test.
     vi.mocked(sessionManager.getAppIdRomIdMapSnapshot).mockReturnValue({ "1234": 42 });
+    // Default: no live session and nothing running, so the already-running guard
+    // is inert and the existing funnel tests run unchanged. Overridden per-test.
+    vi.mocked(sessionManager.getActiveSessionRomId).mockReturnValue(null);
+    vi.mocked(runningApps.isAppRunning).mockReturnValue(false);
     vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "allow" });
     // The shared relaunch re-confirm (#1152) runs on every relaunch; default it
     // to a resolved command + a clean confirm-set so the existing verdict tests
@@ -192,6 +202,81 @@ describe("launchInterceptor — full funnel watcher", () => {
 
       expect(SteamClient.Apps.CancelGameAction).not.toHaveBeenCalled();
       expect(launchGate.runLaunchGate).not.toHaveBeenCalled();
+    });
+  });
+
+  // #1148 round 2: a Play press on an ALREADY-RUNNING game still fires
+  // GameActionStart. Intercepting it cancels the launch and runs the pre-launch
+  // sync MID-SESSION (uploading the save while the emulator holds the file) —
+  // pure damage, since Steam blocks the relaunch as "already running" anyway. The
+  // guard skips the whole funnel when the appId is the live session OR any running
+  // -app source reports it running.
+  describe("already-running guard", () => {
+    it("skips the funnel (no cancel, no gate, no sync) when the appId is the live session", async () => {
+      // Our own session state says rom 42 (appId 1234) is live.
+      vi.mocked(sessionManager.getActiveSessionRomId).mockReturnValue(42);
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(SteamClient.Apps.CancelGameAction).not.toHaveBeenCalled();
+      expect(launchGate.runLaunchGate).not.toHaveBeenCalled();
+      expect(backend.preLaunchSync).not.toHaveBeenCalled();
+      expect(runGameMock()).not.toHaveBeenCalled();
+      expect(backend.logInfo).toHaveBeenCalledWith(
+        expect.stringContaining("appId=1234 already running — skipping pre-launch sync"),
+      );
+    });
+
+    it("skips the funnel when a running-app source reports the appId running", async () => {
+      // No live session in our state, but Steam's running-app surfaces show it.
+      vi.mocked(sessionManager.getActiveSessionRomId).mockReturnValue(null);
+      vi.mocked(runningApps.isAppRunning).mockReturnValue(true);
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(runningApps.isAppRunning).toHaveBeenCalledWith(1234);
+      expect(SteamClient.Apps.CancelGameAction).not.toHaveBeenCalled();
+      expect(launchGate.runLaunchGate).not.toHaveBeenCalled();
+      expect(backend.preLaunchSync).not.toHaveBeenCalled();
+      expect(runGameMock()).not.toHaveBeenCalled();
+      expect(backend.logInfo).toHaveBeenCalledWith(
+        expect.stringContaining("already running — skipping pre-launch sync"),
+      );
+    });
+
+    it("does NOT skip when a DIFFERENT rom is the live session — normal funnel runs", async () => {
+      // A different game (rom 99) is live; the pressed appId 1234 (rom 42) is not
+      // running → the guard is inert and the normal cancel+gate funnel proceeds.
+      vi.mocked(sessionManager.getActiveSessionRomId).mockReturnValue(99);
+      vi.mocked(runningApps.isAppRunning).mockReturnValue(false);
+
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(SteamClient.Apps.CancelGameAction).toHaveBeenCalledWith(77);
+      expect(launchGate.runLaunchGate).toHaveBeenCalled();
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+      expect(backend.logInfo).not.toHaveBeenCalledWith(expect.stringContaining("already running"));
+    });
+
+    it("does NOT skip when nothing is running — normal funnel runs", async () => {
+      // Defaults: no live session, isAppRunning false → guard inert, funnel runs.
+      registerLaunchInterceptor();
+      const handler = captureHandler();
+      handler(77, "1234", "LaunchApp", 0);
+      await flush();
+
+      expect(SteamClient.Apps.CancelGameAction).toHaveBeenCalledWith(77);
+      expect(launchGate.runLaunchGate).toHaveBeenCalled();
+      expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
     });
   });
 

@@ -3,7 +3,8 @@
  * save sync + playtime tracking via backend callables.
  *
  * Uses SteamClient.GameSessions.RegisterForAppLifetimeNotifications to detect
- * game lifecycle events and Router.MainRunningApp for reliable app ID resolution.
+ * game lifecycle events and the defensive `runningApps` reader (multiple Steam
+ * surfaces, not just `Router.MainRunningApp`) for reliable app-ID resolution.
  */
 
 import { toaster } from "@decky/api";
@@ -20,10 +21,7 @@ import { setMigrationStatus } from "./migrationStore";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import { detach } from "./detach";
-
-declare let Router: {
-  MainRunningApp: { appid: number; display_name: string } | null;
-};
+import { readPrimaryRunningApp, readRunningApps, type RunningApp } from "./runningApps";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -66,6 +64,17 @@ function getRomIdForApp(appId: number): number | null {
  */
 export function getAppIdRomIdMapSnapshot(): Record<string, number> {
   return appIdToRomId;
+}
+
+/**
+ * The romId of the session this manager currently tracks as live, or `null` when
+ * none is open. The launch interceptor reads it synchronously to skip its
+ * cancel-then-gate funnel for a Play press on an already-running game (#1148
+ * round 2) — re-syncing mid-session would upload the save while the emulator
+ * holds the file open, and Steam blocks the relaunch as "already running" anyway.
+ */
+export function getActiveSessionRomId(): number | null {
+  return activeRomId;
 }
 
 function getAppIdForRom(romId: number): number | null {
@@ -255,31 +264,29 @@ function handleResume(): void {
   }
 }
 
-/** Read Steam's running-app, guarding the undeclared `Router` SP global. */
-function readMainRunningApp(): { appid: number; display_name: string } | null {
-  return typeof Router === "undefined" ? null : Router.MainRunningApp; // NOSONAR(typescript:S7741) — Router is an undeclared Steam SP global; direct === undefined would throw ReferenceError.
-}
-
 // Adoption polls Steam's running-app before deciding a session's fate: after a
-// full `plugin_loader` restart `Router.MainRunningApp` is not yet populated for
-// several seconds even though the game is still running (#1054 device evidence),
-// so a single early read wrongly orphaned a live session. Poll until it appears
-// or the window elapses.
+// full `plugin_loader` restart the running-app surfaces are not populated for
+// several seconds even though the game is still running (#1054 / #1148 round 2
+// device evidence), so a single early read wrongly orphaned a live session. Poll
+// the defensive multi-source reader until a running app appears or the window
+// elapses.
 const ADOPTION_POLL_INTERVAL_MS = 500;
 const ADOPTION_POLL_MAX_MS = 15_000;
 
 /**
- * Poll `Router.MainRunningApp` until a running app appears or the window elapses.
- * Returns the app (any app, RomM or not — the caller applies the adoption matrix)
- * or `null` on timeout. Does not read `.appid`, so a throwing-getter running-app
- * surfaces in the caller's adoption decision, not here.
+ * Poll every running-app source until one reports a running app or the window
+ * elapses. Returns the primary app (any app, RomM or not — the caller applies
+ * the adoption matrix) or `null` on timeout, alongside the last round's
+ * per-source `diagnostics` so a timed-out adoption logs what EVERY candidate
+ * reported. Each round's diagnostics are also emitted at debug level.
  */
-async function pollForRunningApp(): Promise<{ appid: number; display_name: string } | null> {
+async function pollForRunningApp(): Promise<{ app: RunningApp | null; diagnostics: string }> {
   const started = Date.now();
   for (;;) {
-    const running = readMainRunningApp();
-    if (running) return running;
-    if (Date.now() - started >= ADOPTION_POLL_MAX_MS) return null;
+    const reading = readRunningApps();
+    detach(debugLog(`adoption poll round: ${reading.diagnostics}`));
+    if (reading.apps.length > 0) return { app: reading.apps[0]!, diagnostics: reading.diagnostics };
+    if (Date.now() - started >= ADOPTION_POLL_MAX_MS) return { app: null, diagnostics: reading.diagnostics };
     await delay(ADOPTION_POLL_INTERVAL_MS);
   }
 }
@@ -294,14 +301,16 @@ async function pollForRunningApp(): Promise<{ appid: number; display_name: strin
  * breadcrumb is the attestation of a start we actually observed. Every finalize
  * fold thus stays anchored to a marker stamped by an observed start.
  *
- * The liveness read is POLLED (not a single read): after a loader restart Steam
- * populates `MainRunningApp` only seconds later, so a one-shot read raced the
- * restart and wrongly orphaned a still-running session (#1054).
+ * The liveness read is POLLED (not a single read) and consults MULTIPLE Steam
+ * surfaces: after a loader restart `Router.MainRunningApp` stays null for seconds
+ * and never repopulates without a fresh lifecycle event our reloaded context
+ * missed (#1054 / #1148 round 2), so a one-shot single-source read raced the
+ * restart and wrongly orphaned a still-running session.
  */
 async function adoptOrphanedSession(): Promise<void> {
   const epoch = sessionEpoch;
   const pollStart = Date.now();
-  const running = await pollForRunningApp();
+  const { app: running, diagnostics } = await pollForRunningApp();
   if (epoch !== sessionEpoch) {
     // destroySessionManager ran while the poll was in flight — abort before
     // touching module state, the breadcrumb, or the backend.
@@ -310,7 +319,9 @@ async function adoptOrphanedSession(): Promise<void> {
   }
   const waitedMs = Date.now() - pollStart;
   logInfo(
-    running ? `adoption: MainRunningApp appeared after ${waitedMs}ms` : `adoption: no running app after ${waitedMs}ms`,
+    running
+      ? `adoption: running app appeared after ${waitedMs}ms [${diagnostics}]`
+      : `adoption: no running app after ${waitedMs}ms [${diagnostics}]`,
   );
   const runningRomId = running ? getRomIdForApp(running.appid) : null;
   const crumb = readSessionBreadcrumb();
@@ -442,9 +453,9 @@ export async function initSessionManager(): Promise<void> {
     lifecycleChain = lifecycleChain
       .then(async () => {
         if (update.bRunning) {
-          // Game started — wait for Router.MainRunningApp to populate
+          // Game started — wait for the running-app surfaces to populate
           await delay(500);
-          const running = readMainRunningApp();
+          const running = readPrimaryRunningApp().app;
           const appId = running?.appid ?? update.unAppID;
           if (appId) {
             // Refresh map in case a sync happened since init
@@ -463,15 +474,20 @@ export async function initSessionManager(): Promise<void> {
 
   // Suspend/resume for accurate playtime. #1148: on current SteamOS the legacy
   // `System.RegisterForOnSuspendRequest` / `RegisterForOnResumeFromSuspend` pair
-  // was removed, so decision C's suspend-subtraction shipped dormant. Register on
-  // the legacy pair when a build still exposes it (it keeps working), else fall
-  // back to the renamed `User.*` progress successors. Both namespaces are read
-  // through an `unknown` view — the runtime is the authority here, not the
-  // `.d.ts`, which the on-device probe proved can drift; `readClientNamespace`
-  // tolerates an absent / non-object / throwing namespace so a malformed
-  // SteamClient still emits the diagnostics and reaches the #1054 adoption instead
-  // of throwing. The registration debug line names WHICH surface was used, and the
-  // surface probe enumerates every suspend/resume member the build exposes.
+  // was removed, so decision C's suspend-subtraction shipped dormant. The renamed
+  // `User.*` progress successors EXIST (typeof function) but — device round 2 —
+  // throw "Unknown method" when INVOKED: the Steam bridge doesn't back them in our
+  // CEF context. So a single try/catch that gives up on the first throw is wrong:
+  // we build an ordered candidate CHAIN (legacy first — it keeps working where it
+  // exists — then the User.* successors) and, when a surface's registration THROWS,
+  // log the surface + exact error, roll back any half-registered handle, and try
+  // the NEXT candidate. Both namespaces are read through an `unknown` view — the
+  // runtime is the authority, not the `.d.ts` the on-device probe proved can
+  // drift; `readClientNamespace` tolerates an absent / non-object / throwing
+  // namespace so a malformed SteamClient still emits the diagnostics and reaches
+  // the #1054 adoption instead of throwing. The registration debug line names
+  // WHICH surface was used; the surface probe enumerates every member the build
+  // exposes.
   const systemApi = readClientNamespace("System");
   const userApi = readClientNamespace("User");
   const hasLegacySuspend = typeof systemApi.RegisterForOnSuspendRequest === "function";
@@ -480,40 +496,74 @@ export async function initSessionManager(): Promise<void> {
   const hasUserResume = typeof userApi.RegisterForResumeSuspendedGamesProgress === "function";
 
   type SuspendRegister = (handler: () => void) => unknown;
-  let surface: string | null = null;
-  let registerSuspend: SuspendRegister | null = null;
-  let registerResume: SuspendRegister | null = null;
+  interface SuspendCandidate {
+    surface: string;
+    registerSuspend: SuspendRegister;
+    registerResume: SuspendRegister;
+  }
+  const candidates: SuspendCandidate[] = [];
   if (hasLegacySuspend && hasLegacyResume) {
-    surface = "System.RegisterForOnSuspendRequest/RegisterForOnResumeFromSuspend";
-    registerSuspend = systemApi.RegisterForOnSuspendRequest as SuspendRegister;
-    registerResume = systemApi.RegisterForOnResumeFromSuspend as SuspendRegister;
-  } else if (hasUserSuspend && hasUserResume) {
-    surface = "User.RegisterForPrepareForSystemSuspendProgress/RegisterForResumeSuspendedGamesProgress";
-    registerSuspend = userApi.RegisterForPrepareForSystemSuspendProgress as SuspendRegister;
-    registerResume = userApi.RegisterForResumeSuspendedGamesProgress as SuspendRegister;
+    candidates.push({
+      surface: "System.RegisterForOnSuspendRequest/RegisterForOnResumeFromSuspend",
+      registerSuspend: systemApi.RegisterForOnSuspendRequest as SuspendRegister,
+      registerResume: systemApi.RegisterForOnResumeFromSuspend as SuspendRegister,
+    });
+  }
+  if (hasUserSuspend && hasUserResume) {
+    candidates.push({
+      surface: "User.RegisterForPrepareForSystemSuspendProgress/RegisterForResumeSuspendedGamesProgress",
+      registerSuspend: userApi.RegisterForPrepareForSystemSuspendProgress as SuspendRegister,
+      registerResume: userApi.RegisterForResumeSuspendedGamesProgress as SuspendRegister,
+    });
   }
 
-  if (surface === null || registerSuspend === null || registerResume === null) {
-    // Neither the legacy `System` pair nor the renamed `User` pair is present — the
-    // members decision C depends on are gone on this build. Warn at headline level
-    // (lands even at the default log level); the surface probe below reports
-    // whatever suspend/resume members the runtime actually exposes.
+  if (candidates.length === 0) {
+    // No candidate pair is even present — the members decision C depends on are
+    // gone on this build. Warn at headline level (lands even at the default log
+    // level); the surface probe below reports whatever members the runtime exposes.
     logWarn(
       `Suspend/resume hooks missing on this build: legacy=${hasLegacySuspend}/${hasLegacyResume} user=${hasUserSuspend}/${hasUserResume}`,
     );
   } else {
-    try {
-      const suspendReturn = registerSuspend(handleSuspend);
-      const resumeReturn = registerResume(handleResume);
-      suspendHook = isUnregisterHandle(suspendReturn) ? suspendReturn : null;
-      resumeHook = isUnregisterHandle(resumeReturn) ? resumeReturn : null;
-      detach(
-        debugLog(
-          `Suspend/resume registration [${surface}]: suspend=${describeHandle(suspendReturn)} resume=${describeHandle(resumeReturn)}`,
-        ),
+    let registered = false;
+    for (const candidate of candidates) {
+      try {
+        const suspendReturn = candidate.registerSuspend(handleSuspend);
+        suspendHook = isUnregisterHandle(suspendReturn) ? suspendReturn : null;
+        const resumeReturn = candidate.registerResume(handleResume);
+        resumeHook = isUnregisterHandle(resumeReturn) ? resumeReturn : null;
+        detach(
+          debugLog(
+            `Suspend/resume registration [${candidate.surface}]: suspend=${describeHandle(suspendReturn)} resume=${describeHandle(resumeReturn)}`,
+          ),
+        );
+        registered = true;
+        break;
+      } catch (e) {
+        // A member that exists but the bridge doesn't back throws "Unknown method"
+        // when INVOKED (#1148 round 2) — distinct from a missing member. Warn with
+        // the surface + exact error, roll back a half-registered suspend hook (its
+        // resume threw) so we don't leak a live handler on an abandoned surface,
+        // then fall through to the next candidate.
+        logWarn(`Suspend/resume registration threw on [${candidate.surface}] (trying next surface): ${e}`);
+        if (suspendHook) {
+          try {
+            suspendHook.unregister();
+          } catch {
+            // Rolling back a surface we're abandoning — a failing unregister is inert.
+          }
+        }
+        suspendHook = null;
+        resumeHook = null;
+      }
+    }
+    if (!registered) {
+      // Every present candidate threw on invocation — no usable surface, so decision
+      // C's suspend-subtraction stays dormant. Loud headline (distinct from the
+      // members-missing one) so a Game-Mode run surfaces it.
+      logWarn(
+        `Suspend/resume registration failed on all ${candidates.length} candidate surface(s) — playtime will not exclude suspend time`,
       );
-    } catch (e) {
-      logWarn(`Suspend/resume registration threw: ${e}`);
     }
   }
   // Investigation point 3 — enumerate the suspend/resume members SteamClient

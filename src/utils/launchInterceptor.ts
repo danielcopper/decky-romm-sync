@@ -33,7 +33,8 @@ import {
 } from "../api/backend";
 import { getMigrationState, setMigrationStatus } from "./migrationStore";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
-import { getAppIdRomIdMapSnapshot } from "./sessionManager";
+import { getAppIdRomIdMapSnapshot, getActiveSessionRomId } from "./sessionManager";
+import { isAppRunning } from "./runningApps";
 import { runLaunchGate, markLaunchSkipped, consumeLaunchSkip } from "./launchGate";
 import type { GateVerdict, LaunchGateOps, PreLaunchSyncOutcome } from "./launchGate";
 import { reconfirmLaunchOptions } from "./launchOptionsReconcile";
@@ -287,6 +288,20 @@ export function registerLaunchInterceptor(): void {
       // One-shot skip: a gated relaunch (the watcher's own RunGame) or a
       // Play-button launch already ran the funnel — do NOT re-gate it.
       if (consumeLaunchSkip(appId)) return;
+
+      // Already-running guard (#1148 round 2). A Play press on a game that is
+      // ALREADY running still fires GameActionStart. Intercepting it would cancel
+      // the launch, run the pre-launch gate, and upload the save MID-SESSION (while
+      // the emulator holds the file open) — and Steam blocks the relaunch as
+      // "already running" anyway, so the cancel+re-sync is pure damage. Skip the
+      // whole funnel when this appId is our live session OR any Steam running-app
+      // source reports it running; Steam surfaces its own "already running" popup.
+      const activeRomId = getActiveSessionRomId();
+      const activeAppRomId = getAppIdRomIdMapSnapshot()[String(appId)];
+      if ((activeRomId !== null && activeAppRomId === activeRomId) || isAppRunning(appId)) {
+        logInfo(`Launch interceptor: appId=${appId} already running — skipping pre-launch sync`);
+        return;
+      }
 
       // CANCEL FIRST — synchronously, before any await. This wins the race
       // against the un-pausable launch: from here the launch is stopped and we
