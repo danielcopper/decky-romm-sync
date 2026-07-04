@@ -56,9 +56,10 @@ declare var SteamClient: {
   };
 };
 
-// Result of SteamClient.Apps.RaiseWindowForGame (Steam's ERaiseGameWindowResult).
-// Ambient — a compile-time type only, so consumers branch on the numeric code
-// rather than reading enum members off a runtime object that doesn't exist.
+// Result of SteamClient.Apps.RaiseWindowForGame — mirrors @decky/ui's own
+// ERaiseGameWindowResult, which is defined in that package but NOT re-exported
+// from its public root (see the runtime-mirror note in CustomPlayButton), so we
+// declare the type here on our own SteamClient surface.
 declare enum ERaiseGameWindowResult {
   NotRunning = 1,
   Success = 2,

@@ -1844,21 +1844,27 @@ describe("CustomPlayButton — state-aware Resume (#1313)", () => {
     expect(queryByText("Resume")).toBeNull();
   });
 
-  it("removes the romm_session_changed listener on unmount", async () => {
-    const before = deckyEventListenerCount("romm_session_changed");
+  it("removes the exact romm_session_changed handler on unmount", async () => {
+    // globalThis listeners aren't tracked by the decky harness, so spy the real
+    // add/remove to prove the []-effect cleanup removed the SAME handler ref.
+    const addSpy = vi.spyOn(globalThis, "addEventListener");
+    const removeSpy = vi.spyOn(globalThis, "removeEventListener");
+
     const { unmount } = render(<CustomPlayButton appId={100} />);
     await waitFor(() => expect(vi.mocked(getCachedGameDetail)).toHaveBeenCalled());
+
+    // Capture the exact handler the effect registered for romm_session_changed.
+    const addCall = addSpy.mock.calls.find(([type]) => type === "romm_session_changed");
+    expect(addCall).toBeDefined();
+    const handler = addCall![1];
+
     unmount();
-    // A stop event after unmount must not throw / touch a torn-down component.
-    act(() => {
-      globalThis.dispatchEvent(
-        new CustomEvent("romm_session_changed", { detail: { running: false, appId: 100, romId: 42 } }),
-      );
-    });
-    // globalThis listeners aren't tracked by the decky harness, so the count is a
-    // no-op here (0 before/after); the real assertion is that dispatching post-
-    // unmount is inert (no throw above).
-    expect(deckyEventListenerCount("romm_session_changed")).toBe(before);
+
+    // Non-vacuous: the cleanup removed romm_session_changed with that same ref.
+    expect(removeSpy).toHaveBeenCalledWith("romm_session_changed", handler);
+
+    addSpy.mockRestore();
+    removeSpy.mockRestore();
   });
 
   it("self-heals a stale overlay: RaiseWindowForGame NotRunning falls through to the launch funnel", async () => {

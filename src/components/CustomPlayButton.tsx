@@ -97,10 +97,12 @@ function formatProgress(downloaded: number, total: number): string {
   return `${(downloaded / (1024 * 1024 * 1024)).toFixed(2)} / ${(total / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-// Runtime mirror of the ambient `ERaiseGameWindowResult` (src/types/steam.d.ts).
-// An ambient enum is a compile-time type only — it has no runtime object — so the
-// result codes we branch on live here, typed back to the enum for clean, overlap-
-// safe comparisons against the RaiseWindowForGame result.
+// Runtime mirror of `ERaiseGameWindowResult` (typed in src/types/steam.d.ts).
+// @decky/ui defines that enum but does NOT re-export it from its public root
+// (its globals re-export only SteamClient + stores; the enum lives in the
+// internal steam-client/App module), and the ambient enum carries no runtime
+// object — so the result codes we branch on live here, typed back to the enum
+// for clean, overlap-safe comparisons against the RaiseWindowForGame result.
 const RaiseWindowResult = {
   NotRunning: 1 as ERaiseGameWindowResult,
   Success: 2 as ERaiseGameWindowResult,
