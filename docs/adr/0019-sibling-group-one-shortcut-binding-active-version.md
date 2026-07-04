@@ -1,0 +1,129 @@
+# A RomM sibling group is one game: one Steam shortcut per group, and the bound sibling is the active version
+
+## Status
+
+Accepted. Tracked under [#1267](https://github.com/danielcopper/decky-romm-sync/issues/1267) (slices #1295–#1298).
+Extends [ADR-0009](0009-launcher-pure-exec-wrapper-baked-launch-options.md) (the baked-`launch_options` model supplies
+the appId-safe switch mechanism) and [ADR-0007](0007-rom-retention-identity-anchor.md) (`roms` as the permanent identity
+row). The version-switch UI slice reuses the per-game deviation template of
+[ADR-0011](0011-per-game-core-override-in-db-applied-via-e-flag.md) /
+[ADR-0014](0014-per-game-disc-selection-in-db-applied-as-bake-time-launch-path-override.md).
+
+## Context
+
+A game frequently exists in a RomM library as several dumps of the same title: region versions (`(USA)`, `(Europe)`,
+`(Japan)`), multi-language dumps (`(En,Fr,De)`), revisions (`(Rev 1)`), and patched or virtual-console variants. RomM
+models this natively (verified against 4.9.2, API + server source):
+
+- Every ROM carries `sibling_roms` — all other versions of the same game. Two ROMs are siblings when they matched the
+  same metadata id, coalesced in a fixed order (IGDB → ScreenScraper → Moby → RA → Hasheous → LaunchBox → TGDB →
+  Flashpoint), scoped per platform. Unmatched ROMs have no siblings.
+- The version dimensions are structured fields on each ROM: `regions`, `languages`, `revision`, `tags`.
+- A per-user default version exists: `rom_user.is_main_sibling` (RomM's "SET DEFAULT" checkbox). It is optional, and
+  RomM's own grouped views fall back to alphabetical `fs_name_no_ext` when unset.
+- Server-side saves are strictly per ROM id — sibling versions have independent save universes. This matches both the
+  plugin's per-rom_id `RomSaveState` keying and RetroArch's per-content save naming (the `.srm` is named after the ROM
+  basename, so two dumps never share a save file on disk either).
+
+The plugin is sibling-blind today: the fetch receives all of these fields and persistence drops every one. That is not
+merely a missing feature — it produces wrong behavior. The Steam appId is `CRC32(exe + appName)` and the launcher exe is
+a constant, so **same-named siblings collide onto one appId**: Steam keeps a single shortcut, the roms table's
+one-binding-per-appId rule unbinds whichever sibling rows lost the race, and the binding lands on the **last-committed**
+sibling nondeterministically while the remaining rows permanently read as unsynced. Siblings whose display name differs
+(a Japanese dump with its native title) instead become **duplicate shortcuts** for the same game.
+
+## Decision
+
+### 1. Group identity is computed client-side, mirroring RomM's key; the fetch stays ungrouped
+
+A pure domain function derives each ROM's sibling-group key from the same coalesced metadata id RomM partitions by (IGDB
+→ SS → Moby → RA → Hasheous → LaunchBox → TGDB → Flashpoint, scoped per platform), falling back to the ROM's own id — an
+unmatched ROM is a solo group, exactly as on the server. The key is persisted on `roms` together with the version
+dimensions (`regions`, `languages`, `revision`, `tags`) and `is_main_sibling`. All of these are server-derived facts, so
+— unlike the user-pin columns `emulator_override` / `selected_disc` — they are **included** in the sync UPSERT and
+refresh on every sync.
+
+The library fetch does **not** use RomM's `group_by_meta_id` parameter. Grouping server-side would drop every non-
+representative sibling from the fetched list: an installed non-default version would vanish → the stale path would tear
+its shortcut down (removal churn), and the version picker would need per-sibling detail fetches anyway because the
+grouped response carries only slim sibling stubs. Fetching flat and grouping locally keeps every sibling's full version
+metadata in hand and keeps installed versions visible to the diff, while producing byte-identical group membership.
+
+### 2. One Steam shortcut per group; the binding is the active version
+
+The sibling group is the unit that maps to a Steam shortcut. The existing one-binding-per-appId rule is promoted from
+accident to model: the sibling row holding `shortcut_app_id` **is** the active/installed version of that game. Sibling
+rows without a binding are group members, not unsynced strays. The sync diff and shortcut lifecycle are keyed by group:
+a group is synced when one member is bound; a group gone from the server removes the shortcut; a bound sibling that
+disappears while the group survives **rebinds** to the surviving representative instead of removing the shortcut.
+
+Shortcut identity is **sticky**: name and appId are minted from the representative at shortcut creation and never change
+automatically afterwards — not on a version switch, not when the server-side default changes. Switching the active
+version flips only the baked `launch_options` (appId-safe, hardware-validated in #827) and moves the binding to the
+target row; artwork, collections, playtime and the Steam appId all survive. Renaming is what would change the appId
+(delete + recreate churn), so it never happens implicitly.
+
+### 3. Version resolution chain: installed > existing binding > RomM default > alphabetical; the choice stays local
+
+Wherever one version must be chosen (shortcut representative, picker preselect), the chain is: an installed sibling
+wins; else an existing binding; else the server-side `is_main_sibling` default (respected read-only); else alphabetical
+`fs_name_no_ext` — the last leg being exactly RomM's own fallback, so an ungroomed library behaves identically to the
+RomM web UI. The user's version choice is expressed solely through which sibling is bound/installed — **no write-back**
+of `is_main_sibling` to the server. Writing it would require the `roms.user.write` scope, and a scope change invalidates
+every user's token (forced re-sign-in) — too high a price for mirroring a preference RomM already lets the user set in
+its own UI.
+
+### 4. Saves stay per rom_id; a version switch never migrates saves
+
+Save-sync keying is untouched: each sibling keeps its own `RomSaveState`, slots, baselines and server save universe.
+After a version switch the game plays the target version's saves — matching what RomM itself does and what RetroArch's
+per-content `.srm` naming produces on disk anyway. No automatic carry-over, ever (a foreign-looking save appearing on a
+different dump is exactly the ambiguity the save-sync design refuses to auto-resolve). The save-status UI must make
+unambiguous which version's saves are in play.
+
+### 5. Existing duplicate shortcuts are grandfathered, not force-collapsed
+
+Libraries synced before this model can hold multiple shortcuts of one group (different-name siblings). A group with
+multiple **bound** shortcuts keeps them all — convergence to one-shortcut-per-group happens naturally when the user
+uninstalls one. Duplicate shortcuts of _uninstalled_ siblings are removed by the normal stale path on the next sync.
+Nondeterministic bindings (the same-name collision case) are normalized once by the resolution chain in §3. No migration
+ever deletes a shortcut the user has played.
+
+## Consequences
+
+- **A real bug class is fixed, not just a feature added.** The nondeterministic last-sibling-wins binding and the
+  permanently-unsynced phantom rows disappear; fresh syncs of an N-version game yield exactly one deterministic
+  shortcut.
+- **Version switching is cheap and lossless** — a `launch_options` flip plus a binding move. Multiple versions may
+  coexist on disk; switch-back needs no re-download.
+- **The shortcut name can lag the active version** (play the Japanese dump under the shortcut minted from the USA name).
+  Accepted: name stability is what protects appId, artwork, collections and playtime.
+- **Unmatched ROMs are untouched** — solo groups degrade to exactly today's per-ROM behavior.
+- **The version metadata rides the sync UPSERT**, so server-side re-matching (a sibling joining or leaving a group)
+  propagates on the next sync; the group-keyed diff must tolerate membership drift.
+- The download picker (#1297) and the installed-game version switch (#1298) become thin UI over this model.
+
+## Alternatives considered
+
+- **Fetch with `group_by_meta_id=true` and let the server group.** Rejected: installed non-representative siblings
+  vanish from the list (stale-removal churn on healthy installs), sibling stubs are too slim to build the picker without
+  N extra requests, and incremental fetches get representative-flip semantics the diff would have to undo. Client-side
+  grouping over the flat fetch yields identical membership with none of that.
+- **One shortcut per ROM with name disambiguation** (append `(Germany)` etc. to make appIds unique). Rejected: it
+  multiplies every multi-version game into N library entries — the exact clutter #1267 exists to remove — and renaming
+  existing shortcuts churns their appIds once.
+- **Write the user's choice back to `is_main_sibling`.** Rejected for now: requires the `roms.user.write` scope, and a
+  scope bump forces every user through re-sign-in. The server default is respected read-only instead; revisit if a scope
+  change becomes necessary for other reasons.
+- **Automatic save carry-over on version switch.** Rejected: contradicts RomM's own per-version save model, and silently
+  copying a save onto a different dump is the kind of assumption the save-sync design categorically avoids. If demand
+  materializes, an explicit user-triggered copy (rename + upload to the target sibling) can be a separate feature.
+- **Force-collapse pre-existing duplicate shortcuts in a migration.** Rejected: destructively removes shortcuts that
+  carry artwork, collections and playtime, and picking the loser is guesswork — the removal-churn class of bug (#1036)
+  this project has already paid for once. Grandfathering converges without deleting anything a user can see.
+
+See also: [ADR-0007](0007-rom-retention-identity-anchor.md) (the `roms` identity row the binding lives on),
+[ADR-0009](0009-launcher-pure-exec-wrapper-baked-launch-options.md) (baked `launch_options`, the switch mechanism),
+[ADR-0011](0011-per-game-core-override-in-db-applied-via-e-flag.md) /
+[ADR-0014](0014-per-game-disc-selection-in-db-applied-as-bake-time-launch-path-override.md) (the per-game deviation
+template the switch UI reuses), [Database Design](../architecture/database-design.md) (the roms table this extends).

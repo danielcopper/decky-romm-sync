@@ -463,6 +463,7 @@ class LibraryFetcher:
                     "igdb_id": rom.igdb_id,
                     "sgdb_id": rom.sgdb_id,
                     "ra_id": rom.ra_id,
+                    "sibling_group_key": rom.sibling_group_key,
                 }
                 for rom in uow.roms.iter_by_platform(platform_slug)
                 if rom.shortcut_app_id is not None
@@ -500,6 +501,16 @@ class LibraryFetcher:
         registry_count = len(reconstructed)
 
         if not last_sync or registry_count == 0:
+            return None
+
+        # Version-metadata backfill (#1295 / ADR-0019): a bound ROM whose
+        # sibling_group_key is still NULL predates the version-metadata capture
+        # and must be re-fetched to fill it in. Skipping the platform would leave
+        # it NULL forever, so any un-backfilled ROM forces a full fetch — the
+        # commit then persists every row's group key + version dimensions. Once
+        # every ROM carries a key this is a no-op and the skip resumes.
+        if any(not rom.get("sibling_group_key") for rom in reconstructed):
+            self._logger.info(f"Per-unit fetch {platform_name}: version-metadata backfill needed — full fetch")
             return None
 
         try:

@@ -323,6 +323,12 @@ class SyncReporter:
                 shortcut_app_id=int(app_id),
                 synced_at=self._clock.now().isoformat(),
                 igdb_id=pending.get("igdb_id"),
+                sibling_group_key=pending.get("sibling_group_key"),
+                regions=tuple(pending.get("regions") or ()),
+                languages=tuple(pending.get("languages") or ()),
+                revision=pending.get("revision") or "",
+                tags=tuple(pending.get("tags") or ()),
+                is_main_sibling=bool(pending.get("is_main_sibling", False)),
             )
         except ValueError as e:
             self._logger.warning(f"Skipping invalid ROM {rom_id_str} during commit: {e}")

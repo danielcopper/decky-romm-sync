@@ -10,11 +10,29 @@ shows:
 
 - **Status badge** — "Installed", "Downloading", or "Not Installed"
 - **Platform name** — which system the game belongs to (e.g. "Game Boy Advance")
+- **Version** — the region, language, revision, and tags of this dump, when RomM has them (see below)
 - **BIOS status** — whether required BIOS files are present (see [BIOS Management](bios-management.md))
 - **Save sync status** — last sync time, conflict count, and playtime (see [Save Sync](save-sync.md))
 - **Action buttons** — Download, Pause/Resume, Uninstall, Cancel, or Refresh Metadata depending on state
 
 ![Game detail page showing the RomM Sync panel for an installed game](../assets/screenshot-game-detail.jpg)
+
+## Version Information
+
+RomM records the details that distinguish one dump of a game from another — its **region** (e.g. `USA`, `Europe`), the
+**languages** it supports (e.g. `En`, `Fr`), a **revision** number, and any extra **tags** (e.g. `Demo`). When RomM has
+any of these for a game, the RomM Sync panel shows them in a **Version** row, formatted like:
+
+```text
+USA/Europe · En, Fr · Rev 1 · Demo
+```
+
+The row is read-only and appears only when at least one of these details is present — games with no version metadata
+simply omit it. The values refresh on every sync, so they always reflect what RomM currently knows.
+
+The Version row shows the version you currently have installed. Choosing between multiple versions of the same game (a
+version picker for downloads and an installed-version switch) is planned for a later release; today the panel reflects,
+it doesn't yet switch.
 
 ## Downloading ROMs
 

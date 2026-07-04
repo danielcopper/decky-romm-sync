@@ -70,8 +70,8 @@ def _set_user_version(db_path: str, version: int) -> None:
 # Highest NNN in the shipped migrations dir (001_initial + 002_add_emulator_override
 # + 003_unique_shortcut_app_id + 004_add_selected_disc
 # + 005_unconfirm_legacy_slot_confirmations + 006_native_play_sessions
-# + 007_add_last_played).
-_SHIPPED_VERSION = 7
+# + 007_add_last_played + 008_add_version_metadata).
+_SHIPPED_VERSION = 8
 
 # Tables after every shipped migration: the v1 set plus 006's play-session outbox.
 _SHIPPED_TABLES = _V1_TABLES | {"rom_playtime_sessions"}
@@ -215,6 +215,63 @@ class Test003UniqueShortcutAppId:
                 _insert_rom(conn, 2, 5000)
         finally:
             conn.close()
+
+
+_VERSION_METADATA_COLUMNS = {
+    "sibling_group_key",
+    "regions",
+    "languages",
+    "revision",
+    "tags",
+    "is_main_sibling",
+}
+
+
+class Test008VersionMetadata:
+    """008 adds the sibling-group key + version dimensions to roms only, defaulting
+    a pre-existing row (backfilled by the next sync)."""
+
+    def test_adds_version_columns_to_roms_only(self, tmp_path: Path):
+        db_path = str(tmp_path / "romm_sync.db")
+
+        apply_migrations(db_path)
+
+        assert _user_version(db_path) == _SHIPPED_VERSION
+        assert _columns(db_path, "roms") >= _VERSION_METADATA_COLUMNS
+        # rom_installs (and every other table) is untouched by 008.
+        assert not (_VERSION_METADATA_COLUMNS & _columns(db_path, "rom_installs"))
+
+    def test_existing_row_gets_defaults_across_the_migration(self, tmp_path: Path):
+        # A row created at v7 (before 008) survives and reads back the column
+        # defaults: NULL group key, empty JSON arrays, blank revision, 0 flag.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 7)))
+        assert _user_version(db_path) == 7
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            _insert_rom(conn, 1, 5000)
+        finally:
+            conn.close()
+
+        final_version = apply_migrations(db_path)
+
+        assert final_version == _SHIPPED_VERSION
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT sibling_group_key, regions, languages, revision, tags, is_main_sibling "
+                "FROM roms WHERE rom_id = 1"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert row["sibling_group_key"] is None
+        assert row["regions"] == "[]"
+        assert row["languages"] == "[]"
+        assert row["revision"] == ""
+        assert row["tags"] == "[]"
+        assert row["is_main_sibling"] == 0
 
 
 def _only_migrations_through(tmp_path: Path, max_version: int) -> Path:

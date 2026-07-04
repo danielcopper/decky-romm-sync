@@ -47,6 +47,8 @@ import { showFallbackLaunchModal } from "./FallbackLaunchModal";
 import { getMigrationState } from "../utils/migrationStore";
 import { runLaunchGate, markLaunchSkipped } from "../utils/launchGate";
 import type { GateVerdict, LaunchGateOps, PreLaunchSyncOutcome } from "../utils/launchGate";
+import { getActiveSessionRomId } from "../utils/sessionManager";
+import { isAppRunning } from "../utils/runningApps";
 import type { DownloadProgressEvent, DownloadCompleteEvent, DownloadFailedEvent } from "../types";
 import { SAVEFILES_IN_CONTENT_DIR_REASON } from "../types";
 import { detach } from "../utils/detach";
@@ -492,6 +494,20 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
 
     // Non-RomM / unresolved ROM — nothing to gate, launch straight through.
     if (!romId) {
+      await dispatchLaunch(gameId);
+      return;
+    }
+
+    // Already-running guard (#1148 round 2) — the sibling of the launch
+    // interceptor's guard, since this button is the other launch path and its
+    // enabled state derives from cached install/conflict status, not running
+    // state. A Play press on an already-running game must NOT run the pre-launch
+    // sync: it would upload the save mid-session while the emulator holds the file
+    // open and manufacture a conflict at exit. Skip the whole gate/sync funnel and
+    // just bring the game to front — `dispatchLaunch` skip-marks the appId so the
+    // resulting RunGame doesn't re-enter the interceptor and re-gate either.
+    if (getActiveSessionRomId() === romId || isAppRunning(appId)) {
+      detach(debugLog(`CustomPlayButton: appId=${appId} already running — skipping pre-launch sync`));
       await dispatchLaunch(gameId);
       return;
     }

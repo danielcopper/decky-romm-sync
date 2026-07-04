@@ -34,8 +34,19 @@ declare var SteamClient: {
   };
   System: {
     GetSystemInfo(): Promise<{ sHostname: string; [key: string]: any }>;
+    // Legacy suspend/resume registrations — removed on current SteamOS (#1148).
+    // The session manager still tries these first (a build that exposes them keeps
+    // working) before falling back to the User.* successors below.
     RegisterForOnSuspendRequest(callback: () => void): { unregister: () => void };
     RegisterForOnResumeFromSuspend(callback: () => void): { unregister: () => void };
+  };
+  User: {
+    // Renamed suspend/resume hooks on current SteamOS (#1148), the successors to
+    // the removed System.RegisterForOn{Suspend,ResumeFromSuspend} pair. These are
+    // PROGRESS callbacks — they may fire multiple times per suspend/resume cycle,
+    // so the handlers registered against them must be idempotent.
+    RegisterForPrepareForSystemSuspendProgress(callback: () => void): { unregister: () => void };
+    RegisterForResumeSuspendedGamesProgress(callback: () => void): { unregister: () => void };
   };
 };
 
@@ -111,6 +122,25 @@ declare var appStore: {
   GetAppOverviewByAppID(appId: number): SteamAppOverview | null;
   allApps: SteamAppOverview[];
 };
+
+// Running-app surfaces read by the defensive `utils/runningApps` reader. Steam SP
+// globals — genuinely absent (hence `undefined`) or `null` on some builds/timing,
+// so every read guards. `RunningApps` is optional: present only on builds that
+// expose it (Router.MainRunningApp stays authoritative for the foreground app).
+declare var Router:
+  | {
+      MainRunningApp: SteamAppOverview | null;
+      RunningApps?: SteamAppOverview[];
+    }
+  | null
+  | undefined;
+
+declare var SteamUIStore:
+  | {
+      RunningApps?: SteamAppOverview[];
+    }
+  | null
+  | undefined;
 
 declare var appDetailsStore: {
   GetDescriptions(appId: number): any;

@@ -10,6 +10,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from domain.sibling_group import compute_sibling_group_key
+
 # RetroDECK's flatpak application id. Its plain ``flatpak run <app>`` form is the
 # emulator invocation prefix the launch command wraps the resolved ROM path with;
 # the folder-boot ``direct`` form threads a ``--command=<launcher>`` between the
@@ -169,6 +171,12 @@ def build_shortcuts_data(
     the plain RetroDECK launch, a present ROM bakes its ``-e`` form into
     ``launch_options``. Required so a new bake site can never silently skip the
     override.
+
+    The sibling-group key (ADR-0019) and RomM's version dimensions (``regions`` /
+    ``languages`` / ``revision`` / ``tags`` / ``is_main_sibling``) are derived
+    from each raw ROM dict here and carried through so the commit persists them
+    on the ``Rom`` aggregate. ``is_main_sibling`` sits under ``rom_user``; the
+    lookup is guarded so a missing or ``null`` ``rom_user`` degrades to ``False``.
     """
     exe = os.path.join(plugin_dir, "bin", "rom-launcher")
     start_dir = os.path.join(plugin_dir, "bin")
@@ -193,6 +201,12 @@ def build_shortcuts_data(
             "sgdb_id": rom.get("sgdb_id"),
             "ra_id": rom.get("ra_id"),
             "cover_path": "",
+            "sibling_group_key": compute_sibling_group_key(rom),
+            "regions": list(rom.get("regions") or []),
+            "languages": list(rom.get("languages") or []),
+            "revision": rom.get("revision") or "",
+            "tags": list(rom.get("tags") or []),
+            "is_main_sibling": bool((rom.get("rom_user") or {}).get("is_main_sibling", False)),
         }
         for rom in roms
     ]

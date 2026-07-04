@@ -112,8 +112,15 @@ def _seed_collection(
             rom.setdefault("collection_ids", []).append(collection_id)
 
 
-def _seed_rom_row(plugin, rom_id, *, app_id, platform_slug, name="Game", fs_name=None):
-    """Insert a bound (or unbound when app_id is None) ROM into the shared fake UoW."""
+def _seed_rom_row(
+    plugin, rom_id, *, app_id, platform_slug, name="Game", fs_name=None, sibling_group_key: str | None = "romm:seed:1"
+):
+    """Insert a bound (or unbound when app_id is None) ROM into the shared fake UoW.
+
+    ``sibling_group_key`` defaults to a non-null value so the incremental-skip
+    path treats the registry as already backfilled (#1295); pass ``None`` to
+    seed a pre-migration row that must force a full fetch for backfill.
+    """
     from domain.rom import Rom
 
     rom = Rom(
@@ -123,6 +130,7 @@ def _seed_rom_row(plugin, rom_id, *, app_id, platform_slug, name="Game", fs_name
         fs_name=fs_name if fs_name is not None else f"{name}.z64",
         shortcut_app_id=app_id,
         last_synced_at="2025-01-01T00:00:00",
+        sibling_group_key=sibling_group_key,
     )
     with plugin._uow:
         plugin._uow.roms.save(rom)
@@ -899,6 +907,31 @@ class TestFetchPlatformUnit:
 
         roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
         assert skipped is True
+        assert {r["id"] for r in roms} == {10, 11}
+
+    @pytest.mark.asyncio
+    async def test_null_group_key_forces_full_fetch_for_backfill(self, plugin, fake_romm_api):
+        # A pre-#1295 registry row (NULL sibling_group_key) must NOT skip even
+        # when count matches + zero server updates — the platform is re-fetched so
+        # the commit backfills its version metadata. One bound row un-backfilled
+        # is enough to force the whole platform's fetch.
+        _use_fake_romm(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "A"}, {"id": 11, "name": "B"}],
+        )
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
+        _seed_completed_run(plugin, at="2025-01-01T00:00:00Z")
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="A", fs_name="a.z64", sibling_group_key=None)
+        _seed_rom_row(
+            plugin, 11, app_id=1011, platform_slug="n64", name="B", fs_name="b.z64", sibling_group_key="igdb:5:1"
+        )
+
+        roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
+        assert skipped is False
         assert {r["id"] for r in roms} == {10, 11}
 
     @pytest.mark.asyncio
