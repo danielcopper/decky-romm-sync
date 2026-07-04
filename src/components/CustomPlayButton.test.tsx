@@ -60,6 +60,17 @@ vi.mock("../utils/migrationStore", () => ({
   getMigrationState: vi.fn(() => ({ pending: false })),
 }));
 
+// Already-running guard deps (#1148 round 2). Default: no live session and nothing
+// running, so the guard is inert and the existing Play-funnel tests run unchanged.
+// CustomPlayButton is the only in-graph importer of either module, so a full mock
+// exposing just the guard's two functions is safe.
+vi.mock("../utils/sessionManager", () => ({
+  getActiveSessionRomId: vi.fn(() => null),
+}));
+vi.mock("../utils/runningApps", () => ({
+  isAppRunning: vi.fn(() => false),
+}));
+
 // Shared launch-gate modals — spy so the Play button's verdict switch is
 // observable without rendering each modal (mirrors the watcher's test shape).
 vi.mock("../components/OfflineDriftModal", () => ({
@@ -76,6 +87,8 @@ import { getCachedGameDetail } from "../utils/cachedGameDetailStore";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { markLaunchSkipped, consumeLaunchSkip } from "../utils/launchGate";
 import { getMigrationState } from "../utils/migrationStore";
+import { getActiveSessionRomId } from "../utils/sessionManager";
+import { isAppRunning } from "../utils/runningApps";
 import { showOfflineDriftModal } from "../components/OfflineDriftModal";
 import { showFallbackLaunchModal } from "../components/FallbackLaunchModal";
 import { handleConflicts } from "../components/SyncConflictModal";
@@ -616,6 +629,101 @@ describe("CustomPlayButton — pre-launch savefiles_in_content_dir benign skip (
     expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
     // No fallback-launch confirm modal was opened (would mean we treated it as failure).
     expect(vi.mocked(backend.preLaunchSync)).toHaveBeenCalledWith(42);
+  });
+});
+
+// #1148 round 2: the Play button is the sibling of the launch interceptor's
+// already-running guard. A Play press on an already-running game must NOT run the
+// pre-launch sync (it would upload the save mid-session and manufacture an exit
+// conflict); it skips the whole gate/sync funnel and just brings the game to
+// front. cached rom_id=42, appId=100 → the "Play" state.
+describe("CustomPlayButton — already-running guard (#1148 round 2)", () => {
+  beforeEach(() => {
+    // This file has no global mock-clear, so backend callable call history leaks
+    // across describes (an earlier Play test already invoked isSaveTrackingConfigured
+    // / debugLog). Clear it so the "never touched" guard assertions are meaningful.
+    vi.clearAllMocks();
+    vi.mocked(getCachedGameDetail).mockReset();
+    vi.mocked(toaster.toast).mockReset();
+    // Guard defaults: no live session, nothing running (overridden per test).
+    vi.mocked(getActiveSessionRomId).mockReturnValue(null);
+    vi.mocked(isAppRunning).mockReturnValue(false);
+    // Gate predecessors so the NORMAL path can reach preLaunchSync when the guard
+    // is inert; the guard tests assert these are never touched.
+    vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "default" });
+    vi.mocked(backend.checkCoreChange).mockResolvedValue({ changed: false });
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: true,
+      message: "",
+      synced: 0,
+      errors: [],
+      conflicts: [],
+    });
+    vi.stubGlobal("SteamClient", { Apps: { RunGame: vi.fn() } });
+    vi.stubGlobal("appStore", {
+      GetAppOverviewByAppID: vi.fn(() => ({ GetGameID: () => "gid-1" })),
+      allApps: [],
+    });
+    vi.mocked(getCachedGameDetail).mockResolvedValue({
+      found: true,
+      rom_id: 42,
+      rom_name: "Test ROM",
+      installed: true,
+    });
+  });
+
+  it("skips the gate/sync and brings the game to front when this rom is the live session", async () => {
+    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+    });
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+
+    // The gate/sync funnel never ran — neither its first op nor the sync itself.
+    expect(vi.mocked(backend.isSaveTrackingConfigured)).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.preLaunchSync)).not.toHaveBeenCalled();
+    // The info log fired (non-vacuous — proves the guard branch, not just the sink).
+    expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
+      expect.stringContaining("already running — skipping pre-launch sync"),
+    );
+  });
+
+  it("skips the gate/sync when a running-app source reports the appId running", async () => {
+    vi.mocked(getActiveSessionRomId).mockReturnValue(null);
+    vi.mocked(isAppRunning).mockReturnValue(true);
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+    });
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+
+    expect(vi.mocked(isAppRunning)).toHaveBeenCalledWith(100);
+    expect(vi.mocked(backend.isSaveTrackingConfigured)).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.preLaunchSync)).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
+      expect.stringContaining("already running — skipping pre-launch sync"),
+    );
+  });
+
+  it("runs the normal pre-launch funnel when nothing is running", async () => {
+    // Defaults: no live session, isAppRunning false → guard inert.
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+    });
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+
+    // Guard inert → the gate ran the pre-launch sync before launching, and no
+    // already-running log was emitted.
+    expect(vi.mocked(backend.preLaunchSync)).toHaveBeenCalledWith(42);
+    expect(vi.mocked(backend.debugLog)).not.toHaveBeenCalledWith(expect.stringContaining("already running"));
   });
 });
 

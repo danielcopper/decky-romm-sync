@@ -1459,8 +1459,8 @@ throwing-getter surface degrades to "reported nothing", never a throw), merges t
 a per-source `diagnostics` string. No single surface is reliable across builds/timing: after a `plugin_loader` restart
 `Router.MainRunningApp` stays null for several seconds and never repopulates without a fresh lifecycle event (#1054 /
 #1148 round 2), so the adoption path **polls** the reader (every 500ms up to 15s) instead of reading one surface once,
-and a failed round logs what every candidate reported. The same reader backs the launch interceptor's already-running
-skip ([ADR-0015](../adr/0015-single-launch-gate-cancel-then-relaunch.md)).
+and a failed round logs what every candidate reported. The same reader backs the already-running skip on both launch
+surfaces — the interceptor and the Play button ([ADR-0015](../adr/0015-single-launch-gate-cancel-then-relaunch.md)).
 
 ### App ID to ROM ID mapping
 

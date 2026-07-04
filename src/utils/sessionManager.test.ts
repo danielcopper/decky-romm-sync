@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as backend from "../api/backend";
-import { initSessionManager, destroySessionManager } from "./sessionManager";
+import { initSessionManager, destroySessionManager, ADOPTION_POLL_MAX_MS } from "./sessionManager";
 
 // sessionManager talks to the backend callable surface and the migration
 // stores. Mock both so the test observes only what `handleGameStop` forwards
@@ -60,10 +60,11 @@ async function stopGame(cb: LifetimeCb): Promise<void> {
   await vi.advanceTimersByTimeAsync(0);
 }
 
-// #1148: adoptOrphanedSession now polls Router.MainRunningApp for up to 15s before
-// deciding. When no running app is present, initSessionManager only settles once
-// that poll times out — drain it so the immediate-read tests still resolve.
-const ADOPTION_POLL_MAX_MS = 15_000;
+// #1148: adoptOrphanedSession now polls the running-app surfaces for up to 15s
+// before deciding. When no running app is present, initSessionManager only settles
+// once that poll times out — drain it (using the real source-side constant, so a
+// change to the poll window can't silently desync this fast-forward) so the
+// immediate-read tests still resolve.
 async function initDrainingAdoptionPoll(): Promise<void> {
   const init = initSessionManager();
   await vi.advanceTimersByTimeAsync(ADOPTION_POLL_MAX_MS);

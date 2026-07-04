@@ -271,7 +271,7 @@ function handleResume(): void {
 // the defensive multi-source reader until a running app appears or the window
 // elapses.
 const ADOPTION_POLL_INTERVAL_MS = 500;
-const ADOPTION_POLL_MAX_MS = 15_000;
+export const ADOPTION_POLL_MAX_MS = 15_000;
 
 /**
  * Poll every running-app source until one reports a running app or the window
