@@ -23,12 +23,15 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from domain.emulator_commands import label_to_invocation
+from domain.rom_files import folder_boot_root
+from domain.shortcut_data import EmulatorInvocation
 
 if TYPE_CHECKING:
     import logging
 
+    from domain.emulator_commands import EmulatorOption
     from domain.rom import Rom
-    from domain.shortcut_data import EmulatorInvocation
+    from domain.rom_install import RomInstall
     from services.protocols import (
         CoreInfoProvider,
         PlatformCoreReader,
@@ -86,15 +89,38 @@ class ActiveCoreResolver:
         the plain launch and lets RetroDECK resolve the emulator. A stale
         per-game/per-platform label is never fatal — it degrades to the next
         layer with a WARNING.
+
+        Final step: a resolved **standalone** emulator whose install is a
+        folder-boot layout (PS3 — ``…/PS3_GAME/USRDIR/EBOOT.BIN``) is rewritten
+        to the ``direct`` sandbox form (ADR-0019). RetroDECK's ``run_game.sh``
+        reinterprets a directory ``%ROM%`` as an ES-DE "directory as a file" and
+        can never launch a bare game folder, so a folder-boot game must run its
+        emulator launcher directly inside the sandbox instead. The rewrite keys
+        off :func:`folder_boot_root` — the same fact the disc/bake-path seam uses
+        to fold the target to the game folder — so the invocation form and the
+        baked path are always decided from one layout fact. A libretro emulator,
+        a non-folder install, or an unresolvable sandbox launcher all leave the
+        invocation unchanged.
         """
-        rom = self._read_rom(rom_id)
+        rom, install = self._read_rom_and_install(rom_id)
         if rom is None:
             self._logger.warning("active_core_resolver: no ROM for rom_id=%s; resolving to plain launch", rom_id)
             return None
 
         system = self._resolve_system(rom.platform_slug)
         options = self._core_info.get_emulator_options(system)["options"]
+        emulator = self._resolve_by_precedence(rom, rom_id, system, options)
+        return self._maybe_folder_boot_direct(emulator, install, rom_id)
 
+    def _resolve_by_precedence(
+        self, rom: Rom, rom_id: int, system: str, options: list[EmulatorOption]
+    ) -> EmulatorInvocation | None:
+        """Apply the per-game → per-platform → system-default precedence chain.
+
+        Returns the resolved :class:`EmulatorInvocation` before the folder-boot
+        rewrite. A stale per-game/per-platform label warns and degrades to the
+        next layer; the bottom is the live es_systems default (or ``None``).
+        """
         override = rom.emulator_override
         if override is not None:
             invocation = label_to_invocation(options, override)
@@ -123,6 +149,34 @@ class ActiveCoreResolver:
 
         return self._core_info.get_default_emulator(system)
 
+    def _maybe_folder_boot_direct(
+        self, emulator: EmulatorInvocation | None, install: RomInstall | None, rom_id: int
+    ) -> EmulatorInvocation | None:
+        """Rewrite a standalone *emulator* to the folder-boot ``direct`` form when warranted.
+
+        Fires only for a **standalone** emulator whose *install* is a folder-boot
+        layout (:func:`folder_boot_root` returns a game root). Resolves the
+        emulator's sandbox launcher via the es_find_rules probe and returns a
+        ``direct`` invocation. Leaves the emulator unchanged for a libretro core,
+        a non-folder install, a missing install, or an unresolvable launcher —
+        the last is logged (the baked ``run_game`` form will fail to launch a
+        folder until a later re-bake heals it).
+        """
+        if emulator is None or emulator.kind != "standalone" or emulator.command is None:
+            return emulator
+        if install is None or folder_boot_root(install.file_path, install.rom_dir) is None:
+            return emulator
+        launcher = self._core_info.resolve_sandbox_launcher(emulator.command)
+        if launcher is None:
+            self._logger.warning(
+                "active_core_resolver: folder-boot rom_id=%s resolves to standalone '%s' but its sandbox "
+                "launcher is unresolvable; keeping the run_game form (launch will fail until healed)",
+                rom_id,
+                emulator.label,
+            )
+            return emulator
+        return EmulatorInvocation.direct(emulator.command, launcher, emulator.label)
+
     def active_core_for_rom(self, rom_id: int) -> tuple[str | None, str | None]:
         """Return the ``(core_so, label)`` the ROM ``rom_id`` will launch with.
 
@@ -139,6 +193,6 @@ class ActiveCoreResolver:
             return (None, None)
         return (emulator.core_so, emulator.label)
 
-    def _read_rom(self, rom_id: int) -> Rom | None:
+    def _read_rom_and_install(self, rom_id: int) -> tuple[Rom | None, RomInstall | None]:
         with self._uow_factory() as uow:
-            return uow.roms.get(rom_id)
+            return (uow.roms.get(rom_id), uow.rom_installs.get(rom_id))

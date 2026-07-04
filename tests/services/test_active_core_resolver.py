@@ -14,10 +14,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from fakes.fake_core_info_provider import FakeCoreInfoProvider, standalone_option
+from fakes.fake_core_info_provider import FakeCoreInfoProvider, libretro_option, standalone_option
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 
 from domain.rom import Rom
+from domain.rom_install import RomInstall
 from domain.shortcut_data import EmulatorInvocation
 from services.active_core_resolver import ActiveCoreResolver, ActiveCoreResolverConfig
 
@@ -76,6 +77,28 @@ def _seed_rom(
             shortcut_app_id=rom_id,
             last_synced_at="2026-01-01T00:00:00+00:00",
             emulator_override=emulator_override,
+        )
+    )
+
+
+def _seed_install(
+    uow: FakeUnitOfWork,
+    *,
+    rom_id: int,
+    file_path: str,
+    rom_dir: str | None,
+    platform_slug: str = "ps3",
+    system: str = "ps3",
+) -> None:
+    """Seed one ``RomInstall`` into the UoW (folder-backed unless *rom_dir* is None)."""
+    uow.rom_installs.save(
+        RomInstall.mark_installed(
+            rom_id=rom_id,
+            file_path=file_path,
+            rom_dir=rom_dir,
+            platform_slug=platform_slug,
+            system=system,
+            installed_at="2026-01-01T00:00:00",
         )
     )
 
@@ -452,3 +475,111 @@ def test_stale_standalone_pin_degrades_to_default(caplog: pytest.LogCaptureFixtu
     # Degrades to the system default (the bakeable RPCS3 Directory), never raises.
     assert result == _RPCS3
     assert any("RPCS3 Shortcut (Standalone)" in r.message and "degrading" in r.message for r in caplog.records)
+
+
+# --- folder-boot direct rewrite: standalone → sandbox launch (ADR-0019 / #1212) -
+
+_PS3_EBOOT = "/roms/ps3/MyGame/PS3_GAME/USRDIR/EBOOT.BIN"
+_PS3_ROM_DIR = "/roms/ps3/MyGame"
+_RPCS3_LAUNCHER = "/app/retrodeck/components/rpcs3/component_launcher.sh"
+
+
+def test_folder_boot_standalone_rewrites_to_direct() -> None:
+    """A standalone PS3 default over a folder-boot install becomes the ``direct``
+    sandbox invocation (its launcher resolved via the es_find_rules probe)."""
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=70, platform_slug="ps3", emulator_override=None)
+    _seed_install(uow, rom_id=70, file_path=_PS3_EBOOT, rom_dir=_PS3_ROM_DIR)
+    core_info = FakeCoreInfoProvider(
+        standalone={"ps3": _RPCS3},
+        sandbox_launchers={_RPCS3_COMMAND: _RPCS3_LAUNCHER},
+    )
+    resolver, _ = _make_resolver(uow=uow, core_info=core_info)
+
+    assert resolver.active_emulator_for_rom(70) == EmulatorInvocation.direct(
+        _RPCS3_COMMAND, _RPCS3_LAUNCHER, _RPCS3_LABEL
+    )
+    # The .so-space projection stays (None, label) — unchanged from the standalone.
+    assert resolver.active_core_for_rom(70) == (None, _RPCS3_LABEL)
+
+
+def test_folder_boot_standalone_pin_also_rewrites_to_direct() -> None:
+    """A per-game standalone PIN over a folder-boot install rewrites to direct too —
+    the rewrite is on the resolved emulator, whichever layer produced it."""
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=71, platform_slug="ps3", emulator_override=_RPCS3_LABEL)
+    _seed_install(uow, rom_id=71, file_path=_PS3_EBOOT, rom_dir=_PS3_ROM_DIR)
+    core_info = FakeCoreInfoProvider(
+        options=[standalone_option(_RPCS3_COMMAND, _RPCS3_LABEL)],
+        sandbox_launchers={_RPCS3_COMMAND: _RPCS3_LAUNCHER},
+    )
+    resolver, _ = _make_resolver(uow=uow, core_info=core_info)
+
+    assert resolver.active_emulator_for_rom(71) == EmulatorInvocation.direct(
+        _RPCS3_COMMAND, _RPCS3_LAUNCHER, _RPCS3_LABEL
+    )
+
+
+def test_non_folder_install_keeps_standalone_run_game_form() -> None:
+    """A standalone over a NON-folder install (e.g. a .iso, no folder-boot marker)
+    is left as the run_game ``-e`` standalone form — byte-identical to before."""
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=72, platform_slug="ps3", emulator_override=None)
+    _seed_install(uow, rom_id=72, file_path="/roms/ps3/Game.iso", rom_dir="/roms/ps3/Game")
+    core_info = FakeCoreInfoProvider(
+        standalone={"ps3": _RPCS3},
+        sandbox_launchers={_RPCS3_COMMAND: _RPCS3_LAUNCHER},
+    )
+    resolver, _ = _make_resolver(uow=uow, core_info=core_info)
+
+    assert resolver.active_emulator_for_rom(72) == _RPCS3
+
+
+def test_uninstalled_rom_keeps_standalone() -> None:
+    """No install row (uninstalled ROM) → no folder-boot rewrite; the standalone
+    invocation passes through unchanged for the read-path projection."""
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=73, platform_slug="ps3", emulator_override=None)
+    core_info = FakeCoreInfoProvider(
+        standalone={"ps3": _RPCS3},
+        sandbox_launchers={_RPCS3_COMMAND: _RPCS3_LAUNCHER},
+    )
+    resolver, _ = _make_resolver(uow=uow, core_info=core_info)
+
+    assert resolver.active_emulator_for_rom(73) == _RPCS3
+
+
+def test_libretro_over_folder_boot_install_is_never_rewritten() -> None:
+    """A libretro pin is never rewritten to direct, even over a folder-boot layout —
+    the rewrite fires only for standalone emulators."""
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=74, platform_slug="ps3", emulator_override="LRPS3")
+    _seed_install(uow, rom_id=74, file_path=_PS3_EBOOT, rom_dir=_PS3_ROM_DIR)
+    core_info = FakeCoreInfoProvider(
+        options=[
+            standalone_option(_RPCS3_COMMAND, _RPCS3_LABEL),
+            libretro_option("lrps3_libretro", "LRPS3"),
+        ],
+        sandbox_launchers={_RPCS3_COMMAND: _RPCS3_LAUNCHER},
+    )
+    resolver, _ = _make_resolver(uow=uow, core_info=core_info)
+
+    assert resolver.active_emulator_for_rom(74) == EmulatorInvocation.libretro("lrps3_libretro", "LRPS3")
+
+
+def test_folder_boot_standalone_unresolvable_launcher_keeps_run_game_and_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When the sandbox launcher cannot be resolved, the standalone run_game form is
+    kept (no direct) and a WARNING is logged — the launch fails until a re-bake heals."""
+    uow = FakeUnitOfWork()
+    _seed_rom(uow, rom_id=75, platform_slug="ps3", emulator_override=None)
+    _seed_install(uow, rom_id=75, file_path=_PS3_EBOOT, rom_dir=_PS3_ROM_DIR)
+    core_info = FakeCoreInfoProvider(standalone={"ps3": _RPCS3}, sandbox_launchers={})  # unresolvable
+    resolver, _ = _make_resolver(uow=uow, core_info=core_info)
+
+    with caplog.at_level(logging.WARNING, logger="test"):
+        result = resolver.active_emulator_for_rom(75)
+
+    assert result == _RPCS3
+    assert any("sandbox" in r.message and "launcher" in r.message for r in caplog.records)

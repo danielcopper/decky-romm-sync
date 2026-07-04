@@ -198,6 +198,48 @@ class CoreResolver:
         ]
         return {"available": True, "options": options}
 
+    def resolve_sandbox_launcher(self, command: str) -> str | None:
+        """Resolve a standalone *command*'s emulator to its RetroDECK sandbox launcher path.
+
+        For the folder-boot direct bake (ADR-0019): extracts the command's
+        ``%EMULATOR_<NAME>%`` token, looks it up in ``es_find_rules.xml``, and
+        returns the ``staticpath`` entry that is a sandbox-absolute RetroDECK
+        component launcher — a ``/app/…`` (bundled) or ``/var/{data,config}/…``
+        (external) path naming a RetroDECK component, e.g.
+        ``/app/retrodeck/components/rpcs3/component_launcher.sh``. That is the
+        path ``flatpak run --command=`` execs INSIDE the sandbox; the bundled
+        ``/app`` entry is preferred. Host-native entries (``~/…`` AppImages, host
+        flatpak exports) are skipped — they are not reachable as a sandbox
+        ``--command``. Returns ``None`` when the command carries no emulator
+        token, the find rule is absent, or no sandbox component launcher is
+        listed (the caller then keeps the standalone ``run_game.sh`` form).
+        """
+        token = _emulator_token(command)
+        if token is None:
+            return None
+        staticpaths = self._load_find_rules().get(token)
+        if not staticpaths:
+            return None
+        candidates = [entry.split("|", 1)[0].strip() for entry in staticpaths]
+        sandbox = [path for path in candidates if self._is_sandbox_component(path)]
+        if not sandbox:
+            return None
+        return next((path for path in sandbox if path.startswith("/app/")), sandbox[0])
+
+    @staticmethod
+    def _is_sandbox_component(path: str) -> bool:
+        """Whether *path* is a sandbox-absolute RetroDECK component launcher.
+
+        True for a ``/app/…`` (bundled) or ``/var/{data,config}/…`` (external)
+        ``staticpath`` naming a RetroDECK component — the entries that exist
+        INSIDE the RetroDECK sandbox and can be run via ``flatpak run
+        --command=``. Host-native paths (``~/…``, host flatpak exports) are not.
+        """
+        sandbox_prefixes = ("/app/", "/var/data/", "/var/config/")
+        if not any(path.startswith(prefix) for prefix in sandbox_prefixes):
+            return False
+        return any(marker in path for marker in _RETRODECK_COMPONENT_MARKERS)
+
     def _probe_installed(self, option: EmulatorOption) -> EmulatorOption:
         """Downgrade a bakeable standalone whose emulator is not installed.
 

@@ -89,6 +89,47 @@ class TestResolveEmulatorInvocation:
         result = resolve_emulator_invocation({"id": 1}, EmulatorInvocation.standalone("%EMULATOR_PCSX2% -batch %ROM%"))
         assert result == 'flatpak run net.retrodeck.retrodeck -e "%EMULATOR_PCSX2% -batch %ROM%"'
 
+    def test_direct_runs_sandbox_launcher_bypassing_run_game(self):
+        # A folder-boot direct invocation runs the emulator's sandbox launcher via
+        # flatpak --command=, NOT run_game.sh (which reinterprets a directory %ROM%
+        # as a "directory as a file"). No -e, no %ROM% — the folder is appended by
+        # build_launch_options. Middle args (--no-gui) survive.
+        result = resolve_emulator_invocation(
+            {"id": 1},
+            EmulatorInvocation.direct(
+                "%EMULATOR_RPCS3% --no-gui %ROM%",
+                "/app/retrodeck/components/rpcs3/component_launcher.sh",
+                "RPCS3 Directory (Standalone)",
+            ),
+        )
+        assert result == (
+            "flatpak run --command=/app/retrodeck/components/rpcs3/component_launcher.sh "
+            "net.retrodeck.retrodeck --no-gui"
+        )
+        assert "-e " not in result
+        assert "%ROM%" not in result
+
+    def test_direct_with_no_middle_args_has_no_trailing_space(self):
+        result = resolve_emulator_invocation(
+            {"id": 1},
+            EmulatorInvocation.direct(
+                "%EMULATOR_RPCS3% %ROM%", "/app/retrodeck/components/rpcs3/component_launcher.sh"
+            ),
+        )
+        assert result == (
+            "flatpak run --command=/app/retrodeck/components/rpcs3/component_launcher.sh net.retrodeck.retrodeck"
+        )
+        assert not result.endswith(" ")
+
+    def test_direct_missing_launcher_degrades_to_plain_launch(self):
+        # A half-resolved direct invocation (no launcher) must never render a
+        # broken "--command=None"; it degrades to the plain RetroDECK launch.
+        result = resolve_emulator_invocation(
+            {"id": 1}, EmulatorInvocation(kind="direct", command="%EMULATOR_RPCS3% --no-gui %ROM%", launcher=None)
+        )
+        assert result == "flatpak run net.retrodeck.retrodeck"
+        assert "--command=" not in result
+
     def test_none_never_yields_none_so(self):
         # B4 guard: a None core must never reach the f-string as the literal "None.so".
         assert "None.so" not in resolve_emulator_invocation({"id": 1}, None)
@@ -109,6 +150,23 @@ class TestBuildLaunchOptions:
 
     def test_empty_path_still_quoted(self):
         assert build_launch_options(RETRODECK_INVOCATION, "") == 'flatpak run net.retrodeck.retrodeck ""'
+
+    def test_folder_boot_direct_composes_full_mgs4_command(self):
+        # End-to-end: the direct invocation + the quoted game folder reproduce the
+        # exact on-device-verified RPCS3 boot command (ADR-0019 / #1212).
+        invocation = resolve_emulator_invocation(
+            {"id": 1},
+            EmulatorInvocation.direct(
+                "%EMULATOR_RPCS3% --no-gui %ROM%",
+                "/app/retrodeck/components/rpcs3/component_launcher.sh",
+                "RPCS3 Directory (Standalone)",
+            ),
+        )
+        result = build_launch_options(invocation, "/run/media/deck/Emulation/retrodeck/roms/ps3/Metal Gear Solid 4")
+        assert result == (
+            "flatpak run --command=/app/retrodeck/components/rpcs3/component_launcher.sh "
+            'net.retrodeck.retrodeck --no-gui "/run/media/deck/Emulation/retrodeck/roms/ps3/Metal Gear Solid 4"'
+        )
 
     # The tests below use shlex.split(posix=True) as a reference POSIX /
     # ``\"``-honoring tokenizer: it proves the escaping is internally correct (a

@@ -161,16 +161,9 @@ _DEFAULT_ES_SYSTEMS_XML = """\
 """
 
 
-def seed_es_systems(harness: ContractHarness, xml: str | None = None) -> None:
-    """Write a real-shaped ``es_systems.xml`` for the real ``CoreResolver`` to read.
-
-    The harness roots ``user_home`` at ``tmp_path/home``; the resolver probes the
-    per-user flatpak files tree under it (the contract conftest repoints the
-    system root away, so this seed is the only source). The file lands at the
-    ``…/systems/linux/es_systems.xml`` path ES-DE ships. The default seeds a
-    single ``gba`` system with an mGBA default and a VBA Next alternative.
-    """
-    files_dir = os.path.join(
+def _flatpak_files_dir(harness: ContractHarness) -> str:
+    """The per-user RetroDECK flatpak ``files`` tree under the harness ``user_home``."""
+    return os.path.join(
         str(harness.tmp_path),
         "home",
         ".local",
@@ -182,8 +175,12 @@ def seed_es_systems(harness: ContractHarness, xml: str | None = None) -> None:
         "active",
         "files",
     )
-    dest = os.path.join(
-        files_dir,
+
+
+def _systems_linux_dir(harness: ContractHarness) -> str:
+    """The ``…/systems/linux`` dir holding es_systems.xml + es_find_rules.xml."""
+    return os.path.join(
+        _flatpak_files_dir(harness),
         "retrodeck",
         "components",
         "es-de",
@@ -192,8 +189,46 @@ def seed_es_systems(harness: ContractHarness, xml: str | None = None) -> None:
         "resources",
         "systems",
         "linux",
-        "es_systems.xml",
     )
+
+
+def seed_es_systems(harness: ContractHarness, xml: str | None = None) -> None:
+    """Write a real-shaped ``es_systems.xml`` for the real ``CoreResolver`` to read.
+
+    The harness roots ``user_home`` at ``tmp_path/home``; the resolver probes the
+    per-user flatpak files tree under it (the contract conftest repoints the
+    system root away, so this seed is the only source). The file lands at the
+    ``…/systems/linux/es_systems.xml`` path ES-DE ships. The default seeds a
+    single ``gba`` system with an mGBA default and a VBA Next alternative.
+    """
+    dest = os.path.join(_systems_linux_dir(harness), "es_systems.xml")
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     with open(dest, "w") as f:
         f.write(xml if xml is not None else _DEFAULT_ES_SYSTEMS_XML)
+
+
+def seed_es_find_rules(harness: ContractHarness, xml: str) -> None:
+    """Write ``es_find_rules.xml`` beside the seeded ``es_systems.xml``.
+
+    The sandbox-launcher probe (``resolve_sandbox_launcher``) and the standalone
+    existence probe both read this file as the es_systems sibling.
+    """
+    dest = os.path.join(_systems_linux_dir(harness), "es_find_rules.xml")
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    with open(dest, "w") as f:
+        f.write(xml)
+
+
+def seed_component_launcher(harness: ContractHarness, component: str) -> str:
+    """Create a bundled RetroDECK component launcher; return its SANDBOX path.
+
+    Lays down the on-disk launcher under the flatpak files tree so the existence
+    probe treats the standalone emulator as installed, and returns the
+    ``/app/retrodeck/components/<component>/component_launcher.sh`` sandbox path —
+    the value ``resolve_sandbox_launcher`` returns and the direct bake carries.
+    """
+    host = os.path.join(_flatpak_files_dir(harness), "retrodeck", "components", component, "component_launcher.sh")
+    os.makedirs(os.path.dirname(host), exist_ok=True)
+    with open(host, "w") as f:
+        f.write("#!/bin/sh\n")
+    return f"/app/retrodeck/components/{component}/component_launcher.sh"

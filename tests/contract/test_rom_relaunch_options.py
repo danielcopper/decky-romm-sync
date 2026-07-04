@@ -17,7 +17,38 @@ from __future__ import annotations
 
 from domain.rom_install import RomInstall
 
-from ._seed import seed_install, seed_rom
+from ._seed import seed_component_launcher, seed_es_find_rules, seed_es_systems, seed_install, seed_rom
+
+# A ps3 system whose first bakeable command is RPCS3 Directory (Standalone): the
+# shortcut form is un-bakeable (skipped), so the Directory command is the default.
+_PS3_ES_SYSTEMS_XML = """\
+<?xml version="1.0"?>
+<systemList>
+  <system>
+    <name>ps3</name>
+    <extension>.desktop .ps3 .ps3dir</extension>
+    <command label="RPCS3 Shortcut (Standalone)">%ENABLESHORTCUTS% %EMULATOR_OS-SHELL% %ROM%</command>
+    <command label="RPCS3 Directory (Standalone)">%EMULATOR_RPCS3% --no-gui %ROM%</command>
+  </system>
+</systemList>
+"""
+
+# RPCS3 find rule mirroring the real shape: a host AppImage entry BEFORE the
+# bundled /app RetroDECK component launcher (the sandbox path the direct bake uses).
+_PS3_ES_FIND_RULES_XML = """\
+<?xml version="1.0"?>
+<ruleList>
+  <emulator name="RPCS3">
+    <rule type="systempath">
+      <entry>rpcs3</entry>
+    </rule>
+    <rule type="staticpath">
+      <entry>~/Applications/rpcs3*.AppImage</entry>
+      <entry>/app/retrodeck/components/rpcs3/component_launcher.sh</entry>
+    </rule>
+  </emulator>
+</ruleList>
+"""
 
 
 async def test_installed_bound_rom_returns_item(harness):
@@ -48,14 +79,21 @@ async def test_unknown_rom_returns_none(harness):
     assert item is None
 
 
-async def test_ps3_folder_install_bakes_game_root_not_eboot(harness):
-    """A PS3 folder game bakes the game ROOT directory, not the nested EBOOT (#1212).
+async def test_ps3_folder_install_bakes_direct_sandbox_invocation(harness):
+    """A PS3 folder game bakes the direct sandbox invocation (ADR-0019 / #1212).
 
     The install's ``file_path`` stays the ``…/PS3_GAME/USRDIR/EBOOT.BIN`` launch
-    file (the ADR-0008 anchor), but the folder-boot override (ADR-0019) makes the
-    baked ``launch_options`` quote the game folder so RPCS3's directory-boot can
-    launch it. Drives the real bake seam over real on-disk files under tmp_path.
+    file (the ADR-0008 anchor), but the folder-boot rewrite bakes a
+    ``flatpak run --command=<launcher>`` command that runs RPCS3 directly inside
+    the sandbox over the game FOLDER — bypassing ``run_game.sh``, which would
+    reinterpret the directory as an ES-DE "directory as a file" and never boot
+    it. Drives the real bake seam (es_systems + es_find_rules + the on-disk
+    component launcher) over real files under tmp_path.
     """
+    seed_es_systems(harness, _PS3_ES_SYSTEMS_XML)
+    seed_es_find_rules(harness, _PS3_ES_FIND_RULES_XML)
+    launcher = seed_component_launcher(harness, "rpcs3")
+
     rom_id = 55
     seed_rom(harness, rom_id, platform_slug="ps3", shortcut_app_id=rom_id)
     rom_dir = harness.tmp_path / "retrodeck" / "roms" / "ps3" / "MyGame"
@@ -78,6 +116,7 @@ async def test_ps3_folder_install_bakes_game_root_not_eboot(harness):
 
     assert item is not None
     launch_options = item["launch_options"]
-    # The baked path is the game folder (quoted), never the nested EBOOT.
-    assert f'"{rom_dir}"' in launch_options
+    # Direct sandbox invocation over the game folder; never the nested EBOOT, never run_game -e.
+    assert launch_options == f'flatpak run --command={launcher} net.retrodeck.retrodeck --no-gui "{rom_dir}"'
     assert "EBOOT.BIN" not in launch_options
+    assert "-e " not in launch_options

@@ -945,3 +945,136 @@ class TestEmulatorToken:
     )
     def test_token_extraction(self, command, expected):
         assert _emulator_token(command) == expected
+
+
+# es_systems for the sandbox-launcher tests: find_es_find_rules_xml resolves the
+# rules file as the es_systems sibling, so a findable es_systems.xml must exist.
+_SANDBOX_ES_SYSTEMS_XML = """\
+<?xml version="1.0"?>
+<systemList>
+  <system>
+    <name>ps3</name>
+    <command label="RPCS3 Directory (Standalone)">%EMULATOR_RPCS3% --no-gui %ROM%</command>
+  </system>
+</systemList>
+"""
+
+# Mirrors the real RPCS3 rule's shape — host AppImage + host flatpak export
+# entries listed BEFORE the /app RetroDECK component launcher — plus emulators
+# exercising the /var-only, host-only, |command-suffixed, both-/app-and-/var, and
+# systempath-only branches.
+_SANDBOX_ES_FIND_RULES_XML = """\
+<?xml version="1.0"?>
+<ruleList>
+  <emulator name="RPCS3">
+    <rule type="systempath">
+      <entry>rpcs3</entry>
+    </rule>
+    <rule type="staticpath">
+      <entry>~/Applications/rpcs3*.AppImage</entry>
+      <entry>/var/lib/flatpak/exports/bin/net.rpcs3.RPCS3</entry>
+      <entry>/app/retrodeck/components/rpcs3/component_launcher.sh</entry>
+    </rule>
+  </emulator>
+  <emulator name="BOTHAPPVAR">
+    <rule type="staticpath">
+      <entry>/var/data/retrodeck/external_components/bothappvar/component_launcher.sh</entry>
+      <entry>/app/retrodeck/components/bothappvar/component_launcher.sh</entry>
+    </rule>
+  </emulator>
+  <emulator name="EXTONLY">
+    <rule type="staticpath">
+      <entry>/var/data/retrodeck/external_components/extonly/component_launcher.sh</entry>
+    </rule>
+  </emulator>
+  <emulator name="HOSTONLY">
+    <rule type="staticpath">
+      <entry>~/Applications/hostonly*.AppImage</entry>
+    </rule>
+  </emulator>
+  <emulator name="PIPED">
+    <rule type="staticpath">
+      <entry>/app/retrodeck/components/piped/component_launcher.sh|--flag %ROM%</entry>
+    </rule>
+  </emulator>
+  <emulator name="NOSTATIC">
+    <rule type="systempath">
+      <entry>nostatic</entry>
+    </rule>
+  </emulator>
+</ruleList>
+"""
+
+
+class TestResolveSandboxLauncher:
+    """``resolve_sandbox_launcher`` picks a standalone command's sandbox launcher.
+
+    Drives the real ``find_es_find_rules_xml`` → parse path over a fabricated
+    per-user flatpak tree; the method returns the sandbox-absolute RetroDECK
+    component ``staticpath`` verbatim (no on-disk existence check — the default /
+    pin resolution already gated installedness).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_system_root(self, tmp_path):
+        with mock.patch("adapters.flatpak_install.SYSTEM_FLATPAK_ROOT", str(tmp_path / "nonexistent_system_root")):
+            yield
+
+    def _seed(self, tmp_path, *, find_rules: str | None = _SANDBOX_ES_FIND_RULES_XML):
+        files_dir = str(_user_files_dir(tmp_path))
+        linux_systems = _es_systems_path(files_dir, flavor="linux")
+        os.makedirs(os.path.dirname(linux_systems))
+        with open(linux_systems, "w") as f:
+            f.write(_SANDBOX_ES_SYSTEMS_XML)
+        if find_rules is not None:
+            with open(_es_find_rules_path(files_dir, flavor="linux"), "w") as f:
+                f.write(find_rules)
+        return _make_resolver(user_home=str(tmp_path))
+
+    def test_rpcs3_resolves_app_component_over_host_entries(self, tmp_path):
+        resolver = self._seed(tmp_path)
+        assert (
+            resolver.resolve_sandbox_launcher("%EMULATOR_RPCS3% --no-gui %ROM%")
+            == "/app/retrodeck/components/rpcs3/component_launcher.sh"
+        )
+
+    def test_prefers_app_over_var_data_component(self, tmp_path):
+        resolver = self._seed(tmp_path)
+        assert (
+            resolver.resolve_sandbox_launcher("%EMULATOR_BOTHAPPVAR% %ROM%")
+            == "/app/retrodeck/components/bothappvar/component_launcher.sh"
+        )
+
+    def test_var_data_external_component_resolves(self, tmp_path):
+        resolver = self._seed(tmp_path)
+        assert (
+            resolver.resolve_sandbox_launcher("%EMULATOR_EXTONLY% %ROM%")
+            == "/var/data/retrodeck/external_components/extonly/component_launcher.sh"
+        )
+
+    def test_host_only_staticpaths_yield_none(self, tmp_path):
+        resolver = self._seed(tmp_path)
+        assert resolver.resolve_sandbox_launcher("%EMULATOR_HOSTONLY% %ROM%") is None
+
+    def test_pipe_suffixed_entry_is_stripped(self, tmp_path):
+        resolver = self._seed(tmp_path)
+        assert (
+            resolver.resolve_sandbox_launcher("%EMULATOR_PIPED% %ROM%")
+            == "/app/retrodeck/components/piped/component_launcher.sh"
+        )
+
+    def test_systempath_only_emulator_yields_none(self, tmp_path):
+        resolver = self._seed(tmp_path)
+        assert resolver.resolve_sandbox_launcher("%EMULATOR_NOSTATIC% %ROM%") is None
+
+    def test_unknown_emulator_token_yields_none(self, tmp_path):
+        resolver = self._seed(tmp_path)
+        assert resolver.resolve_sandbox_launcher("%EMULATOR_UNKNOWN% %ROM%") is None
+
+    def test_command_without_emulator_token_yields_none(self, tmp_path):
+        resolver = self._seed(tmp_path)
+        assert resolver.resolve_sandbox_launcher("just some text %ROM%") is None
+
+    def test_missing_find_rules_yields_none(self, tmp_path):
+        resolver = self._seed(tmp_path, find_rules=None)
+        assert resolver.resolve_sandbox_launcher("%EMULATOR_RPCS3% --no-gui %ROM%") is None

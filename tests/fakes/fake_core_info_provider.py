@@ -71,6 +71,7 @@ class FakeCoreInfoProvider:
         options: list[EmulatorOption] | None = None,
         available: bool = True,
         standalone: dict[str, EmulatorInvocation] | None = None,
+        sandbox_launchers: dict[str, str] | None = None,
     ) -> None:
         self.active_core = active_core
         self._available_cores: list[dict[str, Any]] = []
@@ -82,9 +83,13 @@ class FakeCoreInfoProvider:
             self.available_cores = available_cores or []
         self.available = available
         self.standalone: dict[str, EmulatorInvocation] = standalone if standalone is not None else {}
+        # Maps a standalone command → its sandbox launcher path (the folder-boot
+        # direct-bake probe); an unseeded command resolves to ``None``.
+        self.sandbox_launchers: dict[str, str] = sandbox_launchers if sandbox_launchers is not None else {}
         self.reset_cache_count = 0
         self.active_core_calls: list[str] = []
         self.emulator_options_calls: list[str] = []
+        self.sandbox_launcher_calls: list[str] = []
 
     @property
     def available_cores(self) -> list[dict[str, Any]]:
@@ -112,6 +117,10 @@ class FakeCoreInfoProvider:
     def get_emulator_options(self, system_name: str) -> dict[str, Any]:
         self.emulator_options_calls.append(system_name)
         return {"available": self.available, "options": self.options}
+
+    def resolve_sandbox_launcher(self, command: str) -> str | None:
+        self.sandbox_launcher_calls.append(command)
+        return self.sandbox_launchers.get(command)
 
     def reset_cache(self) -> None:
         self.reset_cache_count += 1
