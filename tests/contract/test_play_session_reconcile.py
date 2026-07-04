@@ -13,6 +13,7 @@ unreachable GET degrades to the local total.
 
 from __future__ import annotations
 
+from domain.playtime import PendingPlaySession, Playtime
 from lib.errors import RommApiError, RommForbiddenError
 
 from ._seed import seed_rom
@@ -104,6 +105,48 @@ async def test_reconcile_server_unreachable_keeps_local_total(harness):
 
     assert result["server_query_failed"] is True
     assert result["total_seconds"] == 120
+
+
+async def test_queued_poison_session_is_healed_on_flush(harness):
+    """An already-queued sub-second poison row (a legacy pre-filter enqueue) no longer wedges the outbox (#1312).
+
+    RomM 422s the whole batch on the zero-duration entry; the flush drops exactly
+    that entry and resubmits the survivor, which ingests and reconciles.
+    """
+    seed_rom(harness, 1)
+    await _register(harness)
+    harness.plugin.settings["save_sync_enabled"] = False
+
+    # Seed the outbox directly with a poison + a healthy row (bypassing the
+    # recording seam, which now filters sub-second windows at enqueue).
+    with harness.uow_factory() as uow:
+        uow.playtime.save(
+            1,
+            Playtime(
+                pending_sessions={
+                    "2026-07-04T10:00:00Z": PendingPlaySession(
+                        device_id="device-1", end_time="2026-07-04T10:00:00Z", duration_ms=0
+                    ),
+                    "2026-07-04T11:00:00Z": PendingPlaySession(
+                        device_id="device-1", end_time="2026-07-04T11:20:00Z", duration_ms=1_200_000
+                    ),
+                }
+            ),
+        )
+    # RomM rejects the whole POST while any entry is below one second.
+    harness.romm.reject_batch_below_duration_ms = 1
+
+    result = await harness.plugin.reconcile_playtime(1)
+
+    # The outbox is fully drained: poison dropped, survivor ingested.
+    with harness.uow_factory() as uow:
+        entry = uow.playtime.get(1)
+    assert entry is not None
+    assert entry.pending_sessions == {}
+    # Only the healthy 1200s session reached the server; reconcile unions it in.
+    assert [s["duration_ms"] for s in harness.romm.play_sessions[1]] == [1_200_000]
+    assert result["total_seconds"] == 1200
+    assert result["server_query_failed"] is False
 
 
 async def test_forbidden_reconcile_raises_scope_notice_then_clears(harness):

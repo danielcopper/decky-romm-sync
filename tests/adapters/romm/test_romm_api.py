@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from adapters.romm.romm_api import _TOKEN_SCOPES, RommApiAdapter
-from lib.errors import RommNotFoundError, RommServerError
+from lib.errors import RommNotFoundError, RommServerError, RommUnprocessableEntityError
 
 if TYPE_CHECKING:
     from models.play_sessions import PlaySessionIngestEntry
@@ -824,6 +824,15 @@ class TestIngestPlaySessions:
         client.post_json.side_effect = RommServerError("boom", status_code=500)
         with pytest.raises(RommServerError):
             api.ingest_play_sessions("dev-1", [])
+
+    def test_propagates_422_with_parsed_detail_intact(self):
+        """A whole-request 422 surfaces to the caller as ``RommUnprocessableEntityError`` with its detail."""
+        api, client = _make_api()
+        detail = [{"loc": ["body", "sessions", 0], "msg": "end_time must be after start_time"}]
+        client.post_json.side_effect = RommUnprocessableEntityError("HTTP 422", detail=detail)
+        with pytest.raises(RommUnprocessableEntityError) as excinfo:
+            api.ingest_play_sessions("dev-1", [{"rom_id": 1, "start_time": "t", "end_time": "t", "duration_ms": 0}])
+        assert excinfo.value.detail == detail
 
 
 class TestListPlaySessions:

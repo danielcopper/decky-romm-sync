@@ -11,6 +11,12 @@ wire contract without changing their identity.
 The request envelope (``{"device_id", "sessions"}``) is assembled inline at the
 adapter, not modeled here; the ``GET`` history response is a bare
 ``list[dict[str, Any]]`` (unvalidated at the seam, summed by ``duration_ms``).
+
+A whole-batch validation failure (RomM validates the ``sessions`` array
+atomically — any invalid entry rejects the entire POST, #1312) is a
+transport-level HTTP 422, surfaced as ``lib.errors.RommUnprocessableEntityError``
+carrying the failing ``sessions`` indices in its ``detail`` — NOT a per-entry
+verdict in ``results``.
 """
 
 from __future__ import annotations

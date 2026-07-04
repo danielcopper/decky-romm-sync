@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.iso_time import parse_iso
-from domain.playtime import Playtime
-from lib.errors import RommForbiddenError
+from domain.playtime import Playtime, is_ingestable_session, rejected_session_indices
+from lib.errors import RommForbiddenError, RommUnprocessableEntityError
 from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
@@ -219,17 +219,27 @@ class PlaytimeService:
                         "message": "Failed to calculate session duration",
                     }
                 duration = entry.last_session_duration_sec or 0
-                if device_id:
+                if not device_id:
+                    # Unregistered device: fold locally, never enqueue (an empty
+                    # device id must never reach the wire, ADR-0018 decision #8).
+                    self._log_debug(f"record_session_end: rom {rom_id} not enqueued — device unregistered")
+                elif not is_ingestable_session(started_at, ended_at):
+                    # A window that starts and ends inside one wall-clock second is
+                    # a mis-fired launch (#1305), not real play, and RomM 422s the
+                    # WHOLE ingest batch on it (#1312) — so it never enters the
+                    # outbox. The duration is still folded into the local total
+                    # above; only the native ingest is skipped.
+                    self._log_debug(
+                        f"record_session_end: rom {rom_id} sub-second session not enqueued "
+                        f"(start={started_at}, end={ended_at})"
+                    )
+                else:
                     entry.enqueue_session(
                         device_id=device_id,
                         start_time=started_at,
                         end_time=ended_at,
                         duration_ms=duration * 1000,
                     )
-                else:
-                    # Unregistered device: fold locally, never enqueue (an empty
-                    # device id must never reach the wire, ADR-0018 decision #8).
-                    self._log_debug(f"record_session_end: rom {rom_id} not enqueued — device unregistered")
                 uow.playtime.save(rom_id, entry)
                 total_seconds = entry.total_seconds
                 session_count = entry.session_count
@@ -349,7 +359,11 @@ class PlaytimeService:
 
         A transport failure on the POST is non-fatal (mirrors
         ``_close_negotiate_session``): the group's rows stay queued and retry on
-        the next flush. Per-row verdicts are correlated back by the response
+        the next flush. A whole-request 422 — RomM validates the ``sessions``
+        array atomically and rejects the ENTIRE POST if any entry is invalid — is
+        healed by :meth:`_handle_batch_rejection`: the server-flagged entries drop
+        and the survivors resubmit, so one poison row never blocks the batch
+        (#1312). Per-row 2xx verdicts are correlated back by the response
         ``index`` (position in this group's submitted batch).
         """
         batch: list[PlaySessionIngestEntry] = [
@@ -363,6 +377,18 @@ class PlaytimeService:
         ]
         try:
             response = self._romm_api.ingest_play_sessions(device_id, batch)
+        except RommUnprocessableEntityError as exc:
+            self._handle_batch_rejection(
+                device_id,
+                group,
+                exc,
+                sent_by_rom=sent_by_rom,
+                failed_by_rom=failed_by_rom,
+                quarantine_by_rom=quarantine_by_rom,
+                rejected_by_rom=rejected_by_rom,
+                undrained=undrained,
+            )
+            return
         except Exception as e:
             # No service-level retry wrap — a flush failure is non-fatal and
             # catches up next time. The whole group stays queued.
@@ -411,15 +437,105 @@ class PlaytimeService:
             # unknown verdict is not an explicit rejection, so it gets the same
             # never-drop-data-on-ambiguity hedge as a possibly-transient error —
             # still loop-free (it converges to quarantine after the threshold).
-            undrained.append(row)
-            if row.attempts + 1 >= _MAX_INGEST_ATTEMPTS:
-                quarantine_by_rom.setdefault(row.rom_id, []).append(row.start_time)
-                self._logger.warning(
-                    f"Dropping play session for rom {row.rom_id} (start={row.start_time}, status={status}) "
-                    f"after {row.attempts + 1} failed ingest attempts — unrecoverable, only playtime is lost"
+            self._bump_ingest_attempt(
+                row,
+                status=status,
+                failed_by_rom=failed_by_rom,
+                quarantine_by_rom=quarantine_by_rom,
+                undrained=undrained,
+            )
+
+    def _handle_batch_rejection(
+        self,
+        device_id: str,
+        group: list[PendingSessionRow],
+        exc: RommUnprocessableEntityError,
+        *,
+        sent_by_rom: dict[int, list[str]],
+        failed_by_rom: dict[int, list[str]],
+        quarantine_by_rom: dict[int, list[str]],
+        rejected_by_rom: dict[int, list[str]],
+        undrained: list[PendingSessionRow],
+    ) -> None:
+        """Heal a whole-request 422 by dropping the flagged entries and resubmitting the rest.
+
+        RomM validates the ``sessions`` array atomically: one invalid entry (e.g.
+        a sub-second window) 422s the ENTIRE POST, so a single poison row would
+        block every valid session queued behind it (#1312). The 422 body names
+        the failing positions in ``detail[].loc[2]``; those rows drop as terminal
+        (the byte-identical entry draws the same verdict forever, exactly like a
+        ``skipped`` per-row verdict) and the survivors resubmit so they still
+        ingest. When the body names no usable index (unparseable / no ``detail``),
+        the whole group falls back to bounded-retry attempt counting so a
+        persistent whole-request 422 converges to quarantine instead of looping
+        forever. Recursion is bounded: each level drops at least the flagged rows,
+        so the survivor group strictly shrinks (and the no-index branch never
+        recurses).
+        """
+        indices = set(rejected_session_indices(exc.detail, len(group)))
+        if not indices:
+            self._log_debug(
+                f"Play-session batch rejected (HTTP 422) with no usable detail indices "
+                f"(device {device_id}, {len(group)} session(s)) — bumping attempts"
+            )
+            for row in group:
+                self._bump_ingest_attempt(
+                    row,
+                    status="422",
+                    failed_by_rom=failed_by_rom,
+                    quarantine_by_rom=quarantine_by_rom,
+                    undrained=undrained,
+                )
+            return
+
+        survivors: list[PendingSessionRow] = []
+        for index, row in enumerate(group):
+            if index in indices:
+                rejected_by_rom.setdefault(row.rom_id, []).append(row.start_time)
+                self._logger.info(
+                    f"play session rejected by server for rom {row.rom_id} "
+                    f"(start={row.start_time}, batch index {index}, HTTP 422) — dropping from outbox"
                 )
             else:
-                failed_by_rom.setdefault(row.rom_id, []).append(row.start_time)
+                survivors.append(row)
+
+        if survivors:
+            self._flush_device_group(
+                device_id,
+                survivors,
+                sent_by_rom=sent_by_rom,
+                failed_by_rom=failed_by_rom,
+                quarantine_by_rom=quarantine_by_rom,
+                rejected_by_rom=rejected_by_rom,
+                undrained=undrained,
+            )
+
+    def _bump_ingest_attempt(
+        self,
+        row: PendingSessionRow,
+        *,
+        status: str,
+        failed_by_rom: dict[int, list[str]],
+        quarantine_by_rom: dict[int, list[str]],
+        undrained: list[PendingSessionRow],
+    ) -> None:
+        """Bounded-retry one outbox row that drew a non-terminal ingest failure.
+
+        The row stays queued (``undrained``) and its attempt counter advances;
+        once it would reach ``_MAX_INGEST_ATTEMPTS`` it is quarantined (dropped —
+        only playtime is lost) so a persistently-failing row cannot wedge the
+        outbox. Shared by an ``error`` / unknown per-row verdict and the
+        no-usable-index whole-request-422 fallback.
+        """
+        undrained.append(row)
+        if row.attempts + 1 >= _MAX_INGEST_ATTEMPTS:
+            quarantine_by_rom.setdefault(row.rom_id, []).append(row.start_time)
+            self._logger.warning(
+                f"Dropping play session for rom {row.rom_id} (start={row.start_time}, status={status}) "
+                f"after {row.attempts + 1} failed ingest attempts — unrecoverable, only playtime is lost"
+            )
+        else:
+            failed_by_rom.setdefault(row.rom_id, []).append(row.start_time)
 
     def _apply_flush_outcome(
         self,

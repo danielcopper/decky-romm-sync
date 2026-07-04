@@ -4,7 +4,103 @@ from __future__ import annotations
 
 import pytest
 
-from domain.playtime import PendingPlaySession, Playtime
+from domain.playtime import (
+    PendingPlaySession,
+    Playtime,
+    is_ingestable_session,
+    rejected_session_indices,
+)
+
+
+class TestIsIngestableSession:
+    def test_multi_hour_window_is_ingestable(self):
+        assert is_ingestable_session("2026-07-04T10:00:00Z", "2026-07-04T11:00:00Z") is True
+
+    def test_one_second_window_is_ingestable(self):
+        assert is_ingestable_session("2026-07-04T10:00:00Z", "2026-07-04T10:00:01Z") is True
+
+    def test_same_second_sub_ms_window_is_rejected(self):
+        # The #1312 poison: start and end in the same wall-clock second.
+        assert is_ingestable_session("2026-07-04T10:00:00.100Z", "2026-07-04T10:00:00.900Z") is False
+
+    def test_identical_timestamps_are_rejected(self):
+        assert is_ingestable_session("2026-07-04T10:00:00Z", "2026-07-04T10:00:00Z") is False
+
+    def test_end_before_start_is_rejected(self):
+        assert is_ingestable_session("2026-07-04T10:00:05Z", "2026-07-04T10:00:00Z") is False
+
+    def test_sub_second_but_cross_second_boundary_is_ingestable(self):
+        # 0.6s of real time, but the flooring lands on two different seconds — RomM
+        # accepts it (00 < 01), so we do too (mirror RomM exactly, never over-drop).
+        assert is_ingestable_session("2026-07-04T10:00:00.900Z", "2026-07-04T10:00:01.500Z") is True
+
+    def test_fully_suspended_long_window_is_ingestable(self):
+        # A multi-second window whose duration_ms would be ~0 (fully suspended) is
+        # still a valid window — the kernel judges the window, not the duration.
+        assert is_ingestable_session("2026-07-04T10:00:00Z", "2026-07-04T10:05:00Z") is True
+
+    def test_unparseable_start_is_not_ingestable(self):
+        assert is_ingestable_session("not-a-date", "2026-07-04T10:00:01Z") is False
+
+    def test_unparseable_end_is_not_ingestable(self):
+        assert is_ingestable_session("2026-07-04T10:00:00Z", "garbage") is False
+
+    def test_naive_aware_mismatch_is_not_ingestable(self):
+        assert is_ingestable_session("2026-07-04T10:00:00", "2026-07-04T11:00:00Z") is False
+
+    def test_empty_strings_are_not_ingestable(self):
+        assert is_ingestable_session("", "") is False
+
+
+class TestRejectedSessionIndices:
+    def _detail(self, *indices: int) -> list[dict[str, object]]:
+        return [{"loc": ["body", "sessions", i], "msg": "end_time must be after start_time"} for i in indices]
+
+    def test_extracts_the_flagged_indices_sorted(self):
+        assert rejected_session_indices(self._detail(5, 2), 10) == [2, 5]
+
+    def test_single_index(self):
+        assert rejected_session_indices(self._detail(2), 10) == [2]
+
+    def test_dedupes_repeated_indices(self):
+        assert rejected_session_indices(self._detail(2, 2, 2), 10) == [2]
+
+    def test_out_of_range_indices_are_dropped(self):
+        assert rejected_session_indices(self._detail(0, 99, -1), 3) == [0]
+
+    def test_field_level_loc_still_extracts_the_item_index(self):
+        detail = [{"loc": ["body", "sessions", 4, "end_time"], "msg": "bad"}]
+        assert rejected_session_indices(detail, 10) == [4]
+
+    def test_none_detail_yields_empty(self):
+        assert rejected_session_indices(None, 10) == []
+
+    def test_non_list_detail_yields_empty(self):
+        assert rejected_session_indices({"detail": "oops"}, 10) == []
+
+    def test_empty_detail_yields_empty(self):
+        assert rejected_session_indices([], 10) == []
+
+    def test_loc_without_sessions_segment_is_ignored(self):
+        detail = [{"loc": ["body", "device_id"], "msg": "bad"}]
+        assert rejected_session_indices(detail, 10) == []
+
+    def test_non_int_index_is_ignored(self):
+        detail = [{"loc": ["body", "sessions", "two"], "msg": "bad"}]
+        assert rejected_session_indices(detail, 10) == []
+
+    def test_bool_index_is_excluded(self):
+        # bool is an int subclass — True must NOT be read as index 1.
+        detail = [{"loc": ["body", "sessions", True], "msg": "bad"}]
+        assert rejected_session_indices(detail, 10) == []
+
+    def test_non_dict_items_are_skipped(self):
+        detail = ["oops", None, {"loc": ["body", "sessions", 1]}]
+        assert rejected_session_indices(detail, 10) == [1]
+
+    def test_missing_loc_is_skipped(self):
+        detail = [{"msg": "no loc here"}, {"loc": ["body", "sessions", 3]}]
+        assert rejected_session_indices(detail, 10) == [3]
 
 
 class TestBeginSession:

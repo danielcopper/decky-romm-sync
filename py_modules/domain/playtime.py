@@ -9,6 +9,9 @@ Individual completed sessions are not entities once ingested — only their star
 (while open), their folded-in result, and the still-unsent outbox rows persist.
 RomM's native play-session store is the shared additive record (ADR-0018); this
 aggregate is the local durable + cumulative read model that reconciles with it.
+The module also holds the pure kernels that gate the outbox (``is_ingestable_session``
+— what may enter it) and heal it (``rejected_session_indices`` — which entries a
+whole-request 422 flagged).
 """
 
 from __future__ import annotations
@@ -23,6 +26,75 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 _MAX_SESSION_SECONDS = 86_400  # a single session contributes at most 24h
+
+
+def is_ingestable_session(start_time: str, end_time: str) -> bool:
+    """Whether a closed session's window is safe to POST to RomM's native ingest.
+
+    RomM validates ``end_time must be after start_time`` at SECOND resolution and
+    422s the WHOLE ``sessions`` batch if any one entry fails, so a mis-fired
+    launch that started and ended inside a single wall-clock second (#1305)
+    poisons every valid session queued behind it (#1312). Returns ``True`` only
+    when ``end_time`` is strictly later than ``start_time`` once both are floored
+    to the second — the exact rule RomM applies, so a window this kernel accepts
+    is one RomM accepts and a window it rejects is kept out of the outbox at the
+    recording seam. ``duration_ms`` is deliberately NOT consulted: a long but
+    fully suspended session has a ``duration_ms`` near zero yet a valid
+    multi-second window RomM stores. An unparseable timestamp or a naive/aware
+    mismatch is treated as not ingestable — never enqueue a window that cannot be
+    validated locally.
+    """
+    start = parse_iso(start_time)
+    end = parse_iso(end_time)
+    if start is None or end is None:
+        return False
+    try:
+        return end.replace(microsecond=0) > start.replace(microsecond=0)
+    except TypeError:  # naive/aware mismatch — uncomparable, treat as not ingestable
+        return False
+
+
+def rejected_session_indices(detail: object, batch_size: int) -> list[int]:
+    """Parse RomM's 422 validation body into the rejected ``sessions`` indices.
+
+    RomM (FastAPI/Pydantic) answers a bad play-session batch with
+    ``{"detail": [{"loc": ["body", "sessions", <i>], "msg": ...}, ...]}``, naming
+    each failing entry's position ``<i>`` in the submitted ``sessions`` array.
+    Returns the sorted, deduped positions that fall in ``[0, batch_size)``. A body
+    of any other shape — ``detail`` missing or not a list, a ``loc`` with no
+    ``"sessions"`` int, an index out of range — yields an empty list, the caller's
+    signal to fall back to whole-batch attempt counting rather than dropping a
+    guessed entry.
+    """
+    if not isinstance(detail, list):
+        return []
+    found: set[int] = set()
+    for item in detail:
+        if not isinstance(item, dict):
+            continue
+        index = _session_index_from_loc(item.get("loc"))
+        if index is not None and 0 <= index < batch_size:
+            found.add(index)
+    return sorted(found)
+
+
+def _session_index_from_loc(loc: object) -> int | None:
+    """Extract the ``sessions`` array index from a FastAPI 422 ``loc`` path.
+
+    ``loc`` is the field path, e.g. ``["body", "sessions", 2]`` (a whole-item
+    model-validator error) or ``["body", "sessions", 2, "end_time"]`` (a
+    single-field error). Returns the int immediately following the ``"sessions"``
+    segment, or ``None`` when the path has no such segment or the following
+    element is not a plain int (``bool`` is an ``int`` subclass and is excluded).
+    """
+    if not isinstance(loc, (list, tuple)):
+        return None
+    for pos, segment in enumerate(loc):
+        if segment == "sessions" and pos + 1 < len(loc):
+            nxt = loc[pos + 1]
+            if isinstance(nxt, int) and not isinstance(nxt, bool):
+                return nxt
+    return None
 
 
 @dataclass(frozen=True, slots=True)

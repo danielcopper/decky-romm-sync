@@ -1,5 +1,7 @@
 import asyncio
 import http.client
+import io
+import json
 import ssl
 import urllib.error
 from unittest.mock import MagicMock, patch
@@ -23,6 +25,7 @@ from lib.errors import (
     RommServerError,
     RommSSLError,
     RommTimeoutError,
+    RommUnprocessableEntityError,
     TokenHostMismatchError,
 )
 
@@ -691,6 +694,31 @@ class TestTranslateHttpError:
         result = plugin._http_adapter.translate_http_error(exc, "http://romm.local/api/x", "PUT")
         assert isinstance(result, RommConflictError)
         assert result.status_code == 409
+
+    def test_422_becomes_unprocessable_with_parsed_detail(self, plugin):
+        detail = [{"loc": ["body", "sessions", 2], "msg": "end_time must be after start_time"}]
+        body = json.dumps({"detail": detail}).encode()
+        exc = urllib.error.HTTPError("url", 422, "Unprocessable Entity", http.client.HTTPMessage(), io.BytesIO(body))
+        result = plugin._http_adapter.translate_http_error(exc, "http://romm.local/api/play-sessions", "POST")
+        assert isinstance(result, RommUnprocessableEntityError)
+        assert result.status_code == 422
+        assert result.detail == detail
+        assert result.method == "POST"
+
+    def test_422_with_unreadable_body_degrades_to_none_detail(self, plugin):
+        # fp=None → exc.read() fails → detail degrades to None (whole-request fallback).
+        exc = urllib.error.HTTPError("url", 422, "Unprocessable Entity", http.client.HTTPMessage(), None)
+        result = plugin._http_adapter.translate_http_error(exc, "http://romm.local/api/play-sessions", "POST")
+        assert isinstance(result, RommUnprocessableEntityError)
+        assert result.detail is None
+
+    def test_422_with_non_json_body_degrades_to_none_detail(self, plugin):
+        exc = urllib.error.HTTPError(
+            "url", 422, "Unprocessable Entity", http.client.HTTPMessage(), io.BytesIO(b"<html>nope</html>")
+        )
+        result = plugin._http_adapter.translate_http_error(exc, "http://romm.local/api/play-sessions", "POST")
+        assert isinstance(result, RommUnprocessableEntityError)
+        assert result.detail is None
 
     def test_500_becomes_server_error(self, plugin):
         exc = urllib.error.HTTPError("url", 500, "Internal Server Error", http.client.HTTPMessage(), None)

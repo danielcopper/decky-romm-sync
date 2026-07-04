@@ -13,7 +13,7 @@ from fakes.system_time import FakeClock
 
 from domain.playtime import PendingPlaySession, Playtime
 from domain.rom import Rom
-from lib.errors import RommApiError, RommForbiddenError
+from lib.errors import RommApiError, RommForbiddenError, RommUnprocessableEntityError
 from services.playtime import PlaytimeService, PlaytimeServiceConfig, _coerce_duration_ms
 
 
@@ -273,6 +273,27 @@ class TestRecordSessionEndIngest:
         assert entry.total_seconds == 60
         assert entry.pending_sessions == {}
         assert any("not enqueued" in m and "unregistered" in m for m in logs)
+
+    @pytest.mark.asyncio
+    async def test_sub_second_session_folds_locally_but_is_not_enqueued(self):
+        """A window inside one wall-clock second is mis-fire launch noise (#1312) — folded, never enqueued."""
+        clk = FakeClock(now=datetime(2026, 1, 1, 0, 0, 0, 900_000, tzinfo=UTC))
+        logs: list[str] = []
+        svc, fake, uow = make_service(clock=clk, log_debug=logs.append)
+        start = (clk.now() - timedelta(milliseconds=500)).isoformat()  # same second as now
+        _seed_playtime(uow, 42, Playtime(last_session_start=start))
+
+        result = await svc.record_session_end(42)
+
+        assert result["success"] is True
+        assert result["duration_sec"] == 0  # sub-second folds to 0s locally
+        assert result["session_count"] == 1
+        # Never POSTed and never queued — the poison never reaches the outbox.
+        assert not any(c[0] == "ingest_play_sessions" for c in fake.call_log)
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.pending_sessions == {}
+        assert any("sub-second session not enqueued" in m for m in logs)
 
     @pytest.mark.asyncio
     async def test_ingest_failure_keeps_session_queued(self):
@@ -1098,6 +1119,145 @@ class TestFlushTerminalRejection:
         assert entry is not None
         assert entry.pending_sessions == {}  # quarantined (dropped) at threshold
         assert any("rom 42" in r.message and "s1" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# TestFlushBatch422 — #1312 whole-request 422 heal (drop flagged, resubmit rest)
+# ---------------------------------------------------------------------------
+
+
+def _raise_422(detail):
+    """Build an ``ingest_play_sessions`` stub that always raises a 422 with ``detail``."""
+
+    def _ingest(_device_id, _sessions):
+        raise RommUnprocessableEntityError("HTTP 422", detail=detail)
+
+    return _ingest
+
+
+def _detail_for(*indices: int):
+    """A FastAPI-shaped 422 ``detail`` list naming the given ``sessions`` indices."""
+    return [{"loc": ["body", "sessions", i], "msg": "end_time must be after start_time"} for i in indices]
+
+
+class TestFlushBatch422:
+    @pytest.mark.asyncio
+    async def test_poison_dropped_and_survivors_resubmitted(self):
+        """The atomic 422 drops exactly the flagged entry and re-POSTs the rest."""
+        svc, fake, uow = make_service()
+        _seed_playtime(
+            uow,
+            42,
+            Playtime(pending_sessions={"s_bad": _pending(duration_ms=0), "s_good": _pending(duration_ms=1000)}),
+        )
+        fake.reject_batch_below_duration_ms = 1  # the zero-duration row poisons the batch
+
+        await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.pending_sessions == {}  # poison dropped, survivor sent
+        # Two POSTs: the poisoned batch, then the survivors-only resubmit.
+        ingests = [c for c in fake.call_log if c[0] == "ingest_play_sessions"]
+        assert len(ingests) == 2
+        resubmitted = ingests[1][1][1]
+        assert [s["start_time"] for s in resubmitted] == ["s_good"]
+        # Only the survivor reached the server store.
+        assert [s["duration_ms"] for s in fake.play_sessions[42]] == [1000]
+
+    @pytest.mark.asyncio
+    async def test_poison_and_survivor_on_two_roms_same_device(self):
+        """One device group with a poison ROM + a healthy ROM: the healthy one still ingests."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 1, Playtime(pending_sessions={"a1": _pending(device_id="device-A", duration_ms=0)}))
+        _seed_playtime(uow, 2, Playtime(pending_sessions={"a2": _pending(device_id="device-A", duration_ms=500)}))
+        fake.reject_batch_below_duration_ms = 1
+
+        await svc.flush_pending_sessions()
+
+        assert uow.playtime.get(1).pending_sessions == {}  # type: ignore[union-attr]  # poison dropped
+        assert uow.playtime.get(2).pending_sessions == {}  # type: ignore[union-attr]  # survivor sent
+        assert [s["rom_id"] for s in fake.play_sessions[2]] == [2]
+        assert 1 not in fake.play_sessions  # nothing stored for the poison rom
+
+    @pytest.mark.asyncio
+    async def test_422_drop_logs_once_at_info(self, caplog):
+        """The dropped poison entry is recorded with one info line naming the rom + HTTP 422."""
+        svc, fake, uow = make_service()
+        _seed_playtime(
+            uow,
+            42,
+            Playtime(pending_sessions={"s_bad": _pending(duration_ms=0), "s_good": _pending(duration_ms=1000)}),
+        )
+        fake.reject_batch_below_duration_ms = 1
+
+        with caplog.at_level("INFO"):
+            await svc.flush_pending_sessions()
+
+        rejected = [r for r in caplog.records if "rejected by server" in r.message]
+        assert len(rejected) == 1
+        assert rejected[0].levelname == "INFO"
+        assert "rom 42" in rejected[0].message
+        assert "HTTP 422" in rejected[0].message
+
+    @pytest.mark.asyncio
+    async def test_422_without_detail_bumps_attempts_and_stays_queued(self):
+        """An unparseable 422 (no usable indices) falls back to bounded-retry attempt counting."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending(attempts=0)}))
+        fake.ingest_play_sessions = _raise_422(None)  # type: ignore[method-assign]
+
+        await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert set(entry.pending_sessions) == {"s1"}  # retained, not dropped on an ambiguous 422
+        assert entry.pending_sessions["s1"].attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_422_with_only_out_of_range_indices_bumps_attempts(self):
+        """A 422 naming only out-of-range indices carries no usable target → attempts bump."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending(attempts=0)}))
+        fake.ingest_play_sessions = _raise_422(_detail_for(99))  # type: ignore[method-assign]
+
+        await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert set(entry.pending_sessions) == {"s1"}
+        assert entry.pending_sessions["s1"].attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_persistent_422_without_detail_quarantines_at_threshold(self, caplog):
+        """A whole-request 422 with no indices converges to quarantine, never an infinite loop."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending(attempts=4)}))
+        fake.ingest_play_sessions = _raise_422(None)  # type: ignore[method-assign]
+
+        with caplog.at_level("WARNING"):
+            await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.pending_sessions == {}  # quarantined (dropped) at the threshold
+        assert any("rom 42" in r.message and "s1" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_422_heal_omits_undrained_breadcrumb(self):
+        """A fully-healed 422 (poison dropped, survivor sent) leaves nothing 'not accepted'."""
+        logs: list[str] = []
+        svc, fake, uow = make_service(log_debug=logs.append)
+        _seed_playtime(
+            uow,
+            42,
+            Playtime(pending_sessions={"s_bad": _pending(duration_ms=0), "s_good": _pending(duration_ms=1000)}),
+        )
+        fake.reject_batch_below_duration_ms = 1
+
+        await svc.flush_pending_sessions()
+
+        assert not any("not accepted" in m for m in logs)
 
 
 # ---------------------------------------------------------------------------
