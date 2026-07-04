@@ -97,6 +97,16 @@ function formatProgress(downloaded: number, total: number): string {
   return `${(downloaded / (1024 * 1024 * 1024)).toFixed(2)} / ${(total / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+// Runtime mirror of the ambient `ERaiseGameWindowResult` (src/types/steam.d.ts).
+// An ambient enum is a compile-time type only — it has no runtime object — so the
+// result codes we branch on live here, typed back to the enum for clean, overlap-
+// safe comparisons against the RaiseWindowForGame result.
+const RaiseWindowResult = {
+  NotRunning: 1 as ERaiseGameWindowResult,
+  Success: 2 as ERaiseGameWindowResult,
+  Failure: 3 as ERaiseGameWindowResult,
+} as const;
+
 interface CustomPlayButtonProps {
   appId: number;
 }
@@ -111,6 +121,11 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   const [actionPending, setActionPending] = useState(false);
   const [dlProgress, setDlProgress] = useState<DownloadProgress | null>(null);
   const [isOffline, setIsOffline] = useState(getRommConnectionState() === "offline");
+  // Running overlay (#1313): when the game is already running, the button shows
+  // Resume (top precedence over install/conflict/download) and brings the game to
+  // front instead of running the launch funnel. Seeded synchronously at init and
+  // flipped live by the `romm_session_changed` listener.
+  const [isRunning, setIsRunning] = useState(false);
   const romIdRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -183,6 +198,11 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         setRomId(rid);
         romIdRef.current = rid;
         if (cached.rom_name) setRomName(cached.rom_name);
+
+        // Seed the running overlay from the live session/running-app state so a
+        // button mounted mid-session (or after a reload-adoption) shows Resume
+        // immediately, without waiting for a session event (#1313).
+        setIsRunning(getActiveSessionRomId() === rid || isAppRunning(appId));
 
         if (cached.installed) {
           // Check for conflicts from cached save status
@@ -305,6 +325,16 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     };
     globalThis.addEventListener("romm_connection_changed", onConnectionChanged);
 
+    // Session start/stop (#1313) — flip the running overlay so the button shows
+    // Resume for the live session and returns to Play when it ends. Matches on
+    // romId (present in every dispatch); a stop for our rom clears the overlay
+    // and the underlying play/conflict state shows through.
+    const onSessionChanged = (e: WindowEventMap["romm_session_changed"]) => {
+      if (e.detail.romId !== romIdRef.current) return;
+      setIsRunning(e.detail.running);
+    };
+    globalThis.addEventListener("romm_session_changed", onSessionChanged);
+
     return () => {
       removeEventListener("download_progress", progressListener);
       removeEventListener("download_complete", completeListener);
@@ -312,6 +342,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       globalThis.removeEventListener("romm_rom_uninstalled", onUninstall);
       globalThis.removeEventListener("romm_data_changed", onDataChanged);
       globalThis.removeEventListener("romm_connection_changed", onConnectionChanged);
+      globalThis.removeEventListener("romm_session_changed", onSessionChanged);
     };
   }, []);
 
@@ -589,6 +620,41 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     }
   };
 
+  // Resume an already-running game: bring its window to the foreground instead of
+  // launching (#1313). `RaiseWindowForGame` focuses the live window WITHOUT firing
+  // GameActionStart (so the launch interceptor never re-enters) and WITHOUT Steam's
+  // native "already running" dialog — so the pre-launch sync funnel never runs
+  // mid-session (which would upload the save while the emulator holds it open).
+  //
+  //  - Success    → done.
+  //  - NotRunning → the running overlay was stale; clear it and fall through to the
+  //                 normal launch funnel (self-heal — the game isn't actually up).
+  //  - Failure    → RunGame backstop (accepts the native dialog) so the user still
+  //                 reaches the game rather than being stranded.
+  const handleResumeGame = async () => {
+    const overview = appStore.GetAppOverviewByAppID(appId);
+    const gameId = overview?.GetGameID?.() ?? String(appId);
+    const raiseResult = await SteamClient.Apps.RaiseWindowForGame(appId).catch((e) => {
+      logError(`CustomPlayButton: RaiseWindowForGame threw: ${e}`);
+      return RaiseWindowResult.Failure;
+    });
+
+    if (raiseResult === RaiseWindowResult.Success) {
+      detach(debugLog(`CustomPlayButton: resumed appId=${appId} via RaiseWindowForGame`));
+      return;
+    }
+    if (raiseResult === RaiseWindowResult.NotRunning) {
+      detach(debugLog(`CustomPlayButton: RaiseWindowForGame reported NotRunning — falling through to launch`));
+      setIsRunning(false);
+      await handlePlay();
+      return;
+    }
+    // Failure (or any unexpected code) — fall back to RunGame so the user still
+    // reaches the game (Steam surfaces its own "already running" dialog here).
+    detach(debugLog(`CustomPlayButton: RaiseWindowForGame failed (${raiseResult}) — RunGame backstop`));
+    await dispatchLaunch(gameId);
+  };
+
   // Resolve the conflict the button is already showing. This is a READ, not a
   // re-sync: it pulls the already-known conflict via `getSaveStatus` and hands
   // it to the shared resolution modal. Re-running the act-capable
@@ -778,6 +844,38 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     fontSize: "16px",
     fontWeight: "bold",
   };
+
+  // Running overlay (#1313) — top precedence over install/conflict/download. A
+  // single green Resume button (no Uninstall chevron: uninstalling a running game
+  // is a footgun) that brings the live session to front via `handleResumeGame`.
+  if (isRunning) {
+    return (
+      <Focusable
+        ref={containerRef}
+        className={[appActionButtonClasses?.PlayButtonContainer, appActionButtonClasses?.Green]
+          .filter(Boolean)
+          .join(" ")}
+        style={btnContainerStyle}
+      >
+        <DialogButton
+          className={[appActionButtonClasses?.PlayButton, "romm-btn-play"].filter(Boolean).join(" ")}
+          style={{
+            ...mainBtnStyle,
+            borderRadius: "2px",
+            background: "linear-gradient(to right, #70d61d 0%, #01a75b 60%)",
+            backgroundPosition: "25%",
+            backgroundSize: "330% 100%",
+          }}
+          onClick={() => {
+            detach(handleResumeGame());
+          }}
+          onFocus={scrollToTop}
+        >
+          Resume
+        </DialogButton>
+      </Focusable>
+    );
+  }
 
   if (state === "dl_complete") {
     // "Ready!" state — must match the Play button exactly (same classes + Green tint)

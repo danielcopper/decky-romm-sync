@@ -1118,3 +1118,93 @@ describe("sessionManager suspend subtraction via the User.* fallback (#1148)", (
     expect(resumeUnregister).toHaveBeenCalledTimes(1);
   });
 });
+
+// #1313: the state-aware Resume button reacts to session start/stop without
+// polling by listening for the romm_session_changed DOM event. These pin that
+// sessionManager dispatches it (running:true on start + reload-adoption,
+// running:false on stop) with the appId+romId the button matches on.
+describe("sessionManager session-changed dispatch (#1313)", () => {
+  const BREADCRUMB_KEY = "decky-romm-sync:active-session";
+  let sessionEvents: { running: boolean; appId: number; romId: number }[];
+  let sessionListener: (e: WindowEventMap["romm_session_changed"]) => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    localStorage.clear();
+    vi.stubGlobal("SteamClient", {
+      GameSessions: {
+        RegisterForAppLifetimeNotifications: vi.fn(() => ({ unregister: vi.fn() })),
+      },
+      System: {
+        RegisterForOnSuspendRequest: vi.fn(() => ({ unregister: vi.fn() })),
+        RegisterForOnResumeFromSuspend: vi.fn(() => ({ unregister: vi.fn() })),
+      },
+    });
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({ [String(APP_ID)]: ROM_ID });
+    vi.mocked(backend.recordSessionStart).mockResolvedValue({ success: true });
+    vi.mocked(backend.finalizeGameSession).mockResolvedValue({
+      total_seconds: null,
+      sync: {
+        offline: false,
+        success: true,
+        synced: 0,
+        conflicts: [],
+        toast_title: null,
+        toast_body: null,
+        conflicts_toast: null,
+      },
+      migration: null,
+    });
+    sessionEvents = [];
+    sessionListener = (e) => sessionEvents.push(e.detail);
+    globalThis.addEventListener("romm_session_changed", sessionListener);
+  });
+
+  afterEach(() => {
+    globalThis.removeEventListener("romm_session_changed", sessionListener);
+    destroySessionManager();
+    vi.useRealTimers();
+  });
+
+  it("dispatches running:true on game start and running:false on stop", async () => {
+    vi.stubGlobal("Router", { MainRunningApp: null });
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+
+    await startGame(lifetime);
+    expect(sessionEvents).toContainEqual({ running: true, appId: APP_ID, romId: ROM_ID });
+
+    sessionEvents.length = 0;
+    vi.setSystemTime(60_000);
+    await stopGame(lifetime);
+    expect(sessionEvents).toContainEqual({ running: false, appId: APP_ID, romId: ROM_ID });
+  });
+
+  it("dispatches running:true when adopting a running session via a matching breadcrumb", async () => {
+    localStorage.setItem(
+      BREADCRUMB_KEY,
+      JSON.stringify({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000, pausedMs: 0 }),
+    );
+    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+
+    await initSessionManager();
+
+    expect(sessionEvents).toContainEqual({ running: true, appId: APP_ID, romId: ROM_ID });
+  });
+
+  it("dispatches running:true when adopting a running session with no breadcrumb", async () => {
+    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+
+    await initSessionManager();
+
+    expect(sessionEvents).toContainEqual({ running: true, appId: APP_ID, romId: ROM_ID });
+  });
+
+  it("does not dispatch a session event when nothing is running at init", async () => {
+    vi.stubGlobal("Router", { MainRunningApp: null });
+    await initDrainingAdoptionPoll();
+    expect(sessionEvents).toEqual([]);
+  });
+});

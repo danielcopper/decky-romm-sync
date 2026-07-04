@@ -1462,6 +1462,24 @@ a per-source `diagnostics` string. No single surface is reliable across builds/t
 and a failed round logs what every candidate reported. The same reader backs the already-running skip on both launch
 surfaces — the interceptor and the Play button ([ADR-0015](../adr/0015-single-launch-gate-cancel-then-relaunch.md)).
 
+### State-aware Resume button (#1313)
+
+When the game is already running, the RomM Play button (`CustomPlayButton`) renders **Resume** — top precedence over its
+install / conflict / download states — and a press brings the live window to the foreground via
+`SteamClient.Apps.RaiseWindowForGame(appId)` instead of running the pre-launch sync funnel. `RaiseWindowForGame` is a
+window-raise, not a launch: it fires no `GameActionStart` (so the launch interceptor never re-enters) and shows no Steam
+"already running" dialog, which dissolves the mid-session-sync problem at the UX level rather than defending against it.
+Its result is branched: `Success` is done; `NotRunning` means the running state was stale, so the overlay is cleared and
+the press falls through to the normal launch funnel (self-heal); `Failure` falls back to `RunGame` (accepting Steam's
+native dialog) so the user still reaches the game.
+
+Detection is **reactive, not polled**: the overlay is seeded synchronously at mount from `getActiveSessionRomId()` /
+`isAppRunning(appId)` (so a page opened mid-session — or after a reload-adoption — shows Resume immediately) and flipped
+live by the `romm_session_changed` DOM event, which `sessionManager` dispatches on game start (`running: true`), game
+stop (`running: false`), and both reload-adoption branches (`running: true`). The already-running guards from #1148 /
+#1308 (the interceptor and the `handlePlay` guard) stay in place as **backstops** for the render→click race, where the
+session begins between the button rendering Play and the user pressing it.
+
 ### App ID to ROM ID mapping
 
 The session manager maintains a cached `appId -> romId` map loaded from the backend's synced-ROM registry (the `roms`

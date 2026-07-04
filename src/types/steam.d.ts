@@ -21,6 +21,12 @@ declare var SteamClient: {
       callback: (details: SteamAppDetails | undefined) => void,
     ): { unregister: () => void };
     RunGame(gameId: string | number, launchId: string, param2: number, param3: number): void;
+    // Bring an already-running game's window to the foreground. Unlike RunGame
+    // this is NOT a launch — it fires no GameActionStart (so the launch
+    // interceptor never re-enters) and shows no "already running" dialog. Used
+    // by the state-aware Resume button (#1313) to focus a live session instead
+    // of running the pre-launch sync funnel.
+    RaiseWindowForGame(appId: number): Promise<ERaiseGameWindowResult>;
     TerminateApp(appId: number, force: boolean): void;
     RegisterForGameActionStart(
       callback: (gameActionId: number, appIdStr: string, action: string, launchSource: number) => void,
@@ -49,6 +55,15 @@ declare var SteamClient: {
     RegisterForResumeSuspendedGamesProgress(callback: () => void): { unregister: () => void };
   };
 };
+
+// Result of SteamClient.Apps.RaiseWindowForGame (Steam's ERaiseGameWindowResult).
+// Ambient — a compile-time type only, so consumers branch on the numeric code
+// rather than reading enum members off a runtime object that doesn't exist.
+declare enum ERaiseGameWindowResult {
+  NotRunning = 1,
+  Success = 2,
+  Failure = 3,
+}
 
 interface SteamAppDetails {
   // The two launch-options fields the runtime exposes — keys vary by Steam
