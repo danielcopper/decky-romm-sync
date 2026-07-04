@@ -34,7 +34,7 @@ def _make_sd(
 
 
 def _reg(name="Game", platform_name="N64", platform_slug="n64", fs_name="game.z64", app_id=1001):
-    """Build a registry entry dict matching build_registry_entry output."""
+    """Build a registry entry dict matching _read_preview_baseline output."""
     return {
         "app_id": app_id,
         "name": name,
@@ -119,14 +119,39 @@ class TestClassifyRoms:
         assert new == []
         assert unchanged_ids == []
 
-    def test_platform_name_change_detected(self):
+    def test_platform_name_divergence_not_classified_as_changed(self):
+        """A derived-display-only divergence never counts as changed (#1292).
+
+        ``platform_name`` is a derived, non-persisted display field. A ROM
+        riding an enabled collection whose platform is *disabled* resolves to
+        the bare slug ("gba") on the registry side (the enabled-only
+        slug→name map has no entry, so it falls back to the slug) but to
+        RomM's full display name ("Game Boy Advance") on the fetch side. With
+        every persisted field (name/platform_slug/fs_name) equal, that
+        divergence must NOT classify as changed — the apply upsert persists
+        only platform_slug/name/fs_name, so it could never be healed and
+        produced a permanent phantom "1 updated" preview delta.
+        """
         registry = {
-            "1": _reg(name="Game A", platform_name="Nintendo 64", app_id=1001),
+            "1": _reg(name="Game A", platform_name="gba", platform_slug="gba", fs_name="game.gba", app_id=1001),
         }
-        sd = [_make_sd(1, "Game A", platform_name="N64")]
-        _, changed, _, _, _ = classify_roms(sd, registry, {"N64"})
+        sd = [_make_sd(1, "Game A", platform_name="Game Boy Advance", platform_slug="gba", fs_name="game.gba")]
+        new, changed, unchanged_ids, _, _ = classify_roms(sd, registry, {"N64"})
+        assert changed == []
+        assert new == []
+        assert unchanged_ids == [1]
+
+    def test_platform_slug_change_detected(self):
+        """A genuine platform change (persisted platform_slug differs) is changed."""
+        registry = {
+            "1": _reg(name="Game A", platform_name="Game Boy Advance", platform_slug="gba", app_id=1001),
+        }
+        sd = [_make_sd(1, "Game A", platform_name="Game Boy Color", platform_slug="gbc")]
+        _, changed, unchanged_ids, _, _ = classify_roms(sd, registry, {"N64"})
         assert len(changed) == 1
         assert changed[0]["rom_id"] == 1
+        assert changed[0]["existing_app_id"] == 1001
+        assert unchanged_ids == []
 
     def test_fs_name_change_detected(self):
         registry = {

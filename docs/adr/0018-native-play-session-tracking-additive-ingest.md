@@ -49,7 +49,16 @@ per-session stream. The local `Playtime` aggregate stays the cumulative display 
   no `.romm-backup` — none of the save-sync machinery applies.
 - **Offline outbox.** Unsent sessions are held in a small pending-session outbox owned by the `Playtime` aggregate. Exit
   enqueues and attempts the POST; success dequeues. Offline → the session stays queued and is flushed on the next
-  launch/sync/reconnect. This is the "only DB, then catch up local→server" path, minus any conflict logic.
+  launch/sync/reconnect. This is the "only DB, then catch up local→server" path, minus any conflict logic. **The flush
+  routes each acknowledged (2xx) per-session verdict:** `created`/`duplicate` dequeue as success; a `skipped` — the
+  server's _explicit_ rejection of that exact window (e.g. a sub-second launch-death it refuses on validation) — is
+  dropped from the outbox with a single info log (`play session rejected by server … — dropping from outbox`), never
+  retried, since re-POSTing the byte-identical row draws the same verdict forever. An `error` **and any unknown
+  acknowledged status** are bounded-retried, then quarantined once the row exhausts its attempt threshold — an outbox
+  session exists nowhere else, so we hard-drop only on an explicit `skipped`, never on an ambiguous verdict, while still
+  staying loop-free. Only a transport failure or a row _absent_ from the response keeps the row queued untouched for the
+  next flush. This keeps a permanently-rejected session from wedging the outbox into an infinite retry loop against the
+  periodic flush.
 - **Reconcile is `max(local, Σ server)`.** On the detail view we first flush the outbox, then `GET /api/play-sessions`
   for the ROM and set the displayed total to `max(local_total, Σ server duration)`. Playtime is monotonic, so `max()` is
   always safe: with the outbox drained it naturally adopts the server union ("the server holds the whole total"); with a

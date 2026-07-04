@@ -6,6 +6,7 @@ import pytest
 
 from lib.path_safety import (
     PathTraversalError,
+    coerce_safe_component,
     is_safe_rom_path,
     safe_join,
     safe_path_component,
@@ -53,6 +54,49 @@ class TestSafePathComponent:
     def test_rejects_embedded_traversal_segment(self):
         with pytest.raises(PathTraversalError):
             safe_path_component("sub/../../evil")
+
+
+class TestCoerceSafeComponent:
+    _FALLBACK = "rom_42"
+
+    def test_legit_name_is_byte_identical_and_unchanged(self):
+        assert coerce_safe_component("Metal Gear Solid 4", self._FALLBACK) == ("Metal Gear Solid 4", False)
+
+    def test_legit_name_with_spaces_preserved_byte_identical(self):
+        # Leading/trailing spaces in a legit name are NOT stripped (only tested
+        # for degeneracy) — the component stays byte-identical.
+        assert coerce_safe_component("  My Game  ", self._FALLBACK) == ("  My Game  ", False)
+
+    def test_directory_portion_stripped_to_basename(self):
+        assert coerce_safe_component("../../etc/pwned", self._FALLBACK) == ("pwned", True)
+
+    def test_absolute_path_stripped_to_basename(self):
+        assert coerce_safe_component("/etc/passwd", self._FALLBACK) == ("passwd", True)
+
+    def test_dotdot_falls_back(self):
+        # os.path.basename("..") == ".." — the load-bearing degenerate case.
+        assert coerce_safe_component("..", self._FALLBACK) == (self._FALLBACK, True)
+
+    def test_dot_falls_back(self):
+        assert coerce_safe_component(".", self._FALLBACK) == (self._FALLBACK, True)
+
+    def test_empty_falls_back(self):
+        assert coerce_safe_component("", self._FALLBACK) == (self._FALLBACK, True)
+
+    def test_trailing_slash_basenames_to_empty_falls_back(self):
+        # os.path.basename("foo/") == "" — a directory-shaped name.
+        assert coerce_safe_component("foo/", self._FALLBACK) == (self._FALLBACK, True)
+
+    def test_whitespace_only_falls_back(self):
+        assert coerce_safe_component("   ", self._FALLBACK) == (self._FALLBACK, True)
+
+    def test_dotdot_wrapped_in_dirs_falls_back(self):
+        # os.path.basename("foo/..") == ".." → still degenerate.
+        assert coerce_safe_component("foo/..", self._FALLBACK) == (self._FALLBACK, True)
+
+    def test_leading_dots_name_is_not_degenerate(self):
+        # "..foo" is a real (if unusual) child name, not a traversal.
+        assert coerce_safe_component("..foo", self._FALLBACK) == ("..foo", False)
 
 
 class TestSafeJoin:

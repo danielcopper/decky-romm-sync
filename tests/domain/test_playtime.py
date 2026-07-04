@@ -228,6 +228,21 @@ class TestQuarantineSessions:
         assert set(playtime.pending_sessions) == {"s1"}
 
 
+class TestDropRejectedSessions:
+    def test_drops_named_rows(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="d", start_time="s1", end_time="e", duration_ms=1)
+        playtime.enqueue_session(device_id="d", start_time="s2", end_time="e", duration_ms=1)
+        playtime.drop_rejected_sessions(["s1"])
+        assert set(playtime.pending_sessions) == {"s2"}
+
+    def test_unknown_start_is_ignored(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="d", start_time="s1", end_time="e", duration_ms=1)
+        playtime.drop_rejected_sessions(["missing"])
+        assert set(playtime.pending_sessions) == {"s1"}
+
+
 class TestPendingPlaySessionAttempts:
     def test_defaults_to_zero(self):
         row = PendingPlaySession(device_id="d", end_time="e", duration_ms=1)

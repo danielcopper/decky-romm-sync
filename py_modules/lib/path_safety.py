@@ -8,19 +8,25 @@ belongs in ``lib/`` rather than ``domain/``. The source of the
 configured root (e.g. the ``RetroDeckPaths`` Protocol) stays in
 ``services/``; this module only consumes the resolved string.
 
-Two guards live here for server-supplied path components:
+Guards for server-supplied path components:
 
 - :func:`safe_path_component` — lexical (no I/O). Validates that an
   untrusted string is a single safe filename component before it is
-  joined onto a base.
+  joined onto a base, **raising** on a violation.
+- :func:`coerce_safe_component` — lexical (no I/O). The *defanging*
+  counterpart: reduces an untrusted string to a single safe component and
+  **substitutes a caller-supplied fallback** for a degenerate result
+  (``..``/``.``/empty/whitespace) instead of raising, for call sites that
+  must proceed with a safe name rather than abort the operation.
 - :func:`safe_join` — realpath containment. Joins untrusted parts onto a
   trusted base and confirms the result resolves strictly below the base
   (the same semantics as :func:`is_safe_rom_path`), so a multi-component
   registry path or a symlink cannot escape.
 
-Both raise :class:`PathTraversalError` on a violation so call sites can
-fail closed (abort the operation, surface a canonical failure) rather
-than silently writing outside the configured root.
+The two validating guards (:func:`safe_path_component`, :func:`safe_join`)
+raise :class:`PathTraversalError` so call sites can fail closed (abort the
+operation, surface a canonical failure) rather than silently writing
+outside the configured root; :func:`coerce_safe_component` never raises.
 """
 
 from __future__ import annotations
@@ -70,6 +76,37 @@ def safe_path_component(name: str) -> str:
     if os.path.normpath(name) != name:
         raise PathTraversalError(f"path component is not normalized: {name!r}")
     return name
+
+
+_DEGENERATE_COMPONENTS = frozenset({"", ".", ".."})
+
+
+def coerce_safe_component(name: str, fallback: str) -> tuple[str, bool]:
+    """Coerce *name* to a single safe path component, or *fallback*. Lexical, no I/O.
+
+    The defanging counterpart to :func:`safe_path_component`: where that
+    *raises* to abort the whole operation, this *coerces* so the caller can
+    proceed with a safe name. It strips any directory portion with
+    ``os.path.basename``, then substitutes *fallback* for a degenerate result
+    that would not name a real child — the empty string, whitespace only,
+    ``"."`` or ``".."``.
+
+    The degenerate check is load-bearing: ``os.path.basename("..") == ".."``
+    and ``os.path.basename("dir/") == ""``, and ``os.path.join(base, "..")``
+    (or ``os.path.join(base, "")``) resolves to *base*'s parent or *base*
+    itself — so a downstream ``rmtree`` or write would hit the wrong directory.
+    Basename alone (traversal-stripping) is not enough.
+
+    *fallback* must itself already be a valid single component (e.g. a
+    synthetic ``rom_<id>`` name); it is returned verbatim for a degenerate
+    input. Returns ``(component, changed)`` where *changed* is True whenever
+    the returned component differs from *name*, so the caller logs exactly one
+    warning and never mistakes a coercion for a passthrough.
+    """
+    component = os.path.basename(name)
+    if component.strip() in _DEGENERATE_COMPONENTS:
+        return (fallback, True)
+    return (component, component != name)
 
 
 def safe_join(base: str, *parts: str) -> str:

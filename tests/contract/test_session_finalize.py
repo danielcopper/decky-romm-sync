@@ -88,6 +88,31 @@ async def test_finalize_registered_device_ingests_play_session(harness):
     assert stored[0]["duration_ms"] == 300_000
 
 
+async def test_finalize_server_rejected_session_drains_outbox(harness):
+    """A session the server acknowledges but refuses (``skipped``) drains, not retried.
+
+    Regression guard for the infinite-retry loop: a sub-second launch-death gets
+    a ``skipped`` verdict; the outbox row must drop (empty outbox = nothing to
+    re-flush) rather than being retained and re-POSTed on every heartbeat.
+    """
+    seed_rom(harness, 1)
+    harness.plugin.settings["save_sync_enabled"] = False
+    with harness.uow_factory() as uow:
+        uow.kv_config.set("device_id", "device-1")
+    harness.romm.reject_below_duration_ms = 1000  # server refuses sub-1s sessions
+
+    await harness.plugin.record_session_start(1)
+    # No clock advance → a 0ms session the server rejects.
+    result = await harness.plugin.finalize_game_session(1, 0)
+
+    assert result["total_seconds"] == 0  # still folded locally
+    assert harness.romm.play_sessions == {}  # server stored nothing
+    with harness.uow_factory() as uow:
+        entry = uow.playtime.get(1)
+    assert entry is not None
+    assert entry.pending_sessions == {}  # drained — no infinite retry
+
+
 async def test_finalize_unregistered_device_folds_locally_no_ingest(harness):
     """No device id → the session is counted locally but never POSTed (decision #8)."""
     seed_rom(harness, 1)

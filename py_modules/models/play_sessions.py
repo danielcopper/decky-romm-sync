@@ -36,14 +36,23 @@ class PlaySessionIngestResult(TypedDict):
     """The server's verdict for one submitted session, correlated by ``index``.
 
     ``index`` is the entry's position in the submitted ``sessions`` batch;
-    ``status`` is ``created`` (newly stored), ``duplicate`` (already present, a
-    no-op — still a successful ingest), or ``error``. ``id`` is the stored
-    session row id when created.
+    ``status`` is the per-session verdict:
+
+    - ``created`` — newly stored.
+    - ``duplicate`` — already present, a no-op; still a successful ingest.
+    - ``skipped`` — acknowledged but deliberately not stored (e.g. a sub-second
+      launch-death the server rejects on validation). A terminal verdict: the
+      server will draw the same one for the byte-identical window forever.
+    - ``error`` — the server hit an error storing this row (possibly transient).
+
+    ``id`` is the stored session row id when ``created``; ``detail`` is the
+    server's optional human-readable explanation for a non-``created`` verdict.
     """
 
     index: int
-    status: Literal["created", "duplicate", "error"]
+    status: Literal["created", "duplicate", "skipped", "error"]
     id: NotRequired[int | None]
+    detail: NotRequired[str | None]
 
 
 class PlaySessionIngestResponse(TypedDict):
