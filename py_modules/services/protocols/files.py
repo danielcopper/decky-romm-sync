@@ -116,6 +116,15 @@ class DownloadFileStore(Protocol):
         """
         ...
 
+    def copy_file(self, src: str, dst: str) -> None:
+        """Copy the file *src* to *dst*, leaving *src* in place.
+
+        Used to heal a mis-suffixed dump file (``PS3_DISC.SFB.txt`` →
+        ``PS3_DISC.SFB``) — a correctly-named copy is written while the
+        original is preserved. Callers probe with ``exists`` first.
+        """
+        ...
+
     def disk_free(self, path: str) -> int:
         """Return the free space in bytes for the filesystem hosting *path*."""
         ...

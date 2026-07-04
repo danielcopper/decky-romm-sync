@@ -9,6 +9,7 @@ from domain.rom_files import (
     build_m3u_content,
     detect_launch_file,
     es_de_collapse_rename,
+    folder_boot_layout_root,
     folder_boot_root,
     is_multi_file_download,
     needs_m3u,
@@ -384,6 +385,37 @@ class TestFolderBootRoot:
         rom_dir = "/roms/ps3/MyGame"
         launch = "/roms/ps3/MyGame/ps3_game/USRDIR/EBOOT.BIN"
         assert folder_boot_root(launch, rom_dir) is None
+
+
+class TestFolderBootLayoutRoot:
+    """Tests for folder_boot_layout_root — folder-boot layout detection over a file list."""
+
+    def test_marker_file_yields_game_root(self):
+        # The game root is the dir holding PS3_GAME (where PS3_DISC.SFB sits).
+        files = [
+            "/extract/MyGame/PS3_DISC.SFB.txt",
+            "/extract/MyGame/PS3_GAME/USRDIR/EBOOT.BIN",
+            "/extract/MyGame/PS3_UPDATE/PS3UPDAT.PUP.part",
+        ]
+        assert folder_boot_layout_root(files) == "/extract/MyGame"
+
+    def test_root_at_extract_top_level(self):
+        files = ["/extract/PS3_GAME/USRDIR/EBOOT.BIN"]
+        assert folder_boot_layout_root(files) == "/extract"
+
+    def test_no_marker_returns_none(self):
+        files = ["/extract/Game/disc1.chd", "/extract/Game/disc2.chd", "/extract/Game/readme.txt"]
+        assert folder_boot_layout_root(files) is None
+
+    def test_empty_list_returns_none(self):
+        assert folder_boot_layout_root([]) is None
+
+    def test_lowercase_marker_does_not_match(self):
+        # Standardised uppercase layout; a lowercase run is not a folder-boot marker.
+        assert folder_boot_layout_root(["/extract/MyGame/ps3_game/usrdir/EBOOT.BIN"]) is None
+
+    def test_eboot_not_under_full_marker_run_returns_none(self):
+        assert folder_boot_layout_root(["/extract/MyGame/EBOOT.BIN"]) is None
 
 
 class TestResolveLocalFileName:

@@ -192,6 +192,30 @@ def folder_boot_root(launch_path: str, rom_dir: str | None) -> str | None:
     return None
 
 
+def folder_boot_layout_root(files: list[str]) -> str | None:
+    """Return the game root of a folder-boot layout among *files*, or ``None``.
+
+    Scans *files* for one whose trailing components match a folder-boot marker
+    (:data:`FOLDER_BOOT_MARKERS`, e.g. ``…/PS3_GAME/USRDIR/EBOOT.BIN``) and, on
+    the first match, returns the marker-stripped game root — the directory that
+    *contains* the marker run (where ``PS3_DISC.SFB`` and ``PS3_GAME`` sit).
+
+    Used by the download path to recognise a folder-boot dump — to suppress the
+    M3U playlist and heal the disc ``PS3_DISC.SFB`` — while it still holds only
+    the freshly-extracted file list, before the install's ``rom_dir`` is
+    recorded. Unlike :func:`folder_boot_root` it takes no ``rom_dir`` and applies
+    no containment guard: the caller already scoped *files* to one extract
+    directory, so the marker match alone identifies the layout. Case-sensitive,
+    stdlib-only.
+    """
+    for path in files:
+        for marker in FOLDER_BOOT_MARKERS:
+            root = _strip_marker_components(path, marker)
+            if root is not None:
+                return root
+    return None
+
+
 def _strip_marker_components(path: str, marker: tuple[str, ...]) -> str | None:
     """Strip a trailing *marker* component run from *path*, or ``None`` if it does not match.
 

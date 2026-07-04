@@ -20,6 +20,7 @@ from domain.rom_files import (
     build_m3u_content,
     detect_launch_file,
     es_de_collapse_rename,
+    folder_boot_layout_root,
     is_multi_file_download,
     needs_m3u,
     resolve_local_file_name,
@@ -425,6 +426,9 @@ class DownloadService:
         self._download_file_store.extract_zip(tmp_zip, extract_dir, roms_base, progress_callback=extract_cb)
         self._download_file_store.remove_file(tmp_zip)
         self._download_file_store.decode_url_encoded_names(extract_dir)
+        # Heal a folder-boot disc dump whose PS3_DISC.SFB ships .txt-suffixed,
+        # before launch detection reads the layout (ADR-0019 / #1212).
+        self._maybe_heal_ps3_sfb_io(extract_dir)
         # Whether ES-DE lists .m3u for this system (gates both M3U generation and
         # launch-file selection so a RomM-bundled .m3u is ignored on Switch/Xbox).
         m3u_supported = self._m3u_support(system)
@@ -971,6 +975,29 @@ class DownloadService:
                 del self._control_tokens[rom_id]
             self._prune_download_queue()
 
+    def _maybe_heal_ps3_sfb_io(self, extract_dir: str) -> None:
+        """Copy a folder-boot dump's ``PS3_DISC.SFB.txt`` back to ``PS3_DISC.SFB``.
+
+        RPCS3 identifies a disc-dump folder by a ``PS3_DISC.SFB`` at the game
+        root; some RomM dumps ship it renamed ``PS3_DISC.SFB.txt`` and never
+        boot until it is restored (verified on-device, #1212). Only for a
+        folder-boot layout (:func:`folder_boot_layout_root` locates the game
+        root) and only the exact ``.txt`` → real-name case: when the ``.txt``
+        exists and the real name does not, a copy is written (the original is
+        kept). Any other shape — real SFB already present, no ``.txt``, no
+        folder-boot layout — is left untouched. Scoped to this one known dump
+        quirk, not a general renamer.
+        """
+        all_files = self._download_file_store.scan_files_with_sizes(extract_dir)
+        root = folder_boot_layout_root([path for path, _size in all_files])
+        if root is None:
+            return
+        sfb = os.path.join(root, "PS3_DISC.SFB")
+        sfb_txt = os.path.join(root, "PS3_DISC.SFB.txt")
+        if self._download_file_store.exists(sfb_txt) and not self._download_file_store.exists(sfb):
+            self._download_file_store.copy_file(sfb_txt, sfb)
+            self._logger.info("healed PS3_DISC.SFB from .txt-suffixed dump: %s", sfb)
+
     def _maybe_generate_m3u_io(self, extract_dir: str, rom_detail: dict[str, Any], m3u_supported: bool) -> None:
         """Auto-generate a game-named M3U playlist when one is warranted (see ``needs_m3u``).
 
@@ -985,6 +1012,12 @@ class DownloadService:
             return
 
         all_files = self._download_file_store.scan_files_with_sizes(extract_dir)
+        # A folder-boot dump (PS3 — …/PS3_GAME/USRDIR/EBOOT.BIN) launches the game
+        # directory directly (ADR-0019), never a playlist — and its many payload
+        # files must never be misread as "discs". Suppress the M3U outright even
+        # though ES-DE lists .m3u for the platform. (#1212)
+        if folder_boot_layout_root([path for path, _size in all_files]) is not None:
+            return
         # Check if an M3U already exists (search recursively)
         if any(path.lower().endswith(".m3u") for path, _size in all_files):
             return

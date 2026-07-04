@@ -893,6 +893,94 @@ class TestMaybeGenerateM3u:
 
         assert not (tmp_path / "Game.m3u").exists()
 
+    def test_folder_boot_layout_suppresses_m3u(self, plugin, tmp_path):
+        """#1212: a folder-boot dump (PS3) never gets a playlist, even on an
+        .m3u-supported platform with disc-suffixed payload files that would
+        otherwise warrant one — it launches the game directory directly."""
+        eboot = tmp_path / "PS3_GAME" / "USRDIR" / "EBOOT.BIN"
+        eboot.parent.mkdir(parents=True)
+        eboot.write_bytes(b"\x00" * 16)
+        # Two disc-suffixed payload files that WOULD trigger needs_m3u without the gate.
+        (tmp_path / "PS3_GAME" / "USRDIR" / "part1.iso").write_bytes(b"\x00" * 100)
+        (tmp_path / "PS3_GAME" / "USRDIR" / "part2.iso").write_bytes(b"\x00" * 100)
+
+        rom_detail = {"fs_name_no_ext": "MyGame", "name": "MyGame"}
+        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail, True)
+
+        assert not (tmp_path / "MyGame.m3u").exists()
+        assert list(tmp_path.rglob("*.m3u")) == []
+
+    def test_genuine_multi_disc_still_generates_when_not_folder_boot(self, plugin, tmp_path):
+        """The folder-boot gate does not suppress a genuine multi-disc set (no marker)."""
+        (tmp_path / "Game (Disc 1).chd").write_bytes(b"\x00" * 100)
+        (tmp_path / "Game (Disc 2).chd").write_bytes(b"\x00" * 100)
+
+        rom_detail = {"fs_name_no_ext": "Game", "name": "Game"}
+        plugin._download_service._maybe_generate_m3u_io(str(tmp_path), rom_detail, True)
+
+        assert (tmp_path / "Game.m3u").exists()
+
+
+class TestMaybeHealPs3Sfb:
+    """``_maybe_heal_ps3_sfb_io`` restores a folder-boot dump's mis-suffixed disc SFB (#1212)."""
+
+    def _seed_ps3_layout(self, tmp_path):
+        """Lay down a PS3 folder-boot layout; return the game root (holds PS3_GAME)."""
+        eboot = tmp_path / "PS3_GAME" / "USRDIR" / "EBOOT.BIN"
+        eboot.parent.mkdir(parents=True)
+        eboot.write_bytes(b"\x00" * 16)
+        return tmp_path
+
+    def test_heals_txt_suffixed_sfb(self, plugin, tmp_path):
+        root = self._seed_ps3_layout(tmp_path)
+        (root / "PS3_DISC.SFB.txt").write_bytes(b"SFB-BYTES")
+
+        plugin._download_service._maybe_heal_ps3_sfb_io(str(root))
+
+        sfb = root / "PS3_DISC.SFB"
+        assert sfb.exists()
+        assert sfb.read_bytes() == b"SFB-BYTES"
+        # The original .txt is preserved (copy, not move).
+        assert (root / "PS3_DISC.SFB.txt").exists()
+
+    def test_heals_at_one_level_deeper_root(self, plugin, tmp_path):
+        # An extract that nests PS3_GAME one level below the extract dir: the SFB
+        # heals at the inner game root, not the extract dir.
+        inner = tmp_path / "MyGame"
+        eboot = inner / "PS3_GAME" / "USRDIR" / "EBOOT.BIN"
+        eboot.parent.mkdir(parents=True)
+        eboot.write_bytes(b"\x00" * 16)
+        (inner / "PS3_DISC.SFB.txt").write_bytes(b"SFB")
+
+        plugin._download_service._maybe_heal_ps3_sfb_io(str(tmp_path))
+
+        assert (inner / "PS3_DISC.SFB").exists()
+
+    def test_existing_sfb_is_not_overwritten(self, plugin, tmp_path):
+        root = self._seed_ps3_layout(tmp_path)
+        (root / "PS3_DISC.SFB").write_bytes(b"REAL")
+        (root / "PS3_DISC.SFB.txt").write_bytes(b"WRONG")
+
+        plugin._download_service._maybe_heal_ps3_sfb_io(str(root))
+
+        assert (root / "PS3_DISC.SFB").read_bytes() == b"REAL"
+
+    def test_no_sfb_txt_does_nothing(self, plugin, tmp_path):
+        root = self._seed_ps3_layout(tmp_path)
+
+        plugin._download_service._maybe_heal_ps3_sfb_io(str(root))
+
+        assert not (root / "PS3_DISC.SFB").exists()
+
+    def test_non_folder_boot_layout_does_nothing(self, plugin, tmp_path):
+        # A stray PS3_DISC.SFB.txt without the folder-boot marker is left untouched.
+        (tmp_path / "PS3_DISC.SFB.txt").write_bytes(b"SFB")
+        (tmp_path / "game.iso").write_bytes(b"\x00" * 100)
+
+        plugin._download_service._maybe_heal_ps3_sfb_io(str(tmp_path))
+
+        assert not (tmp_path / "PS3_DISC.SFB").exists()
+
 
 class TestDoDownloadSingleFile:
     """Tests for _do_download happy path — single file."""

@@ -63,6 +63,15 @@ class DownloadFileAdapter:
         """
         os.replace(src, dst)
 
+    def copy_file(self, src: str, dst: str) -> None:
+        """Copy the file *src* to *dst*, preserving *src* and its metadata.
+
+        Used to heal a mis-suffixed dump file (``PS3_DISC.SFB.txt`` →
+        ``PS3_DISC.SFB``) by writing a correctly-named copy while leaving the
+        original in place. ``shutil.copy2`` preserves mode + timestamps.
+        """
+        shutil.copy2(src, dst)
+
     def disk_free(self, path: str) -> int:
         """Return the free space in bytes for the filesystem hosting *path*."""
         return shutil.disk_usage(path).free

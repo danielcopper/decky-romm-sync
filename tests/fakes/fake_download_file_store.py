@@ -103,6 +103,12 @@ class FakeDownloadFileStore:
                 self.dirs.discard(d)
                 self.dirs.add(dst_prefix + d[len(src_prefix) :])
 
+    def copy_file(self, src: str, dst: str) -> None:
+        """Copy the bytes at *src* to *dst*, keeping *src* (models ``shutil.copy2``)."""
+        if src not in self.files:
+            raise FileNotFoundError(src)
+        self.files[dst] = self.files[src]
+
     def disk_free(self, path: str) -> int:
         return self.disk_free_bytes
 

@@ -117,6 +117,23 @@ class TestMoveDir:
             adapter.move_dir(str(tmp_path / "missing"), str(tmp_path / "dst"))
 
 
+class TestCopyFile:
+    def test_copies_and_preserves_source(self, adapter, tmp_path):
+        src = tmp_path / "PS3_DISC.SFB.txt"
+        src.write_bytes(b"SFB-BYTES")
+        dst = tmp_path / "PS3_DISC.SFB"
+
+        adapter.copy_file(str(src), str(dst))
+
+        assert dst.read_bytes() == b"SFB-BYTES"
+        # The source is preserved (copy, not move).
+        assert src.read_bytes() == b"SFB-BYTES"
+
+    def test_missing_source_raises(self, adapter, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            adapter.copy_file(str(tmp_path / "missing"), str(tmp_path / "dst"))
+
+
 class TestDiskFree:
     def test_returns_positive_int(self, adapter, tmp_path):
         # Real filesystem returns some non-negative integer.
@@ -458,6 +475,7 @@ class TestProtocolMethodCount:
             "remove_tree",
             "make_dirs",
             "move_dir",
+            "copy_file",
             "rename",
             "disk_free",
             "walk_files_matching_suffixes",
