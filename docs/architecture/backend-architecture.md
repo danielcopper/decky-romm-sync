@@ -302,12 +302,18 @@ Existing installs from before this feature keep their old folder layout until re
 
 **Folder-boot launch target (PS3)**: for a PS3 folder game `detect_launch_file` picks the nested
 `…/PS3_GAME/USRDIR/EBOOT.BIN` as the install's `file_path` — the correct launch _file_ identity (save path, core, and
-displayed filename all derive from it). But RPCS3's directory-boot wants the game **folder**, not the EBOOT, so the
-baked `launch_options` carries the game directory instead. This is a bake-time path override (`folder_boot_root`,
-`domain/rom_files.py`) applied in the `DiscLaunchResolver` seam, never a `file_path` rewrite: `file_path` stays the
-EBOOT anchor while only the argument baked into the shortcut becomes the folder
+displayed filename all derive from it). But RPCS3's directory-boot wants the game **folder**, not the EBOOT, and
+RetroDECK's `run_game.sh` reinterprets a directory `%ROM%` as a "directory as a file" (`run_game.sh:63-67`) so it can
+never launch a bare folder. Two overrides fire together, both keyed on the same `folder_boot_root` fact and neither a
+`file_path` rewrite: the baked **path** becomes the game folder (`folder_boot_root`, `domain/rom_files.py`, in the
+`DiscLaunchResolver` seam), and the baked **invocation** becomes a **direct sandbox command** that bypasses
+`run_game.sh` — `flatpak run --command=<launcher> net.retrodeck.retrodeck <args> "<folder>"`, resolved in
+`ActiveCoreResolver.active_emulator_for_rom` (standalone + folder-boot install → `CoreResolver.resolve_sandbox_launcher`
+gives the `/app/…/component_launcher.sh` sandbox path → `EmulatorInvocation.direct`). `file_path` stays the EBOOT anchor
 ([ADR-0019](../adr/0019-folder-as-launch-target.md), see
-[Core and Emulator Selection](core-emulator-selection.md#folder-boot-launch-target)).
+[Core and Emulator Selection](core-emulator-selection.md#folder-boot-launch-target)). The multi-file download path also
+**suppresses M3U generation** and **heals a `.txt`-suffixed `PS3_DISC.SFB`** for a folder-boot dump (`domain`
+`folder_boot_layout_root` + `DownloadService._maybe_heal_ps3_sfb_io`).
 
 **M3U generation rule** (`needs_m3u` in `domain/rom_files.py`): a game-named `<fs_name_no_ext>.m3u` is auto-generated
 (when no `.m3u` already exists) for **multi-disc** ROMs — two or more disc files of any kind (`.cue`/`.chd`/`.iso`) — so

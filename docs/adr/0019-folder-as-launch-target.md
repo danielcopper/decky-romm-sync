@@ -2,13 +2,43 @@
 
 ## Status
 
-Accepted. Extends [ADR-0009](0009-launcher-pure-exec-wrapper-baked-launch-options.md) (the baked-`launch_options` model)
-and [ADR-0014](0014-per-game-disc-selection-in-db-applied-as-bake-time-launch-path-override.md) (the bake-time
-launch-path override layer) with a folder-as-target branch, and **refines**
-[ADR-0008](0008-rom-install-launch-file-and-rom-dir.md) (`file_path` = launch file, `rom_dir` = dedicated folder) by
-recording that for a folder-boot system the baked launch **target** deliberately differs from `file_path`. Tracked under
+Accepted, **revised after on-device testing** (see "Empirical revision" below). Extends
+[ADR-0009](0009-launcher-pure-exec-wrapper-baked-launch-options.md) (the baked-`launch_options` model) and
+[ADR-0014](0014-per-game-disc-selection-in-db-applied-as-bake-time-launch-path-override.md) (the bake-time launch-path
+override layer) with a folder-as-target branch, and **refines** [ADR-0008](0008-rom-install-launch-file-and-rom-dir.md)
+(`file_path` = launch file, `rom_dir` = dedicated folder) by recording that for a folder-boot system the baked launch
+**target** deliberately differs from `file_path`. Tracked under
 [#1212](https://github.com/danielcopper/decky-romm-sync/issues/1212) (part of the #914 standalone-emulator epic,
 surfaced by the #1208 PS3-standalone routing).
+
+### Empirical revision (on-device, RPCS3 0.0.40 via RetroDECK)
+
+The original decision (§1–§3) baked the game folder into the **standard `run_game.sh` `-e` form**
+(`… -e "%EMULATOR_RPCS3% --no-gui %ROM%" "<folder>"`) on the assumption that `run_game.sh` passes a directory `%ROM%`
+through to the emulator. On-device testing **falsified that assumption** and surfaced three more dump-specific quirks.
+The folder-as-target decision (§1–§3, the `resolve_bake_path` path override) **stands**; how the folder is handed to the
+emulator changes, and two download-path heals are added:
+
+1. **`run_game.sh` can never launch a bare game folder.** `files/libexec/run_game.sh:63-67` reinterprets **any**
+   directory argument as ES-DE's "directory as a file": `game="$game/$(basename "$game")"`. Our folder bake `<dir>`
+   becomes `<dir>/<dirname>`, which does not exist — RPCS3 gets a bogus path. So the `-e` standalone form cannot deliver
+   a folder target (§4 replaces it with a direct sandbox invocation).
+2. **RPCS3 rejects the nested EBOOT too** (`Invalid file or folder`) — confirming the folder, not the EBOOT, is the only
+   valid target, so there is no working `run_game` fallback.
+3. **The disc dump ships `PS3_DISC.SFB` renamed `PS3_DISC.SFB.txt`.** RPCS3 identifies a disc-dump folder by
+   `PS3_DISC.SFB` at the game root; the game does not boot until it is restored (§5).
+4. **The multi-file download path generated a junk M3U playlist** listing the folder's payload files as "discs" (PS3
+   counts as `.m3u`-supported). It did not break the launch but is wrong and must stop (§6).
+
+The direct command below was hardware-verified to boot the game:
+
+```text
+flatpak run --command=/app/retrodeck/components/rpcs3/component_launcher.sh net.retrodeck.retrodeck \
+  --no-gui "/run/media/deck/Emulation/retrodeck/roms/ps3/Metal Gear Solid 4"
+```
+
+(The component launcher just sets `LD_LIBRARY_PATH` and `exec`s `bin/rpcs3`; its `log:` not-found stderr lines are
+cosmetic.)
 
 ## Context
 
@@ -93,22 +123,80 @@ relaunch reconcile, and the disc picker. They inherit the folder-boot target wit
 installed before this change self-heals on its next sync (or any re-bake), because every bake now resolves through the
 override.
 
-## Consequences
+### 4. Folder-boot targets bake a direct sandbox invocation, bypassing `run_game.sh`
 
-- **PS3 folder games launch.** RPCS3's directory-boot receives the game folder it expects instead of the nested EBOOT it
-  rejects.
-- **No new launch mechanism, no `file_path` rewrite.** The folder path rides the existing baked-`launch_options` layer;
-  the launcher stays a pure `exec "$@"` wrapper ([ADR-0009](0009-launcher-pure-exec-wrapper-baked-launch-options.md));
-  every `file_path`-derived value (save path, core, filename) is unchanged.
+Because `run_game.sh` cannot launch a bare folder (Empirical revision #1), a folder-boot standalone is baked as a
+**direct sandbox invocation** that runs the emulator's own launcher inside the RetroDECK flatpak, bypassing
+`run_game.sh` entirely:
+
+```text
+flatpak run --command=<sandbox-launcher> net.retrodeck.retrodeck <template-args> "<folder>"
+```
+
+The decision is made on the **invocation** seam, mirroring how §3 makes the **path** decision on the `resolve_bake_path`
+seam — both keyed on the same `folder_boot_root` fact, so a folder path and a direct invocation are always chosen
+together. `ActiveCoreResolver.active_emulator_for_rom`, after the per-game/per-platform/system precedence resolves an
+`EmulatorInvocation`, rewrites it when the emulator is a **standalone** and the ROM's install is a folder-boot layout
+(`folder_boot_root(install.file_path, install.rom_dir)` is set — the same fact, provably consistent with the bake path
+because a folder-boot layout is never multi-disc):
+
+- **`<sandbox-launcher>`** is resolved by `CoreResolver.resolve_sandbox_launcher(command)` (`adapters/es_de_config.py`),
+  reusing the `es_find_rules.xml` parse the standalone existence probe already reads: it takes the command's
+  `%EMULATOR_<NAME>%` token, looks up the find-rule `staticpath` entries, and returns the sandbox-absolute RetroDECK
+  **component** launcher (`/app/retrodeck/components/rpcs3/component_launcher.sh` for RPCS3; the `/app` bundled entry is
+  preferred over a `/var/data` external one). Host-native entries (`~/…` AppImages, host flatpak exports) are skipped —
+  they are not reachable as a sandbox `--command`. The `/app` path is what `flatpak run --command=` execs inside the
+  sandbox.
+- **`<template-args>`** are the standalone command's middle: `%EMULATOR_*%` and the trailing `%ROM%` stripped
+  (`%EMULATOR_RPCS3% --no-gui %ROM%` → `--no-gui`). The game folder is appended by `build_launch_options`.
+
+The result is a new `EmulatorInvocation` variant, `kind="direct"` (`domain/shortcut_data.py`), carrying the standalone
+command plus the resolved launcher; `resolve_emulator_invocation` renders the `--command=` form. Every other system
+keeps the `run_game` `-e` form **byte-identical** — the rewrite fires only for a standalone over a folder-boot install.
+If the sandbox launcher cannot be resolved (find rules absent, host-only rule), the standalone `-e` form is kept and a
+warning is logged; the launch will fail (no working fallback exists for a folder target) until a re-bake with readable
+find rules heals it. Because the rewrite lives on the shared `active_emulator_for_rom` seam, all seven bake sites
+inherit it with **zero call-site edits**, exactly as the path override does.
+
+### 5. Heal a `.txt`-suffixed `PS3_DISC.SFB` at extract
+
+After a multi-file extraction (`DownloadService._post_download_multi_io`), a folder-boot layout is healed for the known
+dump quirk (Empirical revision #3): if `<game-root>/PS3_DISC.SFB.txt` exists and `<game-root>/PS3_DISC.SFB` does not,
+the `.txt` is **copied** to the correct name (the original is kept), with one INFO log. The game root is located by
+`domain.folder_boot_layout_root` (the marker-stripped dir that holds `PS3_GAME`); the copy goes through a new
+`DownloadFileStore.copy_file` seam (no raw I/O in the service). Scoped to this exact quirk only — a real `PS3_DISC.SFB`
+already present, no `.txt`, or a non-folder-boot layout are all left untouched. A stray SFB from an older download is
+not re-created; a re-download heals it.
+
+### 6. Suppress M3U generation for a folder-boot layout
+
+`DownloadService._maybe_generate_m3u_io` returns early when `folder_boot_layout_root` finds a folder-boot marker in the
+extract, even though ES-DE lists `.m3u` for PS3 (Empirical revision #4). A folder-boot game launches its directory
+directly and never a playlist, and its many payload files must never be misread as discs. A genuine multi-disc set (no
+marker) still generates its playlist.
+
+- **PS3 folder games launch.** RPCS3 receives the game folder it expects, via a direct sandbox invocation that bypasses
+  `run_game.sh`'s directory-as-a-file reinterpretation — not the nested EBOOT it rejects, and not the `-e` form
+  `run_game.sh` would mishandle.
+- **A new launch mechanism for one case, no `file_path` rewrite.** Folder-boot standalones bake the `--command=`
+  direct-sandbox form (§4); every other system keeps the `run_game` `-e` form byte-identical. The launcher stays a pure
+  `exec "$@"` wrapper ([ADR-0009](0009-launcher-pure-exec-wrapper-baked-launch-options.md)) — the whole command,
+  `--command=` and all, still rides `launch_options`; every `file_path`-derived value (save path, core, filename) is
+  unchanged.
 - **The hardcoded surface is minimal.** Exactly one marker, matched case-sensitively; a new folder-boot system is a
   data-only tuple entry. The two guards (`rom_dir` set, root inside `rom_dir`) keep a stray EBOOT from ever baking the
-  shared system directory.
-- **Existing installs self-heal.** The override lives entirely in the bake resolution, so no migration or re-download is
-  needed — the next sync/re-bake emits the folder target.
+  shared system directory. The sandbox-launcher resolution reuses the existing `es_find_rules.xml` probe — no new I/O
+  surface.
+- **Existing installs self-heal.** Both overrides live in the bake resolution (path) and the invocation resolution, so
+  no migration or re-download is needed — the next sync/re-bake emits the folder target and the direct invocation
+  together. (An SFB `.txt` quirk or a stray junk M3U from an earlier download is healed/avoided on the next re-download,
+  §5–§6.)
 - **One documented degrade path.** The `downloads.py` raw-`file_path` fallback edge (used only in the rare race where
-  the install row is not yet readable at download-complete) does not run through the resolver, so it bakes the raw path.
-  This is an acceptable, transient degrade — the next sync heals it — and is not worth threading the override through a
-  second, edge-only site.
+  the install row is not yet readable at download-complete) bakes the raw EBOOT path; `active_emulator_for_rom` may
+  still read the just-committed install and emit the direct form, so the race can transiently pair the direct invocation
+  with the EBOOT path. Both the folder-with-`-e` and the direct-with-EBOOT shapes are broken for that one launch and
+  heal on the next sync — an acceptable, transient degrade, not worth threading the override through a second, edge-only
+  site.
 
 ## Alternatives considered
 
@@ -124,9 +212,15 @@ override.
   shortcut's `launch_options` ([ADR-0009](0009-launcher-pure-exec-wrapper-baked-launch-options.md)), so an ES-DE naming
   convention buys nothing here and would add a folder-rename step (and the ES-DE-collapse hazard ADR-0013/#1111 already
   navigated) for a mechanism the plugin does not use.
-- **A RetroDECK `.desktop` shortcut mechanism.** Rejected for the same structural reason: it is a different launch
-  channel than the plugin's baked-`launch_options` model, adding a second launch path to maintain when the existing
-  bake-time override answers the question directly.
+- **A RetroDECK `.desktop` shortcut mechanism.** Rejected. A `.desktop` file is `run_game.sh`'s **own** mechanism for a
+  directory game (`run_game.sh:42-61` reads its `Exec=` line and `eval`s it, with a hardcoded `%%RPCS3_GAMEID%%`
+  workaround), so routing through it means re-entering `run_game.sh` — the layer we must bypass — and depending on ES-DE
+  having generated the sidecar. We instead bake a **direct sandbox command** (§4) that runs the same emulator launcher
+  `run_game.sh` would ultimately reach, without its directory-as-a-file rewrite and without a generated sidecar. Same
+  baked-`launch_options` model, one fewer moving part.
+- **Keep the `-e` standalone form and let `run_game.sh` handle the folder.** Falsified on-device (Empirical revision
+  #1): `run_game.sh:63-67` rewrites a directory argument to `<dir>/<dirname>`, which does not exist, so the `-e` form
+  can never deliver a folder target. The direct `--command=` invocation (§4) is the bypass.
 
 ## Deferred (deliberately)
 
@@ -139,11 +233,15 @@ override.
 
 ## On-device verification (gates the merge)
 
-- RPCS3 (via RetroDECK) boots a PS3 game when handed the **game root folder** as `%ROM%` (the `--no-gui <dir>` form).
-- RetroDECK's `run_game.sh` accepts a **directory** argument for the RPCS3 path (the standalone invocation from #1208
-  passes the baked folder through unchanged).
-- A previously-synced PS3 ROM re-bakes to the folder target on the next sync (the self-heal path), and its saves / core
-  badge / displayed filename are unchanged (proving `file_path` was not perturbed).
+- **The direct command boots the game** (verified): the baked
+  `flatpak run --command=<launcher> net.retrodeck.retrodeck --no-gui "<folder>"` starts RPCS3 on the game folder.
+  (`run_game.sh` does **not** accept a directory — the earlier assumption — which is exactly why the direct command
+  bypasses it.)
+- **A previously-synced PS3 ROM re-bakes to the direct invocation** on the next sync (Force Full Sync → the shortcut's
+  `launch_options` becomes the `--command=` form), and MGS4 boots from the Steam shortcut. Its saves / core badge /
+  displayed filename are unchanged (proving `file_path` was not perturbed).
+- **A fresh multi-file PS3 download** heals a `.txt`-suffixed `PS3_DISC.SFB` and generates **no** M3U (§5–§6), and the
+  installed game boots from its shortcut.
 
 See also: [ADR-0008](0008-rom-install-launch-file-and-rom-dir.md) (`file_path` = launch file, `rom_dir` = dedicated
 folder — refined here), [ADR-0009](0009-launcher-pure-exec-wrapper-baked-launch-options.md) (the baked-`launch_options`

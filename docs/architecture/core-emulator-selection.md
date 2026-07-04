@@ -354,18 +354,36 @@ path-override layering the `-e` core override uses.
 Some systems boot a game **directory**, not the nested launch file. A PS3 game installs as a folder whose payload is
 `…/PS3_GAME/USRDIR/EBOOT.BIN`, and `detect_launch_file` picks that EBOOT as `file_path` — correct as the launch _file_
 identity, but RPCS3's directory-boot rejects it and wants the folder that contains `PS3_GAME`
-([#1212](https://github.com/danielcopper/decky-romm-sync/issues/1212)). This is a second bake-time path override,
-layered **after** disc resolution in the same `resolve_bake_path` seam: `folder_boot_root(path, install.rom_dir)`
-(`domain/rom_files.py`) strips a hardcoded `FOLDER_BOOT_MARKERS` run (`PS3_GAME/USRDIR/EBOOT.BIN`, matched
-case-sensitively) from the resolved path and returns the game root, guarded so it fires only when `rom_dir` is set and
-the derived root stays inside `rom_dir` (a bare EBOOT in the shared system dir never bakes that shared dir). Because it
-triggers only when the resolved path still carries the marker, it composes with disc resolution — a resolved disc path
-(`…(Disc 2).cue`) has no marker, so a multi-disc ROM is never folder-stripped, and the folder rule applies only when
-disc resolution returned `file_path`. `RomInstall.file_path` stays the EBOOT (the
-[ADR-0008](../adr/0008-rom-install-launch-file-and-rom-dir.md) anchor), so save-path, core, and displayed-filename
-derivations are untouched; only the baked argument becomes the folder. The override lives in the one seam, so **every**
-bake site (the three below plus the download-complete, core set/clear, and startup-reconcile bakes) inherits it, and a
-PS3 ROM synced before this change self-heals on its next bake. See [ADR-0019](../adr/0019-folder-as-launch-target.md).
+([#1212](https://github.com/danielcopper/decky-romm-sync/issues/1212)). Two things change together for such a game — the
+baked **path** and the baked **invocation form** — because they are decided from the same layout fact.
+
+**The path.** A bake-time path override, layered **after** disc resolution in the same `resolve_bake_path` seam:
+`folder_boot_root(path, install.rom_dir)` (`domain/rom_files.py`) strips a hardcoded `FOLDER_BOOT_MARKERS` run
+(`PS3_GAME/USRDIR/EBOOT.BIN`, matched case-sensitively) from the resolved path and returns the game root, guarded so it
+fires only when `rom_dir` is set and the derived root stays inside `rom_dir` (a bare EBOOT in the shared system dir
+never bakes that shared dir). Because it triggers only when the resolved path still carries the marker, it composes with
+disc resolution — a resolved disc path (`…(Disc 2).cue`) has no marker, so a multi-disc ROM is never folder-stripped,
+and the folder rule applies only when disc resolution returned `file_path`.
+
+**The invocation form.** RetroDECK's `run_game.sh` reinterprets any directory `%ROM%` as an ES-DE "directory as a file"
+(`game="$game/$(basename "$game")"`, `run_game.sh:63-67`), so the standalone `-e "%EMULATOR_RPCS3% --no-gui %ROM%"` form
+handed a folder points RPCS3 at a nonexistent `…/<Game>/<Game>` and never boots. A folder-boot standalone is therefore
+baked as a **direct sandbox invocation** that bypasses `run_game.sh`:
+`flatpak run --command=<launcher> net.retrodeck.retrodeck <args> "<folder>"`, running the emulator's own launcher inside
+the sandbox. `ActiveCoreResolver.active_emulator_for_rom` makes this rewrite: when the resolved emulator is a standalone
+and the ROM's install is a folder-boot layout (same `folder_boot_root` fact), it resolves the emulator's sandbox
+launcher via the `es_find_rules.xml` probe (`CoreResolver.resolve_sandbox_launcher` → the
+`/app/retrodeck/components/<x>/…` component path) and returns an `EmulatorInvocation.direct`;
+`resolve_emulator_invocation` renders the `--command=` form, stripping `%EMULATOR_*%` + `%ROM%` down to the middle args
+(`--no-gui`). A libretro emulator, a non-folder install, or an unresolvable launcher leave the standard `run_game` `-e`
+form untouched.
+
+`RomInstall.file_path` stays the EBOOT (the [ADR-0008](../adr/0008-rom-install-launch-file-and-rom-dir.md) anchor), so
+save-path, core, and displayed-filename derivations are untouched. Both overrides live in the two shared seams
+(`resolve_bake_path` for the path, `active_emulator_for_rom` for the invocation), so **every** bake site (the three
+below plus the download-complete, core set/clear, and startup-reconcile bakes) inherits them with no call-site edits,
+and a PS3 ROM synced before this change self-heals on its next bake. See
+[ADR-0019](../adr/0019-folder-as-launch-target.md).
 
 ### The same three bake sites — disc path composes with the core
 
