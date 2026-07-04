@@ -77,10 +77,17 @@ per-session stream. The local `Playtime` aggregate stays the cumulative display 
   (FastAPI/Pydantic names each failing entry's position in `detail[].loc[2] = ["body","sessions",<index>]`); the service
   extracts those indices via the pure `rejected_session_indices` kernel, drops exactly those rows as terminal (the
   byte-identical entry draws the same verdict forever — same taxonomy as a `skipped` verdict, via
-  `Playtime.drop_rejected_sessions`) and **resubmits the survivors** so one bad entry never blocks the batch. If the 422
-  body names no usable index (unparseable / no `detail`), the whole group falls back to the `attempts` bounded-retry
-  counter above, so a persistent whole-request 422 converges to quarantine instead of looping. Layer boundary: the
-  adapter parses HTTP (status + `detail`), the service decides (drop + resubmit) via the pure kernel.
+  `Playtime.drop_rejected_sessions`) and **resubmits the survivors** so one bad entry never blocks the batch. When the
+  422 body names **no usable index** (a Cloudflare-Tunnel / proxy can mangle the multi-entry validation body — a real
+  risk here), a multi-row batch must NOT quarantine the whole group: a session recorded locally but not yet on the
+  server exists nowhere else, so losing a valid sibling to a poison one would violate "never delete data that exists
+  nowhere else". Instead each session is **re-submitted on its own** (`_flush_single_session`) so the server's
+  per-session verdict isolates the genuine poison — a 201 dequeues the valid one, a lone 422 that now DOES name the
+  entry drops it terminally, a lone 422 that still names nothing bumps only THAT one row's `attempts`, and a transport
+  error retains only that one. A lone row (`len == 1`) has no sibling to isolate, so it skips the re-POST and bumps its
+  own counter directly. Either way a persistent unindexed 422 converges to a per-session quarantine instead of looping,
+  and a valid session is never dropped because a sibling was poison. Layer boundary: the adapter parses HTTP (status +
+  `detail`), the service decides (drop + resubmit / per-session fallback) via the pure kernels.
 - **Reconcile is `max(local, Σ server)`.** On the detail view we first flush the outbox, then `GET /api/play-sessions`
   for the ROM and set the displayed total to `max(local_total, Σ server duration)`. Playtime is monotonic, so `max()` is
   always safe: with the outbox drained it naturally adopts the server union ("the server holds the whole total"); with a

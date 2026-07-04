@@ -412,10 +412,12 @@ A whole-request **HTTP 422** — RomM validates the `sessions` array _atomically
 POST (#1312) — is healed surgically: the adapter surfaces it as `RommUnprocessableEntityError` with the parsed `detail`,
 the pure `rejected_session_indices` kernel reads the failing `detail[].loc[2]` positions, PlaytimeService drops exactly
 those rows (again via `drop_rejected_sessions`) and resubmits the survivors, so one poison entry never blocks the batch;
-a 422 that names no usable index falls back to the `attempts` counter. New sub-second poison is kept out of the outbox
-at the recording seam by the pure `is_ingestable_session` gate (window strictly post-start at second resolution — the
-same rule RomM applies). Separately, each outbox row's `attempts` counts consecutive ingest `error` (or unknown
-acknowledged) verdicts; PlaytimeService quarantines (drops) a row once it reaches its retry threshold, so an ambiguous
+a multi-row 422 that names no usable index (a proxy-mangled body) re-submits each session on its own
+(`_flush_single_session`) so the per-session verdict isolates the genuine poison and a valid sibling is never dropped
+for another's fault, and a lone row bumps only its own `attempts`. New sub-second poison is kept out of the outbox at
+the recording seam by the pure `is_ingestable_session` gate (window strictly post-start at second resolution — the same
+rule RomM applies). Separately, each outbox row's `attempts` counts consecutive ingest `error` (or unknown acknowledged)
+verdicts; PlaytimeService quarantines (drops) a row once it reaches its retry threshold, so an ambiguous
 never-succeeding verdict also cannot wedge the outbox. Either way only that session's playtime is lost.
 
 `007_add_last_played.sql` (`user_version = 7`) adds a nullable `last_played TEXT` column to `rom_playtime`

@@ -13,7 +13,7 @@ from fakes.system_time import FakeClock
 
 from domain.playtime import PendingPlaySession, Playtime
 from domain.rom import Rom
-from lib.errors import RommApiError, RommForbiddenError, RommUnprocessableEntityError
+from lib.errors import RommApiError, RommConnectionError, RommForbiddenError, RommUnprocessableEntityError
 from services.playtime import PlaytimeService, PlaytimeServiceConfig, _coerce_duration_ms
 
 
@@ -1201,8 +1201,8 @@ class TestFlushBatch422:
         assert "HTTP 422" in rejected[0].message
 
     @pytest.mark.asyncio
-    async def test_422_without_detail_bumps_attempts_and_stays_queued(self):
-        """An unparseable 422 (no usable indices) falls back to bounded-retry attempt counting."""
+    async def test_lone_row_422_without_detail_bumps_attempts_and_stays_queued(self):
+        """A lone-row 422 with no usable indices bumps that single row (no sibling to isolate)."""
         svc, fake, uow = make_service()
         _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending(attempts=0)}))
         fake.ingest_play_sessions = _raise_422(None)  # type: ignore[method-assign]
@@ -1215,8 +1215,8 @@ class TestFlushBatch422:
         assert entry.pending_sessions["s1"].attempts == 1
 
     @pytest.mark.asyncio
-    async def test_422_with_only_out_of_range_indices_bumps_attempts(self):
-        """A 422 naming only out-of-range indices carries no usable target → attempts bump."""
+    async def test_lone_row_422_with_only_out_of_range_indices_bumps_attempts(self):
+        """A lone-row 422 naming only out-of-range indices carries no usable target → attempts bump."""
         svc, fake, uow = make_service()
         _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending(attempts=0)}))
         fake.ingest_play_sessions = _raise_422(_detail_for(99))  # type: ignore[method-assign]
@@ -1229,8 +1229,8 @@ class TestFlushBatch422:
         assert entry.pending_sessions["s1"].attempts == 1
 
     @pytest.mark.asyncio
-    async def test_persistent_422_without_detail_quarantines_at_threshold(self, caplog):
-        """A whole-request 422 with no indices converges to quarantine, never an infinite loop."""
+    async def test_persistent_lone_row_422_without_detail_quarantines_at_threshold(self, caplog):
+        """A persistent lone-row 422 with no indices converges to quarantine, never an infinite loop."""
         svc, fake, uow = make_service()
         _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending(attempts=4)}))
         fake.ingest_play_sessions = _raise_422(None)  # type: ignore[method-assign]
@@ -1242,6 +1242,102 @@ class TestFlushBatch422:
         assert entry is not None
         assert entry.pending_sessions == {}  # quarantined (dropped) at the threshold
         assert any("rom 42" in r.message and "s1" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_no_detail_batch_422_falls_back_per_session_isolating_poison(self):
+        """A no-usable-index batch 422 re-POSTs each session alone: valid survives, poison dropped (#1312 L2).
+
+        Under a whole-group bump the valid sibling would be lost; the per-session
+        fallback keeps it because the single-session verdict isolates the poison.
+        """
+        svc, fake, uow = make_service()
+        _seed_playtime(
+            uow,
+            42,
+            Playtime(pending_sessions={"s_bad": _pending(duration_ms=0), "s_good": _pending(duration_ms=1000)}),
+        )
+        fake.reject_batch_below_duration_ms = 1
+        fake.mangle_batch_422_detail = True  # the multi-entry 422 body carries no usable detail
+
+        await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.pending_sessions == {}  # both resolved
+        # The valid session actually reached the server; the poison did not.
+        assert [s["duration_ms"] for s in fake.play_sessions[42]] == [1000]
+        # Batch POST + one single-session POST per row = 3 calls.
+        ingests = [c for c in fake.call_log if c[0] == "ingest_play_sessions"]
+        assert len(ingests) == 3
+        assert [len(c[1][1]) for c in ingests] == [2, 1, 1]  # batch of 2, then singles
+
+    @pytest.mark.asyncio
+    async def test_no_detail_batch_422_does_not_quarantine_valid_sibling_at_threshold(self, caplog):
+        """The money invariant: a valid session at the retry threshold is NOT dropped for a poison sibling.
+
+        With the old whole-group bump, ``s_good`` at attempts=4 would hit its 5th
+        failure and quarantine — losing valid playtime that exists nowhere else.
+        The per-session fallback ingests it instead.
+        """
+        svc, fake, uow = make_service()
+        _seed_playtime(
+            uow,
+            42,
+            Playtime(
+                pending_sessions={
+                    "s_bad": _pending(duration_ms=0, attempts=0),
+                    "s_good": _pending(duration_ms=1000, attempts=4),  # one bump from quarantine
+                }
+            ),
+        )
+        fake.reject_batch_below_duration_ms = 1
+        fake.mangle_batch_422_detail = True
+
+        with caplog.at_level("WARNING"):
+            await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.pending_sessions == {}
+        # s_good was INGESTED (sent), not quarantined — its data survived.
+        assert [s["duration_ms"] for s in fake.play_sessions[42]] == [1000]
+        # No quarantine warning fired for the valid session.
+        assert not any("s_good" in r.message for r in caplog.records if r.levelname == "WARNING")
+
+    @pytest.mark.asyncio
+    async def test_per_session_fallback_retains_row_on_transport_error(self):
+        """A transport error during a single-session re-POST retains only that row (transient)."""
+        svc, fake, uow = make_service()
+        _seed_playtime(
+            uow,
+            42,
+            Playtime(
+                pending_sessions={
+                    "s_bad": _pending(duration_ms=0),
+                    "s_net": _pending(duration_ms=1000),
+                    "s_ok": _pending(duration_ms=1000),
+                }
+            ),
+        )
+
+        def _ingest(_device_id, sessions):
+            if len(sessions) > 1:
+                raise RommUnprocessableEntityError("HTTP 422", detail=None)  # mangled batch body
+            start = sessions[0]["start_time"]
+            if start == "s_bad":
+                raise RommUnprocessableEntityError("HTTP 422", detail=_detail_for(0))  # genuine poison
+            if start == "s_net":
+                raise RommConnectionError("offline")  # transient
+            return {"results": [{"index": 0, "status": "created"}], "created_count": 1, "skipped_count": 0}
+
+        fake.ingest_play_sessions = _ingest  # type: ignore[method-assign]
+
+        await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert set(entry.pending_sessions) == {"s_net"}  # poison dropped, ok sent, only the transient retained
+        assert entry.pending_sessions["s_net"].attempts == 0  # a transport error never bumps attempts
 
     @pytest.mark.asyncio
     async def test_422_heal_omits_undrained_breadcrumb(self):
@@ -1258,6 +1354,63 @@ class TestFlushBatch422:
         await svc.flush_pending_sessions()
 
         assert not any("not accepted" in m for m in logs)
+
+
+# ---------------------------------------------------------------------------
+# TestFlushBatch422MultiLevel — #1312 L1: recursion across resubmit levels
+# ---------------------------------------------------------------------------
+
+
+def _reject_first_sub_floor(floor_ms: int, calls: list[list[int]]):
+    """Stub that 422s naming ONLY the first sub-floor index each call.
+
+    Forces the indexed-drop path to recurse level by level: each resubmit
+    surfaces the NEXT poison at a NEW position, so the test exercises index
+    bookkeeping across multiple levels. Records each submitted batch's rom_ids
+    into ``calls`` (a reassigned stub bypasses ``FakeRommApi.call_log``).
+    """
+
+    def _ingest(_device_id, sessions):
+        calls.append([s["rom_id"] for s in sessions])
+        bad = [i for i, s in enumerate(sessions) if s["duration_ms"] < floor_ms]
+        if bad:
+            raise RommUnprocessableEntityError("HTTP 422", detail=_detail_for(bad[0]))
+        return {
+            "results": [{"index": i, "status": "created"} for i, _ in enumerate(sessions)],
+            "created_count": len(sessions),
+            "skipped_count": 0,
+        }
+
+    return _ingest
+
+
+class TestFlushBatch422MultiLevel:
+    @pytest.mark.asyncio
+    async def test_resubmit_that_itself_422s_drops_the_second_poison_too(self, caplog):
+        """An indexed-422 resubmit that 422s AGAIN on a DIFFERENT index drops that poison too."""
+        svc, fake, uow = make_service()
+        # roms 1 & 3 are poison (duration 0); 2 & 4 are valid. One device group,
+        # ordered (rom_id, start_time): [1, 2, 3, 4].
+        _seed_playtime(uow, 1, Playtime(pending_sessions={"s": _pending(device_id="device-1", duration_ms=0)}))
+        _seed_playtime(uow, 2, Playtime(pending_sessions={"s": _pending(device_id="device-1", duration_ms=1000)}))
+        _seed_playtime(uow, 3, Playtime(pending_sessions={"s": _pending(device_id="device-1", duration_ms=0)}))
+        _seed_playtime(uow, 4, Playtime(pending_sessions={"s": _pending(device_id="device-1", duration_ms=1000)}))
+        calls: list[list[int]] = []
+        fake.ingest_play_sessions = _reject_first_sub_floor(1, calls)  # type: ignore[method-assign]
+
+        with caplog.at_level("INFO"):
+            await svc.flush_pending_sessions()
+
+        # All four resolved: poison roms dropped, valid roms sent.
+        for rid in (1, 2, 3, 4):
+            assert uow.playtime.get(rid).pending_sessions == {}  # type: ignore[union-attr]
+        # Three levels: [1,2,3,4] → drop 1 → [2,3,4] → drop 3 → [2,4] → created.
+        assert calls == [[1, 2, 3, 4], [2, 3, 4], [2, 4]]
+        # Exactly the two poison roms were dropped (index bookkeeping held across levels).
+        dropped = {
+            int(r.message.split("rom ")[1].split(" ")[0]) for r in caplog.records if "rejected by server" in r.message
+        }
+        assert dropped == {1, 3}
 
 
 # ---------------------------------------------------------------------------

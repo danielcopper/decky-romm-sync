@@ -366,15 +366,7 @@ class PlaytimeService:
         (#1312). Per-row 2xx verdicts are correlated back by the response
         ``index`` (position in this group's submitted batch).
         """
-        batch: list[PlaySessionIngestEntry] = [
-            {
-                "rom_id": row.rom_id,
-                "start_time": row.start_time,
-                "end_time": row.end_time,
-                "duration_ms": row.duration_ms,
-            }
-            for row in group
-        ]
+        batch: list[PlaySessionIngestEntry] = [self._entry_for_row(row) for row in group]
         try:
             response = self._romm_api.ingest_play_sessions(device_id, batch)
         except RommUnprocessableEntityError as exc:
@@ -406,44 +398,82 @@ class PlaytimeService:
             result = verdict_by_index.get(index)
             status = result.get("status") if result is not None else None
             detail = result.get("detail") if result is not None else None
-            if status in ("created", "duplicate"):
-                # Both are successful ingests — dequeue.
-                sent_by_rom.setdefault(row.rom_id, []).append(row.start_time)
-                continue
-            if status is None:
-                # Absent from a 2xx response (or a malformed row missing
-                # ``status``): a transient omission, not a verdict. Stay queued
-                # untouched — no attempt bump — and retry on the next flush.
-                undrained.append(row)
-                continue
-            if status == "skipped":
-                # An EXPLICIT server rejection for this exact (device, rom,
-                # start_time) window (e.g. a sub-second launch-death rejected on
-                # validation). Re-POSTing the byte-identical row draws the same
-                # verdict forever, so draining it is the honest terminal action
-                # (only playtime is lost). Log once at info — the single line is
-                # the record. Only ``skipped`` hard-drops: an outbox session
-                # exists nowhere else, so we delete it solely on an explicit
-                # rejection, never on an ambiguous verdict.
-                rejected_by_rom.setdefault(row.rom_id, []).append(row.start_time)
-                detail_suffix = f", detail={detail}" if detail else ""
-                self._logger.info(
-                    f"play session rejected by server for rom {row.rom_id} "
-                    f"(start={row.start_time}, status={status}{detail_suffix}) — dropping from outbox"
-                )
-                continue
-            # ``error`` OR any unknown acknowledged status: bounded retry, then
-            # quarantine once the row exhausts ``_MAX_INGEST_ATTEMPTS``. An
-            # unknown verdict is not an explicit rejection, so it gets the same
-            # never-drop-data-on-ambiguity hedge as a possibly-transient error —
-            # still loop-free (it converges to quarantine after the threshold).
-            self._bump_ingest_attempt(
+            self._route_2xx_verdict(
                 row,
-                status=status,
+                status,
+                detail,
+                sent_by_rom=sent_by_rom,
                 failed_by_rom=failed_by_rom,
                 quarantine_by_rom=quarantine_by_rom,
+                rejected_by_rom=rejected_by_rom,
                 undrained=undrained,
             )
+
+    @staticmethod
+    def _entry_for_row(row: PendingSessionRow) -> PlaySessionIngestEntry:
+        """Project one outbox row to the ``PlaySessionIngestEntry`` wire shape."""
+        return {
+            "rom_id": row.rom_id,
+            "start_time": row.start_time,
+            "end_time": row.end_time,
+            "duration_ms": row.duration_ms,
+        }
+
+    def _route_2xx_verdict(
+        self,
+        row: PendingSessionRow,
+        status: str | None,
+        detail: object,
+        *,
+        sent_by_rom: dict[int, list[str]],
+        failed_by_rom: dict[int, list[str]],
+        quarantine_by_rom: dict[int, list[str]],
+        rejected_by_rom: dict[int, list[str]],
+        undrained: list[PendingSessionRow],
+    ) -> None:
+        """Sort one row into a bucket from its acknowledged (2xx) per-session verdict.
+
+        Shared by the batch loop and the per-session fallback so the two agree on
+        the verdict taxonomy exactly.
+        """
+        if status in ("created", "duplicate"):
+            # Both are successful ingests — dequeue.
+            sent_by_rom.setdefault(row.rom_id, []).append(row.start_time)
+            return
+        if status is None:
+            # Absent from a 2xx response (or a malformed row missing ``status``):
+            # a transient omission, not a verdict. Stay queued untouched — no
+            # attempt bump — and retry on the next flush.
+            undrained.append(row)
+            return
+        if status == "skipped":
+            # An EXPLICIT server rejection for this exact (device, rom,
+            # start_time) window (e.g. a sub-second launch-death rejected on
+            # validation). Re-POSTing the byte-identical row draws the same
+            # verdict forever, so draining it is the honest terminal action (only
+            # playtime is lost). Log once at info — the single line is the record.
+            # Only ``skipped`` hard-drops: an outbox session exists nowhere else,
+            # so we delete it solely on an explicit rejection, never on an
+            # ambiguous verdict.
+            rejected_by_rom.setdefault(row.rom_id, []).append(row.start_time)
+            detail_suffix = f", detail={detail}" if detail else ""
+            self._logger.info(
+                f"play session rejected by server for rom {row.rom_id} "
+                f"(start={row.start_time}, status={status}{detail_suffix}) — dropping from outbox"
+            )
+            return
+        # ``error`` OR any unknown acknowledged status: bounded retry, then
+        # quarantine once the row exhausts ``_MAX_INGEST_ATTEMPTS``. An unknown
+        # verdict is not an explicit rejection, so it gets the same
+        # never-drop-data-on-ambiguity hedge as a possibly-transient error — still
+        # loop-free (it converges to quarantine after the threshold).
+        self._bump_ingest_attempt(
+            row,
+            status=status,
+            failed_by_rom=failed_by_rom,
+            quarantine_by_rom=quarantine_by_rom,
+            undrained=undrained,
+        )
 
     def _handle_batch_rejection(
         self,
@@ -465,25 +495,49 @@ class PlaytimeService:
         the failing positions in ``detail[].loc[2]``; those rows drop as terminal
         (the byte-identical entry draws the same verdict forever, exactly like a
         ``skipped`` per-row verdict) and the survivors resubmit so they still
-        ingest. When the body names no usable index (unparseable / no ``detail``),
-        the whole group falls back to bounded-retry attempt counting so a
-        persistent whole-request 422 converges to quarantine instead of looping
-        forever. Recursion is bounded: each level drops at least the flagged rows,
-        so the survivor group strictly shrinks (and the no-index branch never
-        recurses).
+        ingest.
+
+        When the body names NO usable index (a proxy/Cloudflare-mangled 422 body
+        is a real risk — RomM sits behind a Cloudflare Tunnel here) a multi-row
+        batch must NOT quarantine the whole group: a session recorded locally but
+        not yet on the server exists nowhere else, so losing a valid sibling to a
+        poison one would violate "never delete data that exists nowhere else".
+        Instead each session is re-submitted on its OWN (:meth:`_flush_single_session`)
+        so the server's per-session verdict isolates the genuine poison from its
+        valid siblings. A lone row (``len == 1``) has no sibling to isolate, so it
+        skips the re-POST and bumps its own attempt counter directly.
+
+        Recursion is bounded: the indexed path drops at least the flagged rows, so
+        the survivor group strictly shrinks; the no-index path fans out into
+        single-session POSTs that never re-enter this method.
         """
         indices = set(rejected_session_indices(exc.detail, len(group)))
         if not indices:
-            self._log_debug(
-                f"Play-session batch rejected (HTTP 422) with no usable detail indices "
-                f"(device {device_id}, {len(group)} session(s)) — bumping attempts"
-            )
-            for row in group:
+            if len(group) == 1:
+                # No sibling to isolate — bump this lone row toward its own quarantine.
+                self._log_debug(
+                    f"Play-session single-session 422 with no usable detail (device {device_id}) — bumping attempts"
+                )
                 self._bump_ingest_attempt(
-                    row,
+                    group[0],
                     status="422",
                     failed_by_rom=failed_by_rom,
                     quarantine_by_rom=quarantine_by_rom,
+                    undrained=undrained,
+                )
+                return
+            self._log_debug(
+                f"Play-session batch 422 with no usable detail indices "
+                f"(device {device_id}, {len(group)} session(s)) — falling back to per-session ingest"
+            )
+            for row in group:
+                self._flush_single_session(
+                    device_id,
+                    row,
+                    sent_by_rom=sent_by_rom,
+                    failed_by_rom=failed_by_rom,
+                    quarantine_by_rom=quarantine_by_rom,
+                    rejected_by_rom=rejected_by_rom,
                     undrained=undrained,
                 )
             return
@@ -509,6 +563,68 @@ class PlaytimeService:
                 rejected_by_rom=rejected_by_rom,
                 undrained=undrained,
             )
+
+    def _flush_single_session(
+        self,
+        device_id: str,
+        row: PendingSessionRow,
+        *,
+        sent_by_rom: dict[int, list[str]],
+        failed_by_rom: dict[int, list[str]],
+        quarantine_by_rom: dict[int, list[str]],
+        rejected_by_rom: dict[int, list[str]],
+        undrained: list[PendingSessionRow],
+    ) -> None:
+        """Re-POST one outbox row on its own after an unindexed whole-batch 422.
+
+        The single-session verdict isolates the genuine poison from its valid
+        siblings, so a proxy-mangled batch 422 (no usable ``detail``) can never
+        quarantine a valid session for a sibling's fault (#1312 L2). Verdicts:
+        a 201 (``created`` / ``duplicate``) dequeues; a lone 422 that now DOES name
+        the entry (index 0) drops it terminally (the genuine poison); a lone 422
+        that STILL names no index bumps only THIS row's attempt counter; a
+        transport error retains only this row. Deliberately does NOT re-enter
+        :meth:`_handle_batch_rejection`, so the fan-out is one POST per session and
+        cannot loop.
+        """
+        try:
+            response = self._romm_api.ingest_play_sessions(device_id, [self._entry_for_row(row)])
+        except RommUnprocessableEntityError as exc:
+            if rejected_session_indices(exc.detail, 1):
+                # The server named this lone session as the poison — drop terminally.
+                rejected_by_rom.setdefault(row.rom_id, []).append(row.start_time)
+                self._logger.info(
+                    f"play session rejected by server for rom {row.rom_id} "
+                    f"(start={row.start_time}, HTTP 422 single-session) — dropping from outbox"
+                )
+            else:
+                # Still no usable detail even for one session — bump only this row.
+                self._bump_ingest_attempt(
+                    row,
+                    status="422",
+                    failed_by_rom=failed_by_rom,
+                    quarantine_by_rom=quarantine_by_rom,
+                    undrained=undrained,
+                )
+            return
+        except Exception as e:
+            self._log_debug(f"Play-session ingest failed (non-fatal): {e}")
+            undrained.append(row)
+            return
+
+        result = next((r for r in response.get("results", []) if r.get("index", -1) == 0), None)
+        status = result.get("status") if result is not None else None
+        detail = result.get("detail") if result is not None else None
+        self._route_2xx_verdict(
+            row,
+            status,
+            detail,
+            sent_by_rom=sent_by_rom,
+            failed_by_rom=failed_by_rom,
+            quarantine_by_rom=quarantine_by_rom,
+            rejected_by_rom=rejected_by_rom,
+            undrained=undrained,
+        )
 
     def _bump_ingest_attempt(
         self,
