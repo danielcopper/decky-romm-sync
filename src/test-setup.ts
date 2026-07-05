@@ -25,8 +25,6 @@ vi.stubGlobal("SteamClient", {
   },
   System: {
     GetSystemInfo: vi.fn().mockResolvedValue({ sHostname: "test" }),
-    RegisterForOnSuspendRequest: vi.fn(() => ({ unregister: vi.fn() })),
-    RegisterForOnResumeFromSuspend: vi.fn(() => ({ unregister: vi.fn() })),
   },
 });
 vi.stubGlobal("appStore", { GetAppOverviewByAppID: vi.fn(), allApps: [] });

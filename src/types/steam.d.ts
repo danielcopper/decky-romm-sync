@@ -34,19 +34,6 @@ declare var SteamClient: {
   };
   System: {
     GetSystemInfo(): Promise<{ sHostname: string; [key: string]: any }>;
-    // Legacy suspend/resume registrations — removed on current SteamOS (#1148).
-    // The session manager still tries these first (a build that exposes them keeps
-    // working) before falling back to the User.* successors below.
-    RegisterForOnSuspendRequest(callback: () => void): { unregister: () => void };
-    RegisterForOnResumeFromSuspend(callback: () => void): { unregister: () => void };
-  };
-  User: {
-    // Renamed suspend/resume hooks on current SteamOS (#1148), the successors to
-    // the removed System.RegisterForOn{Suspend,ResumeFromSuspend} pair. These are
-    // PROGRESS callbacks — they may fire multiple times per suspend/resume cycle,
-    // so the handlers registered against them must be idempotent.
-    RegisterForPrepareForSystemSuspendProgress(callback: () => void): { unregister: () => void };
-    RegisterForResumeSuspendedGamesProgress(callback: () => void): { unregister: () => void };
   };
 };
 
