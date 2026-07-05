@@ -443,6 +443,15 @@ column to `rom_playtime` ([#1148](https://github.com/danielcopper/decky-romm-syn
 `ALTER TABLE … ADD COLUMN`; NULL until the next `begin_session` stamps it, and a NULL marker on a pre-migration row
 makes `record_session` fall back to the full wall span (the pre-#1148 behavior, never a regression).
 
+`010_add_sibling_group_key_index.sql` (`user_version = 10`) adds a **non-unique** index `idx_roms_sibling_group_key` on
+`roms(sibling_group_key)`
+([ADR-0021](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0021-sibling-group-one-shortcut-binding-active-version.md),
+[#1296](https://github.com/danielcopper/decky-romm-sync/issues/1296)). Group-aware sync persists every fetched sibling
+(not just the bound representative), so two hot paths now read `roms` keyed by `sibling_group_key` — the per-unit group
+collapse and the Steam-collection group fallback — which the index turns into a range scan. Non-unique on purpose: a
+sibling group has many rows sharing one key, and a NULL key (a not-yet-backfilled row) is its own solo group, so no
+partial `WHERE` clause is needed. Pure DDL — a single `CREATE INDEX`.
+
 ## The runtime Unit of Work
 
 The schema is read and written at runtime through a **Unit of Work** (UoW) — the atomic transaction boundary one

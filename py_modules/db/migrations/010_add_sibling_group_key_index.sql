@@ -1,0 +1,26 @@
+-- =============================================================================
+-- 010_add_sibling_group_key_index.sql — index roms(sibling_group_key)
+-- Issue #1296 (group-aware sync: one shortcut per sibling group) / ADR-0021
+-- =============================================================================
+--
+-- Group-aware sync now persists EVERY fetched sibling (not just the bound
+-- representative) so the whole group is queryable. Today's sync readers do NOT
+-- key on this column: the per-unit group collapse and the collections
+-- group-fallback both read the ``roms`` table via iter_all() / iter_by_platform()
+-- and bucket by sibling_group_key in Python, so no ``WHERE sibling_group_key = ?``
+-- runs yet. This index is forward-looking — the download picker (#1297) and the
+-- installed-game version switch (#1298) resolve a single group by its key
+-- (``WHERE sibling_group_key = ?``), which grows O(rows) without an index once a
+-- library holds many siblings; the non-unique index makes that lookup a range
+-- scan. It ships in the same migration that starts persisting siblings so the
+-- column and its index are introduced together.
+--
+-- Non-unique on purpose: a sibling group has many rows (one per version), and a
+-- NULL key (a row not yet backfilled) is a solo/unmatched group — SQLite indexes
+-- NULLs, and the group readers treat NULL as "its own group", so no partial
+-- WHERE clause is needed.
+--
+-- Transaction-safe DDL only — the runner (adapters/sqlite_migrations.py) wraps
+-- BEGIN/COMMIT and stamps PRAGMA user_version = 10.
+-- -----------------------------------------------------------------------------
+CREATE INDEX idx_roms_sibling_group_key ON roms(sibling_group_key);

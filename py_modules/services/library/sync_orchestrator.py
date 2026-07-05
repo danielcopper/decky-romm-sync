@@ -24,7 +24,9 @@ from typing import TYPE_CHECKING, Any
 from domain.preview_delta import PreviewDelta
 from domain.shortcut_data import EmulatorInvocation, build_shortcuts_data
 from domain.sync_diff import (
+    BIND_ROM_ID_KEY,
     classify_roms,
+    collapse_sibling_groups,
     compute_collection_diff,
     compute_platform_collection_diff,
     select_stale_removals,
@@ -220,8 +222,18 @@ class SyncOrchestrator:
             registry, last_synced_platforms, last_synced_collections = await self._loop.run_in_executor(
                 None, self._read_preview_baseline, slug_to_name
             )
+            # Collapse to one entry per sibling group (ADR-0021) so the preview
+            # counts games, not individual dumps: a multi-version game becomes one
+            # shortcut and its unbound siblings stop reading as perpetual "new".
+            # The preview union is a COMPLETE view of every group (a group is
+            # per-platform, and every enabled platform is fully fetched), which the
+            # apply path's platform units match — so the preview counts can't
+            # diverge from what those units produce (the #1292 bug class). A
+            # collection apply unit is a partial view and only grandfathers, so it
+            # never adds a shortcut the preview didn't already count.
+            emitted = collapse_sibling_groups(shortcuts_data, registry, set(installed_paths), complete_group_view=True)
             new, changed, unchanged_ids, stale, disabled_count = classify_roms(
-                shortcuts_data,
+                emitted,
                 registry,
                 platform_name_set,
             )
@@ -258,7 +270,7 @@ class SyncOrchestrator:
                         last_synced_collections,
                     ),
                     "platform_collection_diff": compute_platform_collection_diff(
-                        shortcuts_data,
+                        emitted,
                         platform_rom_ids,
                         last_synced_platforms,
                         self._settings.get("collection_create_platform_groups", False),
@@ -648,11 +660,43 @@ class SyncOrchestrator:
                     "fs_name": rom.fs_name,
                     "platform_name": slug_to_name.get(rom.platform_slug, rom.platform_slug),
                     "platform_slug": rom.platform_slug,
+                    "sibling_group_key": rom.sibling_group_key,
                 }
             latest = uow.sync_runs.get_latest_completed()
             last_platforms = list(latest.platforms_completed or []) if latest is not None else []
             last_collections = list(latest.collections_completed or []) if latest is not None else []
         return registry, last_platforms, last_collections
+
+    def _read_apply_registry(self, unit: WorkUnit) -> dict[str, dict[str, Any]]:
+        """Read the bound-row registry the per-unit group collapse diffs against.
+
+        Platform units scope to their own platform's rows (a sibling group is
+        per-platform, so a vanished bound sibling shares the platform); collection
+        units read the whole registry since their ROMs span platforms. A platform
+        unit's fetch is therefore a COMPLETE view of every group it touches (the
+        collapse may rebind); a collection unit's fetch is a PARTIAL view — the
+        whole registry surfaces bindings for groups the unit only partly fetched,
+        so the collapse must not treat those as vanished (it passes
+        ``complete_group_view=False`` and only grandfathers). Only bound rows (a
+        live ``shortcut_app_id``) are returned — an unbound sibling is not a
+        shortcut the collapse can grandfather or rebind. The apply path did not
+        read the registry before group-aware sync (ADR-0021).
+        """
+        with self._uow_factory() as uow:
+            rows = (
+                uow.roms.iter_by_platform(unit.slug) if unit.type == "platform" and unit.slug else uow.roms.iter_all()
+            )
+            return {
+                str(rom.rom_id): {
+                    "app_id": rom.shortcut_app_id,
+                    "name": rom.name,
+                    "fs_name": rom.fs_name,
+                    "platform_slug": rom.platform_slug,
+                    "sibling_group_key": rom.sibling_group_key,
+                }
+                for rom in rows
+                if rom.shortcut_app_id is not None
+            }
 
     async def _sync_one_unit(
         self,
@@ -715,8 +759,8 @@ class SyncOrchestrator:
             self._logger.info(f"Per-unit apply skipped: {unit.name} ({len(unit_roms)} ROMs unchanged)")
             return len(unit_roms)
 
-        # Build shortcut data for this unit. Installed ROMs carry the full
-        # launch command; uninstalled ROMs get an empty placeholder until
+        # Build shortcut data for every fetched ROM. Installed ROMs carry the
+        # full launch command; uninstalled ROMs get an empty placeholder until
         # they are downloaded.
         installed_paths = await self._loop.run_in_executor(
             None, self._read_installed_paths, {rom["id"] for rom in unit_roms}
@@ -724,22 +768,42 @@ class SyncOrchestrator:
         core_overrides = await self._loop.run_in_executor(None, self._build_core_overrides, unit_roms)
         shortcuts_data = build_shortcuts_data(unit_roms, self._plugin_dir, installed_paths, core_overrides)
 
-        # Download artwork for this unit. Empty unit_roms is a defensive
-        # guard — an empty platform that survived planning still has no
-        # artwork to fetch.
-        if unit_roms:
+        # Collapse to one Steam shortcut per sibling group (ADR-0021): only the
+        # representative (plus any grandfathered bound siblings) is emitted; a
+        # rebinding group's entry is keyed to its vanished sibling so the
+        # frontend reuses that shortcut. A PLATFORM unit fetches a group's whole
+        # membership (a group is per-platform), so it is a complete view and may
+        # rebind; a COLLECTION unit is a partial view (it fetches only its
+        # members, not a group's bound sibling on another/skipped platform) — the
+        # collapse then only grandfathers, never rebinds a live binding onto an
+        # uninstalled sibling (#1296).
+        registry = await self._loop.run_in_executor(None, self._read_apply_registry, unit)
+        emitted = collapse_sibling_groups(
+            shortcuts_data, registry, set(installed_paths), complete_group_view=(unit.type == "platform")
+        )
+
+        # Download artwork only for the ROMs that actually get a shortcut (the
+        # representatives + grandfathered siblings), not every dump — no eager
+        # covers for versions with no shortcut. A rebind entry pulls its cover
+        # from the representative it binds (``bind_rom_id``), whose raw dict is
+        # the one present in unit_roms.
+        if emitted:
+            artwork_ids = {int(e.get(BIND_ROM_ID_KEY, e["rom_id"])) for e in emitted}
+            artwork_roms = [rom for rom in unit_roms if rom["id"] in artwork_ids]
             cover_paths = await self._download_artwork(
-                unit_roms, progress_step=unit_index + 1, progress_total_steps=total_units
+                artwork_roms, progress_step=unit_index + 1, progress_total_steps=total_units
             )
-            for sd in shortcuts_data:
-                sd["cover_path"] = cover_paths.get(sd["rom_id"], "")
+            for e in emitted:
+                e["cover_path"] = cover_paths.get(int(e.get(BIND_ROM_ID_KEY, e["rom_id"])), "")
 
         if box.is_cancelling():
             return 0
 
-        # Stage pending_sync for this unit so the reporter's commit step
-        # can finalise cover paths + build registry entries against it.
-        box.pending_sync = {sd["rom_id"]: sd for sd in shortcuts_data}
+        # Stage the emitted representatives for cover finalise + binding, and the
+        # full built set for the ack-independent identity + version persist (the
+        # reporter upserts a row for every sibling, binds only representatives).
+        box.pending_sync = {e["rom_id"]: e for e in emitted}
+        box.pending_all_roms = {sd["rom_id"]: sd for sd in shortcuts_data}
 
         # Emit per-unit apply event + wait for the frontend callback.
         box.unit_complete_event = asyncio.Event()
@@ -762,7 +826,7 @@ class SyncOrchestrator:
                 "unit_name": unit.name,
                 "unit_index": unit_index,
                 "total_units": total_units,
-                "shortcuts": shortcuts_data,
+                "shortcuts": emitted,
             },
         )
 
@@ -776,30 +840,32 @@ class SyncOrchestrator:
                 # Drop the pending state, null the event, and clear the unit
                 # identity so a stray late ack can't commit a cancelled unit.
                 box.pending_sync = {}
+                box.pending_all_roms = {}
                 box.unit_complete_event = None
                 box.active_unit_id = None
             else:
                 # Heartbeat timeout: the frontend has already created this
                 # unit's Steam shortcuts and will still fire its late
                 # ``report_unit_results`` ack. Keep ``pending_sync`` +
-                # ``unit_complete_event`` and stash the unit's ROMs so the
-                # late ack commits the delivered bindings instead of leaving
-                # orphan shortcuts (#1052). Flag the unit abandoned so the
-                # reporter drives that commit itself.
+                # ``pending_all_roms`` + ``unit_complete_event`` and stash the
+                # unit's ROMs so the late ack commits the delivered bindings
+                # instead of leaving orphan shortcuts (#1052). Flag the unit
+                # abandoned so the reporter drives that commit itself.
                 box.unit_abandoned = True
                 box.pending_unit_roms = unit_roms
                 box.request_cancel()
             return 0
 
-        # Per-unit commit: the reporter upserts each acked ROM into the
-        # ``roms`` aggregate and stamps its cached ``rom_metadata`` in one
-        # write UoW (Rom row first, metadata second — FK-safe), so a ROM
-        # and its metadata always land atomically. ``acked_roms`` is the
-        # live RomM fetch for the acked ROMs — the source of ``metadatum``.
-        acked_roms = [r for r in unit_roms if str(r["id"]) in applied]
-        await self._reporter.get().commit_unit_results(applied, acked_roms)
+        # Per-unit commit: the reporter upserts EVERY fetched ROM into the
+        # ``roms`` aggregate (identity + version metadata, unbound for non-
+        # representatives) and binds only the acked representatives, stamping
+        # each ROM's cached ``rom_metadata`` in the same write UoW (Rom row
+        # first, metadata second — FK-safe). ``unit_roms`` is the live RomM
+        # fetch for the whole unit — the source of ``metadatum``.
+        await self._reporter.get().commit_unit_results(applied, unit_roms)
 
         box.pending_sync = {}
+        box.pending_all_roms = {}
         box.unit_complete_event = None
         box.active_unit_id = None
         return len(applied)

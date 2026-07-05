@@ -109,6 +109,26 @@ Three things spell similarly; distinct meanings:
 Convention: always write `Rom` (PascalCase) when referring to the aggregate. Write "ROM file" when referring to the
 on-disk artifact.
 
+### Version (RomM: sibling) vs Region / Languages
+
+A **version** is one concrete released dump of a game — its own RomM `rom_id`, its own file, its own save universe
+(saves never carry across versions; matches RomM's per-ROM saves and RetroArch's per-content save naming). All versions
+of one game form a **sibling group** (RomM's `sibling_roms`: same matched metadata id, per platform; unmatched ROMs are
+solo groups). Key derivation: `domain/sibling_group.py`, persisted as `roms.sibling_group_key`
+([ADR-0021](docs/adr/0021-sibling-group-one-shortcut-binding-active-version.md)).
+
+- **Active version** — the sibling currently bound to the group's Steam shortcut (`roms.shortcut_app_id`); the one that
+  installs, launches, and syncs saves. Binding = active version (ADR-0021).
+- **Default version** — RomM's per-user `is_main_sibling` ("SET DEFAULT" in RomM's Switch-version UI). Optional;
+  respected read-only as a preselect, never written back.
+- **Switch version** — the user-facing control (named after RomM's) that changes the active version within a group;
+  rendered only when the group has more than one version (#1297/#1298).
+
+**Region** and **Languages** are **attributes of a single version**, parsed from its filename tags: `(Spain)` → where
+that release shipped; `(En,Fr,De,Es)` → the languages contained in that one dump. A multi-language version is still one
+version. UI rule: Region/Languages render on the game-detail page for the active version only — they are never a version
+list and never the switch mechanism.
+
 ### file_path vs rom_dir (RomInstall paths)
 
 The two path fields on `RomInstall` (`domain/rom_install.py`) answer different questions and must not be conflated:

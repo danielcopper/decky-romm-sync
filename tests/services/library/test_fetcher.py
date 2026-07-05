@@ -302,6 +302,87 @@ class TestTryUnitIncrementalSkip:
         assert result is None
 
 
+def _seed_completed_run(uow):
+    """A completed SyncRun so the skip gate has a ``last_sync`` to diff against."""
+    from domain.sync_run import SyncRun
+
+    run = SyncRun.start(id="r1", at="2025-01-01T00:00:00", platforms_planned=1, roms_planned=3)
+    run.complete("2025-01-01T00:00:00", ["N64"], [])
+    with uow:
+        uow.sync_runs.save(run)
+
+
+def _seed_persisted_rom(uow, rom_id, *, app_id, group_key, platform_slug="n64"):
+    """Persist one ``roms`` row (bound when app_id is set, else an unbound sibling)."""
+    from domain.rom import Rom
+
+    with uow:
+        uow.roms.save(
+            Rom(
+                rom_id=rom_id,
+                platform_slug=platform_slug,
+                name=f"G{rom_id}",
+                fs_name=f"g{rom_id}.z64",
+                shortcut_app_id=app_id,
+                last_synced_at="2025-01-01T00:00:00",
+                sibling_group_key=group_key,
+            )
+        )
+
+
+class TestIncrementalSkipGroupParity:
+    """Skip-gate parity with sibling groups (#1296 / ADR-0021): the platform
+    rom_count is compared against ALL persisted rows, not just the bound reps."""
+
+    @pytest.mark.asyncio
+    async def test_skips_when_all_persisted_rows_match_server_count(self, plugin, fake_romm_api):
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        _seed_completed_run(uow)
+        # A 3-sibling group: one bound representative + two unbound siblings.
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=None, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:100:1")
+        # No server rows updated after last_sync → delta total 0. RomM's rom_count
+        # (all siblings) matches the 3 persisted rows → skip. Under the old
+        # bound-only count this platform full-fetched forever.
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)
+
+        result = await plugin._sync_service._fetcher._try_unit_incremental_skip(unit)
+
+        assert result is not None
+        # The reconstructed unit_roms are the bound representatives (the shortcuts).
+        assert {r["id"] for r in result} == {10}
+
+    @pytest.mark.asyncio
+    async def test_no_skip_when_server_count_differs_from_persisted(self, plugin, fake_romm_api):
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        _seed_completed_run(uow)
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=None, group_key="igdb:100:1")
+        # Server reports 3 ROMs but only 2 are persisted → a new sibling appeared.
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)
+
+        result = await plugin._sync_service._fetcher._try_unit_incremental_skip(unit)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_null_group_key_forces_full_fetch_backfill(self, plugin, fake_romm_api):
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        _seed_completed_run(uow)
+        # A legacy bound row whose sibling_group_key was never captured — even
+        # though the count matches, the backfill forces a full fetch.
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key=None)
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+
+        result = await plugin._sync_service._fetcher._try_unit_incremental_skip(unit)
+
+        assert result is None
+
+
 class TestFetchPlatformUnit:
     """Tests for fetch_platform_unit() — wrong-type guard, error propagation, pagination."""
 

@@ -81,6 +81,115 @@ describe("syncManager — existing-shortcut update uses confirm-poll", () => {
   });
 });
 
+describe("syncManager — group-aware emit: one Steam shortcut per game (ADR-0021)", () => {
+  const EXE = "/home/deck/homebrew/plugins/decky-romm-sync/bin/rom-launcher";
+
+  beforeEach(() => {
+    setLaunchOptionsConfirmed.mockClear();
+    setLaunchOptionsConfirmed.mockResolvedValue(true);
+    addShortcut.mockReset();
+    getExistingRomMShortcuts.mockReset();
+    vi.mocked(backend.reportUnitResults).mockClear();
+    resetSyncDelta();
+    resetSyncCancel();
+    // The global `SteamClient` stub is torn down by test-setup's
+    // `vi.unstubAllGlobals()` after the file's first test, so the update path's
+    // bare `SteamClient.Apps.Set*` calls would throw here — re-stub it.
+    vi.stubGlobal("SteamClient", {
+      Apps: {
+        AddShortcut: vi.fn(),
+        SetShortcutName: vi.fn(),
+        SetShortcutExe: vi.fn(),
+        SetShortcutStartDir: vi.fn(),
+        SetAppLaunchOptions: vi.fn(),
+        SetCustomArtworkForApp: vi.fn().mockResolvedValue(undefined),
+        RemoveShortcut: vi.fn(),
+      },
+    });
+  });
+
+  function groupItem(
+    overrides: Partial<SyncApplyUnitData["shortcuts"][number]>,
+  ): SyncApplyUnitData["shortcuts"][number] {
+    return {
+      rom_id: 0,
+      name: "Game",
+      exe: EXE,
+      start_dir: "/home/deck",
+      launch_options: "",
+      platform_name: "N64",
+      cover_path: "",
+      ...overrides,
+    };
+  }
+
+  it("reuses the existing shortcut for a rebind entry and fetches the representative's artwork", async () => {
+    // The backend collapsed a rebinding group to ONE entry keyed to the vanished
+    // bound sibling's rom_id (already in Steam as appId 5000), naming the
+    // representative in bind_rom_id. The frontend reuses that shortcut.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>([[1, 5000]]));
+    vi.mocked(backend.getArtworkBase64).mockClear();
+    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "ZGF0YQ==" });
+    const jpCmd = 'flatpak run net.retrodeck.retrodeck "/games/zelda_jp.z64"';
+    const data: SyncApplyUnitData = {
+      run_id: "run-rebind",
+      unit_type: "platform",
+      unit_id: 1,
+      unit_name: "N64",
+      unit_index: 0,
+      total_units: 1,
+      shortcuts: [groupItem({ rom_id: 1, name: "Zelda (USA)", launch_options: jpCmd, bind_rom_id: 2 })],
+    };
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", data);
+      await flush(150);
+    });
+
+    // Reused via the existing-shortcut update path — launch options re-baked to
+    // the representative's path via the confirm-poll; never a second AddShortcut.
+    expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(5000, jpCmd);
+    expect(addShortcut).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "1": 5000 }, "run-rebind", 1);
+    // Artwork follows the BINDING target (representative rom 2), NOT the vanished
+    // sibling (rom 1) the shortcut is keyed to — covers can be edition-specific.
+    expect(vi.mocked(backend.getArtworkBase64)).toHaveBeenCalledWith(2);
+    expect(vi.mocked(backend.getArtworkBase64)).not.toHaveBeenCalledWith(1);
+    // And the fetched art was applied to the reused shortcut's appId.
+    expect(SteamClient.Apps.SetCustomArtworkForApp).toHaveBeenCalledWith(5000, "ZGF0YQ==", "png", 0);
+  });
+
+  it("creates exactly one shortcut per group — a collapsed multi-version game never fans out", async () => {
+    // The backend already collapsed each sibling group to ONE entry, so a unit
+    // holding two games (both new) yields exactly two AddShortcut calls — never
+    // one per underlying dump.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    let next = 6000;
+    addShortcut.mockImplementation(async () => next++);
+    const data: SyncApplyUnitData = {
+      run_id: "run-two-groups",
+      unit_type: "platform",
+      unit_id: 1,
+      unit_name: "N64",
+      unit_index: 0,
+      total_units: 1,
+      shortcuts: [groupItem({ rom_id: 10, name: "Zelda" }), groupItem({ rom_id: 20, name: "Mario" })],
+    };
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", data);
+      await flush(250);
+    });
+
+    // Two groups → exactly two shortcuts, one per game.
+    expect(addShortcut).toHaveBeenCalledTimes(2);
+    expect(addShortcut.mock.calls.map((c) => c[0].rom_id).sort((a, b) => a - b)).toEqual([10, 20]);
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "10": 6000, "20": 6001 }, "run-two-groups", 1);
+  });
+});
+
 describe("syncManager — does not ack a cancelled unit (#1041)", () => {
   beforeEach(() => {
     setLaunchOptionsConfirmed.mockClear();

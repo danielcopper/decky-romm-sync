@@ -7,11 +7,14 @@ import pytest
 from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
 
 from domain.rom import Rom
+from domain.sync_diff import BIND_ROM_ID_KEY
 
 # conftest.py patches decky before this import
 
 
-def _seed_rom(uow, rom_id, *, app_id, platform_slug, name="Game", cover_path=None, sgdb_id=None, igdb_id=None):
+def _seed_rom(
+    uow, rom_id, *, app_id, platform_slug, name="Game", cover_path=None, sgdb_id=None, igdb_id=None, group_key=None
+):
     """Insert a bound (or unbound when app_id is None) ROM into the shared fake UoW."""
     rom = Rom(
         rom_id=rom_id,
@@ -23,6 +26,7 @@ def _seed_rom(uow, rom_id, *, app_id, platform_slug, name="Game", cover_path=Non
         cover_path=cover_path,
         sgdb_id=sgdb_id,
         igdb_id=igdb_id,
+        sibling_group_key=group_key,
     )
     with uow:
         uow.roms.save(rom)
@@ -32,6 +36,20 @@ def _seed_platform_names(uow, names: dict[str, str]) -> None:
     """Seed the offline ``platform_slug → display_name`` cache."""
     with uow:
         uow.kv_config.set("platform_names", json.dumps(names))
+
+
+def _stage(box, rom_id, entry, *, emitted=True):
+    """Stage a fetched ROM's built entry for the group-aware per-unit commit.
+
+    ``pending_all_roms`` is the identity + version source for EVERY fetched ROM;
+    ``pending_sync`` holds the emitted representatives (cover-path + bind_rom_id
+    marker). A bound representative appears in both; a non-representative sibling
+    is staged only in ``pending_all_roms`` (``emitted=False``) so the commit
+    persists it unbound.
+    """
+    box.pending_all_roms[rom_id] = entry
+    if emitted:
+        box.pending_sync[rom_id] = entry
 
 
 class TestGetSyncStats:
@@ -260,18 +278,22 @@ class TestCommitUnitResults:
     def test_commit_upserts_rom_from_pending(self, plugin):
         """A unit's acked ROM is upserted into ``uow.roms`` from its pending entry."""
         uow = plugin._uow
-        plugin._sync_service._box.pending_sync[42] = {
-            "name": "Game",
-            "fs_name": "game.z64",
-            "platform_name": "Game Boy",
-            "platform_slug": "gb",
-            "cover_path": "",
-            "igdb_id": 555,
-            "sgdb_id": 999,
-            "ra_id": 777,
-        }
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {
+                "name": "Game",
+                "fs_name": "game.z64",
+                "platform_name": "Game Boy",
+                "platform_slug": "gb",
+                "cover_path": "",
+                "igdb_id": 555,
+                "sgdb_id": 999,
+                "ra_id": 777,
+            },
+        )
 
-        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [])
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}])
 
         assert uow.committed is True
         with uow:
@@ -289,20 +311,24 @@ class TestCommitUnitResults:
         """The sibling-group key + version dimensions ride the pending entry onto
         the upserted ``Rom`` (#1295)."""
         uow = plugin._uow
-        plugin._sync_service._box.pending_sync[42] = {
-            "name": "Game",
-            "fs_name": "game.z64",
-            "platform_slug": "gb",
-            "cover_path": "",
-            "sibling_group_key": "igdb:3404:57",
-            "regions": ["USA", "Europe"],
-            "languages": ["En"],
-            "revision": "1",
-            "tags": ["Demo"],
-            "is_main_sibling": True,
-        }
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {
+                "name": "Game",
+                "fs_name": "game.z64",
+                "platform_slug": "gb",
+                "cover_path": "",
+                "sibling_group_key": "igdb:3404:57",
+                "regions": ["USA", "Europe"],
+                "languages": ["En"],
+                "revision": "1",
+                "tags": ["Demo"],
+                "is_main_sibling": True,
+            },
+        )
 
-        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [])
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}])
 
         with uow:
             rom = uow.roms.get(42)
@@ -318,14 +344,18 @@ class TestCommitUnitResults:
         """A pending entry with no version fields upserts a Rom carrying the
         aggregate defaults — never raises on the missing keys."""
         uow = plugin._uow
-        plugin._sync_service._box.pending_sync[42] = {
-            "name": "Game",
-            "fs_name": "game.z64",
-            "platform_slug": "gb",
-            "cover_path": "",
-        }
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {
+                "name": "Game",
+                "fs_name": "game.z64",
+                "platform_slug": "gb",
+                "cover_path": "",
+            },
+        )
 
-        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [])
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}])
 
         with uow:
             rom = uow.roms.get(42)
@@ -338,14 +368,18 @@ class TestCommitUnitResults:
     def test_commit_stamps_cover_path_when_present(self, plugin):
         """A finalized cover path is recorded on the upserted ROM row."""
         uow = plugin._uow
-        plugin._sync_service._box.pending_sync[42] = {
-            "name": "Game",
-            "fs_name": "game.z64",
-            "platform_slug": "gb",
-            "cover_path": "/covers/staging.png",
-        }
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {
+                "name": "Game",
+                "fs_name": "game.z64",
+                "platform_slug": "gb",
+                "cover_path": "/covers/staging.png",
+            },
+        )
 
-        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [])
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}])
 
         with uow:
             rom = uow.roms.get(42)
@@ -355,20 +389,28 @@ class TestCommitUnitResults:
     def test_commit_skips_invalid_rom_keeps_rest(self, plugin):
         """An invariant ValueError (missing platform_slug) skips one ROM; the rest still commit."""
         uow = plugin._uow
-        plugin._sync_service._box.pending_sync[10] = {
-            "name": "Bad",
-            "fs_name": "bad.z64",
-            "platform_slug": "",  # invalid — Rom.synced raises ValueError
-            "cover_path": "",
-        }
-        plugin._sync_service._box.pending_sync[20] = {
-            "name": "Good",
-            "fs_name": "good.z64",
-            "platform_slug": "gb",
-            "cover_path": "",
-        }
+        _stage(
+            plugin._sync_service._box,
+            10,
+            {
+                "name": "Bad",
+                "fs_name": "bad.z64",
+                "platform_slug": "",  # invalid — Rom.synced raises ValueError
+                "cover_path": "",
+            },
+        )
+        _stage(
+            plugin._sync_service._box,
+            20,
+            {
+                "name": "Good",
+                "fs_name": "good.z64",
+                "platform_slug": "gb",
+                "cover_path": "",
+            },
+        )
 
-        plugin._sync_service._reporter._commit_unit_results_io({"10": 1010, "20": 1020}, [])
+        plugin._sync_service._reporter._commit_unit_results_io({"10": 1010, "20": 1020}, [{"id": 10}, {"id": 20}])
 
         assert uow.committed is True
         with uow:
@@ -397,19 +439,23 @@ class TestCommitUnitResults:
             existing.assign_ra_id(7777)
             uow.roms.save(existing)
 
-        # The re-sync's pending entry (live RomM fetch) lacks sgdb_id / ra_id /
+        # The re-sync's built entry (live RomM fetch) lacks sgdb_id / ra_id /
         # cover_path entirely.
-        plugin._sync_service._box.pending_sync[42] = {
-            "name": "Game",
-            "fs_name": "game.z64",
-            "platform_slug": "gb",
-            "cover_path": "",
-            "igdb_id": 555,
-            "sgdb_id": None,
-            "ra_id": None,
-        }
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {
+                "name": "Game",
+                "fs_name": "game.z64",
+                "platform_slug": "gb",
+                "cover_path": "",
+                "igdb_id": 555,
+                "sgdb_id": None,
+                "ra_id": None,
+            },
+        )
 
-        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [])
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}])
 
         with uow:
             rom = uow.roms.get(42)
@@ -424,18 +470,138 @@ class TestCommitUnitResults:
         uow = plugin._uow
         _seed_rom(uow, 42, app_id=100001, platform_slug="gb", name="Game", sgdb_id=4242)
 
-        plugin._sync_service._box.pending_sync[42] = {
-            "name": "Game",
-            "fs_name": "game.z64",
-            "platform_slug": "gb",
-            "cover_path": "",
-            "sgdb_id": 9999,
-        }
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {
+                "name": "Game",
+                "fs_name": "game.z64",
+                "platform_slug": "gb",
+                "cover_path": "",
+                "sgdb_id": 9999,
+            },
+        )
 
-        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [])
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}])
 
         with uow:
             assert uow.roms.get(42).sgdb_id == 9999
+
+
+class TestGroupAwareCommit:
+    """Group-aware per-unit commit (ADR-0021): persist every fetched sibling,
+    bind only representatives, and move a binding on a rebind."""
+
+    def test_persists_non_representative_sibling_unbound(self, plugin):
+        """A fetched sibling that is not the emitted representative lands a ``roms``
+        row for its identity + version, but carries no shortcut binding."""
+        uow = plugin._uow
+        box = plugin._sync_service._box
+        rep = {
+            "name": "Game (USA)",
+            "fs_name": "usa.z64",
+            "platform_slug": "n64",
+            "cover_path": "",
+            "sibling_group_key": "g",
+        }
+        sibling = {
+            "name": "Game (JP)",
+            "fs_name": "jp.z64",
+            "platform_slug": "n64",
+            "cover_path": "",
+            "sibling_group_key": "g",
+        }
+        box.pending_sync = {10: rep}  # only rom 10 is emitted
+        box.pending_all_roms = {10: rep, 11: sibling}
+
+        plugin._sync_service._reporter._commit_unit_results_io({"10": 9001}, [{"id": 10}, {"id": 11}])
+
+        with uow:
+            rep_row = uow.roms.get(10)
+            sibling_row = uow.roms.get(11)
+        assert rep_row is not None and rep_row.shortcut_app_id == 9001
+        assert sibling_row is not None
+        assert sibling_row.shortcut_app_id is None
+        assert sibling_row.name == "Game (JP)"
+        assert sibling_row.sibling_group_key == "g"
+
+    def test_non_acked_bound_sibling_keeps_its_existing_binding(self, plugin):
+        """A bound sibling NOT acked this cycle keeps its existing binding — the
+        `_persist_synced_rom` fallback (`existing.shortcut_app_id`) is load-bearing.
+
+        Regression guard for the single most dangerous line in #1296: a
+        grandfathered group has rom 11 already bound (app 7777) while rom 10 is the
+        emitted representative bound this cycle (app 9001). Only rom 10 is acked, so
+        the commit must PRESERVE rom 11's 7777 from the existing row — the broken
+        `binding.get(rom_id)` variant (no existing fallback) would silently unbind
+        it, orphaning a live shortcut. ``test_persists_non_representative_sibling_unbound``
+        seeds no prior row for rom 11, so it passes with or without the fallback;
+        this one seeds the prior binding and only passes with it.
+        """
+        uow = plugin._uow
+        # rom 11 already carries a shortcut (grandfathered duplicate of group "g").
+        _seed_rom(uow, 11, app_id=7777, platform_slug="n64", name="Game (JP)", group_key="g")
+        box = plugin._sync_service._box
+        rep = {
+            "name": "Game (USA)",
+            "fs_name": "usa.z64",
+            "platform_slug": "n64",
+            "cover_path": "",
+            "sibling_group_key": "g",
+        }
+        sibling = {
+            "name": "Game (JP)",
+            "fs_name": "jp.z64",
+            "platform_slug": "n64",
+            "cover_path": "",
+            "sibling_group_key": "g",
+        }
+        box.pending_sync = {10: rep}  # only rom 10 is emitted / acked this cycle
+        box.pending_all_roms = {10: rep, 11: sibling}
+
+        plugin._sync_service._reporter._commit_unit_results_io({"10": 9001}, [{"id": 10}, {"id": 11}])
+
+        with uow:
+            rep_row = uow.roms.get(10)
+            sibling_row = uow.roms.get(11)
+        # rom 10 binds the acked appId; rom 11 KEEPS its pre-existing binding.
+        assert rep_row is not None and rep_row.shortcut_app_id == 9001
+        assert sibling_row is not None and sibling_row.shortcut_app_id == 7777
+
+    def test_rebind_moves_binding_to_representative(self, plugin):
+        """A rebind entry (keyed to the vanished bound sibling, carrying
+        ``bind_rom_id``) moves the DB binding onto the surviving representative:
+        the appId survives, the old sibling is unbound (ADR-0021 §2)."""
+        uow = plugin._uow
+        _seed_rom(uow, 1, app_id=5000, platform_slug="n64", name="Game (USA)", group_key="g")
+        box = plugin._sync_service._box
+        # The emitted rebind entry is keyed to the vanished bound sibling (rom 1)
+        # and names the representative (rom 2) in bind_rom_id.
+        box.pending_sync = {1: {"name": "Game (USA)", "cover_path": "", BIND_ROM_ID_KEY: 2}}
+        box.pending_all_roms = {
+            2: {
+                "name": "Game (JP)",
+                "fs_name": "jp.z64",
+                "platform_slug": "n64",
+                "cover_path": "",
+                "sibling_group_key": "g",
+            },
+        }
+
+        # The frontend reused the old shortcut's appId (5000) under rom_id 1.
+        plugin._sync_service._reporter._commit_unit_results_io({"1": 5000}, [{"id": 2}])
+
+        with uow:
+            rep = uow.roms.get(2)
+            old = uow.roms.get(1)
+        # The binding moved onto the representative, which keeps its own real name.
+        assert rep is not None
+        assert rep.shortcut_app_id == 5000
+        assert rep.name == "Game (JP)"
+        assert rep.sibling_group_key == "g"
+        # The vanished sibling is unbound by the collision-safe save (row survives).
+        assert old is not None
+        assert old.shortcut_app_id is None
 
 
 class TestCommitUnitMetadataStamp:
@@ -451,12 +617,11 @@ class TestCommitUnitMetadataStamp:
         a ``rom_metadata`` row in the same commit, with fields mapped + ms→s +
         steam_categories computed."""
         uow = plugin._uow
-        plugin._sync_service._box.pending_sync[42] = {
-            "name": "Game",
-            "fs_name": "game.z64",
-            "platform_slug": "gb",
-            "cover_path": "",
-        }
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {"name": "Game", "fs_name": "game.z64", "platform_slug": "gb", "cover_path": ""},
+        )
         acked = [
             {
                 "id": 42,
@@ -501,12 +666,11 @@ class TestCommitUnitMetadataStamp:
         import logging
 
         uow = plugin._uow
-        plugin._sync_service._box.pending_sync[42] = {
-            "name": "Game",
-            "fs_name": "game.z64",
-            "platform_slug": "gb",
-            "cover_path": "",
-        }
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {"name": "Game", "fs_name": "game.z64", "platform_slug": "gb", "cover_path": ""},
+        )
         # first_release_date is non-numeric → int(...) raises ValueError in the
         # mapping, caught per-rom.
         acked = [{"id": 42, "summary": "Bad", "metadatum": {"first_release_date": "not-a-number"}}]
@@ -525,12 +689,11 @@ class TestCommitUnitMetadataStamp:
         """An acked ROM without a ``metadatum`` field commits the Rom but no
         ``rom_metadata`` row (defensive guard against thin-ROM cache erasure)."""
         uow = plugin._uow
-        plugin._sync_service._box.pending_sync[42] = {
-            "name": "Game",
-            "fs_name": "game.z64",
-            "platform_slug": "gb",
-            "cover_path": "",
-        }
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {"name": "Game", "fs_name": "game.z64", "platform_slug": "gb", "cover_path": ""},
+        )
         acked = [{"id": 42, "name": "Thin"}]  # no metadatum
 
         plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, acked)
@@ -543,18 +706,16 @@ class TestCommitUnitMetadataStamp:
     def test_falsy_metadatum_writes_no_metadata_row(self, plugin):
         """``metadatum: None`` and ``metadatum: {}`` both skip the metadata stamp."""
         uow = plugin._uow
-        plugin._sync_service._box.pending_sync[10] = {
-            "name": "A",
-            "fs_name": "a.z64",
-            "platform_slug": "gb",
-            "cover_path": "",
-        }
-        plugin._sync_service._box.pending_sync[20] = {
-            "name": "B",
-            "fs_name": "b.z64",
-            "platform_slug": "gb",
-            "cover_path": "",
-        }
+        _stage(
+            plugin._sync_service._box,
+            10,
+            {"name": "A", "fs_name": "a.z64", "platform_slug": "gb", "cover_path": ""},
+        )
+        _stage(
+            plugin._sync_service._box,
+            20,
+            {"name": "B", "fs_name": "b.z64", "platform_slug": "gb", "cover_path": ""},
+        )
         acked = [{"id": 10, "metadatum": None}, {"id": 20, "metadatum": {}}]
 
         plugin._sync_service._reporter._commit_unit_results_io({"10": 1010, "20": 1020}, acked)
@@ -661,7 +822,51 @@ class TestFinalizePerUnitRun:
 
         collections_events = [c for c in decky.emit.call_args_list if c[0][0] == "sync_collections"]
         payload = collections_events[0][0][1]
-        # rom 2 is unbound → excluded; only rom 1's app_id appears.
+        # rom 2 is unbound AND has no sibling group → excluded; only rom 1 appears.
+        assert payload["romm_collection_app_ids"] == {"Faves": [1001]}
+
+    @pytest.mark.asyncio
+    async def test_romm_collection_group_fallback_maps_unbound_sibling(self, plugin):
+        """A collection membership on an UNBOUND sibling maps to its group's bound
+        sibling's appId (ADR-0021) — collecting any version collects the game."""
+        import decky
+
+        decky.emit.reset_mock()
+        uow = plugin._uow
+        # A bound representative + an unbound sibling in the SAME group.
+        _seed_rom(uow, 1, app_id=1001, platform_slug="n64", name="Game (USA)", group_key="g")
+        _seed_rom(uow, 2, app_id=None, platform_slug="n64", name="Game (JP)", group_key="g")
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={"Faves": [2]},  # the UNBOUND sibling is collected
+            pending_platform_rom_ids={1},
+            total_games=1,
+            platform_names={"n64": "Nintendo 64"},
+        )
+
+        payload = next(c for c in decky.emit.call_args_list if c[0][0] == "sync_collections")[0][1]
+        # rom 2 is unbound, but its group's bound sibling (rom 1 → 1001) stands in.
+        assert payload["romm_collection_app_ids"] == {"Faves": [1001]}
+
+    @pytest.mark.asyncio
+    async def test_romm_collection_dedups_group_members_onto_one_shortcut(self, plugin):
+        """A collection holding several siblings of one group yields the group's
+        single shortcut appId once, not duplicated."""
+        import decky
+
+        decky.emit.reset_mock()
+        uow = plugin._uow
+        _seed_rom(uow, 1, app_id=1001, platform_slug="n64", name="Game (USA)", group_key="g")
+        _seed_rom(uow, 2, app_id=None, platform_slug="n64", name="Game (JP)", group_key="g")
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={"Faves": [1, 2]},  # BOTH siblings collected
+            pending_platform_rom_ids={1},
+            total_games=1,
+            platform_names={"n64": "Nintendo 64"},
+        )
+
+        payload = next(c for c in decky.emit.call_args_list if c[0][0] == "sync_collections")[0][1]
         assert payload["romm_collection_app_ids"] == {"Faves": [1001]}
 
     @pytest.mark.asyncio

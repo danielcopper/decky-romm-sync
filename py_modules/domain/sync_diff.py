@@ -14,6 +14,14 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
+from domain.sibling_resolution import resolve_group_representative
+
+# Marker key a rebind entry carries so the per-unit commit moves the DB binding
+# from the vanished bound sibling (the entry's ``rom_id``, kept so the frontend
+# reuses its existing shortcut) onto the surviving representative. Absent on
+# normal / grandfathered entries. See :func:`collapse_sibling_groups`.
+BIND_ROM_ID_KEY = "bind_rom_id"
+
 
 class ClassificationResult(NamedTuple):
     new: list[dict[str, Any]]
@@ -77,6 +85,130 @@ def classify_roms(
         1 for rid in stale if registry.get(str(rid), {}).get("platform_name") not in fetched_platform_names
     )
     return ClassificationResult(new, changed, unchanged_ids, stale, disabled_count)
+
+
+def collapse_sibling_groups(
+    shortcuts_data: list[dict[str, Any]],
+    registry: dict[str, dict[str, Any]],
+    installed_rom_ids: set[int],
+    *,
+    complete_group_view: bool,
+) -> list[dict[str, Any]]:
+    """Collapse per-ROM shortcut entries to one Steam shortcut per sibling group.
+
+    A sibling group (same ``sibling_group_key``) is one game = at most one NEW
+    Steam shortcut (ADR-0021 §2). *shortcuts_data* is the built entry for every
+    fetched ROM; *registry* is the bound ``roms`` rows keyed by ``str(rom_id)``
+    (each carrying ``app_id``, ``name``, ``fs_name``, ``platform_slug`` and
+    ``sibling_group_key``); *installed_rom_ids* are the ROMs currently on disk.
+
+    *complete_group_view* asserts whether *shortcuts_data* holds the WHOLE
+    membership of every group a bound row belongs to — the load-bearing safety
+    input. A sibling group is per-platform, so a **platform** unit fetch and the
+    whole-library **preview** union are complete views; a **collection** unit is
+    a PARTIAL view (it spans platforms and may fetch just one unbound sibling of
+    a group whose other members — including the bound one — were never in this
+    fetch). Only a complete view may conclude "bound sibling absent from members
+    ⇒ vanished from the server"; inferring that from a partial view would rebind
+    a live installed game's shortcut onto an uninstalled sibling (#1296 CRITICAL).
+
+    Returns the subset of entries to actually emit as shortcuts, one lane per
+    group:
+
+    * **Grandfathered** — the group has ≥1 bound sibling still fetched: every
+      surviving bound sibling keeps its own entry (ADR-0021 §5). No new shortcut
+      is minted; an unbound fetched sibling becomes a tracked row with no
+      shortcut, and (complete view only) a vanished bound sibling is torn down by
+      the stale path.
+    * **Rebind** (complete view only) — every bound sibling vanished from the
+      server but the group still has fetched members: one synthetic entry (see
+      :func:`_rebind_entry`) keeps the vanished sibling's shortcut and moves its
+      binding to the surviving representative.
+    * **New** — no binding anywhere in the group: emit the single representative
+      chosen by :func:`resolve_group_representative`.
+    * **Grandfathered untouched** (partial view only) — the group holds a binding
+      that is not in THIS fetch: emit nothing. Absence from a partial view is not
+      absence from the server, so the binding is left alone (no rebind, no second
+      shortcut). The group's real representative rides its own platform unit in
+      the same run; the unbound fetched members still persist via
+      ``pending_all_roms`` and the reporter's collection group-fallback places the
+      group's shortcut in the Steam collection.
+
+    Bound rows are grouped by their FETCHED sibling key when the row is in this
+    fetch (so a legacy row whose stored key is still NULL is placed in its real
+    group and grandfathered rather than churned), falling back to the stored key
+    for a vanished bound row.
+    """
+    # Keys are ``str | None``: a built entry always carries a real key, but a
+    # legacy bound row may still hold NULL (its own solo/unmatched group).
+    by_group: dict[str | None, list[dict[str, Any]]] = {}
+    for sd in shortcuts_data:
+        by_group.setdefault(sd.get("sibling_group_key"), []).append(sd)
+
+    fetched_key_by_id: dict[Any, str | None] = {sd["rom_id"]: sd.get("sibling_group_key") for sd in shortcuts_data}
+    bound_by_group: dict[str | None, list[tuple[int, dict[str, Any]]]] = {}
+    bound_rom_ids: set[int] = set()
+    for rid_str, reg in registry.items():
+        if not reg.get("app_id"):
+            continue
+        rid = int(rid_str)
+        bound_rom_ids.add(rid)
+        group_key = fetched_key_by_id.get(rid, reg.get("sibling_group_key"))
+        bound_by_group.setdefault(group_key, []).append((rid, reg))
+
+    emitted: list[dict[str, Any]] = []
+    for group_key, members in by_group.items():
+        fetched_ids = {m["rom_id"] for m in members}
+        bound_here = bound_by_group.get(group_key, [])
+        surviving_ids = {rid for rid, _ in bound_here if rid in fetched_ids}
+        if surviving_ids:
+            # ≥1 bound sibling still fetched → grandfather every surviving one.
+            emitted.extend(m for m in members if m["rom_id"] in surviving_ids)
+        elif not bound_here:
+            # No binding anywhere in the group → mint the single representative.
+            rep_id = resolve_group_representative(members, installed_rom_ids, bound_rom_ids)
+            emitted.append(_member_by_id(members, rep_id))
+        elif complete_group_view:
+            # Complete view: every bound sibling truly vanished from the server →
+            # rebind the shortcut onto the surviving representative (ADR-0021 §2,
+            # never remove).
+            rep = _member_by_id(members, resolve_group_representative(members, installed_rom_ids, bound_rom_ids))
+            kept_rom_id, kept_reg = min(bound_here, key=lambda item: item[0])
+            emitted.append(_rebind_entry(rep, kept_rom_id, kept_reg))
+        # else: partial view (collection unit) — the group holds a binding not in
+        # THIS fetch, so its absence here is not absence from the server.
+        # Grandfather it untouched (no rebind, no new shortcut); its real
+        # representative is owned by the group's platform unit in the same run.
+    return emitted
+
+
+def _member_by_id(members: list[dict[str, Any]], rom_id: int) -> dict[str, Any]:
+    """Return the group member whose ``rom_id`` matches (the resolver picks from *members*)."""
+    return next(m for m in members if m["rom_id"] == rom_id)
+
+
+def _rebind_entry(rep: dict[str, Any], kept_rom_id: int, kept_reg: dict[str, Any]) -> dict[str, Any]:
+    """Synthesize the emitted entry for a rebinding group (ADR-0021 §2).
+
+    Keyed by the vanished bound sibling (*kept_rom_id*) so the frontend REUSES
+    that sibling's existing Steam shortcut (its appId is already in the
+    rom_id→appId map) and the preview diff reads the group as unchanged. The
+    entry carries the representative's launch bake (its installed path, or the
+    empty placeholder when the representative is uninstalled) plus a
+    ``bind_rom_id`` marker so the per-unit commit moves the DB binding onto the
+    representative — the shortcut's appId, artwork, collections and playtime all
+    survive; only the active version changes. Identity fields stay the vanished
+    sibling's (sticky name — never rename automatically, which would change the
+    appId).
+    """
+    return {
+        **rep,
+        "rom_id": kept_rom_id,
+        "name": kept_reg.get("name", rep.get("name", "")),
+        "fs_name": kept_reg.get("fs_name", ""),
+        "platform_slug": kept_reg.get("platform_slug", rep.get("platform_slug", "")),
+        BIND_ROM_ID_KEY: rep["rom_id"],
+    }
 
 
 def select_stale_removals(

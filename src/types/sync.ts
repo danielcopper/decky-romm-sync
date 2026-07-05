@@ -70,6 +70,17 @@ export interface SyncAddItem {
   launch_options: string;
   platform_name: string;
   cover_path: string;
+  /**
+   * Present only on a sibling-group REBIND entry (ADR-0021 §2): the entry is
+   * keyed to the vanished bound sibling's `rom_id` so the frontend reuses its
+   * existing shortcut, while the backend moves the DB binding onto this
+   * representative at commit. Shortcut reuse is still keyed by `rom_id` through
+   * the existing-shortcut map, but the frontend DOES read this to fetch the
+   * representative's artwork (covers can be language-/edition-specific, so the
+   * shortcut must show the bound version's art, not the vanished sibling's). A
+   * plain optional number, JSON-safe.
+   */
+  bind_rom_id?: number;
 }
 
 export interface SyncPreviewSummary {

@@ -213,14 +213,17 @@ async def test_report_unit_results_late_ack_binds_orphan(harness):
     # Run + unit identity survives the abandon window so the late ack validates.
     box.current_sync_id = "run-1"
     box.active_unit_id = 1
-    box.pending_sync = {
-        42: {
-            "name": "Orphan Game",
-            "fs_name": "orphan.gba",
-            "platform_slug": "gba",
-            "cover_path": "",
-        },
+    _entry = {
+        "name": "Orphan Game",
+        "fs_name": "orphan.gba",
+        "platform_slug": "gba",
+        "cover_path": "",
     }
+    # ``pending_all_roms`` is the identity source for the group-aware persist;
+    # ``pending_sync`` holds the emitted representative. Both survive the abandon
+    # window so the late ack can drive the full commit (ADR-0021).
+    box.pending_sync = {42: _entry}
+    box.pending_all_roms = {42: _entry}
     box.unit_complete_event = None
     box.unit_abandoned = True
     box.pending_unit_roms = [{"id": 42}]

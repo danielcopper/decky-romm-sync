@@ -71,8 +71,8 @@ def _set_user_version(db_path: str, version: int) -> None:
 # + 003_unique_shortcut_app_id + 004_add_selected_disc
 # + 005_unconfirm_legacy_slot_confirmations + 006_native_play_sessions
 # + 007_add_last_played + 008_add_version_metadata
-# + 009_add_last_session_start_monotonic).
-_SHIPPED_VERSION = 9
+# + 009_add_last_session_start_monotonic + 010_add_sibling_group_key_index).
+_SHIPPED_VERSION = 10
 
 # Tables after every shipped migration: the v1 set plus 006's play-session outbox.
 _SHIPPED_TABLES = _V1_TABLES | {"rom_playtime_sessions"}
@@ -612,6 +612,43 @@ class Test009AddLastSessionStartMonotonic:
             conn.close()
         # Pre-existing scalars survive; the new column defaults to NULL.
         assert row == (3600, 5, None)
+
+
+class Test010SiblingGroupKeyIndex:
+    """010 — non-unique index on roms(sibling_group_key) for the group readers (#1296)."""
+
+    def test_index_exists_after_full_apply(self, tmp_path: Path):
+        db_path = str(tmp_path / "romm_sync.db")
+
+        apply_migrations(db_path)
+
+        assert _user_version(db_path) == _SHIPPED_VERSION
+        assert "idx_roms_sibling_group_key" in _indexes(db_path, "roms")
+
+    def test_index_absent_before_010(self, tmp_path: Path):
+        # The index is added by 010 — a DB at v9 does not yet carry it.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 9)))
+
+        assert _user_version(db_path) == 9
+        assert "idx_roms_sibling_group_key" not in _indexes(db_path, "roms")
+
+    def test_index_is_non_unique_allows_duplicate_group_keys(self, tmp_path: Path):
+        # A sibling group has many rows sharing one key — the index must be
+        # non-unique so two rows with the same sibling_group_key coexist.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path)
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            _insert_rom(conn, 1, None)
+            _insert_rom(conn, 2, None)
+            conn.execute("UPDATE roms SET sibling_group_key = 'igdb:42:7' WHERE rom_id IN (1, 2)")
+            count = conn.execute("SELECT COUNT(*) FROM roms WHERE sibling_group_key = 'igdb:42:7'").fetchone()[0]
+        finally:
+            conn.close()
+        assert count == 2
 
 
 def test_shipped_migrations_dir_resolves_to_real_schema():

@@ -442,74 +442,99 @@ class LibraryFetcher:
             collections = []
         return _collection_units(collections, enabled_ids, "franchise")
 
-    def _read_incremental_baseline(self, platform_slug: str) -> tuple[str | None, list[dict[str, Any]]]:
-        """Read ``(last_sync_iso, reconstructed_roms)`` for *platform_slug* from SQLite.
+    def _read_incremental_baseline(self, platform_slug: str) -> tuple[str | None, list[dict[str, Any]], int, bool]:
+        """Read the incremental-skip baseline for *platform_slug* from SQLite.
 
-        ``last_sync`` is the ``finished_at`` of the newest completed
-        ``SyncRun``; the reconstructed list is the platform's bound ``roms``
-        rows shaped like a RomM list response (thin — no ``metadatum``, so
-        the orchestrator's skip-guard keeps them out of the metadata
-        stamp). Only one short read UoW is opened.
+        Returns ``(last_sync_iso, reconstructed_roms, persisted_count,
+        needs_backfill)``:
+
+        * ``last_sync`` — ``finished_at`` of the newest completed ``SyncRun``.
+        * ``reconstructed_roms`` — the platform's **bound** ``roms`` rows shaped
+          like a RomM list response (thin — no ``metadatum``, so the skip-guard
+          keeps them out of the metadata stamp). This is the shortcut set the
+          skip reconstructs as the unit's ROMs.
+        * ``persisted_count`` — **all** persisted rows for the platform (bound +
+          unbound siblings). Group-aware sync persists every sibling (ADR-0021),
+          so this is what RomM's platform ``rom_count`` is compared against.
+        * ``needs_backfill`` — any persisted row still carries a NULL
+          ``sibling_group_key`` (predates the version-metadata capture), so the
+          platform must full-fetch to fill it in.
+
+        Only one short read UoW is opened.
         """
         with self._uow_factory() as uow:
             latest = uow.sync_runs.get_latest_completed()
             last_sync = latest.finished_at if latest is not None else None
-            roms = [
-                {
-                    "id": rom.rom_id,
-                    "name": rom.name,
-                    "fs_name": rom.fs_name,
-                    "platform_slug": rom.platform_slug,
-                    "igdb_id": rom.igdb_id,
-                    "sgdb_id": rom.sgdb_id,
-                    "ra_id": rom.ra_id,
-                    "sibling_group_key": rom.sibling_group_key,
-                }
-                for rom in uow.roms.iter_by_platform(platform_slug)
-                if rom.shortcut_app_id is not None
-            ]
-        return last_sync, roms
+            all_rows = list(uow.roms.iter_by_platform(platform_slug))
+        reconstructed = [
+            {
+                "id": rom.rom_id,
+                "name": rom.name,
+                "fs_name": rom.fs_name,
+                "platform_slug": rom.platform_slug,
+                "igdb_id": rom.igdb_id,
+                "sgdb_id": rom.sgdb_id,
+                "ra_id": rom.ra_id,
+                "sibling_group_key": rom.sibling_group_key,
+            }
+            for rom in all_rows
+            if rom.shortcut_app_id is not None
+        ]
+        needs_backfill = any(rom.sibling_group_key is None for rom in all_rows)
+        return last_sync, reconstructed, len(all_rows), needs_backfill
 
     @staticmethod
     def _decorate_reconstructed(
-        roms: list[dict[str, Any]], platform_name: str, platform_slug: str
+        roms: list[dict[str, Any]], platform_name: str, platform_slug: str, platform_id: int
     ) -> list[dict[str, Any]]:
-        """Stamp the live platform display name/slug onto reconstructed ROM dicts."""
+        """Stamp the live platform display name/slug/id onto reconstructed ROM dicts.
+
+        ``platform_id`` is the unit's own platform id (every reconstructed row is
+        this one platform's), stamped so a reconstructed dict is shaped like a live
+        RomM fetch — the persisted ``sibling_group_key`` is already authoritative,
+        but stamping the id keeps ``compute_sibling_group_key`` correct as a
+        fallback rather than yielding ``…:None`` (#1296).
+        """
         for rom in roms:
             rom["platform_name"] = platform_name
             rom["platform_slug"] = platform_slug
             rom["platform_display_name"] = platform_name
+            rom["platform_id"] = platform_id
         return roms
 
     async def _try_unit_incremental_skip(self, unit: WorkUnit) -> list[dict[str, Any]] | None:
         """Per-unit incremental-skip pre-check for a platform unit.
 
-        Returns the roms-reconstructed ROM list when the platform is
-        unchanged (server reports zero rows updated after ``last_sync``
-        and the unit's ``rom_count`` matches the bound-ROM count for this
-        platform). Returns ``None`` to signal "fall through to a full
-        paginated fetch" — either no bound ROMs exist for this platform,
-        no prior completed sync exists, the delta check raised, or the
-        server reports changes.
+        Returns the roms-reconstructed ROM list (the platform's bound rows =
+        its shortcuts) when the platform is unchanged: the server reports zero
+        rows updated after ``last_sync`` AND the unit's ``rom_count`` matches
+        the count of ALL persisted rows for the platform. Group-aware sync
+        persists every sibling (ADR-0021), so the count compares against all
+        persisted rows — not the bound representatives — restoring skip parity
+        on platforms that hold sibling groups. Returns ``None`` to fall through
+        to a full paginated fetch — no persisted rows, no prior completed sync,
+        an un-backfilled row, the delta check raised, or the server reports
+        changes.
         """
         platform_name = unit.name
         platform_slug = unit.slug
 
-        last_sync, reconstructed = await self._loop.run_in_executor(
+        last_sync, reconstructed, persisted_count, needs_backfill = await self._loop.run_in_executor(
             None, self._read_incremental_baseline, platform_slug
         )
         registry_count = len(reconstructed)
 
-        if not last_sync or registry_count == 0:
+        if not last_sync or persisted_count == 0:
             return None
 
-        # Version-metadata backfill (#1295 / ADR-0021): a bound ROM whose
-        # sibling_group_key is still NULL predates the version-metadata capture
-        # and must be re-fetched to fill it in. Skipping the platform would leave
-        # it NULL forever, so any un-backfilled ROM forces a full fetch — the
-        # commit then persists every row's group key + version dimensions. Once
-        # every ROM carries a key this is a no-op and the skip resumes.
-        if any(not rom.get("sibling_group_key") for rom in reconstructed):
+        # Version-metadata backfill (#1295 / #1296 / ADR-0021): a persisted ROM
+        # whose sibling_group_key is still NULL predates the version-metadata
+        # capture and must be re-fetched to fill it in (and to persist its
+        # siblings). Skipping would leave it NULL forever, so any un-backfilled
+        # ROM forces a full fetch — the commit then persists every sibling's
+        # group key + version dimensions. Once every row carries a key this is a
+        # no-op and the skip resumes.
+        if needs_backfill:
             self._logger.info(f"Per-unit fetch {platform_name}: version-metadata backfill needed — full fetch")
             return None
 
@@ -532,13 +557,16 @@ class LibraryFetcher:
             return None
 
         server_total = delta_resp.get("total", 0) if isinstance(delta_resp, dict) else 0
-        if server_total == 0 and unit.rom_count == registry_count:
-            self._logger.info(f"Per-unit skip: {platform_name} unchanged ({registry_count} ROMs in registry)")
-            return self._decorate_reconstructed(reconstructed, platform_name, platform_slug)
+        if server_total == 0 and unit.rom_count == persisted_count:
+            self._logger.info(
+                f"Per-unit skip: {platform_name} unchanged "
+                f"({persisted_count} ROMs persisted, {registry_count} shortcuts)"
+            )
+            return self._decorate_reconstructed(reconstructed, platform_name, platform_slug, int(unit.id))
 
         self._logger.info(
             f"Per-unit fetch {platform_name}: {server_total} updated, "
-            f"server={unit.rom_count} registry={registry_count} — full fetch"
+            f"server={unit.rom_count} persisted={persisted_count} shortcuts={registry_count} — full fetch"
         )
         return None
 

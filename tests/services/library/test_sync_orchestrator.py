@@ -35,6 +35,7 @@ from adapters.persistence import (
 )
 from domain.preview_delta import PreviewDelta
 from domain.shortcut_data import EmulatorInvocation
+from domain.sync_diff import BIND_ROM_ID_KEY
 from domain.sync_state import SyncState
 from domain.work_unit import WorkUnit
 
@@ -1488,6 +1489,292 @@ class TestDoSyncPerUnit:
         assert stale_events == [{"remove": [{"rom_id": 99, "app_id": 9900}]}]
 
     @pytest.mark.asyncio
+    async def test_group_emits_one_shortcut_per_sibling_group(self, plugin, fake_romm_api):
+        """A platform with a 3-version sibling group emits ONE shortcut for the
+        game (ADR-0021); the non-representative dumps are persisted unbound."""
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[
+                # Three dumps of one game (shared igdb_id) + one unrelated game.
+                {
+                    "id": 10,
+                    "name": "Zelda (USA)",
+                    "igdb_id": 100,
+                    "fs_name_no_ext": "zelda_usa",
+                    "rom_user": {"is_main_sibling": True},
+                },
+                {"id": 11, "name": "Zelda (JP)", "igdb_id": 100, "fs_name_no_ext": "zelda_jp"},
+                {"id": 12, "name": "Zelda (EU)", "igdb_id": 100, "fs_name_no_ext": "zelda_eu"},
+                {"id": 20, "name": "Mario", "igdb_id": 200, "fs_name_no_ext": "mario"},
+            ],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def ack_reps(_unit, event):
+            event.set()
+            return {str(rid): 9000 + rid for rid in plugin._sync_service._box.pending_sync}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = ack_reps
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        assert len(unit_events) == 1
+        emitted_ids = {sd["rom_id"] for sd in unit_events[0]["shortcuts"]}
+        # ONE shortcut for the Zelda group (rep = the RomM default, rom 10) + Mario.
+        assert emitted_ids == {10, 20}
+        with plugin._uow as uow:
+            # All four siblings are persisted; only the representatives bind.
+            assert uow.roms.get(10).shortcut_app_id == 9010
+            assert uow.roms.get(20).shortcut_app_id == 9020
+            assert uow.roms.get(11).shortcut_app_id is None
+            assert uow.roms.get(12).shortcut_app_id is None
+            assert uow.roms.get(11).sibling_group_key == "igdb:100:1"
+
+    @pytest.mark.asyncio
+    async def test_vanished_bound_sibling_rebinds_without_stale_removal(self, plugin, fake_romm_api):
+        """A bound sibling that disappears while its group survives rebinds to a
+        surviving sibling — the appId is preserved (no sync_stale removal), and the
+        binding moves onto the representative (ADR-0021 §2)."""
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        # rom 1 was the bound USA dump (app 5000); it is GONE from the server now.
+        _seed_rom_row(
+            plugin,
+            1,
+            app_id=5000,
+            platform_slug="n64",
+            name="Zelda (USA)",
+            fs_name="zelda_usa.z64",
+            sibling_group_key="igdb:100:1",
+        )
+        # The server still serves the JP + EU dumps of the same game.
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[
+                {
+                    "id": 2,
+                    "name": "Zelda (JP)",
+                    "igdb_id": 100,
+                    "fs_name_no_ext": "zelda_jp",
+                    "rom_user": {"is_main_sibling": True},
+                },
+                {"id": 3, "name": "Zelda (EU)", "igdb_id": 100, "fs_name_no_ext": "zelda_eu"},
+            ],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def ack_reuse(_unit, event):
+            event.set()
+            # The frontend reuses the vanished sibling's shortcut (app 5000) under
+            # its rom_id — the emitted rebind entry is keyed to rom 1.
+            return {str(rid): 5000 for rid in plugin._sync_service._box.pending_sync}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = ack_reuse
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        # ONE shortcut emitted, keyed to the vanished sibling (rom 1) for reuse,
+        # rebinding to the RomM default (rom 2).
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        assert len(unit_events) == 1
+        emitted = unit_events[0]["shortcuts"]
+        assert len(emitted) == 1
+        assert emitted[0]["rom_id"] == 1
+        assert emitted[0][BIND_ROM_ID_KEY] == 2
+
+        # No stale removal — the appId is preserved, not wiped.
+        stale_events = [c.args[1] for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_stale"]
+        assert stale_events == [{"remove": []}]
+
+        # The binding moved onto the surviving representative (rom 2); the vanished
+        # sibling row is unbound (kept per ADR-0007).
+        with plugin._uow as uow:
+            assert uow.roms.get(2).shortcut_app_id == 5000
+            assert uow.roms.get(1).shortcut_app_id is None
+
+    @pytest.mark.asyncio
+    async def test_skipped_platform_collection_unbound_sibling_never_rebinds(self, plugin, fake_romm_api):
+        """#1296 CRITICAL: a skipped platform + a collection holding an UNBOUND
+        sibling of a group must NEVER rebind the live installed game.
+
+        Worked failure: the platform incremental-SKIPS, so only its BOUND rows
+        enter ``synced_rom_ids`` and the collection fetches the group's unbound
+        sibling un-deduped. The collection is a PARTIAL group view — the bound
+        installed representative (rom 10) is absent from its fetch but alive on the
+        server — so the collapse must grandfather the group untouched, not read the
+        binding as "vanished" and rebind it onto the uninstalled sibling (which
+        would blank the launch options and orphan the installed ROM).
+        """
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        # A 2-version Zelda group on N64: rom 10 bound + installed (active
+        # version), rom 11 the unbound JP sibling. Both persisted + backfilled so
+        # the platform incremental-skips this run.
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[
+                {"id": 10, "name": "Zelda (USA)", "igdb_id": 100, "fs_name_no_ext": "zelda_usa"},
+                {"id": 11, "name": "Zelda (JP)", "igdb_id": 100, "fs_name_no_ext": "zelda_jp"},
+            ],
+        )
+        # The collection holds ONLY the unbound sibling.
+        _seed_collection(fake_romm_api, collection_id=7, name="Faves", rom_ids=[11], is_favorite=True)
+        plugin.settings["enabled_platforms"] = {"1": True}
+        plugin.settings["enabled_collections"] = {"user": {"7": True}}
+
+        _seed_completed_run(plugin, at="2025-01-01T00:00:00Z")
+        # Install first so the binding survives the _seed_rom_row overwrite.
+        _seed_install(plugin, 10, file_path="/roms/n64/zelda_usa.z64", platform_slug="n64")
+        _seed_rom_row(
+            plugin,
+            10,
+            app_id=5000,
+            platform_slug="n64",
+            name="Zelda (USA)",
+            fs_name="zelda_usa.z64",
+            sibling_group_key="igdb:100:1",
+        )
+        _seed_rom_row(
+            plugin,
+            11,
+            app_id=None,
+            platform_slug="n64",
+            name="Zelda (JP)",
+            fs_name="zelda_jp.z64",
+            sibling_group_key="igdb:100:1",
+        )
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        # Prove the exact worked scenario ran: the platform incremental-SKIPPED
+        # (never paginated ``list_roms``), so its bound rows — but NOT the unbound
+        # sibling — entered ``synced_rom_ids`` and the collection fetched rom 11
+        # un-deduped, exercising the partial-view collapse branch.
+        call_names = [c[0] for c in fake_romm_api.call_log]
+        assert "list_roms" not in call_names
+        assert "list_roms_by_collection" in call_names
+
+        # The platform skipped its apply; the collection emitted but grandfathered
+        # the group → NO shortcut entry, and above all NO rebind entry.
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        all_emitted = [sd for e in unit_events for sd in e["shortcuts"]]
+        assert all(BIND_ROM_ID_KEY not in sd for sd in all_emitted)
+        assert all(sd["rom_id"] != 11 for sd in all_emitted)
+
+        # No stale removal of the live binding.
+        stale_events = [c.args[1] for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_stale"]
+        assert stale_events == [{"remove": []}]
+
+        # Binding + version untouched: rom 10 still bound to app 5000, rom 11 stays
+        # an unbound tracked sibling.
+        with plugin._uow as uow:
+            assert uow.roms.get(10).shortcut_app_id == 5000
+            assert uow.roms.get(11).shortcut_app_id is None
+
+    @pytest.mark.asyncio
+    async def test_disabled_platform_bound_row_stale_removed_collection_does_not_rebind(self, plugin, fake_romm_api):
+        """Disabled-platform variant of #1296: the bound row is stale-removed by the
+        normal path; the collection still does NOT rebind in the same run.
+
+        The group's platform is disabled, so no platform unit re-affirms rom 10 —
+        it is correctly stale-removed (unbound, shortcut torn down). An enabled
+        collection fetches the group's unbound sibling (rom 11), but as a partial
+        view it grandfathers rather than rebinding rom 11 onto the just-freed appId.
+        The result is eventually-consistent: re-enabling the platform on a later
+        sync re-establishes the group's shortcut; nothing is rebound off a partial
+        view here.
+        """
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        # rom 11 (the unbound sibling) lives on N64 + in the collection; rom 10 is
+        # a bound DB row on the (now disabled) platform.
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 11, "name": "Zelda (JP)", "igdb_id": 100, "fs_name_no_ext": "zelda_jp"}],
+        )
+        _seed_collection(fake_romm_api, collection_id=7, name="Faves", rom_ids=[11], is_favorite=True)
+        plugin.settings["enabled_platforms"] = {"1": False}
+        plugin.settings["enabled_collections"] = {"user": {"7": True}}
+
+        _seed_rom_row(
+            plugin,
+            10,
+            app_id=5000,
+            platform_slug="n64",
+            name="Zelda (USA)",
+            fs_name="zelda_usa.z64",
+            sibling_group_key="igdb:100:1",
+        )
+        _seed_rom_row(
+            plugin,
+            11,
+            app_id=None,
+            platform_slug="n64",
+            name="Zelda (JP)",
+            fs_name="zelda_jp.z64",
+            sibling_group_key="igdb:100:1",
+        )
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        # rom 10 is stale-removed by the normal path (its platform is gone).
+        stale_events = [c.args[1] for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_stale"]
+        assert stale_events == [{"remove": [{"rom_id": 10, "app_id": 5000}]}]
+
+        # The collection did NOT rebind onto the freed appId — no rebind entry, no
+        # shortcut for the unbound sibling.
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        all_emitted = [sd for e in unit_events for sd in e["shortcuts"]]
+        assert all(BIND_ROM_ID_KEY not in sd for sd in all_emitted)
+        assert all(sd["rom_id"] != 11 for sd in all_emitted)
+
+        # rom 10 ends unbound (stale path); rom 11 stays unbound (grandfathered).
+        with plugin._uow as uow:
+            assert uow.roms.get(10).shortcut_app_id is None
+            assert uow.roms.get(11).shortcut_app_id is None
+
+    @pytest.mark.asyncio
     async def test_downloads_artwork_when_not_skipped(self, plugin, fake_romm_api):
         import decky
 
@@ -1968,9 +2255,9 @@ class TestReportUnitResults:
         # the abandon window so the late ack for the SAME unit validates.
         box.current_sync_id = "run-1"
         box.active_unit_id = 1
-        box.pending_sync = {
-            42: {"name": "Game", "fs_name": "game.z64", "platform_slug": "gb", "cover_path": ""},
-        }
+        _entry = {"name": "Game", "fs_name": "game.z64", "platform_slug": "gb", "cover_path": ""}
+        box.pending_sync = {42: _entry}
+        box.pending_all_roms = {42: _entry}
         box.unit_complete_event = None
         box.unit_abandoned = True
         box.pending_unit_roms = [{"id": 42, "metadatum": {"genres": ["RPG"]}}]
@@ -1997,20 +2284,20 @@ class TestReportUnitResults:
         assert box.active_unit_id is None
 
     @pytest.mark.asyncio
-    async def test_late_ack_stamps_only_stashed_acked_roms(self, plugin):
-        """A ROM acked but absent from the stash still binds, but stamps no
-        metadata (its ``metadatum`` source is gone) — the binding is the
-        load-bearing data, metadata is best-effort (#1052)."""
+    async def test_late_ack_binds_stashed_rom_without_metadatum_stamps_no_metadata(self, plugin):
+        """A stashed ROM carrying no ``metadatum`` still binds via the late ack,
+        but stamps no metadata — the binding is load-bearing, metadata is
+        best-effort (#1052)."""
         box = plugin._sync_service._box
         box.current_sync_id = "run-1"
         box.active_unit_id = 1
-        box.pending_sync = {
-            42: {"name": "A", "fs_name": "a.z64", "platform_slug": "gb", "cover_path": ""},
-        }
+        _entry = {"name": "A", "fs_name": "a.z64", "platform_slug": "gb", "cover_path": ""}
+        box.pending_sync = {42: _entry}
+        box.pending_all_roms = {42: _entry}
         box.unit_complete_event = None
         box.unit_abandoned = True
-        # The stash carries a DIFFERENT rom than the one acked.
-        box.pending_unit_roms = [{"id": 99, "metadatum": {"genres": ["RPG"]}}]
+        # The stash (the whole unit fetch) carries rom 42 without a metadatum.
+        box.pending_unit_roms = [{"id": 42}]
 
         result = await plugin.report_unit_results({"42": 100001}, "run-1", 1)
 
@@ -2021,7 +2308,7 @@ class TestReportUnitResults:
         # Binding still committed.
         assert rom is not None
         assert rom.shortcut_app_id == 100001
-        # No metadata: rom 42 was not in the stash → empty acked_roms.
+        # No metadata: rom 42 carried no metadatum.
         assert meta is None
 
     @pytest.mark.asyncio
@@ -2077,9 +2364,9 @@ class TestLateAckReconciliationWithStaleScan:
         # rom_id (2), which the frontend acks with the SAME reused appId.
         box.current_sync_id = "run-1"
         box.active_unit_id = 1
-        box.pending_sync = {
-            2: {"name": "A", "fs_name": "a.z64", "platform_slug": "n64", "cover_path": ""},
-        }
+        _entry = {"name": "A", "fs_name": "a.z64", "platform_slug": "n64", "cover_path": ""}
+        box.pending_sync = {2: _entry}
+        box.pending_all_roms = {2: _entry}
         box.unit_complete_event = None
         box.unit_abandoned = True
         box.pending_unit_roms = [{"id": 2}]
@@ -2112,12 +2399,15 @@ class TestCommitUnitResults:
 
     @pytest.mark.asyncio
     async def test_updates_registry_for_unit_roms(self, plugin):
-        plugin._sync_service._pending_sync = {
+        box = plugin._sync_service._box
+        entries = {
             10: {"rom_id": 10, "name": "A", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
             11: {"rom_id": 11, "name": "B", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
         }
+        box.pending_sync = entries
+        box.pending_all_roms = entries
 
-        await plugin._sync_service._reporter.commit_unit_results({"10": 9001, "11": 9002}, [])
+        await plugin._sync_service._reporter.commit_unit_results({"10": 9001, "11": 9002}, [{"id": 10}, {"id": 11}])
 
         with plugin._uow as uow:
             assert uow.roms.get(10).shortcut_app_id == 9001
@@ -2126,15 +2416,42 @@ class TestCommitUnitResults:
     @pytest.mark.asyncio
     async def test_commits_roms_for_unit(self, plugin):
         """commit_unit_results lands the unit's ROM upserts in one committed UoW."""
-        plugin._sync_service._pending_sync = {
-            10: {"rom_id": 10, "name": "A", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""},
-        }
+        box = plugin._sync_service._box
+        entries = {10: {"rom_id": 10, "name": "A", "platform_name": "N64", "platform_slug": "n64", "cover_path": ""}}
+        box.pending_sync = entries
+        box.pending_all_roms = entries
 
-        await plugin._sync_service._reporter.commit_unit_results({"10": 9001}, [])
+        await plugin._sync_service._reporter.commit_unit_results({"10": 9001}, [{"id": 10}])
 
         assert plugin._uow.committed is True
         with plugin._uow as uow:
             assert uow.roms.get(10) is not None
+
+    @pytest.mark.asyncio
+    async def test_persists_unbound_non_representative_siblings(self, plugin):
+        """Group-aware persist (ADR-0021): every fetched ROM gets an identity row,
+        but a sibling absent from the ack lands UNBOUND — only representatives
+        carry a binding."""
+        box = plugin._sync_service._box
+        entries = {
+            10: {"rom_id": 10, "name": "A (USA)", "platform_slug": "n64", "cover_path": "", "sibling_group_key": "g"},
+            11: {"rom_id": 11, "name": "A (JP)", "platform_slug": "n64", "cover_path": "", "sibling_group_key": "g"},
+        }
+        # Only rom 10 is the representative (emitted + acked); rom 11 is a sibling.
+        box.pending_sync = {10: entries[10]}
+        box.pending_all_roms = entries
+
+        await plugin._sync_service._reporter.commit_unit_results({"10": 9001}, [{"id": 10}, {"id": 11}])
+
+        with plugin._uow as uow:
+            rep = uow.roms.get(10)
+            sibling = uow.roms.get(11)
+        assert rep is not None and rep.shortcut_app_id == 9001
+        # The non-representative sibling is persisted for its identity + version,
+        # but carries no shortcut binding.
+        assert sibling is not None
+        assert sibling.shortcut_app_id is None
+        assert sibling.sibling_group_key == "g"
 
 
 class TestShutdown:
@@ -2792,8 +3109,10 @@ class TestPerUnitMetadataStamping:
             assert uow.rom_metadata.get(10) is None
 
     @pytest.mark.asyncio
-    async def test_acked_roms_filter(self, plugin, fake_romm_api):
-        """Only the ROMs the frontend ack'd are threaded into ``commit_unit_results``."""
+    async def test_all_fetched_roms_threaded_ack_subset_binds(self, plugin, fake_romm_api):
+        """Group-aware persist (ADR-0021): the WHOLE unit fetch is threaded into
+        ``commit_unit_results`` (every sibling gets an identity row), while the
+        frontend ack — a subset — decides which representatives bind."""
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
 
@@ -2813,8 +3132,8 @@ class TestPerUnitMetadataStamping:
 
         commit_calls: list[tuple[Any, Any]] = []
 
-        async def capture_commit(rid_to_aid, acked_roms):
-            commit_calls.append((rid_to_aid, acked_roms))
+        async def capture_commit(rid_to_aid, unit_roms):
+            commit_calls.append((rid_to_aid, unit_roms))
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
@@ -2838,8 +3157,10 @@ class TestPerUnitMetadataStamping:
         )
 
         assert len(commit_calls) == 1
-        _rid_to_aid, acked = commit_calls[0]
-        assert {r["id"] for r in acked} == {1, 3, 5}
+        rid_to_aid, unit_roms = commit_calls[0]
+        # The whole fetch is threaded (all 5 siblings), the ack binds only 3.
+        assert {r["id"] for r in unit_roms} == {1, 2, 3, 4, 5}
+        assert set(rid_to_aid.keys()) == {"1", "3", "5"}
 
 
 class TestRegression738CacheCorruption:

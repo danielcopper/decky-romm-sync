@@ -52,7 +52,7 @@ class Rom:
         platform_slug: str,
         name: str,
         fs_name: str,
-        shortcut_app_id: int,
+        shortcut_app_id: int | None,
         synced_at: str,
         igdb_id: int | None = None,
         sibling_group_key: str | None = None,
@@ -62,7 +62,12 @@ class Rom:
         tags: tuple[str, ...] = (),
         is_main_sibling: bool = False,
     ) -> Rom:
-        """Build a Rom synced from RomM at ISO timestamp ``synced_at``."""
+        """Build a Rom synced from RomM at ISO timestamp ``synced_at``.
+
+        ``shortcut_app_id`` is ``None`` for a non-representative sibling — every
+        fetched ROM is persisted for identity + version metadata (ADR-0021), but
+        only the group's representative carries a Steam-shortcut binding.
+        """
         if rom_id <= 0:
             raise ValueError("rom_id must be positive")
         if not platform_slug:

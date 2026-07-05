@@ -3,8 +3,10 @@
 from typing import Any
 
 from domain.sync_diff import (
+    BIND_ROM_ID_KEY,
     ClassificationResult,
     classify_roms,
+    collapse_sibling_groups,
     compute_collection_diff,
     compute_platform_collection_diff,
     select_stale_removals,
@@ -425,3 +427,226 @@ class TestSelectStaleRemovals:
         candidate_stale = [(3, 3000), (1, 1000), (2, 2000)]
         result = select_stale_removals(candidate_stale, set())
         assert result == [(3, 3000), (1, 1000), (2, 2000)]
+
+
+def _gsd(
+    rom_id,
+    *,
+    name="Game",
+    group_key="g1",
+    fs_name="game.z64",
+    fs_name_no_ext="game",
+    is_main_sibling=False,
+    platform_slug="n64",
+    launch_options="",
+):
+    """A built shortcut entry as build_shortcuts_data shapes it, with the
+    sibling-group fields the collapse + resolver read."""
+    return {
+        "rom_id": rom_id,
+        "name": name,
+        "fs_name": fs_name,
+        "fs_name_no_ext": fs_name_no_ext,
+        "platform_name": "N64",
+        "platform_slug": platform_slug,
+        "launch_options": launch_options,
+        "cover_path": "",
+        "sibling_group_key": group_key,
+        "is_main_sibling": is_main_sibling,
+        "igdb_id": None,
+        "sgdb_id": None,
+        "ra_id": None,
+    }
+
+
+def _greg(rom_id, *, app_id, name="Game", group_key: str | None = "g1", fs_name="game.z64", platform_slug="n64"):
+    """A bound-registry entry as _read_apply_registry / _read_preview_baseline shape it."""
+    return {
+        "app_id": app_id,
+        "name": name,
+        "fs_name": fs_name,
+        "platform_slug": platform_slug,
+        "platform_name": "N64",
+        "sibling_group_key": group_key,
+    }
+
+
+class TestCollapseSiblingGroups:
+    """``collapse_sibling_groups`` — one Steam shortcut per sibling group (ADR-0021)."""
+
+    def test_new_group_emits_single_representative(self):
+        # 3 siblings, no binding anywhere; rom 2 is the RomM default → the one rep.
+        members = [
+            _gsd(1, name="Game (USA)", fs_name_no_ext="game_usa"),
+            _gsd(2, name="Game (JP)", fs_name_no_ext="game_jp", is_main_sibling=True),
+            _gsd(3, name="Game (EU)", fs_name_no_ext="game_eu"),
+        ]
+        emitted = collapse_sibling_groups(members, registry={}, installed_rom_ids=set(), complete_group_view=True)
+        assert [e["rom_id"] for e in emitted] == [2]
+
+    def test_installed_sibling_wins_representative(self):
+        members = [
+            _gsd(1, is_main_sibling=True, fs_name_no_ext="a"),
+            _gsd(2, fs_name_no_ext="z"),
+        ]
+        emitted = collapse_sibling_groups(members, registry={}, installed_rom_ids={2}, complete_group_view=True)
+        assert [e["rom_id"] for e in emitted] == [2]
+
+    def test_unbound_siblings_not_counted_as_new(self):
+        # The #1292-class phantom fix: a group with one bound sibling + two unbound
+        # siblings collapses to the bound entry — classify reads it as unchanged,
+        # NOT the unbound siblings as perpetual "new".
+        members = [
+            _gsd(1, name="Game", fs_name="game.z64"),
+            _gsd(2, name="Game (JP)", fs_name="game_jp.z64"),
+            _gsd(3, name="Game (EU)", fs_name="game_eu.z64"),
+        ]
+        registry = {"1": _greg(1, app_id=1001, name="Game", fs_name="game.z64")}
+        emitted = collapse_sibling_groups(members, registry, installed_rom_ids=set(), complete_group_view=True)
+        assert [e["rom_id"] for e in emitted] == [1]
+        result = classify_roms(emitted, registry, {"N64"})
+        assert result.new == []
+        assert result.unchanged_ids == [1]
+        assert result.stale == []
+
+    def test_grandfathered_multiple_bound_siblings_all_kept(self):
+        # Two DIFFERENT-name siblings each already carry a shortcut (a pre-ADR-0021
+        # library). Both are still fetched → both stay emitted; no new shortcut for
+        # the unbound third sibling.
+        members = [
+            _gsd(1, name="Game", fs_name="game.z64"),
+            _gsd(2, name="Game JP", fs_name="game_jp.z64"),
+            _gsd(3, name="Game EU", fs_name="game_eu.z64"),
+        ]
+        registry = {
+            "1": _greg(1, app_id=1001, name="Game", fs_name="game.z64"),
+            "2": _greg(2, app_id=1002, name="Game JP", fs_name="game_jp.z64"),
+        }
+        emitted = collapse_sibling_groups(members, registry, installed_rom_ids=set(), complete_group_view=True)
+        assert sorted(e["rom_id"] for e in emitted) == [1, 2]
+        assert 3 not in {e["rom_id"] for e in emitted}
+
+    def test_whole_group_vanished_is_stale(self):
+        # The bound row's group has NO fetched member at all → collapse emits
+        # nothing for it, and classify flags it stale.
+        members = [_gsd(9, name="Other", group_key="g2")]
+        registry = {"1": _greg(1, app_id=1001, name="Gone", group_key="g1")}
+        emitted = collapse_sibling_groups(members, registry, installed_rom_ids=set(), complete_group_view=True)
+        assert 1 not in {e["rom_id"] for e in emitted}
+        result = classify_roms(emitted, registry, {"N64"})
+        assert result.stale == [1]
+
+    def test_vanished_bound_sibling_rebinds_to_representative(self):
+        # rom 1 is the group's bound sibling but vanished from the server; roms 2/3
+        # survive. Collapse emits ONE rebind entry keyed to rom 1 (frontend reuses
+        # its shortcut) carrying bind_rom_id → the surviving representative.
+        members = [
+            _gsd(
+                2,
+                name="Game (JP)",
+                fs_name="game_jp.z64",
+                fs_name_no_ext="game_jp",
+                is_main_sibling=True,
+                launch_options="run /jp.z64",
+            ),
+            _gsd(3, name="Game (EU)", fs_name="game_eu.z64", fs_name_no_ext="game_eu"),
+        ]
+        registry = {"1": _greg(1, app_id=1001, name="Game (USA)", fs_name="game_usa.z64")}
+        emitted = collapse_sibling_groups(members, registry, installed_rom_ids=set(), complete_group_view=True)
+        assert len(emitted) == 1
+        entry = emitted[0]
+        # Keyed to the vanished bound sibling (sticky identity) so the frontend
+        # reuses its shortcut and the preview reads it as unchanged.
+        assert entry["rom_id"] == 1
+        assert entry["name"] == "Game (USA)"
+        # The binding moves onto the representative (rom 2 = the RomM default), and
+        # the representative's launch bake rides along.
+        assert entry[BIND_ROM_ID_KEY] == 2
+        assert entry["launch_options"] == "run /jp.z64"
+        result = classify_roms(emitted, registry, {"N64"})
+        assert result.unchanged_ids == [1]
+        assert result.stale == []
+        assert result.new == []
+
+    def test_rebind_keeps_smallest_rom_id_binding_others_stale(self):
+        # A group with TWO bound siblings (grandfathered), both vanished. One appId
+        # is kept (smallest rom_id) and rebound; the other goes stale.
+        members = [_gsd(5, name="Game (EU)", fs_name_no_ext="game_eu")]
+        registry = {
+            "1": _greg(1, app_id=1001, name="Game (USA)"),
+            "2": _greg(2, app_id=1002, name="Game (JP)"),
+        }
+        emitted = collapse_sibling_groups(members, registry, installed_rom_ids=set(), complete_group_view=True)
+        assert len(emitted) == 1
+        assert emitted[0]["rom_id"] == 1
+        assert emitted[0][BIND_ROM_ID_KEY] == 5
+        result = classify_roms(emitted, registry, {"N64"})
+        assert result.stale == [2]
+
+    def test_legacy_null_key_bound_row_grandfathered_via_fetched_key(self):
+        # A bound row whose stored sibling_group_key is still NULL (pre-capture) is
+        # grouped by its FETCHED key, so it is grandfathered (kept), never churned
+        # into a delete + recreate.
+        members = [_gsd(1, name="Game", group_key="igdb:42:7")]
+        registry = {"1": _greg(1, app_id=1001, name="Game", group_key=None)}
+        emitted = collapse_sibling_groups(members, registry, installed_rom_ids=set(), complete_group_view=True)
+        assert [e["rom_id"] for e in emitted] == [1]
+        result = classify_roms(emitted, registry, {"N64"})
+        assert result.unchanged_ids == [1]
+
+    def test_solo_unmatched_group_degrades_to_per_rom(self):
+        # An unmatched ROM is a solo group — collapse emits it exactly as before.
+        members = [_gsd(7, name="Homebrew", group_key="romm:7:1")]
+        emitted = collapse_sibling_groups(members, registry={}, installed_rom_ids=set(), complete_group_view=True)
+        assert [e["rom_id"] for e in emitted] == [7]
+
+
+class TestCollapseSiblingGroupsPartialView:
+    """``collapse_sibling_groups`` under a PARTIAL group view (collection units, #1296).
+
+    A collection unit spans platforms and fetches only its own members, so the
+    whole-registry read surfaces bound siblings the unit never fetched. Absence
+    from that partial fetch is NOT absence from the server, so the collapse must
+    never rebind (which would move a live installed game's shortcut onto an
+    uninstalled sibling) — it only grandfathers.
+    """
+
+    def test_bound_sibling_absent_from_partial_fetch_is_grandfathered_not_rebound(self):
+        # The worked #1296 failure in miniature: rom 1 is bound + installed but on
+        # a platform this collection unit never fetched; the collection fetches
+        # only the UNBOUND sibling rom 2. A partial view must leave the binding
+        # untouched — emit nothing, never a rebind entry onto the uninstalled rom 2.
+        members = [_gsd(2, name="Game (JP)", fs_name="game_jp.z64", fs_name_no_ext="game_jp")]
+        registry = {"1": _greg(1, app_id=1001, name="Game (USA)", fs_name="game_usa.z64")}
+        emitted = collapse_sibling_groups(members, registry, installed_rom_ids={1}, complete_group_view=False)
+        assert emitted == []
+        # And the contrast: the SAME inputs under a complete view DO rebind — the
+        # only thing separating "grandfather" from "rebind" is view-completeness.
+        rebound = collapse_sibling_groups(members, registry, installed_rom_ids={1}, complete_group_view=True)
+        assert len(rebound) == 1
+        assert rebound[0]["rom_id"] == 1
+        assert rebound[0][BIND_ROM_ID_KEY] == 2
+
+    def test_partial_view_group_with_no_binding_anywhere_mints_representative(self):
+        # A group with NO binding in the whole registry IS a genuinely new game —
+        # a collection-only unit still mints its single representative among the
+        # fetched members (RomM default rom 2 here).
+        members = [
+            _gsd(1, name="Game (USA)", fs_name_no_ext="game_usa"),
+            _gsd(2, name="Game (JP)", fs_name_no_ext="game_jp", is_main_sibling=True),
+        ]
+        emitted = collapse_sibling_groups(members, registry={}, installed_rom_ids=set(), complete_group_view=False)
+        assert [e["rom_id"] for e in emitted] == [2]
+
+    def test_partial_view_fetched_bound_sibling_still_emits_as_update(self):
+        # A bound sibling that IS in the partial fetch still emits (as an update
+        # entry) so its identity/launch refresh; the unbound fetched sibling does
+        # not mint a second shortcut. No rebind either — the group is grandfathered.
+        members = [
+            _gsd(1, name="Game", fs_name="game.z64"),
+            _gsd(2, name="Game (JP)", fs_name="game_jp.z64"),
+        ]
+        registry = {"1": _greg(1, app_id=1001, name="Game", fs_name="game.z64")}
+        emitted = collapse_sibling_groups(members, registry, installed_rom_ids=set(), complete_group_view=False)
+        assert [e["rom_id"] for e in emitted] == [1]
+        assert all(BIND_ROM_ID_KEY not in e for e in emitted)

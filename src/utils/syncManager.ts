@@ -122,7 +122,11 @@ async function processUnitShortcuts(
       const appId = await resolveShortcutAppId(item, existing);
       if (appId) {
         romIdToAppId[String(item.rom_id)] = appId;
-        artworkTargets.push({ appId, romId: item.rom_id, name: item.name });
+        // Artwork follows the BINDING target: on a rebind entry the shortcut is
+        // keyed to the vanished sibling (item.rom_id) but the backend finalizes
+        // the REPRESENTATIVE's cover (bind_rom_id), and covers can be
+        // language-/edition-specific — so fetch the representative's art (ADR-0021).
+        artworkTargets.push({ appId, romId: item.bind_rom_id ?? item.rom_id, name: item.name });
       }
     } catch (e) {
       logError(`Per-unit: failed to process shortcut for rom ${item.rom_id}: ${e}`);

@@ -30,6 +30,23 @@ You can tap **Cancel Sync** to stop mid-sync. Games already added will remain. A
 collections — stale-collection cleanup only runs after a sync finishes in full, so cancelling can never wipe the
 collections for platforms the run did not reach.
 
+## Multiple versions of a game
+
+When your RomM library holds several dumps of the same game — region variants like `(USA)` / `(Europe)` / `(Japan)`,
+multi-language dumps, or revisions — the plugin treats them as **one game** and creates **one Steam shortcut** for it,
+not one per dump. RomM already groups these versions together; the plugin mirrors that grouping. Because of this, the
+sync counts (in the preview and the completion toast) count **games**, not individual files: a five-region game is one
+"added", not five.
+
+The version the shortcut points at (the **active version**) is chosen automatically: a version you have already
+installed wins, otherwise the shortcut follows the "SET DEFAULT" version you picked in RomM, otherwise the first
+alphabetically. Switching versions from inside the plugin is a later feature; for now the active version follows what is
+installed and RomM's default.
+
+If you synced **before** this update and already have several Steam shortcuts for one game, those existing shortcuts are
+**kept** — the plugin never deletes a shortcut you can see. They converge to a single entry naturally as you uninstall
+the extra versions.
+
 ## Per-Platform Toggles
 
 Not every platform in your RomM library needs to be synced to Steam. Use the **Platforms** page to enable or disable
@@ -95,7 +112,9 @@ You can refresh artwork for any individual game from its
 ## Re-Syncing
 
 Running sync again updates your library with any changes from RomM (new ROMs, removed platforms, etc.). Existing
-shortcuts are updated rather than duplicated.
+shortcuts are updated rather than duplicated. If the specific version a shortcut pointed at is removed from RomM but the
+game still has other versions on the server, the shortcut is **kept** and quietly re-pointed at a surviving version — it
+is not torn down and re-created, so its artwork, collections, and playtime are preserved.
 
 ## Removing Shortcuts
 

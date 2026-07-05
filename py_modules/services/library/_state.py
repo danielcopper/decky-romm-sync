@@ -59,6 +59,14 @@ class LibrarySyncStateBox:
     sync_last_heartbeat: float = 0.0
     sync_progress: dict[str, Any] = field(default_factory=_default_progress)
     pending_sync: dict[int, dict[str, Any]] = field(default_factory=dict)
+    # Every fetched ROM of the active unit (built shortcut-shape, keyed by
+    # rom_id), not just the emitted representatives in ``pending_sync``. The
+    # per-unit commit upserts an identity + version-metadata row for ALL of them
+    # (ADR-0021 group-aware persist) while only representatives carry a binding.
+    # Populated alongside ``pending_sync`` in ``_sync_one_unit`` and reset with
+    # it; kept across the heartbeat-timeout abandon window so a late ack can
+    # still drive the full persist.
+    pending_all_roms: dict[int, dict[str, Any]] = field(default_factory=dict)
     pending_delta: PreviewDelta | None = None
     pending_collection_memberships: dict[str, list[int]] = field(default_factory=dict)
     pending_platform_rom_ids: set[int] | None = None

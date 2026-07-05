@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 from domain.platform_names import decode_platform_names
 from domain.rom import Rom
 from domain.rom_metadata_mapping import build_rom_metadata
-from domain.sync_diff import should_include_in_platform_collection
+from domain.sync_diff import BIND_ROM_ID_KEY, should_include_in_platform_collection
 from domain.sync_stage import SyncStage
 
 if TYPE_CHECKING:
@@ -116,28 +116,50 @@ class SyncReporter:
         (every bound ROM, including ones an incremental sync skipped —
         they remain rows), keyed by the platform's live display name
         resolved from *platform_names* (the work-queue), falling back to
-        the slug when absent. RomM collections keep the per-run
-        membership accumulator and resolve each ``rom_id`` to its bound
-        ``shortcut_app_id`` via ``uow.roms``. Both loops EXCLUDE rows
-        whose ``shortcut_app_id`` is ``None`` (unbound / stale).
+        the slug when absent.
+
+        RomM collections keep the per-run membership accumulator and resolve
+        each member ``rom_id`` to a Steam appId with a **sibling-group
+        fallback** (ADR-0021): a bound member uses its own binding; an unbound
+        member maps to its group's bound sibling's appId, so favouriting /
+        collecting ANY version of a game puts the game's single shortcut into
+        the Steam collection. Per-collection appIds are de-duplicated — several
+        siblings of one group collapse onto the one shortcut. The platform loop
+        still excludes rows whose ``shortcut_app_id`` is ``None``.
         """
         create_groups = self._settings.get("collection_create_platform_groups", False)
         platform_app_ids: dict[str, list[int]] = {}
+        # Each sibling group's bound appId, keyed by sibling_group_key. When a
+        # group carries several bound rows (grandfathered duplicates) the
+        # smallest rom_id's binding wins, deterministically.
+        group_bound: dict[str, tuple[int, int]] = {}
         for rom in uow.roms.iter_all():
             if rom.shortcut_app_id is None:
                 continue
-            if not should_include_in_platform_collection(rom.rom_id, pending_platform_rom_ids, create_groups):
-                continue
-            display = platform_names.get(rom.platform_slug, rom.platform_slug)
-            platform_app_ids.setdefault(display, []).append(rom.shortcut_app_id)
+            if should_include_in_platform_collection(rom.rom_id, pending_platform_rom_ids, create_groups):
+                display = platform_names.get(rom.platform_slug, rom.platform_slug)
+                platform_app_ids.setdefault(display, []).append(rom.shortcut_app_id)
+            group_key = rom.sibling_group_key
+            if group_key is not None:
+                current = group_bound.get(group_key)
+                if current is None or rom.rom_id < current[0]:
+                    group_bound[group_key] = (rom.rom_id, rom.shortcut_app_id)
 
+        group_bound_app_id = {key: app_id for key, (_rid, app_id) in group_bound.items()}
         romm_collection_app_ids: dict[str, list[int]] = {}
         for coll_name, rom_ids in pending_collection_memberships.items():
-            app_ids = [
-                rom.shortcut_app_id
-                for rid in rom_ids
-                if (rom := uow.roms.get(rid)) is not None and rom.shortcut_app_id is not None
-            ]
+            seen: set[int] = set()
+            app_ids: list[int] = []
+            for rid in rom_ids:
+                rom = uow.roms.get(rid)
+                if rom is None:
+                    continue
+                app_id = rom.shortcut_app_id
+                if app_id is None and rom.sibling_group_key is not None:
+                    app_id = group_bound_app_id.get(rom.sibling_group_key)
+                if app_id is not None and app_id not in seen:
+                    seen.add(app_id)
+                    app_ids.append(app_id)
             if app_ids:
                 romm_collection_app_ids[coll_name] = app_ids
 
@@ -258,88 +280,104 @@ class SyncReporter:
 
     # ── Report unit results (per-unit pipeline) ──────────────────
 
-    def _commit_unit_results_io(self, rom_id_to_app_id, acked_roms):
-        """Sync helper: finalise artwork file names, then upsert ``roms`` + metadata for one unit.
+    def _commit_unit_results_io(self, rom_id_to_app_id, unit_roms):
+        """Finalise artwork names, then persist EVERY fetched ROM of the unit.
 
-        ADR-0006 two-pass: cover-file RENAME is filesystem I/O so it runs
-        FIRST (outside any UoW); the final paths are collected, then one
-        short write UoW upserts every acked ROM via
-        :meth:`_upsert_acked_rom`, which lands each ROM row and its cached
-        metadata atomically. ``acked_roms`` is the live RomM fetch keyed by
-        rom_id so the per-rom upsert can stamp metadata in the same write
-        UoW as the ``roms`` row.
+        Group-aware commit (ADR-0021): the unit's whole live RomM fetch
+        (*unit_roms*) is upserted — one ``roms`` row per sibling for its
+        identity + version metadata — while only the acked representatives
+        carry a Steam-shortcut binding. A non-representative sibling keeps
+        whatever binding it already had (usually none); a bound row not
+        re-acked this cycle is never silently unbound.
+
+        The frontend ack is **translated through any rebind** first: a rebind
+        entry is keyed by the vanished bound sibling (so the frontend reused its
+        shortcut), but the binding — and the finalised cover — move onto the
+        surviving representative named in ``bind_rom_id``.
+
+        ADR-0006 two-pass: cover-file RENAME is filesystem I/O so it runs FIRST
+        (outside any UoW); the final paths are collected, then one short write
+        UoW upserts every ROM (Rom row first, cached metadata second — FK-safe),
+        so a ROM and its metadata land atomically.
         """
         grid = self._steam_config.grid_dir()
         box = self._sync_state
 
-        # ``acked_roms`` is the live RomM fetch for the ROMs the frontend
-        # acked — the only source of ``metadatum``. Keyed by rom_id so the
-        # Pass-2 loop can stamp metadata in the same iteration as the upsert.
-        roms_by_id = {int(r["id"]): r for r in acked_roms if "id" in r}
-
-        # Pass 1: rename staged covers to their final ``{app_id}p.png``
-        # path (file I/O — no UoW open).
-        finalized: dict[str, str] = {}
+        # Translate the ack onto binding targets (rebind moves the binding off
+        # the vanished sibling onto its representative) and finalise the staged
+        # cover to ``{app_id}p.png``, keyed by the target rom_id.
+        binding: dict[int, int] = {}
+        finalized: dict[int, str] = {}
         for rom_id_str, app_id in rom_id_to_app_id.items():
-            pending = box.pending_sync.get(int(rom_id_str), {})
-            finalized[rom_id_str] = self._finalize_cover_path(grid, pending.get("cover_path", ""), app_id, rom_id_str)
+            entry = box.pending_sync.get(int(rom_id_str), {})
+            target = int(entry.get(BIND_ROM_ID_KEY, int(rom_id_str)))
+            binding[target] = int(app_id)
+            finalized[target] = self._finalize_cover_path(grid, entry.get("cover_path", ""), int(app_id), str(target))
 
-        # Pass 2: one write UoW for the whole unit's ROM + metadata upserts.
+        # ``unit_roms`` is the live RomM fetch for the whole unit — the source of
+        # each ROM's ``metadatum``. Keyed by rom_id so the persist loop can stamp
+        # metadata in the same iteration as the upsert.
+        roms_by_id = {int(r["id"]): r for r in unit_roms if "id" in r}
+
         with self._uow_factory() as uow:
-            for rom_id_str, app_id in rom_id_to_app_id.items():
-                self._upsert_acked_rom(uow, rom_id_str, app_id, finalized, roms_by_id)
+            for raw in unit_roms:
+                if "id" in raw:
+                    self._persist_synced_rom(uow, int(raw["id"]), binding, finalized, roms_by_id)
 
         steam_input_mode = self._settings.get("steam_input_mode", "default")
-        if steam_input_mode != "default" and rom_id_to_app_id:
+        if steam_input_mode != "default" and binding:
             try:
-                self._steam_config.set_steam_input_config(
-                    [int(aid) for aid in rom_id_to_app_id.values()], mode=steam_input_mode
-                )
+                self._steam_config.set_steam_input_config([int(aid) for aid in binding.values()], mode=steam_input_mode)
             except Exception as e:
                 self._logger.error(f"Failed to set Steam Input config: {e}")
 
-    def _upsert_acked_rom(self, uow, rom_id_str, app_id, finalized, roms_by_id) -> None:
-        """Upsert one acked ROM + its cached metadata into the open write UoW.
+    def _persist_synced_rom(self, uow, rom_id, binding, finalized, roms_by_id) -> None:
+        """Upsert one fetched ROM + its cached metadata into the open write UoW.
 
-        Builds the ``Rom`` via ``Rom.synced`` (which validates untrusted
-        RomM fields; a ``ValueError`` is caught here so one bad row is
-        skipped while the rest of the unit still commits), read-merges the
-        plugin-resolved ids (``sgdb_id`` / ``ra_id`` / ``cover_path`` follow
-        "non-None new wins, else preserve existing, else None"), saves the
-        Rom, then stamps its cached metadata. Saving the Rom before its
-        metadata satisfies the ``rom_metadata.rom_id → roms(rom_id)`` FK at
-        commit, so a ROM and its metadata land atomically.
+        Reads the built identity + version fields from ``pending_all_roms`` (the
+        whole unit's shortcut-shaped build), binds the ROM only when it is a
+        binding target this cycle (else preserves its existing binding — a
+        non-representative sibling stays unbound, a bound row not re-acked keeps
+        its shortcut), read-merges the plugin-resolved ids
+        (``sgdb_id`` / ``ra_id`` / ``cover_path`` follow "non-None new wins,
+        else preserve existing, else None"), saves the Rom, then stamps its
+        cached metadata. Saving the Rom before its metadata satisfies the
+        ``rom_metadata.rom_id → roms(rom_id)`` FK at commit. ``Rom.synced``
+        validates untrusted RomM fields; a ``ValueError`` is caught so one bad
+        row is skipped while the rest of the unit still commits.
         """
-        box = self._sync_state
-        pending = box.pending_sync.get(int(rom_id_str), {})
-        rom_id = int(rom_id_str)
+        built = self._sync_state.pending_all_roms.get(rom_id, {})
         existing = uow.roms.get(rom_id)
+        # Bind a binding target this cycle; otherwise preserve any existing
+        # binding (a non-representative sibling stays unbound, a bound row not
+        # re-acked keeps its shortcut).
+        app_id = binding.get(rom_id, existing.shortcut_app_id if existing is not None else None)
         try:
             rom = Rom.synced(
                 rom_id=rom_id,
-                platform_slug=pending.get("platform_slug", ""),
-                name=pending.get("name", ""),
-                fs_name=pending.get("fs_name", ""),
-                shortcut_app_id=int(app_id),
+                platform_slug=built.get("platform_slug", ""),
+                name=built.get("name", ""),
+                fs_name=built.get("fs_name", ""),
+                shortcut_app_id=app_id,
                 synced_at=self._clock.now().isoformat(),
-                igdb_id=pending.get("igdb_id"),
-                sibling_group_key=pending.get("sibling_group_key"),
-                regions=tuple(pending.get("regions") or ()),
-                languages=tuple(pending.get("languages") or ()),
-                revision=pending.get("revision") or "",
-                tags=tuple(pending.get("tags") or ()),
-                is_main_sibling=bool(pending.get("is_main_sibling", False)),
+                igdb_id=built.get("igdb_id"),
+                sibling_group_key=built.get("sibling_group_key"),
+                regions=tuple(built.get("regions") or ()),
+                languages=tuple(built.get("languages") or ()),
+                revision=built.get("revision") or "",
+                tags=tuple(built.get("tags") or ()),
+                is_main_sibling=bool(built.get("is_main_sibling", False)),
             )
         except ValueError as e:
-            self._logger.warning(f"Skipping invalid ROM {rom_id_str} during commit: {e}")
+            self._logger.warning(f"Skipping invalid ROM {rom_id} during commit: {e}")
             return
-        cover_path = finalized.get(rom_id_str) or (existing.cover_path if existing is not None else None)
+        cover_path = finalized.get(rom_id) or (existing.cover_path if existing is not None else None)
         if cover_path:
             rom.update_cover_path(cover_path)
-        sgdb_id = self._merge_optional_id(pending.get("sgdb_id"), existing.sgdb_id if existing else None)
+        sgdb_id = self._merge_optional_id(built.get("sgdb_id"), existing.sgdb_id if existing else None)
         if sgdb_id is not None:
             rom.assign_sgdb_id(sgdb_id)
-        ra_id = self._merge_optional_id(pending.get("ra_id"), existing.ra_id if existing else None)
+        ra_id = self._merge_optional_id(built.get("ra_id"), existing.ra_id if existing else None)
         if ra_id is not None:
             rom.assign_ra_id(ra_id)
         uow.roms.save(rom)
@@ -396,9 +434,11 @@ class SyncReporter:
         * The orchestrator abandoned the unit on a heartbeat timeout
           (``unit_abandoned``): the frontend already created the Steam
           shortcuts, so commit the delivered bindings here rather than
-          discard them (#1052). Rebuilds ``acked_roms`` from the stashed
-          unit ROMs (the ``metadatum`` source) so metadata is stamped too,
-          then clears the abandoned-unit stash.
+          discard them (#1052). Passes the whole stashed unit fetch
+          (``box.pending_unit_roms``) to ``commit_unit_results`` — every
+          fetched sibling is upserted (identity + metadata, the ``metadatum``
+          source) and only the acked representatives bind — then clears the
+          abandoned-unit stash.
         * Neither (a stray duplicate ack for the active unit): no-op, so
           nothing is double-committed.
         """
@@ -414,11 +454,11 @@ class SyncReporter:
         if box.unit_complete_event is not None:
             box.unit_complete_event.set()
         elif box.unit_abandoned:
-            acked_roms = [r for r in box.pending_unit_roms if str(r["id"]) in rom_id_to_app_id]
-            await self.commit_unit_results(dict(rom_id_to_app_id), acked_roms)
+            await self.commit_unit_results(dict(rom_id_to_app_id), box.pending_unit_roms)
             box.unit_abandoned = False
             box.pending_unit_roms = []
             box.pending_sync = {}
+            box.pending_all_roms = {}
             box.last_unit_results = None
             box.active_unit_id = None
 
@@ -442,23 +482,23 @@ class SyncReporter:
             return False
         return str(run_id) == str(box.current_sync_id) and str(unit_id) == str(box.active_unit_id)
 
-    async def commit_unit_results(self, rom_id_to_app_id, acked_roms):
+    async def commit_unit_results(self, rom_id_to_app_id, unit_roms):
         """Per-unit commit: cover-path finalize then atomic ``roms`` + metadata upsert.
 
         Called once the frontend has acked the unit's shortcuts — by the
         orchestrator on the happy path, or by :meth:`report_unit_results`
-        itself on the heartbeat-timeout late-ack path (#1052). The ``roms``
-        upsert and the cached-metadata stamp land in one write UoW (Rom row
-        first, then ``rom_metadata`` — FK-safe), so a ROM and its metadata
-        are always consistent across a crash. ``acked_roms`` is the live
-        RomM fetch for the acked ROMs — the source of each ROM's
-        ``metadatum``.
+        itself on the heartbeat-timeout late-ack path (#1052). ``unit_roms`` is
+        the whole unit's live RomM fetch: a ``roms`` row is upserted for EVERY
+        sibling (identity + version metadata, ADR-0021), but only the acked
+        representatives carry a binding. The upsert and the cached-metadata
+        stamp land in one write UoW (Rom row first, then ``rom_metadata`` —
+        FK-safe), so a ROM and its metadata are always consistent across a crash.
 
         Records every bound appId in the shared box so the stale-removal scan
         excludes appIds this run committed, whichever path drove the commit —
         a new rom_id reusing an old appId must not look stale (#1036).
         """
-        await self._loop.run_in_executor(None, self._commit_unit_results_io, rom_id_to_app_id, acked_roms)
+        await self._loop.run_in_executor(None, self._commit_unit_results_io, rom_id_to_app_id, unit_roms)
         self._sync_state.committed_app_ids.update(int(aid) for aid in rom_id_to_app_id.values())
 
     # ── Registry queries ─────────────────────────────────────────

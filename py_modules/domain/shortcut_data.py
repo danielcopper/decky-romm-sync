@@ -185,6 +185,11 @@ def build_shortcuts_data(
             "rom_id": rom["id"],
             "name": rom["name"],
             "fs_name": rom.get("fs_name", ""),
+            # Alphabetical tie-break key for sibling-group representative
+            # resolution (ADR-0021): RomM ships it on the list endpoint; fall
+            # back to the filename stem when absent. No DB column — carried only
+            # through the sync pipeline, never persisted.
+            "fs_name_no_ext": rom.get("fs_name_no_ext") or os.path.splitext(rom.get("fs_name", ""))[0],
             "exe": exe,
             "start_dir": start_dir,
             "launch_options": (
@@ -201,7 +206,13 @@ def build_shortcuts_data(
             "sgdb_id": rom.get("sgdb_id"),
             "ra_id": rom.get("ra_id"),
             "cover_path": "",
-            "sibling_group_key": compute_sibling_group_key(rom),
+            # Prefer a sibling_group_key already on the dict — the incremental-skip
+            # path reconstructs ROM dicts from persisted rows that carry the
+            # authoritative key (with the real platform_id baked in) but no
+            # ``platform_id`` field, so recomputing would yield ``…:None`` and split
+            # the group's bucket from a freshly-fetched sibling's (#1296). A live
+            # RomM fetch has no such key, so it computes from the raw dict.
+            "sibling_group_key": rom.get("sibling_group_key") or compute_sibling_group_key(rom),
             "regions": list(rom.get("regions") or []),
             "languages": list(rom.get("languages") or []),
             "revision": rom.get("revision") or "",
