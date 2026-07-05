@@ -31,11 +31,23 @@ export interface RommConnectionChangedDetail {
   state: "checking" | "connected" | "offline";
 }
 
+/**
+ * A RomM play session started or ended (#1313). Dispatched by `sessionManager`
+ * on game start/stop and on reload-adoption so surfaces like `CustomPlayButton`
+ * can flip to (or away from) the state-aware Resume button without polling.
+ */
+export interface RommSessionChangedDetail {
+  running: boolean;
+  appId: number;
+  romId: number;
+}
+
 declare global {
   interface WindowEventMap {
     romm_data_changed: CustomEvent<RommDataChangedDetail>;
     romm_rom_uninstalled: CustomEvent<RommRomUninstalledDetail>;
     romm_tab_switch: CustomEvent<RommTabSwitchDetail>;
     romm_connection_changed: CustomEvent<RommConnectionChangedDetail>;
+    romm_session_changed: CustomEvent<RommSessionChangedDetail>;
   }
 }

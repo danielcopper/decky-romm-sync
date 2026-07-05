@@ -34,6 +34,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from fakes._romm_save_semantics import check_add_save_conflict, compute_is_current, tag_filename
+from lib.errors import RommUnprocessableEntityError
 
 if TYPE_CHECKING:
     from models.play_sessions import (
@@ -73,6 +74,19 @@ class FakeRommApi:
         # ``skipped`` verdict — models RomM refusing a sub-second launch-death.
         # Default 0 never rejects (durations are >= 0), so existing tests stand.
         self.reject_below_duration_ms: int = 0
+        # When > 0, ingest models RomM's ATOMIC batch validation: if ANY submitted
+        # entry's duration_ms is below this floor, the WHOLE POST is rejected with
+        # HTTP 422 (``RommUnprocessableEntityError``) naming every sub-floor index
+        # in ``detail[].loc``, and nothing is stored — mirroring #1312's
+        # whole-request poison. Distinct from ``reject_below_duration_ms`` (a
+        # per-entry ``skipped`` verdict inside a 2xx response).
+        self.reject_batch_below_duration_ms: int = 0
+        # When True, a MULTI-entry 422 carries ``detail=None`` (a proxy/Cloudflare
+        # Tunnel mangled the validation body), while a SINGLE-entry 422 still names
+        # its index — modelling #1312's L2 no-usable-index path where the batch
+        # gives no target but the per-session re-POST does. Requires
+        # ``reject_batch_below_duration_ms > 0`` to fire.
+        self.mangle_batch_422_detail: bool = False
         self.saves: dict[int, dict[str, Any]] = {}
         self.devices: list[dict[str, Any]] = []
         self.current_user: dict[str, Any] = {"id": 1, "username": "tester"}
@@ -372,6 +386,19 @@ class FakeRommApi:
     def ingest_play_sessions(self, device_id: str, sessions: list[PlaySessionIngestEntry]) -> PlaySessionIngestResponse:
         self._log("ingest_play_sessions", (device_id, sessions))
         self._check_fail(self.ingest_play_sessions_side_effect)
+        if self.reject_batch_below_duration_ms > 0:
+            bad = [i for i, s in enumerate(sessions) if s["duration_ms"] < self.reject_batch_below_duration_ms]
+            if bad:
+                # Atomic whole-request rejection: nothing is stored. The 422 body
+                # names every offending index, UNLESS the batch is multi-entry and
+                # ``mangle_batch_422_detail`` is set — modelling a proxy that
+                # strips the detail from a multi-entry validation error.
+                detail = (
+                    None
+                    if (self.mangle_batch_422_detail and len(sessions) > 1)
+                    else [{"loc": ["body", "sessions", i], "msg": "end_time must be after start_time"} for i in bad]
+                )
+                raise RommUnprocessableEntityError("HTTP 422: Unprocessable Entity", detail=detail)
         results: list[PlaySessionIngestResult] = []
         created = 0
         skipped = 0

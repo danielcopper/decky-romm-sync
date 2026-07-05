@@ -58,6 +58,22 @@ class RommConflictError(RommApiError):
     status_code = 409
 
 
+class RommUnprocessableEntityError(RommApiError):
+    """422 Unprocessable Entity — the request body failed server-side validation.
+
+    Carries the parsed validation ``detail`` body (RomM/FastAPI's
+    ``{"detail": [{"loc": [...], "msg": ...}, ...]}``) so a caller can identify
+    which entries of a batch endpoint the server rejected. Non-retryable: the
+    same body draws the same validation verdict, so replaying it cannot succeed.
+    """
+
+    status_code = 422
+
+    def __init__(self, message, *, detail=None, url=None, method=None):
+        self.detail = detail
+        super().__init__(message, url=url, method=method)
+
+
 class RommServerError(RommApiError):
     """5xx server errors (500, 502, 503, etc.)."""
 

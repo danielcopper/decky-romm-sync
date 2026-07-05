@@ -71,7 +71,11 @@ manager, sync, and playtime) is absent, so desktop-mode launches are entirely un
   the button being disabled). Running the pre-launch sync on an already-running game would upload the save
   **mid-session** — while the emulator holds the file open — and manufacture a conflict at exit (the watcher
   additionally cancels a launch Steam blocks as "already running" anyway). Both surfaces skip the sync and just bring
-  the game to front instead (#1148 round 2).
+  the game to front instead (#1148 round 2). The Play button later became **state-aware** (#1313): when running is
+  detected it renders **Resume** and brings the game to front via Steam's own gamescope resume path
+  (`SteamUIStore.SetRunningApp` + `NavigateToRunningApp`, a dialog-free UI navigation that fires no `GameActionStart`),
+  so on that surface the guard is now the **backstop for the render→click race** rather than the primary path — the
+  button honestly reflects running state instead of relying on the guard to catch a Play press.
 - Because the watcher cancels **first** and only then does async work, **there is no race** — the defect of awaiting
   against a live launch is gone by construction.
 
@@ -148,5 +152,8 @@ local file to `.romm-backup`, so there is no silent data loss. "Unknown because 
 
 [#1051](https://github.com/danielcopper/decky-romm-sync/issues/1051) (umbrella),
 [#1144](https://github.com/danielcopper/decky-romm-sync/issues/1144) (non-plugin bypass, resolved here),
-[#1146](https://github.com/danielcopper/decky-romm-sync/issues/1146). The suspend-time playtime fix and the
-multi-file-slot conflict fix are bundled in the same work but are separate bugfixes, not part of this ADR's decision.
+[#1146](https://github.com/danielcopper/decky-romm-sync/issues/1146),
+[#1313](https://github.com/danielcopper/decky-romm-sync/issues/1313) (the state-aware Resume button — the Play button
+reflects running state and foregrounds via `SteamUIStore` navigation, keeping this guard as its backstop). The
+suspend-time playtime fix and the multi-file-slot conflict fix are bundled in the same work but are separate bugfixes,
+not part of this ADR's decision.

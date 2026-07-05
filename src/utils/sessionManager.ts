@@ -131,6 +131,15 @@ function clearSessionBreadcrumb(): void {
   }
 }
 
+/**
+ * Notify open surfaces that a RomM play session started or ended, so they can
+ * flip to/from the state-aware Resume button without polling (#1313). A frontend
+ * DOM CustomEvent — `CustomPlayButton` matches it on `romId`.
+ */
+function dispatchSessionChanged(running: boolean, appId: number, romId: number): void {
+  globalThis.dispatchEvent(new CustomEvent("romm_session_changed", { detail: { running, appId, romId } }));
+}
+
 async function handleGameStart(appId: number): Promise<void> {
   const romId = getRomIdForApp(appId);
   if (!romId) return; // Not a RomM shortcut
@@ -138,6 +147,7 @@ async function handleGameStart(appId: number): Promise<void> {
   logInfo(`Session start: romId=${romId}, appId=${appId}`);
   activeRomId = romId;
   sessionStartTime = Date.now();
+  dispatchSessionChanged(true, appId, romId);
 
   // Attest the open session so a reload mid-game can adopt and finalize it.
   writeSessionBreadcrumb({ v: SESSION_BREADCRUMB_VERSION, appId, romId, startMs: sessionStartTime });
@@ -156,6 +166,12 @@ async function handleGameStop(): Promise<void> {
 
   const romId = activeRomId;
   logInfo(`Session end: romId=${romId}`);
+
+  // Flip any open Resume button back to Play before we lose the appId mapping
+  // (#1313). Best-effort — a missing reverse-map entry leaves the button to
+  // self-heal on remount; the button keys on romId regardless.
+  const stoppedAppId = getAppIdForRom(romId);
+  if (stoppedAppId !== null) dispatchSessionChanged(false, stoppedAppId, romId);
 
   // Clear active session immediately to avoid double-processing. The breadcrumb
   // goes with it — the stop is observed, so there is nothing left to adopt.
@@ -275,6 +291,7 @@ async function adoptOrphanedSession(): Promise<void> {
       // would discard the pre-reload playtime the backend already holds.
       activeRomId = runningRomId;
       sessionStartTime = crumb.startMs;
+      dispatchSessionChanged(true, appId, runningRomId);
       logInfo(`Adopted running session from breadcrumb: romId=${runningRomId}, appId=${appId}`);
     } else {
       // (a′) A game is running but no usable breadcrumb (missing / mismatched /
@@ -289,6 +306,7 @@ async function adoptOrphanedSession(): Promise<void> {
         romId: runningRomId,
         startMs: sessionStartTime,
       });
+      dispatchSessionChanged(true, appId, runningRomId);
       try {
         await recordSessionStart(runningRomId);
       } catch (e) {

@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, waitFor, act } from "@testing-library/react";
 import { toaster } from "@decky/api";
-import { showContextMenu } from "@decky/ui";
+import { showContextMenu, Navigation } from "@decky/ui";
 import type { ReactElement } from "react";
 import { CustomPlayButton } from "./CustomPlayButton";
 import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
@@ -633,10 +633,13 @@ describe("CustomPlayButton — pre-launch savefiles_in_content_dir benign skip (
 });
 
 // #1148 round 2: the Play button is the sibling of the launch interceptor's
-// already-running guard. A Play press on an already-running game must NOT run the
-// pre-launch sync (it would upload the save mid-session and manufacture an exit
-// conflict); it skips the whole gate/sync funnel and just brings the game to
-// front. cached rom_id=42, appId=100 → the "Play" state.
+// already-running guard in `handlePlay`. Since #1313 the button renders Resume
+// (not Play) whenever running is detected at/after mount, so this guard is now
+// the BACKSTOP for the render→click RACE: the button shows Play (nothing running
+// at mount), the session starts WITHOUT a session event reaching this button, and
+// a Play press then must still skip the pre-launch sync (which would upload the
+// save mid-session and manufacture an exit conflict) and just bring the game to
+// front. cached rom_id=42, appId=100.
 describe("CustomPlayButton — already-running guard (#1148 round 2)", () => {
   beforeEach(() => {
     // This file has no global mock-clear, so backend callable call history leaks
@@ -673,11 +676,13 @@ describe("CustomPlayButton — already-running guard (#1148 round 2)", () => {
     });
   });
 
-  it("skips the gate/sync and brings the game to front when this rom is the live session", async () => {
-    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
-
+  it("backstop: skips the gate/sync when the live session appears between render and click", async () => {
+    // Nothing running at mount → the button renders Play (no Resume overlay).
     const { findByText } = render(<CustomPlayButton appId={100} />);
     const playBtn = await findByText("Play");
+    // The session starts after render, before the click — the render→click race
+    // the handlePlay guard exists to catch.
+    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
     await act(async () => {
       playBtn.click();
     });
@@ -692,12 +697,11 @@ describe("CustomPlayButton — already-running guard (#1148 round 2)", () => {
     );
   });
 
-  it("skips the gate/sync when a running-app source reports the appId running", async () => {
-    vi.mocked(getActiveSessionRomId).mockReturnValue(null);
-    vi.mocked(isAppRunning).mockReturnValue(true);
-
+  it("backstop: skips the gate/sync when a running-app source reports the appId at click", async () => {
     const { findByText } = render(<CustomPlayButton appId={100} />);
     const playBtn = await findByText("Play");
+    // Running-app source flips true after render (post-mount race).
+    vi.mocked(isAppRunning).mockReturnValue(true);
     await act(async () => {
       playBtn.click();
     });
@@ -1695,5 +1699,278 @@ describe("CustomPlayButton — pre-launch relaunch re-confirm (#1150)", () => {
       vi.useRealTimers();
       logSpy.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1313 — the state-aware Resume button. When the game is already running the
+// button renders "Resume" (top precedence over install/conflict/download) and
+// brings the live session to the foreground via SteamUIStore navigation
+// (SetRunningApp + NavigateToRunningApp) — Steam's own gamescope "Resume Game"
+// path, NOT the pre-launch sync funnel and NOT the desktop-only RaiseWindowForGame
+// (which silently no-ops in Game Mode). Detection is reactive: seeded at mount from
+// getActiveSessionRomId()/isAppRunning and flipped live by the romm_session_changed
+// DOM event. The #1148/#1308 already-running guards stay intact as backstops.
+// ---------------------------------------------------------------------------
+describe("CustomPlayButton — state-aware Resume (#1313)", () => {
+  let setRunningApp: ReturnType<typeof vi.fn>;
+  let navigateToRunningApp: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getCachedGameDetail).mockReset();
+    vi.mocked(toaster.toast).mockReset();
+    // Detection defaults: not running (overridden per test).
+    vi.mocked(getActiveSessionRomId).mockReturnValue(null);
+    vi.mocked(isAppRunning).mockReturnValue(false);
+    // Gate predecessors so the self-heal fall-through can reach the full funnel.
+    vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "default" });
+    vi.mocked(backend.checkCoreChange).mockResolvedValue({ changed: false });
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: true,
+      message: "",
+      synced: 0,
+      errors: [],
+      conflicts: [],
+    });
+    // dispatchLaunch re-confirms launch_options first; keep that fetch fast (a
+    // later describe leaves it hanging and clearAllMocks doesn't reset the impl).
+    vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue(null);
+    // SteamUIStore is the foreground path: SetRunningApp + NavigateToRunningApp.
+    // Fresh spies each test so call assertions are clean; RunGame is the
+    // launch/self-heal sink, appStore resolves a stable gameId.
+    setRunningApp = vi.fn();
+    navigateToRunningApp = vi.fn();
+    vi.stubGlobal("SteamClient", { Apps: { RunGame: vi.fn() } });
+    vi.stubGlobal("SteamUIStore", { SetRunningApp: setRunningApp, NavigateToRunningApp: navigateToRunningApp });
+    vi.stubGlobal("appStore", {
+      GetAppOverviewByAppID: vi.fn(() => ({ GetGameID: () => "gid-1" })),
+      allApps: [],
+    });
+    vi.mocked(getCachedGameDetail).mockResolvedValue({
+      found: true,
+      rom_id: 42,
+      rom_name: "Test ROM",
+      installed: true,
+    });
+  });
+
+  it("renders Resume (not Play) and foregrounds via SteamUIStore when this rom is the live session — no gate/sync/RunGame", async () => {
+    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+
+    const { findByText, queryByText } = render(<CustomPlayButton appId={100} />);
+
+    // Overlay wins: Resume shows, Play does not.
+    await findByText("Resume");
+    expect(queryByText("Play")).toBeNull();
+
+    const resumeBtn = await findByText("Resume");
+    await act(async () => {
+      resumeBtn.click();
+    });
+
+    // Foreground the live session via Steam's own resume path (select + navigate)…
+    await waitFor(() => expect(setRunningApp).toHaveBeenCalledWith(100));
+    expect(navigateToRunningApp).toHaveBeenCalled();
+    // …and NEVER the launch funnel: no gate op, no sync, no RunGame, no route fallback.
+    expect(vi.mocked(backend.isSaveTrackingConfigured)).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.preLaunchSync)).not.toHaveBeenCalled();
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+    expect(vi.mocked(Navigation.Navigate)).not.toHaveBeenCalled();
+  });
+
+  it("renders Resume and foregrounds when a running-app source reports the appId — no gate/sync/RunGame", async () => {
+    vi.mocked(getActiveSessionRomId).mockReturnValue(null);
+    vi.mocked(isAppRunning).mockReturnValue(true);
+
+    const { findByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Resume");
+    expect(queryByText("Play")).toBeNull();
+
+    const resumeBtn = await findByText("Resume");
+    await act(async () => {
+      resumeBtn.click();
+    });
+
+    // Seeded via isAppRunning(appId) — proves the running-app detection branch.
+    expect(vi.mocked(isAppRunning)).toHaveBeenCalledWith(100);
+    await waitFor(() => expect(setRunningApp).toHaveBeenCalledWith(100));
+    expect(navigateToRunningApp).toHaveBeenCalled();
+    expect(vi.mocked(backend.isSaveTrackingConfigured)).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.preLaunchSync)).not.toHaveBeenCalled();
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+  });
+
+  it("renders Play (overlay inert) when nothing is running at mount", async () => {
+    // Defaults: no live session, isAppRunning false.
+    const { findByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    expect(queryByText("Resume")).toBeNull();
+  });
+
+  it("flips to Resume when a session-start event for this rom arrives", async () => {
+    const { findByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+
+    act(() => {
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_session_changed", { detail: { running: true, appId: 100, romId: 42 } }),
+      );
+    });
+
+    await findByText("Resume");
+    expect(queryByText("Play")).toBeNull();
+  });
+
+  it("flips back to Play when the session-stop event for this rom arrives", async () => {
+    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+
+    const { findByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Resume");
+
+    act(() => {
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_session_changed", { detail: { running: false, appId: 100, romId: 42 } }),
+      );
+    });
+
+    await findByText("Play");
+    expect(queryByText("Resume")).toBeNull();
+  });
+
+  it("ignores a session event for a different rom", async () => {
+    const { findByText, queryByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+
+    act(() => {
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_session_changed", { detail: { running: true, appId: 999, romId: 999 } }),
+      );
+    });
+
+    // Mismatched romId — the overlay never flips.
+    expect(await findByText("Play")).toBeInTheDocument();
+    expect(queryByText("Resume")).toBeNull();
+  });
+
+  it("removes the exact romm_session_changed handler on unmount", async () => {
+    // globalThis listeners aren't tracked by the decky harness, so spy the real
+    // add/remove to prove the []-effect cleanup removed the SAME handler ref.
+    const addSpy = vi.spyOn(globalThis, "addEventListener");
+    const removeSpy = vi.spyOn(globalThis, "removeEventListener");
+
+    const { unmount } = render(<CustomPlayButton appId={100} />);
+    await waitFor(() => expect(vi.mocked(getCachedGameDetail)).toHaveBeenCalled());
+
+    // Capture the exact handler the effect registered for romm_session_changed.
+    const addCall = addSpy.mock.calls.find(([type]) => type === "romm_session_changed");
+    expect(addCall).toBeDefined();
+    const handler = addCall![1];
+
+    unmount();
+
+    // Non-vacuous: the cleanup removed romm_session_changed with that same ref.
+    expect(removeSpy).toHaveBeenCalledWith("romm_session_changed", handler);
+
+    addSpy.mockRestore();
+    removeSpy.mockRestore();
+  });
+
+  it("self-heals a stale overlay: falls through to the launch funnel when nothing is actually running", async () => {
+    // Seed Resume via the session-start EVENT while the live sources stay false
+    // (getActiveSessionRomId null, isAppRunning false), so the liveness gate in
+    // handleResumeGame sees nothing running and falls through to handlePlay — the
+    // already-running guard there is inert, so the FULL funnel runs (self-heal).
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    await findByText("Play");
+    act(() => {
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_session_changed", { detail: { running: true, appId: 100, romId: 42 } }),
+      );
+    });
+    const resumeBtn = await findByText("Resume");
+
+    await act(async () => {
+      resumeBtn.click();
+    });
+
+    // Nothing running → cleared overlay → normal funnel ran (pre-launch sync) → launched.
+    await waitFor(() => expect(vi.mocked(backend.preLaunchSync)).toHaveBeenCalledWith(42));
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
+    // The foreground path was NOT taken — no SteamUIStore selection, no route nav.
+    expect(setRunningApp).not.toHaveBeenCalled();
+    expect(navigateToRunningApp).not.toHaveBeenCalled();
+    expect(vi.mocked(Navigation.Navigate)).not.toHaveBeenCalled();
+  });
+
+  it("falls back to Navigation.Navigate('/apprunning') when NavigateToRunningApp is missing (API drift)", async () => {
+    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+    // Older SteamUI: SetRunningApp present, NavigateToRunningApp absent.
+    vi.stubGlobal("SteamUIStore", { SetRunningApp: setRunningApp });
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const resumeBtn = await findByText("Resume");
+
+    await act(async () => {
+      resumeBtn.click();
+    });
+
+    // Selection still runs; foregrounding falls back to the direct route nav.
+    await waitFor(() => expect(vi.mocked(Navigation.Navigate)).toHaveBeenCalledWith("/apprunning"));
+    expect(setRunningApp).toHaveBeenCalledWith(100);
+    // Still not a launch: no gate, no sync, no RunGame.
+    expect(vi.mocked(backend.preLaunchSync)).not.toHaveBeenCalled();
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+  });
+
+  it("falls back to Navigation.Navigate('/apprunning') when SteamUIStore.SetRunningApp throws (present-but-broken store)", async () => {
+    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+    // Present store, but SetRunningApp is a throwing getter/method — the exact
+    // present-but-broken failure class this whole PR was born from. Without the
+    // guard the async fn rejects, detach() swallows it, and the route fallback is
+    // skipped → user stranded (no foreground, no backstop).
+    const throwingSet = vi.fn(() => {
+      throw new Error("SetRunningApp exploded");
+    });
+    vi.stubGlobal("SteamUIStore", { SetRunningApp: throwingSet, NavigateToRunningApp: navigateToRunningApp });
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const resumeBtn = await findByText("Resume");
+
+    await act(async () => {
+      resumeBtn.click();
+    });
+
+    // The throw is swallowed and the last-resort route nav still foregrounds…
+    await waitFor(() => expect(vi.mocked(Navigation.Navigate)).toHaveBeenCalledWith("/apprunning"));
+    // …and the catch is non-vacuously observable: the debug fallback line was logged.
+    expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
+      expect.stringContaining("SteamUIStore threw, falling back to Navigate"),
+    );
+    // SetRunningApp was attempted (we entered the guarded block); the throw stopped
+    // the navigate-to-running before it ran; and it's still not a launch.
+    expect(throwingSet).toHaveBeenCalledWith(100);
+    expect(navigateToRunningApp).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.preLaunchSync)).not.toHaveBeenCalled();
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+  });
+
+  it("navigates directly when SteamUIStore is absent (extreme API drift)", async () => {
+    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+    // No SteamUIStore at all — the last-resort route nav still foregrounds.
+    vi.stubGlobal("SteamUIStore", undefined);
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const resumeBtn = await findByText("Resume");
+
+    await act(async () => {
+      resumeBtn.click();
+    });
+
+    await waitFor(() => expect(vi.mocked(Navigation.Navigate)).toHaveBeenCalledWith("/apprunning"));
+    // SetRunningApp is unreachable (no store), and it's still not a launch.
+    expect(setRunningApp).not.toHaveBeenCalled();
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
   });
 });

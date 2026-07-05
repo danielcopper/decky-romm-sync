@@ -404,13 +404,21 @@ wizard reappears — a pure `UPDATE`, never deleting rows or baselines (#1276).
 it creates the `rom_playtime_sessions` outbox table (STRICT, `PRIMARY KEY (rom_id, start_time)`,
 `REFERENCES roms(rom_id) ON DELETE CASCADE`, plus an `attempts INTEGER NOT NULL DEFAULT 0` bounded-retry counter) and
 drops the now-readerless `rom_playtime.note_id` column (`ALTER TABLE rom_playtime DROP COLUMN note_id;` — SQLite ≥3.35,
-the Deck ships 3.50). Existing server notes are left in place, harmless. The outbox has two wedge-prevention paths. A
+the Deck ships 3.50). Existing server notes are left in place, harmless. The outbox has three wedge-prevention paths. A
 2xx per-session `skipped` — the server's _explicit_ rejection of that exact `(device, rom, start_time)` window (e.g. a
 sub-second launch-death it refuses on validation) — is dropped immediately via `Playtime.drop_rejected_sessions` with a
 single info log, **without** touching `attempts`: re-POSTing the byte-identical row would draw the same verdict forever.
-Separately, each outbox row's `attempts` counts consecutive ingest `error` (or unknown acknowledged) verdicts;
-PlaytimeService quarantines (drops) a row once it reaches its retry threshold, so an ambiguous never-succeeding verdict
-also cannot wedge the outbox. Either way only that session's playtime is lost.
+A whole-request **HTTP 422** — RomM validates the `sessions` array _atomically_, so one invalid entry rejects the entire
+POST (#1312) — is healed surgically: the adapter surfaces it as `RommUnprocessableEntityError` with the parsed `detail`,
+the pure `rejected_session_indices` kernel reads the failing `detail[].loc[2]` positions, PlaytimeService drops exactly
+those rows (again via `drop_rejected_sessions`) and resubmits the survivors, so one poison entry never blocks the batch;
+a multi-row 422 that names no usable index (a proxy-mangled body) re-submits each session on its own
+(`_flush_single_session`) so the per-session verdict isolates the genuine poison and a valid sibling is never dropped
+for another's fault, and a lone row bumps only its own `attempts`. New sub-second poison is kept out of the outbox at
+the recording seam by the pure `is_ingestable_session` gate (window strictly post-start at second resolution — the same
+rule RomM applies). Separately, each outbox row's `attempts` counts consecutive ingest `error` (or unknown acknowledged)
+verdicts; PlaytimeService quarantines (drops) a row once it reaches its retry threshold, so an ambiguous
+never-succeeding verdict also cannot wedge the outbox. Either way only that session's playtime is lost.
 
 `007_add_last_played.sql` (`user_version = 7`) adds a nullable `last_played TEXT` column to `rom_playtime`
 ([ADR-0018](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0018-native-play-session-tracking-additive-ingest.md),

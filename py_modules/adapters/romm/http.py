@@ -29,6 +29,7 @@ from lib.errors import (
     RommServerError,
     RommSSLError,
     RommTimeoutError,
+    RommUnprocessableEntityError,
     TokenHostMismatchError,
 )
 from lib.url_host import same_origin
@@ -183,6 +184,27 @@ class RommHttpAdapter:
             return RommServerError(msg, status_code=code, url=url, method=method)
         return RommApiError(msg, url=url, method=method)
 
+    def _translate_unprocessable(
+        self, exc: urllib.error.HTTPError, url: str, method: str
+    ) -> RommUnprocessableEntityError:
+        """Build a :class:`RommUnprocessableEntityError` carrying the parsed 422 ``detail``.
+
+        Reads the ``HTTPError`` response body once and extracts its ``detail``
+        list (RomM/FastAPI's per-field validation errors). Any failure to read or
+        parse the body degrades to ``detail=None`` — the caller then falls back to
+        a whole-request strategy rather than a per-entry one.
+        """
+        detail = None
+        try:
+            raw = exc.read().decode()
+            body = json.loads(raw) if raw else None
+            if isinstance(body, dict):
+                detail = body.get("detail")
+        except Exception:  # unreadable / non-JSON body — degrade to no detail
+            detail = None
+        msg = f"HTTP 422: {exc.reason} ({method} {url})"
+        return RommUnprocessableEntityError(msg, detail=detail, url=url, method=method)
+
     @staticmethod
     def _translate_unwrapped(exc: Exception, url: str, method: str) -> RommApiError:
         """Translate non-HTTP exceptions (ssl, timeout, connection) to typed errors."""
@@ -197,6 +219,12 @@ class RommHttpAdapter:
     def translate_http_error(self, exc: Exception, url: str, method: str = "GET") -> RommApiError:
         """Translate urllib/socket exceptions into RommApiError subclasses."""
         if isinstance(exc, urllib.error.HTTPError):
+            if exc.code == 422:
+                # A 422 carries a structured validation body (FastAPI's
+                # ``{"detail": [...]}``). Reading it lets the caller act on WHICH
+                # entries a batch endpoint rejected (#1312) instead of collapsing
+                # the whole request to a generic error.
+                return self._translate_unprocessable(exc, url, method)
             msg = f"HTTP {exc.code}: {exc.reason} ({method} {url})"
             return self._translate_http_status(exc.code, msg, url, method)
         if isinstance(exc, urllib.error.URLError):

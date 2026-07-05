@@ -1462,6 +1462,28 @@ a per-source `diagnostics` string. No single surface is reliable across builds/t
 and a failed round logs what every candidate reported. The same reader backs the already-running skip on both launch
 surfaces — the interceptor and the Play button ([ADR-0015](../adr/0015-single-launch-gate-cancel-then-relaunch.md)).
 
+### State-aware Resume button (#1313)
+
+When the game is already running, the RomM Play button (`CustomPlayButton`) renders **Resume** — top precedence over its
+install / conflict / download states — and a press brings the live session to the foreground via **Steam's own gamescope
+"Resume Game" path**: `SteamUIStore.SetRunningApp(appId)` followed by `SteamUIStore.NavigateToRunningApp()`. This is
+pure UI focus navigation, not a launch: it fires no `GameActionStart` (so the launch interceptor never re-enters) and
+shows no Steam "already running" dialog, which dissolves the mid-session-sync problem at the UX level rather than
+defending against it. (`SteamClient.Apps.RaiseWindowForGame` — the earlier approach — is a **desktop-overlay** call:
+native only acts on it when `SteamUIStore.GetOverlayInstances(appId)` is non-empty, which it never is in gamescope Game
+Mode, so it reports `Success` but silently does nothing. Hence the switch to the store-navigation path.) A click first
+runs a **liveness gate**: if nothing is actually running (`isAppRunning(appId)` / `getActiveSessionRomId()` both say no
+— a stale overlay from a session that ended without a stop event reaching the button), it clears the overlay and falls
+through to the normal launch funnel (self-heal). If `NavigateToRunningApp` is absent on an older SteamUI build, the
+foreground falls back to `Navigation.Navigate("/apprunning")` after the `SetRunningApp` selection (same visible effect).
+
+Detection is **reactive, not polled**: the overlay is seeded synchronously at mount from `getActiveSessionRomId()` /
+`isAppRunning(appId)` (so a page opened mid-session — or after a reload-adoption — shows Resume immediately) and flipped
+live by the `romm_session_changed` DOM event, which `sessionManager` dispatches on game start (`running: true`), game
+stop (`running: false`), and both reload-adoption branches (`running: true`). The already-running guards from #1148 /
+#1308 (the interceptor and the `handlePlay` guard) stay in place as **backstops** for the render→click race, where the
+session begins between the button rendering Play and the user pressing it.
+
 ### App ID to ROM ID mapping
 
 The session manager maintains a cached `appId -> romId` map loaded from the backend's synced-ROM registry (the `roms`

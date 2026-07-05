@@ -48,6 +48,15 @@ per-session stream. The local `Playtime` aggregate stays the cumulative display 
   session `(rom_id, device_id, start, end, duration_ms)` and `POST /api/play-sessions`. RomM accumulates the union
   across devices; `start_time` dedup makes any re-POST idempotent. No `content_hash`, no newest-wins, no conflict modal,
   no `.romm-backup` — none of the save-sync machinery applies.
+- **Only real windows are enqueued (`is_ingestable_session`, #1312).** RomM validates
+  `end_time must be after
+  start_time` at **second** resolution and 422s the _whole_ batch on any entry that fails. A
+  mis-fired launch that starts and ends inside one wall-clock second (the "<1s launch-death", #1305) is therefore not
+  enqueued — the pure `is_ingestable_session` kernel gates the outbox at the recording seam, admitting a window only
+  when `end` is strictly later than `start` once both are floored to the second (the exact rule RomM applies, so we
+  never over-drop a window RomM would accept — a long-but-fully-suspended session with `duration_ms≈0` still has a valid
+  multi-second window and is kept). The duration is still folded into the local total; only the native ingest is
+  skipped. This stops _new_ poison at the source; the outbox heal below repairs rows queued before this gate existed.
 - **Offline outbox.** Unsent sessions are held in a small pending-session outbox owned by the `Playtime` aggregate. Exit
   enqueues and attempts the POST; success dequeues. Offline → the session stays queued and is flushed on the next
   launch/sync/reconnect. This is the "only DB, then catch up local→server" path, minus any conflict logic. **The flush
@@ -60,6 +69,26 @@ per-session stream. The local `Playtime` aggregate stays the cumulative display 
   staying loop-free. Only a transport failure or a row _absent_ from the response keeps the row queued untouched for the
   next flush. This keeps a permanently-rejected session from wedging the outbox into an infinite retry loop against the
   periodic flush.
+- **Whole-request 422 is healed surgically, not looped (#1312).** RomM validates the `sessions` array **atomically**:
+  one invalid entry rejects the ENTIRE `POST /api/play-sessions` with HTTP 422 — there is no per-session verdict list,
+  so a single poison row would block every valid session queued behind it (and the pre-#1312 422 path retained the batch
+  _without_ bumping `attempts`, so 12 real sessions looped forever at `attempts=0`). This **narrows the #1310 assumption
+  that every rejection arrives as a 2xx per-session verdict**: a whole-request rejection is a distinct, structured
+  transport failure. The adapter surfaces it as `RommUnprocessableEntityError` carrying the parsed 422 `detail`
+  (FastAPI/Pydantic names each failing entry's position in `detail[].loc[2] = ["body","sessions",<index>]`); the service
+  extracts those indices via the pure `rejected_session_indices` kernel, drops exactly those rows as terminal (the
+  byte-identical entry draws the same verdict forever — same taxonomy as a `skipped` verdict, via
+  `Playtime.drop_rejected_sessions`) and **resubmits the survivors** so one bad entry never blocks the batch. When the
+  422 body names **no usable index** (a Cloudflare-Tunnel / proxy can mangle the multi-entry validation body — a real
+  risk here), a multi-row batch must NOT quarantine the whole group: a session recorded locally but not yet on the
+  server exists nowhere else, so losing a valid sibling to a poison one would violate "never delete data that exists
+  nowhere else". Instead each session is **re-submitted on its own** (`_flush_single_session`) so the server's
+  per-session verdict isolates the genuine poison — a 201 dequeues the valid one, a lone 422 that now DOES name the
+  entry drops it terminally, a lone 422 that still names nothing bumps only THAT one row's `attempts`, and a transport
+  error retains only that one. A lone row (`len == 1`) has no sibling to isolate, so it skips the re-POST and bumps its
+  own counter directly. Either way a persistent unindexed 422 converges to a per-session quarantine instead of looping,
+  and a valid session is never dropped because a sibling was poison. Layer boundary: the adapter parses HTTP (status +
+  `detail`), the service decides (drop + resubmit / per-session fallback) via the pure kernels.
 - **Reconcile is `max(local, Σ server)`.** On the detail view we first flush the outbox, then `GET /api/play-sessions`
   for the ROM and set the displayed total to `max(local_total, Σ server duration)`. Playtime is monotonic, so `max()` is
   always safe: with the outbox drained it naturally adopts the server union ("the server holds the whole total"); with a

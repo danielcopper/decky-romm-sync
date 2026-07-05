@@ -125,6 +125,13 @@ declare var Router:
 declare var SteamUIStore:
   | {
       RunningApps?: SteamAppOverview[];
+      // Focus a running app in gamescope — pure UI selection, not a launch. The
+      // state-aware Resume button (#1313) calls this + NavigateToRunningApp to
+      // foreground a live session (Steam's own "Resume Game" path).
+      SetRunningApp(appId: number): void;
+      // Navigate to the running-app screen. Optional — absent on older SteamUI
+      // builds, where the Resume path falls back to Navigation.Navigate("/apprunning").
+      NavigateToRunningApp?(force?: boolean): void;
     }
   | null
   | undefined;
