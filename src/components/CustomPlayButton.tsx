@@ -634,17 +634,28 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     // NOSONAR(typescript:S7741) — SteamUIStore is an ambient Steam SP global; the
     // typeof guard keeps a genuinely-absent one from throwing ReferenceError.
     if (typeof SteamUIStore !== "undefined" && SteamUIStore) {
-      SteamUIStore.SetRunningApp(appId);
-      if (typeof SteamUIStore.NavigateToRunningApp === "function") {
-        SteamUIStore.NavigateToRunningApp();
-        detach(debugLog(`CustomPlayButton: resumed appId=${appId} via SteamUIStore.NavigateToRunningApp`));
-        return;
+      // A present-but-broken store is the exact failure class this button was born
+      // from (RaiseWindowForGame reporting Success while doing nothing) — a
+      // throwing `SetRunningApp` / `NavigateToRunningApp` getter must NOT strand the
+      // user with no foreground and no backstop. Any throw is swallowed and falls
+      // through to the route nav below, mirroring how runningApps.ts wraps every
+      // Steam-global access in try/catch.
+      try {
+        SteamUIStore.SetRunningApp(appId);
+        if (typeof SteamUIStore.NavigateToRunningApp === "function") {
+          SteamUIStore.NavigateToRunningApp();
+          detach(debugLog(`CustomPlayButton: resumed appId=${appId} via SteamUIStore.NavigateToRunningApp`));
+          return;
+        }
+      } catch (e) {
+        detach(debugLog(`CustomPlayButton: resume — SteamUIStore threw, falling back to Navigate: ${e}`));
       }
     }
-    // Older SteamUI without `NavigateToRunningApp` (API drift) — navigate to the
-    // running-app route directly. When the store was present `SetRunningApp` above
-    // already selected this app, so the foreground lands on it (the decky-rocketjump
-    // fallback path).
+    // Older SteamUI without `NavigateToRunningApp` (API drift), an absent store, or a
+    // store whose `SetRunningApp` / `NavigateToRunningApp` threw — navigate to the
+    // running-app route directly. When the store was present and `SetRunningApp`
+    // succeeded it already selected this app, so the foreground lands on it (the
+    // decky-rocketjump fallback path).
     Navigation.Navigate("/apprunning");
     detach(debugLog(`CustomPlayButton: resumed appId=${appId} via Navigation.Navigate`));
   };

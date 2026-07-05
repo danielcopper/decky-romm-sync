@@ -1924,6 +1924,38 @@ describe("CustomPlayButton — state-aware Resume (#1313)", () => {
     expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
   });
 
+  it("falls back to Navigation.Navigate('/apprunning') when SteamUIStore.SetRunningApp throws (present-but-broken store)", async () => {
+    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+    // Present store, but SetRunningApp is a throwing getter/method — the exact
+    // present-but-broken failure class this whole PR was born from. Without the
+    // guard the async fn rejects, detach() swallows it, and the route fallback is
+    // skipped → user stranded (no foreground, no backstop).
+    const throwingSet = vi.fn(() => {
+      throw new Error("SetRunningApp exploded");
+    });
+    vi.stubGlobal("SteamUIStore", { SetRunningApp: throwingSet, NavigateToRunningApp: navigateToRunningApp });
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const resumeBtn = await findByText("Resume");
+
+    await act(async () => {
+      resumeBtn.click();
+    });
+
+    // The throw is swallowed and the last-resort route nav still foregrounds…
+    await waitFor(() => expect(vi.mocked(Navigation.Navigate)).toHaveBeenCalledWith("/apprunning"));
+    // …and the catch is non-vacuously observable: the debug fallback line was logged.
+    expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
+      expect.stringContaining("SteamUIStore threw, falling back to Navigate"),
+    );
+    // SetRunningApp was attempted (we entered the guarded block); the throw stopped
+    // the navigate-to-running before it ran; and it's still not a launch.
+    expect(throwingSet).toHaveBeenCalledWith(100);
+    expect(navigateToRunningApp).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.preLaunchSync)).not.toHaveBeenCalled();
+    expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+  });
+
   it("navigates directly when SteamUIStore is absent (extreme API drift)", async () => {
     vi.mocked(getActiveSessionRomId).mockReturnValue(42);
     // No SteamUIStore at all — the last-resort route nav still foregrounds.
