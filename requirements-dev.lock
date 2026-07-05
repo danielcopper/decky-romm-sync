@@ -8,7 +8,7 @@ coverage==7.14.3
     # via pytest-cov
 grimp==3.14
     # via import-linter
-hypothesis==6.155.7
+hypothesis==6.156.1
     # via -r requirements-dev.txt
 import-linter==2.12
     # via -r requirements-dev.txt
