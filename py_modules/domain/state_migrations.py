@@ -33,6 +33,8 @@ def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
         new_data = _migrate_v7_to_v8(new_data)
     if version < 9:
         new_data = _migrate_v8_to_v9(new_data)
+    if version < 10:
+        new_data = _migrate_v9_to_v10(new_data)
     return new_data
 
 
@@ -231,4 +233,20 @@ def _migrate_v8_to_v9(data: dict[str, Any]) -> dict[str, Any]:
         data.pop("romm_user", None)
         data.pop("romm_pass", None)
     data["version"] = 9
+    return data
+
+
+def _migrate_v9_to_v10(data: dict[str, Any]) -> dict[str, Any]:
+    """v<10 → v10: stamp the token-provenance slot.
+
+    Introduces ``romm_api_token_source`` — ``"minted"`` for a token the plugin
+    minted from credentials, ``"user"`` for a token the user pasted in. Before
+    this version every stored token came from the credential-mint path, so a
+    truthy ``romm_api_token`` is stamped ``"minted"`` and a token-less install
+    is stamped ``None``. The provenance decides whether re-auth may DELETE the
+    old token server-side (a pasted ``"user"`` token belongs to the user and is
+    never deleted); no existing token's provenance is inferred beyond this.
+    """
+    data["romm_api_token_source"] = "minted" if data.get("romm_api_token") else None
+    data["version"] = 10
     return data

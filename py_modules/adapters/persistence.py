@@ -16,7 +16,7 @@ from typing import Any, Protocol
 
 from adapters.system_clock import SystemClock
 
-_SETTINGS_VERSION = 9
+_SETTINGS_VERSION = 10
 _LOCK_EXT = ".lock"
 
 
@@ -40,6 +40,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "romm_api_token": None,
     "romm_api_token_id": None,
     "romm_api_token_origin": None,
+    "romm_api_token_source": None,
     "enabled_platforms": {},
     "enabled_collections": {"user": {}, "smart": {}, "franchise": {}},
     "collection_create_platform_groups": False,

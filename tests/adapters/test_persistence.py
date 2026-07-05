@@ -84,8 +84,8 @@ class TestLocking:
 class TestSettingsSchema:
     """Schema-level expectations for the settings defaults + version stamp."""
 
-    def test_settings_version_is_9(self):
-        assert _SETTINGS_VERSION == 9
+    def test_settings_version_is_10(self):
+        assert _SETTINGS_VERSION == 10
 
     def test_default_settings_omit_retired_credential_keys(self):
         """The retired legacy-credential keys must not be re-seeded on load."""
@@ -96,6 +96,7 @@ class TestSettingsSchema:
         assert DEFAULT_SETTINGS["romm_api_token"] is None
         assert DEFAULT_SETTINGS["romm_api_token_id"] is None
         assert DEFAULT_SETTINGS["romm_api_token_origin"] is None
+        assert DEFAULT_SETTINGS["romm_api_token_source"] is None
 
     def test_default_settings_carry_empty_platform_cores(self):
         assert DEFAULT_SETTINGS["platform_cores"] == {}
@@ -130,7 +131,7 @@ class TestVersionStampingOnSave:
         with open(settings_path) as f:
             loaded = json.load(f)
         assert loaded["version"] == _SETTINGS_VERSION
-        assert loaded["version"] == 9
+        assert loaded["version"] == 10
 
 
 # ── Loading edge cases ─────────────────────────────────────────────────────────

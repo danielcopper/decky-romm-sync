@@ -5,6 +5,7 @@ import {
   getSettings,
   saveServerUrl,
   connectWithCredentials,
+  connectWithToken,
   testConnection,
   saveSgdbApiKey,
   verifySgdbApiKey,
@@ -305,6 +306,23 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
       setStatus("Sign-in failed");
     }
   };
+  const handleConnectToken = async (token: string) => {
+    setStatus("");
+    const trimmed = trimServerUrl(url);
+    if (!isValidServerUrl(trimmed)) {
+      setStatus("Enter a valid http:// or https:// server URL");
+      return;
+    }
+    try {
+      const result = await connectWithToken(trimmed, token, allowInsecureSsl);
+      setStatus(result.message);
+      if (result.success) {
+        setHasToken(true);
+      }
+    } catch {
+      setStatus("Sign-in failed");
+    }
+  };
 
   // --- SteamGridDB handlers ---
   const handleSgdbKeySubmit = async (value: string) => {
@@ -444,6 +462,9 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         }}
         onConnect={(username, password) => {
           detach(handleConnect(username, password));
+        }}
+        onConnectToken={(token) => {
+          detach(handleConnectToken(token));
         }}
         onAllowInsecureSslChange={handleAllowInsecureSslChange}
         onTestConnection={() => {

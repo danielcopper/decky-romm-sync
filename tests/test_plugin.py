@@ -714,6 +714,7 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "test_connection",
     "get_romm_version",
     "connect_with_credentials",
+    "connect_with_token",
     "save_server_url",
     "get_settings",
     "get_whitelist_settings",

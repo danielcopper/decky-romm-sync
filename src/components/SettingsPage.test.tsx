@@ -668,6 +668,89 @@ describe("SettingsPage", () => {
     });
   });
 
+  describe("handleConnectToken (pasted API token flow)", () => {
+    it("calls connectWithToken with url + token + ssl, surfaces the message, and sets hasToken on success", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        has_token: false,
+      });
+      vi.mocked(backend.connectWithToken).mockResolvedValue({
+        success: true,
+        message: "Connected!",
+        romm_version: "4.9.0",
+      });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(capturedConnection[capturedConnection.length - 1]?.hasToken).toBe(false);
+
+      await act(async () => {
+        capturedConnection[capturedConnection.length - 1]?.onConnectToken("rmm_pasted");
+        await Promise.resolve();
+      });
+
+      expect(vi.mocked(backend.connectWithToken)).toHaveBeenCalledWith("https://romm.local", "rmm_pasted", false);
+      const conn = capturedConnection[capturedConnection.length - 1];
+      expect(conn?.status).toBe("Connected!");
+      expect(conn?.hasToken).toBe(true);
+    });
+
+    it("surfaces the failure message without setting hasToken (e.g. 403 scope error)", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        has_token: false,
+      });
+      vi.mocked(backend.connectWithToken).mockResolvedValue({
+        success: false,
+        message: "The API token is missing required permissions (scopes).",
+        reason: "auth_failed",
+      });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        capturedConnection[capturedConnection.length - 1]?.onConnectToken("rmm_readonly");
+        await Promise.resolve();
+      });
+
+      const conn = capturedConnection[capturedConnection.length - 1];
+      expect(conn?.status).toBe("The API token is missing required permissions (scopes).");
+      expect(conn?.hasToken).toBe(false);
+    });
+
+    it("rejects an invalid URL inline without calling connectWithToken", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        romm_url: "romm.local", // scheme-less — invalid
+        has_token: false,
+      });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        capturedConnection[capturedConnection.length - 1]?.onConnectToken("rmm_pasted");
+        await Promise.resolve();
+      });
+
+      expect(vi.mocked(backend.connectWithToken)).not.toHaveBeenCalled();
+      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe(
+        "Enter a valid http:// or https:// server URL",
+      );
+    });
+
+    it("sets status='Sign-in failed' when connectWithToken throws", async () => {
+      vi.mocked(backend.connectWithToken).mockRejectedValue(new Error("net"));
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        capturedConnection[capturedConnection.length - 1]?.onConnectToken("rmm_pasted");
+        await Promise.resolve();
+      });
+
+      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("Sign-in failed");
+    });
+  });
+
   describe("handleTest", () => {
     it("forwards the result message into ConnectionSection.status on success", async () => {
       vi.mocked(backend.testConnection).mockResolvedValue({

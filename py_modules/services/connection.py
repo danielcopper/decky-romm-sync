@@ -2,9 +2,10 @@
 
 Owns the ``test_connection`` reachability flow and the Client API Token
 lifecycle: ``establish_token`` mints a scoped token from a one-time
-username/password and discards the credentials, while
-``migrate_legacy_credentials`` upgrades a stored-password install to a
-token on startup. Pure I/O happens through the ``RommConnectionApi``
+username/password and discards the credentials, ``establish_user_token``
+validates and stores a token the user pasted (the OIDC path, which has no
+password to mint from), and ``migrate_legacy_credentials`` upgrades a
+stored-password install to a token on startup. Pure I/O happens through the ``RommConnectionApi``
 Protocol and disk writes through the ``SettingsPersister`` Protocol; this
 service composes that I/O with the response-shape contract the frontend
 depends on. The minimum version is injected so the policy stays anchored
@@ -19,7 +20,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.version import meets_min_version
-from lib.errors import RommForbiddenError, error_response
+from lib.errors import RommAuthError, RommForbiddenError, error_response
 from lib.list_result import ErrorCode
 from lib.url_host import is_valid_server_url, normalize_origin, same_origin
 
@@ -35,9 +36,20 @@ if TYPE_CHECKING:
     )
 
 
+_NO_SERVER_URL_MESSAGE = "No server URL configured"
+
 _FORBIDDEN_TOKEN_MESSAGE = (
     "Your RomM account cannot create API tokens — ask your admin to grant "
     "token permissions or use an account with a higher role."
+)
+
+# Pasted-token validation (``establish_user_token``): a 401 means the token
+# string itself is wrong or was revoked; a 403 means the token authenticates
+# but lacks a scope the validation probe needs (``me.read`` — see the docs for
+# the full scope list the plugin requires).
+_USER_TOKEN_INVALID_MESSAGE = "The API token is invalid or has been revoked. Create a new token in RomM and try again."
+_USER_TOKEN_SCOPE_MESSAGE = (
+    "The API token is missing required permissions (scopes). Grant the scopes listed in the plugin docs and try again."
 )
 
 
@@ -89,7 +101,7 @@ class ConnectionService:
         the heartbeat exposed one.
         """
         if not self._settings.get("romm_url"):
-            return {"success": False, "reason": "config_error", "message": "No server URL configured"}
+            return {"success": False, "reason": "config_error", "message": _NO_SERVER_URL_MESSAGE}
 
         if not self._settings.get("romm_api_token"):
             return {
@@ -164,7 +176,7 @@ class ConnectionService:
         ``reason`` / ``message`` shape as :meth:`test_connection`.
         """
         if not romm_url:
-            return {"success": False, "reason": "config_error", "message": "No server URL configured"}
+            return {"success": False, "reason": "config_error", "message": _NO_SERVER_URL_MESSAGE}
         trimmed = romm_url.strip()
         if not is_valid_server_url(trimmed):
             return {"success": False, "reason": "config_error", "message": "Enter a valid http(s):// server URL"}
@@ -172,6 +184,7 @@ class ConnectionService:
         snapshot = self._snapshot_auth_state()
         old_token_id = snapshot["romm_api_token_id"]
         old_token_origin = snapshot["romm_api_token_origin"]
+        old_token_source = snapshot["romm_api_token_source"]
 
         # Hold the candidate URL in memory only; clear the stored token so the
         # version probe never carries the old server's bearer to this host (and
@@ -195,16 +208,19 @@ class ConnectionService:
             self._restore_auth_state(snapshot)
             return version_error
 
+        # #1309: never DELETE a user-supplied token — it belongs to the user, not
+        # this device (and it has no stored id to delete by anyway).
         # #1038: only replay the DELETE against the same server the old token
         # was minted on. A different (or unknown) origin would delete an
         # unrelated token on the new host, so skip it.
-        if old_token_id is not None and same_origin(old_token_origin, trimmed):
-            await self._delete_existing_token(username, password, old_token_id)
-        elif old_token_id is not None:
-            self._logger.info(
-                "Previous token was minted for a different/unknown server; "
-                "skipping DELETE to avoid replaying it against the current server"
-            )
+        if old_token_source != "user" and old_token_id is not None:
+            if same_origin(old_token_origin, trimmed):
+                await self._delete_existing_token(username, password, old_token_id)
+            else:
+                self._logger.info(
+                    "Previous token was minted for a different/unknown server; "
+                    "skipping DELETE to avoid replaying it against the current server"
+                )
 
         try:
             minted = await self._loop.run_in_executor(None, self._mint, username, password)
@@ -229,7 +245,87 @@ class ConnectionService:
             }
 
         try:
-            self._persist_token(raw_token, token_id, origin=normalize_origin(trimmed))
+            self._persist_token(raw_token, token_id, origin=normalize_origin(trimmed), source="minted")
+        except Exception as e:
+            self._restore_auth_state(snapshot)
+            return error_response(e)
+
+        await self._forget_device_on_origin_change(old_token_origin, trimmed)
+        await self._clear_playtime_scope_notice_best_effort()
+
+        return self._success_result(version)
+
+    async def establish_user_token(
+        self,
+        romm_url: str,
+        token: str,
+        allow_insecure_ssl: bool | None = None,
+    ) -> dict[str, Any]:
+        """Store a user-supplied Client API Token after validating it.
+
+        The sign-in path for OIDC accounts, which have no password to mint a
+        token from: the user creates a token in RomM's web UI and pastes it
+        here. Structurally mirrors :meth:`establish_token` (validate URL → probe
+        version → gate → validate credential → persist on success only, rolling
+        the in-memory auth state back on any failure), but the credential is the
+        pasted token rather than a fresh mint, so there is no mint and no
+        server-side DELETE of any prior token. The token is host-bound to the
+        entered URL's origin during probing so the auth-header guard attaches it
+        and the old server's bearer never leaks to the candidate host. The token
+        is validated with an authenticated ``/api/users/me`` probe — a 401 means
+        the token is invalid/revoked, a 403 means it authenticates but lacks a
+        required scope. The token value is never logged. Returns the same
+        ``success`` / ``reason`` / ``message`` shape as :meth:`test_connection`.
+        """
+        if not romm_url:
+            return {"success": False, "reason": "config_error", "message": _NO_SERVER_URL_MESSAGE}
+        trimmed = romm_url.strip()
+        if not is_valid_server_url(trimmed):
+            return {"success": False, "reason": "config_error", "message": "Enter a valid http(s):// server URL"}
+        trimmed_token = token.strip()
+        if not trimmed_token:
+            return {"success": False, "reason": "config_error", "message": "Enter your RomM API token"}
+
+        snapshot = self._snapshot_auth_state()
+        old_token_origin = snapshot["romm_api_token_origin"]
+
+        # Hold the candidate URL + pasted token in memory only; stamp the origin
+        # so the auth-header guard attaches this token (and not the old server's)
+        # to the validation probe. Nothing is persisted until validation passes.
+        self._settings["romm_url"] = trimmed
+        if allow_insecure_ssl is not None:
+            self._settings["romm_allow_insecure_ssl"] = bool(allow_insecure_ssl)
+        self._settings["romm_api_token"] = trimmed_token
+        self._settings["romm_api_token_id"] = None
+        self._settings["romm_api_token_origin"] = normalize_origin(trimmed)
+        self._settings["romm_api_token_source"] = "user"
+
+        try:
+            version = await self._loop.run_in_executor(None, self._probe_version)
+        except Exception as e:
+            self._restore_auth_state(snapshot)
+            self._romm_api.set_version(None)
+            return error_response(e)
+
+        version_error = self._version_gate_error(version)
+        if version_error is not None:
+            self._restore_auth_state(snapshot)
+            return version_error
+
+        try:
+            await self._loop.run_in_executor(None, self._romm_api.get_current_user)
+        except RommAuthError:
+            self._restore_auth_state(snapshot)
+            return {"success": False, "reason": ErrorCode.AUTH_FAILED.value, "message": _USER_TOKEN_INVALID_MESSAGE}
+        except RommForbiddenError:
+            self._restore_auth_state(snapshot)
+            return {"success": False, "reason": ErrorCode.AUTH_FAILED.value, "message": _USER_TOKEN_SCOPE_MESSAGE}
+        except Exception as e:
+            self._restore_auth_state(snapshot)
+            return error_response(e)
+
+        try:
+            self._persist_token(trimmed_token, None, origin=normalize_origin(trimmed), source="user")
         except Exception as e:
             self._restore_auth_state(snapshot)
             return error_response(e)
@@ -298,7 +394,12 @@ class ConnectionService:
             return
 
         try:
-            self._persist_token(raw_token, token_id, origin=normalize_origin(self._settings.get("romm_url") or ""))
+            self._persist_token(
+                raw_token,
+                token_id,
+                origin=normalize_origin(self._settings.get("romm_url") or ""),
+                source="minted",
+            )
         except Exception as e:
             self._logger.warning(f"Legacy credential migration failed: {e}")
             return
@@ -312,6 +413,7 @@ class ConnectionService:
         "romm_api_token",
         "romm_api_token_id",
         "romm_api_token_origin",
+        "romm_api_token_source",
     )
 
     def _snapshot_auth_state(self) -> dict[str, Any]:
@@ -328,16 +430,19 @@ class ConnectionService:
         for key, value in snapshot.items():
             self._settings[key] = value
 
-    def _persist_token(self, raw_token: str, token_id: int, *, origin: str | None) -> None:
-        """Persist a freshly minted token and retire the legacy credentials.
+    def _persist_token(self, raw_token: str, token_id: int | None, *, origin: str | None, source: str) -> None:
+        """Persist a token and retire the legacy credentials.
 
-        Stores the token + its id + its minting *origin*, drops any stored
-        ``romm_user`` / ``romm_pass`` (a token fully supersedes them — nothing
-        reads the stored credentials at runtime once a token exists), and saves.
+        Stores the token + its id (``None`` for a user-supplied token, which
+        carries no server id) + its *origin* + its *source* provenance
+        (``"minted"`` or ``"user"``), drops any stored ``romm_user`` /
+        ``romm_pass`` (a token fully supersedes them — nothing reads the stored
+        credentials at runtime once a token exists), and saves.
         """
         self._settings["romm_api_token"] = raw_token
         self._settings["romm_api_token_id"] = token_id
         self._settings["romm_api_token_origin"] = origin
+        self._settings["romm_api_token_source"] = source
         self._settings.pop("romm_user", None)
         self._settings.pop("romm_pass", None)
         self._settings_persister.save_settings()

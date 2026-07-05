@@ -12,14 +12,65 @@ The Connection Settings page manages your RomM server connection.
 - **RomM URL** — the full URL of your RomM server, including port if needed (e.g. `http://192.168.1.100:8080`). Tap
   **Edit** to change it; the URL saves automatically.
 - **RomM Account** — shows **Signed in** once a token is stored, or **Not signed in** otherwise. Tap **Sign in** to open
-  a one-time prompt for your RomM username and password. The plugin exchanges them for a RomM Client API Token and
-  stores only the token; your password is discarded after the token is minted and never saved. The username and password
-  are write-only — they are never pre-filled or shown back to you. If your account cannot create API tokens, the status
-  reports that.
+  a one-time prompt. The prompt offers two sign-in methods, chosen from the **Sign-in method** dropdown:
+  - **Username & password** (default) — enter your RomM username and password once. The plugin exchanges them for a RomM
+    Client API Token and stores only the token; your password is discarded after the token is minted and never saved. If
+    your account cannot create API tokens, the status reports that.
+  - **API token** — paste a token you created in RomM's web UI. This is the path for accounts that have no password to
+    mint from, such as **OIDC / SSO logins**. See [Sign in with an API token (OIDC)](#sign-in-with-an-api-token-oidc)
+    below.
+
+  Both the credentials and the pasted token are write-only — they are never pre-filled or shown back to you.
 - **Allow Insecure SSL** — shown only for `https://` URLs; skips certificate verification for self-signed certs (LAN
   only).
 - **Test Connection** — available once you are signed in; verifies the plugin can reach and authenticate with your RomM
   server using the stored token.
+
+### Sign in with an API token (OIDC)
+
+If you log in to RomM through an identity provider (OIDC / SSO), your RomM account has no password, so the plugin cannot
+mint a token for you. Instead, create a token yourself in RomM's web UI and paste it into the plugin.
+
+1. In RomM's web UI, open **Settings → API Tokens** (also called Client API Tokens) and create a new token.
+2. Grant the scopes listed below — make sure the **write** scopes are included. Without them, downloads work but save
+   upload, device sync, and playtime tracking fail with a permissions error.
+3. Copy the token value (RomM shows it only once).
+4. In the plugin's Connection Settings, tap **Sign in**, switch the **Sign-in method** dropdown to **API token**, paste
+   the token, and confirm.
+
+The plugin validates the token at sign-in with an authenticated probe against your RomM profile: a wrong or revoked
+token is rejected there with an "invalid or revoked" message. Sign-in only confirms that the token **authenticates**,
+though — the plugin cannot verify the token's granted scopes, so double-check that you granted the write scopes
+(`assets.write`, `devices.write`, `roms.user.write`) when creating it. A missing write scope is not caught at sign-in;
+it surfaces later as a permissions error on the affected action (save upload, device sync, or playtime).
+
+#### Required scopes
+
+| Scope              | Access    | What it is used for                                                                          |
+| ------------------ | --------- | -------------------------------------------------------------------------------------------- |
+| `me.read`          | read      | Your RomM profile — validates the token at sign-in and reads your RetroAchievements username |
+| `platforms.read`   | read      | Listing your platforms                                                                       |
+| `roms.read`        | read      | Listing and reading ROM metadata (the library)                                               |
+| `roms.user.read`   | read      | Your per-user ROM data — native play-session history                                         |
+| `collections.read` | read      | Reading your collections (user, smart, franchise)                                            |
+| `firmware.read`    | read      | Listing and downloading BIOS / firmware                                                      |
+| `assets.read`      | read      | Downloading save files                                                                       |
+| `devices.read`     | read      | Reading your registered devices (device sync)                                                |
+| `assets.write`     | **write** | Uploading save files                                                                         |
+| `devices.write`    | **write** | Registering this device and opening device-sync sessions                                     |
+| `roms.user.write`  | **write** | Writing your per-user ROM data — playtime ingest                                             |
+
+All eleven scopes are within RomM's **Viewer** role, so a token created by any account (including OIDC accounts) can
+carry them. `me.write` is deliberately **not** requested — a pasted token cannot mint or delete tokens.
+
+> **The plugin never deletes a pasted token.** Signing out of or back into the plugin, or switching servers, leaves your
+> token untouched on the RomM server — you manage its lifecycle in RomM's web UI. (This differs from the
+> username/password method, where the plugin revokes the token it minted when you re-sign-in on the same server.)
+>
+> Note the reverse case too: if you previously signed in with your username and password and then switch to a pasted
+> token on the **same** server, the token the plugin minted earlier is left behind on RomM — it can only revoke that
+> during a same-server password re-sign-in (it has no password once you switch to a token). Revoke the old token
+> manually in RomM's web UI if you no longer want it.
 
 ## SteamGridDB API Key
 

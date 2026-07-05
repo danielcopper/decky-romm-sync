@@ -123,7 +123,7 @@ the rest are single modules. A service over ~700 LOC is the decomposition signal
 | `metadata.py`             | MetadataService — ROM metadata reads from `rom_metadata` (7-day TTL), app_id mapping                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `launch_gate.py`          | LaunchGateService — pre-launch gate (rom lookup, install check, save status)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `startup_healing.py`      | StartupHealingService — prunes stale `rom_installs` rows against disk on load (via the UoW) + reconciles orphaned `running` SyncRuns (a hard crash leaves a `running` row → marked errored) + `get_installed_relaunch_options()` builds the startup launch-options reconcile items (see [StartupHealingService notes](#startuphealingservice-notes))                                                                                                                                                                                                                       |
-| `connection.py`           | ConnectionService — connection test + RomM minimum-version gate + Client API Token lifecycle (mint/establish via credentials, host-bound to the minting origin; see [ConnectionService notes](#connectionservice-notes))                                                                                                                                                                                                                                                                                                                                                   |
+| `connection.py`           | ConnectionService — connection test + RomM minimum-version gate + Client API Token lifecycle (mint/establish via credentials, or validate/store a user-pasted token for OIDC accounts; host-bound to the minting origin; see [ConnectionService notes](#connectionservice-notes))                                                                                                                                                                                                                                                                                          |
 | `protocols/`              | Protocol interfaces grouped by concern (see [Protocol Interfaces](#protocol-interfaces))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 #### LibraryService decomposition (`services/library/`)
@@ -401,11 +401,36 @@ usable token, or a disk error) the in-memory auth state is rolled back to the pr
 disk was never touched the prior working credentials survive a failed sign-in. Only a successful mint commits
 `romm_url` + SSL flag + token + id + origin to disk in a single `save_settings()` call.
 
-**The old-token DELETE is origin-guarded.** RomM scopes a Client API Token to the account, and re-auth deletes the
-device's previous token. That DELETE is only fired when the old token's stored origin matches the new URL's origin
-(same-server re-auth) — replaying it against a different server would delete an unrelated token there, so the DELETE is
-skipped (and logged) when the origins differ or the old origin is unknown. The DELETE uses Basic auth from the one-time
+**The old-token DELETE is origin-guarded and provenance-guarded.** RomM scopes a Client API Token to the account, and
+re-auth deletes the device's previous token. That DELETE is only fired when the old token's stored origin matches the
+new URL's origin (same-server re-auth) — replaying it against a different server would delete an unrelated token there,
+so the DELETE is skipped (and logged) when the origins differ or the old origin is unknown. It is **also** skipped
+whenever the previous token's `romm_api_token_source` is `"user"`: a token the user pasted belongs to the user, not to
+this device, and must never be revoked by the plugin (a user token also carries no `romm_api_token_id`, so there is
+nothing to DELETE by anyway — the source check states the intent). The DELETE uses Basic auth from the one-time
 credentials, unaffected by the cleared bearer.
+
+**A token's provenance is recorded in `romm_api_token_source`.** The value is `"minted"` for a token the plugin minted
+from a username/password (`establish_token` and the startup `migrate_legacy_credentials`) and `"user"` for a token the
+user pasted (`establish_user_token`). It is part of the snapshot/restore auth-state set, so a failed sign-in rolls it
+back with the rest of the auth state. Settings migration `v9 → v10` seeds it — `"minted"` when a token already exists (a
+pre-v10 install could only hold minted tokens), else `None`.
+
+**Pasted-token sign-in (`establish_user_token`) — the OIDC path.** OIDC / SSO accounts have no password to mint from, so
+the user creates a Client API Token in RomM's web UI and pastes it. `establish_user_token` mirrors `establish_token`'s
+validate → probe → gate → validate → persist-on-success-only shape, but the credential is the pasted token rather than a
+fresh mint, so there is **no** mint and **no** server-side DELETE of any prior token. The entered URL is trimmed and
+rejected if non-http(s); a blank/whitespace token is rejected as `config_error` before any network call. The candidate
+URL and the pasted token are held in memory only, with `romm_api_token_origin` stamped to the candidate origin and
+`romm_api_token_source = "user"`, so the auth-header guard attaches **this** token (not the old server's bearer) to the
+validation probe. Validation is an authenticated `GET /api/users/me`: a 401 means the token is invalid or revoked, a 403
+means it authenticates but lacks a required scope (the plugin cannot introspect a token's granted scopes, since
+`/api/users/me`'s `oauth_scopes` reflects the user's role, not the token's grants, so this connect-time authenticated
+probe is the only validation). Both map to the canonical `auth_failed` failure with a token-specific message. On any
+failure the in-memory auth state is rolled back and disk is never touched; only a successful validation commits URL +
+SSL flag + token + `id = None` + origin + source in a single `save_settings()`. The token value is never logged. The
+device-forget-on-origin-change and playtime-scope-notice clear run on the success path exactly as they do for
+`establish_token`.
 
 **The registered device id is forgotten on an origin change.** A device registered with RomM (`POST /api/devices`, its
 id stored in `kv_config["device_id"]`) is bound to the server it was registered against — RomM's `negotiate` save-sync

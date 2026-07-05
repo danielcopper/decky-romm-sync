@@ -101,6 +101,7 @@ export const saveServerUrl = callable<[string, boolean], BackendResult>("save_se
 export const connectWithCredentials = callable<[string, string, string, boolean], BackendResult>(
   "connect_with_credentials",
 );
+export const connectWithToken = callable<[string, string, boolean], BackendResult>("connect_with_token");
 
 export interface WhitelistSettings {
   disabled_defaults: string[];
