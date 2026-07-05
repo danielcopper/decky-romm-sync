@@ -10,7 +10,7 @@ grimp==3.14
     # via import-linter
 hypothesis==6.155.7
     # via -r requirements-dev.txt
-import-linter==2.12
+import-linter==2.13
     # via -r requirements-dev.txt
 iniconfig==2.3.0
     # via pytest
