@@ -8,10 +8,11 @@ Deck, then continue where you left off on your HTPC — your saves travel with y
 The plugin uploads and downloads RetroArch save files (`.srm`) to and from your RomM server. When you start a game, the
 plugin checks if the server has a newer save and downloads it. When you stop playing, it uploads your updated save.
 
-> **Important:** Save sync (pre-launch download, post-exit upload, conflict detection) only runs when you launch games
-> from the **game detail page** using the plugin's Play button. Launching from context menus, search results, or the
-> recent games shelf bypasses the sync flow. Always open the game page and use the Play button to ensure your saves stay
-> in sync.
+> **Important:** Save sync runs in **Game Mode only**, but there it covers every way a game can start: the Play button
+> on the game detail page syncs directly, and a launch that skips the plugin's UI (for example a `steam://rungameid`
+> deep link) is caught by the plugin's launch gate and synced before the game starts. In **Desktop Mode** the plugin is
+> not loaded at all, so nothing syncs there — no pre-launch download, no post-exit upload. Changes made in Desktop Mode
+> are picked up the next time you sync in Game Mode, which may surface a conflict.
 
 Sync uses a **newest-wins** model with a hash-divergence guard:
 
@@ -55,8 +56,8 @@ Open **Save Sync** from the main QAM page to configure sync behavior.
 
 ### Auto Sync
 
-- **Sync before launch** (default: on) — runs sync from the game detail page when you tap Play. If the server is
-  unreachable, the game launches with whatever local save exists.
+- **Sync before launch** (default: on) — runs sync when a game starts, whether via the Play button or the launch gate.
+  If the server is unreachable, the game launches with whatever local save exists.
 - **Sync after exit** (default: on) — runs sync after closing a game. Shows a toast notification on success.
 
 ### When saves conflict
