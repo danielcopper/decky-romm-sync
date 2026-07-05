@@ -155,8 +155,9 @@ message, re-enter your server URL and sign in again in the plugin settings.
 
 ## Playtime Tracking
 
-The plugin tracks playtime per game. Session start and end times are recorded, and device suspend/resume is accounted
-for (sleep time is excluded). Playtime is displayed on the game detail page next to the save sync status.
+The plugin tracks playtime per game. Session start and end times are recorded, and time the device spent suspended
+(asleep) during a session is excluded, so a game left running overnight in sleep does not inflate its playtime. Playtime
+is displayed on the game detail page next to the save sync status.
 
 Each finished session is sent to RomM's built-in play-session store, so your `last_played` time shows correctly in the
 RomM web UI. This is separate from save sync — playtime is recorded for **every** game on every exit, even when save

@@ -29,7 +29,8 @@ RomM 4.9 shipped first-party play-session tracking (rommapp/romm#3155). Verified
   frontend surface." RomM stores the raw session rows but renders **no** aggregated playtime number yet — only
   `last_played` is visible.
 - `duration_ms` is **screen-on** time (may diverge from the `start_time`..`end_time` window under suspend). This maps
-  1:1 onto our existing model: window = session start/end, `duration_ms` = our suspend-adjusted elapsed × 1000.
+  1:1 onto our existing model: window = session start/end, `duration_ms` = our monotonic-derived awake seconds × 1000
+  (the counted duration excludes device-suspend time — see _Suspend exclusion_ below).
 
 The decisive observation: **playtime is additive, not a conflict.** A save is a single overwritable artifact — two
 devices editing it diverge and one must win (the newest-wins / conflict / `.romm-backup` machinery). Playtime is the
@@ -119,6 +120,23 @@ per-session stream. The local `Playtime` aggregate stays the cumulative display 
 - **D — Backfill the historical total now (option B2).** Rejected for now: lossy synthetic window, cross-device
   double-count risk, and ~zero payoff while RomM shows no aggregate playtime. Deferred to #868, to be done carefully
   once it is worth the fidelity cost.
+
+## Suspend exclusion — monotonic clock (#1148)
+
+The `duration_ms` we ingest is **awake-only** time: the counted session duration excludes wall-clock time the device
+spent suspended. That exclusion is derived **backend-side from the monotonic clock**, not from Steam suspend events.
+`CLOCK_MONOTONIC` pauses while the device is suspended (hardware-verified on the Steam Deck), so `begin_session` stamps
+a `Clock.monotonic()` start on the `rom_playtime` row and `record_session` counts the monotonic delta to session end,
+clamped to the wall-clock span and to 0–24 h. When the monotonic delta is unusable (no stored start on a pre-migration
+row, a negative delta from a mid-session reboot, or a delta more than a small tolerance above the wall span) the counted
+duration falls back to the full wall span — never a regression, only the loss of the exclusion. Migration `009` adds the
+nullable `last_session_start_monotonic REAL` column.
+
+The earlier design (decision C of #1051) accumulated a `suspended_seconds` value in the frontend from
+`SteamClient.System.RegisterForOnSuspendRequest` / `RegisterForOnResumeFromSuspend` (and their renamed `User.*` progress
+successors) and passed it to `finalize_game_session`. Those hooks were removed from / never backed by current SteamOS,
+so the accumulator stayed at zero and suspend time was counted anyway (#1148). The frontend suspend machinery and the
+`suspended_seconds` callable argument were removed; the monotonic derivation replaces them.
 
 ## See also
 
