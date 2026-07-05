@@ -167,17 +167,12 @@ class TestRecordSession:
         svc, _, uow = make_service(clock=clk)
         _seed_rom(uow, 42)
 
-        start1 = (clk.now() - timedelta(seconds=30)).isoformat()
-        with uow:
-            uow.playtime.save(42, Playtime(last_session_start=start1))
+        svc.record_session_start(42)  # opens at now, monotonic 0
+        clk.advance(30)  # 30s awake
         await svc.record_session_end(42)
 
-        start2 = (clk.now() - timedelta(seconds=45)).isoformat()
-        with uow:
-            entry = uow.playtime.get(42)
-            assert entry is not None
-            entry.begin_session(start2)
-            uow.playtime.save(42, entry)
+        svc.record_session_start(42)
+        clk.advance(45)  # 45s awake
         result2 = await svc.record_session_end(42)
 
         assert result2["session_count"] == 2
@@ -196,34 +191,68 @@ class TestRecordSession:
         assert result["duration_sec"] == 86400
 
     @pytest.mark.asyncio
-    async def test_suspended_seconds_threaded_to_domain(self):
-        """``suspended_seconds`` is subtracted from the counted session duration."""
-        clk = FakeClock(now=datetime(2026, 1, 1, 0, 5, tzinfo=UTC))
+    async def test_suspend_excluded_via_monotonic(self):
+        """A session spanning a suspend counts only the awake (monotonic) span (#1148)."""
+        clk = FakeClock(now=datetime(2026, 1, 1, 0, 0, tzinfo=UTC))
         svc, _, uow = make_service(clock=clk)
-        start = (clk.now() - timedelta(seconds=300)).isoformat()  # 5min elapsed
-        _seed_playtime(uow, 42, Playtime(last_session_start=start))
+        _seed_rom(uow, 42)
 
-        result = await svc.record_session_end(42, 120)  # 120s suspended
+        svc.record_session_start(42)  # opens at now, monotonic 0
+        clk.advance_wall(120)  # 120s suspended: wall advances, monotonic frozen
+        clk.advance(180)  # 180s awake: both clocks advance
+
+        result = await svc.record_session_end(42)
 
         assert result["success"] is True
-        assert result["duration_sec"] == 180  # 300 minus 120
+        assert result["duration_sec"] == 180  # only the awake span, suspend excluded
         assert result["total_seconds"] == 180
         entry = uow.playtime.get(42)
         assert entry is not None
         assert entry.total_seconds == 180
 
     @pytest.mark.asyncio
-    async def test_default_suspend_counts_full_duration(self):
-        """Omitting ``suspended_seconds`` (default 0) counts the full elapsed span."""
-        clk = FakeClock(now=datetime(2026, 1, 1, 0, 5, tzinfo=UTC))
+    async def test_no_suspend_counts_full_span(self):
+        """No suspend (monotonic tracks wall) counts the full elapsed span."""
+        clk = FakeClock(now=datetime(2026, 1, 1, 0, 0, tzinfo=UTC))
         svc, _, uow = make_service(clock=clk)
-        start = (clk.now() - timedelta(seconds=300)).isoformat()
-        _seed_playtime(uow, 42, Playtime(last_session_start=start))
+        _seed_rom(uow, 42)
+
+        svc.record_session_start(42)
+        clk.advance(300)  # 5 min, both clocks advance
 
         result = await svc.record_session_end(42)
 
         assert result["success"] is True
         assert result["duration_sec"] == 300
+
+    @pytest.mark.asyncio
+    async def test_session_end_logs_wall_mono_awake(self):
+        """The session-end debug line names wall / mono / awake — the on-device #1148 hook."""
+        logs: list[str] = []
+        clk = FakeClock(now=datetime(2026, 1, 1, 0, 0, tzinfo=UTC))
+        svc, _, uow = make_service(clock=clk, log_debug=logs.append)
+        _seed_rom(uow, 42)
+
+        svc.record_session_start(42)
+        clk.advance_wall(120)  # suspend
+        clk.advance(180)  # awake
+
+        await svc.record_session_end(42)
+
+        assert any("record_session_end: rom 42 wall=300s mono=180s awake=180s" in m for m in logs)
+
+    @pytest.mark.asyncio
+    async def test_seeded_session_without_monotonic_falls_back_to_wall(self):
+        """A row seeded with only ``last_session_start`` (no monotonic) counts the wall span."""
+        clk = FakeClock(now=datetime(2026, 1, 1, 0, 5, tzinfo=UTC))
+        svc, _, uow = make_service(clock=clk)
+        start = (clk.now() - timedelta(seconds=300)).isoformat()  # 5min wall elapsed
+        _seed_playtime(uow, 42, Playtime(last_session_start=start))  # last_session_start_monotonic None
+
+        result = await svc.record_session_end(42)
+
+        assert result["success"] is True
+        assert result["duration_sec"] == 300  # full wall span, monotonic delta ignored
 
 
 # ---------------------------------------------------------------------------

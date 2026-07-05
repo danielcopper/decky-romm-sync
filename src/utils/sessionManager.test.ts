@@ -110,7 +110,7 @@ describe("sessionManager lifecycle forwarding", () => {
     expect(backend.recordSessionStart).toHaveBeenCalledWith(ROM_ID);
     // Suspend accounting is a backend concern now — the frontend forwards no
     // suspend duration.
-    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID, 0);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
   });
 
   it("updates the playtime display when finalize returns a total", async () => {
@@ -178,7 +178,7 @@ describe("sessionManager reload adoption", () => {
     await stopGame(lifetime);
 
     // The original rom is finalized on stop.
-    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID, 0);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
     expect(backend.recordSessionStart).not.toHaveBeenCalled();
   });
 
@@ -227,7 +227,7 @@ describe("sessionManager reload adoption", () => {
     await startGame(lifetime);
     vi.setSystemTime(30_000);
     await stopGame(lifetime);
-    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID, 0);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
   });
 
   it("does not adopt when a non-RomM app is running", async () => {
@@ -307,7 +307,7 @@ describe("sessionManager reload adoption", () => {
     vi.setSystemTime(180_000);
     await stopGame(lifetime2);
 
-    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID, 0);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
   });
 
   it("treats a wrong-version breadcrumb as unusable and re-stamps (a′)", async () => {
@@ -347,7 +347,7 @@ describe("sessionManager reload adoption", () => {
     expect(readCrumb()).toMatchObject({ v: 1, appId: APP_ID, romId: ROM_ID });
     const lifetime = captureLifetimeCb();
     await stopGame(lifetime);
-    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID, 0);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
   });
 
   it("clears a live breadcrumb when a non-RomM app is in the foreground", async () => {
@@ -436,7 +436,7 @@ describe("sessionManager reload adoption", () => {
     // The adopted session finalizes on stop.
     const lifetime = captureLifetimeCb();
     await stopGame(lifetime);
-    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID, 0);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
   });
 
   it("orphan-clears the breadcrumb after the poll times out with nothing running", async () => {
@@ -485,7 +485,7 @@ describe("sessionManager reload adoption", () => {
     // Ordering proof: the stop finalized the ADOPTED session. Had the stop run
     // before adoption, activeRomId would still be null and handleGameStop a
     // no-op (no finalize).
-    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID, 0);
+    expect(backend.finalizeGameSession).toHaveBeenCalledWith(ROM_ID);
     expect(backend.recordSessionStart).not.toHaveBeenCalled();
   });
 

@@ -1,19 +1,19 @@
 """Contract tests for the ``finalize_game_session`` end-of-session callable.
 
 Driven frontend-shaped per ``src/api/backend.ts``: ``finalize_game_session``
-takes TWO positional args — the RomM ROM id and the device-suspend wall-clock
-(seconds) the frontend's ``sessionManager`` accumulated during the session —
-and returns the ``SessionFinalizeResult`` dict (``total_seconds`` / ``sync`` /
-``migration``).
+takes ONE positional arg — the RomM ROM id — and returns the
+``SessionFinalizeResult`` dict (``total_seconds`` / ``sync`` / ``migration``).
 
-The suspend-subtraction cases (#1051 "decision C") are the regression guard:
-the counted ``total_seconds`` is the raw server-clock elapsed span MINUS the
-suspended wall-clock, clamped at ``[0, 24h]``. The zero-suspend case is the
-control proving the subtraction is a real, arg-driven difference.
+The suspend-exclusion cases (#1148) are the regression guard: the counted
+``total_seconds`` is the AWAKE span derived from the monotonic clock — wall time
+that elapsed while the device was suspended (the monotonic clock pauses) is not
+counted. The zero-suspend case is the control proving the exclusion is a real,
+monotonic-driven difference.
 
-A session is opened via the real ``record_session_start`` callable (which
-stamps ``last_session_start`` from the deterministic ``FakeClock``); the clock
-is then advanced to fix the raw elapsed span before finalize stamps the end.
+A session is opened via the real ``record_session_start`` callable (which stamps
+both the wall and monotonic starts from the deterministic ``FakeClock``); the
+clock is then advanced before finalize stamps the end — ``advance`` for awake
+time (both clocks) and ``advance_wall`` for suspend (wall only, monotonic frozen).
 """
 
 from __future__ import annotations
@@ -21,38 +21,39 @@ from __future__ import annotations
 from ._seed import seed_rom
 
 
-async def test_finalize_subtracts_suspended_seconds(harness):
-    """Raw elapsed 300s minus 120s suspended -> 180s counted."""
+async def test_finalize_excludes_suspend_via_monotonic(harness):
+    """180s awake + 120s suspended (300s wall) → only the 180s awake span counts."""
     seed_rom(harness, 1)
     harness.plugin.settings["save_sync_enabled"] = False
     await harness.plugin.record_session_start(1)
-    harness.clock.advance(300)  # 5 min of wall-clock elapsed
+    harness.clock.advance(180)  # 180s awake (both clocks)
+    harness.clock.advance_wall(120)  # 120s suspended (wall only, monotonic paused)
 
-    result = await harness.plugin.finalize_game_session(1, 120)
+    result = await harness.plugin.finalize_game_session(1)
 
     assert result["total_seconds"] == 180
 
 
 async def test_finalize_zero_suspend_counts_full_span(harness):
-    """Control: 300s elapsed, 0 suspended → full 300s counted."""
+    """Control: 300s elapsed with no suspend → the full 300s counts."""
     seed_rom(harness, 1)
     harness.plugin.settings["save_sync_enabled"] = False
     await harness.plugin.record_session_start(1)
     harness.clock.advance(300)
 
-    result = await harness.plugin.finalize_game_session(1, 0)
+    result = await harness.plugin.finalize_game_session(1)
 
     assert result["total_seconds"] == 300
 
 
-async def test_finalize_over_subtraction_clamps_to_zero(harness):
-    """Suspend exceeding the elapsed span clamps the counted duration to 0."""
+async def test_finalize_fully_suspended_session_counts_zero(harness):
+    """A session suspended the whole time (monotonic never advanced) counts 0."""
     seed_rom(harness, 1)
     harness.plugin.settings["save_sync_enabled"] = False
     await harness.plugin.record_session_start(1)
-    harness.clock.advance(60)  # 60s elapsed
+    harness.clock.advance_wall(600)  # 10 min of wall, monotonic frozen throughout
 
-    result = await harness.plugin.finalize_game_session(1, 600)  # 600s suspended
+    result = await harness.plugin.finalize_game_session(1)
 
     assert result["total_seconds"] == 0
 
@@ -62,7 +63,7 @@ async def test_finalize_no_active_session_leaves_total_none(harness):
     seed_rom(harness, 1)
     harness.plugin.settings["save_sync_enabled"] = False
 
-    result = await harness.plugin.finalize_game_session(1, 0)
+    result = await harness.plugin.finalize_game_session(1)
 
     assert result["total_seconds"] is None
 
@@ -80,7 +81,7 @@ async def test_finalize_registered_device_ingests_play_session(harness):
 
     await harness.plugin.record_session_start(1)
     harness.clock.advance(300)
-    await harness.plugin.finalize_game_session(1, 0)
+    await harness.plugin.finalize_game_session(1)
 
     stored = harness.romm.play_sessions.get(1)
     assert stored is not None
@@ -103,7 +104,7 @@ async def test_finalize_server_rejected_session_drains_outbox(harness):
 
     await harness.plugin.record_session_start(1)
     # No clock advance → a 0ms session the server rejects.
-    result = await harness.plugin.finalize_game_session(1, 0)
+    result = await harness.plugin.finalize_game_session(1)
 
     assert result["total_seconds"] == 0  # still folded locally
     assert harness.romm.play_sessions == {}  # server stored nothing
@@ -121,7 +122,7 @@ async def test_finalize_unregistered_device_folds_locally_no_ingest(harness):
 
     await harness.plugin.record_session_start(1)
     harness.clock.advance(300)
-    result = await harness.plugin.finalize_game_session(1, 0)
+    result = await harness.plugin.finalize_game_session(1)
 
     assert result["total_seconds"] == 300  # counted locally
     assert harness.romm.play_sessions == {}  # nothing ingested

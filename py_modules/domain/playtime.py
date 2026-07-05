@@ -24,6 +24,14 @@ if TYPE_CHECKING:
 
 _MAX_SESSION_SECONDS = 86_400  # a single session contributes at most 24h
 
+# Slack allowed when comparing the monotonic delta against the wall-clock span:
+# the wall and monotonic readings are taken a few instructions apart and carry
+# independent clock resolution, so a valid monotonic delta may land a hair above
+# the wall span. A delta more than this far above the wall span is treated as
+# untrustworthy (the two readings cannot belong to the same session) and the
+# wall span is used instead.
+_MONOTONIC_TOLERANCE_SECONDS = 2.0
+
 
 @dataclass(frozen=True, slots=True)
 class PendingPlaySession:
@@ -66,25 +74,45 @@ class Playtime:
     total_seconds: int = 0
     session_count: int = 0
     last_session_start: str | None = None
+    last_session_start_monotonic: float | None = None
     last_session_duration_sec: int | None = None
     last_played: str | None = None
     pending_sessions: dict[str, PendingPlaySession] = field(default_factory=dict)
 
-    def begin_session(self, at: str) -> None:
-        """Open a play session that started at ISO timestamp ``at``."""
-        self.last_session_start = at
+    def begin_session(self, at: str, *, monotonic: float) -> None:
+        """Open a play session that started at ISO timestamp ``at``.
 
-    def record_session(self, ended_at: str, *, suspended_seconds: int = 0) -> None:
+        ``monotonic`` is the ``Clock.monotonic()`` reading captured at the same
+        instant as ``at``. It is stored alongside the wall-clock start so
+        :meth:`record_session` can derive the awake-only span — the monotonic
+        clock pauses while the device is suspended, so its delta across the
+        session excludes sleep time (#1148). Both markers are cleared together
+        when the session closes.
+        """
+        self.last_session_start = at
+        self.last_session_start_monotonic = monotonic
+
+    def record_session(self, ended_at: str, *, monotonic_end: float) -> None:
         """Close the open session at ``ended_at`` and fold its duration into the totals.
 
-        The duration is the span from the stored ``last_session_start`` to
-        ``ended_at`` minus any ``suspended_seconds`` the device spent suspended
-        during the session (a negative value is treated as 0), clamped to
-        ``[0, 24h]``. The suspend subtraction happens before the 24h cap, so a
-        long session minus suspend still respects the cap and never goes
-        negative. Also stamps ``last_played`` with ``ended_at`` (the session
-        just ended, so it is the newest play instant). Raises ``ValueError`` if
-        no session is open or either timestamp is unusable.
+        The counted duration is the **awake-only** span: the monotonic clock
+        pauses during device suspend, so ``monotonic_end`` minus the stored
+        ``last_session_start_monotonic`` excludes sleep time (#1148). It is
+        clamped to the wall-clock span (the awake span can never exceed the real
+        elapsed span) and then to ``[0, 24h]``.
+
+        The counted duration falls back to the full wall-clock span whenever the
+        monotonic delta is unusable: no stored monotonic start (a pre-migration
+        row, or a session begun before this field existed), a negative delta
+        (the counter reset across a reboot mid-session), or a delta more than
+        ``_MONOTONIC_TOLERANCE_SECONDS`` above the wall span (the two readings
+        cannot belong to the same session). That fallback is exactly the
+        pre-#1148 wall-span behavior, so a missing/invalid monotonic reading is
+        never a regression — only the loss of the suspend exclusion.
+
+        Also stamps ``last_played`` with ``ended_at`` (the session just ended, so
+        it is the newest play instant). Raises ``ValueError`` if no session is
+        open or either timestamp is unusable.
         """
         if self.last_session_start is None:
             raise ValueError("no open session to record")
@@ -93,16 +121,25 @@ class Playtime:
         if start is None or end is None:
             raise ValueError("unparseable session timestamps")
         try:
-            raw_elapsed = (end - start).total_seconds()
+            wall = max(0.0, (end - start).total_seconds())
         except TypeError as exc:  # naive/aware datetime mismatch
             raise ValueError("inconsistent session timestamps") from exc
-        elapsed = max(0.0, raw_elapsed - max(0, suspended_seconds))
-        seconds = int(min(elapsed, _MAX_SESSION_SECONDS))
+        awake = wall
+        mono_start = self.last_session_start_monotonic
+        if mono_start is not None:
+            mono = monotonic_end - mono_start
+            if 0.0 <= mono <= wall + _MONOTONIC_TOLERANCE_SECONDS:
+                # Monotonic delta is trustworthy: it is the awake-only span,
+                # capped at the wall span (a within-tolerance jitter above wall
+                # is clamped, never counted as more than the real elapsed time).
+                awake = min(mono, wall)
+        seconds = int(min(awake, _MAX_SESSION_SECONDS))
         self.total_seconds += seconds
         self.session_count += 1
         self.last_session_duration_sec = seconds
         self.last_played = ended_at
         self.last_session_start = None
+        self.last_session_start_monotonic = None
 
     def enqueue_session(self, *, device_id: str, start_time: str, end_time: str, duration_ms: int) -> None:
         """Add a closed session to the outbox, awaiting native ingest.

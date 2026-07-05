@@ -32,7 +32,7 @@ async def test_reconcile_flushes_outbox_then_unions_server(harness):
     # Record a 300s local session (folded + ingested on exit).
     await harness.plugin.record_session_start(1)
     harness.clock.advance(300)
-    await harness.plugin.finalize_game_session(1, 0)
+    await harness.plugin.finalize_game_session(1)
 
     # A foreign device already holds 500s on the server for this ROM.
     harness.romm.play_sessions.setdefault(1, []).append(
@@ -79,7 +79,7 @@ async def test_reconcile_local_ahead_is_not_regressed(harness):
 
     await harness.plugin.record_session_start(1)
     harness.clock.advance(900)  # 900s local
-    await harness.plugin.finalize_game_session(1, 0)
+    await harness.plugin.finalize_game_session(1)
 
     # Server only knows about our 900s session (ingested on exit) — no foreign play.
     result = await harness.plugin.reconcile_playtime(1)
@@ -96,7 +96,7 @@ async def test_reconcile_server_unreachable_keeps_local_total(harness):
 
     await harness.plugin.record_session_start(1)
     harness.clock.advance(120)
-    await harness.plugin.finalize_game_session(1, 0)  # local total 120s
+    await harness.plugin.finalize_game_session(1)  # local total 120s
 
     harness.romm.list_play_sessions_side_effect = RommApiError("offline")
 

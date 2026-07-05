@@ -501,7 +501,7 @@ export interface SessionFinalizeResult {
   migration: SessionFinalizeMigration | null;
 }
 
-export const finalizeGameSession = callable<[number, number], SessionFinalizeResult>("finalize_game_session");
+export const finalizeGameSession = callable<[number], SessionFinalizeResult>("finalize_game_session");
 
 // Delete operations
 export const deleteLocalSaves = callable<[number], { success: boolean; deleted_count: number; message: string }>(

@@ -8,42 +8,56 @@ from domain.playtime import PendingPlaySession, Playtime
 
 
 class TestBeginSession:
-    def test_begin_session_sets_start(self):
+    def test_begin_session_sets_start_and_monotonic(self):
         playtime = Playtime()
-        playtime.begin_session("2026-05-28T10:00:00")
+        playtime.begin_session("2026-05-28T10:00:00", monotonic=123.5)
         assert playtime.last_session_start == "2026-05-28T10:00:00"
+        assert playtime.last_session_start_monotonic == 123.5
 
 
 class TestRecordSession:
-    def test_happy_path_folds_duration_into_totals(self):
+    def test_monotonic_delta_is_the_counted_duration(self):
+        """Wall span 13min but only 3min awake (monotonic) → 180s counted (#1148)."""
         playtime = Playtime()
-        playtime.begin_session("2026-05-28T10:00:00")
-        playtime.record_session("2026-05-28T11:00:00")
+        playtime.begin_session("2026-05-28T10:00:00", monotonic=1000.0)
+        # 13 min of wall elapsed, but the monotonic clock advanced only 3 min —
+        # 10 min suspended (the monotonic clock paused).
+        playtime.record_session("2026-05-28T10:13:00", monotonic_end=1180.0)
+        assert playtime.last_session_duration_sec == 180
+        assert playtime.total_seconds == 180
+        assert playtime.session_count == 1
+        assert playtime.last_session_start is None
+        assert playtime.last_session_start_monotonic is None
+
+    def test_no_suspend_counts_full_span(self):
+        """Monotonic delta == wall span (no suspend) → the full span counts."""
+        playtime = Playtime()
+        playtime.begin_session("2026-05-28T10:00:00", monotonic=1000.0)
+        playtime.record_session("2026-05-28T11:00:00", monotonic_end=4600.0)  # +3600 both clocks
+        assert playtime.last_session_duration_sec == 3600
         assert playtime.total_seconds == 3600
         assert playtime.session_count == 1
-        assert playtime.last_session_duration_sec == 3600
-        assert playtime.last_session_start is None
 
     def test_stamps_last_played_with_ended_at(self):
         playtime = Playtime()
-        playtime.begin_session("2026-05-28T10:00:00")
-        playtime.record_session("2026-05-28T11:00:00")
+        playtime.begin_session("2026-05-28T10:00:00", monotonic=0.0)
+        playtime.record_session("2026-05-28T11:00:00", monotonic_end=3600.0)
         assert playtime.last_played == "2026-05-28T11:00:00"
 
     def test_second_cycle_advances_last_played(self):
         playtime = Playtime()
-        playtime.begin_session("2026-05-28T10:00:00")
-        playtime.record_session("2026-05-28T11:00:00")
-        playtime.begin_session("2026-05-28T12:00:00")
-        playtime.record_session("2026-05-28T12:30:00")
+        playtime.begin_session("2026-05-28T10:00:00", monotonic=0.0)
+        playtime.record_session("2026-05-28T11:00:00", monotonic_end=3600.0)
+        playtime.begin_session("2026-05-28T12:00:00", monotonic=10000.0)
+        playtime.record_session("2026-05-28T12:30:00", monotonic_end=11800.0)
         assert playtime.last_played == "2026-05-28T12:30:00"
 
     def test_two_cycles_accumulate(self):
         playtime = Playtime()
-        playtime.begin_session("2026-05-28T10:00:00")
-        playtime.record_session("2026-05-28T11:00:00")
-        playtime.begin_session("2026-05-28T12:00:00")
-        playtime.record_session("2026-05-28T12:30:00")
+        playtime.begin_session("2026-05-28T10:00:00", monotonic=0.0)
+        playtime.record_session("2026-05-28T11:00:00", monotonic_end=3600.0)
+        playtime.begin_session("2026-05-28T12:00:00", monotonic=10000.0)
+        playtime.record_session("2026-05-28T12:30:00", monotonic_end=11800.0)
         assert playtime.total_seconds == 3600 + 1800
         assert playtime.session_count == 2
         assert playtime.last_session_duration_sec == 1800
@@ -51,26 +65,27 @@ class TestRecordSession:
     def test_no_open_session_raises(self):
         playtime = Playtime()
         with pytest.raises(ValueError, match="no open session to record"):
-            playtime.record_session("2026-05-28T11:00:00")
+            playtime.record_session("2026-05-28T11:00:00", monotonic_end=0.0)
 
     def test_unparseable_start_raises(self):
         playtime = Playtime()
-        playtime.begin_session("not-a-date")
+        playtime.begin_session("not-a-date", monotonic=0.0)
         with pytest.raises(ValueError, match="unparseable session timestamps"):
-            playtime.record_session("2026-05-28T11:00:00")
+            playtime.record_session("2026-05-28T11:00:00", monotonic_end=10.0)
 
     def test_upper_clamp_caps_at_24h(self):
         playtime = Playtime()
-        playtime.begin_session("2026-05-28T10:00:00")
-        playtime.record_session("2026-05-30T10:00:00")
+        playtime.begin_session("2026-05-28T10:00:00", monotonic=0.0)
+        # 48h wall, 48h monotonic (no suspend) → capped at 24h.
+        playtime.record_session("2026-05-30T10:00:00", monotonic_end=172_800.0)
         assert playtime.last_session_duration_sec == 86400
         assert playtime.total_seconds == 86400
         assert playtime.session_count == 1
 
     def test_lower_clamp_end_before_start(self):
         playtime = Playtime()
-        playtime.begin_session("2026-05-28T11:00:00")
-        playtime.record_session("2026-05-28T10:00:00")
+        playtime.begin_session("2026-05-28T11:00:00", monotonic=100.0)
+        playtime.record_session("2026-05-28T10:00:00", monotonic_end=100.0)
         assert playtime.last_session_duration_sec == 0
         assert playtime.total_seconds == 0
         assert playtime.session_count == 1
@@ -78,41 +93,61 @@ class TestRecordSession:
 
     def test_mixed_naive_aware_timestamps_raise(self):
         playtime = Playtime()
-        playtime.begin_session("2026-05-28T10:00:00")  # naive
+        playtime.begin_session("2026-05-28T10:00:00", monotonic=0.0)  # naive
         with pytest.raises(ValueError, match="inconsistent session timestamps"):
-            playtime.record_session("2026-05-28T11:00:00Z")  # aware (Z -> +00:00)
+            playtime.record_session("2026-05-28T11:00:00Z", monotonic_end=3600.0)  # aware (Z -> +00:00)
 
-    def test_suspend_subtracted_from_duration(self):
+    def test_fully_suspended_session_counts_zero(self):
+        """A session that was suspended the entire time (monotonic did not advance) counts 0."""
         playtime = Playtime()
-        playtime.begin_session("2026-05-28T10:00:00")
-        # 3600s elapsed minus 600s suspended -> 3000s counted.
-        playtime.record_session("2026-05-28T11:00:00", suspended_seconds=600)
-        assert playtime.last_session_duration_sec == 3000
-        assert playtime.total_seconds == 3000
-        assert playtime.session_count == 1
-        assert playtime.last_session_start is None
-
-    def test_default_suspend_is_zero(self):
-        playtime = Playtime()
-        playtime.begin_session("2026-05-28T10:00:00")
-        # No suspend arg → full elapsed counted (unchanged behavior).
-        playtime.record_session("2026-05-28T11:00:00")
-        assert playtime.last_session_duration_sec == 3600
-
-    def test_over_subtraction_clamps_to_zero(self):
-        playtime = Playtime()
-        playtime.begin_session("2026-05-28T10:00:00")
-        # 30s elapsed minus 60s suspended -> clamped to 0, never negative.
-        playtime.record_session("2026-05-28T10:00:30", suspended_seconds=60)
+        playtime.begin_session("2026-05-28T10:00:00", monotonic=500.0)
+        # 1h wall elapsed but the monotonic clock never moved (asleep throughout).
+        playtime.record_session("2026-05-28T11:00:00", monotonic_end=500.0)
         assert playtime.last_session_duration_sec == 0
         assert playtime.total_seconds == 0
         assert playtime.session_count == 1
 
-    def test_24h_cap_applies_after_subtraction(self):
+
+class TestRecordSessionMonotonicFallback:
+    """When the monotonic delta is unusable, the counted span falls back to wall (pre-#1148 behavior)."""
+
+    def test_absent_monotonic_start_falls_back_to_wall(self):
+        """A constructor-seeded / pre-migration row (no monotonic start) counts the full wall span."""
+        playtime = Playtime(last_session_start="2026-05-28T10:00:00")  # last_session_start_monotonic is None
+        playtime.record_session("2026-05-28T11:00:00", monotonic_end=999.0)
+        assert playtime.last_session_duration_sec == 3600  # full wall span; monotonic_end ignored
+        assert playtime.total_seconds == 3600
+
+    def test_negative_delta_reboot_falls_back_to_wall(self):
+        """A monotonic counter reset mid-session (reboot) yields a negative delta → wall fallback."""
         playtime = Playtime()
-        playtime.begin_session("2026-05-28T10:00:00")
-        # 90000s elapsed minus 3600s suspended = 86400s, still capped at 24h.
-        playtime.record_session("2026-05-29T11:00:00", suspended_seconds=3600)
+        playtime.begin_session("2026-05-28T10:00:00", monotonic=5000.0)
+        # The counter reset lower after a reboot, so end < start.
+        playtime.record_session("2026-05-28T11:00:00", monotonic_end=10.0)
+        assert playtime.last_session_duration_sec == 3600  # wall span, not the negative garbage
+
+    def test_delta_far_above_wall_falls_back_to_wall(self):
+        """A monotonic delta more than the tolerance above the wall span is untrusted → wall fallback."""
+        playtime = Playtime()
+        playtime.begin_session("2026-05-28T10:00:00", monotonic=0.0)
+        # Awake can never exceed elapsed: a 2h monotonic delta over a 1h wall span
+        # cannot belong to this session, so the wall span is used.
+        playtime.record_session("2026-05-28T11:00:00", monotonic_end=7200.0)
+        assert playtime.last_session_duration_sec == 3600
+
+    def test_delta_within_tolerance_above_wall_is_clamped_to_wall(self):
+        """A monotonic delta a hair above wall (read jitter) is clamped to the wall span, never over-counts."""
+        playtime = Playtime()
+        playtime.begin_session("2026-05-28T10:00:00", monotonic=0.0)
+        # 3600s wall, 3601.5s monotonic (within the 2s tolerance) → clamped to 3600.
+        playtime.record_session("2026-05-28T11:00:00", monotonic_end=3601.5)
+        assert playtime.last_session_duration_sec == 3600
+
+    def test_wall_fallback_still_respects_24h_cap(self):
+        """The 24h cap still applies when the monotonic delta is discarded and wall is used."""
+        playtime = Playtime(last_session_start="2026-05-28T10:00:00")  # no monotonic start → wall fallback
+        # 25h wall span, capped at 24h.
+        playtime.record_session("2026-05-29T11:00:00", monotonic_end=0.0)
         assert playtime.last_session_duration_sec == 86400
         assert playtime.total_seconds == 86400
 
@@ -149,8 +184,8 @@ class TestEnqueueSession:
     def test_record_session_end_can_be_enqueued(self):
         """The typical flow: record folds duration, then enqueue captures the window."""
         playtime = Playtime()
-        playtime.begin_session("2026-05-28T10:00:00")
-        playtime.record_session("2026-05-28T10:30:00")
+        playtime.begin_session("2026-05-28T10:00:00", monotonic=0.0)
+        playtime.record_session("2026-05-28T10:30:00", monotonic_end=1800.0)
         playtime.enqueue_session(
             device_id="dev-1",
             start_time="2026-05-28T10:00:00",

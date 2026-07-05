@@ -175,16 +175,13 @@ class SessionLifecycleService:
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
 
-    async def finalize(self, rom_id: int, suspended_seconds: int = 0) -> SessionFinalizeResult:
+    async def finalize(self, rom_id: int) -> SessionFinalizeResult:
         """Run the four end-of-session steps and return the combined verdict.
 
         Parameters
         ----------
         rom_id:
             RomM ROM id whose session just ended.
-        suspended_seconds:
-            Device-suspend wall-clock the frontend accumulated during the
-            session, subtracted from the counted playtime.
 
         Returns
         -------
@@ -196,7 +193,7 @@ class SessionLifecycleService:
             ``romm_data_changed`` event dispatch. ``migration`` carries
             the two migration-status payloads.
         """
-        total_seconds = await self._record_playtime(rom_id, suspended_seconds)
+        total_seconds = await self._record_playtime(rom_id)
         self._schedule_achievement_sync(rom_id)
         sync_result = await self._build_sync_result(rom_id)
         migration = await self._refresh_migration()
@@ -207,16 +204,16 @@ class SessionLifecycleService:
             migration=migration,
         )
 
-    async def _record_playtime(self, rom_id: int, suspended_seconds: int = 0) -> int | None:
+    async def _record_playtime(self, rom_id: int) -> int | None:
         """Record session end and return the updated ``total_seconds``.
 
         Returns ``None`` on any non-success outcome (no active session,
         malformed timestamp, downstream exception) so the frontend
-        knows to leave Steam's playtime display alone. ``suspended_seconds``
-        is forwarded to the recorder so device-suspend time is not counted.
+        knows to leave Steam's playtime display alone. Suspend time is
+        excluded by the recorder via the monotonic clock (#1148).
         """
         try:
-            result = await self._playtime_recorder.record_session_end(rom_id, suspended_seconds)
+            result = await self._playtime_recorder.record_session_end(rom_id)
         except Exception as e:
             self._logger.warning(f"SessionLifecycle playtime record failed for rom_id={rom_id}: {e}")
             return None

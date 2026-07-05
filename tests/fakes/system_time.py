@@ -47,8 +47,16 @@ class FakeClock:
         return self._now.timestamp()
 
     def advance(self, seconds: float) -> None:
-        """Bump both ``monotonic`` and ``now`` forward by ``seconds``."""
+        """Bump both ``monotonic`` and ``now`` forward by ``seconds`` (awake time)."""
         self._monotonic += seconds
+        self._now = self._now + timedelta(seconds=seconds)
+
+    def advance_wall(self, seconds: float) -> None:
+        """Bump only ``now`` forward, leaving ``monotonic`` frozen — models device suspend.
+
+        The monotonic clock pauses while the device is suspended, so wall time
+        advances without a matching monotonic advance. Pair with :meth:`advance`
+        (awake time) to build a session that spans a suspend window."""
         self._now = self._now + timedelta(seconds=seconds)
 
 

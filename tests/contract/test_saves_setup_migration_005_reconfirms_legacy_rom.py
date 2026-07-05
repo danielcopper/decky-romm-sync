@@ -28,16 +28,18 @@ def _rewind_to_v4(db_path: str) -> None:
 
     Bootstrap stamps the DB at the latest version with the full schema. To replay
     the real 005 upgrade path the runner must see a genuine v4 database: the
-    version stamp AND the pre-006/007/008 schema (006's play-session outbox table
-    absent and ``note_id`` present, 007's ``last_played`` column absent, and 008's
-    version-metadata columns absent) so the sequential 005→006→007→008 re-run
-    applies cleanly.
+    version stamp AND the pre-006/007/008/009 schema (006's play-session outbox
+    table absent and ``note_id`` present, 007's ``last_played`` column absent,
+    008's version-metadata columns absent, and 009's ``last_session_start_monotonic``
+    column absent) so the sequential 005→006→007→008→009 re-run applies cleanly.
     """
     conn = sqlite3.connect(db_path, isolation_level=None)
     try:
         conn.execute("DROP TABLE IF EXISTS rom_playtime_sessions")
         conn.execute("ALTER TABLE rom_playtime ADD COLUMN note_id INTEGER")
         conn.execute("ALTER TABLE rom_playtime DROP COLUMN last_played")
+        # Reverse 009 so its ADD COLUMN re-applies instead of duplicating.
+        conn.execute("ALTER TABLE rom_playtime DROP COLUMN last_session_start_monotonic")
         # Reverse 008 so its ADD COLUMNs re-apply instead of duplicating.
         for column in ("sibling_group_key", "regions", "languages", "revision", "tags", "is_main_sibling"):
             conn.execute(f"ALTER TABLE roms DROP COLUMN {column}")

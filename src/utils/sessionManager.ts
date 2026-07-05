@@ -164,7 +164,7 @@ async function handleGameStop(): Promise<void> {
   clearSessionBreadcrumb();
 
   try {
-    const result = await finalizeGameSession(romId, 0);
+    const result = await finalizeGameSession(romId);
 
     // Playtime display update — appStore mutation must stay frontend.
     if (result.total_seconds != null) {

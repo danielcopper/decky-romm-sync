@@ -40,6 +40,7 @@ class TestRoundTrip:
             total_seconds=3600,
             session_count=4,
             last_session_start="2026-03-03T10:00:00Z",
+            last_session_start_monotonic=4321.5,
             last_session_duration_sec=900,
             last_played="2026-03-03T10:15:00Z",
             pending_sessions={"2026-03-03T10:00:00Z": _pending()},
@@ -47,6 +48,15 @@ class TestRoundTrip:
         uow.playtime.save(5, playtime)
 
         assert uow.playtime.get(5) == playtime
+
+    def test_last_session_start_monotonic_round_trips(self, uow: SqliteUnitOfWork):
+        """The monotonic-start column (migration 009) survives save → get (#1148)."""
+        _seed_rom(uow, 5)
+        uow.playtime.save(5, Playtime(last_session_start="2026-03-03T10:00:00Z", last_session_start_monotonic=1234.5))
+
+        loaded = uow.playtime.get(5)
+        assert loaded is not None
+        assert loaded.last_session_start_monotonic == 1234.5
 
     def test_last_played_round_trips(self, uow: SqliteUnitOfWork):
         """The ``last_played`` column (migration 007) survives save → get (#903)."""
@@ -66,6 +76,7 @@ class TestRoundTrip:
         assert loaded is not None
         assert loaded.total_seconds == 0
         assert loaded.last_session_start is None
+        assert loaded.last_session_start_monotonic is None
         assert loaded.last_session_duration_sec is None
         assert loaded.last_played is None
         assert loaded.pending_sessions == {}

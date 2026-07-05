@@ -138,6 +138,28 @@ def _latest_end_time(sessions: list[Any]) -> str | None:
     return latest_raw
 
 
+def _session_debug_line(
+    rom_id: int, started_at: str, ended_at: str, monotonic_start: float | None, monotonic_end: float, awake: int
+) -> str:
+    """Format the #1148 session-end verification line: wall span vs the counted awake span.
+
+    ``wall`` is the raw start→end span; ``mono`` is the monotonic delta that
+    excludes suspend time (``n/a`` when the row predates the monotonic marker and
+    the domain falls back to wall); ``awake`` is the seconds actually counted. It
+    is the on-device hook for confirming suspend exclusion. The timestamps are
+    already known-parseable (``record_session`` validated them before this runs),
+    so a parse miss degrades to ``-1`` rather than raising.
+    """
+    start = parse_iso(started_at)
+    end = parse_iso(ended_at)
+    try:
+        wall = int((end - start).total_seconds()) if start is not None and end is not None else -1
+    except TypeError:  # naive/aware mismatch — record_session would have rejected it first
+        wall = -1
+    mono = "n/a" if monotonic_start is None else str(int(monotonic_end - monotonic_start))
+    return f"record_session_end: rom {rom_id} wall={wall}s mono={mono}s awake={awake}s"
+
+
 class PlaytimeService:
     """Playtime tracking: record sessions, flush the outbox, and reconcile with RomM."""
 
@@ -167,37 +189,44 @@ class PlaytimeService:
         try:
             with self._uow_factory() as uow:
                 pt = uow.playtime.get(rid) or Playtime()
-                pt.begin_session(self._clock.now().isoformat())
+                pt.begin_session(self._clock.now().isoformat(), monotonic=self._clock.monotonic())
                 uow.playtime.save(rid, pt)
         except sqlite3.IntegrityError as e:
             self._log_debug(f"Failed to record session start for rom {rid}: {e}")
             return {"success": False, "reason": "unknown_rom", "message": "Unknown ROM"}
         return {"success": True}
 
-    async def record_session_end(self, rom_id: int, suspended_seconds: int = 0) -> dict[str, Any]:
+    async def record_session_end(self, rom_id: int) -> dict[str, Any]:
         """Record end of play session, accumulate playtime delta.
 
-        Only handles playtime — save sync is handled separately. ``suspended_seconds``
-        is the wall-clock time the device spent suspended during the session; it
-        is subtracted from the raw elapsed span so suspend time is not counted as
-        play. The work runs in an executor: the durable fold + outbox enqueue
-        happen in a short write UoW (the SQLite connection has thread affinity),
-        then the native ingest flush runs best-effort outside any transaction.
+        Only handles playtime — save sync is handled separately. Suspend time is
+        excluded via the monotonic clock: the session was opened with a
+        ``Clock.monotonic()`` start, and the delta to the ``monotonic_end``
+        captured here counts only awake time (the monotonic clock pauses while
+        the device is suspended, #1148). The work runs in an executor: the
+        durable fold + outbox enqueue happen in a short write UoW (the SQLite
+        connection has thread affinity), then the native ingest flush runs
+        best-effort outside any transaction.
         """
-        return await self._loop.run_in_executor(None, self._record_session_end_io, int(rom_id), suspended_seconds)
+        return await self._loop.run_in_executor(None, self._record_session_end_io, int(rom_id))
 
-    def _record_session_end_io(self, rom_id: int, suspended_seconds: int = 0) -> dict[str, Any]:
+    def _record_session_end_io(self, rom_id: int) -> dict[str, Any]:
         """Synchronous twin of :meth:`record_session_end` (runs in the executor).
 
-        Phase A — fold the closed session (minus ``suspended_seconds``) into the
-        aggregate and, when this device is registered, enqueue the session into
-        the outbox, both in one short write UoW. Phase B — flush the outbox to
-        RomM's native ingest outside the transaction (best-effort). Returns the
-        same dict shape the frontend consumes: ``success`` plus ``duration_sec``
-        / ``total_seconds`` / ``session_count`` on the happy path, or
-        ``success: False`` with a ``message`` otherwise.
+        Phase A — fold the closed session (awake-only span, suspend excluded via
+        the monotonic delta) into the aggregate and, when this device is
+        registered, enqueue the session into the outbox, both in one short write
+        UoW. Phase B — flush the outbox to RomM's native ingest outside the
+        transaction (best-effort). Returns the same dict shape the frontend
+        consumes: ``success`` plus ``duration_sec`` / ``total_seconds`` /
+        ``session_count`` on the happy path, or ``success: False`` with a
+        ``message`` otherwise.
         """
         ended_at = self._clock.now().isoformat()
+        # Capture the monotonic reading at the same session-end instant as
+        # ``ended_at``; its delta from the stored monotonic start is the awake-only
+        # span (the monotonic clock pauses across suspend, #1148).
+        monotonic_end = self._clock.monotonic()
         # Read the device id BEFORE opening the write UoW: get_device_id opens its
         # own DeviceRegistry UoW, and a nested BEGIN IMMEDIATE inside our open
         # write transaction would self-deadlock on the write lock.
@@ -207,11 +236,13 @@ class PlaytimeService:
                 entry = uow.playtime.get(rom_id)
                 if entry is None or not entry.last_session_start:
                     return {"success": False, "reason": "no_active_session", "message": "No active session"}
-                # Capture the start BEFORE record_session clears it — it keys the
-                # outbox row and RomM's dedup.
+                # Capture the start markers BEFORE record_session clears them —
+                # started_at keys the outbox row and RomM's dedup; the monotonic
+                # start feeds the verification log line.
                 started_at = entry.last_session_start
+                monotonic_start = entry.last_session_start_monotonic
                 try:
-                    entry.record_session(ended_at, suspended_seconds=suspended_seconds)
+                    entry.record_session(ended_at, monotonic_end=monotonic_end)
                 except ValueError:
                     return {
                         "success": False,
@@ -219,6 +250,9 @@ class PlaytimeService:
                         "message": "Failed to calculate session duration",
                     }
                 duration = entry.last_session_duration_sec or 0
+                self._log_debug(
+                    _session_debug_line(rom_id, started_at, ended_at, monotonic_start, monotonic_end, duration)
+                )
                 if device_id:
                     entry.enqueue_session(
                         device_id=device_id,

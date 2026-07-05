@@ -398,8 +398,8 @@ class Plugin:
         self.loop.create_task(self._save_sync_service.check_save_status_background(int(rom_id)))
         return {"success": True}
 
-    async def finalize_game_session(self, rom_id, suspended_seconds):
-        result = await self._session_lifecycle_service.finalize(rom_id, int(suspended_seconds))
+    async def finalize_game_session(self, rom_id):
+        result = await self._session_lifecycle_service.finalize(rom_id)
         return asdict(result)
 
     # ── Download delegation to DownloadService ──────────────

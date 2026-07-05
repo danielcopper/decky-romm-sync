@@ -216,12 +216,11 @@ class SessionPlaytimeRecorder(Protocol):
     ``total_seconds`` field to the frontend so the playtime display can
     be updated; a falsy ``success`` value yields ``total_seconds=None``
     on the returned DTO so the frontend leaves the display untouched.
-    ``suspended_seconds`` carries the device-suspend wall-clock the
-    frontend accumulated during the session, subtracted from the counted
-    playtime.
+    Device-suspend time is excluded by the recorder itself via the
+    monotonic clock (#1148); the caller passes no suspend duration.
     """
 
-    async def record_session_end(self, rom_id: int, suspended_seconds: int = 0) -> dict[str, Any]: ...
+    async def record_session_end(self, rom_id: int) -> dict[str, Any]: ...
 
 
 class SessionPostExitSync(Protocol):

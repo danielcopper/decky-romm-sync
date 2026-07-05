@@ -19,7 +19,10 @@ if TYPE_CHECKING:
     import sqlite3
     from collections.abc import Iterator
 
-_STATE_COLUMNS = "rom_id, total_seconds, session_count, last_session_start, last_session_duration_sec, last_played"
+_STATE_COLUMNS = (
+    "rom_id, total_seconds, session_count, last_session_start, "
+    "last_session_start_monotonic, last_session_duration_sec, last_played"
+)
 _SESSION_COLUMNS = "rom_id, start_time, device_id, end_time, duration_ms, attempts"
 
 
@@ -40,6 +43,7 @@ class SqlitePlaytimeRepository(BaseRepository):
             total_seconds=row["total_seconds"],
             session_count=row["session_count"],
             last_session_start=row["last_session_start"],
+            last_session_start_monotonic=row["last_session_start_monotonic"],
             last_session_duration_sec=row["last_session_duration_sec"],
             last_played=row["last_played"],
             pending_sessions=pending,
@@ -63,12 +67,13 @@ class SqlitePlaytimeRepository(BaseRepository):
 
     def save(self, rom_id: int, playtime: Playtime) -> None:
         self._conn.execute(
-            f"INSERT OR REPLACE INTO rom_playtime ({_STATE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?)",
+            f"INSERT OR REPLACE INTO rom_playtime ({_STATE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 rom_id,
                 playtime.total_seconds,
                 playtime.session_count,
                 playtime.last_session_start,
+                playtime.last_session_start_monotonic,
                 playtime.last_session_duration_sec,
                 playtime.last_played,
             ),

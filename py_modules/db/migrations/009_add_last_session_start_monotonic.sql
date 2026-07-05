@@ -1,0 +1,18 @@
+-- =============================================================================
+-- 009_add_last_session_start_monotonic.sql — exclude suspend time from playtime
+-- Issue #1148 (session duration derived from the monotonic clock)
+-- =============================================================================
+--
+-- Adds ``last_session_start_monotonic REAL`` to ``rom_playtime`` (the Playtime
+-- aggregate's scalar row). It stores the ``Clock.monotonic()`` reading captured
+-- when a session opens; at session end the delta to the end reading is the
+-- awake-only span (the monotonic clock pauses while the device is suspended), so
+-- suspend time is excluded from the counted duration. NULL until the next
+-- ``begin_session`` stamps it; a NULL marker (a pre-migration row, or a session
+-- opened before this column existed) makes ``record_session`` fall back to the
+-- full wall-clock span — the pre-#1148 behavior, never a regression.
+--
+-- Transaction-safe DDL only — the runner (adapters/sqlite_migrations.py) wraps
+-- BEGIN/COMMIT and stamps PRAGMA user_version = 9.
+-- -----------------------------------------------------------------------------
+ALTER TABLE rom_playtime ADD COLUMN last_session_start_monotonic REAL;
