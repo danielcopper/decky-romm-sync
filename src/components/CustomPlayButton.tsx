@@ -11,7 +11,7 @@
 
 import { useState, useEffect, useRef, FC, ReactElement } from "react";
 import { addEventListener, removeEventListener, toaster } from "@decky/api";
-import { Focusable, DialogButton, Menu, MenuItem, showContextMenu } from "@decky/ui";
+import { Focusable, DialogButton, Menu, MenuItem, Navigation, showContextMenu } from "@decky/ui";
 import { appActionButtonClasses, basicAppDetailsSectionStylerClasses } from "../utils/deckyUiInternals";
 import { hideNativePlaySection, showNativePlaySection } from "../utils/styleInjector";
 import { hasAnySaveConflict } from "../utils/saveStatus";
@@ -96,18 +96,6 @@ function formatProgress(downloaded: number, total: number): string {
     return `${(downloaded / (1024 * 1024)).toFixed(1)} / ${(total / (1024 * 1024)).toFixed(1)} MB`;
   return `${(downloaded / (1024 * 1024 * 1024)).toFixed(2)} / ${(total / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
-
-// Runtime mirror of `ERaiseGameWindowResult` (typed in src/types/steam.d.ts).
-// @decky/ui defines that enum but does NOT re-export it from its public root
-// (its globals re-export only SteamClient + stores; the enum lives in the
-// internal steam-client/App module), and the ambient enum carries no runtime
-// object — so the result codes we branch on live here, typed back to the enum
-// for clean, overlap-safe comparisons against the RaiseWindowForGame result.
-const RaiseWindowResult = {
-  NotRunning: 1 as ERaiseGameWindowResult,
-  Success: 2 as ERaiseGameWindowResult,
-  Failure: 3 as ERaiseGameWindowResult,
-} as const;
 
 interface CustomPlayButtonProps {
   appId: number;
@@ -622,39 +610,43 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     }
   };
 
-  // Resume an already-running game: bring its window to the foreground instead of
-  // launching (#1313). `RaiseWindowForGame` focuses the live window WITHOUT firing
-  // GameActionStart (so the launch interceptor never re-enters) and WITHOUT Steam's
-  // native "already running" dialog — so the pre-launch sync funnel never runs
-  // mid-session (which would upload the save while the emulator holds it open).
-  //
-  //  - Success    → done.
-  //  - NotRunning → the running overlay was stale; clear it and fall through to the
-  //                 normal launch funnel (self-heal — the game isn't actually up).
-  //  - Failure    → RunGame backstop (accepts the native dialog) so the user still
-  //                 reaches the game rather than being stranded.
+  // Resume an already-running game: bring it to the foreground instead of
+  // launching (#1313). Foregrounding is pure UI focus navigation the way Steam's
+  // own gamescope "Resume Game" does it — `SteamUIStore.SetRunningApp(appId)` +
+  // `NavigateToRunningApp()` — NOT a launch: it fires no `GameActionStart` (so the
+  // launch interceptor never re-enters) and shows no "already running" dialog, so
+  // the pre-launch sync funnel never runs mid-session (which would upload the save
+  // while the emulator holds the file open). `RaiseWindowForGame` (the prior
+  // approach) is a DESKTOP-overlay call that silently no-ops in gamescope Game Mode
+  // — it reports Success but does nothing — so it is not used here.
   const handleResumeGame = async () => {
-    const overview = appStore.GetAppOverviewByAppID(appId);
-    const gameId = overview?.GetGameID?.() ?? String(appId);
-    const raiseResult = await SteamClient.Apps.RaiseWindowForGame(appId).catch((e) => {
-      logError(`CustomPlayButton: RaiseWindowForGame threw: ${e}`);
-      return RaiseWindowResult.Failure;
-    });
-
-    if (raiseResult === RaiseWindowResult.Success) {
-      detach(debugLog(`CustomPlayButton: resumed appId=${appId} via RaiseWindowForGame`));
-      return;
-    }
-    if (raiseResult === RaiseWindowResult.NotRunning) {
-      detach(debugLog(`CustomPlayButton: RaiseWindowForGame reported NotRunning — falling through to launch`));
+    // Liveness gate: the overlay can go stale (a session that ended without a stop
+    // event reaching this button). If nothing is actually running, clear the
+    // overlay and fall through to the normal launch funnel — self-heal, so a click
+    // never strands the user on a dead Resume.
+    if (!(isAppRunning(appId) || getActiveSessionRomId() === romId)) {
+      detach(debugLog(`CustomPlayButton: Resume on appId=${appId} but nothing is running — self-healing to launch`));
       setIsRunning(false);
       await handlePlay();
       return;
     }
-    // Failure (or any unexpected code) — fall back to RunGame so the user still
-    // reaches the game (Steam surfaces its own "already running" dialog here).
-    detach(debugLog(`CustomPlayButton: RaiseWindowForGame failed (${raiseResult}) — RunGame backstop`));
-    await dispatchLaunch(gameId);
+
+    // NOSONAR(typescript:S7741) — SteamUIStore is an ambient Steam SP global; the
+    // typeof guard keeps a genuinely-absent one from throwing ReferenceError.
+    if (typeof SteamUIStore !== "undefined" && SteamUIStore) {
+      SteamUIStore.SetRunningApp(appId);
+      if (typeof SteamUIStore.NavigateToRunningApp === "function") {
+        SteamUIStore.NavigateToRunningApp();
+        detach(debugLog(`CustomPlayButton: resumed appId=${appId} via SteamUIStore.NavigateToRunningApp`));
+        return;
+      }
+    }
+    // Older SteamUI without `NavigateToRunningApp` (API drift) — navigate to the
+    // running-app route directly. When the store was present `SetRunningApp` above
+    // already selected this app, so the foreground lands on it (the decky-rocketjump
+    // fallback path).
+    Navigation.Navigate("/apprunning");
+    detach(debugLog(`CustomPlayButton: resumed appId=${appId} via Navigation.Navigate`));
   };
 
   // Resolve the conflict the button is already showing. This is a READ, not a

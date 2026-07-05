@@ -21,12 +21,6 @@ declare var SteamClient: {
       callback: (details: SteamAppDetails | undefined) => void,
     ): { unregister: () => void };
     RunGame(gameId: string | number, launchId: string, param2: number, param3: number): void;
-    // Bring an already-running game's window to the foreground. Unlike RunGame
-    // this is NOT a launch — it fires no GameActionStart (so the launch
-    // interceptor never re-enters) and shows no "already running" dialog. Used
-    // by the state-aware Resume button (#1313) to focus a live session instead
-    // of running the pre-launch sync funnel.
-    RaiseWindowForGame(appId: number): Promise<ERaiseGameWindowResult>;
     TerminateApp(appId: number, force: boolean): void;
     RegisterForGameActionStart(
       callback: (gameActionId: number, appIdStr: string, action: string, launchSource: number) => void,
@@ -55,16 +49,6 @@ declare var SteamClient: {
     RegisterForResumeSuspendedGamesProgress(callback: () => void): { unregister: () => void };
   };
 };
-
-// Result of SteamClient.Apps.RaiseWindowForGame — mirrors @decky/ui's own
-// ERaiseGameWindowResult, which is defined in that package but NOT re-exported
-// from its public root (see the runtime-mirror note in CustomPlayButton), so we
-// declare the type here on our own SteamClient surface.
-declare enum ERaiseGameWindowResult {
-  NotRunning = 1,
-  Success = 2,
-  Failure = 3,
-}
 
 interface SteamAppDetails {
   // The two launch-options fields the runtime exposes — keys vary by Steam
@@ -154,6 +138,13 @@ declare var Router:
 declare var SteamUIStore:
   | {
       RunningApps?: SteamAppOverview[];
+      // Focus a running app in gamescope — pure UI selection, not a launch. The
+      // state-aware Resume button (#1313) calls this + NavigateToRunningApp to
+      // foreground a live session (Steam's own "Resume Game" path).
+      SetRunningApp(appId: number): void;
+      // Navigate to the running-app screen. Optional — absent on older SteamUI
+      // builds, where the Resume path falls back to Navigation.Navigate("/apprunning").
+      NavigateToRunningApp?(force?: boolean): void;
     }
   | null
   | undefined;
