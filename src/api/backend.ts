@@ -83,7 +83,7 @@ export interface CachedGameDetail {
   bios_label?: string | null;
   save_sync_display?: SaveSyncDisplay | null;
   stale_fields?: string[];
-  // Version metadata (ADR-0019) — the RomM sibling-group dimensions, rendered
+  // Version metadata (ADR-0021) — the RomM sibling-group dimensions, rendered
   // read-only in the play-section "Version" row.
   regions?: string[];
   languages?: string[];

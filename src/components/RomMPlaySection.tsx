@@ -102,7 +102,7 @@ interface InfoState {
   romId: number | null;
   romName: string;
   platformSlug: string;
-  /** Pre-joined RomM version label (regions/languages/revision/tags, ADR-0019);
+  /** Pre-joined RomM version label (regions/languages/revision/tags, ADR-0021);
    *  "" hides the VERSION row. */
   versionLabel: string;
   lastPlayed: string;
@@ -1062,7 +1062,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   }
 
   // Version (region/language/revision/tags) — display-only, hidden when the ROM
-  // carries no version metadata (ADR-0019).
+  // carries no version metadata (ADR-0021).
   if (info.versionLabel) {
     infoItems.push(infoItem("version", "VERSION", info.versionLabel));
   }

@@ -503,7 +503,7 @@ class LibraryFetcher:
         if not last_sync or registry_count == 0:
             return None
 
-        # Version-metadata backfill (#1295 / ADR-0019): a bound ROM whose
+        # Version-metadata backfill (#1295 / ADR-0021): a bound ROM whose
         # sibling_group_key is still NULL predates the version-metadata capture
         # and must be re-fetched to fill it in. Skipping the platform would leave
         # it NULL forever, so any un-backfilled ROM forces a full fetch — the

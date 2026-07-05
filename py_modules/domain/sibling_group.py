@@ -5,7 +5,7 @@ metadata id, coalesced in a fixed source order (IGDB → ScreenScraper → Moby 
 → Hasheous → LaunchBox → TGDB → Flashpoint) and scoped per platform. An unmatched
 ROM falls back to its own id — a solo group, exactly as on the server. This module
 derives that group key client-side over a fetched RomM ROM dict so grouping never
-needs the server's ``group_by_meta_id`` fetch (see ADR-0019). Pure compute, no
+needs the server's ``group_by_meta_id`` fetch (see ADR-0021). Pure compute, no
 I/O, stdlib only.
 """
 

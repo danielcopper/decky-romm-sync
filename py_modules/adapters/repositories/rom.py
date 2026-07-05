@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 # save(), so a re-sync (which builds a fresh Rom with both = None) cannot wipe a
 # user's pin. The version-metadata columns (sibling_group_key + the version
 # dimensions) ARE here — they are server-derived facts that must refresh on
-# every sync (ADR-0019), the opposite of the user pins.
+# every sync (ADR-0021), the opposite of the user pins.
 _SYNC_COLUMNS = (
     "rom_id",
     "platform_slug",

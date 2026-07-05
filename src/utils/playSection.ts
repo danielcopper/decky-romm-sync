@@ -95,7 +95,7 @@ export function extractCoreInfo(coreInfo: CoreInfo): CoreInfoFields {
   };
 }
 
-/** The RomM sibling-group version dimensions (ADR-0019) as the game-detail
+/** The RomM sibling-group version dimensions (ADR-0021) as the game-detail
  *  payload ships them — all optional so a pre-backfill ROM (empty metadata)
  *  degrades to a hidden row. */
 export interface VersionFields {

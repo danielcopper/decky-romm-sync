@@ -172,7 +172,7 @@ def build_shortcuts_data(
     ``launch_options``. Required so a new bake site can never silently skip the
     override.
 
-    The sibling-group key (ADR-0019) and RomM's version dimensions (``regions`` /
+    The sibling-group key (ADR-0021) and RomM's version dimensions (``regions`` /
     ``languages`` / ``revision`` / ``tags`` / ``is_main_sibling``) are derived
     from each raw ROM dict here and carried through so the commit persists them
     on the ``Rom`` aggregate. ``is_main_sibling`` sits under ``rom_user``; the

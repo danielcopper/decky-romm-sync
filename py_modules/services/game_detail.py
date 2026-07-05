@@ -272,7 +272,7 @@ class GameDetailService:
             "ra_id": ra_id,
             "achievement_summary": achievement_summary,
             "stale_fields": stale_fields,
-            # Version metadata (ADR-0019): the sibling-group dimensions RomM
+            # Version metadata (ADR-0021): the sibling-group dimensions RomM
             # supplies per ROM, surfaced read-only in the game-detail "Version"
             # row. Tuples are flattened to JSON arrays for the wire.
             "regions": list(rom.regions),

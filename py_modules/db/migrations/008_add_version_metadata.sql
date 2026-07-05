@@ -1,6 +1,6 @@
 -- =============================================================================
 -- 008_add_version_metadata.sql — sibling-group key + version dimensions on Rom
--- Issue #1295 (first slice of #1267 — capture RomM version metadata) / ADR-0019
+-- Issue #1295 (first slice of #1267 — capture RomM version metadata) / ADR-0021
 -- =============================================================================
 --
 -- RomM models one game as several dumps (region/language/revision/tag variants)
