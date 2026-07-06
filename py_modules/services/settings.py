@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from domain.sibling_resolution import AUTO_REGION
 from lib.list_result import ErrorCode
 from lib.url_host import is_valid_server_url
 
@@ -105,6 +106,7 @@ class SettingsService:
             "log_level": self._settings.get("log_level", "warn"),
             "romm_allow_insecure_ssl": self._settings.get("romm_allow_insecure_ssl", False),
             "collection_create_platform_groups": self._settings.get("collection_create_platform_groups", False),
+            "preferred_region": self._settings.get("preferred_region", AUTO_REGION),
         }
 
     # ── Log level ────────────────────────────────────────────────────────
@@ -116,6 +118,41 @@ class SettingsService:
         self._settings["log_level"] = level
         self._settings_persister.save_settings()
         return {"success": True}
+
+    # ── Preferred region (sibling-group naming/binding) ──────────────────
+
+    def save_preferred_region(self, region: object) -> dict[str, Any]:
+        """Validate and persist the preferred sibling-group region (ADR-0021 §3).
+
+        ``"auto"`` (the default) means no preference — the fixed build-time region
+        order (World > USA > Europe > Japan) decides. Any other value lifts that
+        region to the top of the ranking used to pick a group's representative
+        and mint its shortcut name; it takes effect on the next sync (existing
+        shortcuts keep their bound version and name). A blank value normalises to
+        ``"auto"``. The region vocabulary is open-ended (RomM ships full-word
+        regions), so any string is accepted as-is; a non-string from the
+        untrusted frontend wire is rejected.
+        """
+        if not isinstance(region, str):
+            return {"success": False, "reason": "invalid_region", "message": "Invalid region"}
+        self._settings["preferred_region"] = region.strip() or AUTO_REGION
+        self._settings_persister.save_settings()
+        return {"success": True}
+
+    def get_known_regions(self) -> list[str]:
+        """Return the distinct region values present in the locally synced library.
+
+        Reads the ``regions`` of every persisted ``roms`` row (ADR-0021 version
+        metadata) and returns the distinct values, sorted alphabetically. This
+        is the source for the "Preferred region" dropdown's non-anchor options —
+        a purely local read, no server call. An empty library yields ``[]`` (the
+        dropdown then shows only its fixed anchors).
+        """
+        regions: set[str] = set()
+        with self._uow_factory() as uow:
+            for rom in uow.roms.iter_all():
+                regions.update(rom.regions)
+        return sorted(regions)
 
     def frontend_log(self, level: str, message: str) -> None:
         """Log a frontend message respecting the configured log_level threshold.

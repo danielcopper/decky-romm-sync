@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
-from domain.sibling_resolution import resolve_group_representative
+from domain.sibling_resolution import AUTO_REGION, canonical_group_name, resolve_group_representative
 
 # Marker key a rebind entry carries so the per-unit commit moves the DB binding
 # from the vanished bound sibling (the entry's ``rom_id``, kept so the frontend
@@ -93,6 +93,7 @@ def collapse_sibling_groups(
     installed_rom_ids: set[int],
     *,
     complete_group_view: bool,
+    preferred_region: str = AUTO_REGION,
 ) -> list[dict[str, Any]]:
     """Collapse per-ROM shortcut entries to one Steam shortcut per sibling group.
 
@@ -125,7 +126,12 @@ def collapse_sibling_groups(
       :func:`_rebind_entry`) keeps the vanished sibling's shortcut and moves its
       binding to the surviving representative.
     * **New** — no binding anywhere in the group: emit the single representative
-      chosen by :func:`resolve_group_representative`.
+      chosen by :func:`resolve_group_representative`, but with its display
+      ``name`` replaced by :func:`canonical_group_name` — the region-preferred
+      member's name mints the sticky Steam shortcut (ADR-0021 §2/§3), while the
+      representative's ``rom_id`` / launch bake stay the bind target. This is the
+      only lane that renames: an already-bound group (grandfathered / rebind)
+      carries its persisted name verbatim, so a live shortcut is never renamed.
     * **Grandfathered untouched** (partial view only) — the group holds a binding
       that is not in THIS fetch: emit nothing. Absence from a partial view is not
       absence from the server, so the binding is left alone (no rebind, no second
@@ -138,6 +144,11 @@ def collapse_sibling_groups(
     fetch (so a legacy row whose stored key is still NULL is placed in its real
     group and grandfathered rather than churned), falling back to the stored key
     for a vanished bound row.
+
+    *preferred_region* re-heads the region ranking that both the representative
+    and the canonical name fall back to (``"auto"`` = the build-time default
+    order); it is read from settings by the caller and must be the same value at
+    every collapse call site within one sync run.
     """
     # Keys are ``str | None``: a built entry always carries a real key, but a
     # legacy bound row may still hold NULL (its own solo/unmatched group).
@@ -165,14 +176,22 @@ def collapse_sibling_groups(
             # ≥1 bound sibling still fetched → grandfather every surviving one.
             emitted.extend(m for m in members if m["rom_id"] in surviving_ids)
         elif not bound_here:
-            # No binding anywhere in the group → mint the single representative.
-            rep_id = resolve_group_representative(members, installed_rom_ids, bound_rom_ids)
-            emitted.append(_member_by_id(members, rep_id))
+            # No binding anywhere in the group → mint the single representative,
+            # named after the region-preferred (canonical) member. The bind
+            # target stays the representative's rom_id + launch bake; only the
+            # sticky Steam name follows the pure region ranking (ADR-0021 §2/§3).
+            # Copy so the original member dict (also staged in pending_all_roms
+            # for the per-sibling identity upsert) keeps its own real name.
+            rep_id = resolve_group_representative(members, installed_rom_ids, bound_rom_ids, preferred_region)
+            emitted.append({**_member_by_id(members, rep_id), "name": canonical_group_name(members, preferred_region)})
         elif complete_group_view:
             # Complete view: every bound sibling truly vanished from the server →
             # rebind the shortcut onto the surviving representative (ADR-0021 §2,
-            # never remove).
-            rep = _member_by_id(members, resolve_group_representative(members, installed_rom_ids, bound_rom_ids))
+            # never remove). The rebind entry keeps the vanished sibling's
+            # persisted name (sticky) — canonical naming is mint-only.
+            rep = _member_by_id(
+                members, resolve_group_representative(members, installed_rom_ids, bound_rom_ids, preferred_region)
+            )
             kept_rom_id, kept_reg = min(bound_here, key=lambda item: item[0])
             emitted.append(_rebind_entry(rep, kept_rom_id, kept_reg))
         # else: partial view (collection unit) — the group holds a binding not in

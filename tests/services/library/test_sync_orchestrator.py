@@ -1541,6 +1541,91 @@ class TestDoSyncPerUnit:
             assert uow.roms.get(12).shortcut_app_id is None
             assert uow.roms.get(11).sibling_group_key == "igdb:100:1"
 
+    async def _apply_group_and_get_shortcuts(self, plugin, fake_romm_api, roms):
+        """Seed a single-platform sibling group, run one apply unit, return the
+        emitted ``sync_apply_unit`` shortcut dicts. Shared by the region tests."""
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=roms)
+        plugin.settings["enabled_platforms"] = {"1": True}
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def ack_reps(_unit, event):
+            event.set()
+            return {str(rid): 9000 + rid for rid in plugin._sync_service._box.pending_sync}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = ack_reps
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        assert len(unit_events) == 1
+        return unit_events[0]["shortcuts"]
+
+    @pytest.mark.asyncio
+    async def test_region_priority_picks_and_names_representative(self, plugin, fake_romm_api):
+        """No default/installed/bound: region priority binds the USA dump AND
+        names the shortcut after it, even though Japan sorts first alphabetically
+        (ADR-0021 §3 region leg + canonical naming)."""
+        shortcuts = await self._apply_group_and_get_shortcuts(
+            plugin,
+            fake_romm_api,
+            [
+                {"id": 10, "name": "Zelda (JP)", "igdb_id": 100, "fs_name_no_ext": "zelda_jp", "regions": ["Japan"]},
+                {"id": 11, "name": "Zelda (USA)", "igdb_id": 100, "fs_name_no_ext": "zelda_usa", "regions": ["USA"]},
+            ],
+        )
+        assert len(shortcuts) == 1
+        assert shortcuts[0]["rom_id"] == 11
+        assert shortcuts[0]["name"] == "Zelda (USA)"
+
+    @pytest.mark.asyncio
+    async def test_preferred_region_setting_threads_into_apply_collapse(self, plugin, fake_romm_api):
+        """Setting ``preferred_region`` re-heads the ranking: with Japan preferred,
+        the Japanese dump becomes the representative + shortcut name — proving the
+        setting is threaded into the apply collapse call site."""
+        plugin.settings["preferred_region"] = "Japan"
+        shortcuts = await self._apply_group_and_get_shortcuts(
+            plugin,
+            fake_romm_api,
+            [
+                {"id": 10, "name": "Zelda (JP)", "igdb_id": 100, "fs_name_no_ext": "zelda_jp", "regions": ["Japan"]},
+                {"id": 11, "name": "Zelda (USA)", "igdb_id": 100, "fs_name_no_ext": "zelda_usa", "regions": ["USA"]},
+            ],
+        )
+        assert len(shortcuts) == 1
+        assert shortcuts[0]["rom_id"] == 10
+        assert shortcuts[0]["name"] == "Zelda (JP)"
+
+    @pytest.mark.asyncio
+    async def test_preview_new_names_follow_region_canonical(self, plugin, fake_romm_api):
+        """The preview collapse call site also applies region priority: the new
+        game's reported name is the region-canonical (USA) name."""
+        import decky
+
+        plugin.loop = asyncio.get_event_loop()
+        decky.emit.reset_mock()
+        _use_fake_romm(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[
+                {"id": 10, "name": "Zelda (JP)", "igdb_id": 100, "fs_name_no_ext": "zelda_jp", "regions": ["Japan"]},
+                {"id": 11, "name": "Zelda (USA)", "igdb_id": 100, "fs_name_no_ext": "zelda_usa", "regions": ["USA"]},
+            ],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        result = await plugin.sync_preview()
+        assert result["success"] is True
+        assert result["summary"]["new_count"] == 1  # one game, not two dumps
+        assert result["new_names"] == ["Zelda (USA)"]
+
     @pytest.mark.asyncio
     async def test_vanished_bound_sibling_rebinds_without_stale_removal(self, plugin, fake_romm_api):
         """A bound sibling that disappears while its group survives rebinds to a

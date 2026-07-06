@@ -140,6 +140,7 @@ class TestGetSettings:
                 "log_level": "info",
                 "romm_allow_insecure_ssl": True,
                 "collection_create_platform_groups": True,
+                "preferred_region": "USA",
             }
         )
         steam_config.check_retroarch_input_driver.return_value = {"warning": False}
@@ -151,6 +152,7 @@ class TestGetSettings:
         assert result["log_level"] == "info"
         assert result["romm_allow_insecure_ssl"] is True
         assert result["collection_create_platform_groups"] is True
+        assert result["preferred_region"] == "USA"
         assert result["retroarch_input_check"] == {"warning": False}
 
     def test_never_returns_credentials_or_token(self, service, settings):
@@ -198,6 +200,7 @@ class TestGetSettings:
         assert result["log_level"] == "warn"
         assert result["romm_allow_insecure_ssl"] is False
         assert result["collection_create_platform_groups"] is False
+        assert result["preferred_region"] == "auto"
 
     def test_includes_retroarch_input_check_payload(self, service, steam_config):
         steam_config.check_retroarch_input_driver.return_value = {
@@ -232,6 +235,64 @@ class TestSaveLogLevel:
         result = service.save_log_level("")
         assert result["success"] is False
         assert "log_level" not in settings
+
+
+# ── save_preferred_region ──────────────────────────────────────────────
+
+
+class TestSavePreferredRegion:
+    @pytest.mark.parametrize("region", ["auto", "Europe", "USA", "Japan", "Germany"])
+    def test_valid_regions_persist(self, service, settings, settings_persister, region):
+        result = service.save_preferred_region(region)
+        assert result == {"success": True}
+        assert settings["preferred_region"] == region
+        settings_persister.save_settings.assert_called_once_with()
+
+    def test_trims_and_persists(self, service, settings):
+        service.save_preferred_region("  Japan  ")
+        assert settings["preferred_region"] == "Japan"
+
+    def test_blank_normalises_to_auto(self, service, settings, settings_persister):
+        result = service.save_preferred_region("   ")
+        assert result == {"success": True}
+        assert settings["preferred_region"] == "auto"
+        settings_persister.save_settings.assert_called_once_with()
+
+    def test_non_string_rejected_without_writing(self, service, settings, settings_persister):
+        result = service.save_preferred_region(42)
+        assert result["success"] is False
+        assert result["reason"] == "invalid_region"
+        assert "preferred_region" not in settings
+        settings_persister.save_settings.assert_not_called()
+
+
+# ── get_known_regions ──────────────────────────────────────────────────
+
+
+class TestGetKnownRegions:
+    @staticmethod
+    def _seed(uow: FakeUnitOfWork, rom_id: int, regions: tuple[str, ...]) -> None:
+        with uow:
+            uow.roms.save(
+                Rom(
+                    rom_id=rom_id,
+                    platform_slug="snes",
+                    name=f"Game {rom_id}",
+                    fs_name=f"game_{rom_id}.sfc",
+                    shortcut_app_id=None,
+                    last_synced_at="2026-01-01T00:00:00",
+                    regions=regions,
+                )
+            )
+
+    def test_empty_library_returns_empty(self, service):
+        assert service.get_known_regions() == []
+
+    def test_distinct_sorted_regions_across_roms(self, service, uow):
+        self._seed(uow, 1, ("USA", "Europe"))
+        self._seed(uow, 2, ("Japan", "USA"))  # USA repeats across rows
+        self._seed(uow, 3, ())  # a region-less ROM contributes nothing
+        assert service.get_known_regions() == ["Europe", "Japan", "USA"]
 
 
 # ── frontend_log ───────────────────────────────────────────────────────

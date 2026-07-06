@@ -29,6 +29,8 @@ import type { SaveSyncSection } from "./settings/SaveSyncSection";
 import type { RegisteredDevicesSection } from "./settings/RegisteredDevicesSection";
 import type { ControllerSection } from "./settings/ControllerSection";
 import type { AdvancedSection } from "./settings/AdvancedSection";
+import type { LibrarySection } from "./settings/LibrarySection";
+import { showPreferredRegionModal } from "./settings/PreferredRegionModal";
 import type { SaveSortMigrationSection } from "./settings/SaveSortMigrationSection";
 
 type ConnectionProps = ComponentProps<typeof ConnectionSection>;
@@ -37,6 +39,7 @@ type SaveSyncProps = ComponentProps<typeof SaveSyncSection>;
 type RegisteredDevicesProps = ComponentProps<typeof RegisteredDevicesSection>;
 type ControllerProps = ComponentProps<typeof ControllerSection>;
 type AdvancedProps = ComponentProps<typeof AdvancedSection>;
+type LibraryProps = ComponentProps<typeof LibrarySection>;
 type SaveSortMigrationProps = ComponentProps<typeof SaveSortMigrationSection>;
 
 // Captured props arrays — reset in beforeEach. Each child mock pushes the
@@ -48,6 +51,7 @@ const capturedSaveSync: SaveSyncProps[] = [];
 const capturedDevices: RegisteredDevicesProps[] = [];
 const capturedController: ControllerProps[] = [];
 const capturedAdvanced: AdvancedProps[] = [];
+const capturedLibrary: LibraryProps[] = [];
 const capturedMigration: SaveSortMigrationProps[] = [];
 
 vi.mock("./settings/ConnectionSection", () => ({
@@ -85,6 +89,23 @@ vi.mock("./settings/AdvancedSection", () => ({
     capturedAdvanced.push(p);
     return createElement("div", { "data-testid": "advanced-section" });
   },
+}));
+vi.mock("./settings/LibrarySection", async (importOriginal) => {
+  // Keep the real AUTO_REGION / DEFAULT_REGION_LABEL constants (SettingsPage
+  // imports them), but stub the component to capture props.
+  const actual = await importOriginal<typeof import("./settings/LibrarySection")>();
+  return {
+    ...actual,
+    LibrarySection: (p: LibraryProps) => {
+      capturedLibrary.push(p);
+      return createElement("div", { "data-testid": "library-section" });
+    },
+  };
+});
+
+// The Preferred-region change modal — mocked so tests control confirm/cancel.
+vi.mock("./settings/PreferredRegionModal", () => ({
+  showPreferredRegionModal: vi.fn(() => Promise.resolve(true)),
 }));
 vi.mock("./settings/SaveSortMigrationSection", () => ({
   SaveSortMigrationSection: (p: SaveSortMigrationProps) => {
@@ -191,6 +212,7 @@ describe("SettingsPage", () => {
     capturedDevices.length = 0;
     capturedController.length = 0;
     capturedAdvanced.length = 0;
+    capturedLibrary.length = 0;
     capturedMigration.length = 0;
     saveSortListeners.length = 0;
     currentSortState = { pending: false };
@@ -199,6 +221,8 @@ describe("SettingsPage", () => {
     }
     // Defaults — many tests override per case.
     vi.mocked(backend.getSettings).mockResolvedValue(defaultSettings());
+    vi.mocked(backend.getKnownRegions).mockResolvedValue([]);
+    vi.mocked(showPreferredRegionModal).mockResolvedValue(true);
     vi.mocked(backend.getSaveSyncSettings).mockResolvedValue(defaultSaveSyncSettings());
     vi.mocked(backend.getSaveSortMigrationStatus).mockResolvedValue({ pending: false });
     vi.mocked(backend.listDevices).mockResolvedValue({ success: true, devices: [] });
@@ -1451,6 +1475,73 @@ describe("SettingsPage", () => {
       });
       expect(vi.mocked(backend.saveLogLevel)).toHaveBeenCalledWith("debug");
       expect(capturedAdvanced[capturedAdvanced.length - 1]?.logLevel).toBe("debug");
+    });
+  });
+
+  describe("Library handlers", () => {
+    it("hydrates preferredRegion from getSettings", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        preferred_region: "Japan",
+      });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(capturedLibrary[capturedLibrary.length - 1]?.preferredRegion).toBe("Japan");
+    });
+
+    it("defaults preferredRegion to 'auto' when getSettings omits it", async () => {
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(capturedLibrary[capturedLibrary.length - 1]?.preferredRegion).toBe("auto");
+    });
+
+    it("forwards library regions from getKnownRegions to LibrarySection", async () => {
+      vi.mocked(backend.getKnownRegions).mockResolvedValue(["Korea", "Brazil"]);
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(capturedLibrary[capturedLibrary.length - 1]?.libraryRegions).toEqual(["Korea", "Brazil"]);
+    });
+
+    it("change → confirm shows the explanation modal, then persists and updates the dropdown", async () => {
+      vi.mocked(showPreferredRegionModal).mockResolvedValue(true);
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        capturedLibrary[capturedLibrary.length - 1]?.onPreferredRegionChange("Japan");
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // The modal is shown with the human-readable old→new labels ("auto" → default label).
+      expect(vi.mocked(showPreferredRegionModal)).toHaveBeenCalledWith("Default (World > USA > Europe)", "Japan");
+      expect(vi.mocked(backend.savePreferredRegion)).toHaveBeenCalledWith("Japan");
+      expect(capturedLibrary[capturedLibrary.length - 1]?.preferredRegion).toBe("Japan");
+    });
+
+    it("change → cancel shows the modal but does NOT persist and leaves the dropdown unchanged", async () => {
+      vi.mocked(showPreferredRegionModal).mockResolvedValue(false);
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        capturedLibrary[capturedLibrary.length - 1]?.onPreferredRegionChange("Japan");
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(showPreferredRegionModal)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(backend.savePreferredRegion)).not.toHaveBeenCalled();
+      expect(capturedLibrary[capturedLibrary.length - 1]?.preferredRegion).toBe("auto");
+    });
+
+    it("selecting the already-current region is a no-op (no modal, no save)", async () => {
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        capturedLibrary[capturedLibrary.length - 1]?.onPreferredRegionChange("auto");
+        await Promise.resolve();
+      });
+      expect(vi.mocked(showPreferredRegionModal)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.savePreferredRegion)).not.toHaveBeenCalled();
     });
   });
 

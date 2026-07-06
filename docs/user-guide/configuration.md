@@ -148,6 +148,31 @@ After changing the mode, tap **Apply to All Shortcuts** to update all existing R
 
 <!-- Screenshot: Steam Input Mode dropdown with the three options -->
 
+## Preferred region
+
+A dropdown in the **Library** section of the settings page. When a game exists in your RomM library as several regional
+dumps (versions), this decides which region the plugin prefers when it picks the version to bind and the name it gives
+the Steam shortcut.
+
+| Option                                   | Effect                                                                                              |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| **Default (World > USA > Europe)**       | Prefer World, then USA, then Europe, then Japan, then any other region alphabetically (fixed order) |
+| a specific region (World, USA, Japan, …) | Put that region at the top of the order; everything else keeps the default order behind it          |
+
+**"Default" is a fixed order, not auto-detection.** It always prefers `World > USA > Europe > Japan` (then other regions
+alphabetically, then dumps with no region); the plugin never looks at your language or system region.
+
+**The dropdown's options** are the fixed anchors — Default, World, USA, Europe, Japan — followed by every other region
+actually present in the games you have already synced (read from the local database, sorted alphabetically; no server
+request). If your synced library has no other regions, only the anchors are shown.
+
+**When you change it, a short modal explains the effect** and asks you to confirm. The choice is saved immediately, but
+it takes effect on the **next sync** and only affects games synced from then on. It **never** switches the version or
+renames an existing shortcut — shortcut names are fixed when the shortcut is first created, to protect its artwork,
+collections and playtime. Already-synced games keep their bound version and name; run a sync to apply the new preference
+to new games. See [Multiple versions of a game](syncing-your-library.md#multiple-versions-of-a-game) for the full
+picture.
+
 ## Log Level
 
 A dropdown in the **Advanced** section on the main page. Controls how much detail the plugin logs.

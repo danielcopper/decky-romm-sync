@@ -48,6 +48,11 @@ export interface PluginSettings {
   romm_allow_insecure_ssl: boolean;
   retroarch_input_check?: RetroArchInputCheck;
   collection_create_platform_groups?: boolean;
+  // Preferred sibling-group region (ADR-0021 §3). "auto" = the fixed build-time
+  // default order (World > USA > Europe > Japan); any other value heads the
+  // ranking with that region on the next sync. Optional: the backend always
+  // sends it, but older payloads / test fixtures may omit it.
+  preferred_region?: string;
 }
 
 export interface RomMetadata {

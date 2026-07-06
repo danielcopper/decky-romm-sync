@@ -63,15 +63,51 @@ version flips only the baked `launch_options` (appId-safe, hardware-validated in
 target row; artwork, collections, playtime and the Steam appId all survive. Renaming is what would change the appId
 (delete + recreate churn), so it never happens implicitly.
 
-### 3. Version resolution chain: installed > existing binding > RomM default > alphabetical; the choice stays local
+### 3. Version resolution chain: installed > existing binding > RomM default > region priority > alphabetical; the choice stays local
 
 Wherever one version must be chosen (shortcut representative, picker preselect), the chain is: an installed sibling
-wins; else an existing binding; else the server-side `is_main_sibling` default (respected read-only); else alphabetical
-`fs_name_no_ext` — the last leg being exactly RomM's own fallback, so an ungroomed library behaves identically to the
-RomM web UI. The user's version choice is expressed solely through which sibling is bound/installed — **no write-back**
-of `is_main_sibling` to the server. Writing it would require the `roms.user.write` scope, and a scope change invalidates
-every user's token (forced re-sign-in) — too high a price for mirroring a preference RomM already lets the user set in
-its own UI.
+wins; else an existing binding; else the server-side `is_main_sibling` default (respected read-only); else **region
+priority**; else alphabetical `fs_name_no_ext`; else `rom_id`. The first three legs are membership filters; the last
+three are the total order applied inside the surviving leg. The alphabetical leg is exactly RomM's own fallback, so an
+ungroomed library with no region signal behaves identically to the RomM web UI. The user's version choice is expressed
+solely through which sibling is bound/installed — **no write-back** of `is_main_sibling` to the server. Writing it would
+require the `roms.user.write` scope, and a scope change invalidates every user's token (forced re-sign-in) — too high a
+price for mirroring a preference RomM already lets the user set in its own UI.
+
+> **Amendment (region priority + canonical naming, same PR as the region-priority slice).** The chain above originally
+> ended at `alphabetical`. On real libraries the alphabetical leg binds — and, because the shortcut name is minted from
+> the winner and is **sticky forever**, permanently names — the wrong dump: e.g. the Japanese dump of Pokémon FireRed,
+> naming the shortcut `ポケットモンスターファイアレッド`. Two amendments, both local-only, no new server scope:
+>
+> - **Region-priority leg** (inserted before alphabetical). A version is ranked by its **best** `regions` entry against
+>   a **fixed** build-time default order — `World > USA > Europe > Japan` (World first for explicit multi-region
+>   international releases; USA before Europe to match the 1G1R convention and avoid PAL-50Hz dumps being the silent
+>   default on older consoles), every other named region after these ranked alphabetically among themselves, and a
+>   version with no region ranked last. This order is a fixed constant, **not** a language/system detection. A single
+>   user override, the `preferred_region` setting (a bucket-1 user-intent config → `settings.json`, per ADR-0003;
+>   default `"auto"` = the fixed order), lifts one region to the very top; the default order continues behind it. The
+>   leg is evaluated **at resolution time** (during a sync's collapse), so the preference takes effect only on the next
+>   sync — no live re-resolution, and an **existing binding shields its group** (the installed/binding legs win before
+>   region priority is even consulted), which is exactly why changing the preference never disturbs already-synced
+>   games. The domain stays pure: the preference enters `resolve_group_representative` (and the naming function below)
+>   as an explicit parameter, read from settings in the service layer and threaded into every collapse call site
+>   (preview + apply) as the same value within a run. The QAM dropdown that sets it is populated from **fixed anchors**
+>   (Default, World, USA, Europe, Japan) plus the distinct regions read from the **local** `roms.regions` of the synced
+>   library (no server scan), and a confirmation modal spells out the apply-at-next-sync / no-retroactive-rename
+>   semantics before persisting.
+> - **Canonical name follows the pure ranking, not the bound member** (mint-time only). `canonical_group_name` returns
+>   the `name` of the member ranked first by the **pure** order (region priority > alphabetical > `rom_id`), ignoring
+>   the installed/binding/default filters — explicitly **not** majority voting (two Japan dumps + one USA yields the USA
+>   member's name). A NEW group's shortcut is minted with this canonical name while its `rom_id`/bind target stays the
+>   resolution-chain representative, so a Japanese _default_ still binds and launches Japan but the shortcut carries the
+>   USA name (the "name can lag the active version" trade-off in Consequences, now made deliberate for the region-
+>   preferred name). The appId is minted from the canonical name by the frontend `AddShortcut`; the DB binding lands on
+>   the representative `rom_id`; the commit path is agnostic to the name↔rom mismatch (it binds on `rom_id` + the acked
+>   appId, and persists each sibling's own RomM name). **Mint only:** an already-bound group (grandfathered / rebind)
+>   carries its persisted bound name verbatim — emitting a different name would flip `classify_roms` to "changed" and
+>   rename the live shortcut, changing its appId; that must never happen. Under a partial (collection) view the
+>   canonical name is chosen among the fetched members only — acceptable and documented, since the group's real
+>   representative rides its own platform unit in the same run.
 
 ### 4. Saves stay per rom_id; a version switch never migrates saves
 

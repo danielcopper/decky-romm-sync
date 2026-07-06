@@ -17,6 +17,8 @@ import {
   updateSaveSyncSettings,
   syncAllSaves,
   saveLogLevel,
+  savePreferredRegion,
+  getKnownRegions,
   fixRetroarchInputDriver,
   ensureDeviceRegistered,
   listDevices,
@@ -44,6 +46,8 @@ import { SaveSyncSection } from "./settings/SaveSyncSection";
 import { RegisteredDevicesSection } from "./settings/RegisteredDevicesSection";
 import { ControllerSection } from "./settings/ControllerSection";
 import { AdvancedSection } from "./settings/AdvancedSection";
+import { LibrarySection, AUTO_REGION, DEFAULT_REGION_LABEL } from "./settings/LibrarySection";
+import { showPreferredRegionModal } from "./settings/PreferredRegionModal";
 
 interface SettingsPageProps {
   onBack: () => void;
@@ -88,6 +92,10 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   // Advanced state
   const [logLevel, setLogLevel] = useState("warn");
 
+  // Library state (preferred sibling-group region, ADR-0021)
+  const [preferredRegion, setPreferredRegion] = useState(AUTO_REGION);
+  const [libraryRegions, setLibraryRegions] = useState<string[]>([]);
+
   useEffect(() => {
     getSettings()
       .then((s) => {
@@ -98,6 +106,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         setSgdbApiKey(s.sgdb_api_key_masked);
         setSteamInputMode(s.steam_input_mode);
         setLogLevel(s.log_level);
+        setPreferredRegion(s.preferred_region ?? AUTO_REGION);
         if (s.retroarch_input_check) {
           setRetroarchWarning(s.retroarch_input_check);
         }
@@ -106,6 +115,12 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         logError(`Failed to load settings: ${e}`);
         setStatus("Failed to load settings");
       });
+
+    // Distinct regions in the locally synced library — the non-anchor options
+    // for the Preferred-region dropdown. Failure degrades to anchors only.
+    getKnownRegions()
+      .then((regions) => setLibraryRegions(regions))
+      .catch(() => {});
 
     // Load save sync settings and conflicts
     getSaveSyncSettings()
@@ -427,6 +442,25 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
     detach(saveLogLevel(level));
   };
 
+  // --- Library handlers ---
+  const regionLabel = (value: string) => (value === AUTO_REGION ? DEFAULT_REGION_LABEL : value);
+
+  const handlePreferredRegionChange = (region: string) => {
+    if (region === preferredRegion) return;
+    // Explain the apply-at-next-sync / no-retroactive-rename semantics before
+    // persisting. Confirm saves + updates the dropdown; cancel leaves the state
+    // (and therefore the dropdown selection) unchanged.
+    detach(
+      (async () => {
+        const proceed = await showPreferredRegionModal(regionLabel(preferredRegion), regionLabel(region));
+        if (proceed) {
+          setPreferredRegion(region);
+          detach(savePreferredRegion(region));
+        }
+      })(),
+    );
+  };
+
   // --- Save sort migration handlers ---
   const handleMigrateSaveSort = async () => {
     setSaveSortMigrating(true);
@@ -556,6 +590,12 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
           detach(handleFixInputDriver());
         }}
       />
+      <LibrarySection
+        preferredRegion={preferredRegion}
+        libraryRegions={libraryRegions}
+        onPreferredRegionChange={handlePreferredRegionChange}
+      />
+
       <AdvancedSection logLevel={logLevel} onLogLevelChange={handleLogLevelChange} />
     </>
   );

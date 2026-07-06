@@ -342,6 +342,12 @@ export const getDiscSelection = callable<[number], DiscSelection>("get_disc_sele
 export const selectDisc = callable<[number, string | null], SelectDiscResult>("select_disc");
 
 export const saveLogLevel = callable<[string], { success: boolean }>("save_log_level");
+// Preferred sibling-group region (ADR-0021 §3). "auto" = build-time default
+// order; any RomM region string heads the ranking on the next sync.
+export const savePreferredRegion = callable<[string], { success: boolean }>("save_preferred_region");
+// Distinct region values present in the locally synced library — the non-anchor
+// options for the Preferred-region dropdown. Pure local DB read, no server call.
+export const getKnownRegions = callable<[], string[]>("get_known_regions");
 export const debugLog = callable<[string], void>("debug_log");
 const frontendLog = callable<[string, string], void>("frontend_log");
 export const logInfo = (msg: string) => {

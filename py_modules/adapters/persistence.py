@@ -44,6 +44,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "enabled_platforms": {},
     "enabled_collections": {"user": {}, "smart": {}, "franchise": {}},
     "collection_create_platform_groups": False,
+    "preferred_region": "auto",
     "steam_input_mode": "default",
     "steamgriddb_api_key": "",
     "romm_allow_insecure_ssl": False,

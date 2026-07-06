@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.preview_delta import PreviewDelta
 from domain.shortcut_data import EmulatorInvocation, build_shortcuts_data
+from domain.sibling_resolution import AUTO_REGION
 from domain.sync_diff import (
     BIND_ROM_ID_KEY,
     classify_roms,
@@ -231,7 +232,13 @@ class SyncOrchestrator:
             # diverge from what those units produce (the #1292 bug class). A
             # collection apply unit is a partial view and only grandfathers, so it
             # never adds a shortcut the preview didn't already count.
-            emitted = collapse_sibling_groups(shortcuts_data, registry, set(installed_paths), complete_group_view=True)
+            emitted = collapse_sibling_groups(
+                shortcuts_data,
+                registry,
+                set(installed_paths),
+                complete_group_view=True,
+                preferred_region=self._settings.get("preferred_region", AUTO_REGION),
+            )
             new, changed, unchanged_ids, stale, disabled_count = classify_roms(
                 emitted,
                 registry,
@@ -779,7 +786,11 @@ class SyncOrchestrator:
         # uninstalled sibling (#1296).
         registry = await self._loop.run_in_executor(None, self._read_apply_registry, unit)
         emitted = collapse_sibling_groups(
-            shortcuts_data, registry, set(installed_paths), complete_group_view=(unit.type == "platform")
+            shortcuts_data,
+            registry,
+            set(installed_paths),
+            complete_group_view=(unit.type == "platform"),
+            preferred_region=self._settings.get("preferred_region", AUTO_REGION),
         )
 
         # Download artwork only for the ROMs that actually get a shortcut (the

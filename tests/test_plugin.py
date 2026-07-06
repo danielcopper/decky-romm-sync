@@ -723,6 +723,11 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_whitelist_settings",
     "update_whitelist_settings",
     "save_collection_platform_groups",
+    # Preferred sibling-group region — a settings.json-only write (ADR-0021 §3),
+    # never touches RetroDECK state; takes effect on the next sync. Its companion
+    # read (distinct regions in the local library) is a pure local DB read.
+    "save_preferred_region",
+    "get_known_regions",
     # Persistent corrupt-settings-reset notice — the read (banner/card) and the
     # user's explicit QAM ack must both work regardless of a pending migration.
     "get_settings_reset_notice",

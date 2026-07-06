@@ -439,6 +439,7 @@ def _gsd(
     is_main_sibling=False,
     platform_slug="n64",
     launch_options="",
+    regions=(),
 ):
     """A built shortcut entry as build_shortcuts_data shapes it, with the
     sibling-group fields the collapse + resolver read."""
@@ -453,6 +454,7 @@ def _gsd(
         "cover_path": "",
         "sibling_group_key": group_key,
         "is_main_sibling": is_main_sibling,
+        "regions": list(regions),
         "igdb_id": None,
         "sgdb_id": None,
         "ra_id": None,
@@ -599,6 +601,88 @@ class TestCollapseSiblingGroups:
         members = [_gsd(7, name="Homebrew", group_key="romm:7:1")]
         emitted = collapse_sibling_groups(members, registry={}, installed_rom_ids=set(), complete_group_view=True)
         assert [e["rom_id"] for e in emitted] == [7]
+
+
+class TestCollapseSiblingGroupsCanonicalNaming:
+    """Mint entries carry the region-canonical name; bound lanes keep the persisted name (ADR-0021 §2/§3)."""
+
+    def test_mint_binds_region_representative_and_names_it_canonically(self):
+        # The Pokémon fix: no binding anywhere, USA + Japan dumps. Region priority
+        # binds USA AND names the shortcut after USA — not the alphabetically-first
+        # Japanese dump.
+        members = [
+            _gsd(1, name="ポケットモンスターファイアレッド", fs_name_no_ext="game_japan", regions=["Japan"]),
+            _gsd(2, name="Pokemon FireRed", fs_name_no_ext="game_usa", regions=["USA"]),
+        ]
+        emitted = collapse_sibling_groups(members, registry={}, installed_rom_ids=set(), complete_group_view=True)
+        assert len(emitted) == 1
+        assert emitted[0]["rom_id"] == 2
+        assert emitted[0]["name"] == "Pokemon FireRed"
+
+    def test_mint_name_decoupled_from_bound_target_when_default_forces_it(self):
+        # RomM default = the Japanese dump, so the BIND target is Japan, but the
+        # canonical NAME still follows region priority (USA) — name decoupled from
+        # the bound version (ADR-0021 "name can lag the active version").
+        members = [
+            _gsd(1, name="Japan Default", fs_name_no_ext="game_japan", regions=["Japan"], is_main_sibling=True),
+            _gsd(2, name="USA Name", fs_name_no_ext="game_usa", regions=["USA"]),
+        ]
+        emitted = collapse_sibling_groups(members, registry={}, installed_rom_ids=set(), complete_group_view=True)
+        assert len(emitted) == 1
+        assert emitted[0]["rom_id"] == 1  # bind the RomM default (Japan)
+        assert emitted[0]["name"] == "USA Name"  # but name it canonically (USA)
+
+    def test_mint_does_not_mutate_the_source_member(self):
+        # The emitted entry is a copy: the original member dict (also staged in
+        # pending_all_roms for the per-sibling identity upsert) keeps its own name.
+        japan = _gsd(1, name="Japan Name", fs_name_no_ext="game_japan", regions=["Japan"], is_main_sibling=True)
+        members = [japan, _gsd(2, name="USA Name", fs_name_no_ext="game_usa", regions=["USA"])]
+        collapse_sibling_groups(members, registry={}, installed_rom_ids=set(), complete_group_view=True)
+        assert japan["name"] == "Japan Name"
+
+    def test_mint_respects_preferred_region_override(self):
+        members = [
+            _gsd(1, name="Euro Name", fs_name_no_ext="game_eu", regions=["Europe"]),
+            _gsd(2, name="German Name", fs_name_no_ext="game_de", regions=["Germany"]),
+        ]
+        emitted = collapse_sibling_groups(
+            members, registry={}, installed_rom_ids=set(), complete_group_view=True, preferred_region="Germany"
+        )
+        assert emitted[0]["rom_id"] == 2
+        assert emitted[0]["name"] == "German Name"
+
+    def test_grandfathered_bound_sibling_keeps_persisted_name_no_rename(self):
+        # A bound group must never be renamed by canonical naming — the emitted
+        # grandfathered entry carries the fetched member's own name, matching the
+        # persisted registry name, so classify reads it as unchanged (no churn).
+        members = [
+            _gsd(1, name="Japan Name", fs_name_no_ext="game_japan", regions=["Japan"]),
+            _gsd(2, name="USA Name", fs_name_no_ext="game_usa", regions=["USA"]),
+        ]
+        registry = {"1": _greg(1, app_id=1001, name="Japan Name", fs_name="game.z64")}
+        emitted = collapse_sibling_groups(members, registry, installed_rom_ids=set(), complete_group_view=True)
+        assert [e["rom_id"] for e in emitted] == [1]
+        assert emitted[0]["name"] == "Japan Name"
+        result = classify_roms(emitted, registry, {"N64"})
+        assert result.unchanged_ids == [1]
+        assert result.changed == []
+
+    def test_rebind_entry_keeps_persisted_name_not_canonical(self):
+        # A rebinding group is already bound → sticky: the rebind entry carries the
+        # vanished sibling's PERSISTED name, never the region-canonical name, so the
+        # live shortcut is not renamed.
+        members = [
+            _gsd(2, name="USA Name", fs_name_no_ext="game_usa", regions=["USA"]),
+            _gsd(3, name="Euro Name", fs_name_no_ext="game_eu", regions=["Europe"]),
+        ]
+        registry = {"1": _greg(1, app_id=1001, name="Original Bound Name", fs_name="game_x.z64")}
+        emitted = collapse_sibling_groups(members, registry, installed_rom_ids=set(), complete_group_view=True)
+        assert len(emitted) == 1
+        assert emitted[0]["rom_id"] == 1
+        assert emitted[0]["name"] == "Original Bound Name"
+        # The binding still moves onto the region representative (USA outranks
+        # Europe in the build-time order → rom 2).
+        assert emitted[0][BIND_ROM_ID_KEY] == 2
 
 
 class TestCollapseSiblingGroupsPartialView:

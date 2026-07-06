@@ -213,6 +213,12 @@ class Plugin:
     async def save_steam_input_setting(self, mode):
         return self._settings_service.save_steam_input_setting(mode)
 
+    async def save_preferred_region(self, region):
+        return self._settings_service.save_preferred_region(region)
+
+    async def get_known_regions(self):
+        return self._settings_service.get_known_regions()
+
     async def apply_steam_input_setting(self):
         return self._settings_service.apply_steam_input_setting()
 
