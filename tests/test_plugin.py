@@ -716,6 +716,8 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "connect_with_credentials",
     "connect_with_token",
     "connect_with_pairing_code",
+    # Local-forget-only token clear — mutates settings.json, never RetroDECK state.
+    "sign_out",
     "save_server_url",
     "get_settings",
     "get_whitelist_settings",

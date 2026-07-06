@@ -52,6 +52,7 @@ vi.mock("@decky/ui", () => ({
       onChange: (e: { target: { checked: boolean } }) => p.onChange?.(e.target.checked),
     });
   },
+  ConfirmModal: (p: AnyProps) => createElement("div", { "data-testid": "confirm-modal" }, p.children as never),
   showModal: vi.fn(),
 }));
 
@@ -69,6 +70,13 @@ interface ConnectModalProps {
   onConnect?: (username: string, password: string) => void;
   onConnectToken?: (token: string) => void;
   onConnectPairing?: (code: string) => void;
+}
+interface ConfirmModalProps {
+  strTitle?: string;
+  strDescription?: string;
+  strOKButtonText?: string;
+  strCancelButtonText?: string;
+  onOK?: () => void;
 }
 
 function lastShownModalProps<T>(): T | null {
@@ -91,6 +99,7 @@ function defaultProps(overrides: Partial<React.ComponentProps<typeof ConnectionS
     onConnectPairing: vi.fn(),
     onAllowInsecureSslChange: vi.fn(),
     onTestConnection: vi.fn(),
+    onSignOut: vi.fn(),
     ...overrides,
   };
 }
@@ -171,6 +180,59 @@ describe("ConnectionSection", () => {
       expect(props?.onConnect).toBe(onConnect);
       expect(props?.onConnectToken).toBe(onConnectToken);
       expect(props?.onConnectPairing).toBe(onConnectPairing);
+    });
+  });
+
+  describe("account actions by sign-in state", () => {
+    it("shows a single 'Sign in' action and no sign-out when signed out", () => {
+      const { getByText, queryByText } = render(<ConnectionSection {...defaultProps({ hasToken: false })} />);
+      expect(getByText("Sign in")).toBeTruthy();
+      expect(queryByText("Sign in again")).toBeNull();
+      expect(queryByText("Sign out")).toBeNull();
+    });
+
+    it("shows 'Sign in again' and 'Sign out' actions when signed in", () => {
+      const { getByText, queryByText } = render(<ConnectionSection {...defaultProps({ hasToken: true })} />);
+      expect(getByText("Sign in again")).toBeTruthy();
+      expect(getByText("Sign out")).toBeTruthy();
+      // The bare "Sign in" label is replaced by "Sign in again" once signed in.
+      expect(queryByText("Sign in")).toBeNull();
+    });
+
+    it("'Sign in again' opens the same ConnectModal as first sign-in", () => {
+      const onConnect = vi.fn();
+      const onConnectToken = vi.fn();
+      const onConnectPairing = vi.fn();
+      const { getByText } = render(
+        <ConnectionSection {...defaultProps({ hasToken: true, onConnect, onConnectToken, onConnectPairing })} />,
+      );
+      fireEvent.click(getByText("Sign in again"));
+      const props = lastShownModalProps<ConnectModalProps>();
+      expect(props?.onConnect).toBe(onConnect);
+      expect(props?.onConnectToken).toBe(onConnectToken);
+      expect(props?.onConnectPairing).toBe(onConnectPairing);
+    });
+  });
+
+  describe("Sign out button", () => {
+    it("opens a ConfirmModal noting the token stays valid in RomM", () => {
+      const { getByText } = render(<ConnectionSection {...defaultProps({ hasToken: true })} />);
+      fireEvent.click(getByText("Sign out"));
+      const props = lastShownModalProps<ConfirmModalProps>();
+      expect(props?.strTitle).toBe("Sign out of RomM?");
+      expect(props?.strOKButtonText).toBe("Sign out");
+      expect(props?.strDescription).toContain("stays valid in RomM");
+    });
+
+    it("fires onSignOut only when the confirm modal is accepted", () => {
+      const onSignOut = vi.fn();
+      const { getByText } = render(<ConnectionSection {...defaultProps({ hasToken: true, onSignOut })} />);
+      fireEvent.click(getByText("Sign out"));
+      // Opening the modal must not sign out on its own.
+      expect(onSignOut).not.toHaveBeenCalled();
+      const props = lastShownModalProps<ConfirmModalProps>();
+      props?.onOK?.();
+      expect(onSignOut).toHaveBeenCalledTimes(1);
     });
   });
 

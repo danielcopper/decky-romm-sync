@@ -7,6 +7,7 @@ import {
   connectWithCredentials,
   connectWithToken,
   connectWithPairingCode,
+  signOut,
   testConnection,
   saveSgdbApiKey,
   verifySgdbApiKey,
@@ -341,6 +342,18 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
       setStatus("Sign-in failed");
     }
   };
+  const handleSignOut = async () => {
+    setStatus("");
+    try {
+      const result = await signOut();
+      setStatus(result.message);
+      if (result.success) {
+        setHasToken(false);
+      }
+    } catch {
+      setStatus("Sign-out failed");
+    }
+  };
 
   // --- SteamGridDB handlers ---
   const handleSgdbKeySubmit = async (value: string) => {
@@ -490,6 +503,9 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         onAllowInsecureSslChange={handleAllowInsecureSslChange}
         onTestConnection={() => {
           detach(handleTest());
+        }}
+        onSignOut={() => {
+          detach(handleSignOut());
         }}
       />
       <SteamGridDBSection

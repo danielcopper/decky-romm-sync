@@ -1445,3 +1445,102 @@ class TestEstablishPairedTokenSnapshotRestore:
         event_loop.run_until_complete(service.establish_paired_token("https://new.server", "ABCD2345"))
         assert seen["token"] == "rmm_paired"
         assert seen["origin"] == "https://new.server"
+
+
+class TestSignOut:
+    """``sign_out`` forgets the token locally — one atomic save, no server call."""
+
+    def test_clears_token_keys_keeps_url_and_ssl_and_persists_once(
+        self, event_loop, romm_api, logger, settings_persister
+    ):
+        settings = _working_settings()
+        settings["romm_api_token_source"] = "minted"
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+
+        result = service.sign_out()
+
+        assert result["success"] is True
+        assert "Signed out" in result["message"]
+        # The four token keys are cleared to None.
+        assert settings["romm_api_token"] is None
+        assert settings["romm_api_token_id"] is None
+        assert settings["romm_api_token_origin"] is None
+        assert settings["romm_api_token_source"] is None
+        # URL + SSL flag are kept for convenience.
+        assert settings["romm_url"] == "https://old.server"
+        assert settings["romm_allow_insecure_ssl"] is False
+        # Persisted in exactly one atomic save; version cache cleared.
+        settings_persister.save_settings.assert_called_once_with()
+        romm_api.set_version.assert_called_once_with(None)
+
+    def test_never_deletes_token_on_server(self, event_loop, romm_api, logger):
+        settings = _working_settings()
+        settings["romm_api_token_source"] = "minted"
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+
+        service.sign_out()
+
+        romm_api.delete_client_token.assert_not_called()
+
+    def test_idempotent_when_already_signed_out(self, event_loop, romm_api, logger, settings_persister):
+        """Signing out with no stored token still succeeds and persists cleanly."""
+        settings: dict[str, Any] = {"romm_url": "https://old.server", "romm_allow_insecure_ssl": True}
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+
+        result = service.sign_out()
+
+        assert result["success"] is True
+        assert settings["romm_api_token"] is None
+        assert settings["romm_url"] == "https://old.server"
+        assert settings["romm_allow_insecure_ssl"] is True
+        settings_persister.save_settings.assert_called_once_with()
+
+    def test_mutates_settings_dict_in_place(self, event_loop, romm_api, logger):
+        """The live settings dict identity is preserved (mutated, not rebound)."""
+        settings = _working_settings()
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+
+        service.sign_out()
+
+        assert service._settings is settings
+
+    def test_persist_failure_returns_canonical_failure_and_restores_keys(
+        self, event_loop, romm_api, logger, settings_persister
+    ):
+        """A failed atomic save rolls the token quad back so the still-valid token survives."""
+        settings = _working_settings()
+        settings["romm_api_token_source"] = "minted"
+        settings_persister.save_settings.side_effect = OSError("disk full")
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+
+        result = service.sign_out()
+
+        # Canonical failure shape (reason + message both present).
+        assert result["success"] is False
+        assert result["reason"] == "unknown"
+        assert "disk full" in result["message"]
+        # All four token keys restored in-memory — the token is still stored.
+        assert settings["romm_api_token"] == "rmm_old"
+        assert settings["romm_api_token_id"] == 7
+        assert settings["romm_api_token_origin"] == "https://old.server"
+        assert settings["romm_api_token_source"] == "minted"
+        # The version cache is cleared only after a successful save.
+        romm_api.set_version.assert_not_called()

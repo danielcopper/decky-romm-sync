@@ -836,6 +836,76 @@ describe("SettingsPage", () => {
     });
   });
 
+  describe("handleSignOut (local token forget)", () => {
+    it("calls signOut, surfaces the message, and flips hasToken to false on success", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        has_token: true,
+      });
+      vi.mocked(backend.signOut).mockResolvedValue({
+        success: true,
+        message: "Signed out. The token is still valid in RomM.",
+      });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      // Precondition: signed in.
+      expect(capturedConnection[capturedConnection.length - 1]?.hasToken).toBe(true);
+
+      await act(async () => {
+        capturedConnection[capturedConnection.length - 1]?.onSignOut();
+        await Promise.resolve();
+      });
+
+      expect(vi.mocked(backend.signOut)).toHaveBeenCalledTimes(1);
+      const conn = capturedConnection[capturedConnection.length - 1];
+      expect(conn?.status).toBe("Signed out. The token is still valid in RomM.");
+      expect(conn?.hasToken).toBe(false);
+    });
+
+    it("keeps hasToken true when signOut reports failure", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        has_token: true,
+      });
+      vi.mocked(backend.signOut).mockResolvedValue({
+        success: false,
+        message: "Could not save settings.",
+        reason: "config_error",
+      });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        capturedConnection[capturedConnection.length - 1]?.onSignOut();
+        await Promise.resolve();
+      });
+
+      const conn = capturedConnection[capturedConnection.length - 1];
+      expect(conn?.status).toBe("Could not save settings.");
+      expect(conn?.hasToken).toBe(true);
+    });
+
+    it("sets status='Sign-out failed' when signOut throws", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        has_token: true,
+      });
+      vi.mocked(backend.signOut).mockRejectedValue(new Error("net"));
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        capturedConnection[capturedConnection.length - 1]?.onSignOut();
+        await Promise.resolve();
+      });
+
+      const conn = capturedConnection[capturedConnection.length - 1];
+      expect(conn?.status).toBe("Sign-out failed");
+      // A thrown sign-out leaves the session intact.
+      expect(conn?.hasToken).toBe(true);
+    });
+  });
+
   describe("handleTest", () => {
     it("forwards the result message into ConnectionSection.status on success", async () => {
       vi.mocked(backend.testConnection).mockResolvedValue({

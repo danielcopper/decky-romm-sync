@@ -103,6 +103,7 @@ export const connectWithCredentials = callable<[string, string, string, boolean]
 );
 export const connectWithToken = callable<[string, string, boolean], BackendResult>("connect_with_token");
 export const connectWithPairingCode = callable<[string, string, boolean], BackendResult>("connect_with_pairing_code");
+export const signOut = callable<[], BackendResult>("sign_out");
 
 export interface WhitelistSettings {
   disabled_defaults: string[];

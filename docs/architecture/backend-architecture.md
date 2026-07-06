@@ -468,6 +468,23 @@ the URL at a different origin leaves the stored token's origin mismatched and th
 data flows fail fast with `config_error` until the user signs in again. Because every data flow (including device
 registration) is inert until that sign-in, a stale device id from this path cannot be used before the sign-in clears it.
 
+**Sign-out (`sign_out`) is a local forget — never a server-side delete.** `sign_out` clears the token quad
+(`romm_api_token` / `romm_api_token_id` / `romm_api_token_origin` / `romm_api_token_source`) in the in-memory settings
+dict and persists them in a **single** `save_settings()` (the same atomic-write funnel `_persist_token` uses), keeping
+`romm_url` and the SSL flag so the user need not re-enter them. It mirrors the sign-in paths' persist discipline: the
+auth state is snapshotted first, and a failed save rolls the in-memory quad back to the snapshot and returns the
+canonical failure shape (via `error_response`), so a disk error never strands the user with a half-forgotten but
+still-valid token. Only on a **successful** save does it drop the cached RomM server version (`set_version(None)`) so no
+stale value lingers. It is synchronous — no `run_in_executor`, no network — and idempotent (signing out when already
+signed out still returns success). It **never** issues the server-side token DELETE: a minted token deliberately lacks
+`me.write` (deleting it would require re-entering the password, which sign-out does not have), and a user-supplied token
+belongs to the user. That is why the direct re-authentication path stays as **Sign in again** (not sign-out-then-in):
+`establish_token`'s same-origin minted-token cleanup (#1038) only fires while the old token id is still stored, so
+signing out first would strand the old minted token on RomM (which caps tokens per user). After sign-out,
+`test_connection` returns the canonical "Not signed in" `config_error` because `romm_url` survives but the token is
+gone. Signing out (like re-signing-in) while a sync or download is in flight needs no guard: once the token is gone the
+in-flight operation simply fails authentication and surfaces its normal error — deliberate, not a race to defend.
+
 **Server-supplied paths are validated, fail-stop on traversal**: every server-supplied path component — the firmware
 `file_name`, the ROM platform slug, and post-extraction URL-decoded ZIP member names — is checked through
 `lib/path_safety` (`safe_join` for realpath containment, `safe_path_component` for single-component names) before any

@@ -47,7 +47,9 @@ This plugin handles:
   sign-in. If the configured server URL no longer matches, the bearer is withheld rather than sent — a changed or
   hostile host never receives the credential.
 - The plugin **never deletes or modifies a user-supplied token** on the RomM server — that token's lifecycle is managed
-  by you in RomM; only tokens the plugin itself minted are revoked on re-sign-in.
+  by you in RomM; only tokens the plugin itself minted are revoked on re-sign-in. **Signing out clears the token locally
+  only** — it forgets the token on this device but does **not** revoke it server-side; revoke it yourself in RomM if you
+  no longer want it.
 - The **pairing code** used to sign in without pasting a token is a short-lived (60-second), single-use, 8-character
   code exchanged over an unauthenticated endpoint (the code is the only credential). It is never logged and is discarded
   after the exchange; the RomM server delivers the freshly rotated raw token only to this device in the exchange

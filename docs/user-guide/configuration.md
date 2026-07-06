@@ -24,10 +24,29 @@ The Connection Settings page manages your RomM server connection.
     [Sign in with an API token (OIDC)](#sign-in-with-an-api-token-oidc) below.
 
   Both the credentials and the pasted token are write-only — they are never pre-filled or shown back to you.
+
+  Once you are signed in, this button reads **Sign in again** and a **Sign out** button appears below it (see
+  [Sign out](#sign-out)).
 - **Allow Insecure SSL** — shown only for `https://` URLs; skips certificate verification for self-signed certs (LAN
   only).
 - **Test Connection** — available once you are signed in; verifies the plugin can reach and authenticate with your RomM
   server using the stored token.
+
+### Sign out
+
+The **Sign out** button (shown only while signed in) forgets the stored token **on this device**: it clears the token,
+its server-side id, its origin, and its provenance from the plugin's settings, but keeps the **server URL** and the SSL
+setting so you do not have to re-enter them. It asks for confirmation first.
+
+Signing out **never deletes or revokes the token in RomM** — the token stays valid on the server. A token the plugin
+minted from your username and password can only be deleted during a same-server re-sign-in (the stored token
+deliberately lacks the permission to delete itself), and a token you supplied (pasted or paired) is yours to manage. To
+revoke a token for good, delete it in RomM's web UI under **Settings → API Tokens**.
+
+If you just want to switch accounts or re-authenticate, prefer **Sign in again** over signing out and back in. For
+username/password accounts, re-signing in on the **same** server revokes the token the plugin minted before — a path
+that a sign-out then sign-in cannot take, since sign-out has already forgotten the old token's id. RomM caps the number
+of Client API Tokens per user, so avoiding stranded minted tokens matters.
 
 ### Sign in with an API token (OIDC)
 

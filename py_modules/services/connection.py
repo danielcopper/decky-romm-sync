@@ -81,6 +81,12 @@ _PAIRING_OWNER_DISABLED_MESSAGE = (
 _PAIRING_RATE_LIMITED_MESSAGE = "Too many attempts — wait a minute and generate a new code."
 _RATE_LIMITED_REASON = "rate_limited"
 
+# Sign-out (``sign_out``). Local-forget only — the plugin never deletes the
+# token on the server, so the copy tells the user it stays valid in RomM.
+_SIGNED_OUT_MESSAGE = (
+    "Signed out. The token is still valid in RomM — revoke it there (Settings → API Tokens) if you no longer want it."
+)
+
 
 def _normalize_pairing_code(code: str) -> str:
     """Normalize a pairing code the way RomM does: drop all whitespace and ``-``, then uppercase.
@@ -560,6 +566,39 @@ class ConnectionService:
             self._logger.warning(f"Legacy credential migration failed: {e}")
             return
         self._logger.info("Migrated legacy credentials to a Client API Token")
+
+    def sign_out(self) -> dict[str, Any]:
+        """Forget the stored Client API Token on this device — local only.
+
+        Clears the token, its server-side id, its minting origin, and its
+        provenance from settings and persists them in a single atomic save,
+        keeping ``romm_url`` and the SSL flag so the user need not re-enter
+        them. Mirrors the sign-in paths' persist discipline: the auth state is
+        snapshotted first, and if the atomic save fails the in-memory state is
+        rolled back to *snapshot* and the canonical failure shape is returned,
+        so a disk error never strands the user with a half-forgotten but
+        still-valid token. Only on a successful save is the cached RomM server
+        version dropped (``set_version(None)``) so a stale value cannot linger.
+        No server-side token deletion ever happens: a plugin-minted token
+        deliberately lacks the ``me.write`` scope needed to delete it (that
+        would require re-entering the password), and a user-supplied token
+        belongs to the user, who manages it in RomM's web UI. Idempotent —
+        signing out when already signed out still succeeds and is harmless.
+        Returns the canonical success shape on success, the canonical failure
+        shape on a persist error.
+        """
+        snapshot = self._snapshot_auth_state()
+        self._settings["romm_api_token"] = None
+        self._settings["romm_api_token_id"] = None
+        self._settings["romm_api_token_origin"] = None
+        self._settings["romm_api_token_source"] = None
+        try:
+            self._settings_persister.save_settings()
+        except Exception as e:
+            self._restore_auth_state(snapshot)
+            return error_response(e)
+        self._romm_api.set_version(None)
+        return {"success": True, "message": _SIGNED_OUT_MESSAGE}
 
     # ── Internal helpers ─────────────────────────────────────────────────
 

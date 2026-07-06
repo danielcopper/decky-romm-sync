@@ -6,10 +6,24 @@
  */
 
 import { FC } from "react";
-import { PanelSection, PanelSectionRow, ButtonItem, DialogButton, Field, showModal, ToggleField } from "@decky/ui";
+import {
+  PanelSection,
+  PanelSectionRow,
+  ButtonItem,
+  ConfirmModal,
+  DialogButton,
+  Field,
+  showModal,
+  ToggleField,
+} from "@decky/ui";
 import { TextInputModal } from "./TextInputModal";
 import { ConnectModal } from "./ConnectModal";
 import { isHttpsUrl } from "../../utils/serverUrl";
+
+// Sign-out only forgets the token on this device; it never revokes it in RomM.
+const SIGN_OUT_CONFIRM_DESCRIPTION =
+  "This only forgets the RomM token on this device. The token itself stays valid in RomM — " +
+  "revoke it there (Settings → API Tokens) if you no longer want it.";
 
 interface ConnectionSectionProps {
   url: string;
@@ -23,6 +37,7 @@ interface ConnectionSectionProps {
   onConnectPairing: (code: string) => void;
   onAllowInsecureSslChange: (value: boolean) => void;
   onTestConnection: () => void;
+  onSignOut: () => void;
 }
 
 export const ConnectionSection: FC<ConnectionSectionProps> = ({
@@ -37,6 +52,7 @@ export const ConnectionSection: FC<ConnectionSectionProps> = ({
   onConnectPairing,
   onAllowInsecureSslChange,
   onTestConnection,
+  onSignOut,
 }) => {
   return (
     <PanelSection title="Connection">
@@ -66,10 +82,31 @@ export const ConnectionSection: FC<ConnectionSectionProps> = ({
               )
             }
           >
-            Sign in
+            {hasToken ? "Sign in again" : "Sign in"}
           </DialogButton>
         </Field>
       </PanelSectionRow>
+      {hasToken && (
+        <PanelSectionRow>
+          <ButtonItem
+            layout="below"
+            description="Forgets the RomM token on this device. The token stays valid in RomM."
+            onClick={() =>
+              showModal(
+                <ConfirmModal
+                  strTitle="Sign out of RomM?"
+                  strDescription={SIGN_OUT_CONFIRM_DESCRIPTION}
+                  strOKButtonText="Sign out"
+                  strCancelButtonText="Cancel"
+                  onOK={onSignOut}
+                />,
+              )
+            }
+          >
+            Sign out
+          </ButtonItem>
+        </PanelSectionRow>
+      )}
       {isHttpsUrl(url) && (
         <PanelSectionRow>
           <ToggleField
