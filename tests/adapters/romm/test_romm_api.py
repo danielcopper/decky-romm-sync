@@ -8,7 +8,16 @@ from unittest.mock import MagicMock
 import pytest
 
 from adapters.romm.romm_api import _TOKEN_SCOPES, RommApiAdapter
-from lib.errors import RommNotFoundError, RommServerError, RommUnprocessableEntityError
+from lib.errors import (
+    PairingCodeInvalidError,
+    PairingCodeOwnerDisabledError,
+    PairingCodeRateLimitedError,
+    PairingCodeTokenGoneError,
+    RommForbiddenError,
+    RommNotFoundError,
+    RommServerError,
+    RommUnprocessableEntityError,
+)
 
 if TYPE_CHECKING:
     from models.play_sessions import PlaySessionIngestEntry
@@ -24,6 +33,7 @@ def _make_api():
     client.put_json = MagicMock()
     client.upload_multipart = MagicMock()
     client.basic_auth_request = MagicMock()
+    client.unauthenticated_post_json = MagicMock()
     return RommApiAdapter(client), client
 
 
@@ -970,3 +980,82 @@ class TestDeleteClientToken:
         client.basic_auth_request.side_effect = RommServerError("boom", status_code=500)
         with pytest.raises(RommServerError):
             api.delete_client_token("alice", "secret", token_id=7)
+
+
+class TestExchangePairingCode:
+    def test_posts_code_to_public_exchange_endpoint(self):
+        api, client = _make_api()
+        client.unauthenticated_post_json.return_value = {"id": 5, "raw_token": "rmm_paired"}
+        result = api.exchange_pairing_code("ABCD2345")
+        client.unauthenticated_post_json.assert_called_once_with(
+            "/api/client-tokens/exchange",
+            {"code": "ABCD2345"},
+        )
+        assert result == {"id": 5, "raw_token": "rmm_paired"}
+
+    def test_404_invalid_code_maps_to_pairing_invalid(self):
+        api, client = _make_api()
+        client.unauthenticated_post_json.side_effect = RommNotFoundError("404")
+        with pytest.raises(PairingCodeInvalidError):
+            api.exchange_pairing_code("BADCODE1")
+
+    def test_404_unrelated_detail_maps_to_pairing_invalid(self):
+        api, client = _make_api()
+        err = RommNotFoundError("404")
+        err.detail = "Invalid or expired pairing code"
+        client.unauthenticated_post_json.side_effect = err
+        with pytest.raises(PairingCodeInvalidError):
+            api.exchange_pairing_code("BADCODE1")
+
+    def test_404_token_gone_detail_maps_to_pairing_token_gone(self):
+        api, client = _make_api()
+        err = RommNotFoundError("404")
+        err.detail = "Token no longer exists"
+        client.unauthenticated_post_json.side_effect = err
+        with pytest.raises(PairingCodeTokenGoneError):
+            api.exchange_pairing_code("ABCD2345")
+
+    @pytest.mark.parametrize(
+        "detail",
+        [
+            "token no longer exists",  # all-lowercase
+            "TOKEN NO LONGER EXISTS",  # all-uppercase
+            "The token no longer exists.",  # embedded + trailing punctuation
+        ],
+    )
+    def test_404_token_gone_detail_case_and_punctuation_insensitive(self, detail):
+        api, client = _make_api()
+        err = RommNotFoundError("404")
+        err.detail = detail
+        client.unauthenticated_post_json.side_effect = err
+        with pytest.raises(PairingCodeTokenGoneError):
+            api.exchange_pairing_code("ABCD2345")
+
+    @pytest.mark.parametrize("detail", [None, 123, {"msg": "token no longer exists"}, ["token no longer exists"]])
+    def test_404_non_string_or_absent_detail_maps_to_pairing_invalid(self, detail):
+        # A non-string / absent detail must never be coerced into the token-gone
+        # branch — it falls back to invalid/expired.
+        api, client = _make_api()
+        err = RommNotFoundError("404")
+        err.detail = detail
+        client.unauthenticated_post_json.side_effect = err
+        with pytest.raises(PairingCodeInvalidError):
+            api.exchange_pairing_code("ABCD2345")
+
+    def test_403_maps_to_owner_disabled(self):
+        api, client = _make_api()
+        client.unauthenticated_post_json.side_effect = RommForbiddenError("403")
+        with pytest.raises(PairingCodeOwnerDisabledError):
+            api.exchange_pairing_code("ABCD2345")
+
+    def test_429_maps_to_rate_limited(self):
+        api, client = _make_api()
+        client.unauthenticated_post_json.side_effect = RommServerError("rate", status_code=429)
+        with pytest.raises(PairingCodeRateLimitedError):
+            api.exchange_pairing_code("ABCD2345")
+
+    def test_5xx_propagates_as_server_error(self):
+        api, client = _make_api()
+        client.unauthenticated_post_json.side_effect = RommServerError("boom", status_code=500)
+        with pytest.raises(RommServerError):
+            api.exchange_pairing_code("ABCD2345")

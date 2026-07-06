@@ -34,6 +34,8 @@ from lib.errors import (
 )
 from lib.url_host import same_origin
 
+_CONTENT_TYPE_JSON = "application/json"
+
 
 class RommHttpAdapter:
     """Low-level HTTP client for RomM API requests.
@@ -184,26 +186,51 @@ class RommHttpAdapter:
             return RommServerError(msg, status_code=code, url=url, method=method)
         return RommApiError(msg, url=url, method=method)
 
+    @staticmethod
+    def _read_error_detail(exc: urllib.error.HTTPError) -> Any:
+        """Read the FastAPI ``detail`` field from an error response body, or ``None``.
+
+        Reads the ``HTTPError`` body once (it is otherwise discarded) and returns
+        its ``detail`` value, so a caller can distinguish two responses that share
+        a status code but carry different ``detail`` text. Any unreadable /
+        non-JSON body degrades to ``None``.
+        """
+        try:
+            raw = exc.read().decode()
+            body = json.loads(raw) if raw else None
+        except Exception:  # unreadable / non-JSON body — degrade to no detail
+            return None
+        return body.get("detail") if isinstance(body, dict) else None
+
     def _translate_unprocessable(
         self, exc: urllib.error.HTTPError, url: str, method: str
     ) -> RommUnprocessableEntityError:
         """Build a :class:`RommUnprocessableEntityError` carrying the parsed 422 ``detail``.
 
         Reads the ``HTTPError`` response body once and extracts its ``detail``
-        list (RomM/FastAPI's per-field validation errors). Any failure to read or
-        parse the body degrades to ``detail=None`` — the caller then falls back to
-        a whole-request strategy rather than a per-entry one.
+        list (RomM/FastAPI's per-field validation errors). A missing/unreadable
+        body degrades to ``detail=None`` — the caller then falls back to a
+        whole-request strategy rather than a per-entry one.
         """
-        detail = None
-        try:
-            raw = exc.read().decode()
-            body = json.loads(raw) if raw else None
-            if isinstance(body, dict):
-                detail = body.get("detail")
-        except Exception:  # unreadable / non-JSON body — degrade to no detail
-            detail = None
+        detail = self._read_error_detail(exc)
         msg = f"HTTP 422: {exc.reason} ({method} {url})"
         return RommUnprocessableEntityError(msg, detail=detail, url=url, method=method)
+
+    def _translate_with_detail(self, exc: urllib.error.HTTPError, url: str, method: str) -> RommApiError:
+        """Translate an ``HTTPError`` like :meth:`translate_http_error`, with ``detail`` attached.
+
+        Same status → type mapping as :meth:`translate_http_error` (422 keeps its
+        own structured path), but the FastAPI ``detail`` string is read once and
+        attached to the typed error, so a caller can branch on reasons that share
+        a status code (two 404s that differ only by ``detail``).
+        """
+        if exc.code == 422:
+            return self._translate_unprocessable(exc, url, method)
+        detail = self._read_error_detail(exc)
+        msg = f"HTTP {exc.code}: {exc.reason} ({method} {url})"
+        error = self._translate_http_status(exc.code, msg, url, method)
+        error.detail = detail
+        return error
 
     @staticmethod
     def _translate_unwrapped(exc: Exception, url: str, method: str) -> RommApiError:
@@ -493,7 +520,7 @@ class RommHttpAdapter:
         def _do_json_request():
             body = json.dumps(data).encode("utf-8")
             req = urllib.request.Request(url, data=body, method=method)
-            req.add_header("Content-Type", "application/json")
+            req.add_header("Content-Type", _CONTENT_TYPE_JSON)
             self._apply_default_headers(req)
             try:
                 with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
@@ -543,6 +570,35 @@ class RommHttpAdapter:
         except Exception as exc:
             raise self.translate_http_error(exc, url, method) from exc
 
+    # Intentionally skips with_retry: a public single-use credential (the pairing
+    # code) must not be replayed — a retry burns the one-time code and the
+    # server-side rate limit.
+    def unauthenticated_post_json(self, path: str, data: dict[str, Any]) -> dict[str, Any]:
+        """POST JSON to a PUBLIC RomM endpoint — no ``Authorization`` header, no retry.
+
+        For endpoints whose credential is the request body itself (the
+        pairing-code exchange, whose one-time code IS the credential): a stored
+        bearer must never be attached (only the ``User-Agent`` goes out). On an
+        HTTP error the response ``detail`` is attached to the raised typed error
+        so the caller can branch on the server's specific reason. Returns ``{}``
+        on a 204 No Content, parsed JSON otherwise.
+        """
+        url = self._settings["romm_url"].rstrip("/") + path
+        body = json.dumps(data).encode("utf-8")
+        req = urllib.request.Request(url, data=body, method="POST")
+        req.add_header("Content-Type", _CONTENT_TYPE_JSON)
+        req.add_header("User-Agent", self._user_agent)
+        try:
+            with urllib.request.urlopen(req, context=self.ssl_context(), timeout=30) as resp:
+                if resp.status == 204:
+                    return {}
+                raw = resp.read().decode()
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as exc:
+            raise self._translate_with_detail(exc, url, "POST") from exc
+        except Exception as exc:
+            raise self.translate_http_error(exc, url, "POST") from exc
+
     # Intentionally skips with_retry: token mint/delete are not idempotent
     # and must not be retried (a duplicate mint would orphan a token).
     def basic_auth_request(
@@ -567,7 +623,7 @@ class RommHttpAdapter:
         body = json.dumps(data).encode("utf-8") if data is not None else None
         req = urllib.request.Request(url, data=body, method=method)
         if body is not None:
-            req.add_header("Content-Type", "application/json")
+            req.add_header("Content-Type", _CONTENT_TYPE_JSON)
         req.add_header("Authorization", self._basic_auth_header(username, password))
         req.add_header("User-Agent", self._user_agent)
         try:

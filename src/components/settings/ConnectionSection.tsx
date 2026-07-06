@@ -20,6 +20,7 @@ interface ConnectionSectionProps {
   onUrlChange: (value: string) => void;
   onConnect: (username: string, password: string) => void;
   onConnectToken: (token: string) => void;
+  onConnectPairing: (code: string) => void;
   onAllowInsecureSslChange: (value: boolean) => void;
   onTestConnection: () => void;
 }
@@ -33,6 +34,7 @@ export const ConnectionSection: FC<ConnectionSectionProps> = ({
   onUrlChange,
   onConnect,
   onConnectToken,
+  onConnectPairing,
   onAllowInsecureSslChange,
   onTestConnection,
 }) => {
@@ -54,7 +56,15 @@ export const ConnectionSection: FC<ConnectionSectionProps> = ({
         <Field label="RomM Account" description={hasToken ? "Signed in" : "Not signed in"}>
           <DialogButton
             style={{ minWidth: "auto", width: "auto" }}
-            onClick={() => showModal(<ConnectModal onConnect={onConnect} onConnectToken={onConnectToken} />)}
+            onClick={() =>
+              showModal(
+                <ConnectModal
+                  onConnect={onConnect}
+                  onConnectToken={onConnectToken}
+                  onConnectPairing={onConnectPairing}
+                />,
+              )
+            }
           >
             Sign in
           </DialogButton>

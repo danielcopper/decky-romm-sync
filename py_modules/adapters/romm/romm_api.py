@@ -10,7 +10,15 @@ import logging
 import urllib.parse
 from typing import TYPE_CHECKING, Any
 
-from lib.errors import RommNotFoundError
+from lib.errors import (
+    PairingCodeInvalidError,
+    PairingCodeOwnerDisabledError,
+    PairingCodeRateLimitedError,
+    PairingCodeTokenGoneError,
+    RommForbiddenError,
+    RommNotFoundError,
+    RommServerError,
+)
 
 if TYPE_CHECKING:
     from models.play_sessions import PlaySessionIngestEntry, PlaySessionIngestResponse
@@ -27,6 +35,17 @@ _logger = logging.getLogger(__name__)
 # ``/api/play-sessions`` pagination guard: stop after this many pages so a server
 # that never returns a short page (e.g. ignores ``offset``) can't loop forever.
 _MAX_PLAY_SESSION_PAGES = 50
+
+# Public pairing-code exchange endpoint (unauthenticated — the code is the credential).
+_PAIRING_CODE_ENDPOINT = "/api/client-tokens/exchange"
+# Case-folded needle identifying the exchange 404 raised when the token a pairing
+# code was minted for was deleted between pairing and exchange — distinct from the
+# invalid/expired/used-code 404, which the two share only by their FastAPI
+# ``detail`` string. Source string "Token no longer exists": RomM backend
+# ``client_tokens.py`` (verified against RomM 4.9.0 and 4.9.2). Matched by
+# case-insensitive substring containment so a wording/casing/punctuation tweak on
+# the server doesn't silently reroute it to the invalid-code branch.
+_PAIRING_TOKEN_GONE_NEEDLE = "token no longer exists"
 
 # Scopes requested for the minted Client API Token. Deliberately excludes
 # ``me.write`` so the token itself cannot mint or delete tokens — that
@@ -386,3 +405,36 @@ class RommApiAdapter:
             )
         except RommNotFoundError:
             return
+
+    def exchange_pairing_code(self, code: str) -> dict[str, Any]:
+        """Exchange a short-lived RomM pairing code for a Client API Token.
+
+        POSTs ``{"code": code}`` to the PUBLIC ``/api/client-tokens/exchange``
+        endpoint with no Authorization header and no retry — the one-time code is
+        itself the credential, and a replay would burn both the single-use code
+        and the server-side rate limit. Returns RomM's token schema, whose
+        ``raw_token`` is the freshly rotated bearer (the exchange regenerates the
+        token server-side). Neither the code nor the returned token is logged.
+
+        Failure mapping the caller branches on: a 404 for an invalid/expired/used
+        code raises :class:`PairingCodeInvalidError`; a 404 whose ``detail`` says
+        the token is gone raises :class:`PairingCodeTokenGoneError`; a 403 raises
+        :class:`PairingCodeOwnerDisabledError`; a 429 raises
+        :class:`PairingCodeRateLimitedError`. Transport failures propagate as
+        their transport ``RommApiError`` subclass.
+        """
+        try:
+            return self._client.unauthenticated_post_json(_PAIRING_CODE_ENDPOINT, {"code": code})
+        except RommNotFoundError as exc:
+            # Only a real string detail is inspected — a non-string / absent detail
+            # falls through to the invalid/expired branch (never coerced in).
+            detail = exc.detail
+            if isinstance(detail, str) and _PAIRING_TOKEN_GONE_NEEDLE in detail.casefold():
+                raise PairingCodeTokenGoneError("Pairing token no longer exists") from exc
+            raise PairingCodeInvalidError("Pairing code is invalid or expired") from exc
+        except RommForbiddenError as exc:
+            raise PairingCodeOwnerDisabledError("Pairing token owner is disabled") from exc
+        except RommServerError as exc:
+            if exc.status_code == 429:
+                raise PairingCodeRateLimitedError("Too many pairing-code exchange attempts") from exc
+            raise

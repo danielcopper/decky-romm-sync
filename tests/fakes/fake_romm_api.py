@@ -148,9 +148,12 @@ class FakeRommApi:
         self.delete_server_saves_side_effect: Exception | None = None
         self.mint_client_token_side_effect: Exception | None = None
         self.delete_client_token_side_effect: Exception | None = None
+        self.exchange_pairing_code_side_effect: Exception | None = None
 
         # Client-token mint: tests stage the response the next mint returns.
         self.mint_client_token_response: dict[str, Any] = {"id": 1, "raw_token": "rmm_faketoken"}
+        # Pairing-code exchange: tests stage the token schema the next exchange returns.
+        self.exchange_pairing_code_response: dict[str, Any] = {"id": 2, "raw_token": "rmm_paired"}
         # Deleted token ids, in call order.
         self.deleted_token_ids: list[int] = []
 
@@ -688,6 +691,11 @@ class FakeRommApi:
         self._log("delete_client_token", (username, password), {"token_id": token_id})
         self._check_fail(self.delete_client_token_side_effect)
         self.deleted_token_ids.append(token_id)
+
+    def exchange_pairing_code(self, code: str) -> dict[str, Any]:
+        self._log("exchange_pairing_code", (code,))
+        self._check_fail(self.exchange_pairing_code_side_effect)
+        return dict(self.exchange_pairing_code_response)
 
     # ------------------------------------------------------------------
     # Test helpers

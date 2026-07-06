@@ -355,11 +355,12 @@ class RommVersion(Protocol):
 
 
 class RommTokenApi(Protocol):
-    """RomM Client API Token mint/delete surface.
+    """RomM Client API Token surface — mint, delete, and pairing-code exchange.
 
-    The runtime Bearer token deliberately lacks ``me.write``, so both
-    operations need a transient Basic-auth identity built from the
-    username/password passed at call time — never from stored state.
+    Mint and delete need a transient Basic-auth identity built from the
+    username/password passed at call time (never from stored state), because the
+    runtime Bearer token deliberately lacks ``me.write``. The pairing-code
+    exchange is unauthenticated — the one-time code is itself the credential.
     """
 
     def mint_client_token(self, username: str, password: str, *, token_name: str) -> dict[str, Any]:
@@ -372,6 +373,18 @@ class RommTokenApi(Protocol):
 
     def delete_client_token(self, username: str, password: str, *, token_id: int) -> None:
         """Delete a Client API Token by id; a missing token is treated as success."""
+        ...
+
+    def exchange_pairing_code(self, code: str) -> dict[str, Any]:
+        """Exchange a short-lived pairing code for a Client API Token (public, no auth).
+
+        POSTs the one-time code to the unauthenticated exchange endpoint — the
+        code IS the credential, so no bearer is attached and the call is never
+        retried. Returns the server token schema whose ``raw_token`` is the
+        freshly rotated bearer. Raises a pairing-specific ``RommApiError``
+        subclass on a rejected code (invalid/expired, token-gone, owner-disabled,
+        or rate-limited).
+        """
         ...
 
 

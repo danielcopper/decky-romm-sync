@@ -48,6 +48,10 @@ This plugin handles:
   hostile host never receives the credential.
 - The plugin **never deletes or modifies a user-supplied token** on the RomM server — that token's lifecycle is managed
   by you in RomM; only tokens the plugin itself minted are revoked on re-sign-in.
+- The **pairing code** used to sign in without pasting a token is a short-lived (60-second), single-use, 8-character
+  code exchanged over an unauthenticated endpoint (the code is the only credential). It is never logged and is discarded
+  after the exchange; the RomM server delivers the freshly rotated raw token only to this device in the exchange
+  response.
 - Path components supplied by the RomM server (filenames, ROM and save paths) are validated against path traversal
   before they are used to build local filesystem paths, so a compromised or malicious server cannot write outside the
   plugin's directories.

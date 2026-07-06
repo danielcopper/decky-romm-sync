@@ -123,7 +123,7 @@ the rest are single modules. A service over ~700 LOC is the decomposition signal
 | `metadata.py`             | MetadataService — ROM metadata reads from `rom_metadata` (7-day TTL), app_id mapping                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `launch_gate.py`          | LaunchGateService — pre-launch gate (rom lookup, install check, save status)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `startup_healing.py`      | StartupHealingService — prunes stale `rom_installs` rows against disk on load (via the UoW) + reconciles orphaned `running` SyncRuns (a hard crash leaves a `running` row → marked errored) + `get_installed_relaunch_options()` builds the startup launch-options reconcile items (see [StartupHealingService notes](#startuphealingservice-notes))                                                                                                                                                                                                                       |
-| `connection.py`           | ConnectionService — connection test + RomM minimum-version gate + Client API Token lifecycle (mint/establish via credentials, or validate/store a user-pasted token for OIDC accounts; host-bound to the minting origin; see [ConnectionService notes](#connectionservice-notes))                                                                                                                                                                                                                                                                                          |
+| `connection.py`           | ConnectionService — connection test + RomM minimum-version gate + Client API Token lifecycle (mint/establish via credentials, validate/store a user-pasted token, or exchange a short-lived pairing code for a token — the latter two for OIDC accounts; host-bound to the minting origin; see [ConnectionService notes](#connectionservice-notes))                                                                                                                                                                                                                        |
 | `protocols/`              | Protocol interfaces grouped by concern (see [Protocol Interfaces](#protocol-interfaces))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 #### LibraryService decomposition (`services/library/`)
@@ -430,7 +430,26 @@ probe is the only validation). Both map to the canonical `auth_failed` failure w
 failure the in-memory auth state is rolled back and disk is never touched; only a successful validation commits URL +
 SSL flag + token + `id = None` + origin + source in a single `save_settings()`. The token value is never logged. The
 device-forget-on-origin-change and playtime-scope-notice clear run on the success path exactly as they do for
-`establish_token`.
+`establish_token`. The `/api/users/me` validation + persist tail is shared with the paired-token path below via the
+private `_validate_and_persist_user_token` helper (both hand the plugin a token to validate and store with `"user"`
+provenance), so their observable behaviour stays identical.
+
+**Pairing-code sign-in (`establish_paired_token`) — the OIDC path without pasting.** The same OIDC accounts can sign in
+by entering a short-lived RomM pairing code instead of pasting the token: the plugin exchanges the code for the token
+over the **public, unauthenticated** `POST /api/client-tokens/exchange` endpoint (the one-time code is itself the
+credential). It mirrors `establish_user_token`'s validate URL → probe version → gate → obtain-credential → validate via
+`/api/users/me` → persist-on-success-only shape, but the credential is fetched by the exchange rather than pasted, and
+the exchange runs with the token trio **cleared** in memory (like `establish_token`) so no old bearer leaks to the
+candidate host during the unauthenticated call. The code is normalized the way RomM normalizes it — all whitespace and
+`-` stripped, then uppercased (`"ab-cd ef23"` → `"ABCDEF23"`) — and a code that is blank after normalization is a
+`config_error` before any network call. The exchange is **never auto-retried**: a pairing code is single-use, and a
+replay would burn both the code and RomM's per-client rate limit, so the transport's `unauthenticated_post_json` skips
+`with_retry`. Each RomM rejection maps to a distinct, actionable message: an invalid/expired/used code, a
+token-no-longer-exists 404, and a disabled-owner 403 all carry `auth_failed`; a 429 carries the bespoke `rate_limited`
+reason. On success the freshly rotated `raw_token` (the exchange regenerates the token server-side, so any previously
+copied raw value stops working) is host-bound in memory and run through the shared `_validate_and_persist_user_token`
+tail, so it is persisted with `"user"` provenance and `id = None` exactly like a pasted token — no mint, no server-side
+DELETE. The pairing code and the returned token are never logged.
 
 **The registered device id is forgotten on an origin change.** A device registered with RomM (`POST /api/devices`, its
 id stored in `kv_config["device_id"]`) is bound to the server it was registered against — RomM's `negotiate` save-sync

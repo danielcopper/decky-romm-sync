@@ -192,6 +192,9 @@ class Plugin:
     async def connect_with_token(self, romm_url, token, allow_insecure_ssl=None):
         return await self._connection_service.establish_user_token(romm_url, token, allow_insecure_ssl)
 
+    async def connect_with_pairing_code(self, romm_url, code, allow_insecure_ssl=None):
+        return await self._connection_service.establish_paired_token(romm_url, code, allow_insecure_ssl)
+
     async def save_server_url(self, romm_url, allow_insecure_ssl=None):
         return self._settings_service.save_server_url(romm_url, allow_insecure_ssl)
 

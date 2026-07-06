@@ -1,5 +1,7 @@
 """RomM API error types for structured error handling."""
 
+from typing import Any
+
 from lib.list_result import ErrorCode
 
 
@@ -27,6 +29,11 @@ class RommApiError(Exception):
     """Base exception for all RomM HTTP API errors."""
 
     status_code = None
+    # Parsed FastAPI ``detail`` body, populated only by the request paths that
+    # read it (422 validation, the pairing-code exchange). ``None`` otherwise, so
+    # a caller can branch on two responses that share a status code but differ in
+    # ``detail`` without every error path paying to read the body.
+    detail: Any = None
 
     def __init__(self, message, url=None, method=None):
         self.url = url
@@ -114,6 +121,22 @@ class TokenHostMismatchError(RommApiError):
     not minted for, so the credential never leaks to a wrong/hostile server.
     Non-retryable: replaying it cannot succeed, only re-signing-in can.
     """
+
+
+class PairingCodeInvalidError(RommApiError):
+    """Pairing-code exchange rejected: the code is invalid, expired, or already used (404)."""
+
+
+class PairingCodeTokenGoneError(RommApiError):
+    """Pairing-code exchange rejected: the token the code was minted for no longer exists (404)."""
+
+
+class PairingCodeOwnerDisabledError(RommApiError):
+    """Pairing-code exchange rejected: the token owner account is disabled (403)."""
+
+
+class PairingCodeRateLimitedError(RommApiError):
+    """Pairing-code exchange rejected: too many exchange attempts from this client (429)."""
 
 
 def classify_error(exc):

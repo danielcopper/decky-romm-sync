@@ -9,7 +9,16 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lib.errors import RommAuthError, RommConnectionError, RommForbiddenError, RommServerError
+from lib.errors import (
+    PairingCodeInvalidError,
+    PairingCodeOwnerDisabledError,
+    PairingCodeRateLimitedError,
+    PairingCodeTokenGoneError,
+    RommAuthError,
+    RommConnectionError,
+    RommForbiddenError,
+    RommServerError,
+)
 from services.connection import ConnectionService, ConnectionServiceConfig
 
 _MIN_VERSION = (4, 9, 0)
@@ -33,6 +42,7 @@ def romm_api() -> MagicMock:
     api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.9.0"}}
     api.list_platforms.return_value = [{"id": 1, "slug": "n64"}]
     api.mint_client_token.return_value = {"id": 42, "raw_token": "rmm_minted"}
+    api.exchange_pairing_code.return_value = {"id": 99, "raw_token": "rmm_paired"}
     return api
 
 
@@ -1165,3 +1175,273 @@ class TestProbeReachability:
         romm_api.heartbeat_once.assert_called_once_with()
         # The swallow is diagnosable: a genuine bug is not silently lost.
         assert any("probe_reachability heartbeat failed" in r.message for r in caplog.records)
+
+
+class TestEstablishPairedTokenHappyPath:
+    def test_exchanges_and_stores_token_with_user_provenance(self, event_loop, romm_api, logger, settings_persister):
+        settings: dict[str, Any] = {}
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ABCD2345"))
+        assert result["success"] is True
+        assert result["romm_version"] == "4.9.0"
+        # A paired token is persisted exactly like a pasted one: user provenance,
+        # no server-side id, and never minted or DELETEd.
+        assert settings["romm_api_token"] == "rmm_paired"
+        assert settings["romm_api_token_id"] is None
+        assert settings["romm_api_token_origin"] == "http://romm.local"
+        assert settings["romm_api_token_source"] == "user"
+        romm_api.mint_client_token.assert_not_called()
+        romm_api.delete_client_token.assert_not_called()
+        assert settings_persister.save_settings.call_count == 1
+
+    def test_validates_token_with_authenticated_users_me_probe(self, event_loop, romm_api, logger):
+        settings: dict[str, Any] = {}
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+        event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ABCD2345"))
+        romm_api.get_current_user.assert_called_once_with()
+
+    def test_normalizes_code_before_exchange(self, event_loop, romm_api, logger):
+        settings: dict[str, Any] = {}
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+        event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ab-cd ef23"))
+        romm_api.exchange_pairing_code.assert_called_once_with("ABCDEF23")
+
+    def test_persists_url_and_ssl_flag(self, event_loop, romm_api, logger):
+        settings: dict[str, Any] = {}
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+        event_loop.run_until_complete(
+            service.establish_paired_token("http://romm.local", "ABCD2345", allow_insecure_ssl=True)
+        )
+        assert settings["romm_url"] == "http://romm.local"
+        assert settings["romm_allow_insecure_ssl"] is True
+
+    def test_never_logs_the_code_or_token(self, event_loop, romm_api, logger, caplog):
+        settings: dict[str, Any] = {}
+        romm_api.exchange_pairing_code.return_value = {"id": 1, "raw_token": "rmm_supersecret"}
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+        with caplog.at_level(logging.DEBUG, logger="test_connection"):
+            event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "SECRETCODE23"))
+        messages = " ".join(r.getMessage() for r in caplog.records)
+        assert "rmm_supersecret" not in messages
+        assert "SECRETCODE23" not in messages
+
+    def test_forgets_device_on_first_sign_in(self, event_loop, romm_api, logger):
+        settings: dict[str, Any] = {}
+        forget_device = MagicMock()
+        service = _make_service(
+            settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
+        )
+        event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ABCD2345"))
+        forget_device.assert_called_once_with()
+
+    def test_clears_playtime_scope_notice(self, event_loop, romm_api, logger):
+        clear = MagicMock()
+        settings: dict[str, Any] = {}
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            clear_playtime_scope_notice=clear,
+        )
+        result = event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ABCD2345"))
+        assert result["success"] is True
+        clear.assert_called_once()
+
+
+class TestEstablishPairedTokenBadPath:
+    def test_empty_url_returns_config_error(self, event_loop, romm_api, logger):
+        service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.establish_paired_token("", "ABCD2345"))
+        assert result == {"success": False, "reason": "config_error", "message": "No server URL configured"}
+        romm_api.heartbeat.assert_not_called()
+
+    @pytest.mark.parametrize("bad_url", ["romm.local", "ftp://romm.local", "   ", "https://"])
+    def test_invalid_url_returns_config_error_without_probing(self, event_loop, romm_api, logger, bad_url):
+        service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.establish_paired_token(bad_url, "ABCD2345"))
+        assert result == {"success": False, "reason": "config_error", "message": "Enter a valid http(s):// server URL"}
+        romm_api.heartbeat.assert_not_called()
+        romm_api.exchange_pairing_code.assert_not_called()
+
+    @pytest.mark.parametrize("blank_code", ["", "   ", "\t\n", "-", "- -"])
+    def test_blank_code_returns_config_error_without_probing(self, event_loop, romm_api, logger, blank_code):
+        service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.establish_paired_token("http://romm.local", blank_code))
+        assert result == {"success": False, "reason": "config_error", "message": "Enter the pairing code from RomM"}
+        romm_api.heartbeat.assert_not_called()
+        romm_api.exchange_pairing_code.assert_not_called()
+
+    def test_unreachable_server_returns_error_no_exchange(self, event_loop, romm_api, logger):
+        romm_api.heartbeat.side_effect = RommConnectionError("refused")
+        service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ABCD2345"))
+        assert result["success"] is False
+        assert result["reason"] == "server_unreachable"
+        romm_api.exchange_pairing_code.assert_not_called()
+
+    def test_version_gate_failure_returns_version_error_no_exchange(self, event_loop, romm_api, logger):
+        romm_api.heartbeat.return_value = {"SYSTEM": {"VERSION": "4.5.0"}}
+        service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ABCD2345"))
+        assert result["success"] is False
+        assert result["reason"] == "version_error"
+        romm_api.exchange_pairing_code.assert_not_called()
+
+    def test_invalid_code_returns_auth_failed(self, event_loop, romm_api, logger, settings_persister):
+        romm_api.exchange_pairing_code.side_effect = PairingCodeInvalidError("404")
+        service = _make_service(
+            settings={},
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "BADCODE1"))
+        assert result["success"] is False
+        assert result["reason"] == "auth_failed"
+        assert "invalid or has expired" in result["message"]
+        # No validation probe runs after a failed exchange, and nothing persists.
+        romm_api.get_current_user.assert_not_called()
+        settings_persister.save_settings.assert_not_called()
+
+    def test_token_gone_returns_auth_failed_with_own_message(self, event_loop, romm_api, logger):
+        romm_api.exchange_pairing_code.side_effect = PairingCodeTokenGoneError("404")
+        service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ABCD2345"))
+        assert result["success"] is False
+        assert result["reason"] == "auth_failed"
+        assert "no longer exists" in result["message"]
+
+    def test_owner_disabled_returns_auth_failed_with_own_message(self, event_loop, romm_api, logger):
+        romm_api.exchange_pairing_code.side_effect = PairingCodeOwnerDisabledError("403")
+        service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ABCD2345"))
+        assert result["success"] is False
+        assert result["reason"] == "auth_failed"
+        assert "disabled" in result["message"]
+
+    def test_rate_limited_returns_rate_limited_reason(self, event_loop, romm_api, logger):
+        romm_api.exchange_pairing_code.side_effect = PairingCodeRateLimitedError("429")
+        service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ABCD2345"))
+        assert result["success"] is False
+        assert result["reason"] == "rate_limited"
+        assert "Too many attempts" in result["message"]
+
+    def test_transport_failure_during_exchange_returns_error_response(self, event_loop, romm_api, logger):
+        romm_api.exchange_pairing_code.side_effect = RommServerError("boom", status_code=500)
+        service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
+        result = event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ABCD2345"))
+        assert result["success"] is False
+        assert result["reason"] == "server_unreachable"
+
+    def test_missing_raw_token_returns_error(self, event_loop, romm_api, logger, settings_persister):
+        romm_api.exchange_pairing_code.return_value = {"id": 1}  # no raw_token
+        service = _make_service(
+            settings={},
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ABCD2345"))
+        assert result["success"] is False
+        assert result["reason"] == "server_unreachable"
+        assert "did not return a usable token" in result["message"]
+        settings_persister.save_settings.assert_not_called()
+
+    def test_users_me_401_after_exchange_returns_auth_failed(self, event_loop, romm_api, logger, settings_persister):
+        # The exchanged token still runs through the shared /users/me validation:
+        # a 401 there rejects it just like a pasted token.
+        romm_api.get_current_user.side_effect = RommAuthError("401")
+        service = _make_service(
+            settings={},
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ABCD2345"))
+        assert result["success"] is False
+        assert result["reason"] == "auth_failed"
+        assert "invalid or has been revoked" in result["message"]
+        settings_persister.save_settings.assert_not_called()
+
+
+class TestEstablishPairedTokenSnapshotRestore:
+    """A failed pairing-code sign-in must not clobber the previous working state."""
+
+    def _assert_old_state_intact(self, settings: dict[str, Any]) -> None:
+        assert settings["romm_url"] == "https://old.server"
+        assert settings["romm_api_token"] == "rmm_old"
+        assert settings["romm_api_token_id"] == 7
+        assert settings["romm_api_token_origin"] == "https://old.server"
+
+    def test_invalid_code_restores_old_state_and_never_saves(self, event_loop, romm_api, logger, settings_persister):
+        romm_api.exchange_pairing_code.side_effect = PairingCodeInvalidError("404")
+        settings = _working_settings()
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_paired_token("https://new.server", "BADCODE1"))
+        assert result["success"] is False
+        self._assert_old_state_intact(settings)
+        settings_persister.save_settings.assert_not_called()
+
+    def test_rate_limit_restores_old_state_and_never_saves(self, event_loop, romm_api, logger, settings_persister):
+        romm_api.exchange_pairing_code.side_effect = PairingCodeRateLimitedError("429")
+        settings = _working_settings()
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_paired_token("https://new.server", "ABCD2345"))
+        assert result["success"] is False
+        self._assert_old_state_intact(settings)
+        settings_persister.save_settings.assert_not_called()
+
+    def test_probe_failure_restores_old_state_and_never_saves(self, event_loop, romm_api, logger, settings_persister):
+        romm_api.heartbeat.side_effect = RommConnectionError("refused")
+        settings = _working_settings()
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_paired_token("https://new.server", "ABCD2345"))
+        assert result["success"] is False
+        self._assert_old_state_intact(settings)
+        settings_persister.save_settings.assert_not_called()
+
+    def test_binds_paired_token_to_candidate_origin_during_validation(self, event_loop, romm_api, logger):
+        """The /users/me validation runs with the EXCHANGED token bound to the candidate origin."""
+        seen: dict[str, Any] = {}
+
+        def _capture_get_current_user():
+            seen["token"] = settings.get("romm_api_token")
+            seen["origin"] = settings.get("romm_api_token_origin")
+            return {"id": 1, "username": "tester"}
+
+        romm_api.exchange_pairing_code.return_value = {"id": 1, "raw_token": "rmm_paired"}
+        romm_api.get_current_user.side_effect = _capture_get_current_user
+        settings = _working_settings()
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+        event_loop.run_until_complete(service.establish_paired_token("https://new.server", "ABCD2345"))
+        assert seen["token"] == "rmm_paired"
+        assert seen["origin"] == "https://new.server"

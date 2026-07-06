@@ -340,6 +340,88 @@ class TestRommBasicAuthRequest:
             plugin._http_adapter.basic_auth_request("/api/client-tokens", "u", "p", method="POST", data={"name": "x"})
 
 
+class TestUnauthenticatedPostJson:
+    """``unauthenticated_post_json`` POSTs to a public endpoint with no bearer, no retry."""
+
+    _ENDPOINT = "/api/client-tokens/exchange"
+
+    def _staged_resp(self, payload: bytes, status: int = 200):
+        resp = MagicMock()
+        resp.status = status
+        resp.read.return_value = payload
+        resp.__enter__ = MagicMock(return_value=resp)
+        resp.__exit__ = MagicMock(return_value=False)
+        return resp
+
+    def test_omits_authorization_even_with_stored_token(self, plugin):
+        # A stored bearer must NEVER go to the public exchange endpoint.
+        plugin.settings["romm_url"] = "http://romm.local"
+        plugin.settings["romm_api_token"] = "rmm_stored"
+        plugin.settings["romm_api_token_origin"] = "http://romm.local"
+        resp = self._staged_resp(json.dumps({"raw_token": "rmm_paired"}).encode())
+
+        with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+            result = plugin._http_adapter.unauthenticated_post_json(self._ENDPOINT, {"code": "ABCD2345"})
+
+        assert result == {"raw_token": "rmm_paired"}
+        req = mock_open.call_args[0][0]
+        assert req.get_header("Authorization") is None
+        assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
+        assert req.get_header("Content-type") == "application/json"
+        assert req.get_method() == "POST"
+        assert json.loads(req.data.decode()) == {"code": "ABCD2345"}
+
+    def test_returns_empty_dict_on_204(self, plugin):
+        plugin.settings["romm_url"] = "http://romm.local"
+        resp = self._staged_resp(b"", status=204)
+        with patch("urllib.request.urlopen", return_value=resp):
+            result = plugin._http_adapter.unauthenticated_post_json(self._ENDPOINT, {"code": "X"})
+        assert result == {}
+
+    def test_attaches_detail_on_error(self, plugin):
+        # The 404 body's ``detail`` must ride along on the typed error so the
+        # adapter can distinguish the two 404s the exchange returns.
+        plugin.settings["romm_url"] = "http://romm.local"
+        body = json.dumps({"detail": "Token no longer exists"}).encode()
+        exc = urllib.error.HTTPError(
+            "http://romm.local/api/client-tokens/exchange",
+            404,
+            "Not Found",
+            http.client.HTTPMessage(),
+            io.BytesIO(body),
+        )
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommNotFoundError) as exc_info:
+            plugin._http_adapter.unauthenticated_post_json(self._ENDPOINT, {"code": "X"})
+        assert exc_info.value.detail == "Token no longer exists"
+
+    def test_maps_429_to_server_error(self, plugin):
+        plugin.settings["romm_url"] = "http://romm.local"
+        exc = urllib.error.HTTPError(
+            "http://romm.local/api/client-tokens/exchange", 429, "Too Many Requests", http.client.HTTPMessage(), None
+        )
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommServerError) as exc_info:
+            plugin._http_adapter.unauthenticated_post_json(self._ENDPOINT, {"code": "X"})
+        assert exc_info.value.status_code == 429
+
+    def test_does_not_retry(self, plugin):
+        # No with_retry — a single-use credential must not be replayed.
+        plugin.settings["romm_url"] = "http://romm.local"
+        exc = urllib.error.HTTPError(
+            "http://romm.local/api/client-tokens/exchange", 500, "Server Error", http.client.HTTPMessage(), None
+        )
+        with patch("urllib.request.urlopen", side_effect=exc) as mock_open, pytest.raises(RommServerError):
+            plugin._http_adapter.unauthenticated_post_json(self._ENDPOINT, {"code": "X"})
+        assert mock_open.call_count == 1
+
+    def test_transport_failure_maps_to_connection_error(self, plugin):
+        plugin.settings["romm_url"] = "http://romm.local"
+        with (
+            patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")),
+            pytest.raises(RommConnectionError),
+        ):
+            plugin._http_adapter.unauthenticated_post_json(self._ENDPOINT, {"code": "X"})
+
+
 class TestRommRequest:
     def test_uses_auth_header(self, plugin):
         import json as _json

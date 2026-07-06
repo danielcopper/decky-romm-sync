@@ -68,6 +68,7 @@ interface UrlModalProps {
 interface ConnectModalProps {
   onConnect?: (username: string, password: string) => void;
   onConnectToken?: (token: string) => void;
+  onConnectPairing?: (code: string) => void;
 }
 
 function lastShownModalProps<T>(): T | null {
@@ -87,6 +88,7 @@ function defaultProps(overrides: Partial<React.ComponentProps<typeof ConnectionS
     onUrlChange: vi.fn(),
     onConnect: vi.fn(),
     onConnectToken: vi.fn(),
+    onConnectPairing: vi.fn(),
     onAllowInsecureSslChange: vi.fn(),
     onTestConnection: vi.fn(),
     ...overrides,
@@ -157,14 +159,18 @@ describe("ConnectionSection", () => {
       expect(getByText("Sign in")).toBeTruthy();
     });
 
-    it("opens a ConnectModal wired to onConnect and onConnectToken when clicked", () => {
+    it("opens a ConnectModal wired to onConnect, onConnectToken, and onConnectPairing when clicked", () => {
       const onConnect = vi.fn();
       const onConnectToken = vi.fn();
-      const { getByText } = render(<ConnectionSection {...defaultProps({ onConnect, onConnectToken })} />);
+      const onConnectPairing = vi.fn();
+      const { getByText } = render(
+        <ConnectionSection {...defaultProps({ onConnect, onConnectToken, onConnectPairing })} />,
+      );
       fireEvent.click(getByText("Sign in"));
       const props = lastShownModalProps<ConnectModalProps>();
       expect(props?.onConnect).toBe(onConnect);
       expect(props?.onConnectToken).toBe(onConnectToken);
+      expect(props?.onConnectPairing).toBe(onConnectPairing);
     });
   });
 

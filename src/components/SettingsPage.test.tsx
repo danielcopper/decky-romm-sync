@@ -751,6 +751,91 @@ describe("SettingsPage", () => {
     });
   });
 
+  describe("handleConnectPairing (pairing-code flow)", () => {
+    it("calls connectWithPairingCode with url + code + ssl, surfaces the message, and sets hasToken on success", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        has_token: false,
+      });
+      vi.mocked(backend.connectWithPairingCode).mockResolvedValue({
+        success: true,
+        message: "Connected!",
+        romm_version: "4.9.0",
+      });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(capturedConnection[capturedConnection.length - 1]?.hasToken).toBe(false);
+
+      await act(async () => {
+        capturedConnection[capturedConnection.length - 1]?.onConnectPairing("ABCD2345");
+        await Promise.resolve();
+      });
+
+      expect(vi.mocked(backend.connectWithPairingCode)).toHaveBeenCalledWith("https://romm.local", "ABCD2345", false);
+      // The paired flow must not fall through to the pasted-token callable.
+      expect(vi.mocked(backend.connectWithToken)).not.toHaveBeenCalled();
+      const conn = capturedConnection[capturedConnection.length - 1];
+      expect(conn?.status).toBe("Connected!");
+      expect(conn?.hasToken).toBe(true);
+    });
+
+    it("surfaces the failure message without setting hasToken (e.g. expired code)", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        has_token: false,
+      });
+      vi.mocked(backend.connectWithPairingCode).mockResolvedValue({
+        success: false,
+        message: "Pairing code is invalid or has expired.",
+        reason: "auth_failed",
+      });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        capturedConnection[capturedConnection.length - 1]?.onConnectPairing("BADCODE1");
+        await Promise.resolve();
+      });
+
+      const conn = capturedConnection[capturedConnection.length - 1];
+      expect(conn?.status).toBe("Pairing code is invalid or has expired.");
+      expect(conn?.hasToken).toBe(false);
+    });
+
+    it("rejects an invalid URL inline without calling connectWithPairingCode", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        romm_url: "romm.local", // scheme-less — invalid
+        has_token: false,
+      });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        capturedConnection[capturedConnection.length - 1]?.onConnectPairing("ABCD2345");
+        await Promise.resolve();
+      });
+
+      expect(vi.mocked(backend.connectWithPairingCode)).not.toHaveBeenCalled();
+      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe(
+        "Enter a valid http:// or https:// server URL",
+      );
+    });
+
+    it("sets status='Sign-in failed' when connectWithPairingCode throws", async () => {
+      vi.mocked(backend.connectWithPairingCode).mockRejectedValue(new Error("net"));
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+
+      await act(async () => {
+        capturedConnection[capturedConnection.length - 1]?.onConnectPairing("ABCD2345");
+        await Promise.resolve();
+      });
+
+      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("Sign-in failed");
+    });
+  });
+
   describe("handleTest", () => {
     it("forwards the result message into ConnectionSection.status on success", async () => {
       vi.mocked(backend.testConnection).mockResolvedValue({

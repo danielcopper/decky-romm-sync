@@ -12,13 +12,16 @@ The Connection Settings page manages your RomM server connection.
 - **RomM URL** — the full URL of your RomM server, including port if needed (e.g. `http://192.168.1.100:8080`). Tap
   **Edit** to change it; the URL saves automatically.
 - **RomM Account** — shows **Signed in** once a token is stored, or **Not signed in** otherwise. Tap **Sign in** to open
-  a one-time prompt. The prompt offers two sign-in methods, chosen from the **Sign-in method** dropdown:
+  a one-time prompt. The prompt offers three sign-in methods, chosen from the **Sign-in method** dropdown:
   - **Username & password** (default) — enter your RomM username and password once. The plugin exchanges them for a RomM
     Client API Token and stores only the token; your password is discarded after the token is minted and never saved. If
     your account cannot create API tokens, the status reports that.
-  - **API token** — paste a token you created in RomM's web UI. This is the path for accounts that have no password to
-    mint from, such as **OIDC / SSO logins**. See [Sign in with an API token (OIDC)](#sign-in-with-an-api-token-oidc)
-    below.
+  - **API token** — paste a Client API Token you created in RomM's web UI. This is one of the two paths for accounts
+    that have no password to mint from, such as **OIDC / SSO logins**. See
+    [Sign in with an API token (OIDC)](#sign-in-with-an-api-token-oidc) below.
+  - **Pairing code** — the other, recommended OIDC path: instead of copying the token, enter the short-lived 8-character
+    code RomM shows when you **Pair** a token. The plugin fetches the token itself, so nothing is copied or pasted. See
+    [Sign in with an API token (OIDC)](#sign-in-with-an-api-token-oidc) below.
 
   Both the credentials and the pasted token are write-only — they are never pre-filled or shown back to you.
 - **Allow Insecure SSL** — shown only for `https://` URLs; skips certificate verification for self-signed certs (LAN
@@ -29,17 +32,38 @@ The Connection Settings page manages your RomM server connection.
 ### Sign in with an API token (OIDC)
 
 If you log in to RomM through an identity provider (OIDC / SSO), your RomM account has no password, so the plugin cannot
-mint a token for you. Instead, create a token yourself in RomM's web UI and paste it into the plugin.
+mint a token for you. Instead you create a Client API Token yourself in RomM's web UI and hand it to the plugin. There
+are two ways to do that — **pairing code** (recommended) and **pasting the token** — and both grant the same scopes and
+carry the same warnings (see [Required scopes](#required-scopes) below).
+
+Start the same way for either method:
 
 1. In RomM's web UI, open **Settings → API Tokens** (also called Client API Tokens) and create a new token.
 2. Grant the scopes listed below — make sure the **write** scopes are included. Without them, downloads work but save
    upload, device sync, and playtime tracking fail with a permissions error.
-3. Copy the token value (RomM shows it only once).
-4. In the plugin's Connection Settings, tap **Sign in**, switch the **Sign-in method** dropdown to **API token**, paste
+
+#### Pairing code (recommended)
+
+Pairing hands the device the token over a short-lived one-time code, so you never copy or type the token itself.
+
+1. Create the token with the scopes above (steps 1–2).
+2. On that token in RomM's web UI, click **Pair**. RomM shows an 8-character pairing code, valid for **60 seconds**.
+3. In the plugin's Connection Settings, tap **Sign in**, switch the **Sign-in method** dropdown to **Pairing code**,
+   enter the code, and confirm — within the 60-second window. The plugin exchanges the code for the token itself.
+
+> **Pairing rotates the token's secret.** Exchanging a pairing code hands the device a **freshly rotated** secret for
+> that token — any raw token value you copied earlier stops working. Use **one token per device** so pairing a new
+> device never invalidates another.
+
+#### Paste the token
+
+1. Create the token with the scopes above (steps 1–2).
+2. Copy the token value (RomM shows it only once).
+3. In the plugin's Connection Settings, tap **Sign in**, switch the **Sign-in method** dropdown to **API token**, paste
    the token, and confirm.
 
-The plugin validates the token at sign-in with an authenticated probe against your RomM profile: a wrong or revoked
-token is rejected there with an "invalid or revoked" message. Sign-in only confirms that the token **authenticates**,
+Both methods validate the token at sign-in with an authenticated probe against your RomM profile: a wrong, revoked, or
+expired credential is rejected there with an actionable message. Sign-in only confirms that the token **authenticates**,
 though — the plugin cannot verify the token's granted scopes, so double-check that you granted the write scopes
 (`assets.write`, `devices.write`, `roms.user.write`) when creating it. A missing write scope is not caught at sign-in;
 it surfaces later as a permissions error on the affected action (save upload, device sync, or playtime).

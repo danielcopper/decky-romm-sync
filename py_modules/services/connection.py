@@ -4,7 +4,9 @@ Owns the ``test_connection`` reachability flow and the Client API Token
 lifecycle: ``establish_token`` mints a scoped token from a one-time
 username/password and discards the credentials, ``establish_user_token``
 validates and stores a token the user pasted (the OIDC path, which has no
-password to mint from), and ``migrate_legacy_credentials`` upgrades a
+password to mint from), ``establish_paired_token`` exchanges a short-lived RomM
+pairing code for a token (the same OIDC path without pasting), and
+``migrate_legacy_credentials`` upgrades a
 stored-password install to a token on startup. Pure I/O happens through the ``RommConnectionApi``
 Protocol and disk writes through the ``SettingsPersister`` Protocol; this
 service composes that I/O with the response-shape contract the frontend
@@ -20,7 +22,15 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.version import meets_min_version
-from lib.errors import RommAuthError, RommForbiddenError, error_response
+from lib.errors import (
+    PairingCodeInvalidError,
+    PairingCodeOwnerDisabledError,
+    PairingCodeRateLimitedError,
+    PairingCodeTokenGoneError,
+    RommAuthError,
+    RommForbiddenError,
+    error_response,
+)
 from lib.list_result import ErrorCode
 from lib.url_host import is_valid_server_url, normalize_origin, same_origin
 
@@ -37,6 +47,7 @@ if TYPE_CHECKING:
 
 
 _NO_SERVER_URL_MESSAGE = "No server URL configured"
+_INVALID_URL_MESSAGE = "Enter a valid http(s):// server URL"
 
 _FORBIDDEN_TOKEN_MESSAGE = (
     "Your RomM account cannot create API tokens — ask your admin to grant "
@@ -51,6 +62,34 @@ _USER_TOKEN_INVALID_MESSAGE = "The API token is invalid or has been revoked. Cre
 _USER_TOKEN_SCOPE_MESSAGE = (
     "The API token is missing required permissions (scopes). Grant the scopes listed in the plugin docs and try again."
 )
+
+# Pairing-code sign-in (``establish_paired_token``). The 60s single-use pairing
+# code is exchanged for a token over a public endpoint; each rejection carries a
+# distinct, actionable message. The rate-limit reason is a bespoke plain-string
+# slug (the server IS reachable — it is neither an auth nor a reachability fault).
+_ENTER_PAIRING_CODE_MESSAGE = "Enter the pairing code from RomM"
+_PAIRING_CODE_INVALID_MESSAGE = (
+    "Pairing code is invalid or has expired — generate a new one in RomM and try again "
+    "(codes are valid for 60 seconds)."
+)
+_PAIRING_TOKEN_GONE_MESSAGE = (
+    "The token this pairing code was created for no longer exists in RomM. Create a new API token, then pair again."
+)
+_PAIRING_OWNER_DISABLED_MESSAGE = (
+    "This RomM account is disabled — ask your administrator to re-enable it, then try again."
+)
+_PAIRING_RATE_LIMITED_MESSAGE = "Too many attempts — wait a minute and generate a new code."
+_RATE_LIMITED_REASON = "rate_limited"
+
+
+def _normalize_pairing_code(code: str) -> str:
+    """Normalize a pairing code the way RomM does: drop all whitespace and ``-``, then uppercase.
+
+    RomM's exchange endpoint strips ``-`` and uppercases; the plugin additionally
+    removes any whitespace the user pasted (leading, trailing, or embedded). So
+    ``"ab-cd ef23"`` normalizes to ``"ABCDEF23"``.
+    """
+    return "".join(code.split()).replace("-", "").upper()
 
 
 @dataclass(frozen=True)
@@ -179,7 +218,7 @@ class ConnectionService:
             return {"success": False, "reason": "config_error", "message": _NO_SERVER_URL_MESSAGE}
         trimmed = romm_url.strip()
         if not is_valid_server_url(trimmed):
-            return {"success": False, "reason": "config_error", "message": "Enter a valid http(s):// server URL"}
+            return {"success": False, "reason": "config_error", "message": _INVALID_URL_MESSAGE}
 
         snapshot = self._snapshot_auth_state()
         old_token_id = snapshot["romm_api_token_id"]
@@ -281,7 +320,7 @@ class ConnectionService:
             return {"success": False, "reason": "config_error", "message": _NO_SERVER_URL_MESSAGE}
         trimmed = romm_url.strip()
         if not is_valid_server_url(trimmed):
-            return {"success": False, "reason": "config_error", "message": "Enter a valid http(s):// server URL"}
+            return {"success": False, "reason": "config_error", "message": _INVALID_URL_MESSAGE}
         trimmed_token = token.strip()
         if not trimmed_token:
             return {"success": False, "reason": "config_error", "message": "Enter your RomM API token"}
@@ -312,6 +351,123 @@ class ConnectionService:
             self._restore_auth_state(snapshot)
             return version_error
 
+        return await self._validate_and_persist_user_token(trimmed_token, trimmed, old_token_origin, version, snapshot)
+
+    async def establish_paired_token(
+        self,
+        romm_url: str,
+        code: str,
+        allow_insecure_ssl: bool | None = None,
+    ) -> dict[str, Any]:
+        """Exchange a short-lived RomM pairing code for a Client API Token and store it.
+
+        The zero-typing sign-in for OIDC accounts: instead of pasting a token, the
+        user generates a 60-second pairing code in RomM's web UI and enters it
+        here; the plugin exchanges it for the token over a public endpoint.
+        Structurally mirrors :meth:`establish_user_token` (validate URL → probe
+        version → gate → obtain the credential → validate via ``/api/users/me`` →
+        persist on success only, rolling the in-memory auth state back on any
+        failure), but the credential is fetched by the exchange rather than
+        pasted. The candidate URL is held in memory with the token trio CLEARED,
+        so no old bearer can leak to the candidate host during the unauthenticated
+        exchange (or the version probe before it). Each exchange rejection maps to
+        a distinct, actionable message; the exchange is never auto-retried (a
+        single-use code). The pairing code and the returned token are never
+        logged. Returns the same ``success`` / ``reason`` / ``message`` shape as
+        :meth:`test_connection`.
+        """
+        if not romm_url:
+            return {"success": False, "reason": "config_error", "message": _NO_SERVER_URL_MESSAGE}
+        trimmed = romm_url.strip()
+        if not is_valid_server_url(trimmed):
+            return {"success": False, "reason": "config_error", "message": _INVALID_URL_MESSAGE}
+        normalized_code = _normalize_pairing_code(code)
+        if not normalized_code:
+            return {"success": False, "reason": "config_error", "message": _ENTER_PAIRING_CODE_MESSAGE}
+
+        snapshot = self._snapshot_auth_state()
+        old_token_origin = snapshot["romm_api_token_origin"]
+
+        # Hold the candidate URL in memory; clear the token trio so the
+        # unauthenticated exchange (and the version probe before it) never carries
+        # an old server's bearer to the candidate host.
+        self._settings["romm_url"] = trimmed
+        if allow_insecure_ssl is not None:
+            self._settings["romm_allow_insecure_ssl"] = bool(allow_insecure_ssl)
+        self._settings["romm_api_token"] = None
+        self._settings["romm_api_token_id"] = None
+        self._settings["romm_api_token_origin"] = None
+
+        try:
+            version = await self._loop.run_in_executor(None, self._probe_version)
+        except Exception as e:
+            self._restore_auth_state(snapshot)
+            self._romm_api.set_version(None)
+            return error_response(e)
+
+        version_error = self._version_gate_error(version)
+        if version_error is not None:
+            self._restore_auth_state(snapshot)
+            return version_error
+
+        try:
+            exchanged = await self._loop.run_in_executor(None, self._exchange, normalized_code)
+        except PairingCodeInvalidError:
+            self._restore_auth_state(snapshot)
+            return {"success": False, "reason": ErrorCode.AUTH_FAILED.value, "message": _PAIRING_CODE_INVALID_MESSAGE}
+        except PairingCodeTokenGoneError:
+            self._restore_auth_state(snapshot)
+            return {"success": False, "reason": ErrorCode.AUTH_FAILED.value, "message": _PAIRING_TOKEN_GONE_MESSAGE}
+        except PairingCodeOwnerDisabledError:
+            self._restore_auth_state(snapshot)
+            return {"success": False, "reason": ErrorCode.AUTH_FAILED.value, "message": _PAIRING_OWNER_DISABLED_MESSAGE}
+        except PairingCodeRateLimitedError:
+            self._restore_auth_state(snapshot)
+            return {"success": False, "reason": _RATE_LIMITED_REASON, "message": _PAIRING_RATE_LIMITED_MESSAGE}
+        except Exception as e:
+            self._restore_auth_state(snapshot)
+            return error_response(e)
+
+        raw_token = exchanged.get("raw_token")
+        if not raw_token:
+            self._restore_auth_state(snapshot)
+            return {
+                "success": False,
+                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "message": "RomM did not return a usable token",
+            }
+
+        # Host-bind the freshly rotated token in memory, then run the exact same
+        # ``/api/users/me`` validation + persist tail as the pasted-token path.
+        self._settings["romm_api_token"] = raw_token
+        self._settings["romm_api_token_id"] = None
+        self._settings["romm_api_token_origin"] = normalize_origin(trimmed)
+        self._settings["romm_api_token_source"] = "user"
+
+        return await self._validate_and_persist_user_token(raw_token, trimmed, old_token_origin, version, snapshot)
+
+    async def _validate_and_persist_user_token(
+        self,
+        raw_token: str,
+        trimmed: str,
+        old_token_origin: str | None,
+        version: str | None,
+        snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Validate the in-memory host-bound bearer via ``/api/users/me`` and persist on success.
+
+        The shared tail of the two token-handoff sign-ins — the pasted token
+        (:meth:`establish_user_token`) and the paired token
+        (:meth:`establish_paired_token`). Assumes the caller has already placed
+        *raw_token* in memory, host-bound to *trimmed*'s origin, with
+        ``romm_api_token_source = "user"``. Runs the authenticated
+        ``/api/users/me`` probe (a 401 means the token is invalid/revoked, a 403
+        means it lacks a required scope), persists the token with ``id = None``
+        and ``"user"`` provenance, then fires the device-forget-on-origin-change
+        and playtime-scope-notice clear. Rolls the in-memory auth state back to
+        *snapshot* on any failure; disk is untouched until validation passes. The
+        token value is never logged.
+        """
         try:
             await self._loop.run_in_executor(None, self._romm_api.get_current_user)
         except RommAuthError:
@@ -325,7 +481,7 @@ class ConnectionService:
             return error_response(e)
 
         try:
-            self._persist_token(trimmed_token, None, origin=normalize_origin(trimmed), source="user")
+            self._persist_token(raw_token, None, origin=normalize_origin(trimmed), source="user")
         except Exception as e:
             self._restore_auth_state(snapshot)
             return error_response(e)
@@ -512,6 +668,10 @@ class ConnectionService:
     def _mint(self, username: str, password: str) -> dict[str, Any]:
         """Synchronous mint worker invoked on the executor thread."""
         return self._romm_api.mint_client_token(username, password, token_name=self._token_name())
+
+    def _exchange(self, code: str) -> dict[str, Any]:
+        """Synchronous pairing-code exchange worker invoked on the executor thread."""
+        return self._romm_api.exchange_pairing_code(code)
 
     def _delete(self, username: str, password: str, token_id: int) -> None:
         """Synchronous delete worker invoked on the executor thread."""
