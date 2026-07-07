@@ -25,6 +25,13 @@ vi.mock("./steamShortcuts", () => ({
   getLiveRomMShortcutAppIds: vi.fn(),
 }));
 
+// gameDetailPatch pulls in Steam-internal @decky/ui + component imports; mock it
+// so the manager's `registerRomMAppId` call is observable without loading them.
+const registerRomMAppId = vi.fn();
+vi.mock("../patches/gameDetailPatch", () => ({
+  registerRomMAppId: (...args: unknown[]) => registerRomMAppId(...args),
+}));
+
 import { initUnitSyncManager, requestSyncCancel, resetSyncCancel, isCancelRequested } from "./syncManager";
 
 function unit(launchOptions: string, runId = "run-1"): SyncApplyUnitData {
@@ -187,6 +194,114 @@ describe("syncManager — group-aware emit: one Steam shortcut per game (ADR-002
     expect(addShortcut).toHaveBeenCalledTimes(2);
     expect(addShortcut.mock.calls.map((c) => c[0].rom_id).sort((a, b) => a - b)).toEqual([10, 20]);
     expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "10": 6000, "20": 6001 }, "run-two-groups", 1);
+  });
+});
+
+describe("syncManager — registers resolved appIds as RomM-owned at ack time (#1205)", () => {
+  const EXE = "/home/deck/homebrew/plugins/decky-romm-sync/bin/rom-launcher";
+
+  beforeEach(() => {
+    setLaunchOptionsConfirmed.mockClear();
+    setLaunchOptionsConfirmed.mockResolvedValue(true);
+    addShortcut.mockReset();
+    getExistingRomMShortcuts.mockReset();
+    registerRomMAppId.mockClear();
+    vi.mocked(backend.getArtworkBase64).mockReset();
+    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "ZGF0YQ==" });
+    resetSyncDelta();
+    resetSyncCancel();
+    // The global SteamClient stub is torn down by test-setup after the file's
+    // first test; the update/rebind paths call bare `SteamClient.Apps.Set*`, so
+    // re-stub it here.
+    vi.stubGlobal("SteamClient", {
+      Apps: {
+        AddShortcut: vi.fn(),
+        SetShortcutName: vi.fn(),
+        SetShortcutExe: vi.fn(),
+        SetShortcutStartDir: vi.fn(),
+        SetAppLaunchOptions: vi.fn(),
+        SetCustomArtworkForApp: vi.fn().mockResolvedValue(undefined),
+        RemoveShortcut: vi.fn(),
+      },
+    });
+  });
+
+  function item(overrides: Partial<SyncApplyUnitData["shortcuts"][number]>): SyncApplyUnitData["shortcuts"][number] {
+    return {
+      rom_id: 0,
+      name: "Game",
+      exe: EXE,
+      start_dir: "/home/deck",
+      launch_options: "",
+      platform_name: "PSX",
+      cover_path: "",
+      ...overrides,
+    };
+  }
+
+  function unitOf(shortcuts: SyncApplyUnitData["shortcuts"], runId: string): SyncApplyUnitData {
+    return {
+      run_id: runId,
+      unit_type: "platform",
+      unit_id: 1,
+      unit_name: "PSX",
+      unit_index: 0,
+      total_units: 1,
+      shortcuts,
+    };
+  }
+
+  it("registers a newly created shortcut's appId", async () => {
+    // rom 42 has no existing appId → create path → addShortcut returns 6000.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    addShortcut.mockResolvedValue(6000);
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>(
+        "sync_apply_unit",
+        unitOf([item({ rom_id: 42, name: "Test ROM" })], "run-reg-create"),
+      );
+      await flush(120);
+    });
+
+    expect(registerRomMAppId).toHaveBeenCalledWith(6000);
+  });
+
+  it("registers an existing shortcut's appId on the update path", async () => {
+    // rom 42 already maps to appId 5000 → update path, never addShortcut.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>([[42, 5000]]));
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>(
+        "sync_apply_unit",
+        unitOf([item({ rom_id: 42, name: "Test ROM" })], "run-reg-update"),
+      );
+      await flush(120);
+    });
+
+    expect(registerRomMAppId).toHaveBeenCalledWith(5000);
+    expect(addShortcut).not.toHaveBeenCalled();
+  });
+
+  it("registers the reused shortcut's appId for a rebind entry (bind_rom_id)", async () => {
+    // Rebind: the entry is keyed to the vanished bound sibling (rom 1, already in
+    // Steam as appId 5000). The shortcut is reused by rom_id, so 5000 is the appId
+    // the game-detail patch + launch interceptor must recognise — NOT the
+    // representative's (bind_rom_id 2, which only steers artwork).
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>([[1, 5000]]));
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>(
+        "sync_apply_unit",
+        unitOf([item({ rom_id: 1, name: "Zelda (USA)", bind_rom_id: 2 })], "run-reg-rebind"),
+      );
+      await flush(150);
+    });
+
+    expect(registerRomMAppId).toHaveBeenCalledWith(5000);
   });
 });
 

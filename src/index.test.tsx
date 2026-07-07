@@ -78,6 +78,7 @@ vi.mock("./api/backend", async () => {
 });
 
 import { applyAllPlaytime } from "./patches/metadataPatches";
+import { registerRomMAppId } from "./patches/gameDetailPatch";
 import definePluginResult from "./index";
 
 // `definePlugin` is stubbed in test-setup to return its factory unchanged, so
@@ -417,6 +418,73 @@ describe("index.tsx — sync_complete launch-options reconcile (#1151)", () => {
     expect(logError).toHaveBeenCalledWith(
       expect.stringContaining("sync_reconcile: failed to reconcile launch options"),
     );
+    plugin.onDismount();
+  });
+});
+
+describe("index.tsx — sync_complete registers RomM appIds (#1205)", () => {
+  type SyncCompletePayload = {
+    platform_app_ids: Record<string, number[]>;
+    romm_collection_app_ids?: Record<string, number[]>;
+    total_games: number;
+    cancelled?: boolean;
+  };
+
+  function emitSyncComplete(payload: SyncCompletePayload): void {
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", payload);
+    });
+  }
+
+  beforeEach(() => {
+    vi.mocked(registerRomMAppId).mockClear();
+    logError.mockClear();
+    vi.mocked(getAllPlaytime).mockResolvedValue({ playtime: {} });
+    vi.mocked(getAppIdRomIdMap).mockResolvedValue({});
+    vi.mocked(getSettingsResetNotice).mockResolvedValue({ pending: false, backed_up_to: null });
+    vi.mocked(getInstalledRelaunchOptions).mockReset();
+    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue([]);
+    // Empty collectionStore so the detached stale-cleanup is a no-op here.
+    vi.stubGlobal("collectionStore", { userCollections: [] });
+  });
+
+  it("registers every platform and RomM-collection appId from the payload", async () => {
+    const plugin = pluginFactory();
+    await flush(); // settle startup detaches (they call registerRomMAppId with the empty appIdMap)
+    vi.mocked(registerRomMAppId).mockClear();
+
+    emitSyncComplete({
+      platform_app_ids: { "Nintendo 64": [100, 101], PSX: [200] },
+      romm_collection_app_ids: { "[Faves]": [300], "[RPGs]": [200, 400] },
+      total_games: 5,
+    });
+    await flush();
+
+    // Every appId across BOTH maps is registered (200 spans a platform and a
+    // collection — idempotent, still fine).
+    for (const appId of [100, 101, 200, 300, 400]) {
+      expect(registerRomMAppId).toHaveBeenCalledWith(appId);
+    }
+    plugin.onDismount();
+  });
+
+  it("registers RomM-collection appIds even when platform_app_ids is empty (collection-only sync)", async () => {
+    // The #1205 core repro: a collection-only sync never populates
+    // platform_app_ids, so its new shortcuts land only in romm_collection_app_ids.
+    // The old platform-only loop left them unregistered until a Steam restart.
+    const plugin = pluginFactory();
+    await flush();
+    vi.mocked(registerRomMAppId).mockClear();
+
+    emitSyncComplete({
+      platform_app_ids: {},
+      romm_collection_app_ids: { "[Faves]": [777, 888] },
+      total_games: 2,
+    });
+    await flush();
+
+    expect(registerRomMAppId).toHaveBeenCalledWith(777);
+    expect(registerRomMAppId).toHaveBeenCalledWith(888);
     plugin.onDismount();
   });
 });

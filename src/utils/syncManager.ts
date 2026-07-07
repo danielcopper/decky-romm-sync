@@ -16,6 +16,7 @@ import {
 } from "./steamShortcuts";
 import { updateSyncProgress } from "./syncProgress";
 import { recordSyncCreated } from "./syncDeltaStore";
+import { registerRomMAppId } from "../patches/gameDetailPatch";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const HEARTBEAT_INTERVAL_MS = 10_000;
@@ -122,6 +123,14 @@ async function processUnitShortcuts(
       const appId = await resolveShortcutAppId(item, existing);
       if (appId) {
         romIdToAppId[String(item.rom_id)] = appId;
+        // Register the appId as RomM-owned the moment the mapping exists — the
+        // earliest point the game-detail patch and launch interceptor can gate
+        // on it. Registering only at sync_complete leaves a newly created
+        // shortcut's detail page rendering native Steam UI for the whole run's
+        // artwork/collection tail, and a collection-only sync's appIds may never
+        // reach platform_app_ids at all (#1205). Idempotent (Set.add); covers
+        // created, updated, and rebind entries alike.
+        registerRomMAppId(appId);
         // Artwork follows the BINDING target: on a rebind entry the shortcut is
         // keyed to the vanished sibling (item.rom_id) but the backend finalizes
         // the REPRESENTATIVE's cover (bind_rom_id), and covers can be

@@ -310,8 +310,18 @@ export default definePlugin(() => {
     // Defensive reset; sync_plan also resets at the start of the next run.
     resetSyncDelta();
 
-    // Update RomM app ID set with newly synced shortcuts
+    // Update RomM app ID set with newly synced shortcuts. The unit-ack
+    // registration in syncManager is the primary path (registers each appId the
+    // moment it resolves); this is the redundant, no-op-safe net for any appId
+    // the unit loop didn't reach. Iterate BOTH maps: a collection-only sync
+    // touches only romm_collection_app_ids, so skipping it would leave those
+    // shortcuts unregistered until a Steam restart (#1205).
     for (const appIds of Object.values(data.platform_app_ids)) {
+      for (const appId of appIds) {
+        registerRomMAppId(appId);
+      }
+    }
+    for (const appIds of Object.values(data.romm_collection_app_ids ?? {})) {
       for (const appId of appIds) {
         registerRomMAppId(appId);
       }
