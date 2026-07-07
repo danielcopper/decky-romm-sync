@@ -153,12 +153,18 @@ class SyncReporter:
             if should_include_in_platform_collection(rom.rom_id, pending_platform_rom_ids, create_groups):
                 display = platform_names.get(rom.platform_slug, rom.platform_slug)
                 platform_app_ids.setdefault(display, []).append(rom.shortcut_app_id)
-            group_key = rom.sibling_group_key
-            if group_key is not None:
-                current = group_bound.get(group_key)
-                if current is None or rom.rom_id < current[0]:
-                    group_bound[group_key] = (rom.rom_id, rom.shortcut_app_id)
+            self._note_group_binding(group_bound, rom)
         return platform_app_ids, {key: app_id for key, (_rid, app_id) in group_bound.items()}
+
+    @staticmethod
+    def _note_group_binding(group_bound: dict[str, tuple[int, int]], rom: Rom) -> None:
+        """Record the group's winning binding: smallest bound rom_id wins."""
+        group_key = rom.sibling_group_key
+        if group_key is None or rom.shortcut_app_id is None:
+            return
+        current = group_bound.get(group_key)
+        if current is None or rom.rom_id < current[0]:
+            group_bound[group_key] = (rom.rom_id, rom.shortcut_app_id)
 
     def _resolve_collection_memberships(
         self,
