@@ -183,18 +183,25 @@ class SyncReporter:
             seen: set[int] = set()
             app_ids: list[int] = []
             for rid in rom_ids:
-                rom = uow.roms.get(rid)
-                if rom is None:
-                    continue
-                app_id = rom.shortcut_app_id
-                if app_id is None and rom.sibling_group_key is not None:
-                    app_id = group_bound_app_id.get(rom.sibling_group_key)
+                app_id = self._member_app_id(uow, rid, group_bound_app_id)
                 if app_id is not None and app_id not in seen:
                     seen.add(app_id)
                     app_ids.append(app_id)
             if app_ids:
                 romm_collection_app_ids[coll_name] = app_ids
         return romm_collection_app_ids
+
+    @staticmethod
+    def _member_app_id(uow: UnitOfWork, rid: int, group_bound_app_id: dict[str, int]) -> int | None:
+        """A member's appId: its own binding, else its sibling group's bound appId."""
+        rom = uow.roms.get(rid)
+        if rom is None:
+            return None
+        if rom.shortcut_app_id is not None:
+            return rom.shortcut_app_id
+        if rom.sibling_group_key is None:
+            return None
+        return group_bound_app_id.get(rom.sibling_group_key)
 
     # ── Finalise per-unit run ────────────────────────────────────
 
