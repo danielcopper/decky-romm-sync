@@ -127,11 +127,25 @@ class SyncReporter:
         siblings of one group collapse onto the one shortcut. The platform loop
         still excludes rows whose ``shortcut_app_id`` is ``None``.
         """
+        platform_app_ids, group_bound_app_id = self._scan_bound_rows(uow, pending_platform_rom_ids, platform_names)
+        romm_collection_app_ids = self._resolve_collection_memberships(
+            uow, pending_collection_memberships, group_bound_app_id
+        )
+        return platform_app_ids, romm_collection_app_ids
+
+    def _scan_bound_rows(
+        self,
+        uow: UnitOfWork,
+        pending_platform_rom_ids: set[int] | None,
+        platform_names: dict[str, str],
+    ) -> tuple[dict[str, list[int]], dict[str, int]]:
+        """One pass over the bound rows: platform buckets + each group's bound appId.
+
+        When a group carries several bound rows (grandfathered duplicates) the
+        smallest rom_id's binding wins, deterministically.
+        """
         create_groups = self._settings.get("collection_create_platform_groups", False)
         platform_app_ids: dict[str, list[int]] = {}
-        # Each sibling group's bound appId, keyed by sibling_group_key. When a
-        # group carries several bound rows (grandfathered duplicates) the
-        # smallest rom_id's binding wins, deterministically.
         group_bound: dict[str, tuple[int, int]] = {}
         for rom in uow.roms.iter_all():
             if rom.shortcut_app_id is None:
@@ -144,8 +158,20 @@ class SyncReporter:
                 current = group_bound.get(group_key)
                 if current is None or rom.rom_id < current[0]:
                     group_bound[group_key] = (rom.rom_id, rom.shortcut_app_id)
+        return platform_app_ids, {key: app_id for key, (_rid, app_id) in group_bound.items()}
 
-        group_bound_app_id = {key: app_id for key, (_rid, app_id) in group_bound.items()}
+    def _resolve_collection_memberships(
+        self,
+        uow: UnitOfWork,
+        pending_collection_memberships: dict[str, list[int]],
+        group_bound_app_id: dict[str, int],
+    ) -> dict[str, list[int]]:
+        """Resolve each collection's member rom_ids to de-duplicated appIds.
+
+        A bound member uses its own binding; an unbound member falls back to
+        its sibling group's bound appId (ADR-0021). Collections that resolve
+        to no appId are omitted.
+        """
         romm_collection_app_ids: dict[str, list[int]] = {}
         for coll_name, rom_ids in pending_collection_memberships.items():
             seen: set[int] = set()
@@ -162,8 +188,7 @@ class SyncReporter:
                     app_ids.append(app_id)
             if app_ids:
                 romm_collection_app_ids[coll_name] = app_ids
-
-        return platform_app_ids, romm_collection_app_ids
+        return romm_collection_app_ids
 
     # ── Finalise per-unit run ────────────────────────────────────
 
