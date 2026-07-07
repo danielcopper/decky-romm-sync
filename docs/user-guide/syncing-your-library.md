@@ -39,21 +39,26 @@ sync counts (in the preview and the completion toast) count **games**, not indiv
 "added", not five.
 
 The version the shortcut points at (the **active version**) is chosen automatically: a version you have already
-installed wins, otherwise the shortcut follows the "SET DEFAULT" version you picked in RomM, otherwise the one whose
-region ranks highest (see below), otherwise the first alphabetically. Switching versions from inside the plugin is a
-later feature; for now the active version follows what is installed and RomM's default.
+installed wins, otherwise the shortcut follows the "SET DEFAULT" version you picked in RomM, otherwise the plugin picks
+the best dump for you (see below). Switching versions from inside the plugin is a later feature; for now the active
+version follows what is installed and RomM's default.
 
-**Which region wins, and how the shortcut is named.** When nothing is installed and you haven't set a default in RomM,
-the plugin prefers a region in the fixed order **World → USA → Europe → Japan**, then any other region alphabetically,
-and a dump with no region last. (This is a fixed order, not language or system detection.) You can change the preferred
-region — see [Preferred region](configuration.md#preferred-region) in Configuration. The **name** of the Steam shortcut
-follows the same region preference (the pure ranking, ignoring what's installed or set as default), so a multi-region
-game gets a readable name rather than whichever dump happens to sort first: a game with two Japanese dumps and one US
-dump is named after the US dump, while a game that only exists as a Japanese dump honestly gets its Japanese name. The
-name is chosen **once, when the shortcut is created, and never changes automatically** afterwards — even if you later
-switch to a different version, change the RomM default, or change the preferred region. This keeps the shortcut's
-artwork, collections and playtime intact. It does mean the shortcut's name can differ from the version it currently
-launches, and that changing the preferred region only affects games synced **after** the change.
+**How the plugin picks the best dump, and how the shortcut is named.** When nothing is installed and you haven't set a
+default in RomM, the plugin ranks the dumps like a 1G1R (one-game-one-ROM) tool. A **finished release always beats a
+prerelease** — a beta, prototype, alpha, sample or demo dump loses even to a finished release from a less-preferred
+region (so a finished Japanese dump wins over a US beta). Among finished dumps, it prefers a region in the fixed order
+**World → USA → Europe → Japan**, then any other region alphabetically, and a dump with no region last. (This is a fixed
+order, not language or system detection.) Within one region it then prefers the **newest revision** (a `(Rev 1)` dump
+over the plain release, a `(Rev 3)` over a `(Rev 1)`), and finally prefers the plain base game over a filename-only
+re-dump like `(Virtual Console)` or `(Extended Edition)`. You can change the preferred region — see
+[Preferred region](configuration.md#preferred-region) in Configuration. The **name** of the Steam shortcut follows the
+same ranking (ignoring what's installed or set as default), so a multi-region game gets a readable name rather than
+whichever dump happens to sort first: a game with two Japanese dumps and one US dump is named after the US dump, while a
+game that only exists as a Japanese dump honestly gets its Japanese name. The name is chosen **once, when the shortcut
+is created, and never changes automatically** afterwards — even if you later switch to a different version, change the
+RomM default, or change the preferred region. This keeps the shortcut's artwork, collections and playtime intact. It
+does mean the shortcut's name can differ from the version it currently launches, and that changing the preferred region
+only affects games synced **after** the change.
 
 If you synced **before** this update and already have several Steam shortcuts for one game, those existing shortcuts are
 **kept** — the plugin never deletes a shortcut you can see. They converge to a single entry naturally as you uninstall

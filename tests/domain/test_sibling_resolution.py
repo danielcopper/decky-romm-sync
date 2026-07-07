@@ -7,7 +7,7 @@ import pytest
 from domain.sibling_resolution import canonical_group_name, resolve_group_representative
 
 
-def _m(rom_id, *, fs_name_no_ext="", is_main_sibling=False, regions=(), name=""):
+def _m(rom_id, *, fs_name_no_ext="", is_main_sibling=False, regions=(), name="", revision="", tags=()):
     """A group member dict as build_shortcuts_data shapes it for the resolver."""
     return {
         "rom_id": rom_id,
@@ -15,6 +15,8 @@ def _m(rom_id, *, fs_name_no_ext="", is_main_sibling=False, regions=(), name="")
         "is_main_sibling": is_main_sibling,
         "regions": list(regions),
         "name": name,
+        "revision": revision,
+        "tags": list(tags),
     }
 
 
@@ -176,6 +178,184 @@ class TestRegionPriorityLeg:
         assert resolve_group_representative(members, set(), set(), preferred_region="germany") == 2
 
 
+class TestRevisionLeg:
+    """The revision leg (ADR-0021 §3): newest revision wins, but only within a region."""
+
+    def test_rev1_beats_base_same_region(self):
+        # (USA) (Rev 1) beats (USA) base — a real revision outranks the empty one.
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["USA"], revision=""),
+            _m(2, fs_name_no_ext="z", regions=["USA"], revision="1"),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 2
+
+    def test_rev3_beats_rev1_same_region(self):
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["USA"], revision="1"),
+            _m(2, fs_name_no_ext="z", regions=["USA"], revision="3"),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 2
+
+    def test_rev10_beats_rev2_natural_numeric(self):
+        # Natural numeric compare, not lexical: "10" > "2" (lexically "10" < "2").
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["USA"], revision="2"),
+            _m(2, fs_name_no_ext="z", regions=["USA"], revision="10"),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 2
+
+    def test_alphanumeric_revision_b_beats_a(self):
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["USA"], revision="A"),
+            _m(2, fs_name_no_ext="z", regions=["USA"], revision="B"),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 2
+
+    def test_alphanumeric_revision_case_insensitive_tie(self):
+        # "B" and "b" are the same revision → the leg ties, alphabetical fs decides.
+        members = [
+            _m(1, fs_name_no_ext="z", regions=["USA"], revision="B"),
+            _m(2, fs_name_no_ext="a", regions=["USA"], revision="b"),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 2
+
+    def test_empty_revision_is_lowest(self):
+        # Base (empty revision) loses to any real revision, even a low one.
+        members = [
+            _m(1, fs_name_no_ext="z", regions=["USA"], revision="1"),
+            _m(2, fs_name_no_ext="a", regions=["USA"], revision=""),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 1
+
+    def test_non_decimal_digit_revision_does_not_crash(self):
+        # "²" is isdigit()-True but not int()-parseable — it must rank as text,
+        # not raise ValueError and abort the resolution (LOW review finding).
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["USA"], revision="²"),
+            _m(2, fs_name_no_ext="z", regions=["USA"], revision="1"),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 2
+
+    def test_revision_only_breaks_ties_within_a_region(self):
+        # (USA) base beats (Europe) (Rev 9): region ranks BEFORE revision, so a
+        # higher revision never lifts a lower-ranked region.
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["USA"], revision=""),
+            _m(2, fs_name_no_ext="z", regions=["Europe"], revision="9"),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 1
+
+
+class TestPrereleaseDemotion:
+    """The prerelease leg (ADR-0021 §3): a retail dump beats every prerelease, across regions."""
+
+    def test_beta_loses_to_base_same_region(self):
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["USA"], tags=["Beta"]),
+            _m(2, fs_name_no_ext="z", regions=["USA"], tags=[]),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 2
+
+    def test_prerelease_demotion_crosses_regions(self):
+        # THE cross-region case: a finished (Japan) release beats a (USA) (Beta),
+        # even though USA outranks Japan — prerelease demotion ranks before region.
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["USA"], tags=["Beta"]),
+            _m(2, fs_name_no_ext="z", regions=["Japan"], tags=[]),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 2
+
+    @pytest.mark.parametrize("tag", ["Alpha", "Beta", "Beta 1", "Beta 2", "Proto", "Sample", "Demo"])
+    def test_all_prerelease_markers_recognized(self, tag):
+        # The retail Japan dump wins over the USA prerelease regardless of marker.
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["USA"], tags=[tag]),
+            _m(2, fs_name_no_ext="z", regions=["Japan"], tags=[]),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 2
+
+    @pytest.mark.parametrize("tag", ["ALPHA", "beta", "PrOtO", "demo 3", "Beta1"])
+    def test_marker_match_is_case_insensitive(self, tag):
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["USA"], tags=[tag]),
+            _m(2, fs_name_no_ext="z", regions=["Japan"], tags=[]),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 2
+
+    @pytest.mark.parametrize("tag", ["Unl", "Aftermarket", "Castlevania Advance Collection", "Rumble Version"])
+    def test_neutral_tags_not_demoted(self, tag):
+        # "Unl" / "Aftermarket" / a collection-name / an unknown tag carry no draft
+        # signal → the USA member stays retail and its region wins over Japan.
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["USA"], tags=[tag]),
+            _m(2, fs_name_no_ext="z", regions=["Japan"], tags=[]),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 1
+
+    @pytest.mark.parametrize("tag", ["Betamax", "Prototype", "Sampler"])
+    def test_word_starting_with_marker_not_demoted(self, tag):
+        # A longer word that merely starts with a marker (not a numbered variant)
+        # is neutral → the USA member keeps its region win over Japan.
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["USA"], tags=[tag]),
+            _m(2, fs_name_no_ext="z", regions=["Japan"], tags=[]),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 1
+
+    def test_prerelease_demotion_beats_higher_revision(self):
+        # A (USA) retail base beats a (USA) (Beta) (Rev 2): prerelease ranks before
+        # revision, so a higher revision cannot rescue a prerelease.
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["USA"], tags=["Beta"], revision="2"),
+            _m(2, fs_name_no_ext="z", regions=["USA"], tags=[], revision=""),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 2
+
+    def test_two_prereleases_fall_through_to_region(self):
+        # Both prerelease → the demotion ties, so region priority decides among them.
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["Japan"], tags=["Beta"]),
+            _m(2, fs_name_no_ext="z", regions=["USA"], tags=["Proto"]),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 2
+
+
+class TestFilenameOnlyVariants:
+    """Filename-only re-dumps RomM does NOT parse into tags fall to the alphabetical leg.
+
+    "(Virtual Console)" and "(Extended Edition)" appear only in ``fs_name_no_ext``,
+    not as structured ``tags`` / ``regions`` / ``revision``. With every ranked
+    dimension equal, the alphabetical prefix rule keeps the base dump (the shorter
+    stem) ahead of the re-dump.
+    """
+
+    def test_base_beats_virtual_console_redump(self):
+        members = [
+            _m(1, fs_name_no_ext="game", regions=["USA"], name="Game"),
+            _m(2, fs_name_no_ext="game (virtual console)", regions=["USA"], name="Game (Virtual Console)"),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 1
+
+    def test_base_beats_extended_edition_redump(self):
+        members = [
+            _m(1, fs_name_no_ext="game", regions=["USA"], name="Game"),
+            _m(2, fs_name_no_ext="game (extended edition)", regions=["USA"], name="Game (Extended Edition)"),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 1
+
+    def test_discussed_example_world_usa_extended_edition(self):
+        # The discussed group: (World), (USA), (USA) (Extended Edition) → World wins
+        # on region priority, before the filename leg is even consulted.
+        members = [
+            _m(1, fs_name_no_ext="game (usa)", regions=["USA"], name="Game (USA)"),
+            _m(
+                2, fs_name_no_ext="game (usa) (extended edition)", regions=["USA"], name="Game (USA) (Extended Edition)"
+            ),
+            _m(3, fs_name_no_ext="game (world)", regions=["World"], name="Game (World)"),
+        ]
+        assert resolve_group_representative(members, set(), set()) == 3
+
+
 class TestCanonicalGroupName:
     """``canonical_group_name`` — the sticky mint name follows the PURE ranking (ADR-0021 §2/§3)."""
 
@@ -219,6 +399,31 @@ class TestCanonicalGroupName:
             _m(2, fs_name_no_ext="alpha", name="A Name"),
         ]
         assert canonical_group_name(members) == "A Name"
+
+    def test_name_follows_prerelease_demotion_cross_region(self):
+        # (Japan) retail + (USA) (Beta): the canonical NAME comes from the Japan
+        # retail member — prerelease demotion outranks region for naming too.
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["USA"], tags=["Beta"], name="USA Beta"),
+            _m(2, fs_name_no_ext="z", regions=["Japan"], tags=[], name="Japan Final"),
+        ]
+        assert canonical_group_name(members) == "Japan Final"
+
+    def test_name_follows_newest_revision_within_region(self):
+        members = [
+            _m(1, fs_name_no_ext="a", regions=["USA"], revision="1", name="USA Rev1"),
+            _m(2, fs_name_no_ext="z", regions=["USA"], revision="3", name="USA Rev3"),
+        ]
+        assert canonical_group_name(members) == "USA Rev3"
+
+    def test_name_base_beats_filename_only_variant(self):
+        # RomM does not parse "(Virtual Console)" into tags → the alphabetical leg
+        # keeps the base dump's name as canonical.
+        members = [
+            _m(1, fs_name_no_ext="game", regions=["USA"], name="Game"),
+            _m(2, fs_name_no_ext="game (virtual console)", regions=["USA"], name="Game (Virtual Console)"),
+        ]
+        assert canonical_group_name(members) == "Game"
 
     def test_partial_view_uses_only_fetched_members(self):
         # Only the Japanese member was fetched (a collection partial view) → its

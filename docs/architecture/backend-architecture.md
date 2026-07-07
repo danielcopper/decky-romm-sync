@@ -228,28 +228,34 @@ is the group's **active version**.
   installed game onto an uninstalled sibling — #1296.) `classify_roms` runs over the collapsed set, so its new / changed
   / unchanged / stale buckets count **games, not dumps**, and an unbound sibling stops reading as a perpetual "new".
 - **Resolution chain** (`domain/sibling_resolution.py::resolve_group_representative`, total + shuffle-stable): an
-  installed sibling wins; else an existing binding; else RomM's per-user default (`is_main_sibling`); else **region
-  priority**; else alphabetical `fs_name_no_ext`; else `rom_id`. The first three legs are membership filters; the last
-  three are the total order applied inside the surviving leg. Region priority ranks a version by its best `regions`
-  entry against a **fixed** build-time order — `World > USA > Europe > Japan`, every other named region after these
-  (alphabetically), a no-region version last (a fixed constant, **not** language/system detection) — which the user may
-  re-head with a single `preferred_region` setting (`"auto"` = the fixed order; any other value lifts that region to the
-  top). The leg is evaluated at resolution time, so the setting takes effect on the next sync and an existing binding
-  shields its group (the installed/binding legs win before region priority is consulted). Used wherever one version must
-  be chosen (a new group's shortcut, a rebind's target). The QAM dropdown that sets `preferred_region` is populated from
-  fixed anchors (Default, World, USA, Europe, Japan) plus the distinct regions read from the local library
-  (`get_known_regions` over `roms.regions` — no server call), and a confirmation modal states the apply-at-next-sync /
-  no-rename semantics before persisting.
+  installed sibling wins; else an existing binding; else RomM's per-user default (`is_main_sibling`); else the **1G1R
+  ranking** — prerelease demotion > **region priority** > revision (newest) > alphabetical `fs_name_no_ext` > `rom_id`.
+  The first three legs are membership filters; the rest are the total order applied inside the surviving leg.
+  **Prerelease demotion** ranks first: a member whose structured `tags` name a draft build (Alpha / Beta / Proto /
+  Sample / Demo, case-insensitive, tolerant of a trailing number; `Unl` / `Aftermarket` / unknown tags are neutral) is
+  demoted below every retail sibling **across regions**, so a finished `(Japan)` release beats a `(USA) (Beta)`.
+  **Revision** ranks just after region: within one region the newest `revision` wins (natural compare; base dump =
+  lowest), but never lifts a lower-ranked region (a `(USA)` base still beats a `(Europe) (Rev 9)`). The alphabetical leg
+  also keeps a base dump ahead of a filename-only re-dump (`(Virtual Console)`, `(Extended Edition)`) RomM does not
+  parse into a tag. Region priority ranks a version by its best `regions` entry against a **fixed** build-time order —
+  `World > USA > Europe > Japan`, every other named region after these (alphabetically), a no-region version last (a
+  fixed constant, **not** language/system detection) — which the user may re-head with a single `preferred_region`
+  setting (`"auto"` = the fixed order; any other value lifts that region to the top). The leg is evaluated at resolution
+  time, so the setting takes effect on the next sync and an existing binding shields its group (the installed/binding
+  legs win before region priority is consulted). Used wherever one version must be chosen (a new group's shortcut, a
+  rebind's target). The QAM dropdown that sets `preferred_region` is populated from fixed anchors (Default, World, USA,
+  Europe, Japan) plus the distinct regions read from the local library (`get_known_regions` over `roms.regions` — no
+  server call), and a confirmation modal states the apply-at-next-sync / no-rename semantics before persisting.
 - **Canonical name at mint** (`domain/sibling_resolution.py::canonical_group_name`): a NEW group's shortcut is **named**
-  after the member ranked first by the _pure_ order (region priority > alphabetical > `rom_id`), ignoring the
-  installed/binding/default filters — so a Japanese default still binds Japan but the shortcut carries the USA name
-  (never majority voting: two Japan dumps + one USA yields the USA name). This is mint-time only: the name is sticky
-  forever after (ADR-0021 §2), so a rebind/grandfathered entry carries the persisted bound name verbatim and a live
-  shortcut is never renamed. The appId is minted from the canonical name by the frontend `AddShortcut`; the DB binding
-  lands on the representative `rom_id`; the reporter is agnostic to the name↔rom mismatch (it binds on `rom_id` + the
-  acked appId, and persists each sibling's own RomM name from `pending_all_roms`). `preferred_region` is read from
-  settings by `sync_orchestrator` and threaded into every collapse call site (preview + apply) as the same value within
-  a run.
+  after the member ranked first by the _pure_ order (prerelease demotion > region priority > revision > alphabetical >
+  `rom_id`), ignoring the installed/binding/default filters — so a Japanese default still binds Japan but the shortcut
+  carries the USA name (never majority voting: two Japan dumps + one USA yields the USA name). This is mint-time only:
+  the name is sticky forever after (ADR-0021 §2), so a rebind/grandfathered entry carries the persisted bound name
+  verbatim and a live shortcut is never renamed. The appId is minted from the canonical name by the frontend
+  `AddShortcut`; the DB binding lands on the representative `rom_id`; the reporter is agnostic to the name↔rom mismatch
+  (it binds on `rom_id` + the acked appId, and persists each sibling's own RomM name from `pending_all_roms`).
+  `preferred_region` is read from settings by `sync_orchestrator` and threaded into every collapse call site (preview +
+  apply) as the same value within a run.
 - **Rebind, not remove.** When every bound sibling of a group vanishes from the server but the group still has fetched
   members — and the collapse sees the group's whole membership (a platform unit or the preview,
   `complete_group_view=True`; a partial collection view never rebinds) — it emits one **rebind entry** keyed to the

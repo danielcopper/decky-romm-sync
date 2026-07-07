@@ -440,6 +440,8 @@ def _gsd(
     platform_slug="n64",
     launch_options="",
     regions=(),
+    revision="",
+    tags=(),
 ):
     """A built shortcut entry as build_shortcuts_data shapes it, with the
     sibling-group fields the collapse + resolver read."""
@@ -455,6 +457,8 @@ def _gsd(
         "sibling_group_key": group_key,
         "is_main_sibling": is_main_sibling,
         "regions": list(regions),
+        "revision": revision,
+        "tags": list(tags),
         "igdb_id": None,
         "sgdb_id": None,
         "ra_id": None,
@@ -485,6 +489,19 @@ class TestCollapseSiblingGroups:
         ]
         emitted = collapse_sibling_groups(members, registry={}, installed_rom_ids=set(), complete_group_view=True)
         assert [e["rom_id"] for e in emitted] == [2]
+
+    def test_new_group_representative_and_name_follow_hardened_ranking(self):
+        # A New group with a (USA) (Beta) prerelease + a (Japan) retail final: the
+        # 1G1R ranking (prerelease demotion before region) picks the Japan retail
+        # dump as BOTH the emitted representative (bind target) and the canonical
+        # shortcut name — the region-preferred USA dump is a prerelease, so it loses.
+        members = [
+            _gsd(1, name="Game (USA) (Beta)", fs_name_no_ext="game_usa_beta", regions=["USA"], tags=["Beta"]),
+            _gsd(2, name="Game (Japan)", fs_name_no_ext="game_japan", regions=["Japan"]),
+        ]
+        emitted = collapse_sibling_groups(members, registry={}, installed_rom_ids=set(), complete_group_view=True)
+        assert [e["rom_id"] for e in emitted] == [2]
+        assert emitted[0]["name"] == "Game (Japan)"
 
     def test_installed_sibling_wins_representative(self):
         members = [
