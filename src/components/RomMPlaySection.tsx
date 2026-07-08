@@ -171,8 +171,12 @@ async function loadCached(
       saveSyncStatus,
       saveSyncLabel,
       raId: cached.ra_id ?? null,
-      achievementEarned: cached.achievement_summary?.earned ?? 0,
-      achievementTotal: cached.achievement_summary?.total ?? 0,
+      // Keep the last-known count when the re-derived cache has no achievement
+      // summary (e.g. a version switch during an offline window, where the
+      // backend progress cache is cold) — don't degrade a shown "7/70" to 0
+      // (#1345). A genuine earned:0 is a real object, so it still shows through.
+      achievementEarned: cached.achievement_summary?.earned ?? prev.achievementEarned,
+      achievementTotal: cached.achievement_summary?.total ?? prev.achievementTotal,
     }));
 
     // Background: fetch active_slot from save status (not in cached data)

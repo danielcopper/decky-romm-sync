@@ -751,6 +751,36 @@ describe("RomMPlaySection", () => {
         logErrorSpy.mockRestore();
       }
     });
+
+    it("keeps the header trophy count when a switch re-derive lacks the achievement summary (offline) (#1345 F1)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 50,
+        ra_id: 42,
+        achievement_summary: { earned: 7, total: 70, earned_hardcore: 0 },
+        stale_fields: [],
+      });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      await flushAsync();
+      expect(container.textContent).toContain("7/70");
+
+      // A switch during an offline window re-derives from a cache whose
+      // achievement summary is cold (backend progress cache expired / server
+      // unreachable). The shown count must NOT reset to 0 — keep the last value.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 51,
+        ra_id: 42,
+        stale_fields: [],
+      });
+      await act(async () => {
+        dispatchSwitch(testAppId, 51);
+        await Promise.resolve();
+      });
+      await flushAsync();
+      expect(container.textContent).toContain("7/70");
+    });
   });
 
   // ------------------------------------------------------------------

@@ -24,7 +24,13 @@ import {
 } from "../test-utils/dom-event-listener-spy";
 import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
 import { useVersionError } from "./VersionErrorCard";
-import { setRommConnectionState, reportServerReachable, getRommConnectionState } from "../utils/connectionState";
+import {
+  setRommConnectionState,
+  reportServerReachable,
+  getRommConnectionState,
+  setServerRetryProgress,
+  getServerRetryProgress,
+} from "../utils/connectionState";
 import type { MigrationStatus, SaveSortMigrationStatus, RomMetadata, DownloadCompleteEvent } from "../types";
 
 // Type-only imports — vi.mock(...) below replaces the runtime impl, but
@@ -187,6 +193,7 @@ describe("RomMGameInfoPanel", () => {
 
     // Reset the real connection store so each test starts connected (#1345).
     setRommConnectionState("connected");
+    setServerRetryProgress(null);
 
     // resetAllMocks wipes module-mock impls — re-stub below.
     vi.mocked(useVersionError).mockReturnValue(null);
@@ -1740,7 +1747,7 @@ describe("RomMGameInfoPanel", () => {
       expect(container.textContent).toContain("No achievements found for this game");
     });
 
-    it("achievements tab: achievementsLoading=true → 'Loading achievements...'", async () => {
+    it("achievements tab: achievementsLoading=true → ConnectingIndicator with retry progress (#1345 F1)", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 88,
@@ -1761,7 +1768,124 @@ describe("RomMGameInfoPanel", () => {
         );
         await Promise.resolve();
       });
-      expect(container.textContent).toContain("Loading achievements...");
+      // The load pays the retry ladder → surface the shared ConnectingIndicator
+      // (achievements-flavoured label) instead of frozen "Loading…" text.
+      expect(container.textContent).toContain("Loading achievements…");
+      // A retry frame from the ladder appends the "(attempt N/M)" suffix.
+      act(() => {
+        setServerRetryProgress({ attempt: 2, maxAttempts: 3 });
+      });
+      expect(container.textContent).toContain("Loading achievements… (attempt 2/3)");
+    });
+
+    it("achievements tab known-offline fast path: skips the fetch, shows degraded line, reloads on reconnect (#1345 F1)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 88,
+        ra_id: 42,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      setRommConnectionState("offline");
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      vi.mocked(backend.getAchievements).mockClear();
+      vi.mocked(backend.getAchievementProgress).mockClear();
+
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "achievements" } }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Fast path: no server calls (no ladder hang) and a short degraded line.
+      expect(vi.mocked(backend.getAchievements)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.getAchievementProgress)).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("RomM offline — achievements unavailable.");
+
+      // Reconnect → the effect re-runs (isOffline dep) and loads.
+      await act(async () => {
+        reportServerReachable(true);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.getAchievements)).toHaveBeenCalledWith(88);
+      expect(vi.mocked(backend.getAchievementProgress)).toHaveBeenCalledWith(88);
+    });
+
+    it("achievements tab feed: both calls unreachable → store flips offline + retries on reconnect (#1345 F1)", async () => {
+      setRommConnectionState("connected");
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 88,
+        ra_id: 42,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      vi.mocked(backend.getAchievements).mockResolvedValue({
+        success: false,
+        achievements: [],
+        total: 0,
+        reason: "server_unreachable",
+        message: "down",
+      });
+      vi.mocked(backend.getAchievementProgress).mockResolvedValue({
+        success: false,
+        earned: 0,
+        total: 0,
+        earned_achievements: [],
+        reason: "server_unreachable",
+        message: "down",
+      });
+      render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "achievements" } }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Genuine unreachable verdict → store flips offline.
+      expect(getRommConnectionState()).toBe("offline");
+
+      // The unreachable settle released the load-once gate, so a reconnect
+      // retries (mirrors the slot lane's applyLoadSlotsResult failure reset).
+      vi.mocked(backend.getAchievements).mockClear();
+      vi.mocked(backend.getAchievementProgress).mockClear();
+      vi.mocked(backend.getAchievements).mockResolvedValue({ success: true, achievements: [], total: 0 });
+      await act(async () => {
+        reportServerReachable(true);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.getAchievements)).toHaveBeenCalledWith(88);
+    });
+
+    it("achievements tab feed: no_ra_username failure leaves the store untouched (#1345 F1)", async () => {
+      setRommConnectionState("connected");
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 88,
+        ra_id: 42,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      vi.mocked(backend.getAchievements).mockResolvedValue({ success: true, achievements: [], total: 0 });
+      vi.mocked(backend.getAchievementProgress).mockResolvedValue({
+        success: false,
+        earned: 0,
+        total: 0,
+        earned_achievements: [],
+        reason: "no_ra_username",
+        message: "No RA username configured in RomM",
+      });
+      render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "achievements" } }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // A config gap (list succeeded) — not a connectivity verdict.
+      expect(getRommConnectionState()).toBe("connected");
     });
 
     it("achievements lazy-load: rejection → debugLog fires with 'Failed to load achievements'", async () => {
@@ -1915,6 +2039,138 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(backend.getSaveSlots)).toHaveBeenCalledWith(55);
+    });
+
+    it("saves tab: a mid-flight offline flip does not wedge the connecting indicator; reconnect reloads (#1345 F2)", async () => {
+      // Device sequence (#1345): the saves tab is opened while the server is
+      // already down but the store hasn't detected it yet. The slot fetch is in
+      // flight (paying the retry ladder) when a CONCURRENT call (heartbeat / play
+      // section) settles the server unreachable and flips the shared store
+      // offline. That re-runs this effect mid-flight — which must NOT leave the
+      // load wedged (slotsLoading stuck true → the frozen "(attempt N/M)"
+      // indicator that survived reconnect on the device).
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 55,
+        save_sync_enabled: true,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "main" });
+      setServerRetryProgress(null);
+      render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+
+      // Hold the lazy-load slot fetch in flight so we can flip the store offline
+      // while it is still pending. (Ignore the mount-time refreshSlotState call.)
+      let resolveSlots!: (v: Awaited<ReturnType<typeof backend.getSaveSlots>>) => void;
+      const inflight = new Promise<Awaited<ReturnType<typeof backend.getSaveSlots>>>((r) => {
+        resolveSlots = r;
+      });
+      vi.mocked(backend.getSaveSlots).mockClear();
+      vi.mocked(backend.getSaveSlots).mockReturnValueOnce(inflight);
+
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.getSaveSlots)).toHaveBeenCalledWith(55);
+      // In flight → the SavesTab shows its ConnectingIndicator (slotsLoading prop).
+      expect(capturedSavesTab[capturedSavesTab.length - 1]?.slotsLoading).toBe(true);
+
+      // A retry frame arrives from the backend ladder (index.tsx funnels these).
+      act(() => {
+        setServerRetryProgress({ attempt: 3, maxAttempts: 3 });
+      });
+
+      // A concurrent call settles unreachable MID-FLIGHT and flips the store
+      // offline, re-running this effect while the slot fetch is still pending.
+      await act(async () => {
+        reportServerReachable(false);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // WEDGE GUARD: the indicator must be down (degraded view), not frozen.
+      expect(capturedSavesTab[capturedSavesTab.length - 1]?.slotsLoading).toBe(false);
+
+      // The in-flight fetch finally settles unreachable; the cancelled guard
+      // swallows its write, and the retry frame is cleared on settle (the load
+      // that owned it is still the latest → generation guard permits the clear).
+      await act(async () => {
+        resolveSlots({ success: false, slots: [], active_slot: "", reason: "server_unreachable" });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(getServerRetryProgress()).toBeNull();
+
+      // Server recovers → the store flips connected → the effect re-runs and
+      // reloads real content (pre-fix the load-once gate stayed set → no reload).
+      vi.mocked(backend.getSaveSlots).mockClear();
+      vi.mocked(backend.getSaveSlots).mockResolvedValue({
+        success: true,
+        slots: [{ slot: "main", source: "server", count: 1, latest_updated_at: null }],
+        active_slot: "main",
+      });
+      await act(async () => {
+        reportServerReachable(true);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.getSaveSlots)).toHaveBeenCalledWith(55);
+    });
+
+    it("shared load generation: a stale slot settle does not clear the achievements lane's retry frame (#1345)", async () => {
+      // Both lazy lanes feed ONE serverRetryProgress store gated by one shared
+      // load counter. A slot fetch torn down mid-flight must not, when it resolves
+      // late, wipe a newer achievements load's live "(attempt N/M)" frame.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 70,
+        ra_id: 42,
+        save_sync_enabled: true,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "main" });
+      render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+
+      // Slot fetch in flight (older load, gen N).
+      let resolveSlots!: (v: Awaited<ReturnType<typeof backend.getSaveSlots>>) => void;
+      const slotsInflight = new Promise<Awaited<ReturnType<typeof backend.getSaveSlots>>>((r) => {
+        resolveSlots = r;
+      });
+      vi.mocked(backend.getSaveSlots).mockClear();
+      vi.mocked(backend.getSaveSlots).mockReturnValueOnce(slotsInflight);
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Switch to achievements → the slot load is torn down (still pending) and a
+      // newer achievements load starts (gen N+1). Hold its calls in flight too.
+      vi.mocked(backend.getAchievements).mockReturnValue(new Promise(() => {}));
+      vi.mocked(backend.getAchievementProgress).mockReturnValue(new Promise(() => {}));
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "achievements" } }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // The achievements ladder posts its own live frame (index.tsx funnels these).
+      act(() => {
+        setServerRetryProgress({ attempt: 2, maxAttempts: 3 });
+      });
+
+      // The stale slot fetch finally resolves — its settle must NOT clear the
+      // shared store, because a newer load now owns it (shared generation guard).
+      await act(async () => {
+        resolveSlots({ success: false, slots: [], active_slot: "", reason: "server_unreachable" });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(getServerRetryProgress()).toEqual({ attempt: 2, maxAttempts: 3 });
     });
 
     // Pins the slot-load reachability feed (#1345): success → connected,

@@ -38,6 +38,7 @@ import {
 } from "../api/backend";
 import { SlotSetupWizard } from "./SlotSetupWizard";
 import { SavesTab } from "./SavesTab";
+import { ConnectingIndicator } from "./saves/ConnectingIndicator";
 import type {
   RomMetadata,
   InstalledRom,
@@ -420,6 +421,12 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
   // the newly-bound rom_id instead of lingering from the previous version.
   const achievementsLoadedRef = useRef(false);
   const slotsLoadedRef = useRef(false);
+  // Single monotonic load counter SHARED across both lazy lanes (#1345 F2). The
+  // slots and achievements loads feed one serverRetryProgress store, so a load
+  // only clears it on settle if it is still the latest load of EITHER lane —
+  // a stale torn-down slot fetch resolving late must not wipe the achievements
+  // load's live "(attempt N/M)" frame (and vice versa).
+  const loadGenRef = useRef(0);
   const [migration, setMigration] = useState(getMigrationState());
   const [settingsReset, setSettingsReset] = useState(getSettingsResetState());
   const [saveSortPending, setSaveSortPending] = useState(getSaveSortMigrationState().pending);
@@ -672,40 +679,86 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     };
   }, [appId]);
 
-  // Lazy-load achievements when the achievements tab becomes active
+  // Lazy-load achievements when the achievements tab becomes active. Mirrors the
+  // saves-slot load's offline handling (#1345 F1): a known-offline fast path (no
+  // ladder hang), a reachability feed, auto-reload on reconnect, and a
+  // mid-flight-teardown guard so a store flip can't wedge the spinner.
   useEffect(() => {
     if (state.activeTab !== "achievements" || !state.raId || !state.romId) return;
     if (achievementsLoadedRef.current) return;
+
+    // Known-offline fast path: the server fetch runs the retry ladder, so on a
+    // known-unreachable server it would hang "Loading achievements…" for tens of
+    // seconds. Skip it — the render shows a short degraded line while any
+    // last-known list stays visible. The ref stays false, so a flip back to
+    // connected re-runs this effect (isOffline dep) and loads.
+    if (isOffline) return;
     achievementsLoadedRef.current = true;
 
+    const gen = ++loadGenRef.current;
     const romId: number = state.romId;
     let cancelled = false;
-    setState((prev) => ({ ...prev, achievementsLoading: true }));
+    let settled = false;
 
     async function loadAchievements() {
+      setServerRetryProgress(null);
+      setState((prev) => ({ ...prev, achievementsLoading: true }));
       try {
         const [listResult, progressResult] = await Promise.all([getAchievements(romId), getAchievementProgress(romId)]);
         if (cancelled) return;
+        settled = true;
+        // Conservative reachability feed (#1345): report offline only on a
+        // genuine unreachable verdict from either call. Treat a resolved
+        // non-stale success as a connected signal — this can be cache-served
+        // (get_achievements / get_achievement_progress answer from a warm cache
+        // without touching the server), so it is not a hard reachability proof,
+        // but that is acceptable: the 30s heartbeat is the reachability authority
+        // and self-corrects a wrong "connected". A "no_ra_username" config gap and
+        // a stale-cache fallback are neither verdict — leave the store untouched.
+        const unreachable =
+          listResult.reason === "server_unreachable" || progressResult.reason === "server_unreachable";
+        if (unreachable) {
+          reportServerReachable(false);
+          // Mirror the slot lane's failure reset: release the gate so a reconnect
+          // (or a later re-activation) retries instead of caching the failure.
+          achievementsLoadedRef.current = false;
+        } else if ((listResult.success && !listResult.stale) || (progressResult.success && !progressResult.stale)) {
+          reportServerReachable(true);
+        }
         setState((prev) => ({
           ...prev,
-          achievements: listResult.success ? listResult.achievements : [],
-          achievementProgress: progressResult.success ? progressResult : null,
+          // Keep the last-known values on a failed load — never clobber an
+          // already-shown list / progress count to empty on a transient blip.
+          achievements: listResult.success ? listResult.achievements : prev.achievements,
+          achievementProgress: progressResult.success ? progressResult : prev.achievementProgress,
           achievementsLoading: false,
         }));
       } catch (e) {
         detach(debugLog(`Failed to load achievements: ${e}`));
         if (!cancelled) {
+          settled = true;
           achievementsLoadedRef.current = false;
           setState((prev) => ({ ...prev, achievementsLoading: false }));
         }
+      } finally {
+        // Clear the shared retry frame only if this is still the latest load of
+        // EITHER lane (#1345 F2) — a newer slots/achievements load may own it.
+        if (loadGenRef.current === gen) setServerRetryProgress(null);
       }
     }
 
     detach(loadAchievements());
     return () => {
       cancelled = true;
+      // Torn down mid-flight (e.g. a concurrent call flipped the store offline) —
+      // release the gate and drop the spinner so the re-run / reconnect isn't
+      // wedged behind a stuck achievementsLoading (#1345 F1, mirrors the slots lane).
+      if (!settled) {
+        achievementsLoadedRef.current = false;
+        setState((prev) => (prev.achievementsLoading ? { ...prev, achievementsLoading: false } : prev));
+      }
     };
-  }, [state.activeTab, state.raId, state.romId]);
+  }, [state.activeTab, state.raId, state.romId, isOffline]);
 
   useEffect(() => {
     if (state.activeTab !== "saves" || !state.saveSyncEnabled || !state.romId) return;
@@ -722,18 +775,20 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     if (isOffline) return;
     slotsLoadedRef.current = true;
 
+    const gen = ++loadGenRef.current;
     let cancelled = false;
+    let settled = false;
 
     async function loadSlots() {
       // Drop stale retry progress from a prior load so the SavesTab's
-      // ConnectingIndicator starts at plain "Connecting to RomM…" (#1345 round-2
-      // review); clear-on-start is race-free vs a clear-on-complete.
+      // ConnectingIndicator starts at plain "Connecting to RomM…" (#1345).
       setServerRetryProgress(null);
       setState((prev) => ({ ...prev, slotsLoading: true }));
       try {
         if (!state.romId) return;
         const result = await getSaveSlots(state.romId);
         if (cancelled) return;
+        settled = true;
         // A completed slot fetch is a reachability signal (#1345): a success
         // proves the server is reachable; an unreachable server drives the store
         // offline (which then renders the fast path above on the next dependent
@@ -750,15 +805,30 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       } catch (e) {
         detach(debugLog(`Failed to load save slots: ${e}`));
         if (!cancelled) {
+          settled = true;
           slotsLoadedRef.current = false;
           setState((prev) => ({ ...prev, slotsLoading: false }));
         }
+      } finally {
+        // Clear-on-settle in addition to clear-on-start (#1345 F2), but only if
+        // this is still the latest load of EITHER lane — a newer load (slots or
+        // achievements) may already own the shared frame.
+        if (loadGenRef.current === gen) setServerRetryProgress(null);
       }
     }
 
     detach(loadSlots());
     return () => {
       cancelled = true;
+      // Torn down mid-flight (e.g. a concurrent call flipped the store offline,
+      // re-running this effect) — release the load-once gate and drop the spinner
+      // so the re-run isn't wedged behind a stuck slotsLoading/slotsLoadedRef, and
+      // a later reconnect reliably reloads (#1345 F2). A settled load already set
+      // its own final state, so leave it alone.
+      if (!settled) {
+        slotsLoadedRef.current = false;
+        setState((prev) => (prev.slotsLoading ? { ...prev, slotsLoading: false } : prev));
+      }
     };
   }, [state.activeTab, state.saveSyncEnabled, state.romId, isOffline]);
 
@@ -1151,12 +1221,18 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
   let achievementsContent: ReturnType<typeof createElement> | null = null;
   if (state.activeTab === "achievements") {
     if (state.achievementsLoading) {
-      achievementsContent = createElement("div", { className: "romm-panel-loading" }, "Loading achievements...");
+      // The load pays the backend retry ladder — surface the shared
+      // ConnectingIndicator (with live "(attempt N/M)" progress) instead of
+      // frozen "Loading…" text (#1345).
+      achievementsContent = createElement(ConnectingIndicator, { key: "connecting", label: "Loading achievements" });
     } else if (state.achievements.length === 0) {
+      // No cached list to fall back on. When the server is known-offline this is
+      // the degraded state for the fast path (no ladder hang); otherwise it's the
+      // genuine "this game has none" case (#1345).
       achievementsContent = createElement(
         "div",
         { className: "romm-panel-muted" },
-        "No achievements found for this game",
+        isOffline ? "RomM offline — achievements unavailable." : "No achievements found for this game",
       );
     } else {
       const progress = state.achievementProgress;
