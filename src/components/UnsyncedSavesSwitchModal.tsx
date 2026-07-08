@@ -26,7 +26,10 @@ interface UnsyncedSavesModalArgs {
  *
  * Outside-click / X routes through `ConfirmModal`'s `onCancel` → `cancel`.
  */
-export function showUnsyncedSavesModal({ versionName, serverReachable }: UnsyncedSavesModalArgs): Promise<UnsyncedSavesChoice> {
+export function showUnsyncedSavesModal({
+  versionName,
+  serverReachable,
+}: UnsyncedSavesModalArgs): Promise<UnsyncedSavesChoice> {
   return new Promise<UnsyncedSavesChoice>((resolve) => {
     const description = serverReachable
       ? `"${versionName}" has save changes that were never uploaded to RomM. They stay on disk, but won't sync until you switch back.`

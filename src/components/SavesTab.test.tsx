@@ -683,7 +683,9 @@ describe("SavesTab", () => {
   describe("stranded-version banner (#1298)", () => {
     const STRANDED_COPY = 'Version "Game (USA)" has saves that were never uploaded — switch back to sync them.';
 
-    function makeVersion(overrides: Partial<import("../api/backend").VersionInfo>): import("../api/backend").VersionInfo {
+    function makeVersion(
+      overrides: Partial<import("../api/backend").VersionInfo>,
+    ): import("../api/backend").VersionInfo {
       return {
         rom_id: 0,
         name: "",

@@ -422,7 +422,8 @@ export interface SwitchVersionUnsyncedSaves {
  */
 export interface SwitchVersionFailure {
   success: false;
-  reason: "not_found" | "not_in_group" | "bound_elsewhere" | "invalid_target" | "download_in_progress" | "server_unreachable";
+  reason:
+    "not_found" | "not_in_group" | "bound_elsewhere" | "invalid_target" | "download_in_progress" | "server_unreachable";
   message: string;
 }
 
