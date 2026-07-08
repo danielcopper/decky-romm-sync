@@ -15,6 +15,8 @@ import { toaster } from "@decky/api";
 import { VersionPicker } from "./VersionPicker";
 import * as backend from "../api/backend";
 import type { VersionList } from "../api/backend";
+import { emitDeckyEvent } from "../test-utils/decky-api-mock";
+import type { DownloadCompleteEvent } from "../types";
 import {
   installDomEventListenerSpy,
   uninstallDomEventListenerSpy,
@@ -560,6 +562,65 @@ describe("VersionPicker — event refresh", () => {
     });
 
     expect(vi.mocked(backend.getVersionList)).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-fetches on download_complete for a group member so the Downloaded badge is never stale", async () => {
+    // A download changes the install picture WITHOUT a version switch (#1345):
+    // the pre-fix picker kept the superseded list until the next switch.
+    const stale = multiVersionList();
+    const fresh = multiVersionList();
+    fresh.versions![1] = { ...fresh.versions![1]!, installed: true };
+    vi.mocked(backend.getVersionList).mockResolvedValueOnce(stale).mockResolvedValueOnce(fresh);
+
+    const { findByTestId, getByTestId } = render(<VersionPicker appId={APP_ID} />);
+    await findByTestId("version-btn");
+    expect(vi.mocked(backend.getVersionList)).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", { rom_id: 2 } as DownloadCompleteEvent);
+      await Promise.resolve();
+    });
+    expect(vi.mocked(backend.getVersionList)).toHaveBeenCalledTimes(2);
+
+    // Non-vacuous: the reloaded list is what the menu renders — the freshly
+    // downloaded Japan row now carries the Downloaded badge.
+    await act(async () => {
+      fireEvent.click(getByTestId("version-btn"));
+    });
+    const menu = render(<>{captured.menu}</>);
+    const items = within(menu.container).getAllByRole("menuitem");
+    expect(items[1]?.textContent).toContain("Game (Japan)");
+    expect(items[1]?.textContent).toContain("Downloaded");
+  });
+
+  it("ignores a download_complete for a rom outside the group", async () => {
+    vi.mocked(backend.getVersionList).mockResolvedValue(multiVersionList());
+
+    const { findByTestId } = render(<VersionPicker appId={APP_ID} />);
+    await findByTestId("version-btn");
+    expect(vi.mocked(backend.getVersionList)).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", { rom_id: 999 } as DownloadCompleteEvent);
+      await Promise.resolve();
+    });
+
+    expect(vi.mocked(backend.getVersionList)).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-fetches when a group member is uninstalled", async () => {
+    vi.mocked(backend.getVersionList).mockResolvedValue(multiVersionList());
+
+    const { findByTestId } = render(<VersionPicker appId={APP_ID} />);
+    await findByTestId("version-btn");
+    expect(vi.mocked(backend.getVersionList)).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: 1 } }));
+      await Promise.resolve();
+    });
+
+    expect(vi.mocked(backend.getVersionList)).toHaveBeenCalledTimes(2);
   });
 });
 

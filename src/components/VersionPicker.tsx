@@ -21,7 +21,7 @@
  */
 
 import { useState, useEffect, useRef, FC, ReactNode } from "react";
-import { toaster } from "@decky/api";
+import { toaster, addEventListener, removeEventListener } from "@decky/api";
 import { Menu, MenuItem, showContextMenu, DialogButton } from "@decky/ui";
 import { FaChevronDown, FaCompactDisc, FaLayerGroup } from "react-icons/fa";
 import {
@@ -40,7 +40,8 @@ import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { showUnsyncedSavesModal } from "./UnsyncedSavesSwitchModal";
 import { getEventTarget } from "../utils/events";
 import { detach } from "../utils/detach";
-import type { RommDataChangedDetail } from "../types/events";
+import type { RommDataChangedDetail, RommRomUninstalledDetail } from "../types/events";
+import type { DownloadCompleteEvent, DownloadFailedEvent } from "../types";
 
 interface VersionPickerProps {
   appId: number;
@@ -88,6 +89,9 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   // rom_id -> cover base64 for synced versions, filled lazily once the list loads.
   const [covers, setCovers] = useState<Record<number, string>>({});
   const coversRequested = useRef<Set<number>>(new Set());
+  // The group's member rom_ids from the last loaded list — lets the install-change
+  // listeners below ignore events for other games without a fetch.
+  const memberIdsRef = useRef<Set<number>>(new Set());
 
   // Initial load + refresh on a version switch (this or another surface). The
   // loader is defined inside the effect (shared with the event handler) so its
@@ -106,6 +110,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         } else if (result.multi_version) {
           reportServerReachable(true);
         }
+        memberIdsRef.current = new Set((result.versions ?? []).map((v) => v.rom_id));
         if (!cancelled) setVersionList(result);
       } catch (e) {
         logError(`VersionPicker: getVersionList failed: ${e}`);
@@ -127,9 +132,28 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
       }
     };
     globalThis.addEventListener("romm_data_changed", onDataChanged);
+
+    // A download or an uninstall changes a group member's Downloaded badge
+    // WITHOUT a version switch — reload so the menu never shows a superseded
+    // install state. download_failed matters too: the sibling supersede removes
+    // the old install when the download STARTS, so a failed download has still
+    // changed the on-disk picture.
+    const onInstallChanged = (romId: number) => {
+      if (memberIdsRef.current.has(romId)) detach(load());
+    };
+    const dlComplete = addEventListener<[DownloadCompleteEvent]>("download_complete", (evt) =>
+      onInstallChanged(evt.rom_id),
+    );
+    const dlFailed = addEventListener<[DownloadFailedEvent]>("download_failed", (evt) => onInstallChanged(evt.rom_id));
+    const onUninstalled = (e: Event) => onInstallChanged((e as CustomEvent<RommRomUninstalledDetail>).detail.rom_id);
+    globalThis.addEventListener("romm_rom_uninstalled", onUninstalled);
+
     return () => {
       cancelled = true;
       globalThis.removeEventListener("romm_data_changed", onDataChanged);
+      removeEventListener("download_complete", dlComplete);
+      removeEventListener("download_failed", dlFailed);
+      globalThis.removeEventListener("romm_rom_uninstalled", onUninstalled);
     };
   }, [appId]);
 
