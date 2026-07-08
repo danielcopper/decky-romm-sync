@@ -118,6 +118,11 @@ Latest release and shipped features: see `git tag --sort=-v:refname` and GitHub 
 - **Coverage**: `python -m pytest tests/ -q --cov=py_modules --cov=main --cov-report=term --cov-branch`
 - **Setup**: `mise run setup` (installs JS + Python dependencies)
 - **Dev reload**: `mise run dev` (build + restart plugin_loader)
+- **Frontend live dev**: `mise run dev:watch [display]` (one-time `mise run dev:setup`) — hot-reloads the **frontend**
+  into a windowed Big Picture in Desktop Mode on every save, no loader restart. Optional display target picks the
+  monitor (`internal` default, or a name like `dp2` / `DP-3`). **Backend** changes don't auto-trigger — push them with
+  `mise run dev:push-backend`. Lost the Decky UI after leaving BPM: `mise run dev:bpm-reset [display]`. Full guide:
+  `docs/contributing/frontend-dev-loop.md`
 - **Tooling**: mise manages node, pnpm, python, uv. Venv auto-creates at `.venv` (via `_.python.venv` in mise.toml)
   using uv as the underlying tool; `mise run setup` installs Python deps via `uv pip install` (uv is the canonical
   Python package manager in this project). Python deps are pinned in `requirements-dev.lock` / `requirements-docs.lock`,

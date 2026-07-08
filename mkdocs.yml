@@ -77,4 +77,5 @@ nav:
       - Steam Remote Play & Cross-Device: architecture/steam-remote-play.md
   - Contributing:
       - Development: contributing/development.md
+      - Frontend dev loop: contributing/frontend-dev-loop.md
       - Dependency management: contributing/dependency-management.md

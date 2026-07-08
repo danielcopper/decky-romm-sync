@@ -66,13 +66,15 @@ run = [
 description = "Deploy plugin files to Decky plugin directory"
 depends = ["build"]
 raw = true
-run = """
+run = '''
 DEST="$HOME/homebrew/plugins/decky-romm-sync"
 # The plugin dir is root-owned: Decky's root plugin_loader continuously re-owns the
 # dir + plugin.json back to root within ~1-2s as a tamper guard, so a plain
 # deck-owned rsync/cp hits "permission denied". The `dev` task makes this safe by
 # stopping plugin_loader and chowning the dir to deck around this deploy, so nothing
 # re-roots mid-flight. Run via `dev`, not `deploy` standalone, on a root-owned dir.
+# (After `mise run dev:setup` the tamper guard is off and the dir is deck-owned,
+# so standalone deploy — e.g. the initial push inside `dev:watch` — is safe.)
 mkdir -p "$DEST/dist" "$DEST/bin" "$DEST/defaults" "$DEST/py_modules"
 rsync -a --delete dist/ "$DEST/dist/"
 rsync -a --delete bin/ "$DEST/bin/"
@@ -85,7 +87,28 @@ rsync -a --delete defaults/ "$DEST/defaults/"
 for f in defaults/*; do rm -f "$DEST/$(basename "$f")"; done
 rsync -a --delete py_modules/ "$DEST/py_modules/"
 cp -f main.py plugin.json package.json "$DEST/"
-"""
+# Every local deploy is a dev deploy — release zips are packaged in CI
+# (release.yml builds with the Decky CLI straight from the repo checkout), so
+# this deployed copy never feeds a release. Injecting "debug" into the DEPLOYED
+# plugin.json turns on decky-loader's built-in hot-reload watcher for this
+# plugin (the watcher only acts on debug-flagged plugins). Never commit the
+# flag to the repo plugin.json — the Decky plugin store rejects plugins that
+# ship it. Idempotent: re-deploys don't duplicate the flag.
+python3 - "$DEST/plugin.json" <<'PYEOF'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    manifest = json.load(f)
+flags = manifest.setdefault("flags", [])
+if "debug" not in flags:
+    flags.append("debug")
+with open(path, "w", encoding="utf-8") as f:
+    json.dump(manifest, f, indent=2)
+    f.write("\n")
+PYEOF
+'''
 
 [tasks.docs]
 description = "Serve the documentation site locally with live reload"
@@ -113,3 +136,123 @@ trap 'sudo systemctl start plugin_loader' EXIT
 [ -d "$DEST" ] && sudo chown -R "$(id -un):$(id -gn)" "$DEST"
 mise run deploy
 """
+
+[tasks."dev:setup"]
+description = "One-time host setup for the live frontend dev loop (systemd drop-in + chown; uses sudo)"
+raw = true
+run = '''
+sudo -v
+DEST="$HOME/homebrew/plugins/decky-romm-sync"
+# Decky's tamper guard (env CHOWN_PLUGIN_PATH, default "1") re-owns the plugin
+# dir + plugin.json back to root on every plugin load, so the deck user can't
+# write deploys into it while the loader runs. The drop-in turns the guard off
+# on this machine; drop-ins survive Decky self-updates (those rewrite only the
+# unit file). Every step below is idempotent — safe to re-run.
+sudo install -d /etc/systemd/system/plugin_loader.service.d
+printf '[Service]\nEnvironment=CHOWN_PLUGIN_PATH=0\n' | sudo tee /etc/systemd/system/plugin_loader.service.d/10-dev-loop.conf >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl restart plugin_loader
+# Hand an existing (root-owned) plugin dir back to the deck user so the watch
+# loop's plain cp works without sudo from here on.
+if [ -d "$DEST" ]; then sudo chown -R "$(id -un):$(id -gn)" "$DEST"; fi
+# CEF DevTools (http://localhost:8080) need this marker file; warn, don't fail —
+# the hot-reload loop itself works without it.
+if [ ! -e "$HOME/.steam/steam/.cef-enable-remote-debugging" ]; then
+  echo "WARNING: ~/.steam/steam/.cef-enable-remote-debugging is missing — CEF DevTools on http://localhost:8080 won't work. Create the empty file and restart Steam to enable them."
+fi
+echo "Setup done. decky-loader's hot-reload watcher arms ~10 s after the restart."
+echo "Next: mise run dev:watch"
+'''
+
+[tasks."dev:watch"]
+description = "Live frontend dev loop: deploy, open windowed Big Picture, rebuild + hot-reload on every save"
+raw = true
+# The optional display arg reaches the script as $usage_display (mise exposes
+# usage-spec args as usage_<name> env vars); the complete directive feeds mise's
+# shell tab completion from the real outputs of this machine.
+usage = '''
+arg "[display]" help="Monitor for the Big Picture window: 'internal' or an output name (dp2, DP-3, ...)" default="internal"
+complete "display" run="bash scripts/dev_open_bpm.sh --list"
+'''
+run = '''
+DEST="$HOME/homebrew/plugins/decky-romm-sync"
+# Preflight: without the dev:setup drop-in, plugin_loader re-owns the plugin dir
+# back to root within ~1-2s and every cp below dies with "permission denied".
+if ! systemctl show plugin_loader -p Environment | grep -q CHOWN_PLUGIN_PATH=0; then
+  echo "plugin_loader still runs Decky's tamper guard — run: mise run dev:setup" >&2
+  exit 1
+fi
+if [ -d "$DEST" ] && [ ! -w "$DEST" ]; then
+  echo "$DEST is not writable — run: mise run dev:setup" >&2
+  exit 1
+fi
+# Fail fast on a typo'd display target before paying for the full deploy.
+bash scripts/dev_open_bpm.sh --resolve "$usage_display" >/dev/null
+# Full initial push (frontend build + rsync of everything). The `cp -f main.py`
+# inside deploy is itself a modify event on a watched file, so the watcher
+# hot-reloads the plugin with the fresh backend + frontend right away.
+mise run deploy
+# Open desktop Big Picture next to the editor — it renders the same gamepadui
+# React app as Game Mode, and Decky injects into desktop Steam too. Harmless
+# no-op if BPM is already open; if Steam isn't running, this starts it straight
+# into BPM. The helper also places the window on the chosen display (default:
+# internal panel) via a short-lived KWin script, and doesn't wait on Steam.
+bash scripts/dev_open_bpm.sh "$usage_display"
+# Rebuild on every src/ change, then cp the bundle into the deployed dist/.
+# cp (in-place modify), never mv/rsync: decky-loader's watcher reacts only to
+# create/modify events on dist/index.js + main.py — moves/renames are ignored.
+# The sourcemap goes first so the watched trigger file (index.js) lands last.
+exec pnpm exec rollup -c rollup.dev.config.js -w --watch.onEnd="cp -f dist/index.js.map '$DEST/dist/' && cp -f dist/index.js '$DEST/dist/'"
+'''
+
+[tasks."dev:push-backend"]
+description = "Push backend changes (py_modules/ + main.py) into the deployed plugin during a dev:watch session"
+raw = true
+run = '''
+DEST="$HOME/homebrew/plugins/decky-romm-sync"
+# decky-loader's watcher matches only dist/index.js and main.py, so a
+# py_modules-only rsync never triggers a reload — that's why the cp of main.py
+# comes LAST: it's the modify event that makes the watcher reload the plugin
+# (backend subprocess restart + frontend re-import). For bin/ or defaults/
+# changes run the full `mise run deploy` instead.
+rsync -a --delete py_modules/ "$DEST/py_modules/"
+cp -f main.py "$DEST/main.py"
+'''
+
+[tasks."dev:bpm-reset"]
+description = "Restart Steam into windowed Big Picture (recovers the Decky UI after leaving and re-entering BPM)"
+raw = true
+usage = '''
+arg "[display]" help="Monitor for the Big Picture window: 'internal' or an output name (dp2, DP-3, ...)" default="internal"
+complete "display" run="bash scripts/dev_open_bpm.sh --list"
+'''
+run = '''
+# Fail fast on a typo'd display target before shutting Steam down.
+bash scripts/dev_open_bpm.sh --resolve "$usage_display" >/dev/null
+# Decky's UI survives only the FIRST Big Picture entry per Steam process:
+# leaving BPM and re-entering loses the Decky QAM until Steam restarts.
+echo "Shutting down Steam..."
+# Run steam through the user systemd manager, not this shell: mise + the venv
+# pollute PATH/VIRTUAL_ENV, which trips steam-jupiter's 32-bit runtime check.
+# systemd-run --user gives it the pristine session environment (see
+# scripts/dev_open_bpm.sh for the full rationale).
+if command -v systemd-run >/dev/null 2>&1; then
+  systemd-run --user --collect --quiet --wait -- steam -shutdown >/dev/null 2>&1 || true
+else
+  env -u VIRTUAL_ENV steam -shutdown >/dev/null 2>&1 || true
+fi
+# Wait for the running instance to actually exit (up to ~30 s) — reopening too
+# early just talks to the dying process.
+for _ in $(seq 1 30); do
+  if ! pgrep -x steam >/dev/null; then break; fi
+  sleep 1
+done
+if pgrep -x steam >/dev/null; then
+  echo "Steam is still running after 30 s — close it manually, then re-run this task." >&2
+  exit 1
+fi
+echo "Reopening Big Picture..."
+# The helper opens BPM non-blocking and places the window on the chosen
+# display (default: internal panel) via a short-lived KWin script.
+bash scripts/dev_open_bpm.sh "$usage_display"
+'''

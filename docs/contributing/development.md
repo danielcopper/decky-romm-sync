@@ -123,6 +123,12 @@ against that re-own and fails with `permission denied`. With the loader stopped,
 automatically when the task finishes — even if the build or copy fails, so a failure never leaves the plugin dead. For
 backend-only changes, restarting the plugin loader is sufficient without rebuilding.
 
+For frontend iteration there is a much faster loop: after a one-time `mise run dev:setup`,
+`mise run dev:watch [display]` hot-reloads the **frontend** into a windowed Big Picture on the desktop as you save, with
+no loader restarts at all — put it on a second monitor with a display target like `dp2`. Backend changes are pushed on
+demand with `mise run dev:push-backend`. See [Frontend dev loop](frontend-dev-loop.md) for the full workflow, keyboard
+shortcuts, and caveats.
+
 ## Deploying to Device
 
 For development, symlink the repo into the plugins directory:

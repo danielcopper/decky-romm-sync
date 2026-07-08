@@ -88,6 +88,8 @@ details, [save sync](https://danielcopper.github.io/decky-romm-sync/user-guide/s
 Build from source, run the tests, and read the architecture reference on the documentation site:
 
 - [Development setup](https://danielcopper.github.io/decky-romm-sync/contributing/development/)
+- [Frontend dev loop](https://danielcopper.github.io/decky-romm-sync/contributing/frontend-dev-loop/) — live-reload the
+  UI into a windowed Big Picture on the Deck, no Game Mode switching
 - [Backend architecture](https://danielcopper.github.io/decky-romm-sync/architecture/backend-architecture/)
 
 ## Acknowledgments
