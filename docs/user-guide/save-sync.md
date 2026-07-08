@@ -28,6 +28,18 @@ Sync uses a **newest-wins** model with a hash-divergence guard:
 This is the same model used by the official RomM clients (Argosy and Grout). It keeps cross-device save sync simple: one
 timeline per slot, newest wins.
 
+### Saves are per version
+
+When a game has several [versions](managing-games.md#versions) — a `(USA)` dump and a `(Europe)` one, a `(Rev 1)`, and
+so on — each version has its **own** saves, on RomM and on disk. Automatic sync only ever touches the **active version**
+(the one currently bound to the shortcut). Switching versions never copies, moves, or deletes a save.
+
+That means an inactive version's local saves simply wait: if you switch away from a downloaded version whose saves were
+never uploaded, those saves stay on disk untouched and resume syncing the moment you switch back to that version. The
+plugin warns you before you leave such a version and shows a reminder banner on the **Saves** tab so the saves aren't
+forgotten (see [Managing Games → Versions](managing-games.md#versions)). Nothing is lost — the saves just don't sync
+while their version is inactive.
+
 ## Important: Use Your Own RomM Account
 
 Save files in RomM are tied to the authenticated user account. If multiple people share the same RomM account, their

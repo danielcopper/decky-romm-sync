@@ -46,6 +46,7 @@ if TYPE_CHECKING:
         EventEmitter,
         RetroDeckPaths,
         RommRomReader,
+        RomRemoverProvider,
         Sleeper,
         SystemM3uSupportFn,
         SystemResolver,
@@ -107,6 +108,10 @@ class DownloadServiceConfig:
     disc_resolver: DiscResolver
     m3u_support: SystemM3uSupportFn
     uow_factory: UnitOfWorkFactory
+    # Deferred access to RomRemovalService.remove_rom — the two services form a
+    # construction cycle, so the composition root binds it after both exist
+    # (#1298 sibling supersede).
+    rom_remover: RomRemoverProvider
 
 
 class DownloadService:
@@ -126,6 +131,7 @@ class DownloadService:
         self._disc_resolver = config.disc_resolver
         self._m3u_support = config.m3u_support
         self._uow_factory = config.uow_factory
+        self._rom_remover = config.rom_remover
 
         # Owned state
         self._download_in_progress: set[int] = set()
@@ -225,7 +231,98 @@ class DownloadService:
         rom_id = int(rom_id)
         if rom_id in self._download_in_progress:
             return {"success": False, "reason": "already_downloading", "message": "Already downloading"}
+        # Claim the in-progress slot BEFORE the supersede await so a second
+        # start_download for this same rom during that await is rejected by the
+        # guard above instead of racing past it (B1). ``_begin_download`` re-adds
+        # idempotently; every early exit here (removal abort, exception) releases
+        # the claim, and on success the download task's ``finally`` owns it.
+        self._download_in_progress.add(rom_id)
+        # At most one downloaded version per shortcut binding (#1298): strip a
+        # sibling install bound to this shortcut (or unbound) before this one
+        # lands — a grandfathered sibling with its own shortcut is exempt. A
+        # removal failure aborts the download so the invariant stays honest.
+        try:
+            cleanup_failure = await self._remove_conflicting_sibling_installs(rom_id)
+        except Exception:
+            self._download_in_progress.discard(rom_id)
+            raise
+        if cleanup_failure is not None:
+            self._download_in_progress.discard(rom_id)
+            return cleanup_failure
         return await self._begin_download(rom_id, resume=False)
+
+    async def _remove_conflicting_sibling_installs(self, rom_id: int) -> dict[str, Any] | None:
+        """Strip any other downloaded version of ``rom_id``'s sibling group (#1298 T7).
+
+        Shared by ``start_download`` and ``resume_download``. The group's members
+        are snapshotted in one short read UoW (closed before the removal seam runs
+        — the removal opens its own UoW, which must not nest; ADR-0006). The
+        membership read is a single indexed lookup done directly (like
+        ``get_installed_rom``); each superseded install is then removed through the
+        canonical ``RomRemovalService.remove_rom`` (files + ``rom_installs`` row;
+        saves untouched per ADR-0007) rather than duplicating its deletion logic.
+        Every removal attempt is logged with both rom ids so a failure is
+        attributable (S7). A removal that reports ``not_installed`` raced clean and
+        is skipped; any other failure is returned so the caller aborts with that
+        shape. A superseded sibling's *paused* queue entry is evicted so the queue
+        stays coherent with disk (S1). Returns ``None`` when the group is clean /
+        all removals succeeded.
+        """
+        sibling_ids = self._conflicting_sibling_install_ids(rom_id)
+        if not sibling_ids:
+            return None
+        remove_rom = self._rom_remover()
+        for sibling_id in sibling_ids:
+            result = await remove_rom(sibling_id)
+            if result.get("success"):
+                self._logger.info(f"Superseding install of rom {sibling_id} (group of rom {rom_id})")
+                self._evict_if_paused(sibling_id)
+                continue
+            if result.get("reason") == "not_installed":
+                continue  # raced clean — nothing to supersede
+            self._logger.error(
+                f"Superseding install of rom {sibling_id} (group of rom {rom_id}) failed: {result.get('message')}"
+            )
+            return result
+        return None
+
+    def _evict_if_paused(self, rom_id: int) -> None:
+        """Drop a superseded sibling's queue entry when it is paused (#1298 S1).
+
+        A paused download whose install this supersede just removed is stale — its
+        "paused" row (and partial ``.tmp``) would otherwise linger and could be
+        resumed into a second installed version. Only a paused row is evicted; a
+        live or terminal row for the sibling is left to its own lifecycle.
+        """
+        entry = self._download_queue.get(rom_id)
+        if entry is not None and entry.get("status") == "paused":
+            self.evict(rom_id)
+
+    def _conflicting_sibling_install_ids(self, rom_id: int) -> list[int]:
+        """Sibling members with a ``rom_installs`` row that this download supersedes.
+
+        Read in one short UoW (closed before the removal seam runs). A member is
+        superseded when it is installed and either unbound or bound to the *same*
+        shortcut as ``rom_id`` — a member bound to a **different** shortcut is a
+        grandfathered duplicate (ADR-0021 §5) with its own Steam entry and is
+        never removed. A ROM with no sibling group key (solo / unbackfilled) has
+        no siblings, so the list is empty.
+        """
+        with self._uow_factory() as uow:
+            rom = uow.roms.get(rom_id)
+            if rom is None or rom.sibling_group_key is None:
+                return []
+            x_app_id = rom.shortcut_app_id
+            superseded: list[int] = []
+            for member in uow.roms.iter_by_group_key(rom.sibling_group_key):
+                if member.rom_id == rom_id:
+                    continue
+                if uow.rom_installs.get(member.rom_id) is None:
+                    continue
+                if member.shortcut_app_id is not None and member.shortcut_app_id != x_app_id:
+                    continue  # grandfathered separate shortcut — never removed
+                superseded.append(member.rom_id)
+            return superseded
 
     async def _begin_download(self, rom_id, *, resume: bool):
         """Shared core of ``start_download`` and ``resume_download``.
@@ -1166,18 +1263,72 @@ class DownloadService:
         """Resume a previously paused download from its partial ``.tmp``.
 
         Requires a queue entry in status "paused"; otherwise returns the
-        ``not_paused`` failure shape. Re-begins the download with ``resume=True``
-        so the transfer appends onto the existing bytes (when the server honoured
-        the original ``Range`` probe) instead of restarting.
+        ``not_paused`` failure shape. A switch may have moved the group's shortcut
+        binding to a sibling while this download was paused (#1298 S1): if another
+        member now owns the shortcut, this target is stale — the resume is refused
+        (``superseded``) and its queue entry dropped rather than re-downloading a
+        version the picker has already moved away from. Otherwise the same sibling
+        supersede that guards ``start_download`` runs first (abort on removal
+        failure), then the download re-begins with ``resume=True`` so the transfer
+        appends onto the existing bytes (when the server honoured the original
+        ``Range`` probe) instead of restarting. The in-progress claim is taken
+        before the supersede await and released on every early exit (B1).
         """
         rom_id = int(rom_id)
         entry = self._download_queue.get(rom_id)
         if entry is None or entry.get("status") != "paused":
             return {"success": False, "reason": "not_paused", "message": "No paused download for this ROM"}
+        if self._resume_target_superseded(rom_id):
+            self.evict(rom_id)
+            return {"success": False, "reason": "superseded", "message": "Another version is now active"}
+        self._download_in_progress.add(rom_id)
+        try:
+            cleanup_failure = await self._remove_conflicting_sibling_installs(rom_id)
+        except Exception:
+            self._download_in_progress.discard(rom_id)
+            raise
+        if cleanup_failure is not None:
+            self._download_in_progress.discard(rom_id)
+            return cleanup_failure
         return await self._begin_download(rom_id, resume=True)
+
+    def _resume_target_superseded(self, rom_id: int) -> bool:
+        """True when a sibling now owns the group's shortcut, stranding this resume.
+
+        Reads the target's sibling group in one short UoW. A solo ROM (no group
+        key), a target that is itself a bound member, or a group with no bound
+        member at all is never superseded — those resume normally. Only a group
+        whose shortcut binding has moved to a DIFFERENT member (a version switch
+        landed while this download was paused) strands this target: resuming it
+        would re-create a second installed version the supersede predicate can't
+        reach (it protects installs bound to a different app_id — #1298 S1).
+        """
+        with self._uow_factory() as uow:
+            rom = uow.roms.get(rom_id)
+            if rom is None or rom.sibling_group_key is None:
+                return False
+            if rom.shortcut_app_id is not None:
+                return False  # target is (a) bound member — resume normally
+            return any(
+                member.rom_id != rom_id and member.shortcut_app_id is not None
+                for member in uow.roms.iter_by_group_key(rom.sibling_group_key)
+            )
 
     def get_download_queue(self):
         return {"downloads": list(self._download_queue.values())}
+
+    def active_download_rom_ids(self) -> set[int]:
+        """Snapshot the rom ids with an in-flight or queued download (#1298 F1).
+
+        VersionSwitchService consults this to refuse a switch while any member of
+        the target's sibling group is actively downloading (the user cancels
+        first). A *paused* download is not in this set — its task's ``finally``
+        already released the in-progress claim — so a switch is allowed while a
+        sibling is paused, and a later resume of a superseded target is refused by
+        ``resume_download`` instead. Returns a copy so the caller cannot mutate the
+        live control set.
+        """
+        return set(self._download_in_progress)
 
     def get_installed_rom(self, rom_id: int) -> InstalledRomEntry | None:
         """Return the install record for *rom_id* as a frontend-shaped dict, or ``None``.

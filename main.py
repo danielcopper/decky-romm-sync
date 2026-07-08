@@ -282,8 +282,8 @@ class Plugin:
         return await self._version_switch_service.get_version_list(app_id)
 
     @migration_blocked
-    async def switch_version(self, app_id, target_rom_id):
-        return await self._version_switch_service.switch_version(app_id, target_rom_id)
+    async def switch_version(self, app_id, target_rom_id, allow_stranded):
+        return await self._version_switch_service.switch_version(app_id, target_rom_id, allow_stranded)
 
     # ── Firmware delegation to FirmwareService ──────────────
 

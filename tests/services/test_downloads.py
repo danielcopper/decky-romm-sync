@@ -66,6 +66,46 @@ def _seed_install(
         )
 
 
+def _seed_group_member(
+    uow: FakeUnitOfWork,
+    rom_id: int,
+    *,
+    group_key: str | None,
+    app_id: int | None,
+    installed: bool,
+    system: str = "n64",
+) -> None:
+    """Seed one ``Rom`` in a sibling group (controllable app_id + group key), optionally installed.
+
+    Unlike ``_seed_rom`` this sets ``sibling_group_key`` and takes an explicit
+    ``shortcut_app_id`` so a #1298 supersede test can build a real multi-version
+    group (bound rep / unbound install / grandfathered separate shortcut).
+    """
+    with uow:
+        uow.roms.save(
+            Rom.synced(
+                rom_id=rom_id,
+                platform_slug=system,
+                name=f"Game {rom_id}",
+                fs_name=f"game_{rom_id}.z64",
+                shortcut_app_id=app_id,
+                synced_at="2026-01-01T00:00:00+00:00",
+                sibling_group_key=group_key,
+            )
+        )
+        if installed:
+            uow.rom_installs.save(
+                RomInstall.mark_installed(
+                    rom_id=rom_id,
+                    file_path=f"/roms/{system}/game_{rom_id}.z64",
+                    rom_dir=None,
+                    platform_slug=system,
+                    system=system,
+                    installed_at="2026-01-01T00:00:00+00:00",
+                )
+            )
+
+
 @pytest.fixture
 def plugin():
     p = _make_testable_plugin()
@@ -141,6 +181,9 @@ def plugin():
             # a test that exercises a non-m3u platform repoints this seam.
             m3u_support=lambda system_name: p._m3u_supported,
             uow_factory=FakeUnitOfWorkFactory(p._uow),
+            # Late-bound remover for the #1298 sibling supersede — resolved at call
+            # time, by which point ``p._rom_removal_service`` is constructed below.
+            rom_remover=lambda: p._rom_removal_service.remove_rom,
         ),
     )
     p._rom_removal_service = RomRemovalService(
@@ -5080,3 +5123,350 @@ class TestPauseResume:
         plugin._download_service._prune_download_queue()
         assert 1 in plugin._download_service._download_queue
         assert plugin._download_service._download_queue[1]["status"] == "paused"
+
+
+_SUPERSEDE_GROUP = "igdb:100:99"
+
+
+class TestSiblingSupersedeSelection:
+    """`_conflicting_sibling_install_ids` — which downloaded siblings a download supersedes."""
+
+    def test_selects_unbound_installed_sibling(self, plugin):
+        # X (rom 1) is the bound group rep; a fellow unbound version is on disk.
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
+
+        assert plugin._download_service._conflicting_sibling_install_ids(1) == [2]
+
+    def test_skips_grandfathered_and_uninstalled(self, plugin):
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)  # X, bound rep
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)  # → selected
+        _seed_group_member(
+            plugin._uow, 3, group_key=_SUPERSEDE_GROUP, app_id=99, installed=True
+        )  # grandfathered → skip
+        _seed_group_member(
+            plugin._uow, 4, group_key=_SUPERSEDE_GROUP, app_id=None, installed=False
+        )  # not on disk → skip
+
+        assert plugin._download_service._conflicting_sibling_install_ids(1) == [2]
+
+    def test_solo_group_returns_empty(self, plugin):
+        # No sibling_group_key → no siblings, nothing to strip.
+        _seed_group_member(plugin._uow, 1, group_key=None, app_id=42, installed=False)
+        assert plugin._download_service._conflicting_sibling_install_ids(1) == []
+
+    def test_unknown_rom_returns_empty(self, plugin):
+        assert plugin._download_service._conflicting_sibling_install_ids(999) == []
+
+    def test_unbound_downloaded_target_still_supersedes_unbound_sibling(self, plugin):
+        # X itself unbound (app_id None); a fellow unbound installed sibling is
+        # still superseded (both share the "no separate shortcut" state).
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=None, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
+
+        assert plugin._download_service._conflicting_sibling_install_ids(1) == [2]
+
+
+class TestSiblingSupersedeRemoval:
+    """`_remove_conflicting_sibling_installs` + `start_download` — the removal + abort flow."""
+
+    @pytest.mark.asyncio
+    async def test_removes_superseded_sibling(self, plugin):
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
+        remover = AsyncMock(return_value={"success": True, "message": "ROM removed"})
+        plugin._download_service._rom_remover = lambda: remover
+
+        result = await plugin._download_service._remove_conflicting_sibling_installs(1)
+
+        assert result is None
+        remover.assert_awaited_once_with(2)
+
+    @pytest.mark.asyncio
+    async def test_not_installed_result_is_clean_not_abort(self, plugin):
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
+        # A concurrent removal already cleaned it — not_installed is a no-op, not an abort.
+        remover = AsyncMock(return_value={"success": False, "reason": "not_installed", "message": "ROM not installed"})
+        plugin._download_service._rom_remover = lambda: remover
+
+        result = await plugin._download_service._remove_conflicting_sibling_installs(1)
+
+        assert result is None
+        remover.assert_awaited_once_with(2)
+
+    @pytest.mark.asyncio
+    async def test_removal_failure_returns_failure_shape(self, plugin):
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
+        failing = AsyncMock(return_value={"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "boom"})
+        plugin._download_service._rom_remover = lambda: failing
+
+        result = await plugin._download_service._remove_conflicting_sibling_installs(1)
+
+        assert result == {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "boom"}
+
+    @pytest.mark.asyncio
+    async def test_clean_group_no_remover_call(self, plugin):
+
+        # Solo ROM (no group) — the remover provider is never even resolved.
+        _seed_group_member(plugin._uow, 1, group_key=None, app_id=42, installed=False)
+        provider = MagicMock(side_effect=AssertionError("remover must not be resolved when nothing is superseded"))
+        plugin._download_service._rom_remover = provider
+
+        assert await plugin._download_service._remove_conflicting_sibling_installs(1) is None
+        provider.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_start_download_removes_sibling_then_proceeds(self, plugin):
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
+        remover = AsyncMock(return_value={"success": True, "message": "ROM removed"})
+        plugin._download_service._rom_remover = lambda: remover
+        plugin._download_service._begin_download = AsyncMock(
+            return_value={"success": True, "message": "Download started"}
+        )
+
+        result = await plugin.start_download(1)
+
+        assert result == {"success": True, "message": "Download started"}
+        remover.assert_awaited_once_with(2)
+        plugin._download_service._begin_download.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_start_download_aborts_without_starting_when_removal_fails(self, plugin):
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
+        failing = AsyncMock(return_value={"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "boom"})
+        plugin._download_service._rom_remover = lambda: failing
+        plugin._download_service._begin_download = AsyncMock()
+
+        result = await plugin.start_download(1)
+
+        assert result == {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "boom"}
+        plugin._download_service._begin_download.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_start_download_second_call_rejected_while_first_mid_supersede(self, plugin):
+        # B1: the in-progress slot is claimed BEFORE the supersede await, so a
+        # second start_download racing in while the first is suspended inside the
+        # removal await is rejected with the existing already-downloading shape.
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
+
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _blocking_remove(_rom_id):
+            entered.set()
+            await release.wait()
+            return {"success": True, "message": "ROM removed"}
+
+        plugin._download_service._rom_remover = lambda: _blocking_remove
+        plugin._download_service._begin_download = AsyncMock(
+            return_value={"success": True, "message": "Download started"}
+        )
+
+        first = asyncio.create_task(plugin.start_download(1))
+        await entered.wait()  # first call is now suspended inside the removal await
+
+        second = await plugin.start_download(1)
+        assert second == {"success": False, "reason": "already_downloading", "message": "Already downloading"}
+
+        release.set()
+        assert await first == {"success": True, "message": "Download started"}
+
+    @pytest.mark.asyncio
+    async def test_start_download_releases_in_progress_on_supersede_exception(self, plugin):
+        # B1: an exception out of the supersede await releases the in-progress
+        # claim so the ROM isn't stuck "already downloading" until a reload.
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
+        plugin._download_service._rom_remover = lambda: AsyncMock(side_effect=RuntimeError("kaboom"))
+
+        with pytest.raises(RuntimeError):
+            await plugin.start_download(1)
+        assert 1 not in plugin._download_service._download_in_progress
+
+    @pytest.mark.asyncio
+    async def test_start_download_releases_in_progress_on_removal_failure(self, plugin):
+        # B1: the removal-abort return path also releases the in-progress claim.
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
+        failing = AsyncMock(return_value={"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "boom"})
+        plugin._download_service._rom_remover = lambda: failing
+        plugin._download_service._begin_download = AsyncMock()
+
+        result = await plugin.start_download(1)
+        assert result["reason"] == ErrorCode.UNKNOWN.value
+        assert 1 not in plugin._download_service._download_in_progress
+
+    @pytest.mark.asyncio
+    async def test_supersede_evicts_paused_sibling_queue_entry(self, plugin):
+        # S1: superseding a sibling's install drops its stale paused queue entry
+        # too, so a resume can't re-create the version we just removed.
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
+        plugin._download_service._download_queue[2] = {"rom_id": 2, "status": "paused"}
+        plugin._download_service._rom_remover = lambda: AsyncMock(return_value={"success": True, "message": "removed"})
+
+        result = await plugin._download_service._remove_conflicting_sibling_installs(1)
+        assert result is None
+        assert 2 not in plugin._download_service._download_queue
+
+    @pytest.mark.asyncio
+    async def test_supersede_keeps_non_paused_sibling_queue_entry(self, plugin):
+        # Only a PAUSED sibling row is evicted; a terminal/live row is untouched.
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
+        plugin._download_service._download_queue[2] = {"rom_id": 2, "status": "completed"}
+        plugin._download_service._rom_remover = lambda: AsyncMock(return_value={"success": True, "message": "removed"})
+
+        await plugin._download_service._remove_conflicting_sibling_installs(1)
+        assert 2 in plugin._download_service._download_queue
+
+    @pytest.mark.asyncio
+    async def test_supersede_logs_both_rom_ids_on_success(self, plugin, caplog):
+        # S7: a successful supersede logs both the sibling id and the group's rom id.
+        import logging
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
+        plugin._download_service._rom_remover = lambda: AsyncMock(return_value={"success": True, "message": "removed"})
+
+        with caplog.at_level(logging.INFO):
+            await plugin._download_service._remove_conflicting_sibling_installs(1)
+        assert any("rom 2" in r.message and "rom 1" in r.message and r.levelno == logging.INFO for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_supersede_logs_failure_with_message(self, plugin, caplog):
+        # S7: a failed supersede logs at ERROR with both rom ids and the failure message.
+        import logging
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
+        failing = AsyncMock(
+            return_value={"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "delete blew up"}
+        )
+        plugin._download_service._rom_remover = lambda: failing
+
+        with caplog.at_level(logging.INFO):
+            await plugin._download_service._remove_conflicting_sibling_installs(1)
+        assert any(
+            "rom 2" in r.message
+            and "rom 1" in r.message
+            and "delete blew up" in r.message
+            and r.levelno == logging.ERROR
+            for r in caplog.records
+        )
+
+
+class TestResumeSupersede:
+    """`resume_download` — the #1298 S1 stale-resume refusal + supersede-on-resume."""
+
+    @pytest.mark.asyncio
+    async def test_resume_refused_when_binding_moved_to_sibling(self, plugin):
+        # A switch moved the shortcut to sibling 2 while the download of 3 was
+        # paused. Resuming 3 would strand a second install → refused, entry dropped.
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=42, installed=True)
+        _seed_group_member(plugin._uow, 3, group_key=_SUPERSEDE_GROUP, app_id=None, installed=False)
+        plugin._download_service._download_queue[3] = {"rom_id": 3, "status": "paused"}
+        plugin._download_service._begin_download = AsyncMock()
+
+        result = await plugin.resume_download(3)
+        assert result["success"] is False
+        assert result["reason"] == "superseded"
+        assert isinstance(result["message"], str) and len(result["message"]) <= 45
+        assert "error" not in result and "error_code" not in result
+        assert 3 not in plugin._download_service._download_queue
+        assert 3 not in plugin._download_service._download_in_progress
+        plugin._download_service._begin_download.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_resume_runs_supersede_then_rebegins(self, plugin):
+        # No member owns the shortcut → not superseded; the paused resume still
+        # strips a conflicting sibling install first (same guard as start_download).
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=None, installed=False)  # resume target
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)  # to strip
+        plugin._download_service._download_queue[1] = {"rom_id": 1, "status": "paused", "resumable": True}
+        remover = AsyncMock(return_value={"success": True, "message": "removed"})
+        plugin._download_service._rom_remover = lambda: remover
+        plugin._download_service._begin_download = AsyncMock(
+            return_value={"success": True, "message": "Download started"}
+        )
+
+        result = await plugin.resume_download(1)
+        assert result["success"] is True
+        remover.assert_awaited_once_with(2)
+        plugin._download_service._begin_download.assert_awaited_once_with(1, resume=True)
+
+    @pytest.mark.asyncio
+    async def test_resume_bound_target_is_not_superseded(self, plugin):
+        # The paused target itself owns the shortcut → not superseded, resumes.
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=42, installed=False)
+        plugin._download_service._download_queue[2] = {"rom_id": 2, "status": "paused", "resumable": True}
+        plugin._download_service._begin_download = AsyncMock(
+            return_value={"success": True, "message": "Download started"}
+        )
+
+        result = await plugin.resume_download(2)
+        assert result["success"] is True
+        plugin._download_service._begin_download.assert_awaited_once_with(2, resume=True)
+
+    @pytest.mark.asyncio
+    async def test_resume_aborts_and_releases_in_progress_on_removal_failure(self, plugin):
+        # S1 + B1: a removal failure aborts the resume and releases the in-progress claim.
+        from unittest.mock import AsyncMock
+
+        _seed_group_member(plugin._uow, 1, group_key=_SUPERSEDE_GROUP, app_id=None, installed=False)
+        _seed_group_member(plugin._uow, 2, group_key=_SUPERSEDE_GROUP, app_id=None, installed=True)
+        plugin._download_service._download_queue[1] = {"rom_id": 1, "status": "paused"}
+        failing = AsyncMock(return_value={"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "boom"})
+        plugin._download_service._rom_remover = lambda: failing
+        plugin._download_service._begin_download = AsyncMock()
+
+        result = await plugin.resume_download(1)
+        assert result == {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": "boom"}
+        plugin._download_service._begin_download.assert_not_awaited()
+        assert 1 not in plugin._download_service._download_in_progress
+
+    @pytest.mark.asyncio
+    async def test_resume_non_paused_short_circuits_before_supersede(self, plugin):
+        # A non-paused entry returns not_paused without touching the supersede seam.
+        from unittest.mock import MagicMock
+
+        provider = MagicMock(side_effect=AssertionError("supersede must not run for a non-paused resume"))
+        plugin._download_service._rom_remover = provider
+        plugin._download_service._download_queue[7] = {"rom_id": 7, "status": "downloading"}
+
+        result = await plugin.resume_download(7)
+        assert result["reason"] == "not_paused"
+        provider.assert_not_called()

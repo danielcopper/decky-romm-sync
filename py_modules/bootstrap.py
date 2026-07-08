@@ -88,6 +88,7 @@ if TYPE_CHECKING:
         EventEmitter,
         FirmwareFileStore,
         HostnameReader,
+        InstalledRomRemoverFn,
         MachineIdReader,
         MigrationFileStore,
         PathExistsReader,
@@ -421,6 +422,10 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
     # the NameError a bare forward-ref lambda would produce.
     bios_files_index_binding: LateBinding[dict[str, dict[str, Any]]] = LateBinding("bios_files_index")
     pending_sync_binding: LateBinding[dict[int, dict[str, Any]]] = LateBinding("pending_sync")
+    # DownloadService needs RomRemovalService.remove_rom for the #1298 sibling
+    # supersede, but RomRemovalService needs DownloadService's queue-cleanup seam —
+    # a construction cycle. Bind the remover after both services exist.
+    rom_remover_binding: LateBinding[InstalledRomRemoverFn] = LateBinding("rom_remover")
 
     # The single read-path core resolver (B1): folds the per-game
     # emulator_override pin over the system-layer ES-DE resolution. Built first
@@ -594,6 +599,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             disc_resolver=disc_launch_resolver,
             m3u_support=cfg.callbacks.m3u_support,
             uow_factory=cfg.callbacks.uow_factory,
+            rom_remover=rom_remover_binding.get,
         ),
     )
 
@@ -607,6 +613,9 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             uow_factory=cfg.callbacks.uow_factory,
         ),
     )
+    # Close the download↔removal cycle: DownloadService's sibling supersede now
+    # resolves the live remover through this binding (#1298).
+    rom_remover_binding.set(lambda: rom_removal_service.remove_rom)
 
     firmware_service = FirmwareService(
         config=FirmwareServiceConfig(
@@ -702,17 +711,6 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
-    version_switch_service = VersionSwitchService(
-        config=VersionSwitchServiceConfig(
-            loop=cfg.runtime.loop,
-            logger=cfg.runtime.logger,
-            clock=cfg.runtime.clock,
-            uow_factory=cfg.callbacks.uow_factory,
-            romm_api=cfg.adapters.romm_api,
-            settings=cfg.stores.settings,
-        ),
-    )
-
     connection_service = ConnectionService(
         config=ConnectionServiceConfig(
             settings=cfg.stores.settings,
@@ -746,6 +744,26 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             save_file_store=cfg.adapters.save_file_store,
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
+        ),
+    )
+
+    # Built after LaunchGateService + ConnectionService: the version-switch
+    # save-stranding gate draws drift from LaunchGateService.check_local_drift and
+    # reachability from ConnectionService.probe_reachability, and re-bakes a
+    # switched-onto install via the relaunch resolver. The active-download guard
+    # reads DownloadService's in-progress set (built earlier — no LateBinding) (#1298).
+    version_switch_service = VersionSwitchService(
+        config=VersionSwitchServiceConfig(
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+            clock=cfg.runtime.clock,
+            uow_factory=cfg.callbacks.uow_factory,
+            romm_api=cfg.adapters.romm_api,
+            settings=cfg.stores.settings,
+            drift_probe=launch_gate_service.check_local_drift,
+            reachability_probe=connection_service.probe_reachability,
+            relaunch_resolver=relaunch_options_resolver,
+            active_downloads=download_service.active_download_rom_ids,
         ),
     )
 

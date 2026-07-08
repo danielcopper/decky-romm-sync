@@ -13,17 +13,30 @@
  *
  * Selecting a version while the game is not downloaded rebinds the group's Steam
  * shortcut to it (appId-safe: the name/appId stay sticky) so the Download button
- * fetches exactly that version. Switching a *downloaded* game is a later slice
- * (#1298) — the backend rejects it and the picker surfaces the message as a
- * toast. A single-version group renders nothing (the null-gate pattern).
+ * fetches exactly that version. Switching a *downloaded* game rebinds it too and
+ * confirm-writes the target's launch command onto the shortcut (#1298); if the
+ * currently-bound install has unsynced saves the backend soft-blocks and the
+ * picker offers the sync-or-strand confirm. A single-version group renders
+ * nothing (the null-gate pattern).
  */
 
 import { useState, useEffect, useRef, FC, ReactNode } from "react";
 import { toaster } from "@decky/api";
 import { Menu, MenuItem, showContextMenu, DialogButton } from "@decky/ui";
 import { FaChevronDown, FaCompactDisc, FaLayerGroup } from "react-icons/fa";
-import { getVersionList, switchVersion, getArtworkBase64, invalidateCachedGameDetail, logError } from "../api/backend";
-import type { VersionList, VersionInfo } from "../api/backend";
+import {
+  getVersionList,
+  switchVersion,
+  syncRomSaves,
+  refreshSaveStatus,
+  getArtworkBase64,
+  invalidateCachedGameDetail,
+  logError,
+  logWarn,
+} from "../api/backend";
+import type { VersionList, VersionInfo, SwitchVersionSuccess } from "../api/backend";
+import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
+import { showUnsyncedSavesModal } from "./UnsyncedSavesSwitchModal";
 import { getEventTarget } from "../utils/events";
 import { detach } from "../utils/detach";
 import type { RommDataChangedDetail } from "../types/events";
@@ -119,22 +132,104 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     };
   }, [versionList]);
 
+  // Apply a successful switch: confirm-write the target's launch command onto the
+  // Steam shortcut (blank for an uninstalled target — intended, so the shortcut
+  // never keeps the old version's command), then invalidate the cache and
+  // broadcast the switch so sibling surfaces re-read the new binding.
+  //
+  // The backend rebind is ALREADY committed by the time we get here, so the
+  // cache-invalidate + broadcast must always run — even if the launch-command
+  // write fails or throws. A missed confirm only leaves the shortcut on a stale
+  // command; it self-heals at the next startup/sync reconcile, so we warn and
+  // nudge the user rather than reporting the whole switch as failed.
+  const applySwitchSuccess = async (result: SwitchVersionSuccess): Promise<void> => {
+    let confirmed = false;
+    try {
+      confirmed = await setLaunchOptionsConfirmed(result.app_id, result.launch_options);
+    } catch (e) {
+      logError(`VersionPicker: launch-options confirm threw for rom ${result.rom_id} (appId ${result.app_id}): ${e}`);
+    }
+    if (!confirmed) {
+      logError(`VersionPicker: could not confirm launch options for rom ${result.rom_id} (appId ${result.app_id})`);
+      toaster.toast({ title: "RomM Sync", body: "Switched — re-switch if launch fails" });
+    }
+    invalidateCachedGameDetail(appId);
+    globalThis.dispatchEvent(
+      new CustomEvent("romm_data_changed", {
+        detail: { type: "version_switched", app_id: appId, rom_id: result.rom_id },
+      }),
+    );
+  };
+
+  // Sync the stranded version's saves, then retry the switch. Any failure —
+  // sync failed, sync surfaced conflicts, or the retry blocked again — aborts
+  // with a short toast and re-runs the save-status refresh so the conflict UI
+  // surfaces through the normal save_status_updated loop.
+  const syncThenSwitch = async (unsyncedRomId: number, target: VersionInfo): Promise<void> => {
+    const abort = (body: string): void => {
+      toaster.toast({ title: "RomM Sync", body });
+      detach(
+        refreshSaveStatus(unsyncedRomId).catch((e) =>
+          logWarn(`VersionPicker: post-abort save-status refresh failed for rom ${unsyncedRomId}: ${e}`),
+        ),
+      );
+    };
+    try {
+      const sync = await syncRomSaves(unsyncedRomId);
+      if (!sync.success) {
+        abort("Couldn't sync saves — try again");
+        return;
+      }
+      if (sync.conflicts && sync.conflicts.length > 0) {
+        abort("Resolve save conflicts first");
+        return;
+      }
+      const retry = await switchVersion(appId, target.rom_id, false);
+      if (retry.success) {
+        await applySwitchSuccess(retry);
+      } else if (retry.reason === "unsynced_saves") {
+        // The sync ran but the version still reports drift (a partial upload or a
+        // race) — say so instead of the generic "couldn't switch".
+        abort("Saves still unsynced — try again");
+      } else {
+        abort("Couldn't switch versions");
+      }
+    } catch (e) {
+      logError(`VersionPicker: sync-then-switch failed: ${e}`);
+      abort("Couldn't sync saves — try again");
+    }
+  };
+
   const handleSwitch = async (target: VersionInfo): Promise<void> => {
     if (target.active) return;
     try {
-      const result = await switchVersion(appId, target.rom_id);
+      const result = await switchVersion(appId, target.rom_id, false);
       if (result.success) {
-        // Panel + picker refresh off the cache; drop it so the new bound version
-        // (name, region, cover) reloads, then broadcast the switch.
-        invalidateCachedGameDetail(appId);
-        globalThis.dispatchEvent(
-          new CustomEvent("romm_data_changed", {
-            detail: { type: "version_switched", app_id: appId, rom_id: target.rom_id },
-          }),
-        );
-      } else {
-        toaster.toast({ title: "RomM Sync", body: result.message || "Could not switch version" });
+        await applySwitchSuccess(result);
+        return;
       }
+      if (result.reason === "unsynced_saves") {
+        const choice = await showUnsyncedSavesModal({
+          versionName: result.unsynced_version_name,
+          serverReachable: result.server_reachable,
+        });
+        if (choice === "cancel") return;
+        if (choice === "sync_and_switch") {
+          await syncThenSwitch(result.unsynced_rom_id, target);
+          return;
+        }
+        // "Switch anyway" — the override skips the stranding gate; strand the
+        // saves on disk (they stay recoverable, they just won't sync until the
+        // user switches back).
+        const forced = await switchVersion(appId, target.rom_id, true);
+        if (forced.success) {
+          await applySwitchSuccess(forced);
+        } else {
+          toaster.toast({ title: "RomM Sync", body: forced.message || "Could not switch version" });
+        }
+        return;
+      }
+      toaster.toast({ title: "RomM Sync", body: result.message || "Could not switch version" });
     } catch (e) {
       logError(`VersionPicker: switchVersion failed: ${e}`);
       toaster.toast({ title: "RomM Sync", body: "Could not switch version" });

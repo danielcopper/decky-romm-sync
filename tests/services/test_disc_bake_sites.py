@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
@@ -155,6 +155,7 @@ class TestDownloadsBakeSite:
                 disc_resolver=disc_resolver,
                 m3u_support=lambda system_name: False,
                 uow_factory=uow_factory,
+                rom_remover=lambda: AsyncMock(),
             )
         )
 

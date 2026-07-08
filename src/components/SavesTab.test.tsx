@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, fireEvent, act } from "@testing-library/react";
+import { render, fireEvent, act, waitFor } from "@testing-library/react";
 import { createElement, type ComponentProps, type ReactElement } from "react";
 import { SavesTab } from "./SavesTab";
 import * as backend from "../api/backend";
@@ -115,6 +115,7 @@ function defaultProps(
   overrides: Partial<React.ComponentProps<typeof SavesTab>> = {},
 ): React.ComponentProps<typeof SavesTab> {
   return {
+    appId: 100,
     romId: 1,
     saveStatus: null,
     conflicts: [],
@@ -147,6 +148,10 @@ describe("SavesTab", () => {
     vi.clearAllMocks();
     capturedSlotPanelProps = [];
     vi.mocked(getRommConnectionState).mockReturnValue("connected");
+    // Stranded-version banner probes (#1298) — default to "no other versions" so
+    // the banner is absent for the unrelated slot/legacy tests.
+    vi.mocked(backend.getVersionList).mockResolvedValue({ multi_version: false });
+    vi.mocked(backend.checkLocalDrift).mockResolvedValue({ drifted: false, rom_id: 0 });
     installDomEventListenerSpy();
   });
 
@@ -672,6 +677,133 @@ describe("SavesTab", () => {
         />,
       );
       expect(capturedSlotPanelProps[0]?.onSlotSwitched).toBe(onSlotSwitched);
+    });
+  });
+
+  describe("stranded-version banner (#1298)", () => {
+    const STRANDED_COPY = 'Version "Game (USA)" has saves that were never uploaded — switch back to sync them.';
+
+    function makeVersion(overrides: Partial<import("../api/backend").VersionInfo>): import("../api/backend").VersionInfo {
+      return {
+        rom_id: 0,
+        name: "",
+        label: "",
+        regions: [],
+        languages: [],
+        revision: "",
+        tags: [],
+        synced: true,
+        installed: false,
+        active: false,
+        is_default: false,
+        ...overrides,
+      };
+    }
+
+    // Active = Japan (installed); an inactive USA build is also on disk.
+    const listWithStranded: import("../api/backend").VersionList = {
+      multi_version: true,
+      versions: [
+        makeVersion({ rom_id: 2, label: "Game (Japan)", active: true, installed: true }),
+        makeVersion({ rom_id: 5, label: "Game (USA)", active: false, installed: true }),
+      ],
+    };
+    // Active = Japan (installed); the other version is NOT downloaded.
+    const listNoStranded: import("../api/backend").VersionList = {
+      multi_version: true,
+      versions: [
+        makeVersion({ rom_id: 2, label: "Game (Japan)", active: true, installed: true }),
+        makeVersion({ rom_id: 5, label: "Game (USA)", active: false, installed: false }),
+      ],
+    };
+
+    it("shows the banner with the verbatim copy when an inactive installed version drifts", async () => {
+      vi.mocked(backend.getVersionList).mockResolvedValue(listWithStranded);
+      vi.mocked(backend.checkLocalDrift).mockResolvedValue({ drifted: true, rom_id: 5 });
+
+      const { container } = render(<SavesTab {...defaultProps({ romId: 2 })} />);
+
+      await waitFor(() => expect(container.textContent).toContain(STRANDED_COPY));
+      expect(backend.checkLocalDrift).toHaveBeenCalledWith(5);
+    });
+
+    it("hides the banner when no inactive version is installed", async () => {
+      vi.mocked(backend.getVersionList).mockResolvedValue(listNoStranded);
+
+      const { container } = render(<SavesTab {...defaultProps({ romId: 2 })} />);
+
+      await waitFor(() => expect(vi.mocked(backend.getVersionList)).toHaveBeenCalled());
+      expect(container.textContent).not.toContain("never uploaded");
+      // No inactive install → the drift probe is never even fired.
+      expect(backend.checkLocalDrift).not.toHaveBeenCalled();
+    });
+
+    it("hides the banner when the inactive install has no drift", async () => {
+      vi.mocked(backend.getVersionList).mockResolvedValue(listWithStranded);
+      vi.mocked(backend.checkLocalDrift).mockResolvedValue({ drifted: false, rom_id: 5 });
+
+      const { container } = render(<SavesTab {...defaultProps({ romId: 2 })} />);
+
+      await waitFor(() => expect(backend.checkLocalDrift).toHaveBeenCalledWith(5));
+      expect(container.textContent).not.toContain("never uploaded");
+    });
+
+    it("re-runs the check when the bound version changes (version switch)", async () => {
+      // First (romId=2): nothing stranded. After the switch (romId=99): the USA
+      // build is now the inactive-installed drifted sibling → banner appears.
+      vi.mocked(backend.getVersionList).mockResolvedValueOnce(listNoStranded).mockResolvedValue(listWithStranded);
+      vi.mocked(backend.checkLocalDrift).mockResolvedValue({ drifted: true, rom_id: 5 });
+
+      const { container, rerender } = render(<SavesTab {...defaultProps({ romId: 2 })} />);
+      await waitFor(() => expect(vi.mocked(backend.getVersionList)).toHaveBeenCalledTimes(1));
+      expect(container.textContent).not.toContain("never uploaded");
+
+      rerender(<SavesTab {...defaultProps({ romId: 99 })} />);
+      await waitFor(() => expect(container.textContent).toContain(STRANDED_COPY));
+    });
+
+    it("probes every inactive install and surfaces the first DRIFTED one", async () => {
+      // Two inactive installed siblings: the USA build is clean, the Europe build
+      // drifted. The banner must probe past USA and name Europe.
+      vi.mocked(backend.getVersionList).mockResolvedValue({
+        multi_version: true,
+        versions: [
+          makeVersion({ rom_id: 2, label: "Game (Japan)", active: true, installed: true }),
+          makeVersion({ rom_id: 5, label: "Game (USA)", active: false, installed: true }),
+          makeVersion({ rom_id: 6, label: "Game (Europe)", active: false, installed: true }),
+        ],
+      });
+      vi.mocked(backend.checkLocalDrift).mockImplementation((romId: number) =>
+        Promise.resolve({ drifted: romId === 6, rom_id: romId }),
+      );
+
+      const { container } = render(<SavesTab {...defaultProps({ romId: 2 })} />);
+
+      await waitFor(() =>
+        expect(container.textContent).toContain(
+          'Version "Game (Europe)" has saves that were never uploaded — switch back to sync them.',
+        ),
+      );
+      // Both were probed (USA first, then Europe); the clean USA build isn't named.
+      expect(backend.checkLocalDrift).toHaveBeenCalledWith(5);
+      expect(backend.checkLocalDrift).toHaveBeenCalledWith(6);
+      expect(container.textContent).not.toContain("Game (USA)");
+    });
+
+    it("logs a warning and hides the banner when the version-list probe rejects", async () => {
+      const logWarnSpy = vi.spyOn(backend, "logWarn").mockImplementation(() => {});
+      try {
+        vi.mocked(backend.getVersionList).mockRejectedValue(new Error("offline"));
+
+        const { container } = render(<SavesTab {...defaultProps({ romId: 2 })} />);
+
+        await waitFor(() =>
+          expect(logWarnSpy).toHaveBeenCalledWith(expect.stringContaining("stranded-version check failed")),
+        );
+        expect(container.textContent).not.toContain("never uploaded");
+      } finally {
+        logWarnSpy.mockRestore();
+      }
     });
   });
 });

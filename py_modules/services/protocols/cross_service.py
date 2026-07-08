@@ -103,6 +103,90 @@ class RelaunchOptionsReader(Protocol):
     def installed_relaunch_items(self) -> list[dict[str, Any]]: ...
 
 
+class RomRelaunchItemReader(Protocol):
+    """Single installed+bound ROM relaunch-item resolution consumed by VersionSwitchService.
+
+    The composition root satisfies this with ``RelaunchOptionsResolver`` — the
+    same seam the batch ``RelaunchOptionsReader`` draws from, narrowed to one
+    ROM. After a version switch rebinds a *downloaded* target, the picker needs
+    that install's full Steam launch command to write onto the shortcut; this
+    resolves it from the freshly-bound rom_id. Returns ``None`` when the ROM has
+    no install row or no bound shortcut. A UoW-opening seam — the caller resolves
+    it *outside* any open Unit of Work (the nested ``BEGIN IMMEDIATE`` deadlocks).
+    """
+
+    def relaunch_item_for_rom(self, rom_id: int) -> dict[str, Any] | None: ...
+
+
+class SaveDriftProbeFn(Protocol):
+    """Local-save drift probe consumed by VersionSwitchService.
+
+    The composition root satisfies this with ``LaunchGateService.check_local_drift``.
+    Reports whether the ROM's local save files diverge from their persisted sync
+    baseline (a purely-local content-hash read) — the signal that switching away
+    from a downloaded version would strand un-uploaded save changes. Returns the
+    ``{"drifted": bool, "rom_id": int}`` shape and never raises (LaunchGate
+    collapses any internal error to not-drifted).
+    """
+
+    async def __call__(self, rom_id: int) -> dict[str, Any]: ...
+
+
+class ReachabilityProbeFn(Protocol):
+    """Server-reachability probe consumed by VersionSwitchService.
+
+    The composition root satisfies this with ``ConnectionService.probe_reachability``.
+    Fires a single-attempt, short-timeout heartbeat and returns ``{"online": bool}``
+    — the version-switch save-stranding refusal reports it as ``server_reachable``
+    so the frontend offers "Sync now & switch" only when a sync could actually
+    run. Never raises (an offline verdict is ``online: False``).
+    """
+
+    async def __call__(self) -> dict[str, Any]: ...
+
+
+class InstalledRomRemoverFn(Protocol):
+    """Installed-ROM removal consumed by DownloadService (sibling supersede, #1298).
+
+    The composition root satisfies this with ``RomRemovalService.remove_rom``.
+    Before downloading a version whose sibling group already has another version
+    on disk, DownloadService strips that install through this seam — reusing the
+    canonical file-deletion + ``rom_installs`` cleanup rather than duplicating it.
+    Returns the removal's ``{success, ...}`` shape; ``reason: "not_installed"`` is
+    an already-clean no-op, any other failure aborts the download.
+    """
+
+    async def __call__(self, rom_id: int) -> dict[str, Any]: ...
+
+
+class RomRemoverProvider(Protocol):
+    """Deferred access to the installed-ROM remover consumed by DownloadService.
+
+    DownloadService and RomRemovalService form a construction cycle
+    (RomRemovalService needs DownloadService's queue-cleanup seam), so the
+    composition root binds the remover after both exist and hands DownloadService
+    this getter (a ``LateBinding``). Each call returns the live
+    :class:`InstalledRomRemoverFn`; DownloadService awaits it per removal.
+    """
+
+    def __call__(self) -> InstalledRomRemoverFn: ...
+
+
+class ActiveDownloadRomIdsFn(Protocol):
+    """Active-download rom-id snapshot consumed by VersionSwitchService (#1298 F1).
+
+    The composition root satisfies this with ``DownloadService.active_download_rom_ids``.
+    A version switch is refused while any member of the target's sibling group has
+    an active download — the user is asked to cancel it first. Returns a snapshot
+    of the rom ids with an in-flight or queued transfer; a *paused* download is not
+    in the set (its task's ``finally`` already released the claim), so a switch is
+    allowed while a sibling is paused and a stale resume is refused downstream in
+    ``resume_download`` instead. Never raises.
+    """
+
+    def __call__(self) -> set[int]: ...
+
+
 class AchievementsReader(Protocol):
     """Achievement data access consumed by GameDetailService."""
 

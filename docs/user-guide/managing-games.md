@@ -39,13 +39,26 @@ disc picker, and only for a multi-version game. Open it to see every version in 
 - **not synced** — a version RomM has that isn't in your local library yet. Selecting it is fine; the plugin records it
   on the spot.
 
-Selecting a different version **rebinds** the game to it: the Download button now fetches that version, and the panel's
-title and Region/Languages rows update to reflect it. The Steam shortcut's own name, artwork, collections, and playtime
-are untouched — only the RomM Sync panel reflects the change. A single-version game shows no Version control.
+Selecting a different version **rebinds** the game to it: the Download button now fetches that version, the panel's
+title and Region/Languages rows update to reflect it, and its cover refreshes to the new version. The Steam shortcut
+keeps its name, its place in your collections, and its playtime — all tied to the shortcut, which never changes. A
+single-version game shows no Version control.
 
-Switching is free while the game is **not downloaded**. Switching the version of a game you've **already downloaded**
-(with the cleanup and save-file handling that implies) arrives in a later update — for now the control declines that
-with a short message.
+Switching **never deletes anything.** ROM files already on disk stay put, and save files are never moved or deleted by a
+switch. What happens depends on whether the version you're leaving is downloaded and whether its saves are synced:
+
+- **Not downloaded, or downloaded with all saves already synced** — the switch is instant. If the version you switch
+  _to_ is on disk it's playable right away (Play stays Play); if it isn't, the button becomes **Download**.
+- **Switching back to a version still on disk** — instant and playable immediately, with no re-download.
+- **Leaving a downloaded version whose saves were never uploaded** — a dialog warns you first. It offers **Sync now &
+  switch** (uploads the saves, then switches), **Switch anyway** (the saves stay on disk but stop syncing until you
+  switch back to that version), and **Cancel**. When RomM is unreachable the saves can't be uploaded, so the dialog
+  drops the sync option and offers only **Switch anyway** and **Cancel**, explaining why.
+
+When you leave a downloaded version with unsynced saves behind, the **Saves** tab shows a reminder banner ("switch back
+to sync them") so those saves aren't forgotten.
+
+While a download of the game is running, switching is blocked with a short message — cancel the running download first.
 
 ### Region and Languages
 
@@ -71,6 +84,12 @@ leaves your existing install intact. If the cancel happens to land just as the d
 **Installed** rather than torn down.
 
 Downloaded ROMs are stored in your RetroDECK roms directory (e.g. `~/retrodeck/roms/gba/`).
+
+**Only one version of a game is downloaded at a time.** If you tap **Download** on a version while another version of
+the same game (its [sibling group](#versions)) is already on disk, the plugin removes the old install first and then
+downloads the new one — no prompt. This keeps a multi-version game to a single copy on disk. Your **save files are never
+touched** by this cleanup, so switching back and re-downloading the earlier version rejoins its saves. Games that still
+carry a separate shortcut per version from an older release are left untouched.
 
 ### Pausing and Resuming a Download
 

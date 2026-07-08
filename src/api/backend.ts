@@ -380,26 +380,59 @@ export interface VersionList {
 }
 
 /**
- * Result of switching the active version. On success the binding moved to
- * `rom_id` (the version's own RomM `rom_name`); no Steam call, no name change.
- * A failure carries the canonical `{success, reason, message}` shape — `not_found`
- * (unknown appId), `not_in_group`, `bound_elsewhere` (a grandfathered duplicate),
- * `installed` (switching a downloaded game arrives in #1298), or
- * `server_unreachable`.
+ * Success outcome of a version switch (uniform across all switch paths, #1298).
+ * The binding moved to `rom_id`; `launch_options` is the target install's full
+ * Steam launch command when `target_installed`, or `""` for an uninstalled
+ * target (the ADR-0009 placeholder). The frontend confirm-writes `launch_options`
+ * onto the shortcut identified by `app_id` — even when blank, so the shortcut
+ * never keeps the old version's command.
  */
-export interface SwitchVersionResult {
-  success: boolean;
-  rom_id?: number;
-  rom_name?: string;
-  reason?: string;
-  message?: string;
+export interface SwitchVersionSuccess {
+  success: true;
+  rom_id: number;
+  target_installed: boolean;
+  launch_options: string;
+  app_id: number;
 }
+
+/**
+ * Soft-block: switching away from a downloaded version whose local saves have
+ * unsynced changes (#1298). `server_reachable` decides which confirm modal to
+ * show (T4 reachable offers "Sync now & switch", T5 offline does not);
+ * `unsynced_rom_id` / `unsynced_version_name` name the version that would be
+ * stranded. The user resolves it with the `allow_stranded` override.
+ */
+export interface SwitchVersionUnsyncedSaves {
+  success: false;
+  reason: "unsynced_saves";
+  message: string;
+  server_reachable: boolean;
+  unsynced_rom_id: number;
+  unsynced_version_name: string;
+}
+
+/**
+ * Other canonical `{success, reason, message}` failures — `not_found` (unknown
+ * appId), `not_in_group`, `bound_elsewhere` (a grandfathered duplicate),
+ * `invalid_target` (a server-only target the aggregate rejects),
+ * `download_in_progress` (a group download is running — cancel it first), or
+ * `server_unreachable`. All surface via the picker's toast fallback
+ * (`result.message`). The literal reason union excludes `unsynced_saves` so the
+ * soft-block variant narrows cleanly.
+ */
+export interface SwitchVersionFailure {
+  success: false;
+  reason: "not_found" | "not_in_group" | "bound_elsewhere" | "invalid_target" | "download_in_progress" | "server_unreachable";
+  message: string;
+}
+
+export type SwitchVersionResult = SwitchVersionSuccess | SwitchVersionUnsyncedSaves | SwitchVersionFailure;
 
 // Version picker (#1297, ADR-0021). Keyed by the Steam appId (the group's
 // shortcut). get_version_list reads the group's versions; switch_version moves
 // the active-version binding to a target rom_id.
 export const getVersionList = callable<[number], VersionList>("get_version_list");
-export const switchVersion = callable<[number, number], SwitchVersionResult>("switch_version");
+export const switchVersion = callable<[number, number, boolean], SwitchVersionResult>("switch_version");
 
 export const saveLogLevel = callable<[string], { success: boolean }>("save_log_level");
 // Preferred sibling-group region (ADR-0021 §3). "auto" = build-time default

@@ -52,6 +52,7 @@ import {
   clearGameCore,
   reconcilePlaytime,
   debugLog,
+  logError,
 } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
@@ -223,7 +224,10 @@ async function loadCached(
       refreshCoreInfoInBackground(romId, cancelled, setter);
     }
   } catch (e) {
-    detach(debugLog(`RomMPlaySection: loadCached error: ${e}`));
+    // Shared by the mount load and the version-switch re-derive — a failed cache
+    // load leaves the play section stale either way, so surface at warn level
+    // (debugLog is dropped at the default log level).
+    logError(`RomMPlaySection: loadCached error: ${e}`);
   }
 }
 
@@ -350,6 +354,18 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       }));
     };
 
+    const handleVersionSwitched = async (detail: Extract<RommDataChangedDetail, { type: "version_switched" }>) => {
+      if (detail.app_id !== appId) return;
+      // A version switch re-bound this appId to a new rom_id. The picker already
+      // invalidated the cached detail, so re-run the cache-first load to re-derive
+      // the info badges (save-sync / BIOS / core rows) and romId for the new
+      // version. Reset the artwork-applied gate first so the Steam tile's SGDB art
+      // re-applies for the new rom_id (#1298 item 3) — loadCached only applies it
+      // when the appId is absent from the set.
+      artworkApplied.delete(appId);
+      await loadCached(appId, () => cancelled, romIdRef, setInfo);
+    };
+
     const onDataChanged = (e: Event) => {
       detach(
         (async () => {
@@ -364,6 +380,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
                 break;
               case "save_sync":
                 await handleSaveSyncChange(detail);
+                break;
+              case "version_switched":
+                await handleVersionSwitched(detail);
                 break;
             }
           } catch (err) {

@@ -1384,6 +1384,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       });
     } else {
       activeTabContent = createElement(SavesTab, {
+        appId,
         romId,
         saveStatus: state.saveStatus,
         conflicts: state.conflicts,

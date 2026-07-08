@@ -9,13 +9,18 @@ binding to a chosen sibling (the active version), persisting a server-only targe
 first when needed.
 
 A version switch is a pure binding move: the shortcut's name and appId stay
-sticky (ADR-0021 §2), ``launch_options`` stays the uninstalled placeholder, and
-no save state migrates (ADR-0021 §4). Switching a *downloaded* game — with its
-cleanup and save guards — is a later slice (#1298); this service rejects a group
-that has any install row. The group is resolved by ``sibling_group_key`` over the
-migration-010 index; the server view comes from ``get_rom(bound).sibling_roms``.
-Server I/O runs outside the Unit of Work (ADR-0006) — read/close, then fetch,
-then a short write UoW.
+sticky (ADR-0021 §2) and no save state migrates (ADR-0021 §4). Switching a
+*downloaded* game keeps its existing files in place — the switch never deletes
+or transfers saves — but a switch *away* from a downloaded version whose local
+saves drift from their sync baseline is soft-blocked so the user can sync first
+(#1298); an explicit ``allow_stranded`` override honours "switch anyway". A
+switch back onto a still-installed version re-bakes that install's full Steam
+``launch_options`` (the frontend writes it onto the shortcut); switching to an
+uninstalled version returns the empty placeholder (ADR-0009). The group is
+resolved by ``sibling_group_key`` over the migration-010 index; the server view
+comes from ``get_rom(bound).sibling_roms``. Server I/O and the relaunch resolver
+run outside the Unit of Work (ADR-0006) — read/close, then fetch/resolve, then a
+short write UoW.
 """
 
 from __future__ import annotations
@@ -35,8 +40,12 @@ if TYPE_CHECKING:
     import logging
 
     from services.protocols import (
+        ActiveDownloadRomIdsFn,
         Clock,
+        ReachabilityProbeFn,
         RommRomReader,
+        RomRelaunchItemReader,
+        SaveDriftProbeFn,
         UnitOfWorkFactory,
     )
 
@@ -49,6 +58,12 @@ class VersionSwitchServiceConfig:
     Unit-of-Work factory (to resolve a sibling group and move its binding), the
     RomM ROM reader (the live ``sibling_roms`` view + per-sibling detail), and the
     live settings dict (read for ``preferred_region`` when ranking the default).
+    ``drift_probe`` reports whether the currently-bound version's local saves
+    diverge from their baseline (the save-stranding gate); ``reachability_probe``
+    supplies the ``server_reachable`` hint on that refusal; ``relaunch_resolver``
+    re-bakes a switched-onto install's full launch command; ``active_downloads``
+    reports the rom ids currently downloading so a switch is refused while any
+    group member has an active download (#1298).
     """
 
     loop: asyncio.AbstractEventLoop
@@ -57,6 +72,10 @@ class VersionSwitchServiceConfig:
     uow_factory: UnitOfWorkFactory
     romm_api: RommRomReader
     settings: dict[str, Any]
+    drift_probe: SaveDriftProbeFn
+    reachability_probe: ReachabilityProbeFn
+    relaunch_resolver: RomRelaunchItemReader
+    active_downloads: ActiveDownloadRomIdsFn
 
 
 @dataclass(frozen=True)
@@ -91,17 +110,25 @@ class _LocalGroup:
 
 @dataclass(frozen=True)
 class _SwitchContext:
-    """The read side of a version switch (bound group + target state), one UoW."""
+    """The read side of a version switch (bound group + target state), one UoW.
+
+    ``bound_installed`` / ``bound_label`` describe the currently-bound version:
+    the save-stranding gate only fires when the bound version is downloaded, and
+    the refusal names it by its ``fs_name`` stem (regions/revision distinguish
+    siblings that share a ROM ``name``). ``group_member_ids`` snapshots the sibling
+    group (plus the target) so the switch is refused while any of them has an
+    active download.
+    """
 
     bound_rom_id: int
-    bound_name: str
+    bound_installed: bool
+    bound_label: str
     group_key: str | None
     platform_slug: str
-    installed_any: bool
     target_is_local: bool
     target_group_key: str | None
     target_app_id: int | None
-    target_name: str
+    group_member_ids: frozenset[int]
 
 
 def _fs_name_no_ext(fs_name: str) -> str:
@@ -119,6 +146,10 @@ class VersionSwitchService:
         self._uow_factory = config.uow_factory
         self._romm_api = config.romm_api
         self._settings = config.settings
+        self._drift_probe = config.drift_probe
+        self._reachability_probe = config.reachability_probe
+        self._relaunch_resolver = config.relaunch_resolver
+        self._active_downloads = config.active_downloads
 
     # ── get_version_list ─────────────────────────────────────────────────
 
@@ -323,23 +354,34 @@ class VersionSwitchService:
 
     # ── switch_version ───────────────────────────────────────────────────
 
-    async def switch_version(self, app_id: int, target_rom_id: int) -> dict[str, Any]:
+    async def switch_version(self, app_id: int, target_rom_id: int, allow_stranded: bool) -> dict[str, Any]:
         """Move the group's active-version binding to ``target_rom_id``.
 
         A pure binding move (ADR-0021 §2/§4): the target row is bound to the
         group's ``app_id`` and the repository's collision-unbind clears the old
-        representative — no Steam call, no name change, no ``launch_options``
-        rewrite, no save-state migration. A server-only target is persisted from
-        its RomM detail first (server-derived facts). Guards, each canonical
-        ``{success, reason, message}``: an unknown appId → ``not_found``; a target
-        outside the group → ``not_in_group``; a target bound to a *different*
+        representative. Switching away from a *downloaded* version whose local
+        saves drift is soft-blocked (``unsynced_saves``) so the user can sync
+        first — the refusal carries ``server_reachable`` (from the reachability
+        probe), ``unsynced_rom_id``, and ``unsynced_version_name`` so the frontend
+        modal can offer "Sync now & switch" / "Switch anyway" / "Cancel".
+        ``allow_stranded`` is the "Switch anyway" override — honoured even offline
+        (the switch is purely local). Saves are never deleted or transferred.
+
+        On success returns
+        ``{success: True, rom_id, target_installed, launch_options, app_id}``:
+        ``launch_options`` is the target install's full Steam launch command when
+        it is downloaded (the frontend writes it onto the shortcut), or ``""`` for
+        an uninstalled target (the ADR-0009 placeholder). Guards, each canonical
+        ``{success, reason, message}``: unknown appId → ``not_found``; any group
+        member has an active download → ``download_in_progress`` (cancel it first);
+        target outside the group → ``not_in_group``; target bound to a *different*
         shortcut (grandfathered duplicate, ADR-0021 §5) → ``bound_elsewhere``; a
-        group with any downloaded member → ``installed`` (switching a downloaded
-        game is #1298); a server-only target whose detail the aggregate rejects →
-        ``invalid_target``. On success returns ``{success: True, rom_id, rom_name}``.
+        server-only target whose detail the aggregate rejects → ``invalid_target``;
+        an unreachable server on a server-only target fetch → ``server_unreachable``.
         """
         app_id = int(app_id)
         target_rom_id = int(target_rom_id)
+        allow_stranded = bool(allow_stranded)
 
         ctx = await self._loop.run_in_executor(None, self._read_switch_context, app_id, target_rom_id)
         if ctx is None:
@@ -349,26 +391,40 @@ class VersionSwitchService:
                 "message": f"No game is bound to shortcut {app_id}",
             }
 
-        if target_rom_id == ctx.bound_rom_id:
-            # Already the active version — a harmless no-op, reported as success.
-            return {"success": True, "rom_id": ctx.bound_rom_id, "rom_name": ctx.bound_name}
-
-        if ctx.installed_any:
+        # Refuse while any group member has an active download (#1298 F1): the
+        # in-progress set is in-memory (not SQLite), so this reads it directly
+        # before the write UoW — cancel-first, no in-UoW re-check needed.
+        if self._active_downloads() & ctx.group_member_ids:
             return {
                 "success": False,
-                "reason": "installed",
-                "message": "Uninstall the game to switch versions.",
+                "reason": "download_in_progress",
+                "message": "Cancel the running download first.",
             }
 
+        if target_rom_id == ctx.bound_rom_id:
+            # Already the active version — a harmless no-op. Re-bake its launch
+            # command so the shortcut heals even on this path (uniform shape).
+            launch_options = await self._resolve_launch_options(ctx.bound_rom_id, ctx.bound_installed)
+            return self._switch_success(ctx.bound_rom_id, ctx.bound_installed, launch_options, app_id)
+
         if ctx.target_is_local:
+            # Fast reject an invalid local target before the drift/reachability
+            # probes; the write UoW re-checks these same facts (TOCTOU).
             if ctx.group_key is not None and ctx.target_group_key != ctx.group_key:
                 return self._not_in_group(target_rom_id)
             if ctx.target_app_id is not None and ctx.target_app_id != app_id:
                 return self._bound_elsewhere(target_rom_id)
-            return await self._loop.run_in_executor(None, self._rebind_local, target_rom_id, app_id, ctx.target_name)
+            block = await self._save_stranding_block(ctx, allow_stranded)
+            if block is not None:
+                return block
+            return await self._switch_local(app_id, target_rom_id, ctx.group_key)
 
-        # Target not persisted locally — fetch its detail, validate membership,
-        # then persist + bind it (server-derived facts only).
+        # Target not persisted locally — the save-stranding gate on the bound
+        # version applies first (allow_stranded skips it), then fetch the detail,
+        # validate membership, and persist + bind (server-derived facts only).
+        block = await self._save_stranding_block(ctx, allow_stranded)
+        if block is not None:
+            return block
         try:
             target_dict = await self._loop.run_in_executor(None, self._romm_api.get_rom, target_rom_id)
         except Exception as e:  # surfaced as the canonical unreachable failure
@@ -384,27 +440,98 @@ class VersionSwitchService:
 
         return await self._loop.run_in_executor(None, self._persist_and_bind, target_dict, app_id, ctx.platform_slug)
 
+    async def _save_stranding_block(self, ctx: _SwitchContext, allow_stranded: bool) -> dict[str, Any] | None:
+        """Soft-block the switch when the bound version has un-uploaded save drift.
+
+        Only fires when the currently-bound version is downloaded and
+        ``allow_stranded`` is unset — otherwise there is nothing to strand, or the
+        user chose "Switch anyway". The drift probe is a purely-local content-hash
+        read (its own short-lived read, run before any write UoW opens — the
+        rom_save_states baseline it reads must not be touched while this service's
+        write UoW is open). The reachability probe is fired only on the blocking
+        branch so the free switch paths (synced saves, uninstalled, offline
+        override) make no server contact. Returns the ``unsynced_saves`` refusal
+        or ``None`` to proceed.
+        """
+        if allow_stranded or not ctx.bound_installed:
+            return None
+        drift = await self._drift_probe(ctx.bound_rom_id)
+        if not drift.get("drifted"):
+            return None
+        reachable = await self._reachability_probe()
+        return {
+            "success": False,
+            "reason": "unsynced_saves",
+            "message": "Unsynced saves on the current version.",
+            "server_reachable": bool(reachable.get("online")),
+            "unsynced_rom_id": ctx.bound_rom_id,
+            "unsynced_version_name": ctx.bound_label,
+        }
+
+    async def _switch_local(self, app_id: int, target_rom_id: int, group_key: str | None) -> dict[str, Any]:
+        """Rebind a local target (TOCTOU re-check in the write UoW), then re-bake.
+
+        The write UoW re-verifies the SQLite facts (group membership,
+        bound-elsewhere) against the fresh rows so a download or rebind that
+        landed since the pre-write reads decides, and reports whether the target
+        is downloaded. The relaunch resolver runs *after* the write UoW closes (it
+        opens its own — the nested ``BEGIN IMMEDIATE`` would deadlock).
+        """
+        write = await self._loop.run_in_executor(None, self._rebind_local_io, app_id, target_rom_id, group_key)
+        if not write.get("success"):
+            return write
+        target_installed = bool(write["target_installed"])
+        launch_options = await self._resolve_launch_options(target_rom_id, target_installed)
+        return self._switch_success(target_rom_id, target_installed, launch_options, app_id)
+
+    async def _resolve_launch_options(self, rom_id: int, installed: bool) -> str:
+        """Resolve the full Steam launch command for a just-bound installed ROM.
+
+        Returns ``""`` for an uninstalled ROM (the ADR-0009 placeholder). For an
+        installed ROM the relaunch resolver (a UoW-opening seam, run on the
+        executor outside any open UoW) composes the command. A ``None`` from an
+        installed, freshly-bound ROM is an unexpected resolver miss — logged
+        loudly and downgraded to ``""`` so the committed rebind still succeeds
+        rather than faking a failure.
+        """
+        if not installed:
+            return ""
+        item = await self._loop.run_in_executor(None, self._relaunch_resolver.relaunch_item_for_rom, rom_id)
+        if item is None:
+            self._logger.error(f"Version switch: relaunch resolve returned nothing for installed rom {rom_id}")
+            return ""
+        return item.get("launch_options", "")
+
+    @staticmethod
+    def _switch_success(rom_id: int, installed: bool, launch_options: str, app_id: int) -> dict[str, Any]:
+        return {
+            "success": True,
+            "rom_id": rom_id,
+            "target_installed": installed,
+            "launch_options": launch_options,
+            "app_id": app_id,
+        }
+
     def _read_switch_context(self, app_id: int, target_rom_id: int) -> _SwitchContext | None:
-        """Capture the bound group + target state for a switch in one read UoW."""
+        """Capture the bound version + target state for a switch in one read UoW."""
         with self._uow_factory() as uow:
             bound = uow.roms.get_by_app_id(app_id)
             if bound is None:
                 return None
-            group_key = bound.sibling_group_key
-            rows = list(uow.roms.iter_by_group_key(group_key)) if group_key else [bound]
             target_local = uow.roms.get(target_rom_id)
-            check_ids = {r.rom_id for r in rows} | {target_rom_id}
-            installed_any = any(uow.rom_installs.get(i) is not None for i in check_ids)
+            group_key = bound.sibling_group_key
+            member_ids = {r.rom_id for r in uow.roms.iter_by_group_key(group_key)} if group_key else {bound.rom_id}
+            member_ids.add(target_rom_id)
             return _SwitchContext(
                 bound_rom_id=bound.rom_id,
-                bound_name=bound.name,
+                bound_installed=uow.rom_installs.get(bound.rom_id) is not None,
+                bound_label=_fs_name_no_ext(bound.fs_name),
                 group_key=group_key,
                 platform_slug=bound.platform_slug,
-                installed_any=installed_any,
                 target_is_local=target_local is not None,
                 target_group_key=target_local.sibling_group_key if target_local is not None else None,
                 target_app_id=target_local.shortcut_app_id if target_local is not None else None,
-                target_name=target_local.name if target_local is not None else "",
+                group_member_ids=frozenset(member_ids),
             )
 
     def _is_sibling(self, target_dict: dict[str, Any], bound_rom_id: int, group_key: str | None) -> bool:
@@ -419,27 +546,44 @@ class VersionSwitchService:
             return True
         return group_key is not None and compute_sibling_group_key(target_dict) == group_key
 
-    def _rebind_local(self, target_rom_id: int, app_id: int, target_name: str) -> dict[str, Any]:
-        """Move the binding onto an already-persisted local target (short write UoW)."""
+    def _rebind_local_io(self, app_id: int, target_rom_id: int, group_key: str | None) -> dict[str, Any]:
+        """Re-verify the SQLite facts and move the binding in one write UoW.
+
+        The pre-write reads (context + drift) happened in earlier, closed UoWs, so
+        a download or rebind could have landed since. This re-checks the same
+        facts against the fresh rows inside the write transaction — group
+        membership and bound-elsewhere — so the committed decision is consistent.
+        Returns a canonical failure dict (``not_in_group`` / ``bound_elsewhere``)
+        or ``{"success": True, "target_installed": bool}``; the caller resolves the
+        launch command outside this UoW (the relaunch resolver opens its own).
+        """
         with self._uow_factory() as uow:
             target = uow.roms.get(target_rom_id)
             if target is None:
                 # Raced away between read and write — treat as not_in_group.
                 return self._not_in_group(target_rom_id)
+            if group_key is not None and target.sibling_group_key != group_key:
+                return self._not_in_group(target_rom_id)
+            if target.shortcut_app_id is not None and target.shortcut_app_id != app_id:
+                return self._bound_elsewhere(target_rom_id)
             target.bind_shortcut(app_id)
             uow.roms.save(target)
-        return {"success": True, "rom_id": target_rom_id, "rom_name": target_name}
+            target_installed = uow.rom_installs.get(target_rom_id) is not None
+        return {"success": True, "target_installed": target_installed}
 
     def _persist_and_bind(self, target_dict: dict[str, Any], app_id: int, fallback_platform: str) -> dict[str, Any]:
         """Persist a server-only target (server-derived facts) and bind it.
 
         Builds the ``Rom`` from the RomM detail via the shared version-metadata
         extraction, binds it to ``app_id`` (the repository's collision-unbind
-        clears the old representative), and returns the switch success. Siblings
-        share a platform, so the bound group's ``platform_slug`` backstops a detail
-        that omits it (``Rom.synced`` requires a non-empty slug). A detail that the
-        aggregate rejects (bad id, no resolvable slug) fails ``invalid_target`` —
-        the target is a sibling, but its server payload can't become a local row.
+        clears the old representative), and returns the switch success. A
+        server-only target has no ``rom_installs`` row, so it is never installed —
+        ``target_installed`` is ``False`` and ``launch_options`` the empty
+        placeholder. Siblings share a platform, so the bound group's
+        ``platform_slug`` backstops a detail that omits it (``Rom.synced`` requires
+        a non-empty slug). A detail that the aggregate rejects (bad id, no
+        resolvable slug) fails ``invalid_target`` — the target is a sibling, but
+        its server payload can't become a local row.
         """
         meta = extract_version_metadata(target_dict)
         try:
@@ -464,7 +608,7 @@ class VersionSwitchService:
         rom.bind_shortcut(app_id)
         with self._uow_factory() as uow:
             uow.roms.save(rom)
-        return {"success": True, "rom_id": rom.rom_id, "rom_name": rom.name}
+        return self._switch_success(rom.rom_id, False, "", app_id)
 
     @staticmethod
     def _not_in_group(target_rom_id: int) -> dict[str, Any]:

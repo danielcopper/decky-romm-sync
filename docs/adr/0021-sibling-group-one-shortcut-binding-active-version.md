@@ -131,6 +131,29 @@ per-content `.srm` naming produces on disk anyway. No automatic carry-over, ever
 different dump is exactly the ambiguity the save-sync design refuses to auto-resolve). The save-status UI must make
 unambiguous which version's saves are in play.
 
+> **Amendment (downloaded-version switch + one-download-per-game, #1298 slice).** §2's binding-move switch now applies
+> to **downloaded** games, not only uninstalled ones, and the "multiple versions may coexist on disk" consequence is
+> capped. Three rules, all local-only, no new server scope:
+>
+> - **At most one downloaded version per game, enforced at download time.** Tapping Download on a version while another
+>   member of the same sibling group is installed removes the older install first — via the canonical
+>   `RomRemovalService.remove_rom` path (files + `rom_installs` row, **saves untouched** per ADR-0007) — then downloads.
+>   No dialog. A member bound to a **different** shortcut (a grandfathered duplicate, §5) is exempt and never removed.
+>   The picker's switch itself still deletes nothing; only an explicit Download supersedes an install. So "multiple
+>   versions may coexist on disk" holds only until a second version is downloaded — after which switch-back to the
+>   superseded version needs a re-download, which rejoins the saves the supersede left in place.
+> - **Save-stranding guard on switch-away.** Switching away from a downloaded version whose local saves drift from their
+>   sync baseline is **soft-blocked** so the user decides: sync-first-then-switch, switch-anyway (the saves stay on disk
+>   and stop syncing until switch-back — never deleted or transferred, §4 unchanged), or cancel. The block fires only
+>   when the bound version is installed **and** drifted; a purely-local switch (synced saves, or an uninstalled bound
+>   version) is free and allowed **even offline**. Offline, the sync-first option is withheld (the saves can't be
+>   uploaded), leaving switch-anyway / cancel. The read/close-then-fetch-then-short-write-UoW ordering (ADR-0006)
+>   re-checks group membership and bound-elsewhere inside the write transaction (TOCTOU) so a download or rebind that
+>   lands mid-flight decides.
+> - **Block while a group download is in flight.** A switch is refused while any member of the group has an active
+>   download (cancel it first). A paused download whose version is no longer the active binding is refused on resume and
+>   its queue entry dropped, so a stale paused transfer can't resurrect a superseded install.
+
 ### 5. Existing duplicate shortcuts are grandfathered, not force-collapsed
 
 Libraries synced before this model can hold multiple shortcuts of one group (different-name siblings). A group with
@@ -144,8 +167,9 @@ ever deletes a shortcut the user has played.
 - **A real bug class is fixed, not just a feature added.** The nondeterministic last-sibling-wins binding and the
   permanently-unsynced phantom rows disappear; fresh syncs of an N-version game yield exactly one deterministic
   shortcut.
-- **Version switching is cheap and lossless** — a `launch_options` flip plus a binding move. Multiple versions may
-  coexist on disk; switch-back needs no re-download.
+- **Version switching is cheap and lossless** — a `launch_options` flip plus a binding move. A version already on disk
+  needs no re-download on switch-back (the #1298 amendment under §4 caps a game to **one** downloaded version at a time,
+  enforced at download; a switch never removes files, only an explicit Download supersedes an install).
 - **The shortcut name can lag the active version** (play the Japanese dump under the shortcut minted from the USA name).
   Accepted: name stability is what protects appId, artwork, collections and playtime.
 - **Unmatched ROMs are untouched** — solo groups degrade to exactly today's per-ROM behavior.

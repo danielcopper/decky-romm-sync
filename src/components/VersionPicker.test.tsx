@@ -41,7 +41,21 @@ vi.mock("../utils/cachedGameDetailStore", () => ({
   invalidateCachedGameDetail: vi.fn(),
 }));
 
+// setLaunchOptionsConfirmed writes the switched version's launch command onto the
+// Steam shortcut (#1298) — mock so the test asserts the call without SteamClient.
+vi.mock("../utils/steamShortcuts", () => ({
+  setLaunchOptionsConfirmed: vi.fn().mockResolvedValue(true),
+}));
+
+// The unsynced-saves confirm has its own test (UnsyncedSavesSwitchModal.test.tsx);
+// mock it here so the picker's soft-block branch is driven by a chosen outcome.
+vi.mock("./UnsyncedSavesSwitchModal", () => ({
+  showUnsyncedSavesModal: vi.fn(),
+}));
+
 import { invalidateCachedGameDetail } from "../utils/cachedGameDetailStore";
+import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
+import { showUnsyncedSavesModal } from "./UnsyncedSavesSwitchModal";
 
 const APP_ID = 100;
 
@@ -162,6 +176,25 @@ describe("VersionPicker — menu markers", () => {
   });
 });
 
+/** Capture the events dispatched on `romm_data_changed` while `fn` runs. */
+async function captureDataChanged(fn: () => Promise<void>): Promise<CustomEvent[]> {
+  const dispatched: CustomEvent[] = [];
+  const listener = (e: Event) => dispatched.push(e as CustomEvent);
+  globalThis.addEventListener("romm_data_changed", listener);
+  await fn();
+  globalThis.removeEventListener("romm_data_changed", listener);
+  return dispatched;
+}
+
+/** Click a captured-menu row and flush the async switch chain. */
+async function clickRow(menuContainer: HTMLElement, label: string): Promise<void> {
+  await act(async () => {
+    fireEvent.click(within(menuContainer).getByText(label));
+    // Flush the switch → modal → sync → retry microtask chain.
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+  });
+}
+
 describe("VersionPicker — switching", () => {
   beforeEach(() => {
     captured.menu = null;
@@ -169,29 +202,104 @@ describe("VersionPicker — switching", () => {
     vi.mocked(backend.switchVersion).mockReset();
     vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
     vi.mocked(invalidateCachedGameDetail).mockReset();
+    vi.mocked(setLaunchOptionsConfirmed).mockReset().mockResolvedValue(true);
     vi.mocked(toaster.toast).mockReset();
   });
 
-  it("switches to a version: invalidates the cache and dispatches version_switched", async () => {
+  it("switch to a downloaded target confirms its launch command onto the shortcut", async () => {
     vi.mocked(backend.getVersionList).mockResolvedValue(multiVersionList());
-    vi.mocked(backend.switchVersion).mockResolvedValue({ success: true, rom_id: 2, rom_name: "Game (Japan)" });
-
-    const dispatched: CustomEvent[] = [];
-    const listener = (e: Event) => dispatched.push(e as CustomEvent);
-    globalThis.addEventListener("romm_data_changed", listener);
-
-    const { menu } = await renderAndOpen();
-    await act(async () => {
-      fireEvent.click(within(menu.container).getByText("Game (Japan)"));
-      await Promise.resolve();
-      await Promise.resolve();
+    const command = 'flatpak run net.retrodeck.retrodeck "/roms/game.iso"';
+    vi.mocked(backend.switchVersion).mockResolvedValue({
+      success: true,
+      rom_id: 2,
+      target_installed: true,
+      launch_options: command,
+      app_id: APP_ID,
     });
-    globalThis.removeEventListener("romm_data_changed", listener);
 
-    expect(backend.switchVersion).toHaveBeenCalledWith(APP_ID, 2);
+    const dispatched = await captureDataChanged(async () => {
+      const { menu } = await renderAndOpen();
+      await clickRow(menu.container, "Game (Japan)");
+    });
+
+    expect(backend.switchVersion).toHaveBeenCalledWith(APP_ID, 2, false);
+    // The launch command is confirm-written onto the shortcut BEFORE the cache
+    // invalidate + broadcast.
+    expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(APP_ID, command);
     expect(invalidateCachedGameDetail).toHaveBeenCalledWith(APP_ID);
     const versionEvt = dispatched.find((e) => e.detail?.type === "version_switched");
     expect(versionEvt?.detail).toEqual({ type: "version_switched", app_id: APP_ID, rom_id: 2 });
+  });
+
+  it("switch to an uninstalled target blanks the shortcut's launch command", async () => {
+    vi.mocked(backend.getVersionList).mockResolvedValue(multiVersionList());
+    vi.mocked(backend.switchVersion).mockResolvedValue({
+      success: true,
+      rom_id: 2,
+      target_installed: false,
+      launch_options: "",
+      app_id: APP_ID,
+    });
+
+    const dispatched = await captureDataChanged(async () => {
+      const { menu } = await renderAndOpen();
+      await clickRow(menu.container, "Game (Japan)");
+    });
+
+    // Blank is applied on purpose so the shortcut never keeps the old command.
+    expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(APP_ID, "");
+    expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(true);
+  });
+
+  it("still invalidates + broadcasts (and warns) when the launch-options confirm resolves false", async () => {
+    vi.mocked(backend.getVersionList).mockResolvedValue(multiVersionList());
+    vi.mocked(backend.switchVersion).mockResolvedValue({
+      success: true,
+      rom_id: 2,
+      target_installed: true,
+      launch_options: "cmd",
+      app_id: APP_ID,
+    });
+    // The write didn't confirm — the backend rebind is already committed, so the
+    // switch must still complete; only the shortcut command is left stale.
+    vi.mocked(setLaunchOptionsConfirmed).mockResolvedValue(false);
+
+    const dispatched = await captureDataChanged(async () => {
+      const { menu } = await renderAndOpen();
+      await clickRow(menu.container, "Game (Japan)");
+    });
+
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Switched — re-switch if launch fails" });
+    expect(invalidateCachedGameDetail).toHaveBeenCalledWith(APP_ID);
+    expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(true);
+  });
+
+  it("still invalidates + broadcasts when the launch-options confirm THROWS (non-vacuous catch)", async () => {
+    const logErrorSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+    try {
+      vi.mocked(backend.getVersionList).mockResolvedValue(multiVersionList());
+      vi.mocked(backend.switchVersion).mockResolvedValue({
+        success: true,
+        rom_id: 2,
+        target_installed: true,
+        launch_options: "cmd",
+        app_id: APP_ID,
+      });
+      vi.mocked(setLaunchOptionsConfirmed).mockRejectedValue(new Error("steam down"));
+
+      const dispatched = await captureDataChanged(async () => {
+        const { menu } = await renderAndOpen();
+        await clickRow(menu.container, "Game (Japan)");
+      });
+
+      // A throw is treated like a failed confirm: warn + still complete the switch.
+      expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("launch-options confirm threw"));
+      expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Switched — re-switch if launch fails" });
+      expect(invalidateCachedGameDetail).toHaveBeenCalledWith(APP_ID);
+      expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(true);
+    } finally {
+      logErrorSpy.mockRestore();
+    }
   });
 
   it("does nothing when the active version is re-selected", async () => {
@@ -206,25 +314,22 @@ describe("VersionPicker — switching", () => {
     expect(backend.switchVersion).not.toHaveBeenCalled();
   });
 
-  it("toasts the backend message on a failed switch (non-vacuous)", async () => {
+  it("toasts the backend message on a plain failure (non-vacuous)", async () => {
     vi.mocked(backend.getVersionList).mockResolvedValue(multiVersionList());
     vi.mocked(backend.switchVersion).mockResolvedValue({
       success: false,
-      reason: "installed",
-      message: "Uninstall the game to switch versions.",
+      reason: "bound_elsewhere",
+      message: "That version is bound to another shortcut.",
     });
 
     const { menu } = await renderAndOpen();
-    await act(async () => {
-      fireEvent.click(within(menu.container).getByText("Game (Japan)"));
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await clickRow(menu.container, "Game (Japan)");
 
     expect(toaster.toast).toHaveBeenCalledWith({
       title: "RomM Sync",
-      body: "Uninstall the game to switch versions.",
+      body: "That version is bound to another shortcut.",
     });
+    expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
     expect(invalidateCachedGameDetail).not.toHaveBeenCalled();
   });
 
@@ -233,14 +338,186 @@ describe("VersionPicker — switching", () => {
     vi.mocked(backend.switchVersion).mockRejectedValue(new Error("network down"));
 
     const { menu } = await renderAndOpen();
-    await act(async () => {
-      fireEvent.click(within(menu.container).getByText("Game (Japan)"));
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await clickRow(menu.container, "Game (Japan)");
 
     expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Could not switch version" });
     expect(invalidateCachedGameDetail).not.toHaveBeenCalled();
+  });
+});
+
+describe("VersionPicker — unsynced-saves soft-block", () => {
+  const block = {
+    success: false as const,
+    reason: "unsynced_saves" as const,
+    message: "Unsynced saves on the current version.",
+    server_reachable: true,
+    unsynced_rom_id: 1,
+    unsynced_version_name: "Game (USA)",
+  };
+  const successResult = {
+    success: true as const,
+    rom_id: 2,
+    target_installed: false,
+    launch_options: "",
+    app_id: APP_ID,
+  };
+
+  beforeEach(() => {
+    captured.menu = null;
+    vi.mocked(backend.getVersionList).mockReset().mockResolvedValue(multiVersionList());
+    vi.mocked(backend.switchVersion).mockReset();
+    vi.mocked(backend.syncRomSaves).mockReset();
+    vi.mocked(backend.refreshSaveStatus).mockReset().mockResolvedValue({ success: true });
+    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
+    vi.mocked(invalidateCachedGameDetail).mockReset();
+    vi.mocked(setLaunchOptionsConfirmed).mockReset().mockResolvedValue(true);
+    vi.mocked(showUnsyncedSavesModal).mockReset();
+    vi.mocked(toaster.toast).mockReset();
+  });
+
+  it("opens the modal with the stranded version's name + reachability", async () => {
+    vi.mocked(backend.switchVersion).mockResolvedValue(block);
+    vi.mocked(showUnsyncedSavesModal).mockResolvedValue("cancel");
+
+    const { menu } = await renderAndOpen();
+    await clickRow(menu.container, "Game (Japan)");
+
+    expect(showUnsyncedSavesModal).toHaveBeenCalledWith({
+      versionName: "Game (USA)",
+      serverReachable: true,
+    });
+  });
+
+  it("'Switch anyway' forces the switch with allow_stranded=true and applies it", async () => {
+    vi.mocked(backend.switchVersion).mockResolvedValueOnce(block).mockResolvedValueOnce(successResult);
+    vi.mocked(showUnsyncedSavesModal).mockResolvedValue("switch_anyway");
+
+    const dispatched = await captureDataChanged(async () => {
+      const { menu } = await renderAndOpen();
+      await clickRow(menu.container, "Game (Japan)");
+    });
+
+    expect(backend.switchVersion).toHaveBeenNthCalledWith(1, APP_ID, 2, false);
+    expect(backend.switchVersion).toHaveBeenNthCalledWith(2, APP_ID, 2, true);
+    expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(APP_ID, "");
+    expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(true);
+  });
+
+  it("'Sync now & switch' syncs the stranded version then retries the switch", async () => {
+    vi.mocked(backend.switchVersion).mockResolvedValueOnce(block).mockResolvedValueOnce(successResult);
+    vi.mocked(backend.syncRomSaves).mockResolvedValue({ success: true, message: "", synced: 1 });
+    vi.mocked(showUnsyncedSavesModal).mockResolvedValue("sync_and_switch");
+
+    const dispatched = await captureDataChanged(async () => {
+      const { menu } = await renderAndOpen();
+      await clickRow(menu.container, "Game (Japan)");
+    });
+
+    expect(backend.syncRomSaves).toHaveBeenCalledWith(1);
+    // Second switch is the post-sync retry (allow_stranded still false).
+    expect(backend.switchVersion).toHaveBeenNthCalledWith(2, APP_ID, 2, false);
+    expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(APP_ID, "");
+    expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(true);
+  });
+
+  it("aborts with a toast + save-status refresh when the pre-switch sync fails", async () => {
+    vi.mocked(backend.switchVersion).mockResolvedValue(block);
+    vi.mocked(backend.syncRomSaves).mockResolvedValue({ success: false, message: "boom", synced: 0 });
+    vi.mocked(showUnsyncedSavesModal).mockResolvedValue("sync_and_switch");
+
+    const dispatched = await captureDataChanged(async () => {
+      const { menu } = await renderAndOpen();
+      await clickRow(menu.container, "Game (Japan)");
+    });
+
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Couldn't sync saves — try again" });
+    // The stranded version's status is refreshed so the conflict UI can surface.
+    expect(backend.refreshSaveStatus).toHaveBeenCalledWith(1);
+    expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(false);
+    expect(backend.switchVersion).toHaveBeenCalledTimes(1); // no retry
+  });
+
+  it("aborts when the sync surfaces conflicts", async () => {
+    vi.mocked(backend.switchVersion).mockResolvedValue(block);
+    vi.mocked(backend.syncRomSaves).mockResolvedValue({
+      success: true,
+      message: "",
+      synced: 0,
+      conflicts: [{ filename: "save.srm" } as never],
+    });
+    vi.mocked(showUnsyncedSavesModal).mockResolvedValue("sync_and_switch");
+
+    const { menu } = await renderAndOpen();
+    await clickRow(menu.container, "Game (Japan)");
+
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Resolve save conflicts first" });
+    expect(backend.refreshSaveStatus).toHaveBeenCalledWith(1);
+    expect(backend.switchVersion).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a distinct toast when the post-sync retry re-blocks on unsynced saves", async () => {
+    // Sync succeeds cleanly, but the retry still reports drift (partial upload /
+    // race) — the message must say the saves are still unsynced, not the generic
+    // "couldn't switch".
+    vi.mocked(backend.switchVersion).mockResolvedValueOnce(block).mockResolvedValueOnce(block);
+    vi.mocked(backend.syncRomSaves).mockResolvedValue({ success: true, message: "", synced: 1 });
+    vi.mocked(showUnsyncedSavesModal).mockResolvedValue("sync_and_switch");
+
+    const dispatched = await captureDataChanged(async () => {
+      const { menu } = await renderAndOpen();
+      await clickRow(menu.container, "Game (Japan)");
+    });
+
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Saves still unsynced — try again" });
+    expect(backend.refreshSaveStatus).toHaveBeenCalledWith(1);
+    expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(false);
+  });
+
+  it("logs a warning when the post-abort save-status refresh rejects (non-vacuous catch)", async () => {
+    const logWarnSpy = vi.spyOn(backend, "logWarn").mockImplementation(() => {});
+    try {
+      vi.mocked(backend.switchVersion).mockResolvedValue(block);
+      vi.mocked(backend.syncRomSaves).mockResolvedValue({ success: false, message: "boom", synced: 0 });
+      vi.mocked(backend.refreshSaveStatus).mockRejectedValue(new Error("offline"));
+      vi.mocked(showUnsyncedSavesModal).mockResolvedValue("sync_and_switch");
+
+      const { menu } = await renderAndOpen();
+      await clickRow(menu.container, "Game (Japan)");
+
+      // The abort toast still fires, and the rejected refresh is warned (not swallowed silently).
+      expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Couldn't sync saves — try again" });
+      expect(logWarnSpy).toHaveBeenCalledWith(expect.stringContaining("post-abort save-status refresh failed"));
+    } finally {
+      logWarnSpy.mockRestore();
+    }
+  });
+
+  it("cancel leaves the binding untouched", async () => {
+    vi.mocked(backend.switchVersion).mockResolvedValue(block);
+    vi.mocked(showUnsyncedSavesModal).mockResolvedValue("cancel");
+
+    const dispatched = await captureDataChanged(async () => {
+      const { menu } = await renderAndOpen();
+      await clickRow(menu.container, "Game (Japan)");
+    });
+
+    expect(backend.switchVersion).toHaveBeenCalledTimes(1); // only the initial probe
+    expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+    expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(false);
+    expect(toaster.toast).not.toHaveBeenCalled();
+  });
+
+  it("offline block: 'Switch anyway' still forces the switch (T5)", async () => {
+    vi.mocked(backend.switchVersion)
+      .mockResolvedValueOnce({ ...block, server_reachable: false })
+      .mockResolvedValueOnce(successResult);
+    vi.mocked(showUnsyncedSavesModal).mockResolvedValue("switch_anyway");
+
+    const { menu } = await renderAndOpen();
+    await clickRow(menu.container, "Game (Japan)");
+
+    expect(showUnsyncedSavesModal).toHaveBeenCalledWith({ versionName: "Game (USA)", serverReachable: false });
+    expect(backend.switchVersion).toHaveBeenNthCalledWith(2, APP_ID, 2, true);
   });
 });
 

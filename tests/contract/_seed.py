@@ -82,6 +82,62 @@ def seed_install(
     return file_path
 
 
+def seed_group_member(
+    harness: ContractHarness,
+    rom_id: int,
+    *,
+    group_key: str,
+    shortcut_app_id: int | None = None,
+    platform_slug: str = "gba",
+    system: str = "gba",
+    name: str | None = None,
+    regions: tuple[str, ...] = (),
+    is_main_sibling: bool = False,
+    installed: bool = False,
+    file_name: str = "game.gba",
+) -> str | None:
+    """Seed one ``Rom`` row in a sibling group, optionally installed.
+
+    Unlike :func:`seed_rom` / :func:`seed_install` (which default to a solo,
+    self-bound ROM), this sets ``sibling_group_key`` and takes an explicit
+    ``shortcut_app_id`` so a version-switch / #1298 supersede contract test can
+    build a real multi-version group (bound representative / unbound install /
+    grandfathered separate shortcut). Returns the install file path when
+    ``installed`` (its stem is the save-file basename the drift/sync discovery
+    derives — ``find_save_files`` keys off the install path, not the roms row),
+    else ``None``.
+    """
+    with harness.uow_factory() as uow:
+        uow.roms.save(
+            Rom.synced(
+                rom_id=rom_id,
+                platform_slug=platform_slug,
+                name=name or f"rom-{rom_id}",
+                fs_name=name or f"rom-{rom_id}",
+                shortcut_app_id=shortcut_app_id,
+                synced_at="2026-01-01T00:00:00",
+                sibling_group_key=group_key,
+                regions=regions,
+                is_main_sibling=is_main_sibling,
+            )
+        )
+    if not installed:
+        return None
+    file_path = str(harness.tmp_path / "retrodeck" / "roms" / system / file_name)
+    with harness.uow_factory() as uow:
+        uow.rom_installs.save(
+            RomInstall.mark_installed(
+                rom_id=rom_id,
+                file_path=file_path,
+                rom_dir=None,
+                platform_slug=platform_slug,
+                system=system,
+                installed_at="2026-01-01T00:00:00",
+            )
+        )
+    return file_path
+
+
 def seed_save_state(
     harness: ContractHarness,
     rom_id: int,

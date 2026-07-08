@@ -12,7 +12,7 @@
 
 import { useState, useEffect, useRef, createElement, FC } from "react";
 import { ConfirmModal, DialogButton, Focusable, showModal } from "@decky/ui";
-import { switchSlot, debugLog } from "../api/backend";
+import { switchSlot, getVersionList, checkLocalDrift, debugLog, logWarn } from "../api/backend";
 import { getRommConnectionState } from "../utils/connectionState";
 import type { SaveStatus, SyncConflict, SaveSlotSummary } from "../types";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
@@ -23,6 +23,8 @@ import { renderSaveFileRow } from "./saves/SaveFileRow";
 import { detach } from "../utils/detach";
 
 interface SavesTabProps {
+  /** The group's sticky Steam appId — drives the stranded-version drift check. */
+  appId: number;
   romId: number;
   saveStatus: SaveStatus | null;
   conflicts: SyncConflict[];
@@ -33,6 +35,7 @@ interface SavesTabProps {
 }
 
 export const SavesTab: FC<SavesTabProps> = ({
+  appId,
   romId,
   saveStatus,
   conflicts,
@@ -46,6 +49,10 @@ export const SavesTab: FC<SavesTabProps> = ({
   const [isOffline, setIsOffline] = useState(getRommConnectionState() === "offline");
   // Bumped to invalidate VersionHistoryPanel caches after a restore
   const [versionHistoryKey, setVersionHistoryKey] = useState(0);
+  // Display name of an INACTIVE sibling version that is still on disk and has
+  // unsynced save drift (#1298) — null when none. Reminds the user to switch back
+  // and sync before those saves are lost.
+  const [strandedVersion, setStrandedVersion] = useState<string | null>(null);
 
   const handleVersionRestored = () => {
     setVersionHistoryKey((k) => k + 1);
@@ -83,6 +90,47 @@ export const SavesTab: FC<SavesTabProps> = ({
     };
   }, []);
 
+  // Stranded-saves reminder (#1298): after a version switch the previously-bound
+  // install becomes an INACTIVE sibling that still holds its (possibly unsynced)
+  // saves on disk. Surface a banner when such a version has local drift so the
+  // user knows to switch back and sync before those saves are lost. Re-runs on
+  // saves-tab load (mount) and on a version switch (romId changes).
+  useEffect(() => {
+    let cancelled = false;
+    // Getter, not a bare read: the two post-await `cancelled` checks would
+    // otherwise be narrowed to "always false" by no-unnecessary-condition (the
+    // cleanup mutation lives in another closure it can't model).
+    const isCancelled = () => cancelled;
+    const check = async (): Promise<void> => {
+      try {
+        const list = await getVersionList(appId);
+        if (isCancelled()) return;
+        const inactiveInstalled = list.multi_version
+          ? (list.versions ?? []).filter((v) => v.installed && !v.active)
+          : [];
+        // Probe every inactive-installed sibling (any of them can hold stranded
+        // saves), and surface the first one that actually drifted.
+        let stranded: string | null = null;
+        for (const v of inactiveInstalled) {
+          const drift = await checkLocalDrift(v.rom_id);
+          if (isCancelled()) return;
+          if (drift.drifted) {
+            stranded = v.label || v.name || String(v.rom_id);
+            break;
+          }
+        }
+        setStrandedVersion(stranded);
+      } catch (e) {
+        if (!isCancelled()) setStrandedVersion(null);
+        logWarn(`SavesTab: stranded-version check failed for appId ${appId}: ${e}`);
+      }
+    };
+    detach(check());
+    return () => {
+      cancelled = true;
+    };
+  }, [appId, romId]);
+
   // --- Offline banner ---
   const offlineBanner = isOffline
     ? createElement(
@@ -100,6 +148,26 @@ export const SavesTab: FC<SavesTabProps> = ({
           },
         },
         "RomM is offline — slot switching is disabled until the server is reachable. This prevents save sync conflicts.",
+      )
+    : null;
+
+  // --- Stranded-version reminder banner (#1298) ---
+  const strandedBanner = strandedVersion
+    ? createElement(
+        "div",
+        {
+          key: "stranded-banner",
+          style: {
+            padding: "8px",
+            background: "rgba(255, 136, 0, 0.15)",
+            borderRadius: "4px",
+            border: "1px solid rgba(255, 136, 0, 0.3)",
+            marginBottom: "12px",
+            fontSize: "12px",
+            color: "#ff8800",
+          },
+        },
+        `Version "${strandedVersion}" has saves that were never uploaded — switch back to sync them.`,
       )
     : null;
 
@@ -130,6 +198,7 @@ export const SavesTab: FC<SavesTabProps> = ({
       Focusable,
       { noFocusRing: true },
       offlineBanner,
+      strandedBanner,
       createElement("div", { style: { fontSize: "13px", color: "#8f98a0", padding: "8px 0" } }, "Loading slots..."),
     );
   }
@@ -242,6 +311,7 @@ export const SavesTab: FC<SavesTabProps> = ({
       style: { display: "flex", flexDirection: "column" as const, gap: "0" },
     },
     offlineBanner,
+    strandedBanner,
     legacyWarning,
 
     // Legacy mode: show save files directly above slot panels

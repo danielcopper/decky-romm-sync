@@ -523,11 +523,17 @@ describe("RomMPlaySection", () => {
       expect(sectionRefresh.refreshAchievementsInBackground).not.toHaveBeenCalled();
     });
 
-    it("logs via debugLog when getCachedGameDetail rejects", async () => {
-      vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("boom"));
-      render(<RomMPlaySection appId={testAppId} />);
-      await flushAsync();
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("loadCached error"));
+    it("logs via logError when getCachedGameDetail rejects", async () => {
+      const logErrorSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+      try {
+        vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("boom"));
+        render(<RomMPlaySection appId={testAppId} />);
+        await flushAsync();
+        // A failed cache load leaves the play section stale — warn-level, not debug.
+        expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("loadCached error"));
+      } finally {
+        logErrorSpy.mockRestore();
+      }
     });
 
     it("logs 'Auto-artwork error' via debugLog when SteamClient.SetCustomArtworkForApp rejects on auto-apply", async () => {
@@ -655,6 +661,86 @@ describe("RomMPlaySection", () => {
       await flushAsync();
 
       expect(container.querySelector('[title="Version"]')).toBeNull();
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // C3. Version switch reactivity (#1298) — the play section re-reads the cached
+  // detail and re-applies the tile artwork when the bound version changes.
+  // ------------------------------------------------------------------
+
+  describe("version switch reactivity (#1298)", () => {
+    const dispatchSwitch = (appId: number, romId: number) =>
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_data_changed", {
+          detail: { type: "version_switched", app_id: appId, rom_id: romId },
+        }),
+      );
+
+    it("re-reads the cached detail and re-applies artwork on a matching switch", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({ found: true, rom_id: 50 });
+      vi.mocked(backend.getSgdbArtworkBase64).mockResolvedValue({ base64: null, no_api_key: false });
+
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      await flushAsync();
+
+      // Baseline: mount already applied artwork once. Clear so the post-switch
+      // counts measure only the re-apply.
+      vi.mocked(cachedStore.getCachedGameDetail).mockClear();
+      vi.mocked(backend.getSgdbArtworkBase64).mockClear();
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({ found: true, rom_id: 51 });
+
+      await act(async () => {
+        dispatchSwitch(testAppId, 51);
+        await Promise.resolve();
+      });
+      await flushAsync();
+
+      // Cache re-read for the newly-bound rom_id, and the artwork gate reset drives
+      // a fresh 4-asset SGDB re-apply (#1298 item 3).
+      expect(vi.mocked(cachedStore.getCachedGameDetail)).toHaveBeenCalledWith(testAppId);
+      expect(vi.mocked(backend.getSgdbArtworkBase64)).toHaveBeenCalledTimes(4);
+    });
+
+    it("ignores a version_switched event for a different appId", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({ found: true, rom_id: 50 });
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      await flushAsync();
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockClear();
+
+      await act(async () => {
+        dispatchSwitch(testAppId + 12345, 51);
+        await Promise.resolve();
+      });
+      await flushAsync();
+
+      expect(vi.mocked(cachedStore.getCachedGameDetail)).not.toHaveBeenCalled();
+    });
+
+    it("logs at warn level when the re-derive after a switch fails", async () => {
+      const logErrorSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+      try {
+        vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({ found: true, rom_id: 50 });
+        render(<RomMPlaySection appId={testAppId} />);
+        await flushAsync();
+        await flushAsync();
+        logErrorSpy.mockClear();
+
+        // The switch re-derive re-reads the cache — make that read reject.
+        vi.mocked(cachedStore.getCachedGameDetail).mockRejectedValue(new Error("boom"));
+        await act(async () => {
+          dispatchSwitch(testAppId, 51);
+          await Promise.resolve();
+        });
+        await flushAsync();
+
+        expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("loadCached error"));
+      } finally {
+        logErrorSpy.mockRestore();
+      }
     });
   });
 
