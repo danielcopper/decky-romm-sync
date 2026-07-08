@@ -37,15 +37,15 @@ interface VersionPickerProps {
 const ACTIVE_ACCENT = "#59b6ff";
 const NEUTRAL_GREY = "#dcdedf";
 
+const BADGE_COLORS: Record<"accent" | "muted" | "good", { bg: string; fg: string }> = {
+  accent: { bg: "rgba(89, 182, 255, 0.18)", fg: ACTIVE_ACCENT },
+  good: { bg: "rgba(91, 163, 43, 0.22)", fg: "#7ac74f" },
+  muted: { bg: "rgba(255, 255, 255, 0.10)", fg: "rgba(255, 255, 255, 0.55)" },
+};
+
 /** A small pill badge (Default / Downloaded / not synced) shown after a row's label. */
 const Badge: FC<{ text: string; tone: "accent" | "muted" | "good" }> = ({ text, tone }) => {
-  const bg =
-    tone === "accent"
-      ? "rgba(89, 182, 255, 0.18)"
-      : tone === "good"
-        ? "rgba(91, 163, 43, 0.22)"
-        : "rgba(255, 255, 255, 0.10)";
-  const fg = tone === "accent" ? ACTIVE_ACCENT : tone === "good" ? "#7ac74f" : "rgba(255, 255, 255, 0.55)";
+  const { bg, fg } = BADGE_COLORS[tone];
   return (
     <span
       style={{
