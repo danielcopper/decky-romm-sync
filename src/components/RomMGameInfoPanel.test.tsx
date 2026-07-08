@@ -22,8 +22,9 @@ import {
   uninstallDomEventListenerSpy,
   domListenerCount,
 } from "../test-utils/dom-event-listener-spy";
+import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
 import { useVersionError } from "./VersionErrorCard";
-import type { MigrationStatus, SaveSortMigrationStatus, RomMetadata } from "../types";
+import type { MigrationStatus, SaveSortMigrationStatus, RomMetadata, DownloadCompleteEvent } from "../types";
 
 // Type-only imports — vi.mock(...) below replaces the runtime impl, but
 // pinning captured-props shapes to the real component keeps assertions in
@@ -605,6 +606,95 @@ describe("RomMGameInfoPanel", () => {
       });
       // Still installed → ROM File section still rendered
       expect(queryByText("ROM File")).not.toBeNull();
+    });
+
+    // download_complete is a Decky backend event (@decky/api bus), the install
+    // counterpart to romm_rom_uninstalled — the fix for #1340.
+    it("registers a download_complete listener on mount and removes it on unmount", async () => {
+      const before = deckyEventListenerCount("download_complete");
+      const { unmount } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      expect(deckyEventListenerCount("download_complete")).toBe(before + 1);
+      unmount();
+      expect(deckyEventListenerCount("download_complete")).toBe(before);
+    });
+
+    it("download_complete: matching rom_id → ROM File section appears without a re-mount (#1340)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 100,
+        installed: false,
+        platform_name: "Super Nintendo",
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      vi.mocked(backend.getInstalledRom).mockResolvedValue({
+        rom_id: 100,
+        file_name: "test.sfc",
+        file_path: "/roms/test.sfc",
+        system: "snes",
+        platform_slug: "snes",
+        installed_at: "2024-01-01",
+      });
+      const { queryByText } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      // Not installed at mount → ROM File section hidden.
+      expect(queryByText("ROM File")).toBeNull();
+      // Download finishes for this rom → installed flips true + installedRom
+      // populates → section (with the local path) appears live.
+      await act(async () => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", {
+          rom_id: 100,
+          rom_name: "Test",
+          platform_name: "Super Nintendo",
+          file_path: "/roms/test.sfc",
+          app_id: testAppId,
+          launch_options: "cmd",
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(queryByText("ROM File")).not.toBeNull();
+      expect(vi.mocked(backend.getInstalledRom)).toHaveBeenCalledWith(100);
+      // Cache invalidated so a fast re-mount inside the 3s TTL doesn't re-serve
+      // the stale installed:false.
+      expect(vi.mocked(cachedStore.invalidateCachedGameDetail)).toHaveBeenCalledWith(testAppId);
+    });
+
+    it("download_complete: mismatching rom_id → section stays hidden, no fetch", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 100,
+        installed: false,
+        platform_name: "Super Nintendo",
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      vi.mocked(backend.getInstalledRom).mockResolvedValue({
+        rom_id: 100,
+        file_name: "test.sfc",
+        file_path: "/roms/test.sfc",
+        system: "snes",
+        platform_slug: "snes",
+        installed_at: "2024-01-01",
+      });
+      const { queryByText } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      expect(queryByText("ROM File")).toBeNull();
+      await act(async () => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", {
+          rom_id: 999,
+          rom_name: "Other",
+          platform_name: "Super Nintendo",
+          file_path: "/roms/other.sfc",
+          app_id: 1,
+          launch_options: "cmd",
+        });
+        await Promise.resolve();
+      });
+      // Guard held: no state change, no installed-rom fetch for the other rom.
+      expect(queryByText("ROM File")).toBeNull();
+      expect(vi.mocked(backend.getInstalledRom)).not.toHaveBeenCalled();
     });
 
     it("romm_tab_switch: detail.tab present → activeTab state updates", async () => {

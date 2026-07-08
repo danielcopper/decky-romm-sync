@@ -14,6 +14,7 @@
  */
 
 import { useState, useEffect, useRef, FC, createElement } from "react";
+import { addEventListener, removeEventListener } from "@decky/api";
 import { DialogButton, Focusable } from "@decky/ui";
 // DialogButton is natively focusable by Steam's gamepad engine (unlike Focusable
 // wrappers around non-interactive content, which don't register in this injection
@@ -48,6 +49,7 @@ import type {
   AchievementProgress,
   EarnedAchievement,
   SaveSlotSummary,
+  DownloadCompleteEvent,
 } from "../types";
 import type { RommDataChangedDetail } from "../types/events";
 import { biosColorForLevel } from "../utils/biosColor";
@@ -439,6 +441,23 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     };
     globalThis.addEventListener("romm_rom_uninstalled", onUninstall);
 
+    // Listen for download completion — the install counterpart to onUninstall.
+    // The "ROM File" section is gated on installed + installedRom; a fresh
+    // download must flip both so the section (with the local path) appears
+    // without a detail-page re-mount (#1340). Decky backend event (@decky/api),
+    // not a DOM CustomEvent — mirrors DiscSelector's download_complete wiring.
+    const onDownloadComplete = addEventListener<[DownloadCompleteEvent]>(
+      "download_complete",
+      (evt: DownloadCompleteEvent) => {
+        if (evt.rom_id !== romIdRef.current) return;
+        // Invalidate the cached detail so a fast re-mount inside the 3s TTL
+        // doesn't briefly re-serve the stale installed:false.
+        invalidateCachedGameDetail(appId);
+        setState((prev) => ({ ...prev, installed: true }));
+        detach(refreshInstalledRomInBackground(evt.rom_id, () => cancelled, setState));
+      },
+    );
+
     // Per-event-type handlers — each owns one branch of the data-changed dispatch.
     // Defined inside useEffect to share the cancelled/appId/romIdRef/setState closure.
     const handleSaveSyncSettingsChange = async (
@@ -578,6 +597,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     return () => {
       cancelled = true;
       globalThis.removeEventListener("romm_rom_uninstalled", onUninstall);
+      removeEventListener("download_complete", onDownloadComplete);
       globalThis.removeEventListener("romm_data_changed", onDataChanged);
       globalThis.removeEventListener("romm_tab_switch", onTabSwitch);
     };
