@@ -411,6 +411,11 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
   // handler can reject events for other platforms without a stale closure
   // (mirrors romIdRef). bios events fan out to every mounted panel (#1082).
   const platformSlugRef = useRef<string>("");
+  // Load-once gates for the lazy-loaded ACHIEVEMENTS / SAVES tab data. A version
+  // switch resets both (in handleVersionSwitched) so the tab data re-fetches for
+  // the newly-bound rom_id instead of lingering from the previous version.
+  const achievementsLoadedRef = useRef(false);
+  const slotsLoadedRef = useRef(false);
   const [migration, setMigration] = useState(getMigrationState());
   const [settingsReset, setSettingsReset] = useState(getSettingsResetState());
   const [saveSortPending, setSaveSortPending] = useState(getSaveSortMigrationState().pending);
@@ -548,11 +553,22 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       // cached detail (invalidated by the picker) so the panel reflects the new
       // active version — its RomM name (the injected panel title), Region /
       // Languages rows, and cover — while the Steam hero title stays sticky.
+      //
+      // The per-rom TAB data must follow the new active version too. The SAVES
+      // and ACHIEVEMENTS tabs load once behind slotsLoadedRef / achievementsLoadedRef
+      // and hold per-rom state; without re-keying, they keep showing the previous
+      // version's data. Reset both load-once gates and re-key the tab state off
+      // the fresh cache (mirroring a fresh mount) so the tab-activation effects
+      // re-fetch for the new rom_id — covering both the sitting-on-a-tab case
+      // (romId changes → the effect re-runs) and the open-a-tab-later case.
       if (detail.app_id !== appId) return;
       const cached = await getCachedGameDetail(appId);
       if (cancelled || !cached.found) return;
       const newRomId = cached.rom_id ?? romIdRef.current;
       romIdRef.current = newRomId;
+      achievementsLoadedRef.current = false;
+      slotsLoadedRef.current = false;
+      const saveStatus = newRomId != null ? saveStatusFromCache(newRomId, cached.save_status) : null;
       setState((prev) => ({
         ...prev,
         romId: newRomId,
@@ -560,7 +576,24 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
         installed: cached.installed ?? false,
         regions: cached.regions ?? [],
         languages: cached.languages ?? [],
+        // Re-key per-rom tab state so nothing lingers from the previous version.
+        saveSyncEnabled: cached.save_sync_enabled ?? false,
+        saveStatus,
+        conflicts: cached.save_status?.conflicts ?? [],
+        raId: cached.ra_id ?? null,
+        activeSlot: "default",
+        availableSlots: [],
+        slotsLoading: false,
+        achievements: [],
+        achievementProgress: null,
+        achievementsLoading: false,
       }));
+      // Re-fetch slot configuration (slotConfirmed) + slots for the new rom_id,
+      // mirroring loadData's save-sync branch — this is the authority that keeps
+      // the SlotSetupWizard-vs-SavesTab gate correct across the switch.
+      if (cached.save_sync_enabled && newRomId != null) {
+        refreshSlotState(newRomId, setState);
+      }
       if (newRomId) await refreshCoverArtInBackground(newRomId, () => cancelled, setState);
     };
 
@@ -636,7 +669,6 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
   }, [appId]);
 
   // Lazy-load achievements when the achievements tab becomes active
-  const achievementsLoadedRef = useRef(false);
   useEffect(() => {
     if (state.activeTab !== "achievements" || !state.raId || !state.romId) return;
     if (achievementsLoadedRef.current) return;
@@ -671,7 +703,6 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     };
   }, [state.activeTab, state.raId, state.romId]);
 
-  const slotsLoadedRef = useRef(false);
   useEffect(() => {
     if (state.activeTab !== "saves" || !state.saveSyncEnabled || !state.romId) return;
     if (slotsLoadedRef.current) return;
