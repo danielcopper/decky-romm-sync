@@ -357,7 +357,7 @@ class VersionSwitchService:
             return {
                 "success": False,
                 "reason": "installed",
-                "message": "Switching the version of a downloaded game arrives in a later update.",
+                "message": "Uninstall the game to switch versions.",
             }
 
         if ctx.target_is_local:
@@ -376,7 +376,7 @@ class VersionSwitchService:
             return {
                 "success": False,
                 "reason": ErrorCode.SERVER_UNREACHABLE.value,
-                "message": "Could not reach RomM to load the selected version.",
+                "message": "RomM server not reachable.",
             }
 
         if not self._is_sibling(target_dict, ctx.bound_rom_id, ctx.group_key):

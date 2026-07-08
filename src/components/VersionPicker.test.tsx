@@ -211,7 +211,7 @@ describe("VersionPicker — switching", () => {
     vi.mocked(backend.switchVersion).mockResolvedValue({
       success: false,
       reason: "installed",
-      message: "Switching the version of a downloaded game arrives in a later update.",
+      message: "Uninstall the game to switch versions.",
     });
 
     const { menu } = await renderAndOpen();
@@ -223,7 +223,7 @@ describe("VersionPicker — switching", () => {
 
     expect(toaster.toast).toHaveBeenCalledWith({
       title: "RomM Sync",
-      body: "Switching the version of a downloaded game arrives in a later update.",
+      body: "Uninstall the game to switch versions.",
     });
     expect(invalidateCachedGameDetail).not.toHaveBeenCalled();
   });
