@@ -19,8 +19,9 @@ Before installing the plugin, you need:
 2. **RetroDECK** — installed on your Steam Deck or Linux PC. RetroDECK handles the actual emulation. The plugin creates
    shortcuts that launch games through RetroDECK.
 
-3. **Decky Loader** — the plugin framework for Steam's Gaming Mode. Install it from [decky.xyz](https://decky.xyz/) if
-   you haven't already.
+3. **Decky Loader** — the plugin framework. Install it from [decky.xyz](https://decky.xyz/) if you haven't already.
+   Decky renders inside Steam's gamepad UI, and the plugin works wherever that UI runs: Gaming Mode on the Steam Deck,
+   or Big Picture Mode on a Linux PC/HTPC — a dedicated Game Mode session is not required.
 
 4. **A personal RomM account** — save sync ties saves to the authenticated user. Use your own account, not a shared one.
 

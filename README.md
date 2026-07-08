@@ -44,7 +44,8 @@ documentation site. This README is just the quick tour.
 
 ## Requirements
 
-- [Decky Loader](https://decky.xyz/) on your Steam Deck or Linux HTPC
+- [Decky Loader](https://decky.xyz/) on your Steam Deck or Linux HTPC — the plugin lives in Steam's gamepad UI, so it
+  works in the Deck's Game Mode **or** in Big Picture Mode on any Linux PC
 - A running [RomM](https://github.com/rommapp/romm) server, **version 4.9.0 or newer** (the plugin stays inert against
   older servers)
 - [RetroDECK](https://retrodeck.net/) for launching games
