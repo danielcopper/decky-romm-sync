@@ -1867,7 +1867,7 @@ describe("CustomPlayButton — state-aware Resume (#1313)", () => {
 
     // Non-vacuous: pre-fix the overlay dropped and exposed the stuck
     // "Launching..." state — the button must fall back to Play instead.
-    await findByText("Play");
+    expect(await findByText("Play")).toBeInTheDocument();
   });
 
   it("ignores a session event for a different rom", async () => {
