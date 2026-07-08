@@ -35,7 +35,7 @@ import {
   checkLocalDrift,
   refreshSaveStatus,
 } from "../api/backend";
-import { getRommConnectionState } from "../utils/connectionState";
+import { getRommConnectionState, onRommConnectionChange, reportServerReachable } from "../utils/connectionState";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getEventTarget } from "../utils/events";
 import { applyLaunchGateSetupOutcome, resolveSaveSetupOutcome } from "../utils/saveSetup";
@@ -347,11 +347,11 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     };
     globalThis.addEventListener("romm_data_changed", onDataChanged);
 
-    const onConnectionChanged = (e: Event) => {
-      const connState = (e as CustomEvent).detail?.state;
-      setIsOffline(connState === "offline");
-    };
-    globalThis.addEventListener("romm_connection_changed", onConnectionChanged);
+    // Re-derive the offline affordance live on any reachability signal (#1345):
+    // the shared store flips when a server-touching call fails/succeeds or the
+    // recovery probe reconnects, so Download/Play re-enable without a page
+    // re-entry (the device symptom of Download staying blocked after reconnect).
+    const unsubscribeConnection = onRommConnectionChange((s) => setIsOffline(s === "offline"));
 
     // Session start/stop (#1313) — flip the running overlay so the button shows
     // Resume for the live session and returns to Play when it ends. Matches on
@@ -376,7 +376,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       removeEventListener("download_failed", failedListener);
       globalThis.removeEventListener("romm_rom_uninstalled", onUninstall);
       globalThis.removeEventListener("romm_data_changed", onDataChanged);
-      globalThis.removeEventListener("romm_connection_changed", onConnectionChanged);
+      unsubscribeConnection();
       globalThis.removeEventListener("romm_session_changed", onSessionChanged);
     };
   }, [appId]);
@@ -531,13 +531,20 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     migrationPending: () => getMigrationState().pending,
     ensureTrackingConfigured: () => ensureTrackingConfigured(rid),
     checkCoreChange: () => confirmCoreChangeIfNeeded(rid),
-    checkReachability: async () =>
-      (
-        await probeReachability().catch((e) => {
-          logError(`CustomPlayButton: reachability probe failed (treating as offline): ${e}`);
-          return { online: false };
-        })
-      ).online,
+    checkReachability: async () => {
+      // A resolved probe is a definitive reachability signal → feed the shared
+      // store so the badge/Download re-derive (#1345). A throw is a bridge error,
+      // not a server verdict, so it does NOT flip the store — but the launch still
+      // treats it as offline (fail-safe).
+      try {
+        const { online } = await probeReachability();
+        reportServerReachable(online);
+        return online;
+      } catch (e) {
+        logError(`CustomPlayButton: reachability probe failed (treating as offline): ${e}`);
+        return false;
+      }
+    },
     preLaunchSync: () => runPreLaunchSync(rid),
     checkLocalDrift: async () =>
       (
@@ -726,11 +733,14 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       // user back to Play believing the conflict was cleared. Surface it and
       // stay in conflict, exactly like the network-throw catch below (#1276).
       if (result.server_query_failed) {
+        reportServerReachable(false);
         detach(debugLog(`CustomPlayButton: resolve conflict — server query failed for rom ${romId}`));
         toaster.toast({ title: "RomM Sync", body: "Couldn't reach server to resolve conflict" });
         setState("conflict");
         return;
       }
+      // A clean status read proves the server is reachable again (#1345).
+      reportServerReachable(true);
 
       if (result.conflicts && result.conflicts.length > 0) {
         const conflictResult = await handleConflicts(result.conflicts);

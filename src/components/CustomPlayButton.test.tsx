@@ -33,11 +33,9 @@ vi.mock("../utils/cachedGameDetailStore", () => ({
   invalidateCachedGameDetail: vi.fn(),
 }));
 
-// Connection state defaults to "connected" — the offline branch is exercised
-// elsewhere; here we want the simplest path into the "play"/"download" render.
-vi.mock("../utils/connectionState", () => ({
-  getRommConnectionState: () => "connected",
-}));
+// The real in-memory connection store is used so the button's live offline
+// subscription is exercised (#1345); each test resets it to "connected" in
+// beforeEach so the default path renders "play"/"download".
 
 // Uninstall resets the shortcut's launch_options via setLaunchOptionsConfirmed
 // (#1051) — mock it so the test asserts the call without touching SteamClient.
@@ -84,6 +82,7 @@ vi.mock("../components/SyncConflictModal", () => ({
 }));
 
 import { getCachedGameDetail } from "../utils/cachedGameDetailStore";
+import { setRommConnectionState, reportServerReachable } from "../utils/connectionState";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { markLaunchSkipped, consumeLaunchSkip } from "../utils/launchGate";
 import { getMigrationState } from "../utils/migrationStore";
@@ -103,6 +102,12 @@ function mockCachedDetail(overrides: Partial<CachedGameDetail> = {}): void {
     ...overrides,
   });
 }
+
+// Reset the shared connection store before every test (module-level state that
+// persists across tests) so the default render path is "connected" (#1345).
+beforeEach(() => {
+  setRommConnectionState("connected");
+});
 
 describe("CustomPlayButton — download_failed listener", () => {
   beforeEach(() => {
@@ -569,6 +574,44 @@ describe("CustomPlayButton — extraction phase on a multi-file download", () =>
     expect(cancelX).not.toBeDisabled();
     // While downloading (not extracting) there's no throbber action.
     expect(queryByLabelText("Extracting")).toBeNull();
+  });
+});
+
+describe("CustomPlayButton — offline gating reacts live to the store (#1345)", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedGameDetail).mockReset();
+  });
+
+  it("Download re-enables when the store flips back to connected — no remount", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    setRommConnectionState("offline");
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const label = await findByText("Download");
+    const btn = label.closest("button");
+    // Offline at mount → the Download button is disabled.
+    expect(btn).toBeDisabled();
+
+    // The server comes back (any successful probe / call feeds the store). The
+    // button must re-enable on the SAME mount — the device symptom was it staying
+    // blocked until the page was re-entered.
+    act(() => {
+      reportServerReachable(true);
+    });
+    expect(btn).not.toBeDisabled();
+  });
+
+  it("Download disables live when the store flips to offline — no remount", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    setRommConnectionState("connected");
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const label = await findByText("Download");
+    const btn = label.closest("button");
+    expect(btn).not.toBeDisabled();
+
+    act(() => {
+      reportServerReachable(false);
+    });
+    expect(btn).toBeDisabled();
   });
 });
 

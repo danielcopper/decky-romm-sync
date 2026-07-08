@@ -13,7 +13,7 @@
 import { useState, useEffect, useRef, createElement, FC } from "react";
 import { ConfirmModal, DialogButton, Focusable, showModal } from "@decky/ui";
 import { switchSlot, getVersionList, checkLocalDrift, debugLog, logWarn } from "../api/backend";
-import { getRommConnectionState } from "../utils/connectionState";
+import { getRommConnectionState, onRommConnectionChange, reportServerReachable } from "../utils/connectionState";
 import type { SaveStatus, SyncConflict, SaveSlotSummary } from "../types";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
 import { MUTED_COLOR } from "./saves/helpers";
@@ -73,16 +73,10 @@ export const SavesTab: FC<SavesTabProps> = ({
     );
   };
 
-  useEffect(() => {
-    const onConnectionChanged = (e: Event) => {
-      const connState = (e as CustomEvent).detail?.state;
-      setIsOffline(connState === "offline");
-    };
-    globalThis.addEventListener("romm_connection_changed", onConnectionChanged);
-    return () => {
-      globalThis.removeEventListener("romm_connection_changed", onConnectionChanged);
-    };
-  }, []);
+  // Offline banner reacts live to any reachability signal via the shared store
+  // (#1345) — appears when a call reports the server unreachable, clears when the
+  // recovery probe or a successful call reconnects, without a tab re-entry.
+  useEffect(() => onRommConnectionChange((s) => setIsOffline(s === "offline")), []);
 
   useEffect(() => {
     return () => {
@@ -254,6 +248,7 @@ export const SavesTab: FC<SavesTabProps> = ({
               try {
                 const result = await switchSlot(romId, name);
                 if (result.success && result.save_status) {
+                  reportServerReachable(true);
                   onSlotSwitched(name, result.save_status);
                 } else {
                   detach(debugLog(`SavesTab: new slot switch failed: ${result.reason}`));
@@ -261,6 +256,7 @@ export const SavesTab: FC<SavesTabProps> = ({
                   if (result.reason === "pending_uploads") {
                     msg = "Sync your saves first — local changes haven't been uploaded";
                   } else if (result.reason === "server_unreachable") {
+                    reportServerReachable(false);
                     msg = "Can't switch — RomM server is not reachable";
                   }
                   setNewSlotError(msg);

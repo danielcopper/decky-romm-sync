@@ -57,6 +57,18 @@ config file.
 **Fix**: Check your network connection and verify the RomM server is running. Go to **Connection Settings** and tap
 **Test Connection**. Failed syncs are queued and retried automatically when the server is reachable again.
 
+### Offline detection and recovery
+
+When the plugin can't reach RomM, it notices from the calls that fail (a connection probe, a save-status or slot load, a
+version switch) and marks itself offline. On a game's detail page you'll see a **RomM offline** badge in the play row,
+the **Download** button and slot switching are disabled (they need the server), and the **Saves** tab shows a "RomM is
+offline" banner and renders straight away instead of hanging on "Loading slots…". Playtime keeps showing — it's tracked
+locally and doesn't depend on the connection.
+
+You don't need to do anything to recover: while a game page is open and the plugin is offline, it re-checks the server
+roughly every 30 seconds, and the moment RomM is reachable again the badge clears and Download, slot switching, and the
+saves list re-enable on the spot — no need to leave and re-open the page.
+
 ### Save file not found
 
 **Symptom**: The game detail page shows save status but no save file is being synced.

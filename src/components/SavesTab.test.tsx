@@ -4,17 +4,14 @@ import { createElement, type ComponentProps, type ReactElement } from "react";
 import { SavesTab } from "./SavesTab";
 import * as backend from "../api/backend";
 import { showModal } from "@decky/ui";
-import { getRommConnectionState } from "../utils/connectionState";
+import * as connectionState from "../utils/connectionState";
+import { setRommConnectionState } from "../utils/connectionState";
 import type { SaveStatus, SaveSlotSummary, SaveFileStatus, SwitchSlotResponse } from "../types";
 // Type-only — vi.mock("./saves/SlotPanel", ...) below replaces the runtime
 // implementation, but the prop interface comes from the real component so
 // captured-prop assertions stay in sync as SlotPanel evolves.
 import type { SlotPanel } from "./saves/SlotPanel";
-import {
-  installDomEventListenerSpy,
-  uninstallDomEventListenerSpy,
-  domListenerCount,
-} from "../test-utils/dom-event-listener-spy";
+import { installDomEventListenerSpy, uninstallDomEventListenerSpy } from "../test-utils/dom-event-listener-spy";
 
 // showModal from the global @decky/ui mock receives a React element created via
 // createElement(NewSlotModal, props) or createElement(ConfirmModal, props).
@@ -29,9 +26,8 @@ interface ConfirmModalProps {
   strDescription?: string;
 }
 
-vi.mock("../utils/connectionState", () => ({
-  getRommConnectionState: vi.fn(() => "connected"),
-}));
+// The real in-memory connection store is driven directly (setRommConnectionState)
+// so the offline banner's live subscription is exercised end-to-end (#1345).
 
 // Stub NewSlotModal — its own tests cover the text-field + trim behavior.
 // SavesTab only cares that it gets rendered with an onSubmit, which we capture
@@ -147,7 +143,7 @@ describe("SavesTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     capturedSlotPanelProps = [];
-    vi.mocked(getRommConnectionState).mockReturnValue("connected");
+    setRommConnectionState("connected");
     // Stranded-version banner probes (#1298) — default to "no other versions" so
     // the banner is absent for the unrelated slot/legacy tests.
     vi.mocked(backend.getVersionList).mockResolvedValue({ multi_version: false });
@@ -167,7 +163,7 @@ describe("SavesTab", () => {
     });
 
     it("still renders the offline banner alongside the loading message", () => {
-      vi.mocked(getRommConnectionState).mockReturnValue("offline");
+      setRommConnectionState("offline");
       const { container } = render(<SavesTab {...defaultProps({ slotsLoading: true })} />);
       expect(container.textContent).toContain("Loading slots...");
       expect(container.textContent).toContain("RomM is offline");
@@ -180,41 +176,42 @@ describe("SavesTab", () => {
       expect(container.textContent).not.toContain("RomM is offline");
     });
 
-    it("renders when getRommConnectionState() returns 'offline' at mount", () => {
-      vi.mocked(getRommConnectionState).mockReturnValue("offline");
+    it("renders when the store is 'offline' at mount", () => {
+      setRommConnectionState("offline");
       const { container } = render(<SavesTab {...defaultProps()} />);
       expect(container.textContent).toContain("RomM is offline");
     });
 
-    it("appears on a romm_connection_changed event with state=offline", () => {
+    it("appears live when the store flips to offline (no remount)", () => {
       const { container } = render(<SavesTab {...defaultProps()} />);
       expect(container.textContent).not.toContain("RomM is offline");
       act(() => {
-        globalThis.dispatchEvent(new CustomEvent("romm_connection_changed", { detail: { state: "offline" } }));
+        setRommConnectionState("offline");
       });
       expect(container.textContent).toContain("RomM is offline");
     });
 
-    it("clears on a romm_connection_changed event with state=connected", () => {
-      vi.mocked(getRommConnectionState).mockReturnValue("offline");
+    it("clears live when the store flips back to connected (no remount)", () => {
+      setRommConnectionState("offline");
       const { container } = render(<SavesTab {...defaultProps()} />);
       expect(container.textContent).toContain("RomM is offline");
       act(() => {
-        globalThis.dispatchEvent(new CustomEvent("romm_connection_changed", { detail: { state: "connected" } }));
+        setRommConnectionState("connected");
       });
       expect(container.textContent).not.toContain("RomM is offline");
     });
 
-    it("removes its connection-changed listener on unmount", () => {
-      const before = domListenerCount("romm_connection_changed");
+    it("unsubscribes from the connection store on unmount", () => {
+      const unsub = vi.fn();
+      const spy = vi.spyOn(connectionState, "onRommConnectionChange").mockReturnValue(unsub);
       const { unmount } = render(<SavesTab {...defaultProps()} />);
-      expect(domListenerCount("romm_connection_changed")).toBe(before + 1);
+      expect(spy).toHaveBeenCalledTimes(1);
       unmount();
-      expect(domListenerCount("romm_connection_changed")).toBe(before);
+      expect(unsub).toHaveBeenCalledTimes(1);
     });
 
     it("forwards isOffline down to SlotPanel children", () => {
-      vi.mocked(getRommConnectionState).mockReturnValue("offline");
+      setRommConnectionState("offline");
       render(
         <SavesTab
           {...defaultProps({

@@ -32,6 +32,7 @@ import {
   logError,
 } from "../api/backend";
 import { getMigrationState, setMigrationStatus } from "./migrationStore";
+import { reportServerReachable } from "./connectionState";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
 import { getAppIdRomIdMapSnapshot, getActiveSessionRomId } from "./sessionManager";
 import { isAppRunning } from "./runningApps";
@@ -152,13 +153,19 @@ function makeWatcherOps(romId: number): LaunchGateOps {
       return "proceed";
     },
     checkCoreChange: () => checkCoreChangeWatcher(romId),
-    checkReachability: async () =>
-      (
-        await probeReachability().catch((e) => {
-          logError(`Watcher reachability probe failed (treating as offline): ${e}`);
-          return { online: false };
-        })
-      ).online,
+    checkReachability: async () => {
+      // A resolved probe feeds the shared store (#1345); a throw is a bridge
+      // error, not a server verdict, so it leaves the store untouched but the
+      // launch still treats it as offline (fail-safe).
+      try {
+        const { online } = await probeReachability();
+        reportServerReachable(online);
+        return online;
+      } catch (e) {
+        logError(`Watcher reachability probe failed (treating as offline): ${e}`);
+        return false;
+      }
+    },
     preLaunchSync: () => preLaunchSyncWatcher(romId),
     checkLocalDrift: async () =>
       (

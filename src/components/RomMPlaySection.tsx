@@ -97,8 +97,6 @@ interface RomMPlaySectionProps {
   appId: number;
 }
 
-type ConnectionState = "checking" | "connected" | "offline";
-
 interface InfoState {
   romId: number | null;
   romName: string;
@@ -132,7 +130,8 @@ interface InfoState {
   achievementTotal: number;
 }
 
-import { setRommConnectionState, setVersionError } from "../utils/connectionState";
+import { setRommConnectionState, setVersionError, useRommConnectionState } from "../utils/connectionState";
+import { registerOfflineRecovery } from "../utils/offlineRecovery";
 import { useVersionError } from "./VersionErrorCard";
 import { useMigrationStatus } from "./MigrationBlockedPage";
 import { detach } from "../utils/detach";
@@ -270,9 +269,16 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     achievementEarned: 0,
     achievementTotal: 0,
   });
-  const [connectionState, setConnectionState] = useState<ConnectionState>("checking");
+  // Badge derives from the shared store so it appears/disappears live on any
+  // reachability signal (mount check, a failed/succeeded call, or the offline
+  // recovery probe), not just at this mount's check (#1345).
+  const connectionState = useRommConnectionState();
   const [actionPending, setActionPending] = useState<string | null>(null);
   const romIdRef = useRef<number | null>(null);
+
+  // Drive the offline recovery probe while this game page is mounted (#1345).
+  // A module-level guard keeps the ~30s re-probe single-instance and offline-only.
+  useEffect(() => registerOfflineRecovery(), []);
 
   // Cache-first load: render instantly from cached data, then check connection in background
   useEffect(() => {
@@ -404,38 +410,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
   useEffect(() => {
     let cancelled = false;
 
-    // Reconcile-on-view (#868) — pull-only: folds the RomM playtime note total
-    // into the local total so a session played on another device shows up the
-    // moment the detail page opens. INDEPENDENT of save-sync — only gated on
-    // connectivity, so it must NOT sit behind doSaveCheck's saveSyncEnabled
-    // guard. Pushes the reconciled total through updatePlaytimeDisplay (the
-    // overview write-chokepoint), which emits romm_playtime_changed; the
-    // reactive PLAYTIME effect (#869) re-reads the overview and refreshes the
-    // display on the same mount. server_query_failed → no-op (stay local).
-    async function doReconcilePlaytime(isCancelled: boolean) {
-      const romId = romIdRef.current;
-      if (!romId) return;
-      try {
-        const result = await reconcilePlaytime(romId);
-        if (isCancelled) return;
-        if (result.server_query_failed) return;
-        // Adopt the restored cross-device last_played (#1294) and refresh the
-        // display from it. Set BEFORE updatePlaytimeDisplay so the synchronous
-        // romm_playtime_changed handler below reads the new restoredLastPlayed;
-        // also covers the sub-minute total case where updatePlaytimeDisplay
-        // emits no signal.
-        const steamSecs = appStore.GetAppOverviewByAppID(appId)?.rt_last_time_played ?? 0;
-        setInfo((prev) => ({
-          ...prev,
-          restoredLastPlayed: result.last_played,
-          lastPlayed: resolveLastPlayed(result.last_played, steamSecs),
-        }));
-        updatePlaytimeDisplay(appId, result.total_seconds, false);
-      } catch (e) {
-        detach(debugLog(`RomMPlaySection: playtime reconcile error: ${e}`));
-      }
-    }
-
+    // Background save-status check — detects new conflicts once the connection
+    // check confirms the server is reachable (save-sync only). Playtime
+    // reconcile-on-view is a separate, connectivity-independent effect (#1345).
     async function doSaveCheck(isCancelled: boolean) {
       const romId = romIdRef.current;
       if (!romId || !info.saveSyncEnabled) return;
@@ -485,18 +462,16 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         });
       // The fast probe is an EARLY hint, not the authority. Bail if testConnection
       // already settled an authoritative verdict (so a late probe can't clobber
-      // "connected"), or if cancelled / not offline.
+      // "connected"), or if cancelled / not offline. The shared store notifies
+      // its subscribers on the change (#1345).
       if (cancelled || settled || !offline) return;
       setRommConnectionState("offline");
-      setConnectionState("offline");
-      globalThis.dispatchEvent(new CustomEvent("romm_connection_changed", { detail: { state: "offline" } }));
     };
 
     const check = async () => {
       // Reset stale connection state immediately so downstream consumers
       // (e.g. CustomPlayButton) don't stay stuck on a previous "offline"
       setRommConnectionState("checking");
-      globalThis.dispatchEvent(new CustomEvent("romm_connection_changed", { detail: { state: "checking" } }));
 
       // Snappy offline badge — runs concurrently with the precise check below.
       detach(fastOfflineProbe());
@@ -508,20 +483,12 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         if (result.reason === "version_error") {
           setVersionError(result.message);
           setRommConnectionState("offline");
-          setConnectionState("offline");
-          globalThis.dispatchEvent(new CustomEvent("romm_connection_changed", { detail: { state: "offline" } }));
           return;
         }
         const connected = result.success;
-        const connState = connected ? "connected" : "offline";
-        setRommConnectionState(connState);
-        setConnectionState(connState);
-        globalThis.dispatchEvent(new CustomEvent("romm_connection_changed", { detail: { state: connState } }));
+        setRommConnectionState(connected ? "connected" : "offline");
 
         if (connected) {
-          // Fire-and-forget reconcile — non-blocking, runs regardless of
-          // save-sync. NOT awaited so it never delays the save check or render.
-          detach(doReconcilePlaytime(cancelled));
           // Background save status check to detect new conflicts (save-sync only)
           await doSaveCheck(cancelled);
         }
@@ -529,8 +496,6 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         if (!cancelled) {
           settled = true;
           setRommConnectionState("offline");
-          setConnectionState("offline");
-          globalThis.dispatchEvent(new CustomEvent("romm_connection_changed", { detail: { state: "offline" } }));
         }
       }
     };
@@ -539,6 +504,51 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       cancelled = true;
     };
   }, [info.saveSyncEnabled, appId]);
+
+  // Reconcile-on-view (#868) — pull-only: folds RomM's play-session history into
+  // the local total so a session played on another device shows up the moment the
+  // detail page opens. INTENTIONALLY NOT gated on connectivity (#1345): reconcile
+  // returns the LOCAL total even when the server is unreachable, so it re-injects
+  // real playtime into a rebuilt/rebound Steam overview instead of leaving it at
+  // "PLAYTIME None". Runs once romId is known (its own effect, so it fires after
+  // loadCached populates romId rather than racing the connection check). Pushes
+  // the total through updatePlaytimeDisplay (the write-chokepoint), which emits
+  // romm_playtime_changed; the reactive PLAYTIME effect (#869) refreshes the
+  // display on the same mount. A 0 total no-ops in updatePlaytimeDisplay.
+  useEffect(() => {
+    const romId = info.romId;
+    if (!romId) return;
+    let cancelled = false;
+
+    async function doReconcilePlaytime(rid: number, isCancelled: () => boolean) {
+      try {
+        const result = await reconcilePlaytime(rid);
+        if (isCancelled()) return;
+        if (!result.server_query_failed) {
+          // Connected: adopt the restored cross-device last_played (#1294) and
+          // refresh the display from it. Set BEFORE updatePlaytimeDisplay so the
+          // synchronous romm_playtime_changed handler reads the new value; also
+          // covers the sub-minute total case where updatePlaytimeDisplay emits no
+          // signal. Skipped on a failed read — no cross-device push offline.
+          const steamSecs = appStore.GetAppOverviewByAppID(appId)?.rt_last_time_played ?? 0;
+          setInfo((prev) => ({
+            ...prev,
+            restoredLastPlayed: result.last_played,
+            lastPlayed: resolveLastPlayed(result.last_played, steamSecs),
+          }));
+        }
+        // Re-inject the local total regardless of connectivity (offline fix #1345).
+        updatePlaytimeDisplay(appId, result.total_seconds, false);
+      } catch (e) {
+        detach(debugLog(`RomMPlaySection: playtime reconcile error: ${e}`));
+      }
+    }
+
+    detach(doReconcilePlaytime(romId, () => cancelled));
+    return () => {
+      cancelled = true;
+    };
+  }, [info.romId, appId]);
 
   // Content-dir warning probe (#239) — populates `savefilesInContentDir` from a
   // dedicated getSaveStatus call that is INTENTIONALLY NOT gated on connectivity.

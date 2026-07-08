@@ -61,6 +61,7 @@ import {
   setSaveSortMigrationStatus,
 } from "../utils/saveSortMigrationStore";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
+import { reportServerReachable, useRommConnectionState } from "../utils/connectionState";
 import { applyLoadSlotsResult, applyRefreshSlotResult } from "../utils/slotState";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { MigrationBlockedCard } from "./MigrationBlockedCard";
@@ -376,6 +377,9 @@ async function loadData(
 export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { // NOSONAR(typescript:S3776) — React FC fan-out; decomposed in #387/#391/Phase 7. Further split scatters handlers.
   // Subscribe to version error — re-renders when global state changes
   const versionError = useVersionError();
+  // Subscribe to the shared connection state so the saves-tab slot load can take
+  // the known-offline fast path and re-load automatically on reconnect (#1345).
+  const isOffline = useRommConnectionState() === "offline";
 
   const [state, setState] = useState<PanelState>({
     loading: true,
@@ -706,16 +710,36 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
   useEffect(() => {
     if (state.activeTab !== "saves" || !state.saveSyncEnabled || !state.romId) return;
     if (slotsLoadedRef.current) return;
+
+    // Known-offline fast path (#1345): the server slot fetch runs through the
+    // retry+backoff ladder, so on a known-unreachable server it would hang
+    // "Loading slots…" for tens of seconds before the local degraded view (the
+    // per-slot "Server unreachable" notices) renders. Skip the fetch entirely —
+    // slotsLoading is still false here (the slotsLoadedRef guard above means the
+    // connected path never set it), so SavesTab renders the degraded view now.
+    // slotsLoadedRef stays false, so a flip back to connected re-runs this effect
+    // (isOffline dep) and loads.
+    if (isOffline) return;
     slotsLoadedRef.current = true;
 
     let cancelled = false;
-    setState((prev) => ({ ...prev, slotsLoading: true }));
 
     async function loadSlots() {
+      setState((prev) => ({ ...prev, slotsLoading: true }));
       try {
         if (!state.romId) return;
         const result = await getSaveSlots(state.romId);
         if (cancelled) return;
+        // A completed slot fetch is a reachability signal (#1345): a success
+        // proves the server is reachable; an unreachable server drives the store
+        // offline (which then renders the fast path above on the next dependent
+        // run). Any OTHER failure reason is a server-side "no" (the server
+        // answered), not a connectivity verdict — leave the store untouched.
+        if (result.success) {
+          reportServerReachable(true);
+        } else if (result.reason === "server_unreachable") {
+          reportServerReachable(false);
+        }
         applyLoadSlotsResult<PanelState>(result, setState, slotsLoadedRef, (msg) => {
           detach(debugLog(msg));
         });
@@ -732,7 +756,7 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     return () => {
       cancelled = true;
     };
-  }, [state.activeTab, state.saveSyncEnabled, state.romId]);
+  }, [state.activeTab, state.saveSyncEnabled, state.romId, isOffline]);
 
   // --- Render helpers ---
 

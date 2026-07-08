@@ -35,6 +35,7 @@ import {
   logWarn,
 } from "../api/backend";
 import type { VersionList, VersionInfo, SwitchVersionSuccess } from "../api/backend";
+import { reportServerReachable } from "../utils/connectionState";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { showUnsyncedSavesModal } from "./UnsyncedSavesSwitchModal";
 import { getEventTarget } from "../utils/events";
@@ -90,6 +91,15 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     const load = async (): Promise<void> => {
       try {
         const result = await getVersionList(appId);
+        // get_version_list touches the server for the sibling view (#1345): an
+        // explicit server_query_failed means offline; a multi-version list that
+        // loaded without failure proves the server is reachable. A single/unbound
+        // group carries no reachability signal.
+        if (result.server_query_failed) {
+          reportServerReachable(false);
+        } else if (result.multi_version) {
+          reportServerReachable(true);
+        }
         if (!cancelled) setVersionList(result);
       } catch (e) {
         logError(`VersionPicker: getVersionList failed: ${e}`);
@@ -205,10 +215,13 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     try {
       const result = await switchVersion(appId, target.rom_id, false);
       if (result.success) {
+        reportServerReachable(true);
         await applySwitchSuccess(result);
         return;
       }
       if (result.reason === "unsynced_saves") {
+        // The soft-block response carries a definitive reachability verdict (#1345).
+        reportServerReachable(result.server_reachable);
         const choice = await showUnsyncedSavesModal({
           versionName: result.unsynced_version_name,
           serverReachable: result.server_reachable,
@@ -229,6 +242,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         }
         return;
       }
+      if (result.reason === "server_unreachable") reportServerReachable(false);
       toaster.toast({ title: "RomM Sync", body: result.message || "Could not switch version" });
     } catch (e) {
       logError(`VersionPicker: switchVersion failed: ${e}`);

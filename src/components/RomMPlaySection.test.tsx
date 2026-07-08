@@ -105,9 +105,13 @@ vi.mock("../utils/sectionRefresh", () => ({
   refreshBiosInBackground: vi.fn(),
   refreshCoreInfoInBackground: vi.fn(),
 }));
-vi.mock("../utils/connectionState", () => ({
-  setRommConnectionState: vi.fn(),
-  setVersionError: vi.fn(),
+// The REAL in-memory connection store is used so useRommConnectionState drives
+// the offline badge live (#1345); tests read getRommConnectionState()/
+// getVersionError() to assert the verdict and reset the store in beforeEach.
+// The offline recovery probe owns a real setInterval; stub its registration so
+// the component's mount effect is inert in these unit tests.
+vi.mock("../utils/offlineRecovery", () => ({
+  registerOfflineRecovery: vi.fn(() => () => {}),
 }));
 
 // ----- cachedGameDetailStore — getCachedGameDetail / invalidateCachedGameDetail
@@ -252,6 +256,11 @@ describe("RomMPlaySection", () => {
     capturedPlayButton.length = 0;
     testAppId++;
     installDomEventListenerSpy();
+
+    // Reset the shared connection store (real module) so each test starts from a
+    // neutral verdict and no version error leaks across tests (#1345).
+    connectionState.setRommConnectionState("checking");
+    connectionState.setVersionError(null);
 
     // resetAllMocks wipes module-mock impls — re-stub below.
     // Default sibling-hook stubs — no version error, no migration pending.
@@ -880,24 +889,14 @@ describe("RomMPlaySection", () => {
   // ------------------------------------------------------------------
 
   describe("connection check useEffect", () => {
-    it("on testConnection success → setRommConnectionState('connected') + dispatches romm_connection_changed", async () => {
+    it("on testConnection success → the shared store is 'connected'", async () => {
       vi.mocked(backend.testConnection).mockResolvedValue({
         success: true,
         message: "ok",
       });
-      const listener = vi.fn();
-      globalThis.addEventListener("romm_connection_changed", listener);
-      try {
-        render(<RomMPlaySection appId={testAppId} />);
-        await flushAsync();
-        expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("connected");
-        // First "checking" then "connected".
-        const states = listener.mock.calls.map((c) => (c[0] as CustomEvent).detail.state);
-        expect(states).toContain("checking");
-        expect(states).toContain("connected");
-      } finally {
-        globalThis.removeEventListener("romm_connection_changed", listener);
-      }
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(connectionState.getRommConnectionState()).toBe("connected");
     });
 
     it("on testConnection success=false → 'offline'", async () => {
@@ -907,7 +906,7 @@ describe("RomMPlaySection", () => {
       });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("offline");
+      expect(connectionState.getRommConnectionState()).toBe("offline");
     });
 
     it("on reason=version_error → calls setVersionError and stays offline", async () => {
@@ -918,15 +917,15 @@ describe("RomMPlaySection", () => {
       });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      expect(vi.mocked(connectionState.setVersionError)).toHaveBeenCalledWith("Update required");
-      expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("offline");
+      expect(connectionState.getVersionError()).toBe("Update required");
+      expect(connectionState.getRommConnectionState()).toBe("offline");
     });
 
     it("on testConnection throw → catch sets 'offline'", async () => {
       vi.mocked(backend.testConnection).mockRejectedValue(new Error("net"));
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("offline");
+      expect(connectionState.getRommConnectionState()).toBe("offline");
     });
 
     it("fast probeReachability=offline flips the badge offline even while testConnection hangs", async () => {
@@ -934,18 +933,10 @@ describe("RomMPlaySection", () => {
       // resolves (slow/retrying path). The offline badge must NOT wait on it.
       vi.mocked(backend.probeReachability).mockResolvedValue({ online: false });
       vi.mocked(backend.testConnection).mockImplementation(() => new Promise(() => {}));
-      const listener = vi.fn();
-      globalThis.addEventListener("romm_connection_changed", listener);
-      try {
-        render(<RomMPlaySection appId={testAppId} />);
-        await flushAsync();
-        expect(vi.mocked(backend.probeReachability)).toHaveBeenCalled();
-        expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("offline");
-        const states = listener.mock.calls.map((c) => (c[0] as CustomEvent).detail.state);
-        expect(states).toContain("offline");
-      } finally {
-        globalThis.removeEventListener("romm_connection_changed", listener);
-      }
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(vi.mocked(backend.probeReachability)).toHaveBeenCalled();
+      expect(connectionState.getRommConnectionState()).toBe("offline");
     });
 
     it("fast probeReachability=online defers to testConnection (no premature offline flip)", async () => {
@@ -955,9 +946,8 @@ describe("RomMPlaySection", () => {
       vi.mocked(backend.testConnection).mockResolvedValue({ success: true, message: "ok" });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("connected");
       // The fast probe never forced an offline badge on a reachable server.
-      expect(vi.mocked(connectionState.setRommConnectionState)).not.toHaveBeenCalledWith("offline");
+      expect(connectionState.getRommConnectionState()).toBe("connected");
     });
 
     it("fast probeReachability throws → defers (no premature offline flip)", async () => {
@@ -969,7 +959,7 @@ describe("RomMPlaySection", () => {
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       expect(vi.mocked(backend.probeReachability)).toHaveBeenCalled();
-      expect(vi.mocked(connectionState.setRommConnectionState)).not.toHaveBeenCalledWith("offline");
+      expect(connectionState.getRommConnectionState()).not.toBe("offline");
     });
 
     it("on timeout (timeoutMs rejects first) → catch sets 'offline'", async () => {
@@ -978,7 +968,7 @@ describe("RomMPlaySection", () => {
       vi.mocked(backend.testConnection).mockImplementation(() => new Promise(() => {}));
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      expect(vi.mocked(connectionState.setRommConnectionState)).toHaveBeenCalledWith("offline");
+      expect(connectionState.getRommConnectionState()).toBe("offline");
     });
 
     it("dispatches romm_data_changed with has_conflict when connected + save_sync_enabled", async () => {
@@ -1095,40 +1085,49 @@ describe("RomMPlaySection", () => {
       expect(vi.mocked(updatePlaytimeDisplay)).toHaveBeenCalledWith(testAppId, 3600, false);
     });
 
-    it("does NOT reconcile when offline (server not reachable)", async () => {
+    it("reconciles even when offline — playtime is local, not gated on connectivity (#1345)", async () => {
+      // Reconcile-on-view no longer sits behind the connection verdict: it runs
+      // even when testConnection reports offline, because reconcile returns the
+      // LOCAL total and that is what re-injects real playtime into a rebuilt or
+      // rebound Steam overview instead of leaving it at "PLAYTIME None".
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 99,
       });
       vi.mocked(backend.testConnection).mockResolvedValue({ success: false, message: "" });
+      vi.mocked(backend.reconcilePlaytime).mockResolvedValue({
+        total_seconds: 600,
+        session_count: 2,
+        last_played: null,
+        server_query_failed: true,
+      });
       render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      expect(vi.mocked(backend.reconcilePlaytime)).not.toHaveBeenCalled();
-      expect(vi.mocked(updatePlaytimeDisplay)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.reconcilePlaytime)).toHaveBeenCalledWith(99);
+      // The local total re-injects even offline (updateLastPlayed=false).
+      expect(vi.mocked(updatePlaytimeDisplay)).toHaveBeenCalledWith(testAppId, 600, false);
     });
 
-    it("server_query_failed=true → no overview push; PLAYTIME stays on the local value", async () => {
-      useDistinctPlaytimeFormatter();
-      // Mount with a known local playtime of 30 minutes.
-      stubAppStore({ [testAppId]: { minutes_playtime_forever: 30 } });
+    it("server_query_failed=true → still re-injects the LOCAL total (offline PLAYTIME fix #1345)", async () => {
+      // The reconcile GET failed but its result carries the local row's total.
+      // That total must still push to the overview so an offline page shows real
+      // playtime; the server-derived last_played restore is skipped (no push of
+      // cross-device data on a failed read).
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 42,
       });
       vi.mocked(backend.testConnection).mockResolvedValue({ success: true, message: "ok" });
       vi.mocked(backend.reconcilePlaytime).mockResolvedValue({
-        total_seconds: 0,
-        session_count: 0,
+        total_seconds: 1800,
+        session_count: 3,
         last_played: null,
         server_query_failed: true,
       });
-      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       expect(vi.mocked(backend.reconcilePlaytime)).toHaveBeenCalledWith(42);
-      // server_query_failed → no push.
-      expect(vi.mocked(updatePlaytimeDisplay)).not.toHaveBeenCalled();
-      // Display stays on the local 30-minute value (non-vacuous: assert the text).
-      expect(container.textContent).toContain("30m");
+      expect(vi.mocked(updatePlaytimeDisplay)).toHaveBeenCalledWith(testAppId, 1800, false);
     });
 
     it("debugLog fires when reconcilePlaytime rejects (catch is non-vacuous)", async () => {
@@ -3064,6 +3063,28 @@ describe("RomMPlaySection", () => {
       const { container } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
       expect(container.textContent).toContain("RomM offline");
+    });
+
+    it("offline badge appears live when the store flips offline — no remount (#1345)", async () => {
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: true, message: "ok" });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).not.toContain("RomM offline");
+      act(() => {
+        connectionState.setRommConnectionState("offline");
+      });
+      expect(container.textContent).toContain("RomM offline");
+    });
+
+    it("offline badge clears live when the store flips back to connected (#1345)", async () => {
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: false, message: "" });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).toContain("RomM offline");
+      act(() => {
+        connectionState.setRommConnectionState("connected");
+      });
+      expect(container.textContent).not.toContain("RomM offline");
     });
 
     it("lastPlayed item renders when info.lastPlayed is truthy", async () => {

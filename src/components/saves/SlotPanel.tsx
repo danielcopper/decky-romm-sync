@@ -17,6 +17,7 @@ import type {
   SlotDeleteInfo,
 } from "../../types";
 import { scrollFocusedToCenter } from "../../utils/scrollHelpers";
+import { reportServerReachable } from "../../utils/connectionState";
 import { MUTED_COLOR, computeSyncSummary, displaySlot, slotDeleteFailureToast } from "./helpers";
 import { renderSaveFileRow } from "./SaveFileRow";
 import { InactiveSlotBody } from "./InactiveSlotBody";
@@ -186,12 +187,14 @@ export const SlotPanel: FC<SlotPanelProps> = ({
     try {
       const result: SwitchSlotResponse = await switchSlot(romId, slotName);
       if (result.success && result.save_status) {
+        reportServerReachable(true);
         onSlotSwitched(slotName, result.save_status);
       } else {
         let msg = "Failed to switch slot";
         if (result.reason === "pending_uploads") {
           msg = "Sync your saves first — local changes haven't been uploaded";
         } else if (result.reason === "server_unreachable") {
+          reportServerReachable(false);
           msg = "Can't switch — RomM server is not reachable";
         } else if (result.reason === "not_installed") {
           msg = "Can't switch — download the game first";

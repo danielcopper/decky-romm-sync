@@ -24,6 +24,7 @@ import {
 } from "../test-utils/dom-event-listener-spy";
 import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
 import { useVersionError } from "./VersionErrorCard";
+import { setRommConnectionState, reportServerReachable, getRommConnectionState } from "../utils/connectionState";
 import type { MigrationStatus, SaveSortMigrationStatus, RomMetadata, DownloadCompleteEvent } from "../types";
 
 // Type-only imports — vi.mock(...) below replaces the runtime impl, but
@@ -183,6 +184,9 @@ describe("RomMGameInfoPanel", () => {
     currentSaveSortState = { pending: false };
     testAppId++;
     installDomEventListenerSpy();
+
+    // Reset the real connection store so each test starts connected (#1345).
+    setRommConnectionState("connected");
 
     // resetAllMocks wipes module-mock impls — re-stub below.
     vi.mocked(useVersionError).mockReturnValue(null);
@@ -1873,6 +1877,89 @@ describe("RomMGameInfoPanel", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(backend.getSaveSlots)).toHaveBeenCalledTimes(0);
+    });
+
+    it("saves tab known-offline fast path: skips the server fetch, then reloads on reconnect (#1345)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 55,
+        save_sync_enabled: true,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({
+        configured: true,
+        active_slot: "main",
+      });
+      setRommConnectionState("offline");
+      const { queryByTestId } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      // Ignore the mount-time refreshSlotState call — assert only the lazy-load.
+      vi.mocked(backend.getSaveSlots).mockClear();
+
+      // Activate the saves tab while offline: the fast path must NOT run the
+      // server slot fetch (no "Loading slots…" hang through the retry ladder) and
+      // the SavesTab still renders (its degraded per-slot notices).
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.getSaveSlots)).not.toHaveBeenCalled();
+      expect(queryByTestId("saves-tab")).not.toBeNull();
+
+      // Server comes back → the effect re-runs (isOffline dep) and loads slots.
+      await act(async () => {
+        reportServerReachable(true);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.getSaveSlots)).toHaveBeenCalledWith(55);
+    });
+
+    // Pins the slot-load reachability feed (#1345): success → connected,
+    // server_unreachable → offline, any OTHER failure reason → store untouched
+    // (the server answered "no"; it is not a connectivity verdict).
+    async function activateSavesTabWithSlots(
+      slotsResult: Awaited<ReturnType<typeof backend.getSaveSlots>>,
+    ): Promise<void> {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 63,
+        save_sync_enabled: true,
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "main" });
+      vi.mocked(backend.getSaveSlots).mockResolvedValue(slotsResult);
+      render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    }
+
+    it("slot-load feed: a successful get_save_slots reports connected", async () => {
+      // Start from the neutral "checking" verdict (not "offline", which would take
+      // the fast path and skip the fetch) so the flip to "connected" is observable.
+      setRommConnectionState("checking");
+      await activateSavesTabWithSlots({ success: true, slots: [], active_slot: "main" });
+      expect(getRommConnectionState()).toBe("connected");
+    });
+
+    it("slot-load feed: reason=server_unreachable reports offline", async () => {
+      setRommConnectionState("connected");
+      await activateSavesTabWithSlots({ success: false, slots: [], active_slot: "", reason: "server_unreachable" });
+      expect(getRommConnectionState()).toBe("offline");
+    });
+
+    it("slot-load feed: any OTHER failure reason leaves the store untouched", async () => {
+      setRommConnectionState("connected");
+      // A server-side "no" (the server answered) — NOT a connectivity verdict.
+      await activateSavesTabWithSlots({ success: false, slots: [], active_slot: "", reason: "not_found" });
+      expect(getRommConnectionState()).toBe("connected");
     });
 
     it("saves tab: slotConfirmed=false → SlotSetupWizard renders", async () => {
