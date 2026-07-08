@@ -224,6 +224,41 @@ class TestIteration:
         assert uow.roms.count() == 2
 
 
+class TestIterByGroupKey:
+    """``iter_by_group_key`` — the sibling-group resolution seam (ADR-0021 #1297)."""
+
+    @staticmethod
+    def _keyed(rom_id: int, group_key: str | None) -> Rom:
+        return Rom(
+            rom_id=rom_id,
+            platform_slug="snes",
+            name=f"Game {rom_id}",
+            fs_name=f"game_{rom_id}.sfc",
+            shortcut_app_id=1000 + rom_id,
+            last_synced_at="2026-01-01T00:00:00Z",
+            sibling_group_key=group_key,
+        )
+
+    def test_returns_only_rows_sharing_the_key(self, uow: SqliteUnitOfWork):
+        uow.roms.save(self._keyed(1, "igdb:100:57"))
+        uow.roms.save(self._keyed(2, "igdb:100:57"))
+        uow.roms.save(self._keyed(3, "igdb:999:57"))
+
+        ids = {rom.rom_id for rom in uow.roms.iter_by_group_key("igdb:100:57")}
+        assert ids == {1, 2}
+
+    def test_absent_key_returns_empty(self, uow: SqliteUnitOfWork):
+        uow.roms.save(self._keyed(1, "igdb:100:57"))
+        assert list(uow.roms.iter_by_group_key("igdb:404:57")) == []
+
+    def test_null_key_rows_never_returned(self, uow: SqliteUnitOfWork):
+        # A NULL (unbackfilled / solo) key never matches WHERE sibling_group_key = ?.
+        uow.roms.save(self._keyed(1, None))
+        uow.roms.save(self._keyed(2, "igdb:100:57"))
+
+        assert {rom.rom_id for rom in uow.roms.iter_by_group_key("igdb:100:57")} == {2}
+
+
 class TestUpsert:
     def test_save_existing_id_overwrites(self, uow: SqliteUnitOfWork):
         uow.roms.save(_rom(1, app_id=100))

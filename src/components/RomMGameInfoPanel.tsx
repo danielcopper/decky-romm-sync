@@ -104,6 +104,10 @@ interface PanelState {
   activeSlot: string | null;
   availableSlots: SaveSlotSummary[];
   slotsLoading: boolean;
+  // Region / Languages of the ACTIVE version (ADR-0021), rendered as GAME INFO
+  // rows; empty arrays hide their row. Refreshed on a version switch.
+  regions: string[];
+  languages: string[];
 }
 
 /** Format a Unix timestamp (seconds) as a release date string (e.g. "15 Mar 2003") */
@@ -350,6 +354,8 @@ async function loadData(
       activeSlot: "default",
       availableSlots: [],
       slotsLoading: false,
+      regions: cached.regions ?? [],
+      languages: cached.languages ?? [],
     });
 
     if (cached.save_sync_enabled) {
@@ -397,6 +403,8 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     activeSlot: "default",
     availableSlots: [],
     slotsLoading: false,
+    regions: [],
+    languages: [],
   });
   const romIdRef = useRef<number | null>(null);
   // Tracks the panel's own platform so the broadcast `bios` data-changed
@@ -535,6 +543,27 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       setState((prev) => ({ ...prev, biosStatus, biosLevel, coreInfo: coreInfo ?? prev.coreInfo }));
     };
 
+    const handleVersionSwitched = async (detail: Extract<RommDataChangedDetail, { type: "version_switched" }>) => {
+      // A version switch moved the group's binding to a new rom_id. Re-read the
+      // cached detail (invalidated by the picker) so the panel reflects the new
+      // active version — its RomM name (the injected panel title), Region /
+      // Languages rows, and cover — while the Steam hero title stays sticky.
+      if (detail.app_id !== appId) return;
+      const cached = await getCachedGameDetail(appId);
+      if (cancelled || !cached.found) return;
+      const newRomId = cached.rom_id ?? romIdRef.current;
+      romIdRef.current = newRomId;
+      setState((prev) => ({
+        ...prev,
+        romId: newRomId,
+        romName: cached.rom_name || prev.romName,
+        installed: cached.installed ?? false,
+        regions: cached.regions ?? [],
+        languages: cached.languages ?? [],
+      }));
+      if (newRomId) await refreshCoverArtInBackground(newRomId, () => cancelled, setState);
+    };
+
     const handleMetadataChange = async (detail: Extract<RommDataChangedDetail, { type: "metadata" }>) => {
       if (detail.rom_id !== romIdRef.current) return;
       const romId = romIdRef.current;
@@ -578,6 +607,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
                 break;
               case "cover_refreshed":
                 await handleCoverRefreshed(detail);
+                break;
+              case "version_switched":
+                await handleVersionSwitched(detail);
                 break;
             }
           } catch (err) {
@@ -758,6 +790,14 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     gameInfoChildren.push(createElement("div", { key: "rom-name", className: "romm-panel-rom-name" }, state.romName));
   }
 
+  // Region / Languages of the active version (ADR-0021) — omitted when empty.
+  if (state.regions.length > 0) {
+    gameInfoChildren.push(infoRow("regions", "Region", state.regions.join("/")));
+  }
+  if (state.languages.length > 0) {
+    gameInfoChildren.push(infoRow("languages", "Languages", state.languages.join(", ")));
+  }
+
   if (meta) {
     if (meta.summary) {
       gameInfoChildren.push(createElement("div", { key: "summary", className: "romm-panel-summary" }, meta.summary));
@@ -808,10 +848,14 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     gameInfoChildren.push(infoRow("platform", "Platform", state.platformName));
   }
 
-  const gameInfoContent =
-    gameInfoChildren.length > 0
-      ? gameInfoChildren
-      : [createElement("div", { key: "no-meta", className: "romm-panel-muted" }, "No metadata available")];
+  // "No metadata available" fires only when NO descriptive row was added (name,
+  // region/languages, metadata, or platform). The version switcher no longer lives
+  // here — it moved to the play-button section (#1297) — so this is a plain count
+  // of the descriptive rows.
+  if (gameInfoChildren.length === 0) {
+    gameInfoChildren.push(createElement("div", { key: "no-meta", className: "romm-panel-muted" }, "No metadata available"));
+  }
+  const gameInfoContent = gameInfoChildren;
 
   const gameInfoSection = state.coverBase64
     ? section(

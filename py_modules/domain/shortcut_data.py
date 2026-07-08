@@ -151,6 +151,31 @@ def build_launch_options(invocation: str, path: str) -> str:
     return f'{invocation} "{escaped}"'
 
 
+def extract_version_metadata(rom: dict[str, Any]) -> dict[str, Any]:
+    """Extract a raw RomM ROM dict's sibling-group identity + version dimensions.
+
+    The server-derived facts (ADR-0021) persisted on the ``Rom`` aggregate: the
+    sibling-group key plus the ``regions`` / ``languages`` / ``revision`` /
+    ``tags`` / ``is_main_sibling`` dimensions. Shared by the sync shortcut build
+    (:func:`build_shortcuts_data`) and the version-switch persist path so both
+    derive the group key and ``is_main_sibling`` identically — one source of
+    truth for the extraction, no drift between the two call sites.
+
+    Prefers a ``sibling_group_key`` already on the dict (the incremental-skip
+    path carries the authoritative key) and recomputes only when absent.
+    ``is_main_sibling`` sits under ``rom_user``; a missing or ``null``
+    ``rom_user`` degrades to ``False``.
+    """
+    return {
+        "sibling_group_key": rom.get("sibling_group_key") or compute_sibling_group_key(rom),
+        "regions": list(rom.get("regions") or []),
+        "languages": list(rom.get("languages") or []),
+        "revision": rom.get("revision") or "",
+        "tags": list(rom.get("tags") or []),
+        "is_main_sibling": bool((rom.get("rom_user") or {}).get("is_main_sibling", False)),
+    }
+
+
 def build_shortcuts_data(
     roms: list[dict[str, Any]],
     plugin_dir: str,
@@ -206,18 +231,14 @@ def build_shortcuts_data(
             "sgdb_id": rom.get("sgdb_id"),
             "ra_id": rom.get("ra_id"),
             "cover_path": "",
-            # Prefer a sibling_group_key already on the dict — the incremental-skip
-            # path reconstructs ROM dicts from persisted rows that carry the
-            # authoritative key (with the real platform_id baked in) but no
-            # ``platform_id`` field, so recomputing would yield ``…:None`` and split
-            # the group's bucket from a freshly-fetched sibling's (#1296). A live
-            # RomM fetch has no such key, so it computes from the raw dict.
-            "sibling_group_key": rom.get("sibling_group_key") or compute_sibling_group_key(rom),
-            "regions": list(rom.get("regions") or []),
-            "languages": list(rom.get("languages") or []),
-            "revision": rom.get("revision") or "",
-            "tags": list(rom.get("tags") or []),
-            "is_main_sibling": bool((rom.get("rom_user") or {}).get("is_main_sibling", False)),
+            # The sibling-group key + version dimensions (ADR-0021), extracted by
+            # the shared helper so the sync build and the version-switch persist
+            # path derive them identically. The incremental-skip path reconstructs
+            # ROM dicts from persisted rows carrying the authoritative key (real
+            # platform_id baked in) but no ``platform_id`` field, so the helper
+            # prefers that key over recomputing (which would yield ``…:None`` and
+            # split the group's bucket, #1296).
+            **extract_version_metadata(rom),
         }
         for rom in roms
     ]

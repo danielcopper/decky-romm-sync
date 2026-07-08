@@ -191,5 +191,16 @@ class SqliteRomRepository(BaseRepository):
         for row in cursor:
             yield _row_to_rom(row)
 
+    def iter_by_group_key(self, group_key: str) -> Iterator[Rom]:
+        # Range-scans the migration-010 index idx_roms_sibling_group_key. A NULL
+        # key never matches (WHERE = ? excludes NULL), so an unbackfilled / solo
+        # row is correctly absent — the caller treats such a row as its own group.
+        cursor = self._conn.execute(
+            f"SELECT {_SELECT_COLUMNS} FROM roms WHERE sibling_group_key = ?",
+            (group_key,),
+        )
+        for row in cursor:
+            yield _row_to_rom(row)
+
     def count(self) -> int:
         return int(self._conn.execute("SELECT COUNT(*) FROM roms").fetchone()[0])

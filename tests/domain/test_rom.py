@@ -104,6 +104,56 @@ class TestUnbindShortcut:
         assert rom.sgdb_id == 7
 
 
+class TestBindShortcut:
+    def test_sets_app_id_from_unbound(self):
+        rom = Rom.synced(
+            rom_id=2,
+            platform_slug="snes",
+            name="Super Metroid (Japan)",
+            fs_name="Super Metroid (Japan).sfc",
+            shortcut_app_id=None,
+            synced_at="2026-05-28T10:00:00",
+        )
+        rom.bind_shortcut(123456789)
+        assert rom.shortcut_app_id == 123456789
+
+    def test_moves_binding_from_previous_app_id(self):
+        rom = Rom.synced(
+            rom_id=2,
+            platform_slug="snes",
+            name="Super Metroid (Japan)",
+            fs_name="Super Metroid (Japan).sfc",
+            shortcut_app_id=111,
+            synced_at="2026-05-28T10:00:00",
+        )
+        rom.bind_shortcut(222)
+        assert rom.shortcut_app_id == 222
+
+    def test_zero_app_id_raises(self):
+        rom = Rom.synced(
+            rom_id=2,
+            platform_slug="snes",
+            name="x",
+            fs_name="x.sfc",
+            shortcut_app_id=None,
+            synced_at="2026-05-28T10:00:00",
+        )
+        with pytest.raises(ValueError, match="positive"):
+            rom.bind_shortcut(0)
+
+    def test_negative_app_id_raises(self):
+        rom = Rom.synced(
+            rom_id=2,
+            platform_slug="snes",
+            name="x",
+            fs_name="x.sfc",
+            shortcut_app_id=None,
+            synced_at="2026-05-28T10:00:00",
+        )
+        with pytest.raises(ValueError, match="positive"):
+            rom.bind_shortcut(-5)
+
+
 class TestAssignSgdbId:
     def test_sets_sgdb_id(self):
         rom = _make_rom()

@@ -101,6 +101,20 @@ class Rom:
         """
         self.shortcut_app_id = None
 
+    def bind_shortcut(self, app_id: int) -> None:
+        """Make this ROM its sibling group's active version (ADR-0021 §2).
+
+        Records the group's Steam-shortcut *app_id* on this row. A version switch
+        moves the binding here from the previous representative; the repository's
+        collision-unbind then clears the old holder so the one-binding-per-appId
+        rule (migration 003) holds. The shortcut's name/appId stay sticky — only
+        the binding (and the baked ``launch_options``) move. *app_id* must be a
+        positive Steam shortcut id.
+        """
+        if app_id <= 0:
+            raise ValueError("app_id must be a positive Steam shortcut id")
+        self.shortcut_app_id = app_id
+
     def assign_sgdb_id(self, sgdb_id: int) -> None:
         """Stamp the resolved SteamGridDB id."""
         self.sgdb_id = sgdb_id

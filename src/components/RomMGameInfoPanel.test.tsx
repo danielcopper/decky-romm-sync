@@ -2486,6 +2486,26 @@ describe("RomMGameInfoPanel", () => {
       expect(container.textContent).toContain("No metadata available");
     });
 
+    it("renders 'No metadata available' for an empty-but-non-null metadata object (no descriptive rows)", async () => {
+      // metadata is present but every field is empty, and no name / region /
+      // languages / platform accompany it — so no descriptive row is added and
+      // the fallback still fires. Guards the plain descriptive-row count now that
+      // the version switcher moved out of this section to the play row (#1297).
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        rom_name: "",
+        metadata: makeMetadata(),
+        platform_name: "",
+        regions: [],
+        languages: [],
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).toContain("No metadata available");
+    });
+
     it("renders the RomM game name on the info tab", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
@@ -2600,6 +2620,116 @@ describe("RomMGameInfoPanel", () => {
       await flushAsync();
       // The cached summary is still rendered — rejection didn't blank it.
       expect(container.textContent).toContain("from cache");
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // I2. Version attributes (Region / Languages) + version-switch refresh (#1297)
+  // ------------------------------------------------------------------
+
+  describe("Version attributes + switch", () => {
+    it("renders Region and Languages rows for the active version", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        rom_name: "Game (USA)",
+        regions: ["USA", "Europe"],
+        languages: ["En", "Fr"],
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).toContain("Region");
+      expect(container.textContent).toContain("USA/Europe");
+      expect(container.textContent).toContain("Languages");
+      expect(container.textContent).toContain("En, Fr");
+    });
+
+    it("omits Region / Languages rows when the dimensions are empty", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        rom_name: "Game",
+        regions: [],
+        languages: [],
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).not.toContain("Region");
+      expect(container.textContent).not.toContain("Languages");
+    });
+
+    it("refreshes the panel name + Region + cover on a matching version_switched event", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        rom_name: "Game (USA)",
+        regions: ["USA"],
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).toContain("Game (USA)");
+
+      // After the switch the cache resolves the new active version, and the
+      // handler re-fetches the artwork for the newly-bound rom_id.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 2,
+        rom_name: "Game (Japan)",
+        regions: ["Japan"],
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      vi.mocked(backend.getArtworkBase64).mockClear();
+      vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "JAPANCOVER" });
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "version_switched", app_id: testAppId, rom_id: 2 },
+          }),
+        );
+      });
+      await flushAsync();
+
+      expect(container.textContent).toContain("Game (Japan)");
+      expect(container.textContent).toContain("Japan");
+      // Cover refresh: getArtworkBase64 was re-fetched for the new rom_id and the
+      // new cover reached the DOM (dropping refreshCoverArtInBackground in the
+      // version_switched handler makes this fail).
+      expect(vi.mocked(backend.getArtworkBase64)).toHaveBeenCalledWith(2);
+      expect(container.innerHTML).toContain("data:image/png;base64,JAPANCOVER");
+    });
+
+    it("ignores a version_switched event for a different appId", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        rom_name: "Game (USA)",
+        regions: ["USA"],
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+
+      vi.mocked(cachedStore.getCachedGameDetail).mockClear();
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "version_switched", app_id: testAppId + 9999, rom_id: 2 },
+          }),
+        );
+        await Promise.resolve();
+      });
+
+      // The mismatched appId short-circuits before re-reading the cache.
+      expect(vi.mocked(cachedStore.getCachedGameDetail)).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("Game (USA)");
     });
   });
 

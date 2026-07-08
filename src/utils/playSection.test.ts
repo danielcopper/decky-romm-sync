@@ -1,12 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  resolveSaveSyncLabel,
-  applySaveSyncDisplay,
-  extractBiosInfo,
-  extractCoreInfo,
-  formatVersionLabel,
-  timeoutMs,
-} from "./playSection";
+import { resolveSaveSyncLabel, applySaveSyncDisplay, extractBiosInfo, extractCoreInfo, timeoutMs } from "./playSection";
 import { libretroEmu } from "../test-utils/coreFixtures";
 import type { CoreInfo, SaveStatus, SaveSyncDisplay } from "../types";
 
@@ -168,31 +161,6 @@ describe("extractCoreInfo", () => {
     });
     expect(result.emulators).toEqual([]);
     expect(result.emulatorDataAvailable).toBe(false);
-  });
-});
-
-describe("formatVersionLabel", () => {
-  it("joins all present dimensions with ' · ' in order", () => {
-    expect(
-      formatVersionLabel({ regions: ["USA", "Europe"], languages: ["En", "Fr"], revision: "1", tags: ["Demo"] }),
-    ).toBe("USA/Europe · En, Fr · Rev 1 · Demo");
-  });
-
-  it("joins regions with '/' and languages with ', '", () => {
-    expect(formatVersionLabel({ regions: ["USA", "Japan"], languages: ["En", "Ja"] })).toBe("USA/Japan · En, Ja");
-  });
-
-  it("renders the revision as 'Rev X'", () => {
-    expect(formatVersionLabel({ revision: "2" })).toBe("Rev 2");
-  });
-
-  it("omits empty dimensions from the label", () => {
-    expect(formatVersionLabel({ regions: ["USA"], languages: [], revision: "", tags: ["Rev A"] })).toBe("USA · Rev A");
-  });
-
-  it("returns '' when every dimension is empty (row hidden)", () => {
-    expect(formatVersionLabel({ regions: [], languages: [], revision: "", tags: [] })).toBe("");
-    expect(formatVersionLabel({})).toBe("");
   });
 });
 

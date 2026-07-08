@@ -137,3 +137,4 @@ modules =
     services.shortcut_removal
     services.startup_healing
     services.steamgrid
+    services.version_switch

@@ -70,6 +70,14 @@ class RomRepository(Protocol):
         """Iterate ROMs on *platform_slug*. (firmware.py platform filter)"""
         ...
 
+    def iter_by_group_key(self, group_key: str) -> Iterator[Rom]:
+        """Iterate ROMs in the sibling group *group_key* (ADR-0021).
+
+        Range-scans the migration-010 index; a NULL key never matches, so an
+        unbackfilled / solo row is absent. (version_switch.py group resolution)
+        """
+        ...
+
     def count(self) -> int:
         """Return the number of ROMs in the registry. (library/reporter.py len registry, shortcut_removal.py stats)"""
         ...

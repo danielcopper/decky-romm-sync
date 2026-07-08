@@ -95,29 +95,6 @@ export function extractCoreInfo(coreInfo: CoreInfo): CoreInfoFields {
   };
 }
 
-/** The RomM sibling-group version dimensions (ADR-0021) as the game-detail
- *  payload ships them — all optional so a pre-backfill ROM (empty metadata)
- *  degrades to a hidden row. */
-export interface VersionFields {
-  regions?: string[];
-  languages?: string[];
-  revision?: string;
-  tags?: string[];
-}
-
-/** Compose the read-only "Version" row label from RomM's version dimensions:
- *  regions joined with "/", languages with ", ", the revision rendered as
- *  "Rev X", and any remaining tags with ", " — the present segments joined with
- *  " · ". Returns "" when every dimension is empty so the caller hides the row. */
-export function formatVersionLabel(fields: VersionFields): string {
-  const segments: string[] = [];
-  if (fields.regions?.length) segments.push(fields.regions.join("/"));
-  if (fields.languages?.length) segments.push(fields.languages.join(", "));
-  if (fields.revision) segments.push(`Rev ${fields.revision}`);
-  if (fields.tags?.length) segments.push(fields.tags.join(", "));
-  return segments.join(" · ");
-}
-
 /** Promise that rejects after `ms` milliseconds. Pair with `Promise.race` to
  *  enforce a timeout on an otherwise unbounded async call. */
 export function timeoutMs(ms: number): Promise<never> {

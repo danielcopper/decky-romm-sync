@@ -10,29 +10,48 @@ shows:
 
 - **Status badge** — "Installed", "Downloading", or "Not Installed"
 - **Platform name** — which system the game belongs to (e.g. "Game Boy Advance")
-- **Version** — the region, language, revision, and tags of this dump, when RomM has them (see below)
+- **Version switcher** — a compact control next to the Play button (beside the disc picker) to pick which version of the
+  game is active, when RomM has more than one (see below)
+- **Region / Languages** — attributes of the active version, shown in the Game Info tab when RomM has them (see below)
 - **BIOS status** — whether required BIOS files are present (see [BIOS Management](bios-management.md))
 - **Save sync status** — last sync time, conflict count, and playtime (see [Save Sync](save-sync.md))
 - **Action buttons** — Download, Pause/Resume, Uninstall, Cancel, or Refresh Metadata depending on state
 
 ![Game detail page showing the RomM Sync panel for an installed game](../assets/screenshot-game-detail.jpg)
 
-## Version Information
+## Versions
 
-RomM records the details that distinguish one dump of a game from another — its **region** (e.g. `USA`, `Europe`), the
-**languages** it supports (e.g. `En`, `Fr`), a **revision** number, and any extra **tags** (e.g. `Demo`). When RomM has
-any of these for a game, the RomM Sync panel shows them in a **Version** row, formatted like:
+Many games exist in a RomM library as several **versions** — different dumps of the same title: a `(USA)` release and a
+`(Europe)` one, a multi-language `(En,Fr,De)` dump, a `(Rev 1)` revision, a `(Demo)`. RomM groups these as a **sibling
+group** (one game, many versions), and the plugin represents the whole group with a **single Steam shortcut**. The
+version currently bound to that shortcut is the **active version** — the one the Download button fetches, and the one
+that launches and syncs saves.
 
-```text
-USA/Europe · En, Fr · Rev 1 · Demo
-```
+### The Switch-version control
 
-The row is read-only and appears only when at least one of these details is present — games with no version metadata
-simply omit it. The values refresh on every sync, so they always reflect what RomM currently knows.
+When a game has more than one version, a compact **version control** appears next to the Play button — right beside the
+disc picker, and only for a multi-version game. Open it to see every version in the group, each with markers for:
 
-The Version row shows the version you currently have installed. Choosing between multiple versions of the same game (a
-version picker for downloads and an installed-version switch) is planned for a later release; today the panel reflects,
-it doesn't yet switch.
+- **✓ (active)** — the version currently bound to the shortcut. This is exactly what the Download button will fetch.
+- **Default** — the version the plugin would pick on its own, following RomM's "SET DEFAULT" choice (`is_main_sibling`)
+  and, failing that, your [Preferred region](configuration.md) setting. It's a suggestion, not a lock.
+- **Downloaded** — a version you already have on disk.
+- **not synced** — a version RomM has that isn't in your local library yet. Selecting it is fine; the plugin records it
+  on the spot.
+
+Selecting a different version **rebinds** the game to it: the Download button now fetches that version, and the panel's
+title and Region/Languages rows update to reflect it. The Steam shortcut's own name, artwork, collections, and playtime
+are untouched — only the RomM Sync panel reflects the change. A single-version game shows no Version control.
+
+Switching is free while the game is **not downloaded**. Switching the version of a game you've **already downloaded**
+(with the cleanup and save-file handling that implies) arrives in a later update — for now the control declines that
+with a short message.
+
+### Region and Languages
+
+In the panel's **Game Info** tab, the plugin shows the **Region** (e.g. `USA/Europe`) and **Languages** (e.g. `En, Fr`)
+of the **active version**, when RomM has them. These are attributes of that one version — they change when you switch
+versions, and a version with no region/language detail simply omits the rows. The values refresh on every sync.
 
 ## Downloading ROMs
 

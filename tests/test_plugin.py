@@ -753,6 +753,8 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_platform_core_info",
     # Read-only disc-picker state query (the pin-write select_disc IS decorated).
     "get_disc_selection",
+    # Read-only version-picker state query (the binding-move switch_version IS decorated).
+    "get_version_list",
     "get_platforms",
     "get_collections",
     "sync_heartbeat",
@@ -968,6 +970,7 @@ class TestMainStartupOrdering:
             "settings_service": MagicMock(),
             "core_service": MagicMock(),
             "disc_service": MagicMock(),
+            "version_switch_service": MagicMock(),
             "connection_service": connection_service,
             "startup_healing_service": startup_healing_service,
             "launch_gate_service": MagicMock(),

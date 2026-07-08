@@ -11,7 +11,7 @@
 // `beforeEach`) — Option A in the playbook.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, act } from "@testing-library/react";
+import { render, act, waitFor } from "@testing-library/react";
 import { createElement, type ComponentProps, type ReactElement } from "react";
 import { RomMPlaySection } from "./RomMPlaySection";
 import * as backend from "../api/backend";
@@ -94,9 +94,6 @@ vi.mock("../utils/playSection", () => ({
     }),
   ),
   resolveSaveSyncLabel: vi.fn(() => "synced label"),
-  // Version label defaults to "" (VERSION row hidden). Tests opt into a
-  // populated label to assert the row renders.
-  formatVersionLabel: vi.fn(() => ""),
   // timeoutMs returns a Promise that never resolves — Promise.race with
   // testConnection always wins. Tests can override per-case to drive the
   // timeout branch.
@@ -298,7 +295,6 @@ describe("RomMPlaySection", () => {
       });
     });
     vi.mocked(playSectionUtils.resolveSaveSyncLabel).mockReturnValue("synced label");
-    vi.mocked(playSectionUtils.formatVersionLabel).mockReturnValue("");
     vi.mocked(playSectionUtils.timeoutMs).mockImplementation(() => new Promise(() => {}));
     // Default: the re-baked launch_options confirm-set succeeds. Tests opt into
     // the unconfirmed (false) branch per case.
@@ -576,11 +572,13 @@ describe("RomMPlaySection", () => {
   });
 
   // ------------------------------------------------------------------
-  // C2. Version row (#1295)
+  // C2. Version control (#1297) — the verbose VERSION info-row is retired and the
+  // Region/Languages DISPLAY moved to RomMGameInfoPanel's GAME INFO tab. The
+  // version SWITCHER is a compact trigger next to the disc picker (below).
   // ------------------------------------------------------------------
 
-  describe("version row", () => {
-    it("renders the VERSION row when formatVersionLabel returns a non-empty label", async () => {
+  describe("version control (play section)", () => {
+    it("never renders the verbose VERSION info-row in the play section", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
         found: true,
         rom_id: 12,
@@ -589,34 +587,74 @@ describe("RomMPlaySection", () => {
         revision: "1",
         tags: ["Demo"],
       });
-      vi.mocked(playSectionUtils.formatVersionLabel).mockReturnValue("USA/Europe · En, Fr · Rev 1 · Demo");
-
-      const { container } = render(<RomMPlaySection appId={testAppId} />);
-      await flushAsync();
-
-      // The formatter is fed the cached payload's version dimensions.
-      expect(vi.mocked(playSectionUtils.formatVersionLabel)).toHaveBeenCalledWith(
-        expect.objectContaining({ regions: ["USA", "Europe"], languages: ["En", "Fr"], revision: "1", tags: ["Demo"] }),
-      );
-      expect(container.textContent).toContain("VERSION");
-      expect(container.textContent).toContain("USA/Europe · En, Fr · Rev 1 · Demo");
-    });
-
-    it("hides the VERSION row when formatVersionLabel returns an empty string", async () => {
-      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
-        found: true,
-        rom_id: 13,
-        regions: [],
-        languages: [],
-        revision: "",
-        tags: [],
-      });
-      vi.mocked(playSectionUtils.formatVersionLabel).mockReturnValue("");
+      // Single-version group → the compact switcher is absent too.
+      vi.mocked(backend.getVersionList).mockResolvedValue({ multi_version: false });
 
       const { container } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
 
       expect(container.textContent).not.toContain("VERSION");
+    });
+
+    it("renders the compact version trigger next to the disc picker for a multi-version group", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({ found: true, rom_id: 12 });
+      vi.mocked(backend.getVersionList).mockResolvedValue({
+        multi_version: true,
+        server_query_failed: false,
+        versions: [
+          {
+            rom_id: 1,
+            name: "Game (USA)",
+            label: "Game (USA)",
+            regions: ["USA"],
+            languages: ["En"],
+            revision: "",
+            tags: [],
+            synced: true,
+            installed: false,
+            active: true,
+            is_default: true,
+          },
+          {
+            rom_id: 2,
+            name: "Game (Japan)",
+            label: "Game (Japan)",
+            regions: ["Japan"],
+            languages: ["Ja"],
+            revision: "",
+            tags: [],
+            synced: true,
+            installed: false,
+            active: false,
+            is_default: false,
+          },
+        ],
+      });
+      vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
+
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      // Gamepad-safe: the picker is a single DialogButton (a real <button>, the
+      // proven DiscSelector structure) living in the play-section Focusable row —
+      // not a button nested inside another button. waitFor because the picker's
+      // own getVersionList resolves after the section's mount chain. (The local
+      // @decky/ui stub forwards the trigger's `title`, so query on that.)
+      await waitFor(() => {
+        expect(container.querySelector('[title="Version"]')).not.toBeNull();
+      });
+      const trigger = container.querySelector('[title="Version"]');
+      expect(trigger?.tagName).toBe("BUTTON");
+    });
+
+    it("renders no version trigger for a single-version group", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({ found: true, rom_id: 12 });
+      vi.mocked(backend.getVersionList).mockResolvedValue({ multi_version: false });
+
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      expect(container.querySelector('[title="Version"]')).toBeNull();
     });
   });
 
@@ -1181,7 +1219,9 @@ describe("RomMPlaySection", () => {
       const before = domListenerCount("romm_data_changed");
       const { unmount } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
-      expect(domListenerCount("romm_data_changed")).toBe(before + 1);
+      // Two listeners: RomMPlaySection's own + the child VersionPicker's (it also
+      // refreshes on version_switched, #1297). Both are removed on unmount.
+      expect(domListenerCount("romm_data_changed")).toBe(before + 2);
       unmount();
       expect(domListenerCount("romm_data_changed")).toBe(before);
     });

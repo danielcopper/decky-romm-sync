@@ -83,8 +83,9 @@ export interface CachedGameDetail {
   bios_label?: string | null;
   save_sync_display?: SaveSyncDisplay | null;
   stale_fields?: string[];
-  // Version metadata (ADR-0021) — the RomM sibling-group dimensions, rendered
-  // read-only in the play-section "Version" row.
+  // Version metadata (ADR-0021) — the RomM sibling-group dimensions of the
+  // active version, rendered read-only as the Region/Languages rows in
+  // RomMGameInfoPanel's GAME INFO section (the version switcher is separate).
   regions?: string[];
   languages?: string[];
   revision?: string;
@@ -340,6 +341,65 @@ export interface SelectDiscResult {
 // — the m3u playlist or disc 1).
 export const getDiscSelection = callable<[number], DiscSelection>("get_disc_selection");
 export const selectDisc = callable<[number, string | null], SelectDiscResult>("select_disc");
+
+/**
+ * One version (RomM sibling) of a game in the version picker (#1297, ADR-0021).
+ * `label` is the fs_name_no_ext-derived display text; the dimensions are the
+ * version's own region/language/revision/tag attributes. `synced` is false for a
+ * version that exists on the server but has no local row yet (selecting it
+ * persists one); `installed` marks a downloaded version; `active` is the bound
+ * version the Download button fetches; `is_default` marks the version the
+ * resolution chain + Preferred-region setting would pick as the default.
+ */
+export interface VersionInfo {
+  rom_id: number;
+  name: string;
+  label: string;
+  regions: string[];
+  languages: string[];
+  revision: string;
+  tags: string[];
+  synced: boolean;
+  installed: boolean;
+  active: boolean;
+  is_default: boolean;
+}
+
+/**
+ * Version-picker state for the group bound to an appId. `multi_version` is
+ * `false` when the appId is unknown/unbound or the group has a single version —
+ * the picker renders nothing. When `true`, `versions` lists every version
+ * (local + server-only) with markers; `server_query_failed` is `true` when the
+ * live `sibling_roms` view could not be fetched, so the list is local-only
+ * (partial-success carve-out).
+ */
+export interface VersionList {
+  multi_version: boolean;
+  versions?: VersionInfo[];
+  server_query_failed?: boolean;
+}
+
+/**
+ * Result of switching the active version. On success the binding moved to
+ * `rom_id` (the version's own RomM `rom_name`); no Steam call, no name change.
+ * A failure carries the canonical `{success, reason, message}` shape — `not_found`
+ * (unknown appId), `not_in_group`, `bound_elsewhere` (a grandfathered duplicate),
+ * `installed` (switching a downloaded game arrives in #1298), or
+ * `server_unreachable`.
+ */
+export interface SwitchVersionResult {
+  success: boolean;
+  rom_id?: number;
+  rom_name?: string;
+  reason?: string;
+  message?: string;
+}
+
+// Version picker (#1297, ADR-0021). Keyed by the Steam appId (the group's
+// shortcut). get_version_list reads the group's versions; switch_version moves
+// the active-version binding to a target rom_id.
+export const getVersionList = callable<[number], VersionList>("get_version_list");
+export const switchVersion = callable<[number, number], SwitchVersionResult>("switch_version");
 
 export const saveLogLevel = callable<[string], { success: boolean }>("save_log_level");
 // Preferred sibling-group region (ADR-0021 §3). "auto" = build-time default

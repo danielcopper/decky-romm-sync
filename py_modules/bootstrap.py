@@ -70,6 +70,7 @@ from services.settings import SettingsService, SettingsServiceConfig
 from services.shortcut_removal import ShortcutRemovalService, ShortcutRemovalServiceConfig
 from services.startup_healing import StartupHealingService, StartupHealingServiceConfig
 from services.steamgrid import SteamGridService, SteamGridServiceConfig
+from services.version_switch import VersionSwitchService, VersionSwitchServiceConfig
 
 if TYPE_CHECKING:
     import asyncio
@@ -701,6 +702,17 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    version_switch_service = VersionSwitchService(
+        config=VersionSwitchServiceConfig(
+            loop=cfg.runtime.loop,
+            logger=cfg.runtime.logger,
+            clock=cfg.runtime.clock,
+            uow_factory=cfg.callbacks.uow_factory,
+            romm_api=cfg.adapters.romm_api,
+            settings=cfg.stores.settings,
+        ),
+    )
+
     connection_service = ConnectionService(
         config=ConnectionServiceConfig(
             settings=cfg.stores.settings,
@@ -764,6 +776,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         "settings_service": settings_service,
         "core_service": core_service,
         "disc_service": disc_service,
+        "version_switch_service": version_switch_service,
         "connection_service": connection_service,
         "startup_healing_service": startup_healing_service,
         "launch_gate_service": launch_gate_service,
