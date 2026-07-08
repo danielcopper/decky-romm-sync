@@ -131,7 +131,7 @@ interface InfoState {
 }
 
 import { setRommConnectionState, setVersionError, useRommConnectionState } from "../utils/connectionState";
-import { registerOfflineRecovery } from "../utils/offlineRecovery";
+import { registerConnectionHeartbeat } from "../utils/connectionHeartbeat";
 import { useVersionError } from "./VersionErrorCard";
 import { useMigrationStatus } from "./MigrationBlockedPage";
 import { detach } from "../utils/detach";
@@ -278,7 +278,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
 
   // Drive the offline recovery probe while this game page is mounted (#1345).
   // A module-level guard keeps the ~30s re-probe single-instance and offline-only.
-  useEffect(() => registerOfflineRecovery(), []);
+  useEffect(() => registerConnectionHeartbeat(), []);
 
   // Cache-first load: render instantly from cached data, then check connection in background
   useEffect(() => {

@@ -72,9 +72,10 @@ While a save load is actually reaching the server, the **Saves** tab and the set
 and the spinner shows which attempt is in progress — **Connecting to RomM… (attempt 2/3)** — so a slow connection reads
 as busy rather than stuck.
 
-You don't need to do anything to recover: while a game page is open and the plugin is offline, it re-checks the server
-roughly every 30 seconds, and the moment RomM is reachable again the badge clears, Download and slot switching
-re-enable, and the saves list and setup screen reload themselves on the spot — no need to leave and re-open the page.
+You don't need to do anything: while a game page is open, the plugin checks the server roughly every 30 seconds in both
+directions. If RomM goes away, the **RomM offline** badge appears on its own within that window; the moment RomM is
+reachable again the badge clears, Download and slot switching re-enable, and the saves list and setup screen reload
+themselves on the spot — no need to leave and re-open the page.
 
 ### Save file not found
 

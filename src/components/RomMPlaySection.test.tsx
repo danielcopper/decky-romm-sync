@@ -108,10 +108,10 @@ vi.mock("../utils/sectionRefresh", () => ({
 // The REAL in-memory connection store is used so useRommConnectionState drives
 // the offline badge live (#1345); tests read getRommConnectionState()/
 // getVersionError() to assert the verdict and reset the store in beforeEach.
-// The offline recovery probe owns a real setInterval; stub its registration so
+// The connection heartbeat owns a real setInterval; stub its registration so
 // the component's mount effect is inert in these unit tests.
-vi.mock("../utils/offlineRecovery", () => ({
-  registerOfflineRecovery: vi.fn(() => () => {}),
+vi.mock("../utils/connectionHeartbeat", () => ({
+  registerConnectionHeartbeat: vi.fn(() => () => {}),
 }));
 
 // ----- cachedGameDetailStore — getCachedGameDetail / invalidateCachedGameDetail
