@@ -4,6 +4,9 @@ import {
   setRommConnectionState,
   reportServerReachable,
   onRommConnectionChange,
+  getServerRetryProgress,
+  setServerRetryProgress,
+  onServerRetryProgressChange,
 } from "./connectionState";
 
 describe("connectionState store (#1345)", () => {
@@ -53,5 +56,49 @@ describe("connectionState store (#1345)", () => {
     reportServerReachable(false);
     expect(a).toHaveBeenCalledExactlyOnceWith("offline");
     expect(b).toHaveBeenCalledExactlyOnceWith("offline");
+  });
+});
+
+describe("serverRetryProgress store (#1345)", () => {
+  beforeEach(() => {
+    setServerRetryProgress(null);
+  });
+
+  it("starts empty (null)", () => {
+    expect(getServerRetryProgress()).toBeNull();
+  });
+
+  it("sets and reads back a progress value, notifying subscribers", () => {
+    const cb = vi.fn();
+    onServerRetryProgressChange(cb);
+    setServerRetryProgress({ attempt: 2, maxAttempts: 3 });
+    expect(getServerRetryProgress()).toEqual({ attempt: 2, maxAttempts: 3 });
+    expect(cb).toHaveBeenCalledExactlyOnceWith({ attempt: 2, maxAttempts: 3 });
+  });
+
+  it("clearing to null notifies and resets", () => {
+    setServerRetryProgress({ attempt: 3, maxAttempts: 3 });
+    const cb = vi.fn();
+    onServerRetryProgressChange(cb);
+    setServerRetryProgress(null);
+    expect(getServerRetryProgress()).toBeNull();
+    expect(cb).toHaveBeenCalledExactlyOnceWith(null);
+  });
+
+  it("does NOT notify when clearing an already-clear store", () => {
+    const cb = vi.fn();
+    onServerRetryProgressChange(cb);
+    setServerRetryProgress(null); // already null — no-op
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("unsubscribe stops further notifications", () => {
+    const cb = vi.fn();
+    const unsubscribe = onServerRetryProgressChange(cb);
+    setServerRetryProgress({ attempt: 2, maxAttempts: 3 });
+    expect(cb).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    setServerRetryProgress({ attempt: 3, maxAttempts: 3 });
+    expect(cb).toHaveBeenCalledTimes(1);
   });
 });

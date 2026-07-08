@@ -52,6 +52,55 @@ export function useRommConnectionState(): RommConnectionState {
   return state;
 }
 
+/**
+ * Server retry-ladder progress (#1345).
+ *
+ * The backend HTTP adapter retries transient failures with exponential backoff
+ * (up to ~13s over 3 attempts) inside worker threads. It emits a
+ * `server_retry_progress` event per retry, which `index.tsx` funnels into this
+ * store, so a saves surface waiting on a server-touching call can show a live
+ * "Connecting to RomM… (attempt N/M)" spinner instead of a frozen one. `null`
+ * means no retry is in flight — the consumer clears it once its own load
+ * settles (a retry ladder emits no "done" event).
+ */
+export interface ServerRetryProgress {
+  /** 1-based number of the retry currently being attempted. */
+  attempt: number;
+  /** Total attempts the ladder will make before giving up. */
+  maxAttempts: number;
+}
+
+let _retryProgress: ServerRetryProgress | null = null;
+const retryProgressListeners = new Set<(p: ServerRetryProgress | null) => void>();
+
+export function getServerRetryProgress(): ServerRetryProgress | null {
+  return _retryProgress;
+}
+
+/** Set (or clear, with `null`) the current retry progress and notify
+ *  subscribers. A no-op when clearing an already-clear store so a consumer's
+ *  post-load reset doesn't churn renders. */
+export function setServerRetryProgress(p: ServerRetryProgress | null): void {
+  if (p === null && _retryProgress === null) return;
+  _retryProgress = p;
+  retryProgressListeners.forEach((l) => l(p));
+}
+
+export function onServerRetryProgressChange(cb: (p: ServerRetryProgress | null) => void): () => void {
+  retryProgressListeners.add(cb);
+  return () => {
+    retryProgressListeners.delete(cb);
+  };
+}
+
+/** Subscribe to the retry-progress store. Re-renders the caller on every
+ *  change; cleans up its listener on unmount. */
+export function useServerRetryProgress(): ServerRetryProgress | null {
+  const [progress, setProgress] = useState<ServerRetryProgress | null>(getServerRetryProgress());
+  useEffect(() => onServerRetryProgressChange(setProgress), []);
+  return progress;
+}
+
 /** Version mismatch error — set when server returns reason: "version_error" */
 let _versionError: string | null = null;
 const versionErrorListeners = new Set<(err: string | null) => void>();

@@ -24,6 +24,21 @@ export type RommErrorCode =
   | "stale_preview"
   | "config_error";
 
+/**
+ * Payload of the `server_retry_progress` event (#1345). Emitted once per retry
+ * by the backend HTTP adapter's backoff ladder so the frontend can surface a
+ * live "connecting… (attempt N/M)" indicator while a server-touching call is
+ * in flight.
+ */
+export interface ServerRetryProgressEvent {
+  /** 1-based number of the retry currently being attempted. */
+  attempt: number;
+  /** Total attempts the ladder makes before giving up. */
+  max_attempts: number;
+  /** Backoff delay (seconds) before this retry fires. */
+  delay_s: number;
+}
+
 export interface InstalledRom {
   rom_id: number;
   file_name: string;

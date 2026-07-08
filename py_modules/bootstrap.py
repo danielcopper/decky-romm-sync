@@ -415,6 +415,24 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
     dict with keys ``save_sync_service``, ``playtime_service``,
     ``sync_service``, ``download_service``, and ``firmware_service``.
     """
+
+    # Retry-progress surface (#1345): the RommHttpAdapter runs its retry+backoff
+    # ladder inside ``run_in_executor`` worker threads, so each retry is off the
+    # event loop. Wire a listener that marshals a ``server_retry_progress`` emit
+    # back onto the loop (the same call_soon_threadsafe → create_task pattern the
+    # download-progress emits use), letting the saves surfaces show a live
+    # "connecting… (attempt N/M)" indicator instead of a frozen spinner. Wired
+    # here (not in ``bootstrap``) because the loop and emit only exist at
+    # service-wiring time; the adapter stays service-free (plain injected callable).
+    def _emit_server_retry(attempt: int, max_attempts: int, delay_s: float) -> None:
+        payload = {"attempt": attempt, "max_attempts": max_attempts, "delay_s": delay_s}
+        loop = cfg.runtime.loop
+        loop.call_soon_threadsafe(
+            lambda: loop.create_task(cfg.runtime.emit("server_retry_progress", payload)),
+        )
+
+    cfg.adapters.http_adapter.on_retry = _emit_server_retry
+
     # Forward-reference bindings for producers constructed later in this
     # function. Consumers receive ``binding.get`` (a bound method); the
     # binding is populated via ``.set(...)`` once the producer exists.

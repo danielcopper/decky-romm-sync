@@ -60,6 +60,10 @@ to sync them") so those saves aren't forgotten.
 
 While a download of the game is running, switching is blocked with a short message — cancel the running download first.
 
+While a switch is being applied, the version control briefly shows a spinner and can't be reopened until the switch
+settles and its version list refreshes — so a fast second tap can't act against the not-yet-updated list (for example,
+switching straight back before the list has caught up).
+
 ### Region and Languages
 
 In the panel's **Game Info** tab, the plugin shows the **Region** (e.g. `USA/Europe`) and **Languages** (e.g. `En, Fr`)

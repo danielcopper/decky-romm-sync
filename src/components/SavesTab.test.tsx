@@ -156,16 +156,17 @@ describe("SavesTab", () => {
   });
 
   describe("loading state", () => {
-    it("renders the loading message when slotsLoading is true", () => {
+    it("renders the connecting spinner when slotsLoading is true", () => {
       const { container, queryByTestId } = render(<SavesTab {...defaultProps({ slotsLoading: true })} />);
-      expect(container.textContent).toContain("Loading slots...");
+      expect(container.textContent).toContain("Connecting to RomM…");
+      expect(container.querySelector(".romm-throbber")).not.toBeNull();
       expect(queryByTestId("slot-panel-default")).toBeNull();
     });
 
-    it("still renders the offline banner alongside the loading message", () => {
+    it("still renders the offline banner alongside the connecting spinner", () => {
       setRommConnectionState("offline");
       const { container } = render(<SavesTab {...defaultProps({ slotsLoading: true })} />);
-      expect(container.textContent).toContain("Loading slots...");
+      expect(container.textContent).toContain("Connecting to RomM…");
       expect(container.textContent).toContain("RomM is offline");
     });
   });

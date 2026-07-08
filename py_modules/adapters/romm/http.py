@@ -15,6 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -36,6 +37,16 @@ from lib.url_host import same_origin
 
 _CONTENT_TYPE_JSON = "application/json"
 
+# Optional per-retry listener: ``(attempt, max_attempts, delay_s) -> None`` where
+# *attempt* is the 1-based OVERALL attempt ordinal about to run (the initial try
+# is 1, so the first retry is 2, the second 3 — it reads as "attempt N/M"). Fired
+# from :meth:`RommHttpAdapter.with_retry` just before it sleeps ahead of a retry.
+# Injected at the composition root (``bootstrap``) so the adapter stays
+# service-free: it surfaces retry progress without importing ``decky`` or any
+# service (the composition root marshals the call onto the loop and emits the
+# ``server_retry_progress`` event).
+RetryListener = Callable[[int, int, float], None]
+
 
 class RommHttpAdapter:
     """Low-level HTTP client for RomM API requests.
@@ -52,17 +63,31 @@ class RommHttpAdapter:
         Outgoing ``User-Agent`` header value (e.g. ``"decky-romm-sync/0.17.1"``).
         Required because Cloudflare's Bot Fight Mode 403s the default
         ``Python-urllib`` UA before requests reach self-hosted RomM origins.
+    on_retry:
+        Optional :data:`RetryListener` invoked once per retry (before the
+        backoff sleep) so the UI can surface "connecting… (attempt N/M)". A
+        settable attribute, not a hard dependency: ``bootstrap`` wires the
+        loop-threadsafe emit after construction (the loop/emit only exist at
+        service-wiring time), and tests can pass a spy at construction.
     """
 
     _CONNECT_TIMEOUT = 30
     _READ_TIMEOUT = 60
     _DOWNLOAD_BLOCK_SIZE = 65536
 
-    def __init__(self, settings: dict[str, Any], plugin_dir: str, logger: logging.Logger, user_agent: str) -> None:
+    def __init__(
+        self,
+        settings: dict[str, Any],
+        plugin_dir: str,
+        logger: logging.Logger,
+        user_agent: str,
+        on_retry: RetryListener | None = None,
+    ) -> None:
         self._settings = settings
         self._plugin_dir = plugin_dir
         self._logger = logger
         self._user_agent = user_agent
+        self.on_retry = on_retry
 
     # ------------------------------------------------------------------
     # Platform map
@@ -289,10 +314,25 @@ class RommHttpAdapter:
                 if attempt < max_attempts - 1 and self.is_retryable(exc):
                     delay = base_delay * (3**attempt)
                     self._logger.info(f"Retry {attempt + 1}/{max_attempts} after {delay}s: {exc}")
+                    self._notify_retry(attempt + 2, max_attempts, float(delay))
                     time.sleep(delay)
                 else:
                     raise
         raise last_exc  # type: ignore[misc]  # pragma: no cover
+
+    def _notify_retry(self, attempt: int, max_attempts: int, delay_s: float) -> None:
+        """Fire the optional retry listener, swallowing any listener failure.
+
+        The listener surfaces best-effort UI progress; a raise from it (e.g. a
+        closed loop during plugin unload) must never abort the real HTTP retry
+        underway, so it is caught and logged rather than propagated.
+        """
+        if self.on_retry is None:
+            return
+        try:
+            self.on_retry(attempt, max_attempts, delay_s)
+        except Exception:  # progress emit is best-effort — never break a real retry
+            self._logger.debug("on_retry listener raised; ignoring", exc_info=True)
 
     # ------------------------------------------------------------------
     # HTTP request methods

@@ -335,6 +335,32 @@ class TestWireServices:
         assert isinstance(result["achievements_service"], AchievementsService)
         deps["loop"].close()
 
+    def test_wires_http_adapter_on_retry_to_threadsafe_emit(self, tmp_path):
+        # #1345: wire_services installs a retry listener on the http adapter that
+        # marshals a ``server_retry_progress`` emit onto the loop (with_retry runs
+        # in executor threads). Fire it as with_retry would and pump the loop so
+        # the marshaled emit runs.
+        deps = self._make_deps(tmp_path)
+        wire_services(self._make_config(deps))
+        on_retry = deps["http_adapter"].on_retry
+        assert callable(on_retry)
+
+        loop = deps["loop"]
+        on_retry(2, 3, 1.0)
+
+        async def _drain():
+            # One yield runs the call_soon_threadsafe callback (which creates the
+            # emit task); the second lets that task run to completion.
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+
+        loop.run_until_complete(_drain())
+        deps["emit"].assert_awaited_once_with(
+            "server_retry_progress",
+            {"attempt": 2, "max_attempts": 3, "delay_s": 1.0},
+        )
+        loop.close()
+
     def test_services_share_settings_reference(self, tmp_path):
         deps = self._make_deps(tmp_path)
         result = wire_services(self._make_config(deps))

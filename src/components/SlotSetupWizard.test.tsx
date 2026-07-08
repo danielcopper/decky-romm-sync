@@ -12,6 +12,12 @@ import {
 } from "../utils/saveSetup";
 import type { SaveSetupInfo } from "../types";
 import { detach } from "../utils/detach";
+import {
+  setRommConnectionState,
+  getRommConnectionState,
+  reportServerReachable,
+  setServerRetryProgress,
+} from "../utils/connectionState";
 
 // Local @decky/ui re-mock — gives ConfirmModal an inline OK button so RTL can
 // render-and-click the in-tree CustomSlotModal (which owns its own input state
@@ -70,10 +76,16 @@ vi.mock("@decky/ui", () => {
 // src/utils/saveSetup.test.ts. The wizard's job is to *wire* them correctly
 // (right args, right callbacks). Tests that need state transitions through
 // the helper invoke its setter callbacks (e.g. args.setInfo(...)) directly.
-vi.mock("../utils/saveSetup", () => ({
-  applyWizardInitialSetupResult: vi.fn(),
-  applyWizardRetrySetupResult: vi.fn(),
-}));
+vi.mock("../utils/saveSetup", async (importActual) => {
+  // Keep the real constants (SERVER_UNREACHABLE_WIZARD_MESSAGE etc.) the wizard
+  // now imports; only the two apply-result helpers are stubbed.
+  const actual = await importActual<typeof import("../utils/saveSetup")>();
+  return {
+    ...actual,
+    applyWizardInitialSetupResult: vi.fn(),
+    applyWizardRetrySetupResult: vi.fn(),
+  };
+});
 
 function makeSetupInfo(overrides: Partial<SaveSetupInfo> = {}): SaveSetupInfo {
   return {
@@ -135,12 +147,18 @@ describe("SlotSetupWizard", () => {
       success: true,
       message: "",
     });
+    // The wizard now reads/feeds the shared connection store (#1345). Reset it
+    // to a connected baseline so the known-offline fast path doesn't fire in the
+    // tests that exercise the normal fetch, and clear any retry progress.
+    setRommConnectionState("connected");
+    setServerRetryProgress(null);
   });
 
   describe("initial fetch + loading state", () => {
-    it("renders the loading message immediately", () => {
+    it("renders the connecting spinner immediately", () => {
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
-      expect(container.textContent).toContain("Loading save information...");
+      expect(container.textContent).toContain("Connecting to RomM…");
+      expect(container.querySelector(".romm-throbber")).not.toBeNull();
     });
 
     it("calls getSaveSetupInfo with the romId on mount", async () => {
@@ -229,14 +247,14 @@ describe("SlotSetupWizard", () => {
   });
 
   describe("confirming state", () => {
-    it("renders 'Setting up...' when confirming is true and there's no error", async () => {
+    it("renders 'Setting up…' when confirming is true and there's no error", async () => {
       vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_result, deps) => {
         deps.setConfirming(true);
       });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
-      expect(container.textContent).toContain("Setting up...");
-      expect(container.textContent).not.toContain("Loading save information...");
+      expect(container.textContent).toContain("Setting up…");
+      expect(container.textContent).not.toContain("Connecting to RomM…");
     });
   });
 
@@ -755,7 +773,7 @@ describe("SlotSetupWizard", () => {
         await Promise.resolve();
       });
 
-      expect(container.textContent).toContain("Setting up...");
+      expect(container.textContent).toContain("Setting up…");
       expect(container.textContent).not.toContain("Track");
     });
   });
@@ -777,6 +795,124 @@ describe("SlotSetupWizard", () => {
       // isCancelled closure now reports true. This proves the unmount-cleanup
       // pattern is wired correctly.
       expect(deps.isCancelled()).toBe(true);
+    });
+  });
+
+  describe("offline connection integration (#1345)", () => {
+    it("known-offline fast path: skips getSaveSetupInfo and shows the unreachable error + Retry", async () => {
+      setRommConnectionState("offline");
+      const { container, getByText } = render(<SlotSetupWizard {...defaultProps()} />);
+      await flushAsync();
+      // The full retry ladder is skipped — no backend call at all.
+      expect(vi.mocked(backend.getSaveSetupInfo)).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("RomM server is not reachable");
+      expect(getByText("Retry")).not.toBeNull();
+    });
+
+    it("reports the server reachable when the load returns a server-backed result", async () => {
+      setRommConnectionState("checking");
+      vi.mocked(backend.getSaveSetupInfo).mockResolvedValue(makeSetupInfo({ recommended_action: "show_wizard" }));
+      render(<SlotSetupWizard {...defaultProps()} />);
+      await flushAsync();
+      expect(getRommConnectionState()).toBe("connected");
+    });
+
+    it("reports the server offline when the load returns recommended_action=server_unreachable", async () => {
+      setRommConnectionState("checking");
+      vi.mocked(backend.getSaveSetupInfo).mockResolvedValue(
+        makeSetupInfo({ recommended_action: "server_unreachable", server_query_failed: true }),
+      );
+      render(<SlotSetupWizard {...defaultProps()} />);
+      await flushAsync();
+      expect(getRommConnectionState()).toBe("offline");
+    });
+
+    it("auto-reloads on reconnect after holding the offline error", async () => {
+      setRommConnectionState("offline");
+      render(<SlotSetupWizard {...defaultProps({ romId: 5 })} />);
+      await flushAsync();
+      // Fast path: nothing fetched yet.
+      expect(vi.mocked(backend.getSaveSetupInfo)).not.toHaveBeenCalled();
+
+      // The recovery probe reconnects — the wizard re-runs the load on the edge.
+      vi.mocked(backend.getSaveSetupInfo).mockResolvedValue(makeSetupInfo());
+      await act(async () => {
+        reportServerReachable(true);
+        await Promise.resolve();
+      });
+      await flushAsync();
+      expect(vi.mocked(backend.getSaveSetupInfo)).toHaveBeenCalledWith(5);
+    });
+
+    it("shows the connecting spinner with the live attempt count while the load is in flight", async () => {
+      setRommConnectionState("connected");
+      // Never resolves — the wizard stays in the loading branch.
+      vi.mocked(backend.getSaveSetupInfo).mockImplementation(() => new Promise(() => {}));
+      const { container } = render(<SlotSetupWizard {...defaultProps()} />);
+      expect(container.textContent).toContain("Connecting to RomM…");
+      expect(container.querySelector(".romm-throbber")).not.toBeNull();
+      act(() => setServerRetryProgress({ attempt: 2, maxAttempts: 3 }));
+      expect(container.textContent).toContain("Connecting to RomM… (attempt 2/3)");
+    });
+
+    it("manual Retry feeds the store offline when it resolves server_unreachable", async () => {
+      // Start held on an error so the Retry button is present, then have the
+      // retry resolve unreachable and assert the store is driven offline.
+      setRommConnectionState("checking");
+      vi.mocked(backend.getSaveSetupInfo).mockRejectedValueOnce(new Error("first fail"));
+      const { getByText } = render(<SlotSetupWizard {...defaultProps({ romId: 11 })} />);
+      await flushAsync();
+
+      vi.mocked(backend.getSaveSetupInfo).mockResolvedValueOnce(
+        makeSetupInfo({ recommended_action: "server_unreachable", server_query_failed: true }),
+      );
+      await act(async () => {
+        fireEvent.click(getByText("Retry"));
+        await Promise.resolve();
+      });
+      await flushAsync();
+      expect(getRommConnectionState()).toBe("offline");
+    });
+
+    it("clears stale retry progress when a fresh load starts (no leaked attempt suffix across loads)", async () => {
+      // A retry during the first load left the shared store showing "(attempt
+      // 2/3)" — exactly what the server_retry_progress event handler sets. A
+      // NEW healthy load must reset it so ConnectingIndicator reads plain again.
+      setRommConnectionState("connected");
+      vi.mocked(backend.getSaveSetupInfo).mockResolvedValueOnce(makeSetupInfo());
+      const { container, rerender } = render(<SlotSetupWizard {...defaultProps({ romId: 1 })} />);
+      await flushAsync();
+
+      act(() => setServerRetryProgress({ attempt: 2, maxAttempts: 3 }));
+
+      // The next load stays in flight so ConnectingIndicator (the loading branch) renders.
+      vi.mocked(backend.getSaveSetupInfo).mockImplementation(() => new Promise<never>(() => {}));
+      rerender(<SlotSetupWizard {...defaultProps({ romId: 2 })} />);
+      await flushAsync();
+
+      // Fresh load cleared the store → plain label, no leaked "(attempt 2/3)".
+      // (Drop the clear-on-start and this shows "attempt 2/3" and fails.)
+      expect(container.textContent).toContain("Connecting to RomM…");
+      expect(container.textContent).not.toContain("attempt 2/3");
+    });
+
+    it("manual Retry clears stale retry progress before re-fetching", async () => {
+      setRommConnectionState("checking");
+      vi.mocked(backend.getSaveSetupInfo).mockRejectedValueOnce(new Error("first fail"));
+      const { container, getByText } = render(<SlotSetupWizard {...defaultProps()} />);
+      await flushAsync();
+
+      act(() => setServerRetryProgress({ attempt: 2, maxAttempts: 3 }));
+
+      // Keep the retry fetch pending so the loading spinner renders.
+      vi.mocked(backend.getSaveSetupInfo).mockImplementation(() => new Promise<never>(() => {}));
+      await act(async () => {
+        fireEvent.click(getByText("Retry"));
+        await Promise.resolve();
+      });
+
+      expect(container.textContent).toContain("Connecting to RomM…");
+      expect(container.textContent).not.toContain("attempt 2/3");
     });
   });
 });

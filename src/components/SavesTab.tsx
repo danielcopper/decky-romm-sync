@@ -19,6 +19,7 @@ import { scrollFocusedToCenter } from "../utils/scrollHelpers";
 import { MUTED_COLOR } from "./saves/helpers";
 import { NewSlotModal } from "./saves/NewSlotModal";
 import { SlotPanel } from "./saves/SlotPanel";
+import { ConnectingIndicator } from "./saves/ConnectingIndicator";
 import { renderSaveFileRow } from "./saves/SaveFileRow";
 import { detach } from "../utils/detach";
 
@@ -187,13 +188,16 @@ export const SavesTab: FC<SavesTabProps> = ({
       : null;
 
   // --- Loading state ---
+  // A spinner + live retry progress (#1345) instead of bare italic text — the
+  // slot fetch pays the backend retry ladder, so surface "Connecting to RomM…
+  // (attempt N/M)" while it is in flight.
   if (slotsLoading) {
     return createElement(
       Focusable,
       { noFocusRing: true },
       offlineBanner,
       strandedBanner,
-      createElement("div", { style: { fontSize: "13px", color: "#8f98a0", padding: "8px 0" } }, "Loading slots..."),
+      createElement(ConnectingIndicator, { key: "connecting" }),
     );
   }
 

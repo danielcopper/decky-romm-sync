@@ -219,6 +219,88 @@ class TestTokenHostMismatchRetry:
         assert RommHttpAdapter.is_retryable(TokenHostMismatchError("mismatch")) is False
 
 
+class TestWithRetryOnRetryListener:
+    """The optional ``on_retry`` listener fires once per retry so the saves UI
+    can surface "Connecting to RomM… (attempt N/M)" progress (#1345)."""
+
+    def _adapter(self, on_retry=None):
+        import logging
+
+        return RommHttpAdapter(
+            {"romm_url": ""},
+            "/tmp",
+            logging.getLogger("test"),
+            "decky-romm-sync/9.9.9",
+            on_retry=on_retry,
+        )
+
+    def test_fires_per_retry_with_1_based_attempt_numbers(self):
+        calls: list[tuple[int, int, float]] = []
+        adapter = self._adapter(on_retry=lambda a, m, d: calls.append((a, m, d)))
+        tries = {"n": 0}
+
+        def fn():
+            tries["n"] += 1
+            raise ConnectionError("server down")
+
+        with patch("adapters.romm.http.time.sleep") as sleep_mock, pytest.raises(ConnectionError):
+            adapter.with_retry(fn, max_attempts=3)
+
+        # 3 attempts total; the listener fires just before each of the 2 backoff
+        # sleeps, naming the retry about to run (attempt 2/3, then 3/3) and its delay.
+        assert calls == [(2, 3, 1.0), (3, 3, 3.0)]
+        assert sleep_mock.call_count == 2
+        assert tries["n"] == 3
+
+    def test_not_fired_when_first_attempt_succeeds(self):
+        calls: list[tuple[int, int, float]] = []
+        adapter = self._adapter(on_retry=lambda a, m, d: calls.append((a, m, d)))
+        assert adapter.with_retry(lambda: "ok") == "ok"
+        assert calls == []
+
+    def test_not_fired_on_non_retryable_error(self):
+        calls: list[tuple[int, int, float]] = []
+        adapter = self._adapter(on_retry=lambda a, m, d: calls.append((a, m, d)))
+
+        def fn():
+            raise ValueError("bad request")  # non-retryable — raises immediately
+
+        with pytest.raises(ValueError):
+            adapter.with_retry(fn, max_attempts=3)
+        assert calls == []
+
+    def test_listener_exception_never_breaks_the_retry(self):
+        # A raising listener (e.g. a closed loop at plugin unload) must be
+        # swallowed so it can't abort the real HTTP retry underway.
+        def boom(*_a):
+            raise RuntimeError("loop closed")
+
+        adapter = self._adapter(on_retry=boom)
+        tries = {"n": 0}
+
+        def fn():
+            tries["n"] += 1
+            if tries["n"] < 2:
+                raise ConnectionError("server down")
+            return "recovered"
+
+        with patch("adapters.romm.http.time.sleep"):
+            assert adapter.with_retry(fn, max_attempts=3) == "recovered"
+
+    def test_none_listener_is_a_noop_across_a_retry(self):
+        adapter = self._adapter(on_retry=None)
+        tries = {"n": 0}
+
+        def fn():
+            tries["n"] += 1
+            if tries["n"] < 2:
+                raise ConnectionError("server down")
+            return "ok"
+
+        with patch("adapters.romm.http.time.sleep"):
+            assert adapter.with_retry(fn, max_attempts=3) == "ok"
+
+
 class TestRommBasicAuthRequest:
     """``basic_auth_request`` builds a one-off Basic header from passed creds."""
 

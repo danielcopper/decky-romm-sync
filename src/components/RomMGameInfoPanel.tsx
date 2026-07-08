@@ -61,7 +61,7 @@ import {
   setSaveSortMigrationStatus,
 } from "../utils/saveSortMigrationStore";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
-import { reportServerReachable, useRommConnectionState } from "../utils/connectionState";
+import { reportServerReachable, setServerRetryProgress, useRommConnectionState } from "../utils/connectionState";
 import { applyLoadSlotsResult, applyRefreshSlotResult } from "../utils/slotState";
 import { VersionErrorCard, useVersionError } from "./VersionErrorCard";
 import { MigrationBlockedCard } from "./MigrationBlockedCard";
@@ -725,6 +725,10 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     let cancelled = false;
 
     async function loadSlots() {
+      // Drop stale retry progress from a prior load so the SavesTab's
+      // ConnectingIndicator starts at plain "Connecting to RomM…" (#1345 round-2
+      // review); clear-on-start is race-free vs a clear-on-complete.
+      setServerRetryProgress(null);
       setState((prev) => ({ ...prev, slotsLoading: true }));
       try {
         if (!state.romId) return;

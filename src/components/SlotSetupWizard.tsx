@@ -1,11 +1,22 @@
-import { useState, useEffect, FC, createElement, ChangeEvent } from "react";
+import { useState, useEffect, useRef, FC, createElement, ChangeEvent } from "react";
 import { DialogButton, ConfirmModal, TextField, showModal } from "@decky/ui";
 import { getSaveSetupInfo, confirmSlotChoice, logError } from "../api/backend";
 import { scrollFocusedToCenter } from "../utils/scrollHelpers";
-import { applyWizardInitialSetupResult, applyWizardRetrySetupResult } from "../utils/saveSetup";
+import {
+  applyWizardInitialSetupResult,
+  applyWizardRetrySetupResult,
+  SERVER_UNREACHABLE_WIZARD_MESSAGE,
+} from "../utils/saveSetup";
+import {
+  getRommConnectionState,
+  onRommConnectionChange,
+  reportServerReachable,
+  setServerRetryProgress,
+} from "../utils/connectionState";
 import { formatBytes } from "../utils/formatters";
 import type { SaveSetupInfo } from "../types";
 import { detach } from "../utils/detach";
+import { ConnectingIndicator } from "./saves/ConnectingIndicator";
 
 interface SlotSetupWizardProps {
   romId: number;
@@ -86,16 +97,49 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
   const [loading, setLoading] = useState(true);
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Bumped to force a re-fetch — the reconnect auto-reload uses it to re-run the
+  // load effect once the shared connection store flips back to connected (#1345).
+  const [reloadKey, setReloadKey] = useState(0);
+  // True while the wizard is holding on the offline error (fast path or a
+  // server_unreachable result). Gates the reconnect auto-reload so a benign
+  // checking→connected transition never re-fetches, and guards against loops.
+  const offlineHeldRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
 
     const fetchInfo = async () => {
+      // Known-offline fast path (#1345): getSaveSetupInfo runs the backend
+      // retry+backoff ladder, so on a known-unreachable server every saves-tab
+      // re-open would hang "Connecting to RomM…" for ~13s before falling back to
+      // the retry view. Skip the call and render the unreachable state instantly;
+      // offlineHeldRef arms the reconnect auto-reload below.
+      if (getRommConnectionState() === "offline") {
+        offlineHeldRef.current = true;
+        if (!cancelled) {
+          setError(SERVER_UNREACHABLE_WIZARD_MESSAGE);
+          setLoading(false);
+        }
+        return;
+      }
+
+      // Clear any stale retry progress from a previous load before starting a
+      // fresh one, so ConnectingIndicator shows plain "Connecting to RomM…" and
+      // not a leftover "(attempt N/M)" (#1345 round-2 review). Clear-on-start is
+      // race-free — a clear-on-complete could wipe a still-live retry frame.
+      setServerRetryProgress(null);
       setLoading(true);
       setError(null);
       try {
         const result = await getSaveSetupInfo(romId);
         if (cancelled) return;
+        // Feed the shared store (#1345): a server_unreachable result is a
+        // definitive offline signal; any other resolved result proves the
+        // server answered. A throw is a bridge/unknown error, not a verdict —
+        // the catch leaves the store untouched.
+        const reachable = result.recommended_action !== "server_unreachable";
+        reportServerReachable(reachable);
+        offlineHeldRef.current = !reachable;
         await applyWizardInitialSetupResult(result, {
           romId,
           confirmSlotChoice,
@@ -120,7 +164,24 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
     return () => {
       cancelled = true;
     };
-  }, [romId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onComplete is a fresh arrow every parent render; including it would re-fetch on every render. reloadKey is the explicit reconnect re-fetch trigger.
+  }, [romId, reloadKey]);
+
+  // Auto-reload on reconnect (#1345): when the shared store flips back to
+  // connected while the wizard is holding the offline error, re-run the load.
+  // Bounded — fires only on the →connected edge and only when armed, so a
+  // still-unreachable re-fetch (which re-arms via reportServerReachable(false))
+  // can't loop faster than the 30s recovery probe that flips the store.
+  useEffect(
+    () =>
+      onRommConnectionChange((s) => {
+        if (s === "connected" && offlineHeldRef.current) {
+          offlineHeldRef.current = false;
+          setReloadKey((k) => k + 1);
+        }
+      }),
+    [],
+  );
 
   const handleConfirm = async (slot: string, migrate = false, migrateFrom: string | null = null) => {
     setConfirming(true);
@@ -144,12 +205,13 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
     }
   };
 
-  // Loading / confirming
+  // Loading / confirming — a spinner + live retry progress (#1345) instead of
+  // bare italic text, so a load paying the backend retry ladder reads as busy.
   if (loading || (confirming && !error)) {
     return (
       <div style={{ padding: "12px 0" }}>
         <div className="romm-panel-section-title">Save Slot Setup</div>
-        <div className="romm-panel-muted">{confirming ? "Setting up..." : "Loading save information..."}</div>
+        <ConnectingIndicator label={confirming ? "Setting up" : "Connecting to RomM"} />
       </div>
     );
   }
@@ -166,8 +228,18 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
           onClick={() => {
             setError(null);
             setLoading(true);
+            // Fresh load — drop any stale retry progress (see fetchInfo above).
+            setServerRetryProgress(null);
             getSaveSetupInfo(romId).then(
-              (result) => applyWizardRetrySetupResult(result, { setError, setLoading, setInfo }),
+              (result) => {
+                // Same conservative feed as the initial load (#1345): the manual
+                // Retry re-probes reachability, so a server_unreachable result
+                // re-arms offline and any other result reports the server back.
+                const reachable = result.recommended_action !== "server_unreachable";
+                reportServerReachable(reachable);
+                offlineHeldRef.current = !reachable;
+                applyWizardRetrySetupResult(result, { setError, setLoading, setInfo });
+              },
               (e) => {
                 setError(`Failed: ${e}`);
                 setLoading(false);

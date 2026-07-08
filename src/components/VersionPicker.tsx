@@ -79,6 +79,12 @@ const Badge: FC<{ text: string; tone: "accent" | "muted" | "good" }> = ({ text, 
 
 export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   const [versionList, setVersionList] = useState<VersionList | null>(null);
+  // In-flight switch guard (#1345 round-2 / E): a switch rebinds the shortcut and
+  // then relies on the version_switched re-fetch to refresh the (now stale) list.
+  // While a switch is running the trigger is disabled + shows a throbber and the
+  // menu can't open, so a rapid second click can't act against the stale list
+  // (the swallowed switch-back bug) or interleave two switches' confirm polls.
+  const [switching, setSwitching] = useState(false);
   // rom_id -> cover base64 for synced versions, filled lazily once the list loads.
   const [covers, setCovers] = useState<Record<number, string>>({});
   const coversRequested = useRef<Set<number>>(new Set());
@@ -103,6 +109,13 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         if (!cancelled) setVersionList(result);
       } catch (e) {
         logError(`VersionPicker: getVersionList failed: ${e}`);
+      } finally {
+        // The post-switch version_switched reload landing is the "switch fully
+        // settled" signal — clear the in-flight guard here so the trigger
+        // re-enables against a FRESH list, never a stale one (#1345 round-2 / E).
+        // In the finally (not just on success) so a failed reload can't leave the
+        // guard stuck; on the initial mount load switching is already false (no-op).
+        if (!cancelled) setSwitching(false);
       }
     };
     detach(load());
@@ -177,6 +190,9 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   // surfaces through the normal save_status_updated loop.
   const syncThenSwitch = async (unsyncedRomId: number, target: VersionInfo): Promise<void> => {
     const abort = (body: string): void => {
+      // Every sync-then-switch failure is terminal for this attempt — release the
+      // in-flight guard so the trigger re-enables (it never reaches a reload).
+      setSwitching(false);
       toaster.toast({ title: "RomM Sync", body });
       detach(
         refreshSaveStatus(unsyncedRomId).catch((e) =>
@@ -210,8 +226,14 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     }
   };
 
+  // Set the in-flight guard on entry and release it on every non-success terminal
+  // path (below). On success we deliberately LEAVE it set: `applySwitchSuccess`
+  // always broadcasts version_switched, and the resulting list reload clears the
+  // guard once the fresh list lands — so the trigger never re-enables against a
+  // stale list.
   const handleSwitch = async (target: VersionInfo): Promise<void> => {
     if (target.active) return;
+    setSwitching(true);
     try {
       const result = await switchVersion(appId, target.rom_id, false);
       if (result.success) {
@@ -226,8 +248,13 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
           versionName: result.unsynced_version_name,
           serverReachable: result.server_reachable,
         });
-        if (choice === "cancel") return;
+        if (choice === "cancel") {
+          setSwitching(false);
+          return;
+        }
         if (choice === "sync_and_switch") {
+          // syncThenSwitch owns the guard from here: it clears on abort and leaves
+          // it set on its own success (its reload clears it).
           await syncThenSwitch(result.unsynced_rom_id, target);
           return;
         }
@@ -238,13 +265,16 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         if (forced.success) {
           await applySwitchSuccess(forced);
         } else {
+          setSwitching(false);
           toaster.toast({ title: "RomM Sync", body: forced.message || "Could not switch version" });
         }
         return;
       }
       if (result.reason === "server_unreachable") reportServerReachable(false);
+      setSwitching(false);
       toaster.toast({ title: "RomM Sync", body: result.message || "Could not switch version" });
     } catch (e) {
+      setSwitching(false);
       logError(`VersionPicker: switchVersion failed: ${e}`);
       toaster.toast({ title: "RomM Sync", body: "Could not switch version" });
     }
@@ -275,6 +305,9 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   };
 
   const openMenu = (e: MouseEvent): void => {
+    // Blocked while a switch is in flight — the list is stale until the reload
+    // lands, so opening it now would let a click act against the wrong versions.
+    if (switching) return;
     showContextMenu(
       <Menu label="Version">
         {versions.map((v) => (
@@ -305,9 +338,20 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   // it is one natively-focusable, gamepad-reachable element inside the play-section
   // Focusable row. The verbose per-version detail lives in the anchored menu.
   return (
-    <DialogButton className="romm-disc-btn" onClick={openMenu} aria-label="Version" title="Version">
+    <DialogButton
+      className="romm-disc-btn"
+      onClick={openMenu}
+      disabled={switching}
+      aria-label="Version"
+      title="Version"
+      style={switching ? { opacity: 0.55 } : {}}
+    >
       <FaLayerGroup size={20} color={activeIsDefault ? NEUTRAL_GREY : ACTIVE_ACCENT} />
-      <FaChevronDown size={10} color="#cfd3d8" />
+      {switching ? (
+        <span className="romm-throbber" style={{ width: "14px", height: "14px" }} />
+      ) : (
+        <FaChevronDown size={10} color="#cfd3d8" />
+      )}
     </DialogButton>
   );
 };

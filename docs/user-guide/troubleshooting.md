@@ -60,14 +60,21 @@ config file.
 ### Offline detection and recovery
 
 When the plugin can't reach RomM, it notices from the calls that fail (a connection probe, a save-status or slot load, a
-version switch) and marks itself offline. On a game's detail page you'll see a **RomM offline** badge in the play row,
-the **Download** button and slot switching are disabled (they need the server), and the **Saves** tab shows a "RomM is
-offline" banner and renders straight away instead of hanging on "Loading slots…". Playtime keeps showing — it's tracked
-locally and doesn't depend on the connection.
+version switch, or the first-time save-slot setup) and marks itself offline. On a game's detail page you'll see a **RomM
+offline** badge in the play row, the **Download** button and slot switching are disabled (they need the server), and the
+**Saves** tab shows a "RomM is offline" banner and renders straight away instead of hanging. The first-time save-slot
+setup screen does the same — it shows its "RomM server is not reachable" message and a **Retry** button immediately
+rather than working through the connection attempts. Playtime keeps showing — it's tracked locally and doesn't depend on
+the connection.
+
+While a save load is actually reaching the server, the **Saves** tab and the setup screen show a spinner labelled
+**Connecting to RomM…**. If the server is briefly slow or flaky, the plugin retries a couple of times before giving up,
+and the spinner shows which attempt is in progress — **Connecting to RomM… (attempt 2/3)** — so a slow connection reads
+as busy rather than stuck.
 
 You don't need to do anything to recover: while a game page is open and the plugin is offline, it re-checks the server
-roughly every 30 seconds, and the moment RomM is reachable again the badge clears and Download, slot switching, and the
-saves list re-enable on the spot — no need to leave and re-open the page.
+roughly every 30 seconds, and the moment RomM is reachable again the badge clears, Download and slot switching
+re-enable, and the saves list and setup screen reload themselves on the spot — no need to leave and re-open the page.
 
 ### Save file not found
 

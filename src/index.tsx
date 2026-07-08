@@ -43,7 +43,7 @@ import { setMigrationStatus } from "./utils/migrationStore";
 import { fetchSettingsResetState } from "./utils/settingsResetStore";
 import { resetSyncDelta, recordSyncRemoved, getSyncDelta } from "./utils/syncDeltaStore";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
-import { setVersionError } from "./utils/connectionState";
+import { setVersionError, setServerRetryProgress } from "./utils/connectionState";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
 import { findOutermostScrollParent } from "./utils/scrollHelpers";
 import { detach } from "./utils/detach";
@@ -56,6 +56,7 @@ import type {
   SyncPlanData,
   SyncStaleData,
   SyncCollectionsData,
+  ServerRetryProgressEvent,
 } from "./types";
 import { removeShortcut, setLaunchOptionsConfirmed } from "./utils/steamShortcuts";
 import { batchConfirmLaunchOptions } from "./utils/launchOptionsReconcile";
@@ -599,6 +600,17 @@ export default definePlugin(() => {
     },
   );
 
+  // Server retry-ladder progress (#1345): the backend emits one frame per HTTP
+  // retry so the saves surfaces can show "Connecting to RomM… (attempt N/M)".
+  // The consuming surface clears the store once its own load settles — the
+  // ladder itself emits no terminal "done" frame.
+  const serverRetryListener = addEventListener<[ServerRetryProgressEvent]>(
+    "server_retry_progress",
+    (data: ServerRetryProgressEvent) => {
+      setServerRetryProgress({ attempt: data.attempt, maxAttempts: data.max_attempts });
+    },
+  );
+
   return {
     name: "RomM Sync",
     icon: <FaGamepad />,
@@ -622,6 +634,7 @@ export default definePlugin(() => {
       removeEventListener("save_sort_changed", saveSortChangedListener);
       removeEventListener("save_status_updated", saveStatusListener);
       removeEventListener("migration_relaunch_options", migrationRelaunchListener);
+      removeEventListener("server_retry_progress", serverRetryListener);
     },
   };
 });
