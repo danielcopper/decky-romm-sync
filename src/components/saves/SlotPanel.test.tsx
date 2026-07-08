@@ -425,6 +425,34 @@ describe("SlotPanel", () => {
       }
     });
 
+    it("explains the not_installed rejection (bound but not downloaded)", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(backend.getSlotSaves).mockResolvedValue({
+          success: true,
+          slot: "default",
+          saves: [],
+        });
+        vi.mocked(backend.switchSlot).mockResolvedValue({
+          success: false,
+          reason: "not_installed",
+        });
+        const { container, getByText } = render(<SlotPanel {...defaultProps()} />);
+        fireEvent.click(container.querySelector("button")!);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        fireEvent.click(getByText("Activate Slot"));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(0);
+          await vi.advanceTimersByTimeAsync(0);
+        });
+        expect(container.textContent).toContain("Can't switch — download the game first");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("shows the generic error on unknown reason", async () => {
       vi.useFakeTimers();
       try {
