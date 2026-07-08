@@ -360,6 +360,13 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     const onSessionChanged = (e: WindowEventMap["romm_session_changed"]) => {
       if (e.detail.romId !== romIdRef.current) return;
       setIsRunning(e.detail.running);
+      // Session end is the authoritative "not launching anymore" signal. Game
+      // Mode remounts the page on return (init resets the state), but the
+      // desktop windowed BPM does not — without this fallback an externally
+      // killed emulator leaves the button stuck on "Launching...".
+      if (!e.detail.running) {
+        setState((prev) => (prev === "launching" ? "play" : prev));
+      }
     };
     globalThis.addEventListener("romm_session_changed", onSessionChanged);
 

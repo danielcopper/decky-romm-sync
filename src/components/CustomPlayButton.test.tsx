@@ -1839,6 +1839,37 @@ describe("CustomPlayButton — state-aware Resume (#1313)", () => {
     expect(queryByText("Resume")).toBeNull();
   });
 
+  it("resets a stuck Launching state when the session for this rom ends without a remount", async () => {
+    // Desktop windowed BPM never remounts the page after a game exits, so the
+    // session-end event is the only reset path out of "Launching..." there
+    // (Game Mode remounts and re-inits instead).
+    mockCachedDetail();
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+
+    // The click leaves the underlying state at "launching"; the running
+    // overlay shows Resume on top of it while the session lives.
+    await act(async () => {
+      playBtn.click();
+    });
+    act(() => {
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_session_changed", { detail: { running: true, appId: 100, romId: 42 } }),
+      );
+    });
+    await findByText("Resume");
+
+    act(() => {
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_session_changed", { detail: { running: false, appId: 100, romId: 42 } }),
+      );
+    });
+
+    // Non-vacuous: pre-fix the overlay dropped and exposed the stuck
+    // "Launching..." state — the button must fall back to Play instead.
+    await findByText("Play");
+  });
+
   it("ignores a session event for a different rom", async () => {
     const { findByText, queryByText } = render(<CustomPlayButton appId={100} />);
     await findByText("Play");
