@@ -471,7 +471,9 @@ export const fixRetroarchInputDriver = callable<[], { success: boolean; message:
   "fix_retroarch_input_driver",
 );
 export const getRomMetadata = callable<[number], RomMetadata>("get_rom_metadata");
-export const getAllMetadataCache = callable<[], Record<string, RomMetadata>>("get_all_metadata_cache");
+export const getMetadataCachePage = callable<[number, number], { items: Record<string, RomMetadata>; total: number }>(
+  "get_metadata_cache_page",
+);
 export const getAppIdRomIdMap = callable<[], Record<string, number>>("get_app_id_rom_id_map");
 export const getInstalledRelaunchOptions = callable<[], { app_id: number; launch_options: string }[]>(
   "get_installed_relaunch_options",

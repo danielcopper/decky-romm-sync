@@ -143,7 +143,20 @@ class RomMetadataRepository(Protocol):
         ...
 
     def iter_all(self) -> Iterator[tuple[int, RomMetadata]]:
-        """Iterate ``(rom_id, metadata)`` for every ROM. (metadata.py get_all_metadata_cache)"""
+        """Iterate ``(rom_id, metadata)`` for every ROM. (library/reporter.py post-apply scan)"""
+        ...
+
+    def iter_page(self, offset: int, limit: int) -> Iterator[tuple[int, RomMetadata]]:
+        """Iterate ``(rom_id, metadata)`` for one ``rom_id``-ordered page.
+
+        Backs the paged frontend cache load so a large library never dumps every
+        row through the size-limited callable bridge in one response (#1025).
+        (metadata.py get_metadata_cache_page)
+        """
+        ...
+
+    def count(self) -> int:
+        """Return the number of cached metadata rows. (metadata.py get_metadata_cache_page total)"""
         ...
 
 

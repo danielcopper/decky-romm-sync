@@ -155,6 +155,77 @@ class TestIteration:
         assert list(uow.rom_metadata.iter_all()) == []
 
 
+def _meta(summary: str) -> RomMetadata:
+    return RomMetadata(
+        summary=summary,
+        genres=(),
+        companies=(),
+        first_release_date=None,
+        average_rating=None,
+        game_modes=(),
+        player_count="1",
+        cached_at=1.0,
+    )
+
+
+class TestPaging:
+    def test_iter_page_is_rom_id_ordered_and_bounded(self, uow: SqliteUnitOfWork):
+        # Insert out of order — the page read must still order by rom_id.
+        for rom_id in (5, 1, 3, 4, 2):
+            _seed_rom(uow, rom_id)
+            uow.rom_metadata.save(rom_id, _meta(f"game-{rom_id}"))
+
+        first = list(uow.rom_metadata.iter_page(0, 2))
+        second = list(uow.rom_metadata.iter_page(2, 2))
+        third = list(uow.rom_metadata.iter_page(4, 2))
+
+        assert [rom_id for rom_id, _ in first] == [1, 2]
+        assert [rom_id for rom_id, _ in second] == [3, 4]
+        assert [rom_id for rom_id, _ in third] == [5]
+
+    def test_iter_page_past_end_is_empty(self, uow: SqliteUnitOfWork):
+        _seed_rom(uow, 1)
+        uow.rom_metadata.save(1, _meta("only"))
+        assert list(uow.rom_metadata.iter_page(500, 500)) == []
+
+    def test_iter_page_zero_limit_is_empty(self, uow: SqliteUnitOfWork):
+        _seed_rom(uow, 1)
+        uow.rom_metadata.save(1, _meta("only"))
+        assert list(uow.rom_metadata.iter_page(0, 0)) == []
+
+    def test_iter_page_preserves_wire_shape(self, uow: SqliteUnitOfWork):
+        _seed_rom(uow, 7)
+        uow.rom_metadata.save(
+            7,
+            RomMetadata(
+                summary="paged",
+                genres=("RPG",),
+                companies=(),
+                first_release_date=None,
+                average_rating=None,
+                game_modes=(),
+                player_count="1",
+                cached_at=9.0,
+            ),
+        )
+        ((rom_id, meta),) = list(uow.rom_metadata.iter_page(0, 10))
+        assert rom_id == 7
+        assert meta.summary == "paged"
+        assert meta.genres == ("RPG",)
+
+
+class TestCount:
+    def test_count_empty(self, uow: SqliteUnitOfWork):
+        assert uow.rom_metadata.count() == 0
+
+    def test_count_reflects_rows(self, uow: SqliteUnitOfWork):
+        _seed_rom(uow, 1)
+        _seed_rom(uow, 2)
+        uow.rom_metadata.save(1, _meta("one"))
+        uow.rom_metadata.save(2, _meta("two"))
+        assert uow.rom_metadata.count() == 2
+
+
 class TestUpsert:
     def test_save_existing_overwrites(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 5)

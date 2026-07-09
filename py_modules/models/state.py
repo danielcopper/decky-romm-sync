@@ -59,7 +59,7 @@ class MetadataCacheEntry(TypedDict):
     """One ROM's cached metadata as the frontend ``RomMetadata`` wire shape.
 
     The list-shaped projection of the ``rom_metadata`` aggregate handed to
-    the frontend (``get_rom_metadata`` / ``get_all_metadata_cache`` and the
+    the frontend (``get_rom_metadata`` / ``get_metadata_cache_page`` and the
     game-detail payload): tuple fields on the aggregate flatten to ``list``
     arrays here, and ``first_release_date`` / ``average_rating`` stay
     nullable.

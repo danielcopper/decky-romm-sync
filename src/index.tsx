@@ -8,7 +8,8 @@ import { SystemPage } from "./components/SystemPage";
 import { DangerZone } from "./components/DangerZone";
 import { DownloadQueue } from "./components/DownloadQueue";
 import { initUnitSyncManager, resetSyncCancel } from "./utils/syncManager";
-import { setSyncProgress } from "./utils/syncProgress";
+import { setSyncProgress, getSyncProgress, updateSyncProgress } from "./utils/syncProgress";
+import { NEW_ITEM_SEC } from "./utils/syncEstimate";
 import { updateDownload, getDownloadState } from "./utils/downloadStore";
 import { handleGlobalDownloadFailure } from "./utils/downloadFailure";
 import { registerGameDetailPatch, unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
@@ -21,7 +22,7 @@ import {
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./utils/launchInterceptor";
 import { hasAnySaveConflict } from "./utils/saveStatus";
 import {
-  getAllMetadataCache,
+  getMetadataCachePage,
   getAppIdRomIdMap,
   ensureDeviceRegistered,
   getSaveSyncSettings,
@@ -57,6 +58,7 @@ import type {
   SyncStaleData,
   SyncCollectionsData,
   ServerRetryProgressEvent,
+  RomMetadata,
 } from "./types";
 import { removeShortcut, setLaunchOptionsConfirmed } from "./utils/steamShortcuts";
 import { batchConfirmLaunchOptions } from "./utils/launchOptionsReconcile";
@@ -134,14 +136,31 @@ export default definePlugin(() => {
   // each attempt against a deadline to ensure retries actually fire.
   const RETRY_DELAYS = [2000, 5000, 10000, 15000, 20000];
   const CALLABLE_TIMEOUT = 5000;
+  // Metadata is paged so a large library never sends a multi-MB dump through the
+  // size-limited WebSocket bridge in a single callable response (#1025).
+  const METADATA_PAGE_SIZE = 500;
   let initAttempt = 0;
   let initDone = false;
 
   async function loadAppIdsAndMetadata() {
-    const [cache, appIdMap] = await withTimeout(
-      Promise.all([getAllMetadataCache(), getAppIdRomIdMap()]),
-      CALLABLE_TIMEOUT,
-    );
+    const appIdMap = await withTimeout(getAppIdRomIdMap(), CALLABLE_TIMEOUT);
+
+    // Page the metadata cache until every row is collected. A failed page throws
+    // out of the loop (each raced against the same per-callable deadline) and
+    // the outer retry loop restarts init from offset 0. The empty-page guard
+    // stops the loop even if ``total`` overshoots the rows actually returned.
+    const cache: Record<string, RomMetadata> = {};
+    let collected = 0;
+    let total = Number.POSITIVE_INFINITY;
+    for (let offset = 0; collected < total; offset += METADATA_PAGE_SIZE) {
+      const page = await withTimeout(getMetadataCachePage(offset, METADATA_PAGE_SIZE), CALLABLE_TIMEOUT);
+      total = page.total;
+      const keys = Object.keys(page.items);
+      if (keys.length === 0) break;
+      for (const key of keys) cache[key] = page.items[key]!;
+      collected += keys.length;
+    }
+
     registerMetadataPatches(cache, appIdMap);
 
     for (const appIdStr of Object.keys(appIdMap)) {
@@ -444,6 +463,12 @@ export default definePlugin(() => {
     // skip-only run, where no unit handler ever fires (#1198). Run identity for
     // a Cancel click comes from the backend-fed sync_progress store now (#1202).
     resetSyncCancel();
+    // Seed the applying-phase estimate: an honest upper bound that prices every
+    // planned ROM as a new shortcut. Incremental runs skip unchanged units and
+    // update-path items are cheaper, so the real duration only ever undershoots.
+    // Merged (not replaced) so the running/stage the click set survives, and the
+    // sync_progress listener below preserves it across backend frames.
+    updateSyncProgress({ etaSeconds: data.total_roms * NEW_ITEM_SEC });
     logInfo(`sync_plan received: ${data.total_units} units, ${data.total_roms} ROMs total`);
   });
 
@@ -476,9 +501,13 @@ export default definePlugin(() => {
     },
   );
 
-  // Backend emits sync_progress events throughout the sync run — update the module-level store
+  // Backend emits sync_progress events throughout the sync run — update the
+  // module-level store. The backend frame carries no etaSeconds (that ceiling is
+  // frontend-computed from sync_plan), so carry the current value across each
+  // frame rather than letting the full-object replace wipe it.
   const syncProgressListener = addEventListener<[SyncProgress]>("sync_progress", (progress: SyncProgress) => {
-    setSyncProgress(progress);
+    const { etaSeconds } = getSyncProgress();
+    setSyncProgress(etaSeconds !== undefined ? { ...progress, etaSeconds } : progress);
   });
 
   const downloadProgressListener = addEventListener<[DownloadProgressEvent]>(

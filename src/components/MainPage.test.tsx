@@ -1017,6 +1017,93 @@ describe("MainPage", () => {
     });
   });
 
+  describe("always-on sync estimate (#1025 UX)", () => {
+    function previewWithCounts(newCount: number, changedCount: number): SyncPreview {
+      return {
+        success: true,
+        summary: {
+          new_count: newCount,
+          changed_count: changedCount,
+          unchanged_count: 0,
+          remove_count: 0,
+          disabled_platform_remove_count: 0,
+        },
+        new_names: [],
+        changed_names: [],
+        preview_id: "p1",
+      };
+    }
+
+    async function renderPreviewWithCounts(newCount: number, changedCount: number): Promise<HTMLElement> {
+      vi.mocked(backend.syncPreview).mockResolvedValue(previewWithCounts(newCount, changedCount));
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const sync = buttonByExactText(container, "Sync Library");
+      await act(async () => {
+        fireEvent.click(sync!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      return container;
+    }
+
+    function estimateText(container: HTMLElement): string | undefined {
+      return container.querySelector('[data-testid="estimate-time"]')?.textContent ?? undefined;
+    }
+
+    it("renders an estimate row for a small preview", async () => {
+      // 3 new * 0.85s = 2.55s → sub-minute.
+      const c = await renderPreviewWithCounts(3, 0);
+      expect(estimateText(c)).toBe("< 1 min");
+    });
+
+    it("renders an estimate row for a large preview", async () => {
+      // 1000 new * 0.85s = 850s ≈ 14 min.
+      const c = await renderPreviewWithCounts(1000, 0);
+      expect(estimateText(c)).toBe("~14 min");
+    });
+
+    it("prices updated items into the preview estimate", async () => {
+      // 0 new + 100 updated * 0.35s = 35s → sub-minute.
+      const c = await renderPreviewWithCounts(0, 100);
+      expect(estimateText(c)).toBe("< 1 min");
+    });
+
+    it("shows the always-on info copy alongside the preview estimate", async () => {
+      const c = await renderPreviewWithCounts(1, 0);
+      expect(c.textContent).toContain("Progress is saved every ~200 games");
+      expect(c.textContent).toContain("Cancelling is safe");
+      expect(c.textContent).toContain("Keep the Deck awake");
+    });
+
+    it("renders 'up to ~X min' while applying when etaSeconds is set", async () => {
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 1,
+        totalSteps: 2,
+        message: "N64: 1/10",
+        etaSeconds: 850,
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(estimateText(container)).toBe("up to ~14 min");
+    });
+
+    it("omits the applying estimate row when etaSeconds is absent (honest silence)", async () => {
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 1,
+        totalSteps: 2,
+        message: "N64: 1/10",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(container.querySelector('[data-testid="estimate-time"]')).toBeNull();
+    });
+  });
+
   // ===========================================================================
   // F. Sync flow — handleSync (preview gate)
   // ===========================================================================

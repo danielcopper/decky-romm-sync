@@ -1,7 +1,7 @@
 """MetadataService — ROM metadata read surface.
 
 Owns the frontend-facing reads of cached ROM metadata: the per-ROM
-``get_rom_metadata`` lookup, the full ``get_all_metadata_cache`` dump
+``get_rom_metadata`` lookup, the paged ``get_metadata_cache_page`` read
 the frontend loads on plugin start, and the ``app_id -> rom_id`` mapping
 the launcher uses to resolve session ROMs. Cached metadata is persisted
 by the library sync (the per-unit ``roms`` + ``rom_metadata`` commit);
@@ -109,15 +109,27 @@ class MetadataService:
         self._log_debug(f"Metadata cache miss for rom_id={rid}, will refresh on next sync")
         return _empty_metadata_entry()
 
-    def get_all_metadata_cache(self):
-        """Return the full metadata cache dict for frontend to load on plugin start.
+    def get_metadata_cache_page(self, offset, limit):
+        """Return one ``rom_id``-ordered page of the metadata cache for plugin start.
 
-        Keyed by ``str(rom_id)``; each value is the frontend metadata
-        entry (list-shaped array fields). Callable-only, so its own short
-        read UoW is safe (no in-transaction caller).
+        The frontend loads the cache in pages so a large library never
+        sends a multi-MB dump through the size-limited callable bridge in a
+        single response (#1025). Returns ``{"items": {str(rom_id): entry},
+        "total": int}`` — ``items`` keyed by ``str(rom_id)`` with the
+        frontend metadata entry (list-shaped array fields), ``total`` the
+        full row count. Both are read under the same short read UoW so the
+        page and its total are consistent. ``offset`` / ``limit`` are
+        clamped non-negative; a read callable, so no failure shape.
         """
+        page_offset = max(0, int(offset))
+        page_limit = max(0, int(limit))
         with self._uow_factory() as uow:
-            return {str(rom_id): _metadata_to_entry(metadata) for rom_id, metadata in uow.rom_metadata.iter_all()}
+            items = {
+                str(rom_id): _metadata_to_entry(metadata)
+                for rom_id, metadata in uow.rom_metadata.iter_page(page_offset, page_limit)
+            }
+            total = uow.rom_metadata.count()
+        return {"items": items, "total": total}
 
     def get_app_id_rom_id_map(self):
         """Return ``{str(app_id): rom_id}`` from the ``roms`` registry for frontend lookup.

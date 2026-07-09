@@ -195,6 +195,29 @@ class TestFakeRomMetadataRepository:
         assert by_id[1] == meta1
         assert by_id[2] == meta2
 
+    def test_iter_page_is_rom_id_ordered_and_count_reflects_rows(self):
+        repo = FakeRomMetadataRepository()
+
+        def _meta(summary: str) -> RomMetadata:
+            return RomMetadata(
+                summary=summary,
+                genres=(),
+                companies=(),
+                first_release_date=None,
+                average_rating=None,
+                game_modes=(),
+                player_count="1",
+                cached_at=1.0,
+            )
+
+        for rom_id in (3, 1, 2):
+            repo.save(rom_id, _meta(f"game-{rom_id}"))
+
+        assert repo.count() == 3
+        assert [rom_id for rom_id, _ in repo.iter_page(0, 2)] == [1, 2]
+        assert [rom_id for rom_id, _ in repo.iter_page(2, 2)] == [3]
+        assert list(repo.iter_page(500, 2)) == []
+
 
 class TestFakePlaytimeRepository:
     def test_round_trip_iter_delete(self):

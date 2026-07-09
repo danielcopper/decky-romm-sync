@@ -30,6 +30,7 @@ import {
   logError,
 } from "../api/backend";
 import { formatBytes } from "../utils/formatters";
+import { estimateApplySeconds, formatDuration } from "../utils/syncEstimate";
 import { getSyncProgress, setSyncProgress as setStoredSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getDownloadState } from "../utils/downloadStore";
@@ -536,10 +537,24 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       preview.summary.new_count + preview.summary.changed_count + preview.summary.remove_count > 0 ||
       !!(preview.summary.collection_diff?.added.length || preview.summary.collection_diff?.removed.length) ||
       preview.summary.platform_collection_diff?.has_changes;
+    const estimateText = formatDuration(estimateApplySeconds(preview.summary.new_count, preview.summary.changed_count));
     syncBody = (
       <>
         <PanelSectionRow>
           <Field label="Preview" description={formatPreviewDescription(preview.summary)} />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <Field label="Estimated time">
+            <span data-testid="estimate-time" style={{ fontSize: "12px" }}>
+              {estimateText}
+            </span>
+          </Field>
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.6)", padding: "4px 0" }}>
+            Progress is saved every ~200 games. Cancelling is safe — finished games are kept. Keep the Deck awake and
+            powered for long syncs.
+          </div>
         </PanelSectionRow>
         {hasChanges ? (
           <>
@@ -620,6 +635,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                 </div>
               }
             />
+          </PanelSectionRow>
+        )}
+        {syncProgress?.etaSeconds !== undefined && (
+          <PanelSectionRow>
+            <Field label="Estimated time">
+              <span data-testid="estimate-time" style={{ fontSize: "12px" }}>
+                up to {formatDuration(syncProgress.etaSeconds)}
+              </span>
+            </Field>
           </PanelSectionRow>
         )}
         <PanelSectionRow>

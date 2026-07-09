@@ -206,29 +206,71 @@ class TestGetRomMetadata:
             assert any("cache miss" in m.lower() for m in logged)
 
 
-class TestGetAllMetadataCache:
-    """Tests for the get_all_metadata_cache callable — Record<str, entry> wire shape."""
+class TestGetMetadataCachePage:
+    """Tests for the get_metadata_cache_page callable — {items, total} wire shape."""
 
     @pytest.mark.asyncio
-    async def test_returns_full_cache(self, plugin, uow):
+    async def test_returns_page_items_and_total(self, plugin, uow):
         _seed_metadata(uow, 1, _meta(summary="Game 1", genres=("RPG",), cached_at=100.0))
         _seed_metadata(uow, 2, _meta(summary="Game 2", cached_at=200.0))
 
-        result = await plugin.get_all_metadata_cache()
+        result = await plugin.get_metadata_cache_page(0, 500)
 
-        assert len(result) == 2
+        assert set(result.keys()) == {"items", "total"}
+        assert result["total"] == 2
+        items = result["items"]
+        assert len(items) == 2
         # Keyed by str(rom_id).
-        assert result["1"]["summary"] == "Game 1"
-        assert result["2"]["summary"] == "Game 2"
+        assert items["1"]["summary"] == "Game 1"
+        assert items["2"]["summary"] == "Game 2"
         # Array fields are lists, not tuples, on the wire.
-        assert result["1"]["genres"] == ["RPG"]
-        assert isinstance(result["1"]["genres"], list)
-        assert result["1"]["cached_at"] == 100.0
+        assert items["1"]["genres"] == ["RPG"]
+        assert isinstance(items["1"]["genres"], list)
+        assert items["1"]["cached_at"] == 100.0
+
+    @pytest.mark.asyncio
+    async def test_pages_are_rom_id_ordered_and_disjoint(self, plugin, uow):
+        for rom_id in (5, 1, 3, 4, 2):
+            _seed_metadata(uow, rom_id, _meta(summary=f"Game {rom_id}"))
+
+        first = await plugin.get_metadata_cache_page(0, 2)
+        second = await plugin.get_metadata_cache_page(2, 2)
+        third = await plugin.get_metadata_cache_page(4, 2)
+
+        # Every page reports the full total, not the page size.
+        assert first["total"] == second["total"] == third["total"] == 5
+        # Ordered by rom_id across page boundaries; pages are disjoint.
+        assert list(first["items"].keys()) == ["1", "2"]
+        assert list(second["items"].keys()) == ["3", "4"]
+        assert list(third["items"].keys()) == ["5"]
+
+    @pytest.mark.asyncio
+    async def test_out_of_range_page_returns_empty_items_with_total(self, plugin, uow):
+        _seed_metadata(uow, 1, _meta(summary="Game 1"))
+        _seed_metadata(uow, 2, _meta(summary="Game 2"))
+
+        result = await plugin.get_metadata_cache_page(500, 500)
+
+        assert result["items"] == {}
+        assert result["total"] == 2
+
+    @pytest.mark.asyncio
+    async def test_clamps_negative_offset_and_limit(self, plugin, uow):
+        _seed_metadata(uow, 1, _meta(summary="Game 1"))
+
+        # Negative offset clamps to 0; negative limit clamps to 0 (empty page).
+        neg_limit = await plugin.get_metadata_cache_page(-10, -1)
+        assert neg_limit["items"] == {}
+        assert neg_limit["total"] == 1
+
+        neg_offset = await plugin.get_metadata_cache_page(-10, 500)
+        assert list(neg_offset["items"].keys()) == ["1"]
+        assert neg_offset["total"] == 1
 
     @pytest.mark.asyncio
     async def test_returns_empty_when_no_cache(self, plugin):
-        result = await plugin.get_all_metadata_cache()
-        assert result == {}
+        result = await plugin.get_metadata_cache_page(0, 500)
+        assert result == {"items": {}, "total": 0}
 
 
 class TestGetAppIdRomIdMap:

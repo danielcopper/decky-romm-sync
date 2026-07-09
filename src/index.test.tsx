@@ -15,11 +15,19 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act } from "@testing-library/react";
 import { toaster } from "@decky/api";
 import { emitDeckyEvent, deckyEventListenerCount } from "./test-utils/decky-api-mock";
-import { getSettingsResetNotice, getAllPlaytime, getAppIdRomIdMap, getInstalledRelaunchOptions } from "./api/backend";
+import {
+  getSettingsResetNotice,
+  getAllPlaytime,
+  getAppIdRomIdMap,
+  getInstalledRelaunchOptions,
+  getMetadataCachePage,
+} from "./api/backend";
 import { getSettingsResetState, setSettingsResetState } from "./utils/settingsResetStore";
+import { getSyncProgress, setSyncProgress } from "./utils/syncProgress";
+import { NEW_ITEM_SEC } from "./utils/syncEstimate";
 import { recordSyncCreated, resetSyncDelta } from "./utils/syncDeltaStore";
 import { resetSyncCancel } from "./utils/syncManager";
-import type { DownloadCompleteEvent, SyncPlanData, SyncStaleData } from "./types";
+import type { DownloadCompleteEvent, SyncPlanData, SyncProgress, SyncStaleData } from "./types";
 
 vi.mock("./patches/gameDetailPatch", () => ({
   registerGameDetailPatch: vi.fn(),
@@ -89,6 +97,17 @@ const pluginFactory = definePluginResult as unknown as () => { onDismount: () =>
 function flush(): Promise<void> {
   return new Promise((r) => setTimeout(r, 0));
 }
+
+beforeEach(() => {
+  // The metadata cache is paged at init; default to a single empty page so
+  // loadAppIdsAndMetadata terminates and reaches initDone in every test. Cases
+  // that assert init behaviour rely on this resolving (the raw callable stub
+  // resolves undefined, which would throw on `page.total`).
+  vi.mocked(getMetadataCachePage).mockResolvedValue({ items: {}, total: 0 });
+  // The sync-progress store is a real module — reset it so an etaSeconds set by
+  // one test's sync_plan doesn't leak into the next.
+  setSyncProgress({ running: false, stage: "", current: 0, total: 0, message: "" });
+});
 
 describe("index.tsx — download_complete launch-options sync", () => {
   beforeEach(() => {
@@ -820,6 +839,42 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
     await flush();
 
     expect(lastToastBody()).toBe("Sync cancelled.");
+    plugin.onDismount();
+  });
+});
+
+describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estimate)", () => {
+  it("writes etaSeconds = total_roms * NEW_ITEM_SEC into the sync progress store", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-eta", units: [], total_units: 3, total_roms: 120 });
+    });
+
+    // Honest upper bound: every planned ROM priced as a new shortcut.
+    expect(getSyncProgress().etaSeconds).toBe(120 * NEW_ITEM_SEC);
+    plugin.onDismount();
+  });
+
+  it("preserves etaSeconds across a subsequent backend sync_progress frame", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-eta", units: [], total_units: 1, total_roms: 200 });
+    });
+    // A backend frame carries no etaSeconds — the listener must not wipe it.
+    act(() => {
+      emitDeckyEvent<[SyncProgress]>("sync_progress", {
+        running: true,
+        stage: "applying",
+        step: 1,
+        totalSteps: 1,
+        message: "N64: 1/200",
+      });
+    });
+
+    expect(getSyncProgress().etaSeconds).toBe(200 * NEW_ITEM_SEC);
+    expect(getSyncProgress().stage).toBe("applying");
     plugin.onDismount();
   });
 });

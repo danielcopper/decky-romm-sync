@@ -67,3 +67,13 @@ class SqliteRomMetadataRepository(BaseRepository):
     def iter_all(self) -> Iterator[tuple[int, RomMetadata]]:
         for row in self._conn.execute(f"SELECT {_COLUMNS} FROM rom_metadata"):
             yield (row["rom_id"], self._row_to_metadata(row))
+
+    def iter_page(self, offset: int, limit: int) -> Iterator[tuple[int, RomMetadata]]:
+        for row in self._conn.execute(
+            f"SELECT {_COLUMNS} FROM rom_metadata ORDER BY rom_id LIMIT ? OFFSET ?",
+            (limit, offset),
+        ):
+            yield (row["rom_id"], self._row_to_metadata(row))
+
+    def count(self) -> int:
+        return int(self._conn.execute("SELECT COUNT(*) FROM rom_metadata").fetchone()[0])

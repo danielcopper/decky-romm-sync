@@ -46,6 +46,14 @@ export interface SyncProgress {
    * separate run id (#1202).
    */
   runId?: string;
+  /**
+   * Frontend-computed upper-bound apply duration (seconds) for the in-flight
+   * run, derived once from the ``sync_plan`` payload's ``total_roms`` — an
+   * honest ceiling (every ROM priced as new) that the applying UI surfaces as
+   * "up to ~X min". Never sent by the backend; set by the ``sync_plan``
+   * listener and preserved across backend ``sync_progress`` frames.
+   */
+  etaSeconds?: number;
 }
 
 export interface SyncStats {

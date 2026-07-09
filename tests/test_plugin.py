@@ -825,7 +825,7 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "apply_sgdb_game_id",
     # Metadata cache reads.
     "get_rom_metadata",
-    "get_all_metadata_cache",
+    "get_metadata_cache_page",
     "get_app_id_rom_id_map",
     # Read-only startup launch-options reconcile pull (#1043) — heals drifted
     # shortcut launch commands; pure read, never gated.

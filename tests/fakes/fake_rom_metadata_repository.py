@@ -31,6 +31,13 @@ class FakeRomMetadataRepository:
     def iter_all(self) -> Iterator[tuple[int, RomMetadata]]:
         return iter([(rom_id, copy.deepcopy(metadata)) for rom_id, metadata in self._metadata.items()])
 
+    def iter_page(self, offset: int, limit: int) -> Iterator[tuple[int, RomMetadata]]:
+        ordered = sorted(self._metadata.items())
+        return iter([(rom_id, copy.deepcopy(metadata)) for rom_id, metadata in ordered[offset : offset + limit]])
+
+    def count(self) -> int:
+        return len(self._metadata)
+
     def _snapshot(self) -> dict[int, RomMetadata]:
         return copy.deepcopy(self._metadata)
 

@@ -611,8 +611,8 @@ class Plugin:
     async def get_rom_metadata(self, rom_id):
         return self._metadata_service.get_rom_metadata(rom_id)
 
-    async def get_all_metadata_cache(self):
-        return self._metadata_service.get_all_metadata_cache()
+    async def get_metadata_cache_page(self, offset, limit):
+        return self._metadata_service.get_metadata_cache_page(offset, limit)
 
     async def get_app_id_rom_id_map(self):
         return self._metadata_service.get_app_id_rom_id_map()
