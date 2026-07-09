@@ -314,8 +314,34 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // Backend is authoritative for in-flight sync state. Seed the module
     // store from get_sync_status() so a QAM close/reopen recovers the live
     // run rather than guessing from the event-fed store alone.
+    //
+    // But the backend snapshot is COARSE mid-apply: the fine within-unit
+    // counters (current/total/message) are advanced frontend-side per item and
+    // never round-trip to the backend, and etaSeconds is frontend-computed from
+    // sync_plan (never sent by the backend). A blind replace on remount would
+    // wipe the fine line + ETA until the next chunk boundary. So when the
+    // backend reports the SAME in-flight run the module store already tracks,
+    // MERGE: keep the store's fine fields + etaSeconds, take the backend's
+    // authoritative running/stage/runId. Run identity is compared via runId when
+    // both sides carry it; when the backend is idle or the runs differ, keep the
+    // replace behavior (the store holds nothing worth preserving).
     getSyncStatus()
-      .then((progress) => {
+      .then((backendProgress) => {
+        const stored = getSyncProgress();
+        const sameRun = backendProgress.runId && stored.runId ? backendProgress.runId === stored.runId : true;
+        const isSameLiveRun = backendProgress.running && stored.running && sameRun;
+        // Same live run: spread the store (keeping its fine fields + etaSeconds)
+        // and overlay the backend's authoritative running/stage/runId. The
+        // conditional spreads keep the optional stage/runId out when the backend
+        // omits them (exactOptionalPropertyTypes). Otherwise replace wholesale.
+        const progress: SyncProgress = isSameLiveRun
+          ? {
+              ...stored,
+              running: backendProgress.running,
+              ...(backendProgress.stage !== undefined ? { stage: backendProgress.stage } : {}),
+              ...(backendProgress.runId !== undefined ? { runId: backendProgress.runId } : {}),
+            }
+          : backendProgress;
         setStoredSyncProgress(progress);
         if (progress.running) {
           setSyncing(true);

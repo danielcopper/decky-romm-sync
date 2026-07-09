@@ -1017,6 +1017,84 @@ describe("MainPage", () => {
     });
   });
 
+  describe("QAM remount mid-run preserves fine progress + ETA", () => {
+    it("merges the store's fine fields + etaSeconds over the backend's coarse running snapshot", async () => {
+      // Module store holds the in-flight run's FINE state — what a live QAM had
+      // (frontend per-item updates + the sync_plan-derived ETA) before it was
+      // torn down and remounted.
+      setSyncProgress({
+        running: true,
+        stage: "applying",
+        current: 1200,
+        total: 3084,
+        message: "PSX: 1200/3084",
+        step: 2,
+        totalSteps: 8,
+        runId: "run-live",
+        etaSeconds: 480,
+      });
+      // Backend snapshot for the SAME run is coarse: current/total 0, no ETA.
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        current: 0,
+        total: 0,
+        message: "PSX (2/8)",
+        step: 2,
+        totalSteps: 8,
+        runId: "run-live",
+      });
+
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      // Coarse step counter is present either way.
+      expect(container.querySelector('[data-testid="sync-step"]')?.textContent).toContain("2/8");
+      // Fine line survives the remount — it renders only when total && message,
+      // both preserved from the store (backend's total was 0).
+      expect(container.textContent).toContain("PSX: 1200/3084");
+      // ETA row survives — etaSeconds is frontend-only, never in the backend
+      // snapshot; a blind replace would drop it. Non-vacuous: the visible
+      // "up to ~X" row proves the merge kept it.
+      expect(container.querySelector('[data-testid="estimate-time"]')?.textContent).toContain("up to");
+    });
+
+    it("replaces (drops stale fine fields + ETA) when the backend reports a different run", async () => {
+      setSyncProgress({
+        running: true,
+        stage: "applying",
+        current: 1200,
+        total: 3084,
+        message: "PSX: 1200/3084",
+        step: 2,
+        totalSteps: 8,
+        runId: "run-old",
+        etaSeconds: 480,
+      });
+      // A different in-flight run — the old run's fine fields + ETA must NOT
+      // bleed through into the fresh run's UI.
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "fetching",
+        current: 0,
+        total: 0,
+        message: "Fetching library...",
+        step: 0,
+        totalSteps: 0,
+        runId: "run-new",
+      });
+
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.querySelector('[data-testid="sync-stage"]')?.textContent).toContain("Fetching library");
+      // Stale ETA from the prior run is gone (replace branch, not merge).
+      expect(container.querySelector('[data-testid="estimate-time"]')).toBeNull();
+      // Stale fine line from the prior run is gone too.
+      expect(container.textContent).not.toContain("PSX: 1200/3084");
+    });
+  });
+
   describe("always-on sync estimate (#1025 UX)", () => {
     function previewWithCounts(newCount: number, changedCount: number): SyncPreview {
       return {

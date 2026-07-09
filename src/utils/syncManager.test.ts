@@ -14,7 +14,7 @@ import * as backend from "../api/backend";
 import { emitDeckyEvent } from "../test-utils/decky-api-mock";
 import { resetSyncDelta, getSyncDelta } from "./syncDeltaStore";
 import { getSyncProgress, onSyncProgressChange } from "./syncProgress";
-import type { SyncApplyUnitData } from "../types";
+import type { SyncApplyUnitData, SyncProgress } from "../types";
 
 const setLaunchOptionsConfirmed = vi.fn().mockResolvedValue(true);
 const addShortcut = vi.fn();
@@ -591,6 +591,41 @@ describe("syncManager — chunked apply (#1025)", () => {
     const final = snapshots[snapshots.length - 1];
     expect(final?.current).toBe(3);
     expect(final?.total).toBe(3);
+  });
+
+  it("per-item update carries the chunk-constant fields so the store self-heals after a QAM remount wipe", async () => {
+    // Every per-item update must re-assert the full field set (running / stage /
+    // total / step / totalSteps), not just current + message — so a mid-chunk
+    // QAM remount that replaced the module store with the backend's coarse
+    // snapshot is healed on the next item, well before the chunk boundary.
+    const snapshots: SyncProgress[] = [];
+    const unsub = onSyncProgressChange(() => {
+      snapshots.push({ ...getSyncProgress() });
+    });
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>(
+        "sync_apply_unit",
+        chunkOf([sc(1), sc(2)], { chunkIndex: 0, chunkOffset: 0, chunkCount: 1, unitTotal: 2, runId: "run-selfheal" }),
+      );
+      await flush(180);
+    });
+    unsub();
+
+    // The first per-item snapshot (fine current advanced to 1) carries the whole
+    // field set, not a bare current/message pair.
+    const perItem = snapshots.find((s) => s.message === "PSX: 1/2");
+    expect(perItem).toBeDefined();
+    expect(perItem).toMatchObject({
+      running: true,
+      stage: "applying",
+      current: 1,
+      total: 2,
+      step: 1,
+      totalSteps: 1,
+      message: "PSX: 1/2",
+    });
   });
 
   it("acks each chunk with its own chunk_index", async () => {

@@ -109,9 +109,20 @@ async function processUnitShortcuts(
   for (const [i, item] of data.shortcuts.entries()) {
     const unitCurrent = data.chunk_offset + i + 1;
     try {
+      // Carry the chunk-constant fields on every per-item update, not just the
+      // fine current/message. The chunk-init emit (initUnitSyncManager) seeds
+      // these once, but a QAM remount mid-chunk can replace the module store
+      // with the backend's coarse snapshot; re-asserting the full field set here
+      // lets the store self-heal on the next item (≤0.55s), so the fine line +
+      // step counter reappear without waiting for the next chunk boundary.
       updateSyncProgress({
+        running: true,
+        stage: "applying",
         current: unitCurrent,
+        total: data.unit_total,
         message: `${data.unit_name}: ${unitCurrent}/${data.unit_total}`,
+        step: data.unit_index + 1,
+        totalSteps: data.total_units,
       });
       const appId = await resolveShortcutAppId(item, existing);
       if (appId) {
