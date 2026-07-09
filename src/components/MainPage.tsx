@@ -749,10 +749,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             {stats.roms > 0 && (
               <PanelSectionRow>
                 <Field label="Library">
-                  <span style={{ fontSize: "12px" }}>
-                    {stats.roms} games
-                    {stats.platforms > 0 ? ` · ${stats.platforms} platforms` : ""}
-                    {(stats.collections ?? 0) > 0 ? ` · ${stats.collections} collections` : ""}
+                  <span style={{ fontSize: "12px", display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                    <span>{stats.roms} games</span>
+                    {stats.platforms > 0 && <span>{stats.platforms} platforms</span>}
+                    {(stats.collections ?? 0) > 0 && <span>{stats.collections} collections</span>}
                   </span>
                 </Field>
               </PanelSectionRow>
