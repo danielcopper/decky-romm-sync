@@ -342,6 +342,66 @@ class TestDownloadArtwork:
         assert result == {}
 
 
+# ── TestDownloadArtworkProgress ───────────────────────────────────────────────
+
+
+class TestDownloadArtworkProgress:
+    """Cover-download progress frames — throttled, ``fetching`` stage, labelled (#1025).
+
+    The cover phase runs in the per-unit prep, so it narrates under the same
+    ``fetching`` stage as the paginated fetch and is throttled (first + last +
+    every Nth cover) so a ~1300-cover library does not flood the WebSocket
+    bridge with a frame per cover.
+    """
+
+    @pytest.mark.asyncio
+    async def test_throttles_and_labels_cover_frames(
+        self, artwork_service, steam_config, file_store, romm_api, tmp_path
+    ):
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        romm_api.download_cover.side_effect = _writing_download(file_store)
+        frames: list[dict[str, Any]] = []
+
+        async def record(stage, **kwargs):
+            frames.append({"stage": str(stage), **kwargs})
+
+        # 120 covers → first + every 50th + last = covers 1, 50, 100, 120.
+        roms = [{"id": i, "name": f"G{i}", "path_cover_large": f"/c{i}.png"} for i in range(120)]
+        await artwork_service.download_artwork(
+            roms,
+            emit_progress=record,
+            is_cancelling=_not_cancelling,
+            progress_step=3,
+            progress_total_steps=9,
+            label="Game Boy Advance",
+        )
+
+        assert [f["current"] for f in frames] == [1, 50, 100, 120]
+        for f in frames:
+            assert f["stage"] == "fetching"
+            assert f["total"] == 120
+            assert f["step"] == 3
+            assert f["total_steps"] == 9
+        assert frames[0]["message"] == "Preparing covers for Game Boy Advance (1/120)"
+        assert frames[-1]["message"] == "Preparing covers for Game Boy Advance (120/120)"
+
+    @pytest.mark.asyncio
+    async def test_blank_label_falls_back_to_bare_message(
+        self, artwork_service, steam_config, file_store, romm_api, tmp_path
+    ):
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        romm_api.download_cover.side_effect = _writing_download(file_store)
+        frames: list[dict[str, Any]] = []
+
+        async def record(stage, **kwargs):
+            frames.append({"stage": str(stage), **kwargs})
+
+        roms = [{"id": 1, "name": "Solo", "path_cover_large": "/c.png"}]
+        await artwork_service.download_artwork(roms, emit_progress=record, is_cancelling=_not_cancelling)
+
+        assert frames[0]["message"] == "Preparing covers (1/1)"
+
+
 # ── TestFinalizeCoverPath ─────────────────────────────────────────────────────
 
 

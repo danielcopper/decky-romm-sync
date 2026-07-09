@@ -947,7 +947,7 @@ describe("MainPage", () => {
   });
 
   describe("two-level in-flight progress UI", () => {
-    it("main bar shows the coarse step/totalSteps and stage label", async () => {
+    it("main bar interpolates within the running unit and shows the stage label", async () => {
       vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
         stage: "applying",
@@ -961,11 +961,64 @@ describe("MainPage", () => {
       await flushAsync();
       const op = container.querySelector('[data-testid="sync-stage"]');
       expect(op?.textContent).toContain("Applying shortcuts");
-      // The caption's step span carries the coarse "step/totalSteps" counter.
+      // The caption's step span still carries the coarse "step/totalSteps" text.
       expect(container.querySelector('[data-testid="sync-step"]')?.textContent).toContain("2/5");
-      // Determinate: 2/5 * 100 = 40.
-      expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("40");
+      // Interpolated: floor (step-1)=1 plus the within-unit fraction 3/10, over
+      // 5 steps → (1 + 0.3)/5 * 100 = 26 (was a frozen 40 before interpolation).
+      expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("26");
       expect(container.querySelector('[data-testid="progress-indeterminate"]')?.textContent).toBe("false");
+    });
+
+    it("main bar interpolates a large unit's within-unit fraction (2091 items at 2/8)", async () => {
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 2,
+        totalSteps: 8,
+        current: 450,
+        total: 2091,
+        message: "PSX: 450/2091",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      // (step-1 + current/total) / totalSteps * 100 = (1 + 450/2091)/8*100 ≈ 15.19.
+      const nProgress = Number(container.querySelector('[data-testid="progress-progress"]')?.textContent);
+      expect(nProgress).toBeCloseTo(((1 + 450 / 2091) / 8) * 100, 5);
+    });
+
+    it("main bar rests at the unit floor during the fetch phase (no within-unit fill)", async () => {
+      // Fetch frames carry current/total (page counters) to drive the fine line,
+      // but must NOT advance the coarse bar — it rests at (step-1)/totalSteps so
+      // the bar never jumps backwards at the fetch→apply boundary of the unit.
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "fetching",
+        step: 2,
+        totalSteps: 8,
+        current: 30,
+        total: 62,
+        message: "Fetching GBA (page 30/62)",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      // Floor only: (2-1)/8 * 100 = 12.5. The page counter (30/62) does not lift it.
+      expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("12.5");
+    });
+
+    it("main bar reads 100% during finalizing (step == totalSteps, all units done)", async () => {
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "finalizing",
+        step: 8,
+        totalSteps: 8,
+        message: "Finalizing…",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      // Terminal-ish stage keeps the full step count → 8/8 * 100 = 100 (a naive
+      // (step-1) base would drop it to 87.5, jumping backwards from the last
+      // unit's apply which reached 100%).
+      expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("100");
     });
 
     it("main bar goes indeterminate when totalSteps is 0", async () => {

@@ -536,3 +536,122 @@ class TestFetchCollectionUnit:
         method_calls = [c[0] for c in fake_romm_api.call_log]
         assert "list_roms_by_virtual_collection" in method_calls
         assert "list_roms_by_smart_collection" not in method_calls
+
+
+def _fetching_frames(decky):
+    """Ordered ``sync_progress`` payloads whose stage is ``fetching``."""
+    return [
+        c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_progress" and c[0][1].get("stage") == "fetching"
+    ]
+
+
+def _seed_pages(fake_romm_api, *, platform_id, count):
+    """Seed *count* ROMs on one platform so a full fetch paginates over them."""
+    fake_romm_api.roms = {i: {"id": i, "platform_id": platform_id, "name": f"G{i}"} for i in range(count)}
+
+
+class TestFetchProgressNarration:
+    """Throttled ``fetching`` progress frames during the paginated fetch (#1025).
+
+    The QAM's coarse bar sat frozen on "Applying shortcuts" for the minutes a
+    large platform's fetch takes; the fetch now narrates page progress under the
+    ``fetching`` stage, throttled so a 62-page fetch emits ~13 frames (page 1 +
+    every 5th), not one per page.
+    """
+
+    @pytest.mark.asyncio
+    async def test_platform_fetch_emits_throttled_fetching_frames(self, plugin, fake_romm_api):
+        import decky
+
+        decky.emit.reset_mock()
+        _wire_fake(plugin, fake_romm_api)
+        # 470 ROMs at limit=50 → 10 pages (9 full + a 20-item tail). The throttle
+        # (page 1 + every 5th) fires on pages 1, 5, 10 only — never per page.
+        _seed_pages(fake_romm_api, platform_id=1, count=470)
+
+        unit = WorkUnit(type="platform", id=1, name="GBA", slug="gba", rom_count=470)
+        await plugin._sync_service._fetcher.fetch_platform_unit(unit, progress_step=3, progress_total_steps=12)
+
+        frames = _fetching_frames(decky)
+        assert [f["current"] for f in frames] == [1, 5, 10]
+        # Every frame keeps the run's coarse position and names the platform+page.
+        for f in frames:
+            assert f["stage"] == "fetching"
+            assert f["step"] == 3
+            assert f["totalSteps"] == 12
+            assert f["total"] == 10
+        assert frames[0]["message"] == "Fetching GBA (page 1/10)"
+        assert frames[-1]["message"] == "Fetching GBA (page 10/10)"
+
+    @pytest.mark.asyncio
+    async def test_single_page_fetch_emits_one_frame(self, plugin, fake_romm_api):
+        import decky
+
+        decky.emit.reset_mock()
+        _wire_fake(plugin, fake_romm_api)
+        _seed_pages(fake_romm_api, platform_id=1, count=3)
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)
+        await plugin._sync_service._fetcher.fetch_platform_unit(unit, progress_step=1, progress_total_steps=1)
+
+        frames = _fetching_frames(decky)
+        assert [f["current"] for f in frames] == [1]
+        assert frames[0]["message"] == "Fetching N64 (page 1/1)"
+
+    @pytest.mark.asyncio
+    async def test_incremental_skip_emits_no_fetching_frame(self, plugin, fake_romm_api):
+        """A platform that incremental-skips returns before any page → no frames."""
+        import decky
+
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        _seed_completed_run(uow)
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        decky.emit.reset_mock()
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+        _unit_roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(
+            unit, progress_step=1, progress_total_steps=1
+        )
+
+        assert skipped is True
+        assert _fetching_frames(decky) == []
+
+    @pytest.mark.asyncio
+    async def test_collection_fetch_emits_throttled_fetching_frames(self, plugin, fake_romm_api):
+        import decky
+
+        decky.emit.reset_mock()
+        _wire_fake(plugin, fake_romm_api)
+        # 260 ROMs in collection 7 → 6 pages (5 full + a 10-item tail). Throttle
+        # fires on pages 1 and 5.
+        fake_romm_api.roms = {
+            i: {"id": i, "platform_id": 1, "name": f"G{i}", "collection_ids": [7]} for i in range(260)
+        }
+
+        unit = WorkUnit(type="collection", id=7, name="Favorites", slug="", rom_count=260, collection_kind="user")
+        await plugin._sync_service._fetcher.fetch_collection_unit(unit, set(), progress_step=2, progress_total_steps=8)
+
+        frames = _fetching_frames(decky)
+        assert [f["current"] for f in frames] == [1, 5]
+        assert frames[0]["message"] == "Fetching Favorites (page 1/6)"
+        assert frames[0]["step"] == 2
+        assert frames[0]["totalSteps"] == 8
+
+    @pytest.mark.asyncio
+    async def test_no_step_context_leaves_bar_indeterminate(self, plugin, fake_romm_api):
+        """Callers that pass no coarse position (default 0) still narrate pages,
+        but leave step/totalSteps at 0 so the main bar stays indeterminate."""
+        import decky
+
+        decky.emit.reset_mock()
+        _wire_fake(plugin, fake_romm_api)
+        _seed_pages(fake_romm_api, platform_id=1, count=3)
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)
+        await plugin._sync_service._fetcher.fetch_platform_unit(unit)
+
+        frames = _fetching_frames(decky)
+        assert len(frames) == 1
+        assert frames[0]["step"] == 0
+        assert frames[0]["totalSteps"] == 0

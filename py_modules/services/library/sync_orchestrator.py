@@ -221,7 +221,15 @@ class SyncOrchestrator:
                     step=unit_index,
                     total_steps=total_units,
                 )
-                await self._fetch_preview_unit(unit, all_roms, platform_rom_ids, synced_rom_ids, collection_memberships)
+                await self._fetch_preview_unit(
+                    unit,
+                    all_roms,
+                    platform_rom_ids,
+                    synced_rom_ids,
+                    collection_memberships,
+                    progress_step=unit_index,
+                    progress_total_steps=total_units,
+                )
 
             installed_paths = await self._loop.run_in_executor(None, self._scan_installed_paths)
             core_overrides = await self._loop.run_in_executor(None, self._build_core_overrides, all_roms)
@@ -330,22 +338,32 @@ class SyncOrchestrator:
         platform_rom_ids: set[int],
         synced_rom_ids: set[int],
         collection_memberships: dict[str, list[int]],
+        *,
+        progress_step: int = 0,
+        progress_total_steps: int = 0,
     ) -> None:
         """Fetch one work unit's ROMs and fold them into the preview accumulators.
 
         Platform units add every ROM to ``platform_rom_ids`` and
         ``synced_rom_ids``; collection units record their full membership
         list under the unit name. ``all_roms`` is extended in both cases.
-        Mutates the passed-in accumulators in place.
+        Mutates the passed-in accumulators in place. ``progress_step`` /
+        ``progress_total_steps`` thread the unit's coarse position into the
+        fetcher's per-page ``fetching`` frames (on top of the per-unit frame
+        the preview loop already emits).
         """
         if unit.type == "platform":
-            unit_roms, _skipped = await self._fetcher.fetch_platform_unit(unit)
+            unit_roms, _skipped = await self._fetcher.fetch_platform_unit(
+                unit, progress_step=progress_step, progress_total_steps=progress_total_steps
+            )
             for rom in unit_roms:
                 platform_rom_ids.add(rom["id"])
                 synced_rom_ids.add(rom["id"])
             all_roms.extend(unit_roms)
         else:
-            unit_roms, all_collection_rom_ids = await self._fetcher.fetch_collection_unit(unit, synced_rom_ids)
+            unit_roms, all_collection_rom_ids = await self._fetcher.fetch_collection_unit(
+                unit, synced_rom_ids, progress_step=progress_step, progress_total_steps=progress_total_steps
+            )
             if all_collection_rom_ids:
                 collection_memberships[unit.name] = all_collection_rom_ids
             all_roms.extend(unit_roms)
@@ -776,9 +794,14 @@ class SyncOrchestrator:
         ``total_games_applied`` total returned to the user.
         """
         box = self._sync_state
+        # Coarse anchor for the unit: FETCHING (not APPLYING) so the whole
+        # per-unit prep phase — the paginated fetch + cover download below —
+        # reads as "Fetching library". The label flips to "Applying shortcuts"
+        # exactly once, when the chunk loop starts (frontend-driven), instead of
+        # showing a frozen "Applying shortcuts" bar for the minutes-long fetch.
         await self.emit_progress(
-            SyncStage.APPLYING,
-            message=f"{unit.name} ({unit_index + 1}/{total_units})",
+            SyncStage.FETCHING,
+            message=f"Fetching {unit.name}",
             step=unit_index + 1,
             total_steps=total_units,
         )
@@ -786,17 +809,23 @@ class SyncOrchestrator:
         # Fetch this unit's ROMs. Platform units may incremental-skip;
         # collection units always paginate (collection membership is
         # the source of truth, no per-collection "last_sync" gate today).
+        # The unit's coarse step/total is threaded so the fetcher's per-page
+        # ``fetching`` frames keep the bar's position.
         if unit.type == "platform":
             unit_roms, skipped = await self._sync_platform_unit(
                 unit,
                 synced_rom_ids=synced_rom_ids,
                 platform_rom_ids=platform_rom_ids,
+                progress_step=unit_index + 1,
+                progress_total_steps=total_units,
             )
         else:
             unit_roms, skipped = await self._sync_collection_unit(
                 unit,
                 synced_rom_ids=synced_rom_ids,
                 collection_memberships=collection_memberships,
+                progress_step=unit_index + 1,
+                progress_total_steps=total_units,
             )
 
         if box.is_cancelling():
@@ -855,7 +884,10 @@ class SyncOrchestrator:
             artwork_ids = {int(e.get(BIND_ROM_ID_KEY, e["rom_id"])) for e in emitted}
             artwork_roms = [rom for rom in unit_roms if rom["id"] in artwork_ids]
             cover_paths = await self._download_artwork(
-                artwork_roms, progress_step=unit_index + 1, progress_total_steps=total_units
+                artwork_roms,
+                progress_step=unit_index + 1,
+                progress_total_steps=total_units,
+                label=unit.name,
             )
             for e in emitted:
                 e["cover_path"] = cover_paths.get(int(e.get(BIND_ROM_ID_KEY, e["rom_id"])), "")
@@ -974,6 +1006,8 @@ class SyncOrchestrator:
         *,
         synced_rom_ids: set[int],
         platform_rom_ids: set[int],
+        progress_step: int = 0,
+        progress_total_steps: int = 0,
     ) -> tuple[list[dict[str, Any]], bool]:
         """Resolve ROMs for a platform unit and update cross-unit accumulators.
 
@@ -981,8 +1015,12 @@ class SyncOrchestrator:
         shortcut + artwork + apply phases. ROMs come from a live per-unit
         fetch (no preview cache); the fetcher's incremental-skip path
         handles the "unchanged platform" optimisation internally.
+        ``progress_step`` / ``progress_total_steps`` thread the unit's coarse
+        position into the fetcher's per-page ``fetching`` frames.
         """
-        unit_roms, skipped = await self._fetcher.fetch_platform_unit(unit)
+        unit_roms, skipped = await self._fetcher.fetch_platform_unit(
+            unit, progress_step=progress_step, progress_total_steps=progress_total_steps
+        )
         platform_rom_ids.update(r["id"] for r in unit_roms)
         synced_rom_ids.update(r["id"] for r in unit_roms)
         return unit_roms, skipped
@@ -993,16 +1031,22 @@ class SyncOrchestrator:
         *,
         synced_rom_ids: set[int],
         collection_memberships: dict[str, list[int]],
+        progress_step: int = 0,
+        progress_total_steps: int = 0,
     ) -> tuple[list[dict[str, Any]], bool]:
         """Resolve ROMs for a collection unit and record its membership.
 
         Returns ``(unit_roms, skipped)`` — ``skipped`` is always
         ``False`` because collection units have no incremental-skip
         gate today. ROMs come from a live per-unit fetch that already
-        dedups against ``synced_rom_ids``.
+        dedups against ``synced_rom_ids``. ``progress_step`` /
+        ``progress_total_steps`` thread the unit's coarse position into the
+        fetcher's per-page ``fetching`` frames.
         """
         skipped = False
-        unit_roms, all_collection_rom_ids = await self._fetcher.fetch_collection_unit(unit, synced_rom_ids)
+        unit_roms, all_collection_rom_ids = await self._fetcher.fetch_collection_unit(
+            unit, synced_rom_ids, progress_step=progress_step, progress_total_steps=progress_total_steps
+        )
         if all_collection_rom_ids:
             collection_memberships[unit.name] = all_collection_rom_ids
         return unit_roms, skipped
@@ -1171,8 +1215,12 @@ class SyncOrchestrator:
 
     # ── Artwork delegation ───────────────────────────────────────
 
-    async def _download_artwork(self, all_roms, progress_step=4, progress_total_steps=6):
-        """Delegate artwork download to ArtworkService callback."""
+    async def _download_artwork(self, all_roms, progress_step=4, progress_total_steps=6, label=""):
+        """Delegate artwork download to ArtworkService callback.
+
+        ``label`` is the unit's display name, threaded into the cover-download
+        progress frames ("Preparing covers for <label>").
+        """
         box = self._sync_state
         return await self._artwork.download_artwork(
             all_roms,
@@ -1180,4 +1228,5 @@ class SyncOrchestrator:
             is_cancelling=box.is_cancelling,
             progress_step=progress_step,
             progress_total_steps=progress_total_steps,
+            label=label,
         )

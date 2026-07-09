@@ -530,12 +530,31 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     }
   };
 
-  // Two-level progress. The main determinate bar tracks COARSE unit
-  // progress (step / totalSteps); 0/0 means the run hasn't reached a unit
-  // yet, so the bar goes indeterminate. Steam's ProgressBarWithInfo
-  // nProgress uses percentage (0-100), not fraction (0-1).
+  // Two-level progress. The main determinate bar tracks COARSE unit progress
+  // but INTERPOLATES within the running unit so a large unit (e.g. 2091 items at
+  // step 2/8) doesn't sit frozen: the bar fills from the step's floor
+  // ((step-1)/totalSteps) toward the next notch as the unit's items are applied.
+  // 0/0 totalSteps means the run hasn't reached a unit yet → indeterminate.
+  // ``nProgress`` is a percentage (0-100), not a fraction.
+  //
+  // While actively working a unit (``fetching``/``applying``) the current unit
+  // is not yet done, so the completed count is ``step - 1``; the terminal-ish
+  // stages (``finalizing``/``done``) carry ``step == totalSteps`` as a
+  // completed count, so they keep the full ``step`` and the bar reads 100%.
+  // The within-unit fill is taken ONLY from the ``applying`` stage: the fetch
+  // and cover frames also carry current/total (to drive the fine line), and
+  // letting those advance the coarse bar would make it jump backwards at each
+  // fetch→cover→apply boundary of the same unit. During fetch the bar therefore
+  // rests at the unit's floor and only the fine line moves.
+  const step = syncProgress?.step ?? 0;
+  const activeUnit = syncProgress?.stage === "fetching" || syncProgress?.stage === "applying";
+  const completedSteps = activeUnit ? Math.max(0, step - 1) : step;
+  const withinUnitFraction =
+    syncProgress?.stage === "applying" && syncProgress.current && syncProgress.total
+      ? syncProgress.current / syncProgress.total
+      : 0;
   const coarseFraction = syncProgress?.totalSteps
-    ? ((syncProgress.step ?? 0) / syncProgress.totalSteps) * 100
+    ? Math.max(0, Math.min(100, ((completedSteps + withinUnitFraction) / syncProgress.totalSteps) * 100))
     : undefined;
   const hasFineDetail = !!(syncProgress?.total && syncProgress.message);
 

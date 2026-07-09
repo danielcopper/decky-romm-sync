@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.platform_prefs import materialize_enabled_platforms, resolve_sync_enabled
+from domain.sync_stage import SyncStage
 from domain.sync_state import SyncCancelled, SyncState
 from domain.work_unit import CollectionKind, WorkUnit
 from lib.errors import classify_error
@@ -41,6 +42,12 @@ if TYPE_CHECKING:
 
 
 _SYNC_CANCELLED = "Sync cancelled"
+
+# Emit a ``fetching`` progress frame on the first page and every Nth page of a
+# paginated unit fetch. A 62-page platform fetch narrates ~13 frames instead of
+# one per page, so the QAM bar keeps moving during a long fetch without flooding
+# the WebSocket bridge with a frame per page.
+_FETCH_PROGRESS_PAGE_INTERVAL = 5
 
 
 def _collection_units(collections: list[dict[str, Any]], enabled_ids: set[str], kind: CollectionKind) -> list[WorkUnit]:
@@ -570,7 +577,42 @@ class LibraryFetcher:
         )
         return None
 
-    async def fetch_platform_unit(self, unit: WorkUnit) -> tuple[list[dict[str, Any]], bool]:
+    async def _emit_fetch_page_progress(
+        self,
+        *,
+        unit_name: str,
+        page: int,
+        total_pages: int,
+        progress_step: int,
+        progress_total_steps: int,
+    ) -> None:
+        """Emit a throttled ``fetching`` progress frame for a paginated fetch.
+
+        Called once per page; a no-op except on the first page and every
+        ``_FETCH_PROGRESS_PAGE_INTERVAL``-th page, so a large multi-page fetch
+        narrates its progress without a frame per page. ``progress_step`` /
+        ``progress_total_steps`` are the run's coarse unit index / total so the
+        main bar holds its position while the fine line advances by page; a
+        falsy pair (the preview loop already emits its own per-unit frame,
+        standalone callers) leaves the coarse bar indeterminate, as before.
+        The displayed total is clamped to at least ``page`` so a server that
+        grew since the listing never shows ``page 63/62``.
+        """
+        if page != 1 and page % _FETCH_PROGRESS_PAGE_INTERVAL != 0:
+            return
+        shown_total = max(total_pages, page)
+        await self._emit_progress(
+            SyncStage.FETCHING,
+            current=page,
+            total=shown_total,
+            message=f"Fetching {unit_name} (page {page}/{shown_total})",
+            step=progress_step,
+            total_steps=progress_total_steps,
+        )
+
+    async def fetch_platform_unit(
+        self, unit: WorkUnit, *, progress_step: int = 0, progress_total_steps: int = 0
+    ) -> tuple[list[dict[str, Any]], bool]:
         """Fetch ROMs for a single platform unit.
 
         Tries the incremental-skip path first: if the platform's
@@ -584,6 +626,11 @@ class LibraryFetcher:
         branch — no ``sync_apply_unit`` emit, no frontend roundtrip, no
         registry commit. The reconstructed ``unit_roms`` still flow back
         so the caller can keep its synced-rom accounting accurate.
+
+        ``progress_step`` / ``progress_total_steps`` are the run's coarse unit
+        index / total, threaded through to the throttled per-page ``fetching``
+        frames so the QAM bar keeps its position and narrates the paginated
+        fetch (an incremental skip returns before any page, so it emits none).
         """
         if unit.type != "platform":
             raise ValueError(f"fetch_platform_unit called with non-platform unit type={unit.type}")
@@ -599,8 +646,18 @@ class LibraryFetcher:
         unit_roms: list[dict[str, Any]] = []
         offset = 0
         limit = 50
+        total_pages = (unit.rom_count + limit - 1) // limit if unit.rom_count else 0
+        page_num = 0
         while True:
             self._check_cancelling()
+            page_num += 1
+            await self._emit_fetch_page_progress(
+                unit_name=platform_name,
+                page=page_num,
+                total_pages=total_pages,
+                progress_step=progress_step,
+                progress_total_steps=progress_total_steps,
+            )
             try:
                 # ``dict | list`` keeps the isinstance guard below genuine:
                 # the paginated endpoint returns ``{"items": [...]}`` but the
@@ -641,7 +698,7 @@ class LibraryFetcher:
         return unit_roms, False
 
     async def fetch_collection_unit(
-        self, unit: WorkUnit, synced_rom_ids: set[int]
+        self, unit: WorkUnit, synced_rom_ids: set[int], *, progress_step: int = 0, progress_total_steps: int = 0
     ) -> tuple[list[dict[str, Any]], list[int]]:
         """Fetch ROMs for a single collection unit.
 
@@ -656,6 +713,11 @@ class LibraryFetcher:
           * ``all_collection_rom_ids`` — every rom_id in the collection
             (including those already synced via a platform unit), used
             to build Steam collection memberships at the final phase.
+
+        ``progress_step`` / ``progress_total_steps`` are the run's coarse unit
+        index / total, threaded through to the throttled per-page ``fetching``
+        frames so a large collection fetch narrates its progress like a
+        platform fetch does.
         """
         if unit.type != "collection":
             raise ValueError(f"fetch_collection_unit called with non-collection unit type={unit.type}")
@@ -665,8 +727,18 @@ class LibraryFetcher:
 
         offset = 0
         limit = 50
+        total_pages = (unit.rom_count + limit - 1) // limit if unit.rom_count else 0
+        page_num = 0
         while True:
             self._check_cancelling()
+            page_num += 1
+            await self._emit_fetch_page_progress(
+                unit_name=unit.name,
+                page=page_num,
+                total_pages=total_pages,
+                progress_step=progress_step,
+                progress_total_steps=progress_total_steps,
+            )
             if unit.collection_kind == "franchise":
                 # ``dict | list`` keeps the isinstance guard below genuine:
                 # the paginated endpoint returns ``{"items": [...]}`` but the

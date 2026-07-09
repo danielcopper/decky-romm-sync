@@ -38,6 +38,10 @@ of games. If you sync without previewing first, the estimate appears once the ru
 
 A few things worth knowing for a large library:
 
+- **The progress line narrates each phase.** For a large platform the sync first pulls the game list from your server
+  page by page and then downloads cover art before it starts creating shortcuts; the line names what it is doing (e.g.
+  "Fetching Game Boy Advance (page 12/62)" then "Preparing covers for Game Boy Advance"), so a fetch that takes minutes
+  never looks stuck.
 - **Progress is saved as it goes** — roughly every 200 games. If Steam crashes or you cancel partway through, the games
   already created are kept, and the next sync picks up where it left off instead of starting over.
 - **Cancelling keeps finished games.** Everything added before you cancel stays in your library; cancelling never

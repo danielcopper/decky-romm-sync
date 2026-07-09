@@ -205,6 +205,7 @@ class ArtworkManager(Protocol):
         is_cancelling: Any,
         progress_step: int = 4,
         progress_total_steps: int = 6,
+        label: str = "",
     ) -> dict[Any, Any]: ...
 
     def finalize_cover_path(self, grid: str | None, cover_path: str, app_id: int, rom_id_str: str) -> str: ...

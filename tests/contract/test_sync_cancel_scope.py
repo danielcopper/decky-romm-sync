@@ -179,8 +179,8 @@ async def test_preview_cancel_after_unit_loop_returns_cancelled(harness):
     box = harness.plugin._sync_service._box
     orig_fetch = orch._fetch_preview_unit
 
-    async def fetch_then_cancel(unit, all_roms, platform_rom_ids, synced_rom_ids, collection_memberships):
-        await orig_fetch(unit, all_roms, platform_rom_ids, synced_rom_ids, collection_memberships)
+    async def fetch_then_cancel(unit, all_roms, platform_rom_ids, synced_rom_ids, collection_memberships, **kwargs):
+        await orig_fetch(unit, all_roms, platform_rom_ids, synced_rom_ids, collection_memberships, **kwargs)
         # Cancel lands after the unit's ROMs are fetched, after the in-loop
         # checkpoint already passed — only the post-loop re-check can catch it.
         box.request_cancel()

@@ -35,7 +35,7 @@ class FakeArtworkManager:
     ) -> None:
         self.canned_download: dict[str, Any] = canned_download if canned_download is not None else {}
         self.finalize_override = finalize_override
-        self.download_calls: list[tuple[list[dict[str, Any]], Any, Any, int, int]] = []
+        self.download_calls: list[tuple[list[dict[str, Any]], Any, Any, int, int, str]] = []
         self.finalize_calls: list[tuple[str | None, str, int, str]] = []
         self.remove_calls: list[tuple[str, str | int, ShortcutRegistryEntry]] = []
 
@@ -46,8 +46,11 @@ class FakeArtworkManager:
         is_cancelling: Any,
         progress_step: int = 4,
         progress_total_steps: int = 6,
+        label: str = "",
     ) -> dict[str, Any]:
-        self.download_calls.append((list(all_roms), emit_progress, is_cancelling, progress_step, progress_total_steps))
+        self.download_calls.append(
+            (list(all_roms), emit_progress, is_cancelling, progress_step, progress_total_steps, label)
+        )
         return dict(self.canned_download)
 
     def finalize_cover_path(self, grid: str | None, cover_path: str, app_id: int, rom_id_str: str) -> str:

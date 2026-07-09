@@ -3733,6 +3733,91 @@ class TestDownloadArtworkDelegation:
         plugin._sync_service._box.sync_state = SyncState.CANCELLING
         assert is_cancelling() is True
 
+    @pytest.mark.asyncio
+    async def test_forwards_unit_label_to_artwork(self, plugin):
+        """The unit display name is threaded through as the cover-progress label."""
+        fake_download = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._artwork = MagicMock()
+        plugin._sync_service._orchestrator._artwork.download_artwork = fake_download
+
+        await plugin._sync_service._orchestrator._download_artwork(
+            [{"id": 1, "name": "A"}], progress_step=1, progress_total_steps=1, label="Game Boy Advance"
+        )
+
+        assert fake_download.call_args.kwargs["label"] == "Game Boy Advance"
+
+
+class TestFetchNarrationInterplay:
+    """Fetch-phase narration meets the chunk-apply phase (#1025).
+
+    The per-unit prep (anchor + paginated fetch + cover download) narrates under
+    the ``fetching`` stage; the chunk loop then hands progress to the frontend
+    under ``applying``. The backend must not emit a ``fetching`` frame once a
+    unit's chunks start, or the coarse label would flip back and forth.
+    """
+
+    @pytest.mark.asyncio
+    async def test_unit_anchor_is_fetching_stage(self, plugin, fake_romm_api):
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 10, "name": "A"}])
+        plugin.settings["enabled_platforms"] = {"1": True}
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        progress_frames = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_progress"]
+        # The unit's first progress frame anchors the coarse bar under FETCHING,
+        # not the old APPLYING that read as a frozen "Applying shortcuts".
+        first = progress_frames[0]
+        assert first["stage"] == "fetching"
+        assert first["message"] == "Fetching N64"
+        assert first["step"] == 1
+        assert first["totalSteps"] == 1
+
+    @pytest.mark.asyncio
+    async def test_no_fetching_frame_after_first_chunk_emit(self, plugin, fake_romm_api):
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "A"}, {"id": 11, "name": "B"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        first_chunk_idx = next(i for i, c in enumerate(decky.emit.call_args_list) if c[0][0] == "sync_apply_unit")
+        fetching_after_chunk = [
+            i
+            for i, c in enumerate(decky.emit.call_args_list)
+            if c[0][0] == "sync_progress" and c[0][1].get("stage") == "fetching" and i > first_chunk_idx
+        ]
+        assert fetching_after_chunk == []
+        # And the fetch actually narrated before the chunk (guards against a
+        # vacuous pass where no fetching frame was ever emitted).
+        fetching_before_chunk = [
+            i
+            for i, c in enumerate(decky.emit.call_args_list)
+            if c[0][0] == "sync_progress" and c[0][1].get("stage") == "fetching" and i < first_chunk_idx
+        ]
+        assert fetching_before_chunk
+
+
 
 class TestComponentGroupKeyStamping:
     """The per-unit / preview stamp of component sibling-group keys (#1368).

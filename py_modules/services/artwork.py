@@ -19,6 +19,11 @@ from domain.artwork_paths import TMP_SUFFIX, cache_filename, final_filename, sta
 from domain.sync_stage import SyncStage
 from lib.list_result import ErrorCode
 
+# Emit a cover-download progress frame on the first cover, every Nth cover, and
+# the last one, so a large library's cover phase narrates its progress (a moving
+# counter, not a frozen bar) without a WebSocket frame per cover.
+_COVER_PROGRESS_INTERVAL = 50
+
 if TYPE_CHECKING:
     import asyncio
     import logging
@@ -102,6 +107,7 @@ class ArtworkService:
         is_cancelling: Callable[[], bool],
         progress_step: int = 4,
         progress_total_steps: int = 6,
+        label: str = "",
     ) -> dict[int, str]:
         """Download cover artwork into the per-ROM cache, returning rom_id → cache path.
 
@@ -111,6 +117,12 @@ class ArtworkService:
         landed); else download from RomM. The returned cache path becomes the
         pending-sync ``cover_path`` that ``finalize_cover_path`` publishes onto
         the grid once the Steam app_id is known.
+
+        Progress is narrated under the ``fetching`` stage (this runs in the
+        per-unit prep phase, before the shortcuts are applied) as "Preparing
+        covers for <label>", throttled to the first/last/every-Nth cover.
+        ``label`` is the owning unit's display name; blank falls back to a
+        bare "Preparing covers".
         """
         cover_paths: dict[int, str] = {}
         grid = self._steam_config.grid_dir()
@@ -120,19 +132,22 @@ class ArtworkService:
 
         self._cover_art_file_store.make_dirs(self._cover_cache_dir)
         total = len(all_roms)
+        cover_target = f"Preparing covers for {label}" if label else "Preparing covers"
 
         for i, rom in enumerate(all_roms):
             if is_cancelling():
                 return cover_paths
 
-            await emit_progress(
-                SyncStage.APPLYING,
-                current=i + 1,
-                total=total,
-                message=f"Downloading artwork {i + 1}/{total}",
-                step=progress_step,
-                total_steps=progress_total_steps,
-            )
+            processed = i + 1
+            if processed == 1 or processed == total or processed % _COVER_PROGRESS_INTERVAL == 0:
+                await emit_progress(
+                    SyncStage.FETCHING,
+                    current=processed,
+                    total=total,
+                    message=f"{cover_target} ({processed}/{total})",
+                    step=progress_step,
+                    total_steps=progress_total_steps,
+                )
 
             cover_url = rom.get("path_cover_large") or rom.get("path_cover_small")
             if not cover_url:
