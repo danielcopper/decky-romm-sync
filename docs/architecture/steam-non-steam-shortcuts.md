@@ -18,20 +18,28 @@ Returns the new shortcut's `appId` (a number), or `0`/`null` on failure.
 Despite accepting four parameters, `AddShortcut` **ignores `startDir` and `launchOptions`**. This was confirmed by the
 [MoonDeck plugin](https://github.com/FrogTheFrog/moondeck) developers. Only `name` and `exe` are used during creation.
 
-To set all shortcut properties reliably, call the `Set*` methods **after a 500ms delay**:
+To set all shortcut properties reliably, wait for Steam to register the new app's **overview** before the `Set*` calls:
 
 ```typescript
 const appId = await SteamClient.Apps.AddShortcut(name, exe, "", "");
-await delay(500);
+// Poll appStore.GetAppOverviewByAppID(appId) (~100ms cadence) until the overview
+// exists, with a 1000ms fallback; on timeout, proceed anyway.
+await waitForAppOverview(appId, 1000);
 
 SteamClient.Apps.SetShortcutName(appId, name);
 SteamClient.Apps.SetShortcutExe(appId, exe);
 SteamClient.Apps.SetShortcutStartDir(appId, startDir);
-SteamClient.Apps.SetAppLaunchOptions(appId, launchOptions);
+// An empty launch_options (uninstalled placeholder) needs no write or confirm —
+// a fresh shortcut's launch options are already empty, so skip both. A non-empty
+// command takes the confirmed write (setLaunchOptionsConfirmed).
+if (launchOptions !== "") await setLaunchOptionsConfirmed(appId, launchOptions);
 ```
 
-The 500ms delay is critical. Without it, the `Set*` calls may silently fail because Steam has not finished registering
-the new app internally.
+Steam must finish registering the new app internally before the `Set*` calls land, or they silently fail. Rather than a
+fixed worst-case wait, the plugin polls `appStore` for the new overview (readiness) — the common case proceeds in ~100ms
+instead of a blind 500ms, and the 1000ms ceiling keeps the old wait's safety net when the overview is slow. Skipping the
+launch-options write for the (majority) uninstalled case also avoids `setLaunchOptionsConfirmed`'s
+`RegisterForAppDetails` poll, which forces Steam to load and cache a fat `AppDetails` object per call.
 
 ### Exe quoting
 
@@ -284,9 +292,10 @@ Pre-quoting the exe path in `AddShortcut` or `SetShortcutExe` causes double-quot
 
 ### Empty Set* params after AddShortcut
 
-Calling `Set*` methods too quickly after `AddShortcut` (before the 500ms delay) results in the properties not being
-saved. The shortcut appears in the library but with wrong or missing exe/startDir/launchOptions. Launches fail or open
-the wrong thing.
+Calling `Set*` methods too quickly after `AddShortcut` (before the new app's overview is registered) results in the
+properties not being saved. The shortcut appears in the library but with wrong or missing exe/startDir/launchOptions.
+Launches fail or open the wrong thing. The plugin gates the `Set*` calls on an overview-readiness poll
+(`waitForAppOverview`, 1000ms fallback) rather than a fixed delay.
 
 ### Removal-churn can corrupt shortcut state
 

@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as backend from "../api/backend";
-import { getExistingRomMShortcuts, getLiveRomMShortcutAppIds, setLaunchOptionsConfirmed } from "./steamShortcuts";
+import {
+  addShortcut,
+  getExistingRomMShortcuts,
+  getLiveRomMShortcutAppIds,
+  setLaunchOptionsConfirmed,
+} from "./steamShortcuts";
+import type { SyncAddItem } from "../types";
 
 const ROM_LAUNCHER = "/home/deck/homebrew/plugins/decky-romm-sync/bin/rom-launcher";
 
@@ -236,5 +242,138 @@ describe("getExistingRomMShortcuts", () => {
     // Non-vacuous: crossing the window fires the fire-and-forget heartbeat.
     expect(vi.mocked(backend.syncHeartbeat)).toHaveBeenCalled();
     nowSpy.mockRestore();
+  });
+});
+
+describe("addShortcut — overview-readiness poll + empty-launch-options skip", () => {
+  const EXE = "/home/deck/homebrew/plugins/decky-romm-sync/bin/rom-launcher";
+
+  function item(launchOptions: string): SyncAddItem {
+    return {
+      rom_id: 1,
+      name: "Test ROM",
+      exe: EXE,
+      start_dir: "/home/deck",
+      launch_options: launchOptions,
+      platform_name: "PSX",
+      cover_path: "",
+    };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("sets shortcut properties as soon as the overview appears (no fixed 500ms wait)", async () => {
+    vi.useFakeTimers();
+    const setName = vi.fn();
+    // Overview is absent on the first poll, present on the second — the poll,
+    // not a fixed delay, gates the Set* calls.
+    let overviewCalls = 0;
+    const getOverview = vi.fn(() => (++overviewCalls >= 2 ? ({ appid: 4242 } as SteamAppOverview) : null));
+    vi.stubGlobal("appStore", { GetAppOverviewByAppID: getOverview, allApps: [] });
+    vi.stubGlobal("SteamClient", {
+      Apps: {
+        AddShortcut: vi.fn().mockResolvedValue(4242),
+        SetShortcutName: setName,
+        SetShortcutExe: vi.fn(),
+        SetShortcutStartDir: vi.fn(),
+        SetAppLaunchOptions: vi.fn(),
+        RegisterForAppDetails: vi.fn(() => ({ unregister: vi.fn() })),
+      },
+    });
+
+    const promise = addShortcut(item(""));
+    // Advance one poll interval so the second (truthy) overview check runs.
+    await vi.advanceTimersByTimeAsync(100);
+    const appId = await promise;
+
+    expect(appId).toBe(4242);
+    // The overview was polled exactly twice; Set* fired after the second check.
+    expect(getOverview).toHaveBeenCalledTimes(2);
+    expect(setName).toHaveBeenCalledWith(4242, "Test ROM");
+  });
+
+  it("proceeds with Set* (and logs) after the readiness timeout when the overview never appears", async () => {
+    vi.useFakeTimers();
+    const setName = vi.fn();
+    const getOverview = vi.fn(() => null); // never ready
+    const logInfoSpy = vi.spyOn(backend, "logInfo").mockImplementation(() => {});
+    vi.stubGlobal("appStore", { GetAppOverviewByAppID: getOverview, allApps: [] });
+    vi.stubGlobal("SteamClient", {
+      Apps: {
+        AddShortcut: vi.fn().mockResolvedValue(7),
+        SetShortcutName: setName,
+        SetShortcutExe: vi.fn(),
+        SetShortcutStartDir: vi.fn(),
+        SetAppLaunchOptions: vi.fn(),
+        RegisterForAppDetails: vi.fn(() => ({ unregister: vi.fn() })),
+      },
+    });
+
+    const promise = addShortcut(item(""));
+    // Exhaust the 1000ms readiness budget.
+    await vi.advanceTimersByTimeAsync(1000);
+    const appId = await promise;
+
+    expect(appId).toBe(7);
+    // Non-vacuous: the timeout path both proceeds (Set* fired) and logs.
+    expect(setName).toHaveBeenCalledWith(7, "Test ROM");
+    expect(logInfoSpy).toHaveBeenCalledWith(expect.stringContaining("not ready"));
+  });
+
+  it("skips SetAppLaunchOptions and the confirm poll for an empty launch_options (uninstalled ROM)", async () => {
+    const setLaunchOptions = vi.fn();
+    const registerForAppDetails = vi.fn(() => ({ unregister: vi.fn() }));
+    // Overview ready immediately, so no timers are involved.
+    vi.stubGlobal("appStore", { GetAppOverviewByAppID: vi.fn(() => ({ appid: 9 }) as SteamAppOverview), allApps: [] });
+    vi.stubGlobal("SteamClient", {
+      Apps: {
+        AddShortcut: vi.fn().mockResolvedValue(9),
+        SetShortcutName: vi.fn(),
+        SetShortcutExe: vi.fn(),
+        SetShortcutStartDir: vi.fn(),
+        SetAppLaunchOptions: setLaunchOptions,
+        RegisterForAppDetails: registerForAppDetails,
+      },
+    });
+
+    const appId = await addShortcut(item(""));
+
+    expect(appId).toBe(9);
+    // Nothing to write or confirm for an empty command — both are skipped, so
+    // the fat-AppDetails-cache hit of the confirm poll is avoided.
+    expect(setLaunchOptions).not.toHaveBeenCalled();
+    expect(registerForAppDetails).not.toHaveBeenCalled();
+  });
+
+  it("takes the confirmed-write path for a non-empty launch_options (installed ROM)", async () => {
+    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/x.bin"';
+    const setLaunchOptions = vi.fn();
+    // RegisterForAppDetails reports the written value back → the confirm matches.
+    const registerForAppDetails = vi.fn((_appId: number, cb: (d: SteamAppDetails | undefined) => void) => {
+      queueMicrotask(() => cb({ strLaunchOptions: cmd }));
+      return { unregister: vi.fn() };
+    });
+    vi.stubGlobal("appStore", { GetAppOverviewByAppID: vi.fn(() => ({ appid: 55 }) as SteamAppOverview), allApps: [] });
+    vi.stubGlobal("SteamClient", {
+      Apps: {
+        AddShortcut: vi.fn().mockResolvedValue(55),
+        SetShortcutName: vi.fn(),
+        SetShortcutExe: vi.fn(),
+        SetShortcutStartDir: vi.fn(),
+        SetAppLaunchOptions: setLaunchOptions,
+        RegisterForAppDetails: registerForAppDetails,
+      },
+    });
+
+    const appId = await addShortcut(item(cmd));
+
+    expect(appId).toBe(55);
+    // Confirmed-write path unchanged: SetAppLaunchOptions fired AND the read-back
+    // was polled via RegisterForAppDetails.
+    expect(setLaunchOptions).toHaveBeenCalledWith(55, cmd);
+    expect(registerForAppDetails).toHaveBeenCalledWith(55, expect.any(Function));
   });
 });

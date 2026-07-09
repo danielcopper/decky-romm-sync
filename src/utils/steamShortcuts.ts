@@ -1,5 +1,5 @@
 import type { SyncAddItem } from "../types";
-import { getAppIdRomIdMap, syncHeartbeat, logError } from "../api/backend";
+import { getAppIdRomIdMap, syncHeartbeat, logError, logInfo } from "../api/backend";
 
 /**
  * Ownership marker: RomM-managed shortcuts launch through the plugin's
@@ -161,6 +161,25 @@ export async function getExistingRomMShortcuts(): Promise<Map<number, number>> {
 }
 
 /**
+ * Poll ``appStore`` until the new shortcut's overview is registered, or
+ * ``timeoutMs`` elapses. A freshly created shortcut's overview appears
+ * asynchronously; polling for readiness (MoonDeck pattern) replaces a fixed
+ * worst-case wait — the common case proceeds in ~100ms instead of a blind
+ * 500ms, and the timeout ceiling keeps the net behaviour of the old wait when
+ * the overview is slow to appear. Resolves ``true`` once the overview exists,
+ * ``false`` on timeout (the caller proceeds regardless).
+ */
+async function waitForAppOverview(appId: number, timeoutMs: number): Promise<boolean> {
+  const POLL_INTERVAL_MS = 100;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (appStore.GetAppOverviewByAppID(appId)) return true;
+    if (Date.now() >= deadline) return false;
+    await delay(POLL_INTERVAL_MS);
+  }
+}
+
+/**
  * Add a single Steam shortcut. Returns the new steam app_id, or null on failure.
  */
 export async function addShortcut(data: SyncAddItem): Promise<number | null> {
@@ -171,15 +190,26 @@ export async function addShortcut(data: SyncAddItem): Promise<number | null> {
 
     if (!appId) return null;
 
-    // Wait for Steam to register the new app before setting properties
-    await delay(500);
+    // Wait for Steam to register the new app's overview before setting
+    // properties. Poll for readiness instead of a blind 500ms; on timeout,
+    // proceed anyway (same net behaviour as the old fixed wait).
+    if (!(await waitForAppOverview(appId, 1000))) {
+      logInfo(`addShortcut: overview for ${appId} not ready within 1000ms; proceeding anyway`);
+    }
 
     SteamClient.Apps.SetShortcutName(appId, data.name);
     SteamClient.Apps.SetShortcutExe(appId, data.exe);
     SteamClient.Apps.SetShortcutStartDir(appId, data.start_dir);
-    // launch_options may be "" for an uninstalled ROM (placeholder) — setting
-    // "" is fine; the confirm-poll matches against the empty read-back.
-    await setLaunchOptionsConfirmed(appId, data.launch_options);
+    // A freshly created shortcut's launch options are already empty. For an
+    // uninstalled ROM (launch_options ""), there is nothing to write or confirm,
+    // so skip both SetAppLaunchOptions and the confirm poll — the confirm poll's
+    // RegisterForAppDetails forces Steam to load+cache a fat AppDetails object
+    // per call, so skipping it for the majority uninstalled case avoids that
+    // heap hit. A non-empty command (installed ROM) still takes the confirmed
+    // write (#827).
+    if (data.launch_options !== "") {
+      await setLaunchOptionsConfirmed(appId, data.launch_options);
+    }
 
     return appId;
   } catch (e) {

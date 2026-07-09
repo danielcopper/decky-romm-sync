@@ -31,8 +31,11 @@ silent omission. The CI check enforces this.
   `ServerAPI.callPluginMethod()`).
 - **RomM API quirks**: Filter param is `platform_ids` (plural). Cover URLs have unencoded spaces (must URL-encode).
   Paginated: `{"items": [...], "total": N}`.
-- **AddShortcut timing**: Must wait 300-500ms after `AddShortcut()` before setting properties. Use 50ms delay between
-  operations.
+- **AddShortcut timing**: After `AddShortcut()`, wait for the new app's overview before setting properties — poll
+  `appStore.GetAppOverviewByAppID(appId)` (`waitForAppOverview`, ~100ms cadence, 1000ms fallback that proceeds anyway)
+  instead of a blind fixed delay. On create, an empty `launch_options` (uninstalled ROM) skips both
+  `SetAppLaunchOptions` and the confirm poll — a fresh shortcut's launch options are already empty, and skipping avoids
+  the confirm poll's fat `AppDetails` cache hit. Use 50ms delay between operations in the apply loop.
 - **Large payloads**: Never send bulk base64 data through `decky.emit()` — WebSocket bridge has size limits. Use
   per-item callables instead. Bulk lists are chunked too: the library apply emits shortcuts ~200 at a time
   (`_APPLY_CHUNK_SIZE`, ADR-0022) and the metadata cache is loaded page-by-page (`get_metadata_cache_page`), so a large
@@ -43,8 +46,8 @@ silent omission. The CI check enforces this.
   `decky-romm-sync/<version>` to both — single source of truth, no hardcoded version strings.
 - **AddShortcut ignores most params**: `SteamClient.Apps.AddShortcut(name, exe, startDir, launchOptions)` ignores
   startDir and launchOptions (confirmed by MoonDeck plugin). Must use `Set*` calls (`SetShortcutName`, `SetShortcutExe`,
-  `SetShortcutStartDir`, `SetAppLaunchOptions`) after a 500ms delay. Do NOT pass quoted exe paths — the API handles
-  quoting internally.
+  `SetShortcutStartDir`, `SetAppLaunchOptions`) once the new app's overview is registered (see AddShortcut timing
+  above). Do NOT pass quoted exe paths — the API handles quoting internally.
 - **BIsModOrShortcut bypass DROPPED**: Phase 5.6 removed the bypass counter entirely. Shortcuts return
   `BIsModOrShortcut() = true` (natural state). We own the entire game detail UI via RomMPlaySection + future
   RomMGameInfoPanel.
