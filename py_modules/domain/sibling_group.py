@@ -44,3 +44,34 @@ def compute_sibling_group_key(rom: dict[str, Any]) -> str:
         if value is not None:
             return f"{source}:{value}:{platform_id}"
     return f"romm:{rom.get('id')}:{platform_id}"
+
+
+def target_in_sibling_group(
+    *,
+    bound_group_key: str | None,
+    target_local_group_key: str | None,
+    target_is_local: bool,
+    target_is_server_sibling: bool,
+) -> bool:
+    """Whether a switch target belongs to the bound ROM's sibling group.
+
+    The single membership authority shared by the version picker's per-version
+    ``switchable`` flag (``get_version_list``) and ``switch_version``'s group
+    guard, so the two surfaces can never disagree (ADR-0021). A target that has a
+    local row must share the bound row's ``sibling_group_key`` — a NULL bound key
+    (an unbackfilled / solo bound row) accepts any local target. A target with no
+    local row counts when RomM's symmetric ``sibling_roms`` view lists it against
+    the bound ROM (selecting it in the picker persists a new local row that joins
+    the group).
+
+    Why the two inputs can disagree: RomM groups by ANY shared metadata id (an OR
+    across sources) while the local key is the FIRST non-null id in coalesce
+    order, so RomM can bridge two local groups (e.g. an IGDB-keyed title next to a
+    ScreenScraper-keyed variant that share only the ScreenScraper id). A bridged
+    sibling that is ALSO synced locally under a different key is reported by the
+    picker but is not switchable — a switch would land the shortcut on a foreign
+    group. This predicate is what tells both surfaces so.
+    """
+    if target_is_local:
+        return bound_group_key is None or target_local_group_key == bound_group_key
+    return target_is_server_sibling

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from domain.sibling_group import compute_sibling_group_key
+from domain.sibling_group import compute_sibling_group_key, target_in_sibling_group
 
 
 class TestCoalesceOrder:
@@ -114,3 +114,83 @@ class TestMissingAndNoneIds:
         # 0 is a legitimate (if unusual) id — only None means "unmatched".
         rom = {"id": 1, "platform_id": 57, "igdb_id": 0}
         assert compute_sibling_group_key(rom) == "igdb:0:57"
+
+
+class TestTargetInSiblingGroup:
+    """The membership authority shared by the picker's ``switchable`` flag and
+    ``switch_version`` — a local target must share the bound key; a server-only
+    target counts when RomM's symmetric sibling view lists it."""
+
+    def test_local_target_same_group_is_member(self):
+        assert (
+            target_in_sibling_group(
+                bound_group_key="igdb:100:57",
+                target_local_group_key="igdb:100:57",
+                target_is_local=True,
+                target_is_server_sibling=True,
+            )
+            is True
+        )
+
+    def test_local_target_different_group_is_not_member(self):
+        # The #1359 bug: a RomM sibling that is locally synced under a DIFFERENT
+        # key (bridged by a shared lower-priority metadata id) is not switchable.
+        assert (
+            target_in_sibling_group(
+                bound_group_key="igdb:1156:57",
+                target_local_group_key="ss:19274:57",
+                target_is_local=True,
+                target_is_server_sibling=True,
+            )
+            is False
+        )
+
+    def test_null_bound_key_accepts_any_local_target(self):
+        # An unbackfilled / solo bound row (NULL key) never blocks a local target.
+        assert (
+            target_in_sibling_group(
+                bound_group_key=None,
+                target_local_group_key="ss:19274:57",
+                target_is_local=True,
+                target_is_server_sibling=False,
+            )
+            is True
+        )
+
+    def test_server_only_target_that_is_a_sibling_is_member(self):
+        # Not in the local library yet — membership rides on the server view;
+        # selecting it persists a new local row that joins the group.
+        assert (
+            target_in_sibling_group(
+                bound_group_key="igdb:100:57",
+                target_local_group_key=None,
+                target_is_local=False,
+                target_is_server_sibling=True,
+            )
+            is True
+        )
+
+    def test_server_only_target_that_is_not_a_sibling_is_not_member(self):
+        assert (
+            target_in_sibling_group(
+                bound_group_key="igdb:100:57",
+                target_local_group_key=None,
+                target_is_local=False,
+                target_is_server_sibling=False,
+            )
+            is False
+        )
+
+    def test_local_target_group_check_ignores_server_sibling_flag(self):
+        # For a LOCAL target the server-sibling flag is irrelevant — the local key
+        # decides. A cross-group local target stays a non-member even if RomM lists
+        # it as a sibling.
+        assert (
+            target_in_sibling_group(
+                bound_group_key="igdb:1156:57",
+                target_local_group_key="ss:19274:57",
+                target_is_local=True,
+                target_is_server_sibling=True,
+            )
+            is False
+        )

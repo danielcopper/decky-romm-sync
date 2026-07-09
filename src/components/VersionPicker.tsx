@@ -277,6 +277,10 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   // stale list.
   const handleSwitch = async (target: VersionInfo): Promise<void> => {
     if (target.active) return;
+    // A non-switchable row is a RomM sibling that lives in a different local group
+    // (#1359) — its row is rendered disabled, and this guard makes a click a no-op
+    // (defense-in-depth), so switch_version's rejection can never reach a toast.
+    if (!target.switchable) return;
     setSwitching(true);
     try {
       const result = await switchVersion(appId, target.rom_id, false);
@@ -310,13 +314,15 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
           await applySwitchSuccess(forced);
         } else {
           setSwitching(false);
-          toaster.toast({ title: "RomM Sync", body: forced.message || "Could not switch version" });
+          toaster.toast({ title: "RomM Sync", body: "Could not switch version", subtext: forced.message });
         }
         return;
       }
       if (result.reason === "server_unreachable") reportServerReachable(false);
       setSwitching(false);
-      toaster.toast({ title: "RomM Sync", body: result.message || "Could not switch version" });
+      // Keep the toast body short (Steam truncates it to one line) and put the
+      // backend detail in the subtext so the reason is readable (#1359).
+      toaster.toast({ title: "RomM Sync", body: "Could not switch version", subtext: result.message });
     } catch (e) {
       setSwitching(false);
       logError(`VersionPicker: switchVersion failed: ${e}`);
@@ -355,20 +361,28 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     showContextMenu(
       <Menu label="Version">
         {versions.map((v) => (
-          <MenuItem key={v.rom_id} onClick={() => detach(handleSwitch(v))}>
+          <MenuItem key={v.rom_id} disabled={!v.switchable} onClick={() => detach(handleSwitch(v))}>
             <span
               style={{
                 display: "inline-flex",
                 alignItems: "center",
                 gap: "10px",
                 color: v.active ? ACTIVE_ACCENT : undefined,
+                // A non-switchable row (a different game entry in RomM) is dimmed —
+                // still visible so the user sees the version exists (#1359).
+                opacity: v.switchable ? undefined : 0.55,
               }}
             >
               {rowCover(v)}
               <span>{v.label || v.name || String(v.rom_id)}</span>
               {v.is_default ? <Badge text="Default" tone="accent" /> : null}
               {v.installed ? <Badge text="Downloaded" tone="good" /> : null}
-              {!v.synced ? <Badge text="not synced" tone="muted" /> : null}
+              {v.switchable && !v.synced ? <Badge text="not synced" tone="muted" /> : null}
+              {v.switchable ? null : (
+                <span style={{ marginLeft: "8px", fontSize: "11px", fontStyle: "italic", color: NEUTRAL_GREY }}>
+                  separate game entry in RomM
+                </span>
+              )}
               {v.active ? <span style={{ marginLeft: "6px", fontWeight: 700 }}>✓</span> : null}
             </span>
           </MenuItem>

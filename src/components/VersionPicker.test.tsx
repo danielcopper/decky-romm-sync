@@ -30,8 +30,12 @@ vi.mock("@decky/ui", () => ({
   DialogButton: (p: { onClick?: (e: unknown) => void; children?: ReactNode; className?: string }) =>
     createElement("button", { "data-testid": "version-btn", onClick: p.onClick, className: p.className }, p.children),
   Menu: (p: { children?: ReactNode }) => createElement("div", { "data-testid": "version-menu" }, p.children),
-  MenuItem: (p: { onClick?: () => void; children?: ReactNode }) =>
-    createElement("div", { role: "menuitem", onClick: p.onClick }, p.children),
+  MenuItem: (p: { onClick?: () => void; children?: ReactNode; disabled?: boolean }) =>
+    createElement(
+      "div",
+      { role: "menuitem", onClick: p.onClick, "aria-disabled": p.disabled ? "true" : undefined },
+      p.children,
+    ),
   showContextMenu: (menu: ReactNode) => {
     captured.menu = menu;
   },
@@ -78,6 +82,7 @@ function multiVersionList(overrides: Partial<VersionList> = {}): VersionList {
         installed: true,
         active: true,
         is_default: false,
+        switchable: true,
       },
       {
         rom_id: 2,
@@ -91,6 +96,7 @@ function multiVersionList(overrides: Partial<VersionList> = {}): VersionList {
         installed: false,
         active: false,
         is_default: true,
+        switchable: true,
       },
       {
         rom_id: 3,
@@ -104,6 +110,7 @@ function multiVersionList(overrides: Partial<VersionList> = {}): VersionList {
         installed: false,
         active: false,
         is_default: false,
+        switchable: true,
       },
     ],
     ...overrides,
@@ -175,6 +182,82 @@ describe("VersionPicker — menu markers", () => {
     expect(text(1)).not.toContain("✓");
     // Server-only row (Europe) is marked not synced.
     expect(text(2)).toContain("not synced");
+  });
+});
+
+describe("VersionPicker — non-switchable rows (#1359)", () => {
+  beforeEach(() => {
+    captured.menu = null;
+    vi.mocked(backend.getVersionList).mockReset();
+    vi.mocked(backend.switchVersion).mockReset();
+    vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
+    vi.mocked(toaster.toast).mockReset();
+  });
+
+  // A group whose second version is a RomM sibling from a DIFFERENT local group
+  // (switchable:false) alongside the switchable active version.
+  function listWithNonSwitchable(): VersionList {
+    return multiVersionList({
+      versions: [
+        {
+          rom_id: 1,
+          name: "Tomb Raider II",
+          label: "Tomb Raider II",
+          regions: ["USA"],
+          languages: ["En"],
+          revision: "",
+          tags: [],
+          synced: true,
+          installed: true,
+          active: true,
+          is_default: true,
+          switchable: true,
+        },
+        {
+          rom_id: 5,
+          name: "Lara Croft",
+          label: "Lara Croft (USA)",
+          regions: [],
+          languages: [],
+          revision: "",
+          tags: [],
+          synced: false,
+          installed: false,
+          active: false,
+          is_default: false,
+          switchable: false,
+        },
+      ],
+    });
+  }
+
+  it("renders the non-switchable row disabled with the hint (still listed)", async () => {
+    vi.mocked(backend.getVersionList).mockResolvedValue(listWithNonSwitchable());
+
+    const { menu } = await renderAndOpen();
+
+    const items = within(menu.container).getAllByRole("menuitem");
+    const laraRow = items.find((i) => i.textContent.includes("Lara Croft"));
+    // The cross-group version is STILL listed so the user sees it exists…
+    expect(laraRow).toBeTruthy();
+    // …but the row is disabled and explains why.
+    expect(laraRow?.getAttribute("aria-disabled")).toBe("true");
+    expect(laraRow?.textContent).toContain("separate game entry in RomM");
+    // The switchable active row is not disabled and carries no hint.
+    const trRow = items.find((i) => i.textContent.includes("Tomb Raider II"));
+    expect(trRow?.getAttribute("aria-disabled")).toBeNull();
+    expect(trRow?.textContent).not.toContain("separate game entry");
+  });
+
+  it("clicking a non-switchable row fires no switch and no toast", async () => {
+    vi.mocked(backend.getVersionList).mockResolvedValue(listWithNonSwitchable());
+
+    const { menu } = await renderAndOpen();
+    await clickRow(menu.container, "Lara Croft (USA)");
+
+    // The guard makes the click a no-op — the dead-end rejection toast never fires.
+    expect(backend.switchVersion).not.toHaveBeenCalled();
+    expect(toaster.toast).not.toHaveBeenCalled();
   });
 });
 
@@ -497,7 +580,7 @@ describe("VersionPicker — switching", () => {
     expect(backend.switchVersion).not.toHaveBeenCalled();
   });
 
-  it("toasts the backend message on a plain failure (non-vacuous)", async () => {
+  it("toasts a short body with the backend detail in subtext on a plain failure (non-vacuous)", async () => {
     vi.mocked(backend.getVersionList).mockResolvedValue(multiVersionList());
     vi.mocked(backend.switchVersion).mockResolvedValue({
       success: false,
@@ -508,9 +591,11 @@ describe("VersionPicker — switching", () => {
     const { menu } = await renderAndOpen();
     await clickRow(menu.container, "Game (Japan)");
 
+    // Short body (Steam truncates it to one line), backend detail in subtext (#1359).
     expect(toaster.toast).toHaveBeenCalledWith({
       title: "RomM Sync",
-      body: "That version is bound to another shortcut.",
+      body: "Could not switch version",
+      subtext: "That version is bound to another shortcut.",
     });
     expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
     expect(invalidateCachedGameDetail).not.toHaveBeenCalled();
@@ -584,6 +669,33 @@ describe("VersionPicker — unsynced-saves soft-block", () => {
     expect(backend.switchVersion).toHaveBeenNthCalledWith(2, APP_ID, 2, true);
     expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(APP_ID, "");
     expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(true);
+  });
+
+  it("toasts a short body + backend subtext when the forced 'Switch anyway' fails", async () => {
+    // Block → "Switch anyway" → the forced switch itself fails: the toast must use
+    // the short body with the backend detail in subtext, same as the plain path (#1359).
+    vi.mocked(backend.switchVersion).mockResolvedValueOnce(block).mockResolvedValueOnce({
+      success: false,
+      reason: "bound_elsewhere",
+      message: "That version is bound to another shortcut.",
+    });
+    vi.mocked(showUnsyncedSavesModal).mockResolvedValue("switch_anyway");
+
+    const dispatched = await captureDataChanged(async () => {
+      const { menu } = await renderAndOpen();
+      await clickRow(menu.container, "Game (Japan)");
+    });
+
+    expect(backend.switchVersion).toHaveBeenNthCalledWith(2, APP_ID, 2, true);
+    expect(toaster.toast).toHaveBeenCalledWith({
+      title: "RomM Sync",
+      body: "Could not switch version",
+      subtext: "That version is bound to another shortcut.",
+    });
+    // The failed force never applies the switch.
+    expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+    expect(invalidateCachedGameDetail).not.toHaveBeenCalled();
+    expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(false);
   });
 
   it("'Sync now & switch' syncs the stranded version then retries the switch", async () => {

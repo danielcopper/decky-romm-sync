@@ -88,6 +88,29 @@ async def test_get_version_list_happy_shape(harness):
     # Default badge ignores the current binding — the is_main_sibling wins.
     assert by_id[2]["is_default"] is True
     assert by_id[1]["synced"] is True and by_id[2]["synced"] is True
+    # Both local members share the bound key, so both are switchable.
+    assert by_id[1]["switchable"] is True and by_id[2]["switchable"] is True
+
+
+async def test_get_version_list_cross_group_sibling_not_switchable(harness):
+    """A RomM sibling synced locally under a different group key is listed but not
+    switchable — and switch_version rejects it, agreeing with the picker (#1359)."""
+    _seed_rom(harness, rom_id=1, app_id=_APP_ID, group_key=_GROUP)
+    # Rom 5 is a RomM sibling of rom 1 but is locally synced under a DIFFERENT key
+    # (RomM bridged the two groups on a shared lower-priority metadata id).
+    _seed_rom(harness, rom_id=5, app_id=None, group_key="ss:19274:57")
+    harness.romm.roms[1] = {"id": 1, "sibling_roms": [{"id": 5, "name": "Lara", "fs_name_no_ext": "Lara"}]}
+
+    result = await harness.plugin.get_version_list(_APP_ID)
+    by_id = {v["rom_id"]: v for v in result["versions"]}
+    assert set(by_id) == {1, 5}  # both LISTED
+    assert by_id[1]["switchable"] is True
+    assert by_id[5]["switchable"] is False
+
+    # The backend rejection agrees with the disabled picker row (defense-in-depth).
+    rejected = await harness.plugin.switch_version(_APP_ID, 5, True)
+    assert rejected["success"] is False
+    assert rejected["reason"] == "not_in_group"
 
 
 async def test_get_version_list_solo_group_not_multi(harness):

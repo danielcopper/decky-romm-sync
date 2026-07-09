@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.rom import Rom
 from domain.shortcut_data import extract_version_metadata
-from domain.sibling_group import compute_sibling_group_key
+from domain.sibling_group import compute_sibling_group_key, target_in_sibling_group
 from domain.sibling_resolution import AUTO_REGION, resolve_group_representative
 from lib.list_result import ErrorCode
 
@@ -161,11 +161,16 @@ class VersionSwitchService:
         ``{"multi_version": True, "versions": [...], "server_query_failed": bool}``
         — one entry per version with ``rom_id`` / ``label`` / ``name`` / the
         version dimensions and the ``synced`` / ``installed`` / ``active`` /
-        ``is_default`` markers. Local rows always appear; the server's
-        ``sibling_roms`` add any not-yet-synced versions (``synced: False``). When
-        the server view can't be fetched the local-only list is returned with the
-        additive ``server_query_failed: True`` flag (partial-success carve-out) —
-        the picker still works over what's synced.
+        ``is_default`` / ``switchable`` markers. Local rows always appear; the
+        server's ``sibling_roms`` add any not-yet-synced versions
+        (``synced: False``). ``switchable`` is the same membership authority
+        ``switch_version`` decides by (:func:`target_in_sibling_group`): a RomM
+        sibling that is actually a locally-synced ROM under a different group key
+        is listed but ``switchable: False``, so the picker disables it instead of
+        offering a switch the backend would reject. When the server view can't be
+        fetched the local-only list is returned with the additive
+        ``server_query_failed: True`` flag (partial-success carve-out) — the picker
+        still works over what's synced.
         """
         app_id = int(app_id)
         local = await self._loop.run_in_executor(None, self._read_local_group, app_id)
@@ -176,15 +181,24 @@ class VersionSwitchService:
             bound_detail = await self._loop.run_in_executor(None, self._romm_api.get_rom, local.bound_rom_id)
         except Exception as e:  # transport failure degrades to a local-only list
             self._logger.warning(f"Version list: sibling fetch failed for rom {local.bound_rom_id}: {e}")
-            return self._build_version_list(local, server_only_stubs=[], detail_by_id={}, server_query_failed=True)
+            return self._build_version_list(
+                local, server_only_stubs=[], detail_by_id={}, stub_local_group_keys={}, server_query_failed=True
+            )
 
         stubs = bound_detail.get("sibling_roms") or []
         server_only_stubs = [
             s for s in stubs if int(s.get("id", 0)) not in local.member_ids and int(s.get("id", 0)) > 0
         ]
         detail_by_id = await self._fetch_stub_details(server_only_stubs)
+        stub_local_group_keys = await self._loop.run_in_executor(
+            None, self._read_stub_local_group_keys, [int(s["id"]) for s in server_only_stubs]
+        )
         return self._build_version_list(
-            local, server_only_stubs=server_only_stubs, detail_by_id=detail_by_id, server_query_failed=False
+            local,
+            server_only_stubs=server_only_stubs,
+            detail_by_id=detail_by_id,
+            stub_local_group_keys=stub_local_group_keys,
+            server_query_failed=False,
         )
 
     async def _fetch_stub_details(self, stubs: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
@@ -247,19 +261,46 @@ class VersionSwitchService:
                 members=members,
             )
 
+    def _read_stub_local_group_keys(self, stub_ids: list[int]) -> dict[int, str | None]:
+        """Local ``sibling_group_key`` for each server-only stub id that IS local.
+
+        A server-only stub was excluded from the bound group's members, but it may
+        still be a locally-synced ROM under a DIFFERENT group key — RomM's
+        ``sibling_roms`` bridges two local groups when they share a lower-priority
+        metadata id (see :func:`target_in_sibling_group`). An id present in the
+        returned map has such a local row (its group key); an absent id has no
+        local row (a genuine not-yet-synced sibling). The picker uses this to mark
+        the cross-group rows non-switchable so ``switch_version`` never rejects a
+        row the user could click. Read in its own short UoW after the server fetch.
+        """
+        if not stub_ids:
+            return {}
+        with self._uow_factory() as uow:
+            keys: dict[int, str | None] = {}
+            for rom_id in stub_ids:
+                row = uow.roms.get(rom_id)
+                if row is not None:
+                    keys[rom_id] = row.sibling_group_key
+            return keys
+
     def _build_version_list(
         self,
         local: _LocalGroup,
         *,
         server_only_stubs: list[dict[str, Any]],
         detail_by_id: dict[int, dict[str, Any]],
+        stub_local_group_keys: dict[int, str | None],
         server_query_failed: bool,
     ) -> dict[str, Any]:
         """Merge local rows + server-only stubs into the picker's version list.
 
         Local rows carry rich dimensions and are ``synced: True``; a server-only
         stub is ``synced: False``, its dimensions filled from a fetched detail when
-        one is available (else empty). A single-version group renders no picker.
+        one is available (else empty). Every entry carries ``switchable`` — the
+        single authority (:func:`target_in_sibling_group`) that ``switch_version``
+        also decides by, so a listed row the switch would reject is rendered
+        non-switchable rather than a dead-end. A single-version group renders no
+        picker.
         """
         entries: list[dict[str, Any]] = [
             {
@@ -272,6 +313,15 @@ class VersionSwitchService:
                 "tags": m.tags,
                 "synced": True,
                 "installed": m.installed,
+                # Members share the bound key by construction (iter_by_group_key),
+                # so they are always switchable — routed through the shared
+                # predicate to keep a single authority.
+                "switchable": target_in_sibling_group(
+                    bound_group_key=local.group_key,
+                    target_local_group_key=local.group_key,
+                    target_is_local=True,
+                    target_is_server_sibling=True,
+                ),
             }
             for m in local.members
         ]
@@ -290,13 +340,20 @@ class VersionSwitchService:
                     "tags": list(meta.get("tags") or []),
                     "synced": False,
                     "installed": False,
+                    "switchable": target_in_sibling_group(
+                        bound_group_key=local.group_key,
+                        target_local_group_key=stub_local_group_keys.get(rom_id),
+                        target_is_local=rom_id in stub_local_group_keys,
+                        target_is_server_sibling=True,
+                    ),
                 }
             )
 
         if len(entries) <= 1:
             return {"multi_version": False}
 
-        default_rom_id = self._resolve_default(local, server_only_stubs, detail_by_id)
+        switchable_ids = {e["rom_id"] for e in entries if e["switchable"]}
+        default_rom_id = self._resolve_default(local, server_only_stubs, detail_by_id, switchable_ids)
         for e in entries:
             e["active"] = e["rom_id"] == local.bound_rom_id
             e["is_default"] = e["rom_id"] == default_rom_id
@@ -307,6 +364,7 @@ class VersionSwitchService:
         local: _LocalGroup,
         server_only_stubs: list[dict[str, Any]],
         detail_by_id: dict[int, dict[str, Any]],
+        switchable_ids: set[int],
     ) -> int | None:
         """The version the resolution chain would pick as the group's default.
 
@@ -314,10 +372,12 @@ class VersionSwitchService:
         filters, so the badge marks the *natural* default — RomM's
         ``is_main_sibling`` else the 1G1R + preferred-region ranking — independent
         of which version is currently bound (marking that would be circular with
-        the ``active`` flag). Ranks over the whole group; a server-only stub with
-        no fetched detail ranks with only its label. Returns ``None`` if the chain
-        somehow can't decide (never, for a non-empty group) so the badge is simply
-        absent rather than the call failing.
+        the ``active`` flag). Ranks over the group's *switchable* versions only
+        (``switchable_ids``): a cross-group RomM sibling is not a real member here,
+        so it must not win the Default badge. A server-only stub with no fetched
+        detail ranks with only its label. Returns ``None`` if the chain somehow
+        can't decide (never, for a non-empty group) so the badge is simply absent
+        rather than the call failing.
         """
         ranking: list[dict[str, Any]] = [
             {
@@ -329,9 +389,12 @@ class VersionSwitchService:
                 "fs_name_no_ext": m.label,
             }
             for m in local.members
+            if m.rom_id in switchable_ids
         ]
         for stub in server_only_stubs:
             rom_id = int(stub["id"])
+            if rom_id not in switchable_ids:
+                continue
             detail = detail_by_id.get(rom_id)
             meta = extract_version_metadata(detail) if detail is not None else {}
             ranking.append(
@@ -410,8 +473,13 @@ class VersionSwitchService:
         if ctx.target_is_local:
             # Fast reject an invalid local target before the drift/reachability
             # probes; the write UoW re-checks these same facts (TOCTOU).
-            if ctx.group_key is not None and ctx.target_group_key != ctx.group_key:
-                return self._not_in_group(target_rom_id)
+            if not target_in_sibling_group(
+                bound_group_key=ctx.group_key,
+                target_local_group_key=ctx.target_group_key,
+                target_is_local=True,
+                target_is_server_sibling=False,
+            ):
+                return self._not_in_group()
             if ctx.target_app_id is not None and ctx.target_app_id != app_id:
                 return self._bound_elsewhere(target_rom_id)
             block = await self._save_stranding_block(ctx, allow_stranded)
@@ -435,8 +503,13 @@ class VersionSwitchService:
                 "message": "RomM server not reachable.",
             }
 
-        if not self._is_sibling(target_dict, ctx.bound_rom_id, ctx.group_key):
-            return self._not_in_group(target_rom_id)
+        if not target_in_sibling_group(
+            bound_group_key=ctx.group_key,
+            target_local_group_key=None,
+            target_is_local=False,
+            target_is_server_sibling=self._is_sibling(target_dict, ctx.bound_rom_id, ctx.group_key),
+        ):
+            return self._not_in_group()
 
         return await self._loop.run_in_executor(None, self._persist_and_bind, target_dict, app_id, ctx.platform_slug)
 
@@ -561,9 +634,14 @@ class VersionSwitchService:
             target = uow.roms.get(target_rom_id)
             if target is None:
                 # Raced away between read and write — treat as not_in_group.
-                return self._not_in_group(target_rom_id)
-            if group_key is not None and target.sibling_group_key != group_key:
-                return self._not_in_group(target_rom_id)
+                return self._not_in_group()
+            if not target_in_sibling_group(
+                bound_group_key=group_key,
+                target_local_group_key=target.sibling_group_key,
+                target_is_local=True,
+                target_is_server_sibling=False,
+            ):
+                return self._not_in_group()
             if target.shortcut_app_id is not None and target.shortcut_app_id != app_id:
                 return self._bound_elsewhere(target_rom_id)
             target.bind_shortcut(app_id)
@@ -611,11 +689,13 @@ class VersionSwitchService:
         return self._switch_success(rom.rom_id, False, "", app_id)
 
     @staticmethod
-    def _not_in_group(target_rom_id: int) -> dict[str, Any]:
+    def _not_in_group() -> dict[str, Any]:
         return {
             "success": False,
             "reason": "not_in_group",
-            "message": f"Version {target_rom_id} is not part of this game's sibling group.",
+            "message": (
+                "This version belongs to a different game entry in RomM — fix its metadata match to switch to it."
+            ),
         }
 
     @staticmethod

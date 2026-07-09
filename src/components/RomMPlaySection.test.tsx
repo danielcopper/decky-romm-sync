@@ -629,6 +629,7 @@ describe("RomMPlaySection", () => {
             installed: false,
             active: true,
             is_default: true,
+            switchable: true,
           },
           {
             rom_id: 2,
@@ -642,6 +643,7 @@ describe("RomMPlaySection", () => {
             installed: false,
             active: false,
             is_default: false,
+            switchable: true,
           },
         ],
       });

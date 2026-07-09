@@ -41,6 +41,12 @@ icon), with markers for:
 - **not synced** — a version RomM has that isn't in your local library yet. Selecting it is fine; the plugin records it
   on the spot.
 
+Some rows are **dimmed and can't be selected**, labelled _"separate game entry in RomM"_. RomM sometimes lists a version
+as a sibling because it shares one metadata id, even though the plugin tracks it as its own separate game (a different
+primary match). The plugin shows it so you know it exists, but switching to it isn't possible — it would move the
+shortcut onto a different game. To make it selectable, fix its metadata match in RomM so both share the same primary id,
+then re-sync.
+
 Selecting a different version **rebinds** the game to it: the Download button now fetches that version, the panel's
 title and Region/Languages rows update to reflect it, and its cover refreshes to the new version. The Steam shortcut
 keeps its name, its place in your collections, and its playtime — all tied to the shortcut, which never changes. A

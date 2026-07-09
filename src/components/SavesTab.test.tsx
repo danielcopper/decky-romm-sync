@@ -696,6 +696,7 @@ describe("SavesTab", () => {
         installed: false,
         active: false,
         is_default: false,
+        switchable: true,
         ...overrides,
       };
     }

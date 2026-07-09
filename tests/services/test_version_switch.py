@@ -227,6 +227,79 @@ class TestGetVersionList:
         assert by_id[5]["label"] == "Game (Japan)"
         assert by_id[5]["regions"] == ["Japan"]
 
+    def test_local_members_are_switchable(self, event_loop, service, uow, romm):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID, regions=("USA",))
+        _seed_rom(uow, rom_id=2, app_id=None, regions=("Japan",))
+        romm.roms[1] = {"id": 1, "sibling_roms": []}
+
+        result = _run(event_loop, service.get_version_list(_APP_ID))
+        by_id = {v["rom_id"]: v for v in result["versions"]}
+        assert by_id[1]["switchable"] is True
+        assert by_id[2]["switchable"] is True
+
+    def test_genuine_server_only_sibling_is_switchable(self, event_loop, service, uow, romm):
+        # A RomM sibling with no local row yet — selecting it persists one, so it
+        # is switchable (and marked not synced).
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID, regions=("USA",))
+        romm.roms[1] = {"id": 1, "sibling_roms": [{"id": 5, "name": "Game (Japan)"}]}
+
+        result = _run(event_loop, service.get_version_list(_APP_ID))
+        by_id = {v["rom_id"]: v for v in result["versions"]}
+        assert by_id[5]["synced"] is False
+        assert by_id[5]["switchable"] is True
+
+    def test_cross_group_local_sibling_is_not_switchable(self, event_loop, service, uow, romm):
+        # #1359: RomM's sibling_roms bridges two local groups (a shared lower-
+        # priority metadata id). Rom 5 is synced locally under a DIFFERENT group
+        # key, so the picker lists it (the user sees the version) but it is not
+        # switchable — switch_version would reject a cross-group local target.
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID, group_key=_GROUP, regions=("USA",))
+        _seed_rom(uow, rom_id=5, app_id=None, group_key="ss:19274:57", regions=("Japan",))
+        romm.roms[1] = {"id": 1, "sibling_roms": [{"id": 5, "name": "Lara", "fs_name_no_ext": "Lara"}]}
+
+        result = _run(event_loop, service.get_version_list(_APP_ID))
+        by_id = {v["rom_id"]: v for v in result["versions"]}
+        assert set(by_id) == {1, 5}  # the cross-group sibling is still LISTED
+        assert by_id[1]["switchable"] is True
+        assert by_id[5]["switchable"] is False
+
+    def test_switchable_flag_agrees_with_switch_version(self, event_loop, service, uow, romm):
+        # Single-authority property: the picker's switchable flag predicts EXACTLY
+        # whether switch_version rejects the target as not_in_group — both decide
+        # via target_in_sibling_group. allow_stranded skips the unrelated drift
+        # gate so only the membership verdict decides.
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID, group_key=_GROUP)  # bound, in group
+        _seed_rom(uow, rom_id=2, app_id=None, group_key=_GROUP)  # local, in group
+        _seed_rom(uow, rom_id=5, app_id=None, group_key="ss:19274:57")  # local, other group
+        romm.roms[1] = {"id": 1, "sibling_roms": [{"id": 5, "name": "Lara", "fs_name_no_ext": "Lara"}]}
+
+        by_id = {v["rom_id"]: v for v in _run(event_loop, service.get_version_list(_APP_ID))["versions"]}
+        assert by_id[2]["switchable"] is True
+        assert by_id[5]["switchable"] is False
+
+        # The non-switchable cross-group target IS rejected by the switch...
+        cross = _run(event_loop, service.switch_version(_APP_ID, 5, True))
+        assert cross["success"] is False
+        assert cross["reason"] == "not_in_group"
+        # ...and the switchable in-group target is NOT rejected as not_in_group.
+        in_group = _run(event_loop, service.switch_version(_APP_ID, 2, True))
+        assert in_group.get("reason") != "not_in_group"
+
+    def test_cross_group_sibling_excluded_from_default(self, event_loop, service, uow, romm):
+        # A cross-group RomM sibling that WOULD rank as the default (is_main_sibling
+        # on the server) must not win the Default badge — it is not a switchable
+        # member of this group, so it is dropped from the default ranking.
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID, group_key=_GROUP, regions=("USA",))
+        _seed_rom(uow, rom_id=2, app_id=None, group_key=_GROUP, regions=("Japan",))
+        _seed_rom(uow, rom_id=5, app_id=None, group_key="ss:19274:57")
+        romm.roms[1] = {"id": 1, "sibling_roms": [{"id": 5, "name": "Lara", "fs_name_no_ext": "Lara"}]}
+        romm.roms[5] = {"id": 5, "platform_id": 57, "is_main_sibling": True}
+
+        by_id = {v["rom_id"]: v for v in _run(event_loop, service.get_version_list(_APP_ID))["versions"]}
+        assert by_id[5]["switchable"] is False
+        assert by_id[5]["is_default"] is False  # excluded despite is_main_sibling
+        assert by_id[1]["is_default"] or by_id[2]["is_default"]  # default stays in-group
+
     def test_server_unreachable_degrades_to_local_only(self, event_loop, service, uow, romm):
         _seed_rom(uow, rom_id=1, app_id=_APP_ID)
         _seed_rom(uow, rom_id=2, app_id=None)
@@ -441,6 +514,20 @@ class TestSwitchVersion:
         result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
         assert result["success"] is False
         assert result["reason"] == "not_in_group"
+
+    def test_not_in_group_message_is_human_readable(self, event_loop, service, uow):
+        # The refusal message is human-readable and carries no raw internals (the
+        # target rom id or the "sibling group" key jargon it once dumped, #1359).
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID, group_key=_GROUP)
+        _seed_rom(uow, rom_id=2, app_id=None, group_key="igdb:999:57")
+
+        result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
+        assert result["reason"] == "not_in_group"
+        assert result["message"] == (
+            "This version belongs to a different game entry in RomM — fix its metadata match to switch to it."
+        )
+        assert "sibling group" not in result["message"].lower()
+        assert "error" not in result and "error_code" not in result
 
     def test_unknown_target_not_in_group(self, event_loop, service, uow, romm):
         _seed_rom(uow, rom_id=1, app_id=_APP_ID)

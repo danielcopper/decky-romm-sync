@@ -357,6 +357,10 @@ export const selectDisc = callable<[number, string | null], SelectDiscResult>("s
  * persists one); `installed` marks a downloaded version; `active` is the bound
  * version the Download button fetches; `is_default` marks the version the
  * resolution chain + Preferred-region setting would pick as the default.
+ * `switchable` is false for a RomM sibling that is actually a locally-synced ROM
+ * under a different group key (RomM bridged two local groups on a shared metadata
+ * id) — the picker lists it but disables the row, because switch_version would
+ * reject it; every other row is switchable (#1359).
  */
 export interface VersionInfo {
   rom_id: number;
@@ -370,6 +374,7 @@ export interface VersionInfo {
   installed: boolean;
   active: boolean;
   is_default: boolean;
+  switchable: boolean;
 }
 
 /**
