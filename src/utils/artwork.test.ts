@@ -71,3 +71,97 @@ describe("applyArtwork", () => {
     expect(vi.mocked(SteamClient.Apps.SetCustomArtworkForApp)).not.toHaveBeenCalled();
   });
 });
+
+type Art = { base64: string | null; no_api_key?: boolean };
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+describe("applyArtwork — newest-apply-wins race guard", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.stubGlobal("SteamClient", {
+      Apps: {
+        SetCustomArtworkForApp: vi.fn().mockResolvedValue(undefined),
+      },
+    });
+    vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: true });
+  });
+
+  it("a superseded in-flight apply writes nothing — only the newer apply's art lands for that appId", async () => {
+    const appId = 5000;
+    const slow = deferred<Art>();
+    // Apply A (rom 42) hangs on `slow` for every asset; apply B (rom 99) resolves
+    // fast with distinct art and completes its writes first.
+    vi.mocked(backend.getSgdbArtworkBase64).mockImplementation((romId: number): Promise<Art> => {
+      if (romId === 42) return slow.promise;
+      return Promise.resolve({ base64: "BB==", no_api_key: false });
+    });
+
+    // A starts first (claims the older generation), B starts second for the SAME appId.
+    const aPromise = applyArtwork(42, appId);
+    const bPromise = applyArtwork(99, appId);
+    await bPromise;
+
+    // B's art is on the tile.
+    const write = vi.mocked(SteamClient.Apps.SetCustomArtworkForApp);
+    expect(write).toHaveBeenCalledWith(appId, "BB==", "png", 1);
+
+    // Now let A's slow fetches finally resolve with the OLD art.
+    slow.resolve({ base64: "AA==", no_api_key: false });
+    await aPromise;
+
+    // Assert on call CONTENTS, not counts: every write carries B's art, none carry
+    // A's — the stale apply performed no writes after being superseded.
+    expect(write.mock.calls.every((c) => c[1] === "BB==")).toBe(true);
+    expect(write.mock.calls.some((c) => c[1] === "AA==")).toBe(false);
+    // Exactly one hero (assetType 1) write, and it is B's.
+    expect(write.mock.calls.filter((c) => c[3] === 1)).toEqual([[appId, "BB==", "png", 1]]);
+    // The icon path (saveShortcutIcon) only ever received B's art, never A's.
+    expect(vi.mocked(backend.saveShortcutIcon).mock.calls.some((c) => c[1] === "AA==")).toBe(false);
+    // A resolved to the count it managed to write (0) rather than throwing.
+    await expect(aPromise).resolves.toBe(0);
+  });
+
+  it("sequential applies for the same appId both write (no over-suppression)", async () => {
+    const appId = 5000;
+    vi.mocked(backend.getSgdbArtworkBase64).mockImplementation((romId: number): Promise<Art> =>
+      Promise.resolve({ base64: romId === 1 ? "AA==" : "BB==", no_api_key: false }),
+    );
+
+    await expect(applyArtwork(1, appId)).resolves.toBe(4); // A completes fully
+    await expect(applyArtwork(2, appId)).resolves.toBe(4); // then B completes fully
+
+    const write = vi.mocked(SteamClient.Apps.SetCustomArtworkForApp);
+    // Both applies wrote their hero art — the guard only suppresses a call that a
+    // NEWER one overtook while it was still in flight, not a finished predecessor.
+    expect(write).toHaveBeenCalledWith(appId, "AA==", "png", 1);
+    expect(write).toHaveBeenCalledWith(appId, "BB==", "png", 1);
+  });
+
+  it("an in-flight apply for one appId does not suppress a concurrent apply for a different appId", async () => {
+    const slow = deferred<Art>();
+    // appId X's rom (42) hangs; appId Y's rom (99) resolves fast.
+    vi.mocked(backend.getSgdbArtworkBase64).mockImplementation((romId: number): Promise<Art> => {
+      if (romId === 42) return slow.promise;
+      return Promise.resolve({ base64: "YY==", no_api_key: false });
+    });
+
+    const xPromise = applyArtwork(42, 5000); // appId X, in flight
+    await applyArtwork(99, 6000); // appId Y, different appId — completes
+
+    const write = vi.mocked(SteamClient.Apps.SetCustomArtworkForApp);
+    // Y wrote despite X being mid-flight (different appId → independent generation).
+    expect(write).toHaveBeenCalledWith(6000, "YY==", "png", 1);
+
+    // X is NOT superseded — Y bumped a different appId — so X still writes when it resolves.
+    slow.resolve({ base64: "XX==", no_api_key: false });
+    await expect(xPromise).resolves.toBe(4);
+    expect(write).toHaveBeenCalledWith(5000, "XX==", "png", 1);
+  });
+});
