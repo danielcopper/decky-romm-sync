@@ -21,6 +21,7 @@ from domain.sync_state import SyncCancelled, SyncState
 from domain.work_unit import CollectionKind, WorkUnit
 from lib.errors import classify_error
 from lib.list_result import ErrorCode
+from lib.romm_paging import LIST_PAGE_SIZE
 
 if TYPE_CHECKING:
     import asyncio
@@ -44,10 +45,11 @@ if TYPE_CHECKING:
 _SYNC_CANCELLED = "Sync cancelled"
 
 # Emit a ``fetching`` progress frame on the first page and every Nth page of a
-# paginated unit fetch. A 62-page platform fetch narrates ~13 frames instead of
-# one per page, so the QAM bar keeps moving during a long fetch without flooding
-# the WebSocket bridge with a frame per page.
-_FETCH_PROGRESS_PAGE_INTERVAL = 5
+# paginated unit fetch. At the 500-ROM page size a large platform paginates in
+# only a handful of pages (a ~3000-ROM platform is 7), so every page is narrated
+# (interval 1) — a "page 3/7" update every few seconds — rather than throttled.
+# The interval knob stays so a future larger page count can throttle again.
+_FETCH_PROGRESS_PAGE_INTERVAL = 1
 
 
 def _collection_units(collections: list[dict[str, Any]], enabled_ids: set[str], kind: CollectionKind) -> list[WorkUnit]:
@@ -636,9 +638,9 @@ class LibraryFetcher:
     ) -> None:
         """Emit a throttled ``fetching`` progress frame for a paginated fetch.
 
-        Called once per page; a no-op except on the first page and every
-        ``_FETCH_PROGRESS_PAGE_INTERVAL``-th page, so a large multi-page fetch
-        narrates its progress without a frame per page. ``progress_step`` /
+        Called once per page; emits only on the first page and every
+        ``_FETCH_PROGRESS_PAGE_INTERVAL``-th page so the frame rate stays
+        bounded on a large multi-page fetch. ``progress_step`` /
         ``progress_total_steps`` are the run's coarse unit index / total so the
         main bar holds its position while the fine line advances by page; a
         falsy pair (the preview loop already emits its own per-unit frame,
@@ -693,7 +695,7 @@ class LibraryFetcher:
 
         unit_roms: list[dict[str, Any]] = []
         offset = 0
-        limit = 50
+        limit = LIST_PAGE_SIZE
         total_pages = (unit.rom_count + limit - 1) // limit if unit.rom_count else 0
         page_num = 0
         while True:
@@ -774,7 +776,7 @@ class LibraryFetcher:
         all_collection_rom_ids: list[int] = []
 
         offset = 0
-        limit = 50
+        limit = LIST_PAGE_SIZE
         total_pages = (unit.rom_count + limit - 1) // limit if unit.rom_count else 0
         page_num = 0
         while True:

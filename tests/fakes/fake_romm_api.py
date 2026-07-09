@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 from fakes._romm_save_semantics import check_add_save_conflict, compute_is_current, tag_filename
 from lib.errors import RommUnprocessableEntityError
+from lib.romm_paging import LIST_PAGE_SIZE
 
 if TYPE_CHECKING:
     from models.play_sessions import (
@@ -255,7 +256,7 @@ class FakeRommApi:
         sliced = items[offset : offset + limit]
         return {"items": [dict(r) for r in sliced], "total": len(items)}
 
-    def list_roms(self, platform_id: int, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    def list_roms(self, platform_id: int, limit: int = LIST_PAGE_SIZE, offset: int = 0) -> dict[str, Any]:
         self._log("list_roms", (platform_id,), {"limit": limit, "offset": offset})
         self._check_fail(self.list_roms_side_effect)
         items = [r for r in self.roms.values() if r.get("platform_id") == platform_id]
@@ -281,7 +282,9 @@ class FakeRommApi:
         ]
         return self._paginate(items, limit, offset)
 
-    def list_roms_by_collection(self, collection_id: int, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    def list_roms_by_collection(
+        self, collection_id: int, limit: int = LIST_PAGE_SIZE, offset: int = 0
+    ) -> dict[str, Any]:
         self._log(
             "list_roms_by_collection",
             (collection_id,),
@@ -291,7 +294,9 @@ class FakeRommApi:
         items = [r for r in self.roms.values() if collection_id in (r.get("collection_ids") or [])]
         return self._paginate(items, limit, offset)
 
-    def list_roms_by_virtual_collection(self, virtual_id: str, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    def list_roms_by_virtual_collection(
+        self, virtual_id: str, limit: int = LIST_PAGE_SIZE, offset: int = 0
+    ) -> dict[str, Any]:
         self._log(
             "list_roms_by_virtual_collection",
             (virtual_id,),
@@ -301,7 +306,9 @@ class FakeRommApi:
         items = [r for r in self.roms.values() if virtual_id in (r.get("virtual_collection_ids") or [])]
         return self._paginate(items, limit, offset)
 
-    def list_roms_by_smart_collection(self, smart_id: int, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    def list_roms_by_smart_collection(
+        self, smart_id: int, limit: int = LIST_PAGE_SIZE, offset: int = 0
+    ) -> dict[str, Any]:
         self._log(
             "list_roms_by_smart_collection",
             (smart_id,),

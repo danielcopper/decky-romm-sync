@@ -30,7 +30,10 @@ silent omission. The CI check enforces this.
 - **Frontend API**: `@decky/ui` + `@decky/api` (NOT deprecated `decky-frontend-lib`). Use `callable()` (NOT
   `ServerAPI.callPluginMethod()`).
 - **RomM API quirks**: Filter param is `platform_ids` (plural). Cover URLs have unencoded spaces (must URL-encode).
-  Paginated: `{"items": [...], "total": N}`.
+  Paginated: `{"items": [...], "total": N}`. The `/api/roms` list calls page at `limit=500` (`lib/romm_paging.py`
+  `LIST_PAGE_SIZE`; the endpoint bounds `limit` at `le=10_000`, unchanged across 4.9.x) and append
+  `&with_char_index=false&with_filter_values=false` to skip the unused char-index + filter-values aggregations the
+  server computes on every list request — so a typical platform is one request, not dozens.
 - **AddShortcut timing**: After `AddShortcut()`, wait for the new app's overview before setting properties — poll
   `appStore.GetAppOverviewByAppID(appId)` (`waitForAppOverview`, ~100ms cadence, 1000ms fallback that proceeds anyway)
   instead of a blind fixed delay. On create, an empty `launch_options` (uninstalled ROM) skips both

@@ -19,6 +19,7 @@ from lib.errors import (
     RommNotFoundError,
     RommServerError,
 )
+from lib.romm_paging import LIST_PAGE_SIZE
 
 if TYPE_CHECKING:
     from models.play_sessions import PlaySessionIngestEntry, PlaySessionIngestResponse
@@ -35,6 +36,12 @@ _logger = logging.getLogger(__name__)
 # ``/api/play-sessions`` pagination guard: stop after this many pages so a server
 # that never returns a short page (e.g. ignores ``offset``) can't loop forever.
 _MAX_PLAY_SESSION_PAGES = 50
+
+# RomM computes an unused character index and a filter-values aggregation on
+# every ``/api/roms`` list request unless disabled. The plugin reads only
+# ``items`` / ``total`` from the list endpoints, so both are turned off to skip
+# that server-side work. Appended to every list-endpoint query string.
+_LIST_AGGREGATIONS_DISABLED = "&with_char_index=false&with_filter_values=false"
 
 # Public pairing-code exchange endpoint (unauthenticated — the code is the credential).
 _PAIRING_CODE_ENDPOINT = "/api/client-tokens/exchange"
@@ -113,8 +120,10 @@ class RommApiAdapter:
     def get_rom(self, rom_id: int) -> dict[str, Any]:
         return self._client.request(f"/api/roms/{rom_id}")
 
-    def list_roms(self, platform_id: int, limit: int = 50, offset: int = 0) -> dict[str, Any]:
-        return self._client.request(f"/api/roms?platform_ids={platform_id}&limit={limit}&offset={offset}")
+    def list_roms(self, platform_id: int, limit: int = LIST_PAGE_SIZE, offset: int = 0) -> dict[str, Any]:
+        return self._client.request(
+            f"/api/roms?platform_ids={platform_id}&limit={limit}&offset={offset}{_LIST_AGGREGATIONS_DISABLED}"
+        )
 
     def list_roms_updated_after(
         self,
@@ -125,7 +134,8 @@ class RommApiAdapter:
     ) -> dict[str, Any]:
         quoted_after = urllib.parse.quote(updated_after)
         return self._client.request(
-            f"/api/roms?platform_ids={platform_id}&limit={limit}&offset={offset}&updated_after={quoted_after}"
+            f"/api/roms?platform_ids={platform_id}&limit={limit}&offset={offset}"
+            f"&updated_after={quoted_after}{_LIST_AGGREGATIONS_DISABLED}"
         )
 
     def download_rom_content(
@@ -164,15 +174,27 @@ class RommApiAdapter:
         result = self._client.request("/api/collections/smart")
         return result if isinstance(result, list) else []
 
-    def list_roms_by_collection(self, collection_id: int, limit: int = 50, offset: int = 0) -> dict[str, Any]:
-        return self._client.request(f"/api/roms?collection_id={collection_id}&limit={limit}&offset={offset}")
+    def list_roms_by_collection(
+        self, collection_id: int, limit: int = LIST_PAGE_SIZE, offset: int = 0
+    ) -> dict[str, Any]:
+        return self._client.request(
+            f"/api/roms?collection_id={collection_id}&limit={limit}&offset={offset}{_LIST_AGGREGATIONS_DISABLED}"
+        )
 
-    def list_roms_by_virtual_collection(self, virtual_id: str, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    def list_roms_by_virtual_collection(
+        self, virtual_id: str, limit: int = LIST_PAGE_SIZE, offset: int = 0
+    ) -> dict[str, Any]:
         encoded_id = urllib.parse.quote(str(virtual_id), safe="")
-        return self._client.request(f"/api/roms?virtual_collection_id={encoded_id}&limit={limit}&offset={offset}")
+        return self._client.request(
+            f"/api/roms?virtual_collection_id={encoded_id}&limit={limit}&offset={offset}{_LIST_AGGREGATIONS_DISABLED}"
+        )
 
-    def list_roms_by_smart_collection(self, smart_id: int, limit: int = 50, offset: int = 0) -> dict[str, Any]:
-        return self._client.request(f"/api/roms?smart_collection_id={smart_id}&limit={limit}&offset={offset}")
+    def list_roms_by_smart_collection(
+        self, smart_id: int, limit: int = LIST_PAGE_SIZE, offset: int = 0
+    ) -> dict[str, Any]:
+        return self._client.request(
+            f"/api/roms?smart_collection_id={smart_id}&limit={limit}&offset={offset}{_LIST_AGGREGATIONS_DISABLED}"
+        )
 
     # ── Firmware / BIOS ───────────────────────────────────────────────
 

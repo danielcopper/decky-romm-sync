@@ -12,6 +12,7 @@ import pytest
 
 from domain.sync_state import SyncCancelled, SyncState
 from domain.work_unit import WorkUnit
+from lib.romm_paging import LIST_PAGE_SIZE
 
 
 def _wire_fake(plugin, fake_romm_api):
@@ -608,13 +609,14 @@ class TestFetchPlatformUnit:
         """
         _wire_fake(plugin, fake_romm_api)
 
-        # Seed exactly one full page worth of ROMs (50 items at limit=50).
-        fake_romm_api.roms = {i: {"id": i, "platform_id": 1, "name": f"G{i}"} for i in range(50)}
+        # Seed exactly one full page worth of ROMs (500 items at limit=500) so a
+        # full page 1 advances the offset and a second request is attempted.
+        fake_romm_api.roms = {i: {"id": i, "platform_id": 1, "name": f"G{i}"} for i in range(LIST_PAGE_SIZE)}
 
         original_list_roms = fake_romm_api.list_roms
         call_count = {"n": 0}
 
-        def list_roms_with_second_page_failure(platform_id, limit=50, offset=0):
+        def list_roms_with_second_page_failure(platform_id, limit=LIST_PAGE_SIZE, offset=0):
             call_count["n"] += 1
             if call_count["n"] == 2:
                 raise RuntimeError("page 2 boom")
@@ -622,23 +624,25 @@ class TestFetchPlatformUnit:
 
         fake_romm_api.list_roms = list_roms_with_second_page_failure  # type: ignore[method-assign]
 
-        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=200)
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=LIST_PAGE_SIZE + 100)
         with pytest.raises(RuntimeError, match="page 2 boom"):
             await plugin._sync_service._fetcher.fetch_platform_unit(unit)
 
     @pytest.mark.asyncio
     async def test_paginates_across_multiple_pages(self, plugin, fake_romm_api):
-        """Line 514: a full first page must trigger offset += limit and a second fetch."""
+        """A full first page must trigger offset += limit and a second fetch."""
         _wire_fake(plugin, fake_romm_api)
 
-        # 51 ROMs at limit=50 => page 1 fills to limit, page 2 carries the tail.
-        fake_romm_api.roms = {i: {"id": i, "platform_id": 1, "name": f"G{i}"} for i in range(51)}
+        # One full page + a one-ROM tail at the 500-ROM page size => page 1 fills
+        # to the limit, page 2 carries the tail (exercises offset += limit).
+        rom_count = LIST_PAGE_SIZE + 1
+        fake_romm_api.roms = {i: {"id": i, "platform_id": 1, "name": f"G{i}"} for i in range(rom_count)}
 
-        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=51)
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=rom_count)
         unit_roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
 
         assert skipped is False
-        assert len(unit_roms) == 51
+        assert len(unit_roms) == rom_count
         assert {r["platform_name"] for r in unit_roms} == {"N64"}
 
 
@@ -654,10 +658,11 @@ class TestFetchCollectionUnit:
 
     @pytest.mark.asyncio
     async def test_paginates_across_multiple_pages(self, plugin, fake_romm_api):
-        """Line 566: a full first page must trigger offset += limit and a second fetch."""
+        """A full first page must trigger offset += limit and a second fetch."""
         _wire_fake(plugin, fake_romm_api)
 
-        # 51 ROMs in collection id=7 => page 1 fills, page 2 carries the tail.
+        # One full page + a one-ROM tail at the 500-ROM page size => page 1 fills,
+        # page 2 carries the tail.
         fake_romm_api.roms = {
             i: {
                 "id": i,
@@ -667,7 +672,7 @@ class TestFetchCollectionUnit:
                 "platform_slug": "n64",
                 "collection_ids": [7],
             }
-            for i in range(50)
+            for i in range(LIST_PAGE_SIZE)
         }
         fake_romm_api.roms[999] = {
             "id": 999,
@@ -678,12 +683,13 @@ class TestFetchCollectionUnit:
             "collection_ids": [7],
         }
 
-        unit = WorkUnit(type="collection", id=7, name="Coll", slug="", rom_count=51, collection_kind="user")
+        rom_count = LIST_PAGE_SIZE + 1
+        unit = WorkUnit(type="collection", id=7, name="Coll", slug="", rom_count=rom_count, collection_kind="user")
         synced: set[int] = set()
         new_roms, all_collection_rom_ids = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
 
-        assert len(new_roms) == 51
-        assert len(all_collection_rom_ids) == 51
+        assert len(new_roms) == rom_count
+        assert len(all_collection_rom_ids) == rom_count
         assert 999 in synced
 
     @pytest.mark.asyncio
@@ -738,37 +744,39 @@ def _seed_pages(fake_romm_api, *, platform_id, count):
 
 
 class TestFetchProgressNarration:
-    """Throttled ``fetching`` progress frames during the paginated fetch (#1025).
+    """Per-page ``fetching`` progress frames during the paginated fetch (#1025).
 
     The QAM's coarse bar sat frozen on "Applying shortcuts" for the minutes a
     large platform's fetch takes; the fetch now narrates page progress under the
-    ``fetching`` stage, throttled so a 62-page fetch emits ~13 frames (page 1 +
-    every 5th), not one per page.
+    ``fetching`` stage. At the 500-ROM page size a large platform is only a
+    handful of pages, so every page emits a frame
+    (``_FETCH_PROGRESS_PAGE_INTERVAL`` is 1) — "page 3/7" every few seconds.
     """
 
     @pytest.mark.asyncio
-    async def test_platform_fetch_emits_throttled_fetching_frames(self, plugin, fake_romm_api):
+    async def test_platform_fetch_emits_per_page_fetching_frames(self, plugin, fake_romm_api):
         import decky
 
         decky.emit.reset_mock()
         _wire_fake(plugin, fake_romm_api)
-        # 470 ROMs at limit=50 → 10 pages (9 full + a 20-item tail). The throttle
-        # (page 1 + every 5th) fires on pages 1, 5, 10 only — never per page.
-        _seed_pages(fake_romm_api, platform_id=1, count=470)
+        # 3084 ROMs at the 500-ROM page size → 7 pages (6 full + an 84-item tail).
+        # Every page emits a frame (interval 1).
+        rom_count = 3084
+        _seed_pages(fake_romm_api, platform_id=1, count=rom_count)
 
-        unit = WorkUnit(type="platform", id=1, name="GBA", slug="gba", rom_count=470)
+        unit = WorkUnit(type="platform", id=1, name="GBA", slug="gba", rom_count=rom_count)
         await plugin._sync_service._fetcher.fetch_platform_unit(unit, progress_step=3, progress_total_steps=12)
 
         frames = _fetching_frames(decky)
-        assert [f["current"] for f in frames] == [1, 5, 10]
+        assert [f["current"] for f in frames] == [1, 2, 3, 4, 5, 6, 7]
         # Every frame keeps the run's coarse position and names the platform+page.
         for f in frames:
             assert f["stage"] == "fetching"
             assert f["step"] == 3
             assert f["totalSteps"] == 12
-            assert f["total"] == 10
-        assert frames[0]["message"] == "Fetching GBA (page 1/10)"
-        assert frames[-1]["message"] == "Fetching GBA (page 10/10)"
+            assert f["total"] == 7
+        assert frames[0]["message"] == "Fetching GBA (page 1/7)"
+        assert frames[-1]["message"] == "Fetching GBA (page 7/7)"
 
     @pytest.mark.asyncio
     async def test_single_page_fetch_emits_one_frame(self, plugin, fake_romm_api):
@@ -805,23 +813,24 @@ class TestFetchProgressNarration:
         assert _fetching_frames(decky) == []
 
     @pytest.mark.asyncio
-    async def test_collection_fetch_emits_throttled_fetching_frames(self, plugin, fake_romm_api):
+    async def test_collection_fetch_emits_per_page_fetching_frames(self, plugin, fake_romm_api):
         import decky
 
         decky.emit.reset_mock()
         _wire_fake(plugin, fake_romm_api)
-        # 260 ROMs in collection 7 → 6 pages (5 full + a 10-item tail). Throttle
-        # fires on pages 1 and 5.
+        # 1200 ROMs in collection 7 → 3 pages (500 + 500 + 200) at the 500-ROM
+        # page size; every page emits a frame (interval 1).
+        rom_count = 1200
         fake_romm_api.roms = {
-            i: {"id": i, "platform_id": 1, "name": f"G{i}", "collection_ids": [7]} for i in range(260)
+            i: {"id": i, "platform_id": 1, "name": f"G{i}", "collection_ids": [7]} for i in range(rom_count)
         }
 
-        unit = WorkUnit(type="collection", id=7, name="Favorites", slug="", rom_count=260, collection_kind="user")
+        unit = WorkUnit(type="collection", id=7, name="Favorites", slug="", rom_count=rom_count, collection_kind="user")
         await plugin._sync_service._fetcher.fetch_collection_unit(unit, set(), progress_step=2, progress_total_steps=8)
 
         frames = _fetching_frames(decky)
-        assert [f["current"] for f in frames] == [1, 5]
-        assert frames[0]["message"] == "Fetching Favorites (page 1/6)"
+        assert [f["current"] for f in frames] == [1, 2, 3]
+        assert frames[0]["message"] == "Fetching Favorites (page 1/3)"
         assert frames[0]["step"] == 2
         assert frames[0]["totalSteps"] == 8
 
