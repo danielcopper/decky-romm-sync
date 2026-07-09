@@ -35,11 +35,13 @@ class DirectoryFileListerFn(Protocol):
 class CoverArtFileStore(Protocol):
     """Filesystem seam for cover-art file operations.
 
-    Owns the raw POSIX calls (``exists``, ``remove_file``, atomic ``rename``,
-    ``listdir``, ``is_dir``, ``read_bytes``) ArtworkService uses to manage
-    cover art under the Steam grid directory. Path construction, registry
-    lookups, and orphan detection remain a service concern; this Protocol
-    exposes only the I/O seams.
+    Owns the raw POSIX calls ArtworkService uses to manage cover art across the
+    plugin-owned per-ROM cover cache and the shared Steam grid directory: the
+    per-ROM cache is downloaded/seeded into, ``copy_file`` publishes the active
+    version's cache cover onto the Steam grid as ``{app_id}p.png``, and the read
+    seams back the base64 queries and orphan pruning. Path construction,
+    registry lookups, and orphan detection remain a service concern; this
+    Protocol exposes only the I/O seams.
 
     Implementations are synchronous — services that call from an async
     context offload via ``loop.run_in_executor``.
@@ -49,12 +51,26 @@ class CoverArtFileStore(Protocol):
         """Return True when *path* refers to an existing file or directory."""
         ...
 
+    def make_dirs(self, path: str) -> None:
+        """Create *path* and any missing parents. Idempotent."""
+        ...
+
     def remove_file(self, path: str) -> None:
         """Delete *path*. Idempotent: a missing file is not an error."""
         ...
 
     def rename(self, src: str, dst: str) -> None:
         """Atomically rename *src* to *dst*, replacing any existing file at *dst*."""
+        ...
+
+    def copy_file(self, src: str, dst: str) -> None:
+        """Copy the file *src* to *dst*, leaving *src* in place.
+
+        Publishes a per-ROM cache cover onto the Steam grid (or seeds the cache
+        from an existing grid cover) without consuming the source, so every
+        sibling version keeps its own cache file. The destination's parent
+        directory must already exist; callers create it via :meth:`make_dirs`.
+        """
         ...
 
     def listdir(self, directory: str) -> list[str]:

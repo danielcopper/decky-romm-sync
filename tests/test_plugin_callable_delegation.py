@@ -427,6 +427,13 @@ class TestArtworkCallableDelegation:
         assert result == {"base64": None}
 
     @pytest.mark.asyncio
+    async def test_fetch_cover_base64_delegates(self, plugin):
+        plugin._artwork_service.fetch_cover_base64 = AsyncMock(return_value={"base64": "QUJD"})
+        result = await plugin.fetch_cover_base64(42)
+        plugin._artwork_service.fetch_cover_base64.assert_awaited_once_with(42)
+        assert result == {"base64": "QUJD"}
+
+    @pytest.mark.asyncio
     async def test_refresh_cover_artwork_delegates(self, plugin):
         plugin._artwork_service.refresh_cover = AsyncMock(
             return_value={"success": True, "message": "Cover refreshed", "cover_path": "/grid/999p.png"},
@@ -771,6 +778,12 @@ class TestCallableErrorPropagation:
         plugin._artwork_service.get_artwork_base64 = AsyncMock(side_effect=RuntimeError("art"))
         with pytest.raises(RuntimeError, match="art"):
             await plugin.get_artwork_base64(42)
+
+    @pytest.mark.asyncio
+    async def test_fetch_cover_base64_propagates(self, plugin):
+        plugin._artwork_service.fetch_cover_base64 = AsyncMock(side_effect=RuntimeError("art"))
+        with pytest.raises(RuntimeError, match="art"):
+            await plugin.fetch_cover_base64(42)
 
     @pytest.mark.asyncio
     async def test_evaluate_launch_propagates(self, plugin):

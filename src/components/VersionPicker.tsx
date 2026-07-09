@@ -8,8 +8,9 @@
  * marked — the active version (✓ + tint), the default (the version the
  * resolution chain + Preferred-region setting would pick), downloaded versions,
  * and versions that exist on the server but aren't synced locally yet. Per-row
- * covers load lazily (only for synced versions), never eagerly during sync
- * (ADR-0021 / #1267).
+ * covers load lazily from the per-ROM cover cache (cache-first fetchCoverBase64,
+ * #1346), so each version shows its own art rather than the group's shared grid
+ * cover; a not-yet-synced sibling downloads its cover once.
  *
  * Selecting a version while the game is not downloaded rebinds the group's Steam
  * shortcut to it (appId-safe: the name/appId stay sticky) so the Download button
@@ -29,7 +30,7 @@ import {
   switchVersion,
   syncRomSaves,
   refreshSaveStatus,
-  getArtworkBase64,
+  fetchCoverBase64,
   invalidateCachedGameDetail,
   logError,
   logWarn,
@@ -86,7 +87,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   // menu can't open, so a rapid second click can't act against the stale list
   // (the swallowed switch-back bug) or interleave two switches' confirm polls.
   const [switching, setSwitching] = useState(false);
-  // rom_id -> cover base64 for synced versions, filled lazily once the list loads.
+  // rom_id -> cover base64 for every version, filled lazily once the list loads.
   const [covers, setCovers] = useState<Record<number, string>>({});
   const coversRequested = useRef<Set<number>>(new Set());
   // The group's member rom_ids from the last loaded list — lets the install-change
@@ -157,8 +158,14 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     };
   }, [appId]);
 
-  // Lazily fetch covers for the synced versions once the list is known. Only
-  // versions with a local row (synced) have artwork; server-only stubs skip it.
+  // Lazily fetch a cover for every version once the list is known, via the
+  // cache-first fetchCoverBase64 (#1346): a synced version resolves from the
+  // per-ROM cover cache, and a not-yet-synced sibling downloads its cover from
+  // RomM once (coversRequested dedupes). Loading here — on the list load, not on
+  // menu open — is deliberate: showContextMenu renders a static element, so a
+  // cover fetched after the menu opened would not appear until it reopened;
+  // loading now means covers are ready by the first open, and cache-first keeps
+  // repeat renders cheap. Rows still without art keep the FaCompactDisc fallback.
   // The `cancelled` guard drops an in-flight setState if the panel unmounts (or
   // the list changes) mid-fetch, matching the panel's fetch-helper pattern.
   useEffect(() => {
@@ -166,9 +173,9 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     if (!versions) return;
     let cancelled = false;
     for (const v of versions) {
-      if (!v.synced || coversRequested.current.has(v.rom_id)) continue;
+      if (coversRequested.current.has(v.rom_id)) continue;
       coversRequested.current.add(v.rom_id);
-      getArtworkBase64(v.rom_id)
+      fetchCoverBase64(v.rom_id)
         .then((result) => {
           if (!cancelled && result.base64) setCovers((prev) => ({ ...prev, [v.rom_id]: result.base64! }));
         })
@@ -199,6 +206,19 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     if (!confirmed) {
       logError(`VersionPicker: could not confirm launch options for rom ${result.rom_id} (appId ${result.app_id})`);
       toaster.toast({ title: "RomM Sync", body: "Switched — re-switch if launch fails" });
+    }
+    // Publish the newly active version's cover onto the Steam shortcut so the
+    // grid art tracks the binding (#1346). Cache-first and best-effort — a
+    // missing/unfetchable cover leaves the old art in place and never disturbs
+    // the already-committed switch.
+    try {
+      const cover = await fetchCoverBase64(result.rom_id);
+      if (cover.base64) {
+        setCovers((prev) => ({ ...prev, [result.rom_id]: cover.base64! }));
+        await SteamClient.Apps.SetCustomArtworkForApp(result.app_id, cover.base64, "png", 0);
+      }
+    } catch (e) {
+      logWarn(`VersionPicker: cover apply after switch failed for rom ${result.rom_id}: ${e}`);
     }
     invalidateCachedGameDetail(appId);
     globalThis.dispatchEvent(

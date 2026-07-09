@@ -563,6 +563,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             romm_api=cfg.adapters.romm_api,
             steam_config=cfg.adapters.steam_config,
             cover_art_file_store=cfg.adapters.cover_art_file_store,
+            cover_cache_dir=os.path.join(cfg.runtime.runtime_dir, "covers"),
             loop=cfg.runtime.loop,
             logger=cfg.runtime.logger,
             get_pending_sync=pending_sync_binding.get,

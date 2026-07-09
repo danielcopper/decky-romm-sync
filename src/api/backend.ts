@@ -189,6 +189,13 @@ export const removeAllShortcuts = callable<
   }
 >("remove_all_shortcuts");
 export const getArtworkBase64 = callable<[number], { base64: string | null }>("get_artwork_base64");
+// Cache-first per-ROM cover fetch for the version picker (#1346, ADR-0021).
+// Keyed by RomM ID: a cache hit returns the cached bytes, a miss downloads the
+// ROM's cover from RomM into the cache. Works for a group version with no local
+// DB row (the picker lists not-yet-synced siblings). Every failure — offline, no
+// cover, read error — returns { base64: null } silently; it never re-downloads a
+// cached cover.
+export const fetchCoverBase64 = callable<[number], { base64: string | null }>("fetch_cover_base64");
 export const refreshCoverArtwork = callable<
   [number],
   { success: boolean; reason?: string; message: string; cover_path?: string }

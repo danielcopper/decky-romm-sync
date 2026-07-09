@@ -379,7 +379,7 @@ class TestRemovalCleansUpArtwork:
         _seed_rom(uow, 10, app_id=100001, name="Game A")
         steam_config.grid_dir = lambda: str(grid_dir)
 
-        svc = _artwork_integration_service(uow, steam_config)
+        svc = _artwork_integration_service(uow, steam_config, tmp_path)
         await svc.report_removal_results([10])
         assert not art_file.exists()
 
@@ -393,12 +393,12 @@ class TestRemovalCleansUpArtwork:
         _seed_rom(uow, 10, app_id=100001, name="Game A")
         steam_config.grid_dir = lambda: str(grid_dir)
 
-        svc = _artwork_integration_service(uow, steam_config)
+        svc = _artwork_integration_service(uow, steam_config, tmp_path)
         await svc.report_removal_results([10])
         assert not staging.exists()
 
 
-def _artwork_integration_service(uow, steam_config) -> ShortcutRemovalService:
+def _artwork_integration_service(uow, steam_config, tmp_path) -> ShortcutRemovalService:
     """Wire a ShortcutRemovalService backed by the real ArtworkService remover."""
     from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 
@@ -410,6 +410,7 @@ def _artwork_integration_service(uow, steam_config) -> ShortcutRemovalService:
             romm_api=MagicMock(),
             steam_config=steam_config,
             cover_art_file_store=CoverArtFileStoreAdapter(),
+            cover_cache_dir=str(tmp_path / "covers"),
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             get_pending_sync=dict,

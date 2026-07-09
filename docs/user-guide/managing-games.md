@@ -30,7 +30,9 @@ that launches and syncs saves.
 ### The Switch-version control
 
 When a game has more than one version, a compact **version control** appears next to the Play button — right beside the
-disc picker, and only for a multi-version game. Open it to see every version in the group, each with markers for:
+disc picker, and only for a multi-version game. Open it to see every version in the group, each showing **its own cover
+art** (so two regions of the same game are told apart at a glance; a version whose cover can't be fetched shows a disc
+icon), with markers for:
 
 - **✓ (active)** — the version currently bound to the shortcut. This is exactly what the Download button will fetch.
 - **Default** — the version the plugin would pick on its own, following RomM's "SET DEFAULT" choice (`is_main_sibling`)

@@ -1,13 +1,39 @@
-"""Cover-art filename builders for the Steam grid directory.
+"""Cover-art filename builders for the Steam grid and the per-ROM cover cache.
 
-Pure naming logic for the two filename conventions ArtworkService writes
-into the grid dir: the per-ROM staging name used before a Steam app_id is
-known, and the final ``{app_id}p.png`` name Steam reads as the portrait
-cover. Filesystem I/O lives in adapters; this module is import- and
-state-free.
+Pure naming logic for the filename conventions ArtworkService writes: the
+per-ROM ``{rom_id}.png`` cache name (in the plugin-owned cover cache, keyed by
+RomM ID so every version of a sibling group keeps its own cover), the final
+``{app_id}p.png`` name Steam reads as the active shortcut's portrait cover, the
+``.tmp`` sidecar every write lands in before its atomic rename, and the legacy
+per-ROM staging name that predates the cache. Filesystem I/O lives in adapters;
+this module is import- and state-free.
 """
 
 from __future__ import annotations
+
+TMP_SUFFIX = ".tmp"
+
+
+def with_tmp_suffix(name: str) -> str:
+    """Return *name* with the write-sidecar ``.tmp`` suffix appended.
+
+    Cover writes stream/copy into this sidecar first, then an atomic rename
+    publishes it over the real name — so a concurrent reader (the picker fetch,
+    or Steam reading the grid tile) never observes a half-written file. Accepts
+    a bare filename or a full path; it is pure string concatenation.
+    """
+    return name + TMP_SUFFIX
+
+
+def cache_filename(rom_id: int | str) -> str:
+    """Return the per-ROM cover cache filename, keyed by RomM ID.
+
+    The cache is the source of truth for a ROM's cover: it lives in the
+    plugin-owned cover-cache directory (never the shared Steam grid dir), so
+    every version of a sibling group keeps its own file rather than overwriting
+    the group's single ``{app_id}p.png``.
+    """
+    return f"{rom_id}.png"
 
 
 def staging_filename(rom_id: int | str) -> str:

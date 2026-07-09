@@ -645,7 +645,7 @@ describe("RomMPlaySection", () => {
           },
         ],
       });
-      vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
+      vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
 
       const { container } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();

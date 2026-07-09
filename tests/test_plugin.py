@@ -766,6 +766,10 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     # not gated by a pending migration, matching report_removal_results above.
     "reconcile_shortcuts",
     "get_artwork_base64",
+    # Cache-first per-ROM cover fetch for the version picker (#1346) — a
+    # read-only data callable (fills the cover cache on a miss), never mutates
+    # RetroDECK state.
+    "fetch_cover_base64",
     "get_sync_status",
     "get_sync_stats",
     "get_rom_by_steam_app_id",

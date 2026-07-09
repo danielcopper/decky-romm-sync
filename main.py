@@ -151,6 +151,7 @@ class Plugin:
         # and saves/playtime survive a ROM leaving RomM (ADR-0007).
         self._sgdb_service.prune_orphaned_artwork_cache()
         self._artwork_service.prune_orphaned_staging_artwork()
+        self._artwork_service.prune_orphaned_cover_cache()
         self._download_service.cleanup_leftover_tmp_files()
 
         # ── 6. Background tasks ─────────────────────────────────────────────
@@ -383,6 +384,9 @@ class Plugin:
 
     async def get_artwork_base64(self, rom_id):
         return await self._artwork_service.get_artwork_base64(rom_id)
+
+    async def fetch_cover_base64(self, rom_id):
+        return await self._artwork_service.fetch_cover_base64(rom_id)
 
     @migration_blocked
     async def refresh_cover_artwork(self, rom_id):

@@ -125,7 +125,7 @@ describe("VersionPicker — render gate", () => {
   beforeEach(() => {
     captured.menu = null;
     vi.mocked(backend.getVersionList).mockReset();
-    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
+    vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
   });
 
   it("renders nothing for a single-version group (multi_version:false)", async () => {
@@ -155,7 +155,7 @@ describe("VersionPicker — menu markers", () => {
   beforeEach(() => {
     captured.menu = null;
     vi.mocked(backend.getVersionList).mockReset();
-    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
+    vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
   });
 
   it("lists every version and marks active / default / downloaded / not-synced", async () => {
@@ -178,6 +178,187 @@ describe("VersionPicker — menu markers", () => {
   });
 });
 
+describe("VersionPicker — per-version covers (#1346)", () => {
+  beforeEach(() => {
+    captured.menu = null;
+    vi.mocked(backend.getVersionList).mockReset().mockResolvedValue(multiVersionList());
+    vi.mocked(backend.fetchCoverBase64).mockReset();
+    vi.mocked(backend.switchVersion).mockReset();
+    vi.mocked(setLaunchOptionsConfirmed).mockReset().mockResolvedValue(true);
+    vi.mocked(invalidateCachedGameDetail).mockReset();
+  });
+
+  /** Render, wait for every row's cover fetch to settle, then open the menu. */
+  async function renderWaitCoversAndOpen() {
+    const r = render(<VersionPicker appId={APP_ID} />);
+    await r.findByTestId("version-btn");
+    // Covers load lazily on the list-load effect — one fetch per row (3 rows).
+    await waitFor(() => expect(vi.mocked(backend.fetchCoverBase64)).toHaveBeenCalledTimes(3));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      fireEvent.click(r.getByTestId("version-btn"));
+    });
+    return render(<>{captured.menu}</>);
+  }
+
+  it("lazily fetches a cover for every version — synced AND not-synced", async () => {
+    vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
+
+    const r = render(<VersionPicker appId={APP_ID} />);
+    await r.findByTestId("version-btn");
+
+    await waitFor(() => {
+      expect(vi.mocked(backend.fetchCoverBase64)).toHaveBeenCalledWith(1);
+      expect(vi.mocked(backend.fetchCoverBase64)).toHaveBeenCalledWith(2);
+      // The Europe row is server-only (synced:false) — it is fetched too, via the
+      // cache-first callable, so each version shows its own art (#1346).
+      expect(vi.mocked(backend.fetchCoverBase64)).toHaveBeenCalledWith(3);
+    });
+  });
+
+  it("renders each version's own distinct cover as an <img>", async () => {
+    vi.mocked(backend.fetchCoverBase64).mockImplementation(async (romId: number) => ({
+      base64: romId === 1 ? "AAAA" : romId === 2 ? "BBBB" : null,
+    }));
+
+    const menu = await renderWaitCoversAndOpen();
+
+    const srcs = Array.from(menu.container.querySelectorAll("img")).map((i) => i.getAttribute("src"));
+    expect(srcs).toContain("data:image/png;base64,AAAA");
+    expect(srcs).toContain("data:image/png;base64,BBBB");
+    // The third (null) row shows no <img> — only the two covers rendered.
+    expect(menu.container.querySelectorAll("img")).toHaveLength(2);
+  });
+
+  it("falls back to the disc icon when a cover fetch returns null", async () => {
+    vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
+
+    const menu = await renderWaitCoversAndOpen();
+
+    // No covers rendered; every row shows the FaCompactDisc fallback (an <svg>).
+    expect(menu.container.querySelectorAll("img")).toHaveLength(0);
+    expect(menu.container.querySelectorAll("svg").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("publishes the newly active version's cover onto the Steam shortcut after a switch", async () => {
+    const setArt = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("SteamClient", { Apps: { SetCustomArtworkForApp: setArt } });
+    vi.mocked(backend.switchVersion).mockResolvedValue({
+      success: true,
+      rom_id: 2,
+      target_installed: false,
+      launch_options: "",
+      app_id: APP_ID,
+    });
+    vi.mocked(backend.fetchCoverBase64).mockImplementation(async (romId: number) => ({
+      base64: romId === 2 ? "JPCOVER" : null,
+    }));
+
+    const r = render(<VersionPicker appId={APP_ID} />);
+    await r.findByTestId("version-btn");
+    await act(async () => {
+      fireEvent.click(r.getByTestId("version-btn"));
+    });
+    const menu = render(<>{captured.menu}</>);
+    await clickRow(menu.container, "Game (Japan)");
+
+    // The Japan version's cover (rom_id 2) is applied to the group's shortcut as
+    // the portrait grid (assetType 0) once the switch commits.
+    expect(setArt).toHaveBeenCalledWith(APP_ID, "JPCOVER", "png", 0);
+  });
+
+  it("degrades silently when the post-switch cover fetch returns null (no SetCustomArtworkForApp)", async () => {
+    const setArt = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("SteamClient", { Apps: { SetCustomArtworkForApp: setArt } });
+    vi.mocked(backend.switchVersion).mockResolvedValue({
+      success: true,
+      rom_id: 2,
+      target_installed: false,
+      launch_options: "",
+      app_id: APP_ID,
+    });
+    vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
+
+    const r = render(<VersionPicker appId={APP_ID} />);
+    await r.findByTestId("version-btn");
+    await act(async () => {
+      fireEvent.click(r.getByTestId("version-btn"));
+    });
+    const menu = render(<>{captured.menu}</>);
+    await clickRow(menu.container, "Game (Japan)");
+
+    // No cover obtainable → the old art is left in place, the switch still completes.
+    expect(setArt).not.toHaveBeenCalled();
+    expect(invalidateCachedGameDetail).toHaveBeenCalledWith(APP_ID);
+  });
+
+  it("still completes the switch when the post-switch cover fetch REJECTS (non-vacuous catch)", async () => {
+    const setArt = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("SteamClient", { Apps: { SetCustomArtworkForApp: setArt } });
+    const logWarnSpy = vi.spyOn(backend, "logWarn").mockImplementation(() => {});
+    try {
+      vi.mocked(backend.switchVersion).mockResolvedValue({
+        success: true,
+        rom_id: 2,
+        target_installed: false,
+        launch_options: "",
+        app_id: APP_ID,
+      });
+      vi.mocked(backend.fetchCoverBase64).mockRejectedValue(new Error("offline"));
+
+      const r = render(<VersionPicker appId={APP_ID} />);
+      await r.findByTestId("version-btn");
+      await act(async () => {
+        fireEvent.click(r.getByTestId("version-btn"));
+      });
+      const menu = render(<>{captured.menu}</>);
+      await clickRow(menu.container, "Game (Japan)");
+
+      // The rejection is caught + warned; nothing is applied, and the switch still
+      // commits (invalidate ran) — the rejection never propagates out of the switch.
+      expect(setArt).not.toHaveBeenCalled();
+      expect(logWarnSpy).toHaveBeenCalledWith(expect.stringContaining("cover apply after switch failed"));
+      expect(invalidateCachedGameDetail).toHaveBeenCalledWith(APP_ID);
+    } finally {
+      logWarnSpy.mockRestore();
+    }
+  });
+
+  it("still completes the switch when SetCustomArtworkForApp THROWS (non-vacuous catch)", async () => {
+    const setArt = vi.fn().mockRejectedValue(new Error("steam down"));
+    vi.stubGlobal("SteamClient", { Apps: { SetCustomArtworkForApp: setArt } });
+    const logWarnSpy = vi.spyOn(backend, "logWarn").mockImplementation(() => {});
+    try {
+      vi.mocked(backend.switchVersion).mockResolvedValue({
+        success: true,
+        rom_id: 2,
+        target_installed: false,
+        launch_options: "",
+        app_id: APP_ID,
+      });
+      vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: "JP" });
+
+      const r = render(<VersionPicker appId={APP_ID} />);
+      await r.findByTestId("version-btn");
+      await act(async () => {
+        fireEvent.click(r.getByTestId("version-btn"));
+      });
+      const menu = render(<>{captured.menu}</>);
+      await clickRow(menu.container, "Game (Japan)");
+
+      // The apply was attempted with valid data, its rejection is caught + warned,
+      // and the switch still commits without rethrowing.
+      expect(setArt).toHaveBeenCalledWith(APP_ID, "JP", "png", 0);
+      expect(logWarnSpy).toHaveBeenCalledWith(expect.stringContaining("cover apply after switch failed"));
+      expect(invalidateCachedGameDetail).toHaveBeenCalledWith(APP_ID);
+    } finally {
+      logWarnSpy.mockRestore();
+    }
+  });
+});
+
 /** Capture the events dispatched on `romm_data_changed` while `fn` runs. */
 async function captureDataChanged(fn: () => Promise<void>): Promise<CustomEvent[]> {
   const dispatched: CustomEvent[] = [];
@@ -192,8 +373,8 @@ async function captureDataChanged(fn: () => Promise<void>): Promise<CustomEvent[
 async function clickRow(menuContainer: HTMLElement, label: string): Promise<void> {
   await act(async () => {
     fireEvent.click(within(menuContainer).getByText(label));
-    // Flush the switch → modal → sync → retry microtask chain.
-    for (let i = 0; i < 6; i++) await Promise.resolve();
+    // Flush the switch → modal → sync → retry → cover-apply microtask chain.
+    for (let i = 0; i < 10; i++) await Promise.resolve();
   });
 }
 
@@ -202,7 +383,7 @@ describe("VersionPicker — switching", () => {
     captured.menu = null;
     vi.mocked(backend.getVersionList).mockReset();
     vi.mocked(backend.switchVersion).mockReset();
-    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
+    vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
     vi.mocked(invalidateCachedGameDetail).mockReset();
     vi.mocked(setLaunchOptionsConfirmed).mockReset().mockResolvedValue(true);
     vi.mocked(toaster.toast).mockReset();
@@ -370,7 +551,7 @@ describe("VersionPicker — unsynced-saves soft-block", () => {
     vi.mocked(backend.switchVersion).mockReset();
     vi.mocked(backend.syncRomSaves).mockReset();
     vi.mocked(backend.refreshSaveStatus).mockReset().mockResolvedValue({ success: true });
-    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
+    vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
     vi.mocked(invalidateCachedGameDetail).mockReset();
     vi.mocked(setLaunchOptionsConfirmed).mockReset().mockResolvedValue(true);
     vi.mocked(showUnsyncedSavesModal).mockReset();
@@ -527,7 +708,7 @@ describe("VersionPicker — event refresh", () => {
   beforeEach(() => {
     captured.menu = null;
     vi.mocked(backend.getVersionList).mockReset();
-    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
+    vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
   });
 
   it("re-fetches the version list on a matching version_switched event", async () => {
@@ -629,7 +810,7 @@ describe("VersionPicker — listener cleanup", () => {
     captured.menu = null;
     vi.mocked(backend.getVersionList).mockReset();
     vi.mocked(backend.getVersionList).mockResolvedValue(multiVersionList());
-    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
+    vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
     installDomEventListenerSpy();
   });
 
@@ -655,7 +836,7 @@ describe("VersionPicker — in-flight switch guard (#1345 / E)", () => {
     captured.menu = null;
     vi.mocked(backend.getVersionList).mockReset();
     vi.mocked(backend.switchVersion).mockReset();
-    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
+    vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
     vi.mocked(invalidateCachedGameDetail).mockReset();
     vi.mocked(setLaunchOptionsConfirmed).mockReset().mockResolvedValue(true);
     vi.mocked(showUnsyncedSavesModal).mockReset();

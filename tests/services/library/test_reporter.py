@@ -227,20 +227,24 @@ class TestGetRomBySteamAppId:
 
 
 class TestFinalizeCoverPath:
-    """Tests for _finalize_cover_path() — lines 699-712."""
+    """Tests for _finalize_cover_path() — publishes the cache cover onto the grid."""
 
-    def test_renames_staging_to_final(self, plugin, tmp_path):
-        grid = str(tmp_path)
-        staging = tmp_path / "romm_1_cover.png"
-        staging.write_text("cover data")
+    def test_copies_cache_to_final_and_persists_cache_path(self, plugin, tmp_path):
+        grid_path = tmp_path / "grid"
+        grid_path.mkdir()
+        grid = str(grid_path)
+        cache = tmp_path / "covers" / "1.png"
+        cache.parent.mkdir(parents=True)
+        cache.write_text("cover data")
 
-        result = plugin._sync_service._reporter._finalize_cover_path(grid, str(staging), 100001, "1")
-        expected = os.path.join(grid, "100001p.png")
-        assert result == expected
-        assert not staging.exists()
-        assert os.path.exists(expected)
+        result = plugin._sync_service._reporter._finalize_cover_path(grid, str(cache), 100001, "1")
+        expected_final = os.path.join(grid, "100001p.png")
+        # The persisted path is the CACHE path; the grid gets a copy (cache survives).
+        assert result == str(cache)
+        assert cache.exists()
+        assert os.path.exists(expected_final)
 
-    def test_returns_existing_final(self, plugin, tmp_path):
+    def test_returns_existing_final_when_cover_missing(self, plugin, tmp_path):
         grid = str(tmp_path)
         final = tmp_path / "100001p.png"
         final.write_text("final data")
@@ -256,20 +260,20 @@ class TestFinalizeCoverPath:
         result = plugin._sync_service._reporter._finalize_cover_path(str(tmp_path), "", 100001, "1")
         assert result == ""
 
-    def test_handles_rename_os_error(self, plugin, tmp_path):
-        grid = str(tmp_path)
-        staging_path = os.path.join(grid, "romm_1_cover.png")
+    def test_handles_copy_os_error(self, plugin, tmp_path):
+        grid = str(tmp_path / "grid")
+        cache_path = os.path.join(str(tmp_path / "covers"), "1.png")
 
-        # Inject OSError on rename through the CoverArtFileStore Protocol —
+        # Inject OSError on copy_file through the CoverArtFileStore Protocol —
         # mirrors the Wave 3 fake-adapter failure-injection pattern instead
-        # of patching ``os.replace`` globally.
-        fake_store = FakeCoverArtFileStore(files={staging_path: b"data"})
-        fake_store.rename_failures.add(staging_path)
+        # of patching ``shutil.copyfile`` globally.
+        fake_store = FakeCoverArtFileStore(files={cache_path: b"data"})
+        fake_store.copy_failures.add(cache_path)
         plugin._artwork_service._cover_art_file_store = fake_store
 
-        result = plugin._sync_service._reporter._finalize_cover_path(grid, staging_path, 100001, "1")
-        # Should return original path on error
-        assert result == staging_path
+        result = plugin._sync_service._reporter._finalize_cover_path(grid, cache_path, 100001, "1")
+        # A failed copy still returns the cache path (persist unchanged).
+        assert result == cache_path
 
 
 class TestCommitUnitResults:

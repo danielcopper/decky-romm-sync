@@ -78,6 +78,7 @@ def plugin(tmp_path):
             romm_api=p._romm_api,
             steam_config=steam_config,
             cover_art_file_store=CoverArtFileStoreAdapter(),
+            cover_cache_dir=str(tmp_path / "covers"),
             loop=asyncio.get_event_loop(),
             logger=decky.logger,
             get_pending_sync=dict,
