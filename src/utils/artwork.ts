@@ -64,10 +64,15 @@ export async function applyArtwork(romId: number, appId: number): Promise<number
     await SteamClient.Apps.SetCustomArtworkForApp(appId, results[2].base64, "png", 3);
     applied++;
   }
-  // Type 4 = icon (VDF-based)
+  // Type 4 = icon. The backend writes the PNG into Steam's grid dir and
+  // returns its path; pointing the shortcut at it must go through SteamClient
+  // (Steam owns shortcuts.vdf in memory and clobbers external writes).
   if (results[3].base64) {
     if (superseded()) return bail();
-    await saveShortcutIcon(appId, results[3].base64);
+    const iconResult = await saveShortcutIcon(appId, results[3].base64);
+    if (iconResult.success && iconResult.icon_path) {
+      SteamClient.Apps.SetShortcutIcon(appId, iconResult.icon_path);
+    }
     applied++;
   }
 

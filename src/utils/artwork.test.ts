@@ -8,6 +8,7 @@ describe("applyArtwork", () => {
     vi.stubGlobal("SteamClient", {
       Apps: {
         SetCustomArtworkForApp: vi.fn().mockResolvedValue(undefined),
+        SetShortcutIcon: vi.fn(),
       },
     });
     vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: true });
@@ -40,11 +41,38 @@ describe("applyArtwork", () => {
       .mockResolvedValueOnce({ base64: "BB==", no_api_key: false })
       .mockResolvedValueOnce({ base64: "CC==", no_api_key: false })
       .mockResolvedValueOnce({ base64: "DD==", no_api_key: false });
+    vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: true, icon_path: "/grid/5000_icon.png" });
     await expect(applyArtwork(42, 5000)).resolves.toBe(4);
     expect(vi.mocked(SteamClient.Apps.SetCustomArtworkForApp)).toHaveBeenCalledWith(5000, "AA==", "png", 1);
     expect(vi.mocked(SteamClient.Apps.SetCustomArtworkForApp)).toHaveBeenCalledWith(5000, "BB==", "png", 2);
     expect(vi.mocked(SteamClient.Apps.SetCustomArtworkForApp)).toHaveBeenCalledWith(5000, "CC==", "png", 3);
     expect(vi.mocked(backend.saveShortcutIcon)).toHaveBeenCalledWith(5000, "DD==");
+    // The returned grid path is applied to the shortcut live via SteamClient.
+    expect(vi.mocked(SteamClient.Apps.SetShortcutIcon)).toHaveBeenCalledWith(5000, "/grid/5000_icon.png");
+  });
+
+  it("does not call SetShortcutIcon when saveShortcutIcon reports failure", async () => {
+    vi.mocked(backend.getSgdbArtworkBase64)
+      .mockResolvedValueOnce({ base64: null, no_api_key: false })
+      .mockResolvedValueOnce({ base64: null, no_api_key: false })
+      .mockResolvedValueOnce({ base64: null, no_api_key: false })
+      .mockResolvedValueOnce({ base64: "DD==", no_api_key: false });
+    vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: false });
+    await applyArtwork(42, 5000);
+    expect(vi.mocked(backend.saveShortcutIcon)).toHaveBeenCalledWith(5000, "DD==");
+    expect(vi.mocked(SteamClient.Apps.SetShortcutIcon)).not.toHaveBeenCalled();
+  });
+
+  it("does not call SetShortcutIcon when saveShortcutIcon returns no icon_path", async () => {
+    vi.mocked(backend.getSgdbArtworkBase64)
+      .mockResolvedValueOnce({ base64: null, no_api_key: false })
+      .mockResolvedValueOnce({ base64: null, no_api_key: false })
+      .mockResolvedValueOnce({ base64: null, no_api_key: false })
+      .mockResolvedValueOnce({ base64: "DD==", no_api_key: false });
+    vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: true });
+    await applyArtwork(42, 5000);
+    expect(vi.mocked(backend.saveShortcutIcon)).toHaveBeenCalledWith(5000, "DD==");
+    expect(vi.mocked(SteamClient.Apps.SetShortcutIcon)).not.toHaveBeenCalled();
   });
 
   it("returns 0 and writes nothing when all assets are null", async () => {
@@ -88,6 +116,7 @@ describe("applyArtwork — newest-apply-wins race guard", () => {
     vi.stubGlobal("SteamClient", {
       Apps: {
         SetCustomArtworkForApp: vi.fn().mockResolvedValue(undefined),
+        SetShortcutIcon: vi.fn(),
       },
     });
     vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: true });

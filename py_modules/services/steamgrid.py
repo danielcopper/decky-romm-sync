@@ -24,7 +24,6 @@ from domain.sgdb_artwork import (
     first_grid_url,
     parse_autocomplete_results,
     sgdb_endpoint_path,
-    to_signed_app_id,
 )
 from lib.errors import SgdbApiError, SteamGridDirMissingError
 from lib.list_result import ErrorCode
@@ -444,34 +443,30 @@ class SteamGridService:
     # -- icon saving -------------------------------------------------------
 
     def _save_icon_to_grid(self, app_id, icon_bytes):
-        """Write icon PNG to Steam's grid dir and update shortcuts.vdf icon field."""
+        """Write the icon PNG into Steam's grid dir; return its path or ``None``.
+
+        Pointing the shortcut at this file is the frontend's job via
+        ``SteamClient.Apps.SetShortcutIcon`` — Steam holds shortcuts.vdf in
+        memory and silently clobbers any external write while it runs — so
+        this method only lays down the grid file and never touches
+        shortcuts.vdf.
+        """
         try:
-            icon_path = self._steam_config.write_shortcut_icon(app_id, icon_bytes)
+            return self._steam_config.write_shortcut_icon(app_id, icon_bytes)
         except SteamGridDirMissingError as e:
             self._logger.warning(f"Cannot save icon: {e}")
-            return False
+            return None
         except Exception as e:
             self._logger.error(f"Failed to write icon file for app_id {app_id}: {e}")
-            return False
-
-        # Update shortcuts.vdf icon field
-        try:
-            vdf_data = self._steam_config.read_shortcuts()
-            signed_id = to_signed_app_id(app_id)
-            shortcuts = vdf_data.get("shortcuts", {})
-            for entry in shortcuts.values():
-                if entry.get("appid") == signed_id:
-                    entry["icon"] = icon_path
-                    break
-            self._steam_config.write_shortcuts(vdf_data)
-        except Exception as e:
-            self._logger.warning(f"Failed to update shortcuts.vdf icon field: {e}")
-            # Icon file is still saved, just VDF field not set — non-fatal
-
-        return True
+            return None
 
     async def save_shortcut_icon(self, app_id, icon_base64):
-        """Save icon PNG to Steam grid dir and update VDF. Called from frontend."""
+        """Write a frontend-supplied icon PNG into Steam's grid directory.
+
+        Returns the written ``icon_path`` on success so the frontend can
+        point the shortcut at it via ``SteamClient.Apps.SetShortcutIcon``;
+        failures use the canonical ``{success, reason, message}`` shape.
+        """
         app_id = int(app_id)
         try:
             icon_bytes = base64.b64decode(icon_base64)
@@ -479,5 +474,11 @@ class SteamGridService:
             self._logger.error(f"Failed to decode icon base64: {e}")
             return {"success": False, "reason": "invalid_payload", "message": "Failed to decode icon data"}
 
-        success = await self._loop.run_in_executor(None, self._save_icon_to_grid, app_id, icon_bytes)
-        return {"success": success}
+        icon_path = await self._loop.run_in_executor(None, self._save_icon_to_grid, app_id, icon_bytes)
+        if not icon_path:
+            return {
+                "success": False,
+                "reason": "icon_write_failed",
+                "message": "Failed to write icon to Steam grid directory",
+            }
+        return {"success": True, "icon_path": icon_path}

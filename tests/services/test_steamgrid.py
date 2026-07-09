@@ -808,11 +808,27 @@ class TestPruneOrphanedArtworkCache:
         assert orphan in sgdb_artwork_cache.files
 
 
-class TestSaveShortcutIcon:
-    """Tests for VDF-based icon saving (save_shortcut_icon callable)."""
+def _forbidden_vdf(*_args, **_kwargs):
+    """Stand-in for shortcuts.vdf I/O that must never run during an icon save.
 
-    def test_save_icon_to_grid_writes_file(self, plugin, tmp_path):
-        """Icon PNG should be written via the SteamConfigAdapter seam."""
+    Steam owns shortcuts.vdf in memory and clobbers external writes, so the
+    icon-save path only lays down the grid PNG. Wiring this in for
+    ``read_shortcuts`` / ``write_shortcuts`` turns any regression that
+    re-introduces the VDF read-modify-write into a loud failure.
+    """
+    raise AssertionError("shortcuts.vdf must not be read or written during an icon save")
+
+
+class TestSaveShortcutIcon:
+    """Tests for the icon-save path (``_save_icon_to_grid`` / ``save_shortcut_icon``).
+
+    The callable writes the icon PNG into Steam's grid directory and returns
+    its path; pointing the shortcut at that file is the frontend's job via
+    SteamClient, so this path never touches shortcuts.vdf.
+    """
+
+    def test_save_icon_to_grid_writes_file_and_returns_path(self, plugin, tmp_path):
+        """Icon PNG is written via the SteamConfigAdapter seam; its path returned."""
         written: dict[str, bytes] = {}
 
         def fake_write_icon(app_id, icon_bytes):
@@ -821,99 +837,39 @@ class TestSaveShortcutIcon:
             return path
 
         plugin._steam_config.write_shortcut_icon = fake_write_icon  # type: ignore[method-assign]
-        plugin._steam_config.read_shortcuts = lambda: {"shortcuts": {}}  # type: ignore[method-assign]
-        plugin._steam_config.write_shortcuts = lambda data: None  # type: ignore[method-assign]
+        # shortcuts.vdf must not be touched — raise if it is.
+        plugin._steam_config.read_shortcuts = _forbidden_vdf  # type: ignore[method-assign]
+        plugin._steam_config.write_shortcuts = _forbidden_vdf  # type: ignore[method-assign]
 
-        result = plugin._sgdb_service._save_icon_to_grid(12345, b"fake png data")
+        icon_path = plugin._sgdb_service._save_icon_to_grid(12345, b"fake png data")
 
-        assert result is True
-        icon_path = os.path.join(str(tmp_path), "12345_icon.png")
-        assert written[icon_path] == b"fake png data"
-
-    def test_save_icon_to_grid_updates_vdf(self, plugin, tmp_path):
-        """VDF icon field should be updated for the matching shortcut."""
-        from domain.sgdb_artwork import to_signed_app_id
-
-        # app_id 3000000000 -> signed = -1294967296
-        app_id = 3000000000
-        signed_id = to_signed_app_id(app_id)
-
-        def fake_write_icon(a, _b):
-            return os.path.join(str(tmp_path), f"{a}_icon.png")
-
-        written_data = {}
-
-        def mock_read():
-            return {"shortcuts": {"0": {"appid": signed_id, "AppName": "Test"}}}
-
-        def mock_write(data):
-            written_data.update(data)
-
-        plugin._steam_config.write_shortcut_icon = fake_write_icon  # type: ignore[method-assign]
-        plugin._steam_config.read_shortcuts = mock_read  # type: ignore[method-assign]
-        plugin._steam_config.write_shortcuts = mock_write  # type: ignore[method-assign]
-
-        result = plugin._sgdb_service._save_icon_to_grid(app_id, b"icon data")
-
-        assert result is True
-        shortcut = written_data["shortcuts"]["0"]
-        assert shortcut["icon"].endswith(f"{app_id}_icon.png")
+        expected = os.path.join(str(tmp_path), "12345_icon.png")
+        assert icon_path == expected
+        assert written[expected] == b"fake png data"
 
     def test_save_icon_to_grid_no_grid_dir(self, plugin):
-        """Should return False if the grid directory cannot be found."""
+        """No grid directory → ``None`` (icon cannot be written)."""
 
         def raise_missing(_app_id, _bytes):
             raise SteamGridDirMissingError("Cannot find Steam grid directory")
 
         plugin._steam_config.write_shortcut_icon = raise_missing  # type: ignore[method-assign]
 
-        result = plugin._sgdb_service._save_icon_to_grid(12345, b"data")
-        assert result is False
+        assert plugin._sgdb_service._save_icon_to_grid(12345, b"data") is None
 
     def test_save_icon_to_grid_write_failure(self, plugin):
-        """Unexpected write failures should return False without crashing."""
+        """Unexpected write failure → ``None`` without crashing."""
 
         def raise_oserror(_app_id, _bytes):
             raise OSError("disk full")
 
         plugin._steam_config.write_shortcut_icon = raise_oserror  # type: ignore[method-assign]
 
-        result = plugin._sgdb_service._save_icon_to_grid(12345, b"data")
-        assert result is False
-
-    def test_save_icon_to_grid_vdf_mismatch_still_writes_file(self, plugin, tmp_path):
-        """If VDF has no matching shortcut, icon file should still be saved."""
-        written: dict[str, bytes] = {}
-
-        def fake_write_icon(app_id, icon_bytes):
-            path = os.path.join(str(tmp_path), f"{app_id}_icon.png")
-            written[path] = icon_bytes
-            return path
-
-        plugin._steam_config.write_shortcut_icon = fake_write_icon  # type: ignore[method-assign]
-
-        written_data = {}
-
-        def mock_read():
-            return {"shortcuts": {"0": {"appid": 999, "AppName": "Other"}}}
-
-        def mock_write(data):
-            written_data.update(data)
-
-        plugin._steam_config.read_shortcuts = mock_read  # type: ignore[method-assign]
-        plugin._steam_config.write_shortcuts = mock_write  # type: ignore[method-assign]
-
-        result = plugin._sgdb_service._save_icon_to_grid(12345, b"icon data")
-
-        assert result is True
-        icon_path = os.path.join(str(tmp_path), "12345_icon.png")
-        assert written[icon_path] == b"icon data"
-        # VDF was written but icon field not set on any shortcut
-        assert written_data["shortcuts"]["0"].get("icon") is None
+        assert plugin._sgdb_service._save_icon_to_grid(12345, b"data") is None
 
     @pytest.mark.asyncio
-    async def test_save_shortcut_icon_callable(self, plugin, tmp_path):
-        """save_shortcut_icon callable should decode base64 and save."""
+    async def test_save_shortcut_icon_callable_returns_icon_path(self, plugin, tmp_path):
+        """save_shortcut_icon decodes base64, writes the PNG, returns its path."""
         import base64
 
         written: dict[str, bytes] = {}
@@ -924,25 +880,47 @@ class TestSaveShortcutIcon:
             return path
 
         plugin._steam_config.write_shortcut_icon = fake_write_icon  # type: ignore[method-assign]
-        plugin._steam_config.read_shortcuts = lambda: {"shortcuts": {}}  # type: ignore[method-assign]
-        plugin._steam_config.write_shortcuts = lambda data: None  # type: ignore[method-assign]
+        plugin._steam_config.read_shortcuts = _forbidden_vdf  # type: ignore[method-assign]
+        plugin._steam_config.write_shortcuts = _forbidden_vdf  # type: ignore[method-assign]
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
         icon_b64 = base64.b64encode(b"real icon png").decode("ascii")
         result = await plugin.save_shortcut_icon(12345, icon_b64)
 
-        assert result["success"] is True
-        icon_path = os.path.join(str(tmp_path), "12345_icon.png")
-        assert written[icon_path] == b"real icon png"
+        expected = os.path.join(str(tmp_path), "12345_icon.png")
+        assert result == {"success": True, "icon_path": expected}
+        assert written[expected] == b"real icon png"
 
     @pytest.mark.asyncio
     async def test_save_shortcut_icon_invalid_base64(self, plugin):
-        """Invalid base64 should return success=False."""
+        """Invalid base64 → canonical failure shape, no icon_path."""
         plugin._sgdb_service._loop = asyncio.get_event_loop()
 
         result = await plugin.save_shortcut_icon(12345, "not-valid-base64!!!")
 
         assert result["success"] is False
+        assert result["reason"]
+        assert result["message"]
+        assert "icon_path" not in result
+
+    @pytest.mark.asyncio
+    async def test_save_shortcut_icon_write_failure_returns_failure_shape(self, plugin):
+        """A grid-write failure → canonical failure shape, no icon_path."""
+        import base64
+
+        def raise_missing(_app_id, _bytes):
+            raise SteamGridDirMissingError("Cannot find Steam grid directory")
+
+        plugin._steam_config.write_shortcut_icon = raise_missing  # type: ignore[method-assign]
+        plugin._sgdb_service._loop = asyncio.get_event_loop()
+
+        icon_b64 = base64.b64encode(b"real icon png").decode("ascii")
+        result = await plugin.save_shortcut_icon(12345, icon_b64)
+
+        assert result["success"] is False
+        assert result["reason"]
+        assert result["message"]
+        assert "icon_path" not in result
 
 
 class TestDebugLoggerProtocolSeam:
@@ -1303,47 +1281,3 @@ class TestPruneOrphanedArtworkCacheEdgeCases:
 
         # File still present (remove was patched to fail)
         assert tmp_path in sgdb_artwork_cache.files
-
-
-class TestSaveIconVdfFailure:
-    """``_save_icon_to_grid`` VDF-update failure path.
-
-    The icon write is the primary success criterion: if the VDF read or
-    write fails after a successful PNG write, the function logs but
-    still returns True (icon-on-disk is the source of truth; the VDF
-    field is a best-effort optimisation).
-    """
-
-    def test_vdf_read_failure_still_returns_true(self, plugin, tmp_path):
-        """OSError on ``read_shortcuts`` → icon saved, function returns True."""
-
-        def fake_write_icon(app_id, _bytes):
-            return os.path.join(str(tmp_path), f"{app_id}_icon.png")
-
-        def raising_read():
-            raise OSError("vdf corrupted")
-
-        plugin._steam_config.write_shortcut_icon = fake_write_icon  # type: ignore[method-assign]
-        plugin._steam_config.read_shortcuts = raising_read  # type: ignore[method-assign]
-        plugin._steam_config.write_shortcuts = lambda _data: None  # type: ignore[method-assign]
-
-        result = plugin._sgdb_service._save_icon_to_grid(12345, b"icon data")
-
-        assert result is True
-
-    def test_vdf_write_failure_still_returns_true(self, plugin, tmp_path):
-        """OSError on ``write_shortcuts`` → icon saved, function returns True."""
-
-        def fake_write_icon(app_id, _bytes):
-            return os.path.join(str(tmp_path), f"{app_id}_icon.png")
-
-        def raising_write(_data):
-            raise OSError("disk full")
-
-        plugin._steam_config.write_shortcut_icon = fake_write_icon  # type: ignore[method-assign]
-        plugin._steam_config.read_shortcuts = lambda: {"shortcuts": {}}  # type: ignore[method-assign]
-        plugin._steam_config.write_shortcuts = raising_write  # type: ignore[method-assign]
-
-        result = plugin._sgdb_service._save_icon_to_grid(12345, b"icon data")
-
-        assert result is True

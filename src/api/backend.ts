@@ -479,8 +479,11 @@ export const getInstalledRelaunchOptions = callable<[], { app_id: number; launch
   "get_installed_relaunch_options",
 );
 
-// Icon support (VDF-based)
-export const saveShortcutIcon = callable<[number, string], { success: boolean }>("save_shortcut_icon");
+// Icon support — writes the icon PNG into Steam's grid dir and returns its
+// path; the caller points the shortcut at it via SteamClient.Apps.SetShortcutIcon.
+export const saveShortcutIcon = callable<[number, string], { success: boolean; icon_path?: string }>(
+  "save_shortcut_icon",
+);
 
 // Save sync callables
 export const ensureDeviceRegistered = callable<[], { success: boolean; device_id: string; device_name: string }>(
