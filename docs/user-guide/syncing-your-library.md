@@ -34,7 +34,13 @@ collections for platforms the run did not reach.
 
 Before you start, the sync preview shows an **Estimated time** for the run. It is a rough upper bound — it prices every
 game as a brand-new shortcut, so the real run usually finishes sooner, especially a re-sync that only updates a handful
-of games. If you sync without previewing first, the estimate appears once the run starts, shown as "up to ~X min".
+of games. If you sync without previewing first, the same upper bound appears once the run starts, shown as "up to ~X
+min".
+
+Once the sync has been creating shortcuts for a few seconds, the estimate switches from that upper bound to a **live
+countdown** — "~9 min left" — measured from the actual speed on your device and updated as the run proceeds. Because it
+reflects the real work (most re-sync items take the cheap update path, not a full create), the countdown is far closer
+to reality than the initial upper bound, and it ticks down as the run goes.
 
 A few things worth knowing for a large library:
 
@@ -46,6 +52,10 @@ A few things worth knowing for a large library:
   already created are kept, and the next sync picks up where it left off instead of starting over.
 - **Cancelling keeps finished games.** Everything added before you cancel stays in your library; cancelling never
   removes finished games (and never removes Steam collections).
+- **"Last sync" reflects a cancelled or interrupted run too.** The main page's **Last sync** line normally shows when
+  the last full sync finished. If your most recent run was cancelled (or interrupted by a crash) after the last
+  completed one, it shows that attempt instead — e.g. "17:48 (cancelled)" — so a partial run that still added hundreds
+  of games never reads a misleading "Never".
 - **Sleep is safe; keep it powered.** If the Deck sleeps mid-sync the run pauses and resumes on wake — it does not stall
   or lose progress. For a large first sync, plug it in so the battery lasts the whole run.
 

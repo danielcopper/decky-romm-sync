@@ -1,8 +1,10 @@
 """SQLite adapter for the ``SyncRun`` aggregate over the ``sync_runs`` table.
 
 History table — one row per run. ``get_latest_completed`` finds the newest
-``completed`` row; ``get_running`` finds the single in-flight run. The
-platforms_completed/collections_completed columns are nullable JSON arrays.
+``completed`` row; ``get_latest_terminal`` finds the newest row in any terminal
+state (completed/cancelled/errored) by ``finished_at``; ``get_running`` finds the
+single in-flight run. The platforms_completed/collections_completed columns are
+nullable JSON arrays.
 """
 
 from __future__ import annotations
@@ -60,6 +62,16 @@ class SqliteSyncRunRepository(BaseRepository):
     def get_latest_completed(self) -> SyncRun | None:
         row = self._conn.execute(
             f"SELECT {_COLUMNS} FROM sync_runs WHERE status = 'completed' ORDER BY started_at DESC LIMIT 1",
+        ).fetchone()
+        return self._row_to_run(row) if row is not None else None
+
+    def get_latest_terminal(self) -> SyncRun | None:
+        # Only terminal runs carry a finished_at (running runs leave it NULL), so
+        # ordering by finished_at DESC picks the most recently ENDED run of any
+        # terminal status.
+        row = self._conn.execute(
+            f"SELECT {_COLUMNS} FROM sync_runs "
+            f"WHERE status IN ('completed', 'cancelled', 'errored') ORDER BY finished_at DESC LIMIT 1",
         ).fetchone()
         return self._row_to_run(row) if row is not None else None
 

@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from domain.platform_sync_state import PlatformSyncState
+    from domain.sync_run import SyncRun
     from services.library._state import LibrarySyncStateBox
     from services.protocols import (
         ArtworkManager,
@@ -634,26 +635,47 @@ class SyncReporter:
             )
         else:
             enabled_collection_count = 0
-        last_sync, rom_count = self._read_sync_stats_io()
+        last_sync, last_attempt, rom_count = self._read_sync_stats_io()
         return {
             "last_sync": last_sync,
+            "last_attempt": last_attempt,
             "platforms": enabled_platform_count,
             "collections": enabled_collection_count,
             "roms": rom_count,
             "total_shortcuts": rom_count,
         }
 
-    def _read_sync_stats_io(self) -> tuple[str | None, int]:
-        """Read ``(last_sync_iso, bound_rom_count)`` from SQLite.
+    def _read_sync_stats_io(self) -> tuple[str | None, dict[str, str] | None, int]:
+        """Read ``(last_sync_iso, last_attempt, bound_rom_count)`` from SQLite.
 
-        ``last_sync`` is the ``finished_at`` of the latest completed
-        ``SyncRun``; the ROM count is the bound-shortcut count in ``roms``.
+        ``last_sync`` is the ``finished_at`` of the latest completed ``SyncRun``;
+        ``last_attempt`` surfaces the newest cancelled/errored run when it is newer
+        than that (see :meth:`_last_attempt`); the ROM count is the bound-shortcut
+        count in ``roms``.
         """
         with self._uow_factory() as uow:
-            latest = uow.sync_runs.get_latest_completed()
-            last_sync = latest.finished_at if latest is not None else None
+            completed = uow.sync_runs.get_latest_completed()
+            terminal = uow.sync_runs.get_latest_terminal()
             rom_count = sum(1 for rom in uow.roms.iter_all() if rom.shortcut_app_id is not None)
-        return last_sync, rom_count
+        last_sync = completed.finished_at if completed is not None else None
+        return last_sync, self._last_attempt(completed, terminal), rom_count
+
+    @staticmethod
+    def _last_attempt(completed: SyncRun | None, terminal: SyncRun | None) -> dict[str, str] | None:
+        """The newest cancelled/errored run, but only when it is newer than the last completed one.
+
+        A run that ended without completing (cancelled or crash-interrupted) still
+        applied shortcuts; without this the last-completed-only ``last_sync`` read
+        reports "Never" even after thousands of games synced. Returns ``None`` when
+        the newest terminal run completed cleanly (``last_sync`` already covers it)
+        or when a completed run is at least as recent as the attempt. ``finished_at``
+        is guaranteed set on a terminal run (mark_cancelled/mark_errored stamp it).
+        """
+        if terminal is None or terminal.status == "completed":
+            return None
+        if completed is not None and (terminal.finished_at or "") <= (completed.finished_at or ""):
+            return None
+        return {"finished_at": terminal.finished_at or "", "status": terminal.status}
 
     def get_rom_by_steam_app_id(self, app_id):
         return self._read_rom_by_app_id_io(int(app_id))

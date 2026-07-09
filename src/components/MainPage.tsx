@@ -31,6 +31,7 @@ import {
 } from "../api/backend";
 import { formatBytes } from "../utils/formatters";
 import { estimateApplySeconds, formatDuration } from "../utils/syncEstimate";
+import { observeApplyProgress, liveEtaSeconds, resetEta, formatEtaCountdown } from "../utils/syncEta";
 import { getSyncProgress, setSyncProgress as setStoredSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getDownloadState } from "../utils/downloadStore";
@@ -169,6 +170,15 @@ function formatLastSync(iso: string | null): string {
   }
 }
 
+/** Wall-clock ``HH:MM`` for the "last attempt" hint; the raw ISO on a bad parse. */
+function formatClockTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
 function formatPreviewDescription(s: SyncPreviewSummary): string {
   const sections: string[] = [];
   const romChanges = formatChanges([
@@ -207,6 +217,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // sync_in_progress reject and look like an instant finish (#1202, RC-B).
   const [cancelling, setCancelling] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
+  // Live apply-rate countdown (seconds), or null before the rate is measured (or
+  // between runs). Derived from the syncEta estimator on each progress frame;
+  // null falls the UI back to the static "up to ~X" seed carried on the store.
+  const [liveEta, setLiveEta] = useState<number | null>(null);
   const [status, setStatus] = useState("");
   const [preview, setPreview] = useState<SyncPreview | null>(null);
   const [skipPreview, setSkipPreview] = useState(false);
@@ -358,6 +372,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       const progress = getSyncProgress();
       setSyncProgress(progress);
       if (isTerminalStage(progress.stage)) {
+        // Tear down the run's live-ETA state so the next run measures fresh.
+        resetEta();
+        setLiveEta(null);
         setSyncing(false);
         setLoading(false);
         // True terminal reached — re-arm the button out of any "Cancelling…"
@@ -367,6 +384,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         getSyncStats()
           .then(setStats)
           .catch((e) => logError(`Failed to refresh sync stats: ${e}`));
+      } else {
+        // Feed the live-rate estimator from applying frames only (fetch frames
+        // carry page/cover counters, not item progress), then re-derive the
+        // countdown. liveEtaSeconds() stays null until the rate is measured, so
+        // the UI holds the static "up to ~X" seed until then.
+        if (progress.stage === "applying" && progress.step !== undefined && progress.current !== undefined) {
+          observeApplyProgress(progress.step, progress.current, Date.now());
+        }
+        setLiveEta(liveEtaSeconds());
       }
     });
 
@@ -557,6 +583,18 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     : undefined;
   const hasFineDetail = !!(syncProgress?.total && syncProgress.message);
 
+  // Estimated-time readout for the in-flight run. Prefer the live measured
+  // countdown ("~9 min left") once the estimator has a rate; before that, fall
+  // back to the static seed carried on the store as an upper bound ("up to
+  // ~X min"). Absent both, the row is omitted (honest silence).
+  const staticEtaSeconds = syncProgress?.etaSeconds;
+  const etaText =
+    liveEta !== null
+      ? formatEtaCountdown(liveEta)
+      : staticEtaSeconds !== undefined
+        ? `up to ${formatDuration(staticEtaSeconds)}`
+        : null;
+
   const activeDownloads = downloads.filter((d) => d.status === "queued" || d.status === "downloading");
   const completedDownloads = downloads.filter(
     (d) => d.status === "completed" || d.status === "failed" || d.status === "cancelled",
@@ -706,11 +744,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             />
           </PanelSectionRow>
         )}
-        {syncProgress?.etaSeconds !== undefined && (
+        {etaText !== null && (
           <PanelSectionRow>
             <Field label="Estimated time">
               <span data-testid="estimate-time" style={{ fontSize: "12px" }}>
-                up to {formatDuration(syncProgress.etaSeconds)}
+                {etaText}
               </span>
             </Field>
           </PanelSectionRow>
@@ -812,7 +850,29 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           <>
             <PanelSectionRow>
               <Field label="Last sync">
-                <span style={{ fontSize: "12px" }}>{formatLastSync(stats.last_sync)}</span>
+                {stats.last_sync ? (
+                  // A completed run exists. Show its relative time; when a newer
+                  // run ended without completing (cancelled/crashed), the backend
+                  // surfaces it as last_attempt — add a subtle second line so the
+                  // "Last sync" time isn't mistaken for the most recent activity.
+                  <span style={{ fontSize: "12px", display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+                    <span>{formatLastSync(stats.last_sync)}</span>
+                    {stats.last_attempt && (
+                      <span style={{ opacity: 0.6 }}>
+                        last attempt: {formatClockTime(stats.last_attempt.finished_at)} ({stats.last_attempt.status})
+                      </span>
+                    )}
+                  </span>
+                ) : stats.last_attempt ? (
+                  // No completed run ever, but a cancelled/crashed run left rows
+                  // behind — surface the attempt so it never reads a bare "Never"
+                  // after thousands of games were synced (#1367-class report).
+                  <span style={{ fontSize: "12px" }}>
+                    {formatClockTime(stats.last_attempt.finished_at)} ({stats.last_attempt.status})
+                  </span>
+                ) : (
+                  <span style={{ fontSize: "12px" }}>Never</span>
+                )}
               </Field>
             </PanelSectionRow>
             {stats.roms > 0 && (

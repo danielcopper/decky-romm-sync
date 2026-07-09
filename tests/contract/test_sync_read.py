@@ -57,12 +57,27 @@ async def test_sync_heartbeat_shape(harness):
 
 
 async def test_get_sync_stats_shape(harness):
-    """Stats dict: every count key present and an int; last_sync None when never synced."""
+    """Stats dict: every count key present and an int; last_sync + last_attempt None when never synced."""
     result = await harness.plugin.get_sync_stats()
-    assert set(result.keys()) == {"last_sync", "platforms", "collections", "roms", "total_shortcuts"}
+    assert set(result.keys()) == {"last_sync", "last_attempt", "platforms", "collections", "roms", "total_shortcuts"}
     assert result["last_sync"] is None
+    assert result["last_attempt"] is None
     for key in ("platforms", "collections", "roms", "total_shortcuts"):
         assert isinstance(result[key], int)
+
+
+async def test_get_sync_stats_surfaces_cancelled_attempt(harness):
+    """A cancelled run with no completed run → last_sync None, last_attempt carries finished_at + status."""
+    from domain.sync_run import SyncRun
+
+    run = SyncRun.start(id="run-c", at="2025-06-01T17:00:00", platforms_planned=1, roms_planned=1)
+    run.mark_cancelled("2025-06-01T17:48:00", "Sync cancelled")
+    with harness.uow_factory() as uow:
+        uow.sync_runs.save(run)
+
+    result = await harness.plugin.get_sync_stats()
+    assert result["last_sync"] is None
+    assert result["last_attempt"] == {"finished_at": "2025-06-01T17:48:00", "status": "cancelled"}
 
 
 async def test_get_sync_stats_counts_bound_roms(harness):

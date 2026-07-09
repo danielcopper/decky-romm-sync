@@ -10,6 +10,7 @@ import { DownloadQueue } from "./components/DownloadQueue";
 import { initUnitSyncManager, resetSyncCancel } from "./utils/syncManager";
 import { setSyncProgress, getSyncProgress, updateSyncProgress } from "./utils/syncProgress";
 import { NEW_ITEM_SEC } from "./utils/syncEstimate";
+import { beginEtaRun } from "./utils/syncEta";
 import { updateDownload, getDownloadState } from "./utils/downloadStore";
 import { handleGlobalDownloadFailure } from "./utils/downloadFailure";
 import { registerGameDetailPatch, unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
@@ -467,8 +468,18 @@ export default definePlugin(() => {
     // planned ROM as a new shortcut. Incremental runs skip unchanged units and
     // update-path items are cheaper, so the real duration only ever undershoots.
     // Merged (not replaced) so the running/stage the click set survives, and the
-    // sync_progress listener below preserves it across backend frames.
+    // sync_progress listener below preserves it across backend frames. Shown as
+    // "up to ~X min" only until the live rate estimator (below) has measured the
+    // real apply speed, which then replaces it with a "~X min left" countdown.
     updateSyncProgress({ etaSeconds: data.total_roms * NEW_ITEM_SEC });
+    // Begin the run-scoped live-ETA estimator with the plan's per-unit weights
+    // (rom_count in plan order) and total. MainPage samples the applying stage
+    // against this to derive the countdown; a fresh plan resets any prior slope.
+    beginEtaRun(
+      data.run_id,
+      data.units.map((u) => u.rom_count),
+      data.total_roms,
+    );
     logInfo(`sync_plan received: ${data.total_units} units, ${data.total_roms} ROMs total`);
   });
 

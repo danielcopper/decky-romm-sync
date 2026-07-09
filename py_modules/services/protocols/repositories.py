@@ -294,6 +294,15 @@ class SyncRunRepository(Protocol):
         """Return the newest run with status ``completed``, or ``None``. (library/reporter.py last_sync read)"""
         ...
 
+    def get_latest_terminal(self) -> SyncRun | None:
+        """Return the newest run in a terminal state (``completed`` / ``cancelled`` / ``errored``), or ``None``.
+
+        Ordered by ``finished_at``. Backs the "Last sync" last-attempt hint: when
+        the newest terminal run did NOT complete, it is surfaced so a cancelled or
+        crash-resumed run reads as an attempt instead of "Never". (library/reporter.py)
+        """
+        ...
+
     def get_running(self) -> SyncRun | None:
         """Return any run with status ``running``, or ``None`` (is-a-sync-running check)."""
         ...

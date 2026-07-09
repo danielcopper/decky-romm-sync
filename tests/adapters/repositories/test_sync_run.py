@@ -75,6 +75,42 @@ class TestGetLatestCompleted:
         assert uow.sync_runs.get_latest_completed() is None
 
 
+class TestGetLatestTerminal:
+    def test_returns_newest_terminal_by_finished_at(self, uow: SqliteUnitOfWork):
+        # A completed run finished earlier, a cancelled run finished later.
+        completed = _running("done", started_at="2026-01-01T00:00:00Z")
+        completed.complete(at="2026-01-01T02:00:00Z", platforms=[], collections=[])
+        cancelled = _running("cancel", started_at="2026-01-02T00:00:00Z")
+        cancelled.mark_cancelled(at="2026-01-02T02:00:00Z", reason="user")
+        uow.sync_runs.save(completed)
+        uow.sync_runs.save(cancelled)
+
+        latest = uow.sync_runs.get_latest_terminal()
+        assert latest is not None
+        assert latest.id == "cancel"
+        assert latest.status == "cancelled"
+
+    def test_returns_completed_when_it_is_the_newest_terminal(self, uow: SqliteUnitOfWork):
+        cancelled = _running("cancel", started_at="2026-01-01T00:00:00Z")
+        cancelled.mark_cancelled(at="2026-01-01T02:00:00Z", reason="user")
+        completed = _running("done", started_at="2026-01-02T00:00:00Z")
+        completed.complete(at="2026-01-02T02:00:00Z", platforms=[], collections=[])
+        uow.sync_runs.save(cancelled)
+        uow.sync_runs.save(completed)
+
+        latest = uow.sync_runs.get_latest_terminal()
+        assert latest is not None
+        assert latest.id == "done"
+        assert latest.status == "completed"
+
+    def test_ignores_running_runs(self, uow: SqliteUnitOfWork):
+        uow.sync_runs.save(_running("running-1"))
+        assert uow.sync_runs.get_latest_terminal() is None
+
+    def test_returns_none_when_no_runs(self, uow: SqliteUnitOfWork):
+        assert uow.sync_runs.get_latest_terminal() is None
+
+
 class TestGetRunning:
     def test_returns_the_running_run(self, uow: SqliteUnitOfWork):
         completed = _running("done")

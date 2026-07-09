@@ -312,6 +312,23 @@ class TestFakeSyncRunRepository:
         assert run is not None
         assert run.id == "r1"
 
+    def test_latest_terminal_picks_newest_of_any_terminal_status_by_finished_at(self):
+        repo = FakeSyncRunRepository()
+        assert repo.get_latest_terminal() is None
+        # A running run never counts (no finished_at).
+        repo.save(SyncRun.start(id="r1", at="2026-01-01T00:00:00Z", platforms_planned=1, roms_planned=1))
+        completed = SyncRun.start(id="c1", at="2026-01-01T00:00:00Z", platforms_planned=1, roms_planned=1)
+        completed.complete(at="2026-01-01T01:00:00Z", platforms=[], collections=[])
+        cancelled = SyncRun.start(id="x1", at="2026-02-01T00:00:00Z", platforms_planned=1, roms_planned=1)
+        cancelled.mark_cancelled(at="2026-02-01T01:00:00Z", reason="user")
+        repo.save(completed)
+        repo.save(cancelled)
+
+        latest = repo.get_latest_terminal()
+        assert latest is not None
+        assert latest.id == "x1"
+        assert latest.status == "cancelled"
+
 
 class TestFakePlatformSyncStateRepository:
     def test_round_trip_upsert_clear(self):

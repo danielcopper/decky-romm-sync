@@ -58,6 +58,14 @@ export interface SyncProgress {
 
 export interface SyncStats {
   last_sync: string | null;
+  /**
+   * The latest run that ended in a terminal state OTHER than completed
+   * (cancelled / errored), surfaced only when it is newer than ``last_sync`` —
+   * so a cancelled or crash-resumed run reads as "17:48 (cancelled)" instead of
+   * "Never" after thousands of shortcuts were applied. ``null`` (or absent) when
+   * the most recent terminal run completed cleanly.
+   */
+  last_attempt?: { finished_at: string; status: "cancelled" | "errored" } | null;
   platforms: number;
   collections?: number;
   roms: number;

@@ -79,6 +79,8 @@ class TestGetSyncStats:
         assert stats["roms"] == 3
         assert stats["total_shortcuts"] == 3
         assert stats["last_sync"] == "2025-01-01T00:00:00"
+        # Only a completed run exists — no separate attempt to surface.
+        assert stats["last_attempt"] is None
 
     @pytest.mark.asyncio
     async def test_empty_registry(self, plugin):
@@ -87,6 +89,7 @@ class TestGetSyncStats:
         assert stats["roms"] == 0
         assert stats["total_shortcuts"] == 0
         assert stats["last_sync"] is None
+        assert stats["last_attempt"] is None
 
     @pytest.mark.asyncio
     async def test_excludes_unbound_roms_from_count(self, plugin):
@@ -115,6 +118,77 @@ class TestGetSyncStats:
         with uow:
             assert uow.roms.get(10).shortcut_app_id is None
             assert uow.roms.get(20).shortcut_app_id is None
+
+
+class TestGetSyncStatsLastAttempt:
+    """last_attempt — surface a cancelled/crashed run so 'Last sync' isn't 'Never' (#1367-class)."""
+
+    @staticmethod
+    def _cancelled(uow, *, id, started, finished, reason="Sync cancelled"):
+        from domain.sync_run import SyncRun
+
+        run = SyncRun.start(id=id, at=started, platforms_planned=1, roms_planned=1)
+        run.mark_cancelled(finished, reason)
+        with uow:
+            uow.sync_runs.save(run)
+
+    @staticmethod
+    def _completed(uow, *, id, started, finished):
+        from domain.sync_run import SyncRun
+
+        run = SyncRun.start(id=id, at=started, platforms_planned=1, roms_planned=1)
+        run.complete(finished, ["N64"], [])
+        with uow:
+            uow.sync_runs.save(run)
+
+    @pytest.mark.asyncio
+    async def test_no_runs_reports_no_attempt(self, plugin):
+        stats = await plugin.get_sync_stats()
+        assert stats["last_sync"] is None
+        assert stats["last_attempt"] is None
+
+    @pytest.mark.asyncio
+    async def test_only_cancelled_run_surfaces_attempt(self, plugin):
+        """A cancelled run with no completed run ever → last_sync None, last_attempt set."""
+        self._cancelled(plugin._uow, id="run-c", started="2025-06-01T17:00:00", finished="2025-06-01T17:48:00")
+
+        stats = await plugin.get_sync_stats()
+        assert stats["last_sync"] is None
+        assert stats["last_attempt"] == {"finished_at": "2025-06-01T17:48:00", "status": "cancelled"}
+
+    @pytest.mark.asyncio
+    async def test_errored_run_surfaces_attempt_with_errored_status(self, plugin):
+        run_uow = plugin._uow
+        from domain.sync_run import SyncRun
+
+        run = SyncRun.start(id="run-e", at="2025-06-01T10:00:00", platforms_planned=1, roms_planned=1)
+        run.mark_errored("2025-06-01T10:05:00", "boom")
+        with run_uow:
+            run_uow.sync_runs.save(run)
+
+        stats = await plugin.get_sync_stats()
+        assert stats["last_sync"] is None
+        assert stats["last_attempt"] == {"finished_at": "2025-06-01T10:05:00", "status": "errored"}
+
+    @pytest.mark.asyncio
+    async def test_cancelled_newer_than_completed_surfaces_attempt(self, plugin):
+        """A cancelled run newer than the last completed one → both surface."""
+        self._completed(plugin._uow, id="run-ok", started="2025-06-01T09:00:00", finished="2025-06-01T09:30:00")
+        self._cancelled(plugin._uow, id="run-c", started="2025-06-02T08:00:00", finished="2025-06-02T08:20:00")
+
+        stats = await plugin.get_sync_stats()
+        assert stats["last_sync"] == "2025-06-01T09:30:00"
+        assert stats["last_attempt"] == {"finished_at": "2025-06-02T08:20:00", "status": "cancelled"}
+
+    @pytest.mark.asyncio
+    async def test_completed_newer_than_cancelled_hides_attempt(self, plugin):
+        """A clean run after a cancelled one → last_sync only, no stale attempt line."""
+        self._cancelled(plugin._uow, id="run-c", started="2025-06-01T08:00:00", finished="2025-06-01T08:20:00")
+        self._completed(plugin._uow, id="run-ok", started="2025-06-02T09:00:00", finished="2025-06-02T09:30:00")
+
+        stats = await plugin.get_sync_stats()
+        assert stats["last_sync"] == "2025-06-02T09:30:00"
+        assert stats["last_attempt"] is None
 
 
 class TestGetRegistryPlatforms:
