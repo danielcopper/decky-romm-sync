@@ -1,13 +1,6 @@
 import { addEventListener } from "@decky/api";
 import type { SyncAddItem, SyncApplyUnitData } from "../types";
-import {
-  getArtworkBase64,
-  reconcileShortcuts,
-  reportUnitResults,
-  syncHeartbeat,
-  logInfo,
-  logError,
-} from "../api/backend";
+import { reconcileShortcuts, reportUnitResults, syncHeartbeat, logInfo, logError } from "../api/backend";
 import {
   getExistingRomMShortcuts,
   getLiveRomMShortcutAppIds,
@@ -20,13 +13,6 @@ import { registerRomMAppId } from "../patches/gameDetailPatch";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const HEARTBEAT_INTERVAL_MS = 10_000;
-const ART_CONCURRENCY = 8;
-
-interface ArtworkTarget {
-  appId: number;
-  romId: number;
-  name: string;
-}
 
 let _cancelRequested = false;
 let _isUnitRunning = false;
@@ -102,17 +88,22 @@ async function resolveShortcutAppId(item: SyncAddItem, existing: Map<number, num
 
 /**
  * Process every shortcut for one apply chunk at the CEF-safe 50ms cadence,
- * recording the rom_id→appId mapping and the artwork targets for the
- * follow-up artwork phase. Progress is unit-wide — ``chunk_offset`` carries the
- * count from prior chunks so the QAM bar advances continuously across a unit's
- * chunks against ``unit_total``. Heartbeats are emitted every 10s. The loop
- * exits early on cancel.
+ * recording the rom_id→appId mapping. Progress is unit-wide — ``chunk_offset``
+ * carries the count from prior chunks so the QAM bar advances continuously
+ * across a unit's chunks against ``unit_total``. Heartbeats are emitted every
+ * 10s. The loop exits early on cancel.
+ *
+ * Cover artwork is NOT applied here: the backend already writes each cover to
+ * the Steam grid dir as ``{app_id}p.png`` at commit (reporter._finalize_cover_path),
+ * and Steam loads that file lazily for visible entries only. Pushing every
+ * cover through ``SetCustomArtworkForApp`` during sync forced Steam to decode
+ * and cache all covers resident at once, overflowing the CEF heap on large
+ * libraries (the #797 steamwebhelper SIGTRAP).
  */
 async function processUnitShortcuts(
   data: SyncApplyUnitData,
   existing: Map<number, number>,
   romIdToAppId: Record<string, number>,
-  artworkTargets: ArtworkTarget[],
 ): Promise<void> {
   let lastHeartbeat = Date.now();
   for (const [i, item] of data.shortcuts.entries()) {
@@ -133,11 +124,6 @@ async function processUnitShortcuts(
         // reach platform_app_ids at all (#1205). Idempotent (Set.add); covers
         // created, updated, and rebind entries alike.
         registerRomMAppId(appId);
-        // Artwork follows the BINDING target: on a rebind entry the shortcut is
-        // keyed to the vanished sibling (item.rom_id) but the backend finalizes
-        // the REPRESENTATIVE's cover (bind_rom_id), and covers can be
-        // language-/edition-specific — so fetch the representative's art (ADR-0021).
-        artworkTargets.push({ appId, romId: item.bind_rom_id ?? item.rom_id, name: item.name });
       }
     } catch (e) {
       logError(`Per-unit: failed to process shortcut for rom ${item.rom_id}: ${e}`);
@@ -151,39 +137,6 @@ async function processUnitShortcuts(
     if (isCancelRequested()) {
       logInfo(`Per-unit cancel observed during ${data.unit_name}`);
       break;
-    }
-  }
-}
-
-/**
- * Fetch and apply cover artwork for a single target. Swallows per-target
- * errors so one failure doesn't take down the batch.
- */
-async function applyArtworkForTarget({ appId, romId, name }: ArtworkTarget): Promise<void> {
-  try {
-    const artResult = await getArtworkBase64(romId);
-    if (artResult.base64) {
-      await SteamClient.Apps.SetCustomArtworkForApp(appId, artResult.base64, "png", 0);
-    }
-  } catch (artErr) {
-    logError(`Per-unit: failed to fetch/set artwork for ${name}: ${artErr}`);
-  }
-}
-
-/**
- * Fetch artwork for every target in batches of ``ART_CONCURRENCY``, with
- * heartbeats between batches. Exits early on cancel.
- */
-async function processUnitArtwork(artworkTargets: ArtworkTarget[]): Promise<void> {
-  if (artworkTargets.length === 0) return;
-  let lastHeartbeat = Date.now();
-  for (let i = 0; i < artworkTargets.length; i += ART_CONCURRENCY) {
-    if (isCancelRequested()) break;
-    const batch = artworkTargets.slice(i, i + ART_CONCURRENCY);
-    await Promise.all(batch.map(applyArtworkForTarget));
-    if (Date.now() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
-      syncHeartbeat().catch(() => {});
-      lastHeartbeat = Date.now();
     }
   }
 }
@@ -244,8 +197,9 @@ export async function reconcileStaleShortcuts(): Promise<void> {
  * Initialize the per-unit pipeline handler. Listens for ``sync_apply_unit``
  * events, processes each unit's shortcuts at the CEF-safe 50ms cadence, and
  * reports back via ``reportUnitResults`` so the backend can advance the
- * work queue. Artwork still goes through the existing base64 round-trip —
- * the artwork-rename optimisation is deferred until hardware verification.
+ * work queue. Covers are not applied here — the backend writes each
+ * ``{app_id}p.png`` grid file at commit and Steam picks it up lazily (see
+ * {@link processUnitShortcuts}).
  */
 export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
   return addEventListener("sync_apply_unit", async (data: SyncApplyUnitData) => {
@@ -262,7 +216,6 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
 
       _cancelRequested = false;
       const romIdToAppId: Record<string, number> = {};
-      const artworkTargets: ArtworkTarget[] = [];
 
       const total = data.shortcuts.length;
       logInfo(
@@ -284,11 +237,7 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
       });
 
       const existing = await resolveExistingShortcuts(data.run_id);
-      await processUnitShortcuts(data, existing, romIdToAppId, artworkTargets);
-
-      // Artwork — keep existing base64 path; per-chunk-sized batch keeps the
-      // payload comfortably under the decky.emit WebSocket size ceiling.
-      await processUnitArtwork(artworkTargets);
+      await processUnitShortcuts(data, existing, romIdToAppId);
 
       // Do NOT ack a cancelled unit: the backend has already discarded this
       // run's in-flight state, so a post-cancel ack only risks being credited

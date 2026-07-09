@@ -135,13 +135,12 @@ describe("syncManager — group-aware emit: one Steam shortcut per game (ADR-002
     };
   }
 
-  it("reuses the existing shortcut for a rebind entry and fetches the representative's artwork", async () => {
+  it("reuses the existing shortcut for a rebind entry without applying cover artwork", async () => {
     // The backend collapsed a rebinding group to ONE entry keyed to the vanished
     // bound sibling's rom_id (already in Steam as appId 5000), naming the
     // representative in bind_rom_id. The frontend reuses that shortcut.
     getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>([[1, 5000]]));
     vi.mocked(backend.getArtworkBase64).mockClear();
-    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "ZGF0YQ==" });
     const jpCmd = 'flatpak run net.retrodeck.retrodeck "/games/zelda_jp.z64"';
     const data: SyncApplyUnitData = {
       run_id: "run-rebind",
@@ -168,12 +167,11 @@ describe("syncManager — group-aware emit: one Steam shortcut per game (ADR-002
     expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(5000, jpCmd);
     expect(addShortcut).not.toHaveBeenCalled();
     expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "1": 5000 }, "run-rebind", 1, 0);
-    // Artwork follows the BINDING target (representative rom 2), NOT the vanished
-    // sibling (rom 1) the shortcut is keyed to — covers can be edition-specific.
-    expect(vi.mocked(backend.getArtworkBase64)).toHaveBeenCalledWith(2);
-    expect(vi.mocked(backend.getArtworkBase64)).not.toHaveBeenCalledWith(1);
-    // And the fetched art was applied to the reused shortcut's appId.
-    expect(SteamClient.Apps.SetCustomArtworkForApp).toHaveBeenCalledWith(5000, "ZGF0YQ==", "png", 0);
+    // Covers are NOT pushed through CEF during sync — the backend writes each
+    // {app_id}p.png grid file at commit and Steam loads it lazily. Applying every
+    // cover here overflowed the CEF heap on large libraries (#797 / Option A).
+    expect(vi.mocked(backend.getArtworkBase64)).not.toHaveBeenCalled();
+    expect(SteamClient.Apps.SetCustomArtworkForApp).not.toHaveBeenCalled();
   });
 
   it("creates exactly one shortcut per group — a collapsed multi-version game never fans out", async () => {
@@ -224,8 +222,6 @@ describe("syncManager — registers resolved appIds as RomM-owned at ack time (#
     addShortcut.mockReset();
     getExistingRomMShortcuts.mockReset();
     registerRomMAppId.mockClear();
-    vi.mocked(backend.getArtworkBase64).mockReset();
-    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "ZGF0YQ==" });
     resetSyncDelta();
     resetSyncCancel();
     // The global SteamClient stub is torn down by test-setup after the file's
@@ -505,8 +501,6 @@ describe("syncManager — chunked apply (#1025)", () => {
       ]),
     );
     vi.mocked(backend.reportUnitResults).mockClear();
-    vi.mocked(backend.getArtworkBase64).mockReset();
-    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "" });
     vi.stubGlobal("SteamClient", {
       Apps: {
         AddShortcut: vi.fn(),
