@@ -38,6 +38,7 @@ from domain.shortcut_data import EmulatorInvocation
 from domain.sync_diff import BIND_ROM_ID_KEY
 from domain.sync_state import SyncState
 from domain.work_unit import WorkUnit
+from lib.romm_paging import LIST_PAGE_SIZE
 
 # conftest.py patches decky before this import
 
@@ -3005,7 +3006,7 @@ class TestSyncOneUnitCollectionAndCancel:
 
         orig_list_roms = fake_romm_api.list_roms
 
-        def list_roms_then_cancel(platform_id, limit=50, offset=0):
+        def list_roms_then_cancel(platform_id, limit=LIST_PAGE_SIZE, offset=0):
             page = orig_list_roms(platform_id, limit=limit, offset=offset)
             plugin._sync_service._box.sync_state = SyncState.CANCELLING
             return page

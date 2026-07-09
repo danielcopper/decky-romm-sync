@@ -346,12 +346,18 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         // Same live run: spread the store (keeping its fine fields + etaSeconds)
         // and overlay the backend's authoritative running/stage/runId. The
         // conditional spreads keep the optional stage/runId out when the backend
-        // omits them (exactOptionalPropertyTypes). Otherwise replace wholesale.
+        // omits them (exactOptionalPropertyTypes). One exception: "applying" is
+        // frontend-authoritative (the backend never emits it — its last frame is
+        // the fetch anchor), so a stored applying stage survives the seed; taking
+        // the backend's stale "fetching" would drop the coarse-bar interpolation
+        // and flip the label until the next per-item update. Otherwise replace
+        // wholesale.
+        const backendStage = stored.stage === "applying" ? undefined : backendProgress.stage;
         const progress: SyncProgress = isSameLiveRun
           ? {
               ...stored,
               running: backendProgress.running,
-              ...(backendProgress.stage !== undefined ? { stage: backendProgress.stage } : {}),
+              ...(backendStage !== undefined ? { stage: backendStage } : {}),
               ...(backendProgress.runId !== undefined ? { runId: backendProgress.runId } : {}),
             }
           : backendProgress;

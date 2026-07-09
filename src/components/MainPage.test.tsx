@@ -1207,6 +1207,40 @@ describe("MainPage", () => {
       expect(container.querySelector('[data-testid="estimate-time"]')?.textContent).toContain("up to");
     });
 
+    it("keeps the store's applying stage when the backend's snapshot is still the fetch anchor", async () => {
+      // The backend never emits an "applying" frame (its last emit is the fetch
+      // anchor), so a remount mid-apply must not let the stale "fetching" stage
+      // drop the coarse-bar interpolation or flip the label.
+      setSyncProgress({
+        running: true,
+        stage: "applying",
+        current: 1200,
+        total: 3084,
+        message: "PSX: 1200/3084",
+        step: 2,
+        totalSteps: 8,
+        runId: "run-live",
+      });
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "fetching",
+        current: 0,
+        total: 0,
+        message: "Fetching PSX",
+        step: 2,
+        totalSteps: 8,
+        runId: "run-live",
+      });
+
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+
+      expect(container.querySelector('[data-testid="sync-stage"]')?.textContent).toContain("Applying shortcuts");
+      // Interpolation stays live: (1 + 1200/3084) / 8, not the 12.5% unit floor.
+      const nProgress = Number(container.querySelector('[data-testid="progress-progress"]')?.textContent);
+      expect(nProgress).toBeCloseTo(((1 + 1200 / 3084) / 8) * 100, 5);
+    });
+
     it("replaces (drops stale fine fields + ETA) when the backend reports a different run", async () => {
       setSyncProgress({
         running: true,
