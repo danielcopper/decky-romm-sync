@@ -237,16 +237,32 @@ class TestGetVersionList:
         assert by_id[1]["switchable"] is True
         assert by_id[2]["switchable"] is True
 
-    def test_genuine_server_only_sibling_is_switchable(self, event_loop, service, uow, romm):
-        # A RomM sibling with no local row yet — selecting it persists one, so it
-        # is switchable (and marked not synced).
-        _seed_rom(uow, rom_id=1, app_id=_APP_ID, regions=("USA",))
+    def test_never_synced_sibling_matching_key_is_switchable(self, event_loop, service, uow, romm):
+        # A RomM sibling with no local row yet whose WOULD-BE key (derived from its
+        # server metadata) matches the bound group — selecting it persists a row
+        # that joins the group, so it is switchable (and marked not synced, #1360).
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID, group_key=_GROUP, regions=("USA",))
         romm.roms[1] = {"id": 1, "sibling_roms": [{"id": 5, "name": "Game (Japan)"}]}
+        romm.roms[5] = {"id": 5, "platform_id": 57, "igdb_id": 100, "name": "Game (Japan)"}
 
         result = _run(event_loop, service.get_version_list(_APP_ID))
         by_id = {v["rom_id"]: v for v in result["versions"]}
         assert by_id[5]["synced"] is False
         assert by_id[5]["switchable"] is True
+
+    def test_never_synced_bridged_sibling_different_key_not_switchable(self, event_loop, service, uow, romm):
+        # #1360: a never-synced RomM sibling whose would-be key lands it in its OWN
+        # group (shares only a lower-priority id — igdb differs) is LISTED but not
+        # switchable; a switch would bind the shortcut cross-group.
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID, group_key=_GROUP, regions=("USA",))
+        romm.roms[1] = {"id": 1, "sibling_roms": [{"id": 5, "name": "Lara"}]}
+        romm.roms[5] = {"id": 5, "platform_id": 57, "igdb_id": 999, "ss_id": 22, "name": "Lara"}
+
+        result = _run(event_loop, service.get_version_list(_APP_ID))
+        by_id = {v["rom_id"]: v for v in result["versions"]}
+        assert set(by_id) == {1, 5}  # the bridged sibling is still LISTED
+        assert by_id[5]["synced"] is False
+        assert by_id[5]["switchable"] is False
 
     def test_cross_group_local_sibling_is_not_switchable(self, event_loop, service, uow, romm):
         # #1359: RomM's sibling_roms bridges two local groups (a shared lower-
@@ -284,6 +300,32 @@ class TestGetVersionList:
         # ...and the switchable in-group target is NOT rejected as not_in_group.
         in_group = _run(event_loop, service.switch_version(_APP_ID, 2, True))
         assert in_group.get("reason") != "not_in_group"
+
+    def test_switchable_flag_agrees_with_switch_version_server_only(self, event_loop, service, uow, romm):
+        # Single-authority property for NEVER-SYNCED siblings (#1360): the picker's
+        # switchable flag predicts EXACTLY whether switch_version accepts the target
+        # — both derive the target's would-be key and compare it to the bound group.
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID, group_key=_GROUP)  # bound, igdb:100:57
+        romm.roms[1] = {"id": 1, "sibling_roms": [{"id": 5, "name": "in"}, {"id": 6, "name": "out"}]}
+        # rom 5: would-be key matches the bound group. rom 6: bridged, differs.
+        romm.roms[5] = {"id": 5, "platform_id": 57, "igdb_id": 100, "platform_slug": "snes", "fs_name": "in.sfc"}
+        romm.roms[6] = {"id": 6, "platform_id": 57, "igdb_id": 999, "ss_id": 22, "platform_slug": "snes"}
+
+        by_id = {v["rom_id"]: v for v in _run(event_loop, service.get_version_list(_APP_ID))["versions"]}
+        assert by_id[5]["switchable"] is True
+        assert by_id[6]["switchable"] is False
+
+        # The bridged (non-switchable) server-only target IS rejected by the switch...
+        rejected = _run(event_loop, service.switch_version(_APP_ID, 6, True))
+        assert rejected["success"] is False
+        assert rejected["reason"] == "not_in_group"
+        # ...and the matching server-only target is accepted (persisted + bound).
+        accepted = _run(event_loop, service.switch_version(_APP_ID, 5, True))
+        assert accepted["success"] is True
+        assert accepted["rom_id"] == 5
+        with uow as u:
+            assert u.roms.get(5).sibling_group_key == _GROUP
+            assert u.roms.get(5).shortcut_app_id == _APP_ID
 
     def test_cross_group_sibling_excluded_from_default(self, event_loop, service, uow, romm):
         # A cross-group RomM sibling that WOULD rank as the default (is_main_sibling
@@ -606,12 +648,18 @@ class TestSwitchVersion:
         assert "error" not in result
 
     def test_server_target_unbuildable_is_invalid_target(self, event_loop, service, uow, romm):
-        # The server detail IS a sibling (its sibling_roms points back at the bound
-        # rom) but carries an id the Rom aggregate rejects (<= 0), so Rom.synced
-        # raises and the switch fails as invalid_target — NOT not_in_group (the
-        # payload just couldn't be turned into a local row).
+        # The server detail is IN the group (its would-be key matches the bound
+        # group, so membership passes) but carries an id the Rom aggregate rejects
+        # (<= 0), so Rom.synced raises and the switch fails as invalid_target — NOT
+        # not_in_group (the payload just couldn't be turned into a local row).
         _seed_rom(uow, rom_id=1, app_id=_APP_ID, group_key=_GROUP)
-        romm.roms[3] = {"id": 0, "platform_slug": "snes", "sibling_roms": [{"id": 1}]}
+        romm.roms[3] = {
+            "id": 0,
+            "platform_id": 57,
+            "igdb_id": 100,
+            "platform_slug": "snes",
+            "sibling_roms": [{"id": 1}],
+        }
 
         result = _run(event_loop, service.switch_version(_APP_ID, 3, False))
         assert result["success"] is False

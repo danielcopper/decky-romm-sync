@@ -113,6 +113,64 @@ async def test_get_version_list_cross_group_sibling_not_switchable(harness):
     assert rejected["reason"] == "not_in_group"
 
 
+async def test_get_version_list_never_synced_matching_key_switchable(harness):
+    """A never-synced RomM sibling whose would-be key matches the bound group is
+    switchable, and switch_version persists + binds it into the group (#1360)."""
+    _seed_rom(harness, rom_id=1, app_id=_APP_ID, group_key=_GROUP)
+    harness.romm.roms[1] = {"id": 1, "sibling_roms": [{"id": 5, "name": "Game (JP)"}]}
+    # Rom 5 has no local row; its server metadata derives the same igdb:100:57 key.
+    harness.romm.roms[5] = {
+        "id": 5,
+        "platform_id": 57,
+        "igdb_id": 100,
+        "platform_slug": "snes",
+        "fs_name": "game_5.sfc",
+        "name": "Game (JP)",
+    }
+
+    result = await harness.plugin.get_version_list(_APP_ID)
+    by_id = {v["rom_id"]: v for v in result["versions"]}
+    assert set(by_id) == {1, 5}
+    assert by_id[5]["synced"] is False
+    assert by_id[5]["switchable"] is True
+
+    # The backend agrees with the enabled picker row: it persists the server-only
+    # row into the bound group and moves the binding.
+    switched = await harness.plugin.switch_version(_APP_ID, 5, True)
+    assert switched["success"] is True
+    assert switched["rom_id"] == 5
+    with harness.uow_factory() as uow:
+        persisted = uow.roms.get(5)
+        assert persisted is not None
+        assert persisted.sibling_group_key == _GROUP
+        assert persisted.shortcut_app_id == _APP_ID
+        assert uow.roms.get(1).shortcut_app_id is None
+
+
+async def test_get_version_list_never_synced_bridged_key_not_switchable(harness):
+    """A never-synced RomM sibling whose would-be key differs (bridged on a lower-
+    priority id) is listed but not switchable, and switch_version rejects it (#1360)."""
+    _seed_rom(harness, rom_id=1, app_id=_APP_ID, group_key=_GROUP)
+    harness.romm.roms[1] = {"id": 1, "sibling_roms": [{"id": 6, "name": "Lara"}]}
+    # Rom 6 shares only ss_id with the bound group; its would-be key is igdb:999:57.
+    harness.romm.roms[6] = {"id": 6, "platform_id": 57, "igdb_id": 999, "ss_id": 22, "name": "Lara"}
+
+    result = await harness.plugin.get_version_list(_APP_ID)
+    by_id = {v["rom_id"]: v for v in result["versions"]}
+    assert set(by_id) == {1, 6}  # both LISTED
+    assert by_id[6]["synced"] is False
+    assert by_id[6]["switchable"] is False
+
+    # The backend rejection agrees with the disabled picker row (defense-in-depth).
+    rejected = await harness.plugin.switch_version(_APP_ID, 6, True)
+    assert rejected["success"] is False
+    assert rejected["reason"] == "not_in_group"
+    # Nothing persisted or bound for the rejected target.
+    with harness.uow_factory() as uow:
+        assert uow.roms.get(6) is None
+        assert uow.roms.get(1).shortcut_app_id == _APP_ID
+
+
 async def test_get_version_list_solo_group_not_multi(harness):
     """A single-version group renders no picker."""
     _seed_rom(harness, rom_id=1, app_id=_APP_ID)
@@ -338,8 +396,15 @@ async def test_switch_version_sync_then_retry_succeeds(harness):
 async def test_switch_version_unbuildable_target_failure_shape(harness):
     """A server-only sibling whose detail the aggregate rejects → ``invalid_target``."""
     _seed_rom(harness, rom_id=1, app_id=_APP_ID)
-    # Sibling of the bound rom, but an id <= 0 the Rom aggregate refuses.
-    harness.romm.roms[3] = {"id": 0, "platform_slug": "snes", "sibling_roms": [{"id": 1}]}
+    # In-group (its would-be key matches the bound igdb:100:57), so membership
+    # passes — but an id <= 0 the Rom aggregate refuses, so the build fails.
+    harness.romm.roms[3] = {
+        "id": 0,
+        "platform_id": 57,
+        "igdb_id": 100,
+        "platform_slug": "snes",
+        "sibling_roms": [{"id": 1}],
+    }
 
     result = await harness.plugin.switch_version(_APP_ID, 3, False)
     assert result["success"] is False

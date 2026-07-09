@@ -38,14 +38,15 @@ icon), with markers for:
 - **Default** — the version the plugin would pick on its own, following RomM's "SET DEFAULT" choice (`is_main_sibling`)
   and, failing that, your [Preferred region](configuration.md) setting. It's a suggestion, not a lock.
 - **Downloaded** — a version you already have on disk.
-- **not synced** — a version RomM has that isn't in your local library yet. Selecting it is fine; the plugin records it
-  on the spot.
+- **not synced** — a version RomM has that isn't in your local library yet. Selecting it records it on the spot — unless
+  it's dimmed as a separate game entry (see below).
 
 Some rows are **dimmed and can't be selected**, labelled _"separate game entry in RomM"_. RomM sometimes lists a version
-as a sibling because it shares one metadata id, even though the plugin tracks it as its own separate game (a different
-primary match). The plugin shows it so you know it exists, but switching to it isn't possible — it would move the
-shortcut onto a different game. To make it selectable, fix its metadata match in RomM so both share the same primary id,
-then re-sync.
+as a sibling because it shares one metadata id, even though its **primary match differs** — so RomM really treats it as
+its own separate game entry. This holds whether or not the version is already in your library: a dump you've already
+synced under a different match, and a not-yet-synced version whose primary id differs, are both shown (so you know they
+exist) but can't be switched to — either would move the shortcut onto a different game. To make one selectable, fix its
+metadata match in RomM so both share the same primary id, then re-sync.
 
 Selecting a different version **rebinds** the game to it: the Download button now fetches that version, the panel's
 title and Region/Languages rows update to reflect it, and its cover refreshes to the new version. The Steam shortcut

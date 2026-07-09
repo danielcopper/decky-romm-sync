@@ -165,8 +165,10 @@ class VersionSwitchService:
         server's ``sibling_roms`` add any not-yet-synced versions
         (``synced: False``). ``switchable`` is the same membership authority
         ``switch_version`` decides by (:func:`target_in_sibling_group`): a RomM
-        sibling that is actually a locally-synced ROM under a different group key
-        is listed but ``switchable: False``, so the picker disables it instead of
+        sibling whose group key differs from the bound group — whether already
+        synced locally under a different key (#1359) or never synced but with a
+        differing **would-be** key derived from its server metadata (#1360) — is
+        listed but ``switchable: False``, so the picker disables it instead of
         offering a switch the backend would reject. When the server view can't be
         fetched the local-only list is returned with the additive
         ``server_query_failed: True`` flag (partial-success carve-out) — the picker
@@ -318,7 +320,7 @@ class VersionSwitchService:
                 # predicate to keep a single authority.
                 "switchable": target_in_sibling_group(
                     bound_group_key=local.group_key,
-                    target_local_group_key=local.group_key,
+                    target_group_key=local.group_key,
                     target_is_local=True,
                     target_is_server_sibling=True,
                 ),
@@ -329,6 +331,14 @@ class VersionSwitchService:
             rom_id = int(stub["id"])
             detail = detail_by_id.get(rom_id)
             meta = extract_version_metadata(detail) if detail is not None else {}
+            target_is_local = rom_id in stub_local_group_keys
+            # A stub already synced under a (possibly different) local key uses
+            # that key (#1359); a never-synced stub uses its WOULD-BE key — what
+            # selecting it would persist it under (``meta``'s ``sibling_group_key``,
+            # the same sync-time derivation) — so a bridged sibling in its own
+            # group is listed but not switchable (#1360). A missing detail (a
+            # transient fetch miss) yields no derivable key → non-switchable.
+            target_group_key = stub_local_group_keys.get(rom_id) if target_is_local else meta.get("sibling_group_key")
             entries.append(
                 {
                     "rom_id": rom_id,
@@ -342,8 +352,8 @@ class VersionSwitchService:
                     "installed": False,
                     "switchable": target_in_sibling_group(
                         bound_group_key=local.group_key,
-                        target_local_group_key=stub_local_group_keys.get(rom_id),
-                        target_is_local=rom_id in stub_local_group_keys,
+                        target_group_key=target_group_key,
+                        target_is_local=target_is_local,
                         target_is_server_sibling=True,
                     ),
                 }
@@ -475,7 +485,7 @@ class VersionSwitchService:
             # probes; the write UoW re-checks these same facts (TOCTOU).
             if not target_in_sibling_group(
                 bound_group_key=ctx.group_key,
-                target_local_group_key=ctx.target_group_key,
+                target_group_key=ctx.target_group_key,
                 target_is_local=True,
                 target_is_server_sibling=False,
             ):
@@ -503,9 +513,15 @@ class VersionSwitchService:
                 "message": "RomM server not reachable.",
             }
 
+        # The target's WOULD-BE key — what persisting it will bind it under
+        # (extract_version_metadata is exactly what _persist_and_bind stores), so
+        # the picker's ``switchable`` flag, this guard, and the persisted row all
+        # agree: a bridged sibling in its own group is rejected here rather than
+        # binding the shortcut cross-group (#1360).
+        would_be_key = extract_version_metadata(target_dict)["sibling_group_key"]
         if not target_in_sibling_group(
             bound_group_key=ctx.group_key,
-            target_local_group_key=None,
+            target_group_key=would_be_key,
             target_is_local=False,
             target_is_server_sibling=self._is_sibling(target_dict, ctx.bound_rom_id, ctx.group_key),
         ):
@@ -637,7 +653,7 @@ class VersionSwitchService:
                 return self._not_in_group()
             if not target_in_sibling_group(
                 bound_group_key=group_key,
-                target_local_group_key=target.sibling_group_key,
+                target_group_key=target.sibling_group_key,
                 target_is_local=True,
                 target_is_server_sibling=False,
             ):

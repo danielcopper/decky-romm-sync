@@ -118,14 +118,16 @@ class TestMissingAndNoneIds:
 
 class TestTargetInSiblingGroup:
     """The membership authority shared by the picker's ``switchable`` flag and
-    ``switch_version`` — a local target must share the bound key; a server-only
-    target counts when RomM's symmetric sibling view lists it."""
+    ``switch_version``. A target is a member when it is eligible (has a local row
+    OR RomM lists it as a sibling) AND its group key — the local key for a synced
+    target, else the would-be key derived from its server metadata — matches the
+    bound key (a NULL bound key accepts any eligible target)."""
 
     def test_local_target_same_group_is_member(self):
         assert (
             target_in_sibling_group(
                 bound_group_key="igdb:100:57",
-                target_local_group_key="igdb:100:57",
+                target_group_key="igdb:100:57",
                 target_is_local=True,
                 target_is_server_sibling=True,
             )
@@ -138,7 +140,7 @@ class TestTargetInSiblingGroup:
         assert (
             target_in_sibling_group(
                 bound_group_key="igdb:1156:57",
-                target_local_group_key="ss:19274:57",
+                target_group_key="ss:19274:57",
                 target_is_local=True,
                 target_is_server_sibling=True,
             )
@@ -150,20 +152,48 @@ class TestTargetInSiblingGroup:
         assert (
             target_in_sibling_group(
                 bound_group_key=None,
-                target_local_group_key="ss:19274:57",
+                target_group_key="ss:19274:57",
                 target_is_local=True,
                 target_is_server_sibling=False,
             )
             is True
         )
 
-    def test_server_only_target_that_is_a_sibling_is_member(self):
-        # Not in the local library yet — membership rides on the server view;
-        # selecting it persists a new local row that joins the group.
+    def test_server_only_target_with_matching_would_be_key_is_member(self):
+        # Not in the local library yet — its would-be key (derived from the server
+        # metadata) matches the bound group, so selecting it persists a new local
+        # row that joins the group.
         assert (
             target_in_sibling_group(
                 bound_group_key="igdb:100:57",
-                target_local_group_key=None,
+                target_group_key="igdb:100:57",
+                target_is_local=False,
+                target_is_server_sibling=True,
+            )
+            is True
+        )
+
+    def test_server_only_target_with_different_would_be_key_is_not_member(self):
+        # The #1360 bug: a never-synced bridged sibling RomM lists (shared lower-
+        # priority id) whose would-be key lands it in its OWN group — switching to
+        # it would bind the shortcut cross-group, so it is not a member.
+        assert (
+            target_in_sibling_group(
+                bound_group_key="igdb:1156:57",
+                target_group_key="ss:19274:57",
+                target_is_local=False,
+                target_is_server_sibling=True,
+            )
+            is False
+        )
+
+    def test_null_bound_key_accepts_any_server_only_target(self):
+        # An unbackfilled / solo bound row can't discriminate — any RomM sibling
+        # is accepted regardless of its would-be key.
+        assert (
+            target_in_sibling_group(
+                bound_group_key=None,
+                target_group_key="ss:19274:57",
                 target_is_local=False,
                 target_is_server_sibling=True,
             )
@@ -174,7 +204,7 @@ class TestTargetInSiblingGroup:
         assert (
             target_in_sibling_group(
                 bound_group_key="igdb:100:57",
-                target_local_group_key=None,
+                target_group_key="igdb:100:57",
                 target_is_local=False,
                 target_is_server_sibling=False,
             )
@@ -188,8 +218,47 @@ class TestTargetInSiblingGroup:
         assert (
             target_in_sibling_group(
                 bound_group_key="igdb:1156:57",
-                target_local_group_key="ss:19274:57",
+                target_group_key="ss:19274:57",
                 target_is_local=True,
+                target_is_server_sibling=True,
+            )
+            is False
+        )
+
+
+class TestWouldBeKeyDerivation:
+    """The picker/switch derive a server-only target's would-be key by reusing the
+    same sync-time derivation over the server ROM's metadata ids — never a private
+    reimplementation — so a target's ``switchable`` verdict matches the group its
+    row would actually persist under."""
+
+    def test_would_be_key_equals_sync_derivation_for_server_dict(self):
+        # A server ROM dict fed to compute_sibling_group_key yields the very key a
+        # sync would stamp on it — the coalesce order (igdb first) is identical.
+        server_rom = {"id": 900, "platform_id": 57, "igdb_id": 100, "ss_id": 22}
+        assert compute_sibling_group_key(server_rom) == "igdb:100:57"
+
+    def test_server_only_member_iff_derived_key_matches_bound(self):
+        # Feeding the derived key into the authority: a server ROM sharing the
+        # bound group's top-priority id is a member; one that only shares a lower-
+        # priority id (a different derived key) is not.
+        bound = "igdb:100:57"
+        same = {"id": 900, "platform_id": 57, "igdb_id": 100, "ss_id": 22}
+        bridged = {"id": 901, "platform_id": 57, "igdb_id": 999, "ss_id": 22}
+        assert (
+            target_in_sibling_group(
+                bound_group_key=bound,
+                target_group_key=compute_sibling_group_key(same),
+                target_is_local=False,
+                target_is_server_sibling=True,
+            )
+            is True
+        )
+        assert (
+            target_in_sibling_group(
+                bound_group_key=bound,
+                target_group_key=compute_sibling_group_key(bridged),
+                target_is_local=False,
                 target_is_server_sibling=True,
             )
             is False

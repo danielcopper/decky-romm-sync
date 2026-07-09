@@ -49,7 +49,7 @@ def compute_sibling_group_key(rom: dict[str, Any]) -> str:
 def target_in_sibling_group(
     *,
     bound_group_key: str | None,
-    target_local_group_key: str | None,
+    target_group_key: str | None,
     target_is_local: bool,
     target_is_server_sibling: bool,
 ) -> bool:
@@ -57,21 +57,28 @@ def target_in_sibling_group(
 
     The single membership authority shared by the version picker's per-version
     ``switchable`` flag (``get_version_list``) and ``switch_version``'s group
-    guard, so the two surfaces can never disagree (ADR-0021). A target that has a
-    local row must share the bound row's ``sibling_group_key`` — a NULL bound key
-    (an unbackfilled / solo bound row) accepts any local target. A target with no
-    local row counts when RomM's symmetric ``sibling_roms`` view lists it against
-    the bound ROM (selecting it in the picker persists a new local row that joins
-    the group).
+    guard, so the two surfaces can never disagree (ADR-0021). A target is a
+    member when it is *eligible* — it has a local row (``target_is_local``) OR
+    RomM's symmetric ``sibling_roms`` view lists it (``target_is_server_sibling``)
+    — AND its group key matches the bound row's. ``target_group_key`` is the
+    target's local ``sibling_group_key`` when it has a local row, else its
+    **would-be** key: the key the same sync-time derivation
+    (:func:`compute_sibling_group_key`) yields for the server ROM's metadata ids —
+    i.e. the group selecting it in the picker would persist it under. A NULL bound
+    key (an unbackfilled / solo bound row) can't discriminate, so it accepts any
+    eligible target.
 
-    Why the two inputs can disagree: RomM groups by ANY shared metadata id (an OR
-    across sources) while the local key is the FIRST non-null id in coalesce
-    order, so RomM can bridge two local groups (e.g. an IGDB-keyed title next to a
-    ScreenScraper-keyed variant that share only the ScreenScraper id). A bridged
-    sibling that is ALSO synced locally under a different key is reported by the
-    picker but is not switchable — a switch would land the shortcut on a foreign
-    group. This predicate is what tells both surfaces so.
+    Why the key check matters even for a server-only target: RomM groups by ANY
+    shared metadata id (an OR across sources) while the group key is the FIRST
+    non-null id in coalesce order, so RomM can bridge two groups (e.g. an
+    IGDB-keyed title next to a ScreenScraper-keyed variant that share only the
+    ScreenScraper id). A bridged sibling that was never synced locally has no
+    local row, but its would-be key still lands it in its OWN group — switching to
+    it would bind the shortcut outside the group it was created from. Comparing
+    the would-be key to the bound key rejects it (listed but not switchable),
+    exactly as a bridged sibling already synced under a different local key is
+    rejected (#1360 / #1359).
     """
-    if target_is_local:
-        return bound_group_key is None or target_local_group_key == bound_group_key
-    return target_is_server_sibling
+    if not (target_is_local or target_is_server_sibling):
+        return False
+    return bound_group_key is None or target_group_key == bound_group_key
