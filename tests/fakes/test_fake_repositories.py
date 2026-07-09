@@ -14,6 +14,7 @@ import pytest
 
 from domain.bios_file import BiosFile
 from domain.firmware_cache import FirmwareCacheEntry
+from domain.platform_sync_state import PlatformSyncState
 from domain.playtime import Playtime
 from domain.rom import Rom
 from domain.rom_install import RomInstall
@@ -23,6 +24,7 @@ from domain.sync_run import SyncRun
 from fakes.fake_bios_file_repository import FakeBiosFileRepository
 from fakes.fake_firmware_cache_repository import FakeFirmwareCacheRepository
 from fakes.fake_kv_config_repository import FakeKvConfigRepository
+from fakes.fake_platform_sync_state_repository import FakePlatformSyncStateRepository
 from fakes.fake_playtime_repository import FakePlaytimeRepository
 from fakes.fake_rom_install_repository import FakeRomInstallRepository
 from fakes.fake_rom_metadata_repository import FakeRomMetadataRepository
@@ -36,6 +38,7 @@ if TYPE_CHECKING:
         BiosFileRepository,
         FirmwareCacheRepository,
         KvConfigRepository,
+        PlatformSyncStateRepository,
         PlaytimeRepository,
         RomInstallRepository,
         RomMetadataRepository,
@@ -70,9 +73,11 @@ class TestProtocolSatisfaction:
         bios: BiosFileRepository = FakeBiosFileRepository()
         firmware: FirmwareCacheRepository = FakeFirmwareCacheRepository()
         runs: SyncRunRepository = FakeSyncRunRepository()
+        platform_state: PlatformSyncStateRepository = FakePlatformSyncStateRepository()
         kv: KvConfigRepository = FakeKvConfigRepository()
         assert all(
-            obj is not None for obj in (roms, installs, metadata, playtime, save_states, bios, firmware, runs, kv)
+            obj is not None
+            for obj in (roms, installs, metadata, playtime, save_states, bios, firmware, runs, platform_state, kv)
         )
 
     def test_fake_uow_and_factory_satisfy_protocols(self):
@@ -308,6 +313,34 @@ class TestFakeSyncRunRepository:
         assert run.id == "r1"
 
 
+class TestFakePlatformSyncStateRepository:
+    def test_round_trip_upsert_clear(self):
+        repo = FakePlatformSyncStateRepository()
+        assert repo.get("n64") is None
+        repo.save(PlatformSyncState.stamp(platform_slug="n64", at="2026-01-01T00:00:00+00:00", rom_count=100))
+        loaded = repo.get("n64")
+        assert loaded is not None
+        assert loaded.rom_count == 100
+        assert repo.save_count == 1
+        # Same slug overwrites.
+        repo.save(PlatformSyncState.stamp(platform_slug="n64", at="2026-02-01T00:00:00+00:00", rom_count=105))
+        overwritten = repo.get("n64")
+        assert overwritten is not None
+        assert overwritten.rom_count == 105
+        repo.clear()
+        assert repo.get("n64") is None
+
+    def test_get_returns_copy_so_caller_mutations_dont_leak(self):
+        repo = FakePlatformSyncStateRepository()
+        repo.save(PlatformSyncState.stamp(platform_slug="n64", at="2026-01-01T00:00:00+00:00", rom_count=100))
+        first = repo.get("n64")
+        assert first is not None
+        first.rom_count = 999  # mutate the returned copy, no save()
+        second = repo.get("n64")
+        assert second is not None
+        assert second.rom_count == 100  # stored copy untouched
+
+
 class TestFakeKvConfigRepository:
     def test_set_get_delete(self):
         repo = FakeKvConfigRepository()
@@ -460,7 +493,7 @@ class TestFakeUnitOfWorkRomIdForeignKey:
         assert getattr(uow, repo_name).get(42) is not None
 
     def test_non_fk_repos_commit_without_a_rom(self):
-        """bios_files / firmware_cache / sync_runs / kv_config have no rom_id FK."""
+        """bios_files / firmware_cache / sync_runs / platform_sync_state / kv_config have no rom_id FK."""
         uow = FakeUnitOfWork()
         with uow:
             uow.bios_files.save(
@@ -470,5 +503,8 @@ class TestFakeUnitOfWorkRomIdForeignKey:
                 [FirmwareCacheEntry(id=1, name="x.bin", platform_slug="psx", file_size_bytes=10, cached_at=5.0)]
             )
             uow.sync_runs.save(SyncRun.start(id="r1", at="2026-01-01T00:00:00Z", platforms_planned=1, roms_planned=1))
+            uow.platform_sync_state.save(
+                PlatformSyncState.stamp(platform_slug="psx", at="2026-01-01T00:00:00Z", rom_count=1)
+            )
             uow.kv_config.set("k", "v")
         assert uow.committed is True

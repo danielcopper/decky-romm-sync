@@ -298,6 +298,18 @@ sibling row holding `shortcut_app_id` is the group's **active version**.
   each RomM collection `rom_id` with a **group fallback** — an unbound sibling maps to its group's bound sibling's appId
   — so collecting or favouriting any version puts the game's single shortcut in the collection.
 
+**Incremental-skip time reference — per-platform completion stamps.** The skip's "unchanged since" reference is the
+platform's own `PlatformSyncState.completed_at` when one exists, otherwise the newest completed `SyncRun`'s `last_sync`
+([ADR-0022](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0022-chunked-per-unit-apply.md)). The
+reporter writes that stamp when a platform work unit's **last** apply chunk commits — atomically in the same write UoW
+as the chunk's `roms` upserts — so a platform that fully synced inside a run the user later cancelled/crashed (which
+leaves no completed `SyncRun`, so the library-wide `last_sync` never advances) still skips on the next run instead of
+re-walking every already-applied game through CEF. All the existing guards still gate the skip (zero-bound-rows,
+`sibling_group_key` backfill, the `updated_after` server-delta check, the persisted-row count match); additionally, when
+the skip rides a stamp, the stamp's `rom_count` must still equal the server's platform `rom_count` — a server-side count
+change invalidates it. "Force Full Sync" (`clear_sync_cache`) clears every stamp alongside the completed-run history, so
+both skip references reset together.
+
 **Single-owner run lifecycle (#1202).** The run-lifecycle pair — `sync_state` (idle/running/cancelling) and
 `current_sync_id` — is mutated **only** through four verb methods on `LibrarySyncStateBox`, never by direct field
 assignment from a sub-service. Confining those two writes to the box makes run admission, cancellation, and termination

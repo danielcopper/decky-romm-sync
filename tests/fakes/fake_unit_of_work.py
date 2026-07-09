@@ -1,4 +1,4 @@
-"""In-memory ``UnitOfWork`` composing the nine fake repositories, for service tests.
+"""In-memory ``UnitOfWork`` composing the ten fake repositories, for service tests.
 
 Mirrors the real UoW's context-manager shape — a clean ``__exit__`` commits and
 flips ``committed``; an exceptional one truly rolls back (discards every write
@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 from fakes.fake_bios_file_repository import FakeBiosFileRepository
 from fakes.fake_firmware_cache_repository import FakeFirmwareCacheRepository
 from fakes.fake_kv_config_repository import FakeKvConfigRepository
+from fakes.fake_platform_sync_state_repository import FakePlatformSyncStateRepository
 from fakes.fake_playtime_repository import FakePlaytimeRepository
 from fakes.fake_rom_install_repository import FakeRomInstallRepository
 from fakes.fake_rom_metadata_repository import FakeRomMetadataRepository
@@ -43,6 +44,7 @@ if TYPE_CHECKING:
 
     from domain.bios_file import BiosFile
     from domain.firmware_cache import FirmwareCacheEntry
+    from domain.platform_sync_state import PlatformSyncState
     from domain.playtime import Playtime
     from domain.rom import Rom
     from domain.rom_install import RomInstall
@@ -63,11 +65,12 @@ class _Snapshot:
     bios_files: dict[tuple[str, str], BiosFile]
     firmware_cache: dict[tuple[str, str], FirmwareCacheEntry]
     sync_runs: dict[str, SyncRun]
+    platform_sync_state: dict[str, PlatformSyncState]
     kv_config: dict[str, str]
 
 
 class FakeUnitOfWork:
-    """In-memory unit of work over nine fake repositories with commit/rollback flags."""
+    """In-memory unit of work over ten fake repositories with commit/rollback flags."""
 
     # Child repos whose aggregate carries a ``rom_id`` foreign key onto ``roms``
     # (schema: rom_installs / rom_metadata / rom_playtime / rom_save_states +
@@ -86,6 +89,7 @@ class FakeUnitOfWork:
         self.bios_files = FakeBiosFileRepository()
         self.firmware_cache = FakeFirmwareCacheRepository()
         self.sync_runs = FakeSyncRunRepository()
+        self.platform_sync_state = FakePlatformSyncStateRepository()
         self.kv_config = FakeKvConfigRepository()
         self.committed = False
         self.rolled_back = False
@@ -105,6 +109,7 @@ class FakeUnitOfWork:
             bios_files=self.bios_files._snapshot(),
             firmware_cache=self.firmware_cache._snapshot(),
             sync_runs=self.sync_runs._snapshot(),
+            platform_sync_state=self.platform_sync_state._snapshot(),
             kv_config=self.kv_config._snapshot(),
         )
         return self
@@ -146,6 +151,7 @@ class FakeUnitOfWork:
         self.bios_files._restore(snapshot.bios_files)
         self.firmware_cache._restore(snapshot.firmware_cache)
         self.sync_runs._restore(snapshot.sync_runs)
+        self.platform_sync_state._restore(snapshot.platform_sync_state)
         self.kv_config._restore(snapshot.kv_config)
 
     def _enforce_rom_id_foreign_keys(self) -> None:

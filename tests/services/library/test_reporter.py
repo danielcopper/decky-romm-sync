@@ -311,6 +311,44 @@ class TestCommitUnitResults:
         assert rom.sgdb_id == 999
         assert rom.ra_id == 777
 
+    def test_commit_persists_platform_stamp_atomically(self, plugin):
+        """A passed ``platform_stamp`` lands in the SAME committed UoW as the rom
+        upsert — the per-platform completion stamp is atomic with the chunk (ADR-0022)."""
+        from domain.platform_sync_state import PlatformSyncState
+
+        uow = plugin._uow
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {"name": "Game", "fs_name": "game.z64", "platform_slug": "n64", "cover_path": ""},
+        )
+        stamp = PlatformSyncState.stamp(platform_slug="n64", at="2026-01-01T00:00:00+00:00", rom_count=7)
+
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}], stamp)
+
+        assert uow.committed is True
+        with uow:
+            assert uow.roms.get(42) is not None  # chunk rom upserted
+            loaded = uow.platform_sync_state.get("n64")
+        assert loaded is not None
+        assert loaded.rom_count == 7
+        assert loaded.completed_at == "2026-01-01T00:00:00+00:00"
+
+    def test_commit_without_stamp_writes_no_platform_state(self, plugin):
+        """A commit with the default ``platform_stamp=None`` (non-final chunk, or a
+        collection/late-ack path) leaves ``platform_sync_state`` untouched."""
+        uow = plugin._uow
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {"name": "Game", "fs_name": "game.z64", "platform_slug": "n64", "cover_path": ""},
+        )
+
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}])
+
+        with uow:
+            assert uow.platform_sync_state.get("n64") is None
+
     def test_commit_persists_version_metadata_from_pending(self, plugin):
         """The sibling-group key + version dimensions ride the pending entry onto
         the upserted ``Rom`` (#1295)."""
@@ -805,6 +843,29 @@ class TestClearSyncCache:
 
         with uow:
             assert uow.sync_runs.get_running() is not None
+
+    def test_clears_platform_completion_stamps(self, plugin):
+        """Force Full Sync also drops the per-platform completion stamps (ADR-0022).
+
+        Each stamp is its own effective ``last_sync``; leaving them would let an
+        unchanged platform still skip after the user asked for a full re-fetch.
+        """
+        from domain.platform_sync_state import PlatformSyncState
+
+        uow = plugin._uow
+        with uow:
+            uow.platform_sync_state.save(
+                PlatformSyncState.stamp(platform_slug="n64", at="2025-01-01T00:00:00", rom_count=100)
+            )
+            uow.platform_sync_state.save(
+                PlatformSyncState.stamp(platform_slug="snes", at="2025-01-01T00:00:00", rom_count=200)
+            )
+
+        plugin._sync_service.clear_sync_cache()
+
+        with uow:
+            assert uow.platform_sync_state.get("n64") is None
+            assert uow.platform_sync_state.get("snes") is None
 
 
 class TestFinalizePerUnitRun:

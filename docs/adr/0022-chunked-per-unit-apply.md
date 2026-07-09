@@ -76,7 +76,10 @@ mid-unit failure forfeits only the in-flight chunk.**
 - **Cancel/timeout becomes chunk-atomic rather than unit-atomic.** Cancelling a large unit keeps the games already
   committed in prior chunks — a behavior change: previously the whole in-flight unit was discarded. This is strictly
   less lost work and matches "cancel keeps finished games," but it does mean a cancelled unit can leave a **partially**
-  applied platform; the next sync completes it.
+  applied platform; the next sync completes it. Platform units that _did_ finish (their last chunk committed) before the
+  cancel are additionally stamped complete (`PlatformSyncState`, #1025) in the same write UoW as that final chunk, so
+  the next run's incremental-skip gate skips them wholesale rather than re-walking every already-applied game through
+  CEF — even though the cancelled run never completed its `SyncRun` and so never advanced the library-wide `last_sync`.
 - **More round-trips.** A 3084 unit now runs ~16 emit/ack/commit cycles instead of one. Each cycle adds an event, a
   callable ack, and a short write UoW; the added overhead is roughly 2% of the unit's apply time — negligible against
   the crash-recovery it buys.

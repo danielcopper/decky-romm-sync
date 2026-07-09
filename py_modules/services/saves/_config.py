@@ -131,7 +131,7 @@ class SaveServiceConfig:
         needs it; not reached through the ``_save_service`` back-ref.
     uow_factory:
         ``UnitOfWorkFactory`` Protocol seam — opens a fresh transactional
-        Unit of Work over the nine SQLite repositories. The saves vertical
+        Unit of Work over the SQLite repositories. The saves vertical
         reads/writes the ``rom_save_states`` aggregate + ``kv_config``
         device id through it; each public callable owns a narrow
         read→I/O→write bracket (ADR-0006).

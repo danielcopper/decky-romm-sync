@@ -72,11 +72,12 @@ def _set_user_version(db_path: str, version: int) -> None:
 # + 005_unconfirm_legacy_slot_confirmations + 006_native_play_sessions
 # + 007_add_last_played + 008_add_version_metadata
 # + 009_add_last_session_start_monotonic + 010_add_sibling_group_key_index
-# + 011_rekey_sibling_group_key).
-_SHIPPED_VERSION = 11
+# + 011_rekey_sibling_group_key + 012_add_platform_sync_state).
+_SHIPPED_VERSION = 12
 
-# Tables after every shipped migration: the v1 set plus 006's play-session outbox.
-_SHIPPED_TABLES = _V1_TABLES | {"rom_playtime_sessions"}
+# Tables after every shipped migration: the v1 set plus 006's play-session outbox
+# and 012's per-platform completion stamp.
+_SHIPPED_TABLES = _V1_TABLES | {"rom_playtime_sessions", "platform_sync_state"}
 
 
 class TestEmptyDatabase:
@@ -89,8 +90,9 @@ class TestEmptyDatabase:
 
         assert final_version == _SHIPPED_VERSION
         assert _user_version(db_path) == _SHIPPED_VERSION
-        # 002/004 ALTER roms, 003 adds an index; 006 adds the play-session outbox
-        # table — the only table added past v1.
+        # 002/004 ALTER roms, 003/010 add indexes; 006 adds the play-session
+        # outbox table and 012 the per-platform completion stamp — the two tables
+        # added past v1.
         assert _tables(db_path) == _SHIPPED_TABLES
 
     def test_creates_missing_parent_directory(self, tmp_path: Path):
@@ -708,6 +710,58 @@ class Test011RekeySiblingGroupKey:
             conn.close()
         # Binding + version dimensions survive; only the group key is NULLed.
         assert row == (1, 5000, None, '["USA"]')
+
+
+class Test012PlatformSyncState:
+    """012 — adds the platform_sync_state completion-stamp table (#1025 / ADR-0022)."""
+
+    def test_table_exists_after_full_apply(self, tmp_path: Path):
+        db_path = str(tmp_path / "romm_sync.db")
+
+        apply_migrations(db_path)
+
+        assert _user_version(db_path) == _SHIPPED_VERSION
+        assert "platform_sync_state" in _tables(db_path)
+        assert _columns(db_path, "platform_sync_state") == {"platform_slug", "completed_at", "rom_count"}
+
+    def test_table_absent_before_012(self, tmp_path: Path):
+        # The table is added by 012 — a DB at v11 does not yet carry it.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 11)))
+
+        assert _user_version(db_path) == 11
+        assert "platform_sync_state" not in _tables(db_path)
+
+    def test_platform_slug_is_primary_key_upsert(self, tmp_path: Path):
+        # platform_slug is the PK — a second write for the same slug replaces the row.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path)
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO platform_sync_state (platform_slug, completed_at, rom_count) "
+                "VALUES ('n64', '2026-01-01T00:00:00+00:00', 100)"
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO platform_sync_state (platform_slug, completed_at, rom_count) "
+                "VALUES ('n64', '2026-02-01T00:00:00+00:00', 105)"
+            )
+            rows = conn.execute("SELECT platform_slug, completed_at, rom_count FROM platform_sync_state").fetchall()
+        finally:
+            conn.close()
+        assert rows == [("n64", "2026-02-01T00:00:00+00:00", 105)]
+
+    def test_survives_full_apply_with_seeded_v11_state(self, tmp_path: Path):
+        # A DB seeded at v11 (before 012) upgrades cleanly and gains the table.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 11)))
+        assert _user_version(db_path) == 11
+
+        final_version = apply_migrations(db_path)
+
+        assert final_version == _SHIPPED_VERSION
+        assert "platform_sync_state" in _tables(db_path)
 
 
 def test_shipped_migrations_dir_resolves_to_real_schema():

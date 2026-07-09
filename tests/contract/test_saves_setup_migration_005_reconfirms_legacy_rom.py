@@ -28,12 +28,12 @@ def _rewind_to_v4(db_path: str) -> None:
 
     Bootstrap stamps the DB at the latest version with the full schema. To replay
     the real 005 upgrade path the runner must see a genuine v4 database: the
-    version stamp AND the pre-006/007/008/009/010 schema (006's play-session
+    version stamp AND the pre-006/007/008/009/010/011 schema (006's play-session
     outbox table absent and ``note_id`` present, 007's ``last_played`` column
     absent, 008's version-metadata columns absent, 009's
-    ``last_session_start_monotonic`` column absent, and 010's
-    sibling_group_key index absent) so the sequential 005→…→010 re-run applies
-    cleanly.
+    ``last_session_start_monotonic`` column absent, 010's sibling_group_key index
+    absent, and 011's platform_sync_state table absent) so the sequential
+    005→…→011 re-run applies cleanly.
     """
     conn = sqlite3.connect(db_path, isolation_level=None)
     try:
@@ -45,6 +45,8 @@ def _rewind_to_v4(db_path: str) -> None:
         # Reverse 010's index before dropping its column (SQLite rejects dropping
         # a column an index still references), so 010 re-creates it cleanly.
         conn.execute("DROP INDEX IF EXISTS idx_roms_sibling_group_key")
+        # Reverse 011 so its CREATE TABLE re-applies instead of erroring.
+        conn.execute("DROP TABLE IF EXISTS platform_sync_state")
         # Reverse 008 so its ADD COLUMNs re-apply instead of duplicating.
         for column in ("sibling_group_key", "regions", "languages", "revision", "tags", "is_main_sibling"):
             conn.execute(f"ALTER TABLE roms DROP COLUMN {column}")

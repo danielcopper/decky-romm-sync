@@ -9,9 +9,10 @@ One Repository per aggregate root, not per table. ``RomSaveStateRepository``
 spans two tables (``rom_save_states`` + ``rom_save_files``); that is an adapter
 concern — services see a single aggregate.
 
-The 9 Protocols match the 9 aggregate roots settled in ADR-0003: ``Rom``,
+The Protocols match the aggregate roots settled in ADR-0003 — ``Rom``,
 ``RomInstall``, ``RomMetadata``, ``Playtime``, ``RomSaveState``, ``BiosFile``,
-``FirmwareCacheEntry``, ``SyncRun``, and the ``kv_config`` key-value surface.
+``FirmwareCacheEntry``, ``SyncRun`` — plus ``PlatformSyncState`` (the per-platform
+completion stamp, ADR-0022) and the ``kv_config`` key-value surface.
 ``SyncSettings``/``Platform``/``Device`` are NOT repositories — ADR-0003 dropped
 those aggregates.
 
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
 
     from domain.bios_file import BiosFile
     from domain.firmware_cache import FirmwareCacheEntry
+    from domain.platform_sync_state import PlatformSyncState
     from domain.playtime import PendingSessionRow, Playtime
     from domain.rom import Rom
     from domain.rom_install import RomInstall
@@ -302,6 +304,31 @@ class SyncRunRepository(Protocol):
         Backs the "Force Full Sync" reset: clearing the completed-run history
         resets the ``last_sync`` read the incremental-skip gate keys off, forcing
         the next sync to full-fetch every platform. (library/reporter.py)
+        """
+        ...
+
+
+class PlatformSyncStateRepository(Protocol):
+    """Persistence seam for the ``PlatformSyncState`` aggregate (per-platform completion stamp).
+
+    Identity is the ``platform_slug``. Backs the incremental-skip gate's honoring
+    of durable per-platform progress a cancelled/crashed run leaves behind
+    (ADR-0022).
+    """
+
+    def get(self, platform_slug: str) -> PlatformSyncState | None:
+        """Return the completion stamp for *platform_slug*, or ``None``. (library/fetcher.py skip gate)"""
+        ...
+
+    def save(self, state: PlatformSyncState) -> None:
+        """Upsert the completion stamp. (library/reporter.py final-chunk commit)"""
+        ...
+
+    def clear(self) -> None:
+        """Drop every stamp so no platform skips next run.
+
+        Backs the "Force Full Sync" reset alongside the completed-run history:
+        clearing the stamps forces every platform to full-fetch. (library/reporter.py)
         """
         ...
 

@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Awaitable, Callable
 
+    from domain.platform_sync_state import PlatformSyncState
     from services.library._state import LibrarySyncStateBox
     from services.protocols import (
         ArtworkManager,
@@ -228,6 +229,13 @@ class SyncReporter:
         refresh + reads commit atomically.
         """
         with self._uow_factory() as uow:
+            # Stale removal only UNBINDS the row (ADR-0007 keeps it), so a
+            # platform's persisted-row count is unchanged and its completion stamp
+            # (ADR-0022) stays valid — deliberately NOT invalidated here. If the
+            # server actually dropped ROMs, the next skip catches it anyway: the
+            # dropped ROM lowers RomM's platform rom_count, which no longer matches
+            # the stamp's rom_count (nor the persisted-row count), so the platform
+            # full-fetches. So the stale path needs no stamp invalidation.
             for rid in stale_rom_ids or []:
                 rom = uow.roms.get(rid)
                 if rom is None or rom.shortcut_app_id is None:
@@ -318,7 +326,7 @@ class SyncReporter:
 
     # ── Report unit results (per-unit pipeline) ──────────────────
 
-    def _commit_unit_results_io(self, rom_id_to_app_id, unit_roms):
+    def _commit_unit_results_io(self, rom_id_to_app_id, unit_roms, platform_stamp=None):
         """Finalise artwork names, then persist EVERY fetched ROM of the chunk.
 
         Group-aware commit (ADR-0021): this chunk's slice of the live RomM fetch
@@ -337,6 +345,11 @@ class SyncReporter:
         (outside any UoW); the final paths are collected, then one short write
         UoW upserts every ROM (Rom row first, cached metadata second — FK-safe),
         so a ROM and its metadata land atomically.
+
+        ``platform_stamp`` (set by the orchestrator on the final chunk of a
+        platform unit, ADR-0022) is saved inside that same write UoW, so the
+        per-platform completion stamp commits atomically with the chunk's rom
+        upserts — the platform is stamped complete iff its last chunk is durable.
         """
         grid = self._steam_config.grid_dir()
         box = self._sync_state
@@ -361,6 +374,8 @@ class SyncReporter:
             for raw in unit_roms:
                 if "id" in raw:
                     self._persist_synced_rom(uow, int(raw["id"]), binding, finalized, roms_by_id)
+            if platform_stamp is not None:
+                uow.platform_sync_state.save(platform_stamp)
 
         steam_input_mode = self._settings.get("steam_input_mode", "default")
         if steam_input_mode != "default" and binding:
@@ -529,7 +544,7 @@ class SyncReporter:
             and int(chunk_index) == box.active_chunk_index
         )
 
-    async def commit_unit_results(self, rom_id_to_app_id, unit_roms):
+    async def commit_unit_results(self, rom_id_to_app_id, unit_roms, platform_stamp: PlatformSyncState | None = None):
         """Per-chunk commit: cover-path finalize then atomic ``roms`` + metadata upsert.
 
         Called once the frontend has acked an apply chunk's shortcuts — by the
@@ -542,11 +557,19 @@ class SyncReporter:
         ``rom_metadata`` — FK-safe), so a ROM and its metadata are always
         consistent across a crash, and each committed chunk is durable on its own.
 
+        ``platform_stamp`` is passed only by the orchestrator on the **final
+        chunk of a platform unit** (ADR-0022); it rides the same write UoW so the
+        per-platform completion stamp is atomic with the chunk's rom upserts. The
+        heartbeat-timeout late-ack path never sets it — a timed-out platform is
+        incomplete and must not be stamped.
+
         Records every bound appId in the shared box so the stale-removal scan
         excludes appIds this run committed, whichever path drove the commit —
         a new rom_id reusing an old appId must not look stale (#1036).
         """
-        await self._loop.run_in_executor(None, self._commit_unit_results_io, rom_id_to_app_id, unit_roms)
+        await self._loop.run_in_executor(
+            None, self._commit_unit_results_io, rom_id_to_app_id, unit_roms, platform_stamp
+        )
         self._sync_state.committed_app_ids.update(int(aid) for aid in rom_id_to_app_id.values())
 
     # ── Registry queries ─────────────────────────────────────────
@@ -583,16 +606,21 @@ class SyncReporter:
     # ── Cache / stats ────────────────────────────────────────────
 
     def clear_sync_cache(self):
-        """Force a full re-fetch on the next sync by clearing the completed-run history.
+        """Force a full re-fetch on the next sync by clearing the sync checkpoints.
 
-        The incremental-skip gate (fetcher) and ``get_sync_stats`` both derive
-        ``last_sync`` from the newest completed ``SyncRun``; deleting the
-        completed runs in a short write UoW resets that read to ``None`` so every
-        platform full-fetches next time (and the "Force Full Sync" button hides
-        until a fresh run completes).
+        The incremental-skip gate (fetcher) keys off two checkpoints: the newest
+        completed ``SyncRun`` (the library-wide ``last_sync``, also read by
+        ``get_sync_stats``) and the per-platform ``PlatformSyncState`` completion
+        stamps (ADR-0022). "Force Full Sync" must reset BOTH — clearing only the
+        runs would leave the per-platform stamps in place, and each stamp is its
+        own ``effective_last_sync`` that would still skip an unchanged platform.
+        Deleting the completed runs and clearing every stamp in one short write
+        UoW resets both reads so every platform full-fetches next time (and the
+        "Force Full Sync" button hides until a fresh run completes).
         """
         with self._uow_factory() as uow:
             uow.sync_runs.delete_completed()
+            uow.platform_sync_state.clear()
         self._logger.info("Sync cache cleared — next sync will do a full fetch")
         return {"success": True, "message": "Next sync will do a full fetch"}
 

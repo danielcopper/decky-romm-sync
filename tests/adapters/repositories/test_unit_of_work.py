@@ -107,7 +107,7 @@ class TestRollback:
 
 
 class TestRepositoryWiring:
-    def test_all_nine_repositories_exposed(self, uow: SqliteUnitOfWork):
+    def test_all_repositories_exposed(self, uow: SqliteUnitOfWork):
         for name in (
             "roms",
             "rom_installs",
@@ -117,6 +117,7 @@ class TestRepositoryWiring:
             "bios_files",
             "firmware_cache",
             "sync_runs",
+            "platform_sync_state",
             "kv_config",
         ):
             assert getattr(uow, name) is not None

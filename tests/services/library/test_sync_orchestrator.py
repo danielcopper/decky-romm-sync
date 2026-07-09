@@ -3190,7 +3190,7 @@ class TestApplyChunking:
 
         commit_rows: list[list[int]] = []
 
-        async def capture_commit(_rid_to_aid, chunk_rows):
+        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None):
             commit_rows.append([r["id"] for r in chunk_rows])
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
@@ -3282,7 +3282,7 @@ class TestApplyChunking:
 
         commit_rows: list[list[int]] = []
 
-        async def capture_commit(_rid_to_aid, chunk_rows):
+        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None):
             commit_rows.append([r["id"] for r in chunk_rows])
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
@@ -3347,7 +3347,7 @@ class TestApplyChunking:
         commit_rows: list[list[int]] = []
         box = plugin._sync_service._box
 
-        async def capture_commit(_rid_to_aid, chunk_rows):
+        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None):
             commit_rows.append([r["id"] for r in chunk_rows])
             # Cancel lands the instant chunk 0's commit resolves — before the loop
             # returns to the top to emit chunk 1.
@@ -3457,9 +3457,9 @@ class TestPerUnitMetadataStamping:
         commit_calls: list[tuple[Any, Any]] = []
         original_commit = plugin._sync_service._reporter.commit_unit_results
 
-        async def tracked_commit(rid_to_aid, acked_roms):
+        async def tracked_commit(rid_to_aid, acked_roms, platform_stamp=None):
             commit_calls.append((rid_to_aid, acked_roms))
-            await original_commit(rid_to_aid, acked_roms)
+            await original_commit(rid_to_aid, acked_roms, platform_stamp=platform_stamp)
 
         plugin._sync_service._reporter.commit_unit_results = tracked_commit  # type: ignore[method-assign]
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
@@ -3557,7 +3557,7 @@ class TestPerUnitMetadataStamping:
 
         commit_calls: list[tuple[Any, Any]] = []
 
-        async def capture_commit(rid_to_aid, unit_roms):
+        async def capture_commit(rid_to_aid, unit_roms, platform_stamp=None):
             commit_calls.append((rid_to_aid, unit_roms))
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
@@ -3586,6 +3586,229 @@ class TestPerUnitMetadataStamping:
         # The whole fetch is threaded (all 5 siblings), the ack binds only 3.
         assert {r["id"] for r in unit_roms} == {1, 2, 3, 4, 5}
         assert set(rid_to_aid.keys()) == {"1", "3", "5"}
+
+
+class TestPlatformCompletionStamp:
+    """Per-platform completion stamp written on the final platform chunk (ADR-0022 / #1025).
+
+    The stamp lets the next sync's incremental-skip gate skip a platform that fully
+    synced inside a run the user later cancelled — the run never completes, so the
+    library-wide ``last_sync`` never advances, but the per-platform stamp does. It
+    is written ONLY when a platform unit's LAST chunk commits, never on a
+    collection unit, a cancelled unit, or a heartbeat-timed-out unit.
+    """
+
+    @pytest.mark.asyncio
+    async def test_stamp_written_after_final_platform_chunk(self, plugin, fake_romm_api):
+        """A platform unit that completes stamps ``platform_sync_state`` with the
+        server ROM count and the clock's completion timestamp (real commit)."""
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "A"}, {"id": 2, "name": "B"}],
+        )
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def fake_wait(_u, event):
+            event.set()
+            return {"1": 5001, "2": 5002}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        with plugin._uow as uow:
+            stamp = uow.platform_sync_state.get("n64")
+        assert stamp is not None
+        # rom_count is the unit's server count; completed_at is the injected clock.
+        assert stamp.rom_count == 2
+        assert stamp.completed_at == "2026-01-01T00:00:00+00:00"
+
+    @pytest.mark.asyncio
+    async def test_stamp_only_on_final_chunk_carries_unit_rom_count(self, plugin, fake_romm_api, monkeypatch):
+        """Across a multi-chunk platform, only the FINAL chunk's commit carries the
+        stamp, and it records the unit's whole ``rom_count`` (not the chunk size)."""
+        from services.library import sync_orchestrator
+
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": i, "name": f"G{i}"} for i in range(1, 6)],
+        )
+
+        stamps: list[Any] = []
+
+        async def capture_commit(_rid_to_aid, _chunk_rows, platform_stamp=None):
+            stamps.append(platform_stamp)
+
+        plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        # 5 singletons at chunk size 2 → 3 chunks; only the last carries the stamp.
+        assert len(stamps) == 3
+        assert stamps[0] is None
+        assert stamps[1] is None
+        assert stamps[2] is not None
+        assert stamps[2].platform_slug == "n64"
+        assert stamps[2].rom_count == 5
+
+    @pytest.mark.asyncio
+    async def test_no_stamp_on_user_cancel_mid_unit(self, plugin, fake_romm_api, monkeypatch):
+        """A user cancel before a platform's last chunk leaves NO stamp — the platform
+        is only partially applied, so the next run must re-fetch it."""
+        from services.library import sync_orchestrator
+
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": i, "name": f"G{i}"} for i in range(1, 6)],
+        )
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        box = plugin._sync_service._box
+
+        async def wait(_unit, event):
+            if box.active_chunk_index == 0:
+                event.set()
+                return {}
+            box.sync_state = SyncState.CANCELLING  # user cancel during chunk 1
+            return None
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = wait
+        box.sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        with plugin._uow as uow:
+            assert uow.platform_sync_state.get("n64") is None
+
+    @pytest.mark.asyncio
+    async def test_no_stamp_on_heartbeat_timeout(self, plugin, fake_romm_api):
+        """A heartbeat timeout (wait returns None while NOT cancelling) abandons the
+        chunk without committing it — no stamp, even on a single-chunk platform."""
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "A"}, {"id": 2, "name": "B"}],
+        )
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def timeout_wait(_unit, _event):
+            return None  # heartbeat timeout — box is NOT cancelling
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = timeout_wait
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        with plugin._uow as uow:
+            assert uow.platform_sync_state.get("n64") is None
+
+    @pytest.mark.asyncio
+    async def test_no_stamp_for_collection_unit(self, plugin, fake_romm_api):
+        """Collection units have no incremental-skip gate, so they are never stamped —
+        every chunk's commit carries ``platform_stamp=None``."""
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "A"}, {"id": 2, "name": "B"}],
+        )
+        _seed_collection(fake_romm_api, collection_id=7, name="Favs", rom_ids=[1, 2])
+
+        stamps: list[Any] = []
+
+        async def capture_commit(_rid_to_aid, _chunk_rows, platform_stamp=None):
+            stamps.append(platform_stamp)
+
+        plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def fake_wait(_u, event):
+            event.set()
+            return {"1": 5001, "2": 5002}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="collection", id="7", name="Favs", slug="favs", rom_count=2, collection_kind="user")
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        # The collection committed (non-vacuous) but never carried a stamp.
+        assert stamps, "collection unit should have committed at least one chunk"
+        assert all(s is None for s in stamps)
 
 
 class TestRegression738CacheCorruption:

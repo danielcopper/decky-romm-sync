@@ -21,6 +21,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from domain.platform_sync_state import PlatformSyncState
 from domain.preview_delta import PreviewDelta
 from domain.shortcut_data import EmulatorInvocation, build_shortcuts_data
 from domain.sibling_group import compute_component_group_keys
@@ -982,6 +983,24 @@ class SyncOrchestrator:
                     box.request_cancel()
                 return applied_count
 
+            # On the final chunk of a PLATFORM unit, hand the reporter a
+            # per-platform completion stamp so it lands in the SAME write UoW as
+            # this chunk's rom upserts — "platform fully synced" ⟺ "stamp exists",
+            # atomic on a crash. The stamp lets the next sync's incremental-skip
+            # gate skip this platform even when the whole run is later cancelled
+            # (its library-wide ``last_sync`` never advances). Only platform units
+            # carry a skip gate — collections have none, so they are never
+            # stamped. A cancel or heartbeat timeout mid-unit returns above before
+            # the final chunk, so an incomplete platform is never stamped
+            # (ADR-0022 / #1025).
+            platform_stamp = None
+            if unit.type == "platform" and unit.slug and chunk_index == chunk_count - 1:
+                platform_stamp = PlatformSyncState.stamp(
+                    platform_slug=unit.slug,
+                    at=self._clock.now().isoformat(),
+                    rom_count=unit.rom_count,
+                )
+
             # Per-chunk commit: the reporter upserts every fetched ROM of this
             # chunk into the ``roms`` aggregate (identity + version metadata,
             # unbound for non-representatives) and binds only the acked
@@ -989,8 +1008,9 @@ class SyncOrchestrator:
             # same write UoW (Rom row first, metadata second — FK-safe).
             # ``chunk_rows`` is this chunk's slice of the live RomM fetch — the
             # source of ``metadatum`` — so each committed chunk is a crash-safe
-            # checkpoint.
-            await self._reporter.get().commit_unit_results(applied, chunk_rows)
+            # checkpoint. ``platform_stamp`` (final platform chunk only) rides the
+            # same UoW.
+            await self._reporter.get().commit_unit_results(applied, chunk_rows, platform_stamp=platform_stamp)
             applied_count += len(applied)
 
         box.pending_sync = {}
