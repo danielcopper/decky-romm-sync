@@ -34,7 +34,9 @@ silent omission. The CI check enforces this.
 - **AddShortcut timing**: Must wait 300-500ms after `AddShortcut()` before setting properties. Use 50ms delay between
   operations.
 - **Large payloads**: Never send bulk base64 data through `decky.emit()` — WebSocket bridge has size limits. Use
-  per-item callables instead.
+  per-item callables instead. Bulk lists are chunked too: the library apply emits shortcuts ~200 at a time
+  (`_APPLY_CHUNK_SIZE`, ADR-0022) and the metadata cache is loaded page-by-page (`get_metadata_cache_page`), so a large
+  library never pushes a multi-MB frame in one response.
 - **User-Agent on outgoing HTTP**: SteamGridDB **and** RomM behind Cloudflare Tunnel reject the default `Python-urllib`
   UA with 403 (Bot Fight Mode at the edge). Every HTTP-talking adapter (`RommHttpAdapter`, `SteamGridDbAdapter`) takes a
   `user_agent: str` ctor param. Bootstrap reads `package.json` once via `PluginMetadataReader` and threads
@@ -46,12 +48,15 @@ silent omission. The CI check enforces this.
 - **BIsModOrShortcut bypass DROPPED**: Phase 5.6 removed the bypass counter entirely. Shortcuts return
   `BIsModOrShortcut() = true` (natural state). We own the entire game detail UI via RomMPlaySection + future
   RomMGameInfoPanel.
-- **Shortcut property updates**: A shortcut's appId is derived from `exe + appName` (CRC32), so
-  `launchOptions`/`startDir` changes are **appId-safe** (same shortcut, binding/artwork/collections survive) and
-  `SetAppLaunchOptions`-on-existing is **reliable** (hardware-validated in #827: in-session + restart + churn). Use the
-  fire-then-poll-`AppDetails` confirm (`setLaunchOptionsConfirmed`) since `Set*` returns void. Delete + recreate
-  (re-sync) is only needed for **exe/name** changes, which produce a different appId. The real hazard is removal-churn
-  corrupting Steam's in-memory shortcut state (a restart clears it).
+- **Shortcut property updates**: Steam **assigns** a shortcut's appId at creation and it is **stable for the shortcut's
+  lifetime** (the plugin never computes it — it records the assigned id in `roms.shortcut_app_id` and detects ownership
+  by the exe path; the old `CRC32(exe + appName)` derivation is disproven on current Steam, see
+  `docs/architecture/steam-non-steam-shortcuts.md` §App IDs). So `launchOptions`/`startDir` changes are **appId-safe**
+  (same shortcut, binding/artwork/collections survive) and `SetAppLaunchOptions`-on-existing is **reliable**
+  (hardware-validated in #827: in-session + restart + churn). Use the fire-then-poll-`AppDetails` confirm
+  (`setLaunchOptionsConfirmed`) since `Set*` returns void. Delete + recreate (re-sync) is still the path for
+  **exe/name** changes (a fresh `AddShortcut` yields a new appId). The real hazard is removal-churn corrupting Steam's
+  in-memory shortcut state (a restart clears it).
 - **Launcher + launch_options model**: `bin/rom-launcher` (renamed from `bin/romm-launcher`, #778) is a pure `exec "$@"`
   wrapper — no state, no path resolution, no emulator knowledge. The Steam shortcut's `launch_options` carries the FULL
   launch command (`flatpak run net.retrodeck.retrodeck "<rom-path>"`) for installed ROMs, or `""` (placeholder) for

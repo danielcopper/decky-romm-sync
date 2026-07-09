@@ -32,6 +32,12 @@ its artwork, its collection membership, and its `roms.shortcut_app_id` binding. 
 destructive (it yields a different `appId`, i.e. a different shortcut), and the launch command lives entirely in
 `launch_options` — never in `exe` or `appName` — so re-resolving a path never disturbs the binding.
 
+> **Errata (2026-07).** The `appId = CRC32(exe + appName)` derivation stated here and later in this ADR (inherited from
+> ADR-0005) does not hold on current Steam — the appId is **assigned at creation** and stable for the shortcut's
+> lifetime. This does not change the decision: a `launch_options` write is appId-safe because it does not change an
+> existing shortcut's assigned appId (not because it falls outside a hash). Corrected model:
+> [Steam Non-Steam Shortcuts — App IDs and Artwork](../architecture/steam-non-steam-shortcuts.md#app-ids-and-artwork).
+
 ## Decision
 
 The launcher becomes a **pure exec wrapper**. `bin/rom-launcher` (renamed from `bin/romm-launcher`) is:

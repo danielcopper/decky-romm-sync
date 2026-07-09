@@ -1,0 +1,108 @@
+# The per-unit apply is chunked into durable per-chunk commits
+
+## Status
+
+Accepted. Tracked under [#1025](https://github.com/danielcopper/decky-romm-sync/issues/1025). Extends
+[ADR-0006](0006-narrow-unit-of-work-scope.md) (the narrow write Unit of Work each chunk commits under) and the
+group-aware apply of [ADR-0021](0021-sibling-group-one-shortcut-binding-active-version.md) (chunks cut only at
+sibling-group boundaries, so a game's dumps never straddle two commits). It carries the #1041 run/unit ack identity and
+the #1052 heartbeat-timeout late-ack recovery down to chunk granularity.
+
+## Context
+
+The library apply emits one `sync_apply_unit` event per platform/collection unit, carrying that unit's whole collapsed
+shortcut list, then waits for the frontend's `report_unit_results` ack before committing the unit's `roms` rows in a
+single write UoW. On small libraries this is fine. On large ones it is a single point of catastrophic loss.
+
+[#797](https://github.com/danielcopper/decky-romm-sync/issues/797) is the field data. A platform unit of **3084
+shortcuts** was emitted in one event. The frontend applied them at the CEF-safe 50 ms cadence — about 24 minutes of work
+— and roughly 24 minutes in, `steamwebhelper` died of an internal out-of-memory (a `SIGTRAP` inside `libcef.so`, the
+process image near 4 GB). No `report_unit_results` ever arrived, so the backend committed **nothing**: the entire unit's
+24 minutes of shortcut creation was forfeit, and the next sync started it over from zero. Two compounding costs made the
+single emit fragile:
+
+- **Payload size.** One unit's shortcut list is a multi-MB JSON blob (~3 MB at 3084 entries) pushed through the
+  size-limited `decky.emit` WebSocket bridge in one frame, and the frontend closure holds the whole list live for the
+  entire apply.
+- **Blast radius.** The commit is all-or-nothing at unit granularity, so any crash, cancel, or heartbeat timeout
+  anywhere in those 24 minutes discards the whole unit.
+
+## Decision
+
+**A unit's emitted shortcuts are split into fixed-size chunks that are emitted, acked, and committed one at a time, so a
+mid-unit failure forfeits only the in-flight chunk.**
+
+- **Chunk size is a fixed 200** (`_APPLY_CHUNK_SIZE`, `services/library/sync_orchestrator.py`). At ~200 entries a
+  chunk's payload is ~200 KB (comfortably under the bridge ceiling) and its apply is ~2 minutes at the 50 ms cadence —
+  the crash blast radius drops from 24+ minutes to ~2. It is not configurable (see Alternatives).
+- **Chunks cut only at sibling-group boundaries** (`domain/sync_chunking.py::build_unit_chunks`, pure). The collapsed
+  emit list is group-clustered (ADR-0021); a chunk greedy-fills to 200 but **overflows to finish a group** so a
+  multi-version game's entries never straddle two chunks — and therefore two commits. A keyless entry (a legacy or solo
+  ROM) is its own singleton run, so a cut before or after it is always legal. Groups fetched but never emitted (a
+  partial view's grandfathered siblings) plus any unmatched leftover ROMs ride chunk 0's commit row set; an empty unit
+  yields exactly one empty chunk, so the empty round-trip and its unbound-row commit survive.
+- **Each chunk is a durable commit.** `sync_apply_unit` now also carries `chunk_index` / `chunk_count` / `chunk_offset`
+  / `unit_total`, and `shortcuts` is the chunk slice. On the ack the reporter commits only that chunk's `roms` rows —
+  the same group-aware two-pass write it already did per unit (every fetched sibling upserted, only representatives
+  bound; Rom row before `rom_metadata`, FK-safe; the ADR-0006 narrow UoW), now over a row subset. A committed chunk is
+  crash-safe on its own; the next chunk emits only after it commits.
+- **Reuse the existing event and callable, extended in place.** `sync_apply_unit` gains four fields and
+  `report_unit_results(map, run_id, unit_id, chunk_index)` gains the chunk index. No new `sync_apply_chunk` event and no
+  new ack callable were added — a chunk is the unit at a finer grain, so the chunk protocol is the unit protocol.
+  Frontend and backend ship in the same PR, the callable-manifest and event-parity gates keep them in lock-step, and
+  there is no half-wired dead surface (a new event with no listener, or a callable with no caller, would fail those
+  gates).
+- **Ack identity is chunk-scoped.** The #1041 identity check (`run_id` == `current_sync_id`, `unit_id` ==
+  `active_unit_id`) gains `chunk_index` == `active_chunk_index`. The orchestrator stamps `active_chunk_index` before
+  each chunk's emit and clears it at commit or cancel, so a late ack for a superseded chunk can never commit against a
+  newer one — the same defense the run/unit identity already gave, at chunk granularity.
+- **Late-ack recovery is per chunk (#1052).** A heartbeat timeout still keeps the coordination state and lets the late
+  `report_unit_results` drive the commit itself, but it now stashes only the **abandoned chunk's** rows
+  (`pending_unit_roms`), not the whole unit's fetch — every chunk committed before the timeout stays committed.
+- **Cancel is chunk-atomic.** A user cancel or a timeout mid-unit forfeits only the in-flight chunk; every chunk
+  committed before it survives. The `SyncRun` still completes **only at run end**, so a partial unit is never recorded
+  as complete and the incremental-skip gate re-fetches it on the next run; the stale-removal scan is already skipped on
+  a cancelled run, so partial progress never triggers removals.
+
+## Consequences
+
+- **A large unit survives a mid-apply crash.** The #797 scenario now loses one ~2-minute chunk, not 24 minutes; the
+  committed chunks are on disk and the next sync resumes from the first uncommitted game.
+- **The bridge payload and frontend memory are bounded by the chunk, not the unit** — ~200 KB and one chunk's closure
+  instead of ~3 MB and the whole list.
+- **Cancel/timeout becomes chunk-atomic rather than unit-atomic.** Cancelling a large unit keeps the games already
+  committed in prior chunks — a behavior change: previously the whole in-flight unit was discarded. This is strictly
+  less lost work and matches "cancel keeps finished games," but it does mean a cancelled unit can leave a **partially**
+  applied platform; the next sync completes it.
+- **More round-trips.** A 3084 unit now runs ~16 emit/ack/commit cycles instead of one. Each cycle adds an event, a
+  callable ack, and a short write UoW; the added overhead is roughly 2% of the unit's apply time — negligible against
+  the crash-recovery it buys.
+- **No wire-surface growth.** Extending the existing event and callable keeps the callable-manifest and event-parity
+  gates green with no new names to police.
+
+## Alternatives considered
+
+- **A dedicated `sync_apply_chunk` event and a new chunk-ack callable.** Rejected as pure churn: the chunk is the unit
+  at a finer grain, so a parallel event/callable pair would duplicate the identity check, the late-ack path, and the
+  parity-gate entries for no behavioral gain — two protocols to keep in sync instead of one.
+- **A configurable chunk size** (a setting or a heuristic). Rejected: 200 already balances payload, cadence, and blast
+  radius across the library sizes we see, and a user-facing knob invites misconfiguration — a too-large value re-opens
+  the #797 loss — for a value no one needs to tune. `_APPLY_CHUNK_SIZE` stays a build-time constant.
+- **Bulk-importing shortcuts outside CEF** (writing `shortcuts.vdf` directly, or an out-of-process importer that
+  bypasses the per-shortcut SteamClient cadence). Deliberately **not** part of this decision. `shortcuts.vdf` is
+  memory-authoritative — Steam rewrites it from memory and clobbers external writes while it is running (see
+  [Steam Non-Steam Shortcuts](../architecture/steam-non-steam-shortcuts.md)) — so a safe bulk path requires Steam
+  restarted or not running, which is a different, research-gated design. Chunking hardens the in-CEF path we have
+  without blocking that future work; the bulk-import route is tracked separately.
+
+## See also
+
+- [#797](https://github.com/danielcopper/decky-romm-sync/issues/797) (the field crash),
+  [#1025](https://github.com/danielcopper/decky-romm-sync/issues/1025) (chunked apply),
+  [#1041](https://github.com/danielcopper/decky-romm-sync/issues/1041) (run/unit ack identity),
+  [#1052](https://github.com/danielcopper/decky-romm-sync/issues/1052) (heartbeat-timeout late-ack recovery)
+- [ADR-0006](0006-narrow-unit-of-work-scope.md) (the narrow write UoW each chunk commits under)
+- [ADR-0021](0021-sibling-group-one-shortcut-binding-active-version.md) (sibling-group collapse — the boundary chunks
+  cut at)
+- [Backend Architecture](../architecture/backend-architecture.md) and
+  [Steam Non-Steam Shortcuts](../architecture/steam-non-steam-shortcuts.md) (the apply pipeline this chunks)

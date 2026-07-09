@@ -32,6 +32,12 @@ one-binding-per-appId rule unbinds whichever sibling rows lost the race, and the
 sibling nondeterministically while the remaining rows permanently read as unsynced. Siblings whose display name differs
 (a Japanese dump with its native title) instead become **duplicate shortcuts** for the same game.
 
+> **Errata (2026-07).** The `appId = CRC32(exe + appName)` premise in this Context is disproven on current Steam — the
+> appId is **assigned at creation**, not hashed. Without a hash, same-named siblings do not collide onto one appId; they
+> instead produce **duplicate shortcuts** (the same failure the differing-name case already describes). The decision
+> below is unaffected: one shortcut per sibling group prevents both manifestations. Corrected model:
+> [Steam Non-Steam Shortcuts — App IDs and Artwork](../architecture/steam-non-steam-shortcuts.md#app-ids-and-artwork).
+
 ## Decision
 
 ### 1. Group identity is computed client-side, mirroring RomM's key; the fetch stays ungrouped

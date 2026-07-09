@@ -30,6 +30,21 @@ You can tap **Cancel Sync** to stop mid-sync. Games already added will remain. A
 collections — stale-collection cleanup only runs after a sync finishes in full, so cancelling can never wipe the
 collections for platforms the run did not reach.
 
+## Time estimate and progress
+
+Before you start, the sync preview shows an **Estimated time** for the run. It is a rough upper bound — it prices every
+game as a brand-new shortcut, so the real run usually finishes sooner, especially a re-sync that only updates a handful
+of games. If you sync without previewing first, the estimate appears once the run starts, shown as "up to ~X min".
+
+A few things worth knowing for a large library:
+
+- **Progress is saved as it goes** — roughly every 200 games. If Steam crashes or you cancel partway through, the games
+  already created are kept, and the next sync picks up where it left off instead of starting over.
+- **Cancelling keeps finished games.** Everything added before you cancel stays in your library; cancelling never
+  removes finished games (and never removes Steam collections).
+- **Keep the Deck awake and powered** for a long sync. If the Deck sleeps or the screen turns off mid-sync the run can
+  stall, so plug it in and keep it awake until it finishes.
+
 ## Multiple versions of a game
 
 When your RomM library holds several dumps of the same game — region variants like `(USA)` / `(Europe)` / `(Japan)`,
