@@ -534,6 +534,19 @@ class LibraryFetcher:
         if not last_sync or persisted_count == 0:
             return None
 
+        # A skip's contract is "the local mirror already matches the server", so
+        # it reconstructs the unit's ROMs from the bound rows. Zero bound rows
+        # while rows persist means nothing is mirrored in Steam — e.g. after a
+        # mass delete leaves unbind-only rows (ADR-0007) — so the reconstructed
+        # list is empty and the diff sees nothing to re-add. Fall through to a
+        # full fetch so the re-add path is fed the platform's ROMs again.
+        if registry_count == 0:
+            self._logger.info(
+                f"Per-unit fetch {platform_name}: no bound shortcuts "
+                f"({persisted_count} rows persisted, 0 bound) — full fetch"
+            )
+            return None
+
         # Version-metadata backfill (#1295 / #1296 / ADR-0021): a persisted ROM
         # whose sibling_group_key is still NULL predates the version-metadata
         # capture and must be re-fetched to fill it in (and to persist its

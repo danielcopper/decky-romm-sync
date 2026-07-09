@@ -383,6 +383,70 @@ class TestIncrementalSkipGroupParity:
         assert result is None
 
 
+class TestIncrementalSkipZeroBoundRows:
+    """Skip-gate guard for a mass-deleted platform (on-device #1025).
+
+    Deleting every RomM shortcut leaves the ``roms`` rows behind as
+    unbind-only (their ``shortcut_app_id`` cleared, ADR-0007). A completed
+    run, an unchanged server, and matching counts otherwise satisfy the
+    skip — but the skip reconstructs the unit's ROMs from the *bound* rows,
+    so with zero bindings the reconstructed list is empty and the diff sees
+    nothing to re-add. The guard must fall through to a full fetch instead.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_skip_when_zero_bound_rows(self, plugin, fake_romm_api):
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        _seed_completed_run(uow)
+        # Rows persist but every shortcut_app_id was cleared by the mass delete;
+        # each carries a group key so the backfill gate would NOT fire — the
+        # only reason to full-fetch is the zero-bindings guard under test.
+        _seed_persisted_rom(uow, 10, app_id=None, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=None, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:100:1")
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)
+
+        result = await plugin._sync_service._fetcher._try_unit_incremental_skip(unit)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_fetch_platform_unit_full_fetches_when_zero_bound_rows(self, plugin, fake_romm_api):
+        """End-to-end: the mass-deleted platform re-paginates its ROMs (skipped=False)."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        _seed_completed_run(uow)
+        _seed_persisted_rom(uow, 10, app_id=None, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=None, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:100:1")
+        # The full-fetch path paginates the live server list back into the re-add path.
+        fake_romm_api.roms = {i: {"id": i, "platform_id": 1, "name": f"G{i}"} for i in range(3)}
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)
+
+        unit_roms, skipped = await plugin._sync_service._fetcher.fetch_platform_unit(unit)
+
+        assert skipped is False
+        assert len(unit_roms) == 3
+
+    @pytest.mark.asyncio
+    async def test_skips_when_a_bound_row_survives(self, plugin, fake_romm_api):
+        """Guard is scoped to zero bindings: one surviving shortcut still skips."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        _seed_completed_run(uow)
+        # One bound representative survives + two unbound siblings → registry_count > 0.
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=None, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:100:1")
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)
+
+        result = await plugin._sync_service._fetcher._try_unit_incremental_skip(unit)
+
+        assert result is not None
+        assert {r["id"] for r in result} == {10}
+
+
 class TestFetchPlatformUnit:
     """Tests for fetch_platform_unit() — wrong-type guard, error propagation, pagination."""
 
