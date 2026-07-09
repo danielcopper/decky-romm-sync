@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.26.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.25.0...decky-romm-sync-v0.26.0) (2026-07-09)
+
+
+### Features
+
+* **auth:** add api-token sign-in for OIDC users ([#1333](https://github.com/danielcopper/decky-romm-sync/issues/1333)) ([407db78](https://github.com/danielcopper/decky-romm-sync/commit/407db78cb9c189ec357a28e8832675654b7a11ca))
+* **auth:** request roms.user.read scope for native play-session reads ([#1280](https://github.com/danielcopper/decky-romm-sync/issues/1280)) ([3043cb5](https://github.com/danielcopper/decky-romm-sync/commit/3043cb597fa7c65906803db5de935d7d833ac937))
+* **auth:** sign in with a RomM pairing code ([#1335](https://github.com/danielcopper/decky-romm-sync/issues/1335)) ([061bf36](https://github.com/danielcopper/decky-romm-sync/commit/061bf3600b56bf0b331b9d3cb450314d3554a392))
+* **auth:** sign out and signed-in connection actions ([#1336](https://github.com/danielcopper/decky-romm-sync/issues/1336)) ([c544ef1](https://github.com/danielcopper/decky-romm-sync/commit/c544ef155244d2bc0c2def5c608ad14301b5aaf6))
+* **launch:** resolve emulator defaults live from es_systems ([#1305](https://github.com/danielcopper/decky-romm-sync/issues/1305)) ([8a2724f](https://github.com/danielcopper/decky-romm-sync/commit/8a2724f540fa8b9e3263009fb0b7b45663950688))
+* **launch:** state-aware Resume button for an already-running game ([#1315](https://github.com/danielcopper/decky-romm-sync/issues/1315)) ([70e7c4a](https://github.com/danielcopper/decky-romm-sync/commit/70e7c4a10743a08dcd881e3afac9e31799584541))
+* **library:** capture rom version metadata and sibling group key ([#1304](https://github.com/danielcopper/decky-romm-sync/issues/1304)) ([350cc7e](https://github.com/danielcopper/decky-romm-sync/commit/350cc7e25d48a9bf21e09dbe6fd4a3f7afa613ff))
+* **library:** guarded version switching for downloaded games ([#1344](https://github.com/danielcopper/decky-romm-sync/issues/1344)) ([5cb1d67](https://github.com/danielcopper/decky-romm-sync/commit/5cb1d67292049f4115dfe407a7044c0d54cf8065))
+* **library:** one steam shortcut per sibling group with deterministic binding ([#1337](https://github.com/danielcopper/decky-romm-sync/issues/1337)) ([1e61bec](https://github.com/danielcopper/decky-romm-sync/commit/1e61becca3a424536737eff9cfbb40b4541be815))
+* **playtime:** adopt RomM native play-session ingest (ADR-0018) ([#1281](https://github.com/danielcopper/decky-romm-sync/issues/1281)) ([b5936bc](https://github.com/danielcopper/decky-romm-sync/commit/b5936bc3a00deb611417e8ee56fe075a770260aa))
+* **playtime:** restore session_count and last_played from native play sessions ([#1288](https://github.com/danielcopper/decky-romm-sync/issues/1288)) ([f8f39b3](https://github.com/danielcopper/decky-romm-sync/commit/f8f39b35e6d457b659ceef4198598217fb5d189b))
+* **ui:** show last played from restored playtime data ([#1300](https://github.com/danielcopper/decky-romm-sync/issues/1300)) ([39edeac](https://github.com/danielcopper/decky-romm-sync/commit/39edeac13486f8100df743b0a99cdd9cc49f6189))
+* **ui:** version picker as a standalone game-detail control ([#1343](https://github.com/danielcopper/decky-romm-sync/issues/1343)) ([c9b68d0](https://github.com/danielcopper/decky-romm-sync/commit/c9b68d0a0fbf88245926e365fafa30e1223c816f))
+
+
+### Bug Fixes
+
+* **artwork:** cache covers per rom so version picker thumbnails persist per version ([#1357](https://github.com/danielcopper/decky-romm-sync/issues/1357)) ([4261a7d](https://github.com/danielcopper/decky-romm-sync/commit/4261a7dfe7562940500240a7dda11c5a504713b1))
+* **connection:** harden version gate against non-string SYSTEM.VERSION ([#1284](https://github.com/danielcopper/decky-romm-sync/issues/1284)) ([f29f2f9](https://github.com/danielcopper/decky-romm-sync/commit/f29f2f9b25917806ea02baaedfe0e0eccb657f4b))
+* **cores:** resolve active core outside the open UoW ([#1283](https://github.com/danielcopper/decky-romm-sync/issues/1283)) ([ac1757e](https://github.com/danielcopper/decky-romm-sync/commit/ac1757e5990671492b4ae1e549e4dd0c54828a0d)), closes [#1047](https://github.com/danielcopper/decky-romm-sync/issues/1047) [#1134](https://github.com/danielcopper/decky-romm-sync/issues/1134)
+* **downloads:** name multi-file extract dir from the ROM identity, not files[0] ([#1307](https://github.com/danielcopper/decky-romm-sync/issues/1307)) ([b5e82e0](https://github.com/danielcopper/decky-romm-sync/commit/b5e82e085b827c5f26fd2862f7b5fcdcb20e04db))
+* **launch:** bake the game folder as the PS3 launch target ([#1302](https://github.com/danielcopper/decky-romm-sync/issues/1302)) ([ed00f88](https://github.com/danielcopper/decky-romm-sync/commit/ed00f882dc462dd18f35941cae0b0c2b389d0416))
+* **library:** reset kept shortcut launch_options after bulk uninstall ([#1146](https://github.com/danielcopper/decky-romm-sync/issues/1146)) ([#1285](https://github.com/danielcopper/decky-romm-sync/issues/1285)) ([397e122](https://github.com/danielcopper/decky-romm-sync/commit/397e122c7be5c069ef9c80bbb2614848cd4dc54c))
+* **library:** stop classifying the derived platform_name (permanent preview delta) ([#1306](https://github.com/danielcopper/decky-romm-sync/issues/1306)) ([7d8a2b8](https://github.com/danielcopper/decky-romm-sync/commit/7d8a2b8ede5f7282a208b920f9693fe7ec7ed7f3)), closes [#1292](https://github.com/danielcopper/decky-romm-sync/issues/1292)
+* **migration:** chain pending homes so repeated moves never strand files ([#1282](https://github.com/danielcopper/decky-romm-sync/issues/1282)) ([80d584b](https://github.com/danielcopper/decky-romm-sync/commit/80d584bee5a2503a62826191a799d84992a6ffee))
+* **playtime:** adopt orphaned session after plugin reload ([#1289](https://github.com/danielcopper/decky-romm-sync/issues/1289)) ([968aab1](https://github.com/danielcopper/decky-romm-sync/commit/968aab1f77bb77f031cb873a1684443877c3341c))
+* **playtime:** drain server-rejected play sessions instead of retrying forever ([#1310](https://github.com/danielcopper/decky-romm-sync/issues/1310)) ([5d6e925](https://github.com/danielcopper/decky-romm-sync/commit/5d6e92570528d973c35b754619071c44ffd19136))
+* **playtime:** exclude suspend time via the monotonic clock ([#1316](https://github.com/danielcopper/decky-romm-sync/issues/1316)) ([a34dfb9](https://github.com/danielcopper/decky-romm-sync/commit/a34dfb98c0c15f16446387e33d5a8875db97dd30))
+* **playtime:** register renamed suspend hooks + robust session adoption ([#1308](https://github.com/danielcopper/decky-romm-sync/issues/1308)) ([4b2db57](https://github.com/danielcopper/decky-romm-sync/commit/4b2db57558bf64321b3c2ba84d815412a013e173))
+* **playtime:** sub-second sessions poison the whole ingest batch → 422 retry loop ([#1314](https://github.com/danielcopper/decky-romm-sync/issues/1314)) ([5a7b3c9](https://github.com/danielcopper/decky-romm-sync/commit/5a7b3c9e4e9e52b66d33197206a10bd63d3abc05))
+* **settings:** purge retired romm_user/romm_pass keys from settings.json ([#1278](https://github.com/danielcopper/decky-romm-sync/issues/1278)) ([bbc3eec](https://github.com/danielcopper/decky-romm-sync/commit/bbc3eec2548ee829e92c93f6bd7e98d2a292254d))
+* **ui:** disable cross-group versions in picker and make switch failure toasts readable ([#1361](https://github.com/danielcopper/decky-romm-sync/issues/1361)) ([b8ea414](https://github.com/danielcopper/decky-romm-sync/commit/b8ea4141f89540ef6b166234203345b83cf9eeeb))
+* **ui:** hide Apply when the sync preview has no real collection delta ([#1287](https://github.com/danielcopper/decky-romm-sync/issues/1287)) ([4085def](https://github.com/danielcopper/decky-romm-sync/commit/4085def80064b08fb363edf9ff691021c0bb68c1))
+* **ui:** live RomM connection state with offline fast paths, recovery, and switch-flow polish ([#1347](https://github.com/danielcopper/decky-romm-sync/issues/1347)) ([f8f60ac](https://github.com/danielcopper/decky-romm-sync/commit/f8f60ac1798ee070cc412847f5cb33c25d6f4d51))
+* **ui:** prevent stale sgdb artwork apply from overwriting a newer one ([#1358](https://github.com/danielcopper/decky-romm-sync/issues/1358)) ([6f832ee](https://github.com/danielcopper/decky-romm-sync/commit/6f832ee876597b0db4a435e3e67c8b096bca84b3))
+* **ui:** refresh game-detail ROM File section on download_complete ([#1342](https://github.com/danielcopper/decky-romm-sync/issues/1342)) ([10182a0](https://github.com/danielcopper/decky-romm-sync/commit/10182a0df0e4d4ad5efdde5b138ac97ca2d6839b)), closes [#1340](https://github.com/danielcopper/decky-romm-sync/issues/1340)
+* **ui:** register new shortcuts as romm-owned at unit-ack time ([#1338](https://github.com/danielcopper/decky-romm-sync/issues/1338)) ([3a68a2e](https://github.com/danielcopper/decky-romm-sync/commit/3a68a2e9fc687ad1c05e398ab10aafe9c8176ad2))
+* **ui:** require would-be group key match for server-only siblings in picker and switch ([#1363](https://github.com/danielcopper/decky-romm-sync/issues/1363)) ([7cf4205](https://github.com/danielcopper/decky-romm-sync/commit/7cf42056a430dd64f149ac3b3b679e73d80a84b1))
+* **ui:** surface backend bootstrap failure instead of eternal "Checking…" ([#1286](https://github.com/danielcopper/decky-romm-sync/issues/1286)) ([7dc03c0](https://github.com/danielcopper/decky-romm-sync/commit/7dc03c0e6f7d43f228d9b548bd0a9cd8f2407437))
+
 ## [0.25.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.24.2...decky-romm-sync-v0.25.0) (2026-07-02)
 
 
