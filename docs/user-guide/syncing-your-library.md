@@ -42,8 +42,8 @@ A few things worth knowing for a large library:
   already created are kept, and the next sync picks up where it left off instead of starting over.
 - **Cancelling keeps finished games.** Everything added before you cancel stays in your library; cancelling never
   removes finished games (and never removes Steam collections).
-- **Keep the Deck awake and powered** for a long sync. If the Deck sleeps or the screen turns off mid-sync the run can
-  stall, so plug it in and keep it awake until it finishes.
+- **Sleep is safe; keep it powered.** If the Deck sleeps mid-sync the run pauses and resumes on wake — it does not stall
+  or lose progress. For a large first sync, plug it in so the battery lasts the whole run.
 
 ## Multiple versions of a game
 

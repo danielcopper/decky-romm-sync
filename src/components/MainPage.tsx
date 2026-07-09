@@ -552,8 +552,8 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         </PanelSectionRow>
         <PanelSectionRow>
           <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.6)", padding: "4px 0" }}>
-            Progress is saved every ~200 games. Cancelling is safe — finished games are kept. Keep the Deck awake and
-            powered for long syncs.
+            Progress is saved every ~200 games. Cancelling is safe — finished games are kept. Long syncs pause while the
+            Deck sleeps and resume on wake; keep it powered for a large first sync.
           </div>
         </PanelSectionRow>
         {hasChanges ? (

@@ -1073,7 +1073,7 @@ describe("MainPage", () => {
       const c = await renderPreviewWithCounts(1, 0);
       expect(c.textContent).toContain("Progress is saved every ~200 games");
       expect(c.textContent).toContain("Cancelling is safe");
-      expect(c.textContent).toContain("Keep the Deck awake");
+      expect(c.textContent).toContain("Long syncs pause while the Deck sleeps and resume on wake");
     });
 
     it("renders 'up to ~X min' while applying when etaSeconds is set", async () => {
