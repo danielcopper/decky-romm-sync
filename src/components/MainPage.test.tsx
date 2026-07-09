@@ -1069,6 +1069,12 @@ describe("MainPage", () => {
       await flushAsync();
       expect(container.textContent).toContain(longMsg);
       expect(container.textContent).not.toContain("…");
+      // The shared wrap rule is applied: the line wraps (whiteSpace normal),
+      // never single-line nowrap.
+      const fine = container.querySelector('[data-testid="sync-fine"]') as HTMLElement | null;
+      expect(fine).not.toBeNull();
+      expect(fine!.style.whiteSpace).toBe("normal");
+      expect(fine!.style.whiteSpace).not.toBe("nowrap");
     });
 
     it("shows a spinner next to the stage label while running without fine detail", async () => {

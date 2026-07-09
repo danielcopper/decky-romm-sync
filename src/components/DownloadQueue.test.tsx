@@ -153,6 +153,33 @@ describe("DownloadQueue", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Caption wrapping — dynamic ROM/platform text must wrap, never clip (#1367)
+  // ---------------------------------------------------------------------------
+  describe("caption wrapping (never clip long names)", () => {
+    it("renders a long ROM/platform caption in full with wrapping styles (no nowrap/ellipsis clip)", async () => {
+      const longName = "Super Long Game Name That Exceeds The Narrow QAM Panel Width By A Wide Margin";
+      const item = makeItem({
+        rom_id: 7,
+        rom_name: longName,
+        platform_name: "Nintendo Entertainment System",
+      });
+      vi.mocked(backend.getDownloadQueue).mockResolvedValue({ downloads: [item] });
+      const { container } = render(<DownloadQueue onBack={() => {}} />);
+      await flushMount();
+
+      const caption = container.querySelector('[data-testid="dl-caption"]') as HTMLElement | null;
+      expect(caption).not.toBeNull();
+      // Full text present — nothing truncated away.
+      expect(caption!.textContent).toBe(`${longName} (Nintendo Entertainment System)`);
+      // The old clip styles are gone; the shared wrap rule is applied.
+      expect(caption!.style.whiteSpace).toBe("normal");
+      expect(caption!.style.whiteSpace).not.toBe("nowrap");
+      expect(caption!.style.textOverflow).toBe("");
+      expect(caption!.style.overflow).toBe("");
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Polling (500ms setInterval)
   // ---------------------------------------------------------------------------
   describe("polling", () => {

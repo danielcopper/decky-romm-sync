@@ -5,6 +5,7 @@ import { getDownloadState, setDownloads } from "../utils/downloadStore";
 import { formatBytes } from "../utils/formatters";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
+import { wrapText } from "../utils/textStyles";
 import type { DownloadItem } from "../types";
 
 interface DownloadQueueProps {
@@ -155,14 +156,15 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
                     style={{
                       display: "flex",
                       justifyContent: "space-between",
+                      alignItems: "flex-start",
                       fontSize: "12px",
                       marginBottom: "4px",
                     }}
                   >
-                    <span
-                      data-testid="dl-caption"
-                      style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                    >
+                    {/* Wrap a long ROM/platform caption to as many lines as
+                        needed instead of clipping it with an ellipsis (shared
+                        wrap rule) — the bytes column stays pinned top-right. */}
+                    <span data-testid="dl-caption" style={wrapText}>
                       {item.rom_name} ({item.platform_name}){item.status === "paused" ? " — Paused" : ""}
                       {item.status === "extracting" ? " — Extracting…" : ""}
                     </span>

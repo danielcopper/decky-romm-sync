@@ -61,6 +61,7 @@ import type {
 } from "../types";
 import { detach } from "../utils/detach";
 import { withTimeout } from "../utils/withTimeout";
+import { wrapText } from "../utils/textStyles";
 
 type Page = "settings" | "library" | "data" | "downloads" | "system";
 
@@ -683,17 +684,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               label={
                 <div style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
                   <Spinner width={14} height={14} />
-                  {/* Let the longer narrated messages ("Fetching Game Boy
-                      Advance (page 4/62)") wrap to up to two lines on word
-                      boundaries instead of being clipped mid-parenthesis. The
-                      flex child needs minWidth:0 to wrap; the clamp caps it at
-                      two lines so an unexpectedly long name can't blow up the
-                      row. */}
+                  {/* Wrap the narrated messages ("Fetching Game Boy Advance
+                      (page 4/62)") on word boundaries instead of clipping them
+                      mid-parenthesis (shared wrap rule). The clamp caps this
+                      live-updating line at two lines so a long platform name
+                      can't grow the row unboundedly. */}
                   <span
+                    data-testid="sync-fine"
                     style={{
-                      fontSize: "12px",
-                      minWidth: 0,
-                      whiteSpace: "normal",
+                      ...wrapText,
                       display: "-webkit-box",
                       WebkitLineClamp: 2,
                       WebkitBoxOrient: "vertical",
