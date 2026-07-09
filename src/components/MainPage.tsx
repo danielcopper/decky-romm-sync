@@ -176,7 +176,7 @@ function formatPreviewDescription(s: SyncPreviewSummary): string {
     [s.changed_count, "updated"],
     [s.remove_count, "removed"],
   ]);
-  if (romChanges) sections.push(`ROMs: ${romChanges}`);
+  if (romChanges) sections.push(`Games: ${romChanges}`);
   const p = s.platform_collection_diff;
   if (p?.has_changes) {
     const platChanges = formatChanges([
@@ -726,7 +726,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               <PanelSectionRow>
                 <Field label="Library">
                   <span style={{ fontSize: "12px" }}>
-                    {stats.roms} ROMs
+                    {stats.roms} games
                     {stats.platforms > 0 ? ` · ${stats.platforms} platforms` : ""}
                     {(stats.collections ?? 0) > 0 ? ` · ${stats.collections} collections` : ""}
                   </span>

@@ -440,8 +440,9 @@ describe("MainPage", () => {
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      // Library line includes "42 ROMs"
-      expect(container.textContent).toContain("42 ROMs");
+      // Library line includes "42 games" — the stat counts bound shortcuts
+      // (sibling groups), so the label says games, not ROMs (#1298 audit).
+      expect(container.textContent).toContain("42 games");
       expect(container.textContent).toContain("3 platforms");
       expect(container.textContent).toContain("2 collections");
     });
@@ -905,7 +906,7 @@ describe("MainPage", () => {
         remove_count: 2,
       });
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
-      expect(descs.some((d) => d.includes("ROMs: 3 added, 1 updated, 2 removed"))).toBe(true);
+      expect(descs.some((d) => d.includes("Games: 3 added, 1 updated, 2 removed"))).toBe(true);
     });
 
     it("renders Platforms section from platform_collection_diff", async () => {
@@ -939,9 +940,9 @@ describe("MainPage", () => {
         remove_count: 0,
       });
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
-      // Should render "ROMs: 1 added" — no "updated" or "removed" tokens.
-      const romsLine = descs.find((d) => d.startsWith("ROMs:"));
-      expect(romsLine).toBe("ROMs: 1 added");
+      // Should render "Games: 1 added" — no "updated" or "removed" tokens.
+      const romsLine = descs.find((d) => d.startsWith("Games:"));
+      expect(romsLine).toBe("Games: 1 added");
     });
   });
 

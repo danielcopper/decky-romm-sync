@@ -873,7 +873,7 @@ describe("LibraryPage", () => {
       });
       const favToggle = container.querySelector<HTMLElement>('[data-label="Sync RomM favorites"]');
       expect(favToggle).not.toBeNull();
-      expect(favToggle?.getAttribute("data-description")).toBe("Includes 1 favorited game");
+      expect(favToggle?.getAttribute("data-description")).toBe("Includes 1 favorited ROM");
     });
 
     it("renders the plural description for N>1 favorited games", async () => {
@@ -889,7 +889,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       const favToggle = container.querySelector<HTMLElement>('[data-label="Sync RomM favorites"]');
-      expect(favToggle?.getAttribute("data-description")).toBe("Includes 7 favorited games");
+      expect(favToggle?.getAttribute("data-description")).toBe("Includes 7 favorited ROMs");
     });
 
     it("renders the plural description for 0 favorited games", async () => {
@@ -905,7 +905,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       const favToggle = container.querySelector<HTMLElement>('[data-label="Sync RomM favorites"]');
-      expect(favToggle?.getAttribute("data-description")).toBe("Includes 0 favorited games");
+      expect(favToggle?.getAttribute("data-description")).toBe("Includes 0 favorited ROMs");
     });
 
     it("clicking the favorites toggle calls saveCollectionSync with the favorites id and kind=user", async () => {

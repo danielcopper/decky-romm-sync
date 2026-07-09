@@ -60,8 +60,8 @@ function filterCollectionsBySubTab(
 }
 
 function favoritesDescription(romCount: number): string {
-  if (romCount === 1) return "Includes 1 favorited game";
-  return `Includes ${romCount} favorited games`;
+  if (romCount === 1) return "Includes 1 favorited ROM";
+  return `Includes ${romCount} favorited ROMs`;
 }
 
 interface LibraryPageProps {
