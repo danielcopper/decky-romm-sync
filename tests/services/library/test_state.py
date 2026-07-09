@@ -113,6 +113,14 @@ class TestFinishRun:
         assert box.current_sync_id == "run-B"
 
 
+class TestChunkCoordination:
+    def test_active_chunk_index_defaults_to_none(self):
+        """A fresh box has no in-flight apply chunk — the reporter's chunk guard
+        treats ``None`` as 'no active chunk' and rejects any ack (#1025)."""
+        box = LibrarySyncStateBox()
+        assert box.active_chunk_index is None
+
+
 class TestIsInFlight:
     def test_idle_not_in_flight(self):
         box = LibrarySyncStateBox()

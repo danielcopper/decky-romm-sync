@@ -25,6 +25,7 @@ from domain.preview_delta import PreviewDelta
 from domain.shortcut_data import EmulatorInvocation, build_shortcuts_data
 from domain.sibling_group import compute_component_group_keys
 from domain.sibling_resolution import AUTO_REGION
+from domain.sync_chunking import build_unit_chunks
 from domain.sync_diff import (
     BIND_ROM_ID_KEY,
     classify_roms,
@@ -72,6 +73,12 @@ _UNIT_HEARTBEAT_TIMEOUT_SEC = 60.0
 # clock. Kept short so cancel propagation feels responsive without
 # burning CPU.
 _UNIT_WAIT_POLL_SEC = 1.0
+# Emitted-shortcut count per apply chunk. A unit's emitted shortcuts are split
+# into chunks of about this many entries, each emitted → acked → committed
+# durably before the next, so a mid-unit CEF crash forfeits only the in-flight
+# chunk. A chunk may overflow this to keep a sibling group whole (see
+# :func:`domain.sync_chunking.build_unit_chunks`).
+_APPLY_CHUNK_SIZE = 200
 
 
 @dataclass(frozen=True)
@@ -859,73 +866,93 @@ class SyncOrchestrator:
         # Stage the emitted representatives for cover finalise + binding, and the
         # full built set for the ack-independent identity + version persist (the
         # reporter upserts a row for every sibling, binds only representatives).
+        # Staging stays whole-unit; the apply is chunked below, so a mid-unit CEF
+        # crash forfeits only the in-flight chunk, not every prior chunk.
         box.pending_sync = {e["rom_id"]: e for e in emitted}
         box.pending_all_roms = {sd["rom_id"]: sd for sd in shortcuts_data}
 
-        # Emit per-unit apply event + wait for the frontend callback.
-        box.unit_complete_event = asyncio.Event()
-        box.last_unit_results = None
-        # Stamp the unit's identity so the reporter can validate the ack's
-        # run_id + unit_id and reject a late ack from a cancelled run or a
-        # stray ack for a different unit (#1041).
-        box.active_unit_id = unit.id
-        # Reset the abandoned-unit stash so a prior timed-out unit can't
-        # leak its state into this one's late-ack commit (#1052).
-        box.unit_abandoned = False
-        box.pending_unit_roms = []
-        box.sync_last_heartbeat = self._clock.monotonic()
-        await self._emit(
-            "sync_apply_unit",
-            {
-                "run_id": str(box.current_sync_id or ""),
-                "unit_type": unit.type,
-                "unit_id": unit.id,
-                "unit_name": unit.name,
-                "unit_index": unit_index,
-                "total_units": total_units,
-                "shortcuts": emitted,
-            },
-        )
+        # Split the unit's emitted shortcuts into commit chunks and process one
+        # at a time: emit → wait → commit durably → next. ``chunk.rom_ids`` are
+        # this chunk's fetched ROMs (its sibling groups' rows); a keyed lookup
+        # into the whole unit's live fetch yields the chunk's commit subset.
+        chunks = build_unit_chunks(emitted, shortcuts_data, _APPLY_CHUNK_SIZE)
+        roms_by_id = {r["id"]: r for r in unit_roms if "id" in r}
+        chunk_count = len(chunks)
+        applied_count = 0
+        for chunk_index, chunk in enumerate(chunks):
+            chunk_rows = [roms_by_id[rid] for rid in chunk.rom_ids if rid in roms_by_id]
 
-        applied = await self._wait_for_unit_complete(unit, box.unit_complete_event)
-        if applied is None:
-            # The wait gave up — but the reason matters. The outer loop
-            # observes CANCELLING and stops either way; what differs is
-            # whether the frontend's in-flight work is recoverable.
-            if box.is_cancelling():
-                # User cancel: in-flight work is intentionally discarded.
-                # Drop the pending state, null the event, and clear the unit
-                # identity so a stray late ack can't commit a cancelled unit.
-                box.pending_sync = {}
-                box.pending_all_roms = {}
-                box.unit_complete_event = None
-                box.active_unit_id = None
-            else:
-                # Heartbeat timeout: the frontend has already created this
-                # unit's Steam shortcuts and will still fire its late
-                # ``report_unit_results`` ack. Keep ``pending_sync`` +
-                # ``pending_all_roms`` + ``unit_complete_event`` and stash the
-                # unit's ROMs so the late ack commits the delivered bindings
-                # instead of leaving orphan shortcuts (#1052). Flag the unit
-                # abandoned so the reporter drives that commit itself.
-                box.unit_abandoned = True
-                box.pending_unit_roms = unit_roms
-                box.request_cancel()
-            return 0
+            # Fresh per-chunk coordination: a new event + identity (run + unit +
+            # chunk index) so the reporter validates each chunk's ack, and the
+            # abandoned-chunk stash from a prior chunk can't leak into this one.
+            box.unit_complete_event = asyncio.Event()
+            box.last_unit_results = None
+            box.active_unit_id = unit.id
+            box.active_chunk_index = chunk_index
+            box.unit_abandoned = False
+            box.pending_unit_roms = []
+            box.sync_last_heartbeat = self._clock.monotonic()
+            await self._emit(
+                "sync_apply_unit",
+                {
+                    "run_id": str(box.current_sync_id or ""),
+                    "unit_type": unit.type,
+                    "unit_id": unit.id,
+                    "unit_name": unit.name,
+                    "unit_index": unit_index,
+                    "total_units": total_units,
+                    "chunk_index": chunk_index,
+                    "chunk_count": chunk_count,
+                    "chunk_offset": chunk.offset,
+                    "unit_total": len(emitted),
+                    "shortcuts": chunk.emitted,
+                },
+            )
 
-        # Per-unit commit: the reporter upserts EVERY fetched ROM into the
-        # ``roms`` aggregate (identity + version metadata, unbound for non-
-        # representatives) and binds only the acked representatives, stamping
-        # each ROM's cached ``rom_metadata`` in the same write UoW (Rom row
-        # first, metadata second — FK-safe). ``unit_roms`` is the live RomM
-        # fetch for the whole unit — the source of ``metadatum``.
-        await self._reporter.get().commit_unit_results(applied, unit_roms)
+            applied = await self._wait_for_unit_complete(unit, box.unit_complete_event)
+            if applied is None:
+                # The wait gave up — the reason decides whether this chunk's
+                # in-flight work is recoverable. Chunks committed before this one
+                # stay committed either way.
+                if box.is_cancelling():
+                    # User cancel: this chunk is intentionally discarded. Drop the
+                    # whole-unit staging, null the event, and clear the unit +
+                    # chunk identity so a stray late ack can't commit it.
+                    box.pending_sync = {}
+                    box.pending_all_roms = {}
+                    box.unit_complete_event = None
+                    box.active_unit_id = None
+                    box.active_chunk_index = None
+                else:
+                    # Heartbeat timeout: the frontend already created this chunk's
+                    # Steam shortcuts and will still fire its late
+                    # ``report_unit_results`` ack. Keep the staging +
+                    # ``unit_complete_event`` and stash THIS chunk's rows so the
+                    # late ack commits the delivered bindings instead of leaving
+                    # orphan shortcuts (#1052). Flag the chunk abandoned so the
+                    # reporter drives that commit itself.
+                    box.unit_abandoned = True
+                    box.pending_unit_roms = chunk_rows
+                    box.request_cancel()
+                return applied_count
+
+            # Per-chunk commit: the reporter upserts every fetched ROM of this
+            # chunk into the ``roms`` aggregate (identity + version metadata,
+            # unbound for non-representatives) and binds only the acked
+            # representatives, stamping each ROM's cached ``rom_metadata`` in the
+            # same write UoW (Rom row first, metadata second — FK-safe).
+            # ``chunk_rows`` is this chunk's slice of the live RomM fetch — the
+            # source of ``metadatum`` — so each committed chunk is a crash-safe
+            # checkpoint.
+            await self._reporter.get().commit_unit_results(applied, chunk_rows)
+            applied_count += len(applied)
 
         box.pending_sync = {}
         box.pending_all_roms = {}
         box.unit_complete_event = None
         box.active_unit_id = None
-        return len(applied)
+        box.active_chunk_index = None
+        return applied_count
 
     async def _sync_platform_unit(
         self,

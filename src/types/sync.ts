@@ -137,6 +137,17 @@ export interface SyncApplyUnitData {
   unit_name: string;
   unit_index: number;
   total_units: number;
+  /**
+   * A unit's shortcuts are emitted in chunks, each acked + committed durably
+   * before the next, so a mid-unit CEF crash forfeits only the in-flight chunk.
+   * ``chunk_index`` (0-based) is echoed back in the ack so the backend rejects a
+   * stale chunk; ``chunk_offset`` / ``unit_total`` drive unit-wide progress that
+   * stays continuous across chunks; ``shortcuts`` is this chunk's slice.
+   */
+  chunk_index: number;
+  chunk_count: number;
+  chunk_offset: number;
+  unit_total: number;
   shortcuts: SyncAddItem[];
 }
 

@@ -91,6 +91,14 @@ class LibrarySyncStateBox:
     # heartbeat-timeout abandon window so the late ack for the SAME unit still
     # validates; the cleared cross-run/cross-unit case is what it rejects.
     active_unit_id: int | str | None = None
+    # 0-based index of the unit's apply chunk currently dispatched to the
+    # frontend. A unit's emitted shortcuts are split into chunks emitted +
+    # committed one at a time (each chunk is a durable checkpoint); this stamps
+    # which chunk is in flight so ``SyncReporter.report_unit_results`` can reject
+    # an ack for a stale chunk alongside the run/unit identity check. Set by the
+    # orchestrator before each chunk's ``sync_apply_unit`` emit and cleared to
+    # ``None`` once the unit's last chunk is committed (or the unit is cancelled).
+    active_chunk_index: int | None = None
     # Holds the frontend-supplied ``rom_id_to_app_id`` mapping reported
     # for the active unit. Surfaces the result so the orchestrator can
     # accumulate the per-unit registry into the cross-run accumulators.
@@ -101,9 +109,11 @@ class LibrarySyncStateBox:
     # observes this flag and drives the per-unit commit itself so the
     # delivered bindings are persisted rather than discarded (#1052).
     unit_abandoned: bool = False
-    # The abandoned unit's live RomM fetch (the source of each ROM's
-    # ``metadatum``), stashed so a late ack can rebuild ``acked_roms`` for
-    # the commit it drives. Reset between units alongside ``last_unit_results``.
+    # The abandoned CHUNK's rows (the fetched ROMs of the in-flight chunk's
+    # sibling groups, each the source of its ``metadatum``), stashed so a late
+    # ack can rebuild ``acked_roms`` for the commit it drives. Only the chunk
+    # that timed out is stashed — already-committed chunks stay committed. Reset
+    # between chunks alongside ``last_unit_results``.
     pending_unit_roms: list[dict[str, Any]] = field(default_factory=list)
     # Every Steam appId bound by a ``commit_unit_results`` this run, across
     # BOTH the happy path and the heartbeat-timeout late-ack path (#1052).

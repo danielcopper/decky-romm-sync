@@ -13,6 +13,7 @@ import { act } from "@testing-library/react";
 import * as backend from "../api/backend";
 import { emitDeckyEvent } from "../test-utils/decky-api-mock";
 import { resetSyncDelta, getSyncDelta } from "./syncDeltaStore";
+import { getSyncProgress, onSyncProgressChange } from "./syncProgress";
 import type { SyncApplyUnitData } from "../types";
 
 const setLaunchOptionsConfirmed = vi.fn().mockResolvedValue(true);
@@ -42,6 +43,10 @@ function unit(launchOptions: string, runId = "run-1"): SyncApplyUnitData {
     unit_name: "PSX",
     unit_index: 0,
     total_units: 1,
+    chunk_index: 0,
+    chunk_count: 1,
+    chunk_offset: 0,
+    unit_total: 1,
     shortcuts: [
       {
         rom_id: 42,
@@ -83,8 +88,8 @@ describe("syncManager — existing-shortcut update uses confirm-poll", () => {
     expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(5000, cmd);
     expect(addShortcut).not.toHaveBeenCalled();
     // The rom_id→appId binding is reported back to the backend, echoing the
-    // run + unit identity so the backend can reject a stale ack (#1041).
-    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 5000 }, "run-confirm", 1);
+    // run + unit + chunk identity so the backend can reject a stale ack (#1041/#1025).
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 5000 }, "run-confirm", 1, 0);
   });
 });
 
@@ -145,6 +150,10 @@ describe("syncManager — group-aware emit: one Steam shortcut per game (ADR-002
       unit_name: "N64",
       unit_index: 0,
       total_units: 1,
+      chunk_index: 0,
+      chunk_count: 1,
+      chunk_offset: 0,
+      unit_total: 1,
       shortcuts: [groupItem({ rom_id: 1, name: "Zelda (USA)", launch_options: jpCmd, bind_rom_id: 2 })],
     };
 
@@ -158,7 +167,7 @@ describe("syncManager — group-aware emit: one Steam shortcut per game (ADR-002
     // the representative's path via the confirm-poll; never a second AddShortcut.
     expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(5000, jpCmd);
     expect(addShortcut).not.toHaveBeenCalled();
-    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "1": 5000 }, "run-rebind", 1);
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "1": 5000 }, "run-rebind", 1, 0);
     // Artwork follows the BINDING target (representative rom 2), NOT the vanished
     // sibling (rom 1) the shortcut is keyed to — covers can be edition-specific.
     expect(vi.mocked(backend.getArtworkBase64)).toHaveBeenCalledWith(2);
@@ -181,6 +190,10 @@ describe("syncManager — group-aware emit: one Steam shortcut per game (ADR-002
       unit_name: "N64",
       unit_index: 0,
       total_units: 1,
+      chunk_index: 0,
+      chunk_count: 1,
+      chunk_offset: 0,
+      unit_total: 2,
       shortcuts: [groupItem({ rom_id: 10, name: "Zelda" }), groupItem({ rom_id: 20, name: "Mario" })],
     };
 
@@ -193,7 +206,12 @@ describe("syncManager — group-aware emit: one Steam shortcut per game (ADR-002
     // Two groups → exactly two shortcuts, one per game.
     expect(addShortcut).toHaveBeenCalledTimes(2);
     expect(addShortcut.mock.calls.map((c) => c[0].rom_id).sort((a, b) => a - b)).toEqual([10, 20]);
-    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "10": 6000, "20": 6001 }, "run-two-groups", 1);
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith(
+      { "10": 6000, "20": 6001 },
+      "run-two-groups",
+      1,
+      0,
+    );
   });
 });
 
@@ -247,6 +265,10 @@ describe("syncManager — registers resolved appIds as RomM-owned at ack time (#
       unit_name: "PSX",
       unit_index: 0,
       total_units: 1,
+      chunk_index: 0,
+      chunk_count: 1,
+      chunk_offset: 0,
+      unit_total: shortcuts.length,
       shortcuts,
     };
   }
@@ -462,5 +484,141 @@ describe("syncManager — records created shortcuts into the per-run delta store
 
     expect(addShortcut).toHaveBeenCalledTimes(1);
     expect(getSyncDelta()).toEqual({ added: 0, removed: 0 });
+  });
+});
+
+describe("syncManager — chunked apply (#1025)", () => {
+  const EXE = "/home/deck/homebrew/plugins/decky-romm-sync/bin/rom-launcher";
+
+  beforeEach(() => {
+    setLaunchOptionsConfirmed.mockClear();
+    setLaunchOptionsConfirmed.mockResolvedValue(true);
+    addShortcut.mockReset();
+    getExistingRomMShortcuts.mockReset();
+    // Update path: every rom already maps to an appId, so the loop takes the
+    // in-place Set* branch (no addShortcut / artwork-fetch complexity).
+    getExistingRomMShortcuts.mockResolvedValue(
+      new Map<number, number>([
+        [1, 5001],
+        [2, 5002],
+        [3, 5003],
+      ]),
+    );
+    vi.mocked(backend.reportUnitResults).mockClear();
+    vi.mocked(backend.getArtworkBase64).mockReset();
+    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "" });
+    vi.stubGlobal("SteamClient", {
+      Apps: {
+        AddShortcut: vi.fn(),
+        SetShortcutName: vi.fn(),
+        SetShortcutExe: vi.fn(),
+        SetShortcutStartDir: vi.fn(),
+        SetAppLaunchOptions: vi.fn(),
+        SetCustomArtworkForApp: vi.fn().mockResolvedValue(undefined),
+        RemoveShortcut: vi.fn(),
+      },
+    });
+  });
+
+  function sc(romId: number): SyncApplyUnitData["shortcuts"][number] {
+    return {
+      rom_id: romId,
+      name: `ROM ${romId}`,
+      exe: EXE,
+      start_dir: "/home/deck",
+      launch_options: "",
+      platform_name: "PSX",
+      cover_path: "",
+    };
+  }
+
+  function chunkOf(
+    shortcuts: SyncApplyUnitData["shortcuts"],
+    opts: { chunkIndex: number; chunkOffset: number; chunkCount: number; unitTotal: number; runId: string },
+  ): SyncApplyUnitData {
+    return {
+      run_id: opts.runId,
+      unit_type: "platform",
+      unit_id: 1,
+      unit_name: "PSX",
+      unit_index: 0,
+      total_units: 1,
+      chunk_index: opts.chunkIndex,
+      chunk_count: opts.chunkCount,
+      chunk_offset: opts.chunkOffset,
+      unit_total: opts.unitTotal,
+      shortcuts,
+    };
+  }
+
+  it("advances progress continuously across two chunks of one unit", async () => {
+    // Unit "PSX" has 3 shortcuts split into chunk 0 (rom 1,2) and chunk 1
+    // (rom 3). Progress must read unit-wide — 1/3, 2/3, 3/3 — never restart at
+    // 0 per chunk, so a 3084-ROM platform shows one smooth bar.
+    const snapshots: { current: number | undefined; message: string | undefined; total: number | undefined }[] = [];
+    const unsub = onSyncProgressChange(() => {
+      const p = getSyncProgress();
+      snapshots.push({ current: p.current, message: p.message, total: p.total });
+    });
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>(
+        "sync_apply_unit",
+        chunkOf([sc(1), sc(2)], { chunkIndex: 0, chunkOffset: 0, chunkCount: 2, unitTotal: 3, runId: "run-chunked" }),
+      );
+      await flush(180);
+    });
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>(
+        "sync_apply_unit",
+        chunkOf([sc(3)], { chunkIndex: 1, chunkOffset: 2, chunkCount: 2, unitTotal: 3, runId: "run-chunked" }),
+      );
+      await flush(120);
+    });
+    unsub();
+
+    const currents = snapshots.map((s) => s.current ?? 0);
+    // The unit-wide counter is monotonic non-decreasing — chunk 1 never resets
+    // the bar back to 0 (the buggy per-chunk reset would break this).
+    let prev = currents[0] ?? 0;
+    for (const c of currents.slice(1)) {
+      expect(c).toBeGreaterThanOrEqual(prev);
+      prev = c;
+    }
+    // Every item's message counts against the UNIT total, not the chunk length.
+    const messages = snapshots.map((s) => s.message);
+    expect(messages).toContain("PSX: 1/3");
+    expect(messages).toContain("PSX: 2/3");
+    expect(messages).toContain("PSX: 3/3");
+    // Chunk 1 would read "PSX: 1/1" if progress used the chunk length — it must not.
+    expect(messages).not.toContain("PSX: 1/1");
+    // Final state: the whole unit is done, 3/3.
+    const final = snapshots[snapshots.length - 1];
+    expect(final?.current).toBe(3);
+    expect(final?.total).toBe(3);
+  });
+
+  it("acks each chunk with its own chunk_index", async () => {
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>(
+        "sync_apply_unit",
+        chunkOf([sc(1), sc(2)], { chunkIndex: 0, chunkOffset: 0, chunkCount: 2, unitTotal: 3, runId: "run-ack" }),
+      );
+      await flush(180);
+    });
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>(
+        "sync_apply_unit",
+        chunkOf([sc(3)], { chunkIndex: 1, chunkOffset: 2, chunkCount: 2, unitTotal: 3, runId: "run-ack" }),
+      );
+      await flush(120);
+    });
+
+    // Each chunk acks only its own bindings, echoing its own chunk index so the
+    // backend commits the matching chunk (a stale-chunk ack is rejected).
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenNthCalledWith(1, { "1": 5001, "2": 5002 }, "run-ack", 1, 0);
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenNthCalledWith(2, { "3": 5003 }, "run-ack", 1, 1);
   });
 });

@@ -168,9 +168,10 @@ async def test_report_unit_results_signal_shape(harness):
     box = harness.plugin._sync_service._box
     box.current_sync_id = "run-1"
     box.active_unit_id = 1
+    box.active_chunk_index = 0
     box.unit_complete_event = asyncio.Event()
 
-    result = await harness.plugin.report_unit_results({"10": 9001}, "run-1", 1)
+    result = await harness.plugin.report_unit_results({"10": 9001}, "run-1", 1, 0)
 
     assert result == {"success": True, "count": 1}
     assert box.unit_complete_event.is_set()
@@ -188,13 +189,34 @@ async def test_report_unit_results_stale_run_ignored(harness):
     # Active run B, waiting on its own unit's event.
     box.current_sync_id = "run-B"
     box.active_unit_id = 7
+    box.active_chunk_index = 0
     box.unit_complete_event = asyncio.Event()
 
     # Stale ack from the cancelled run A.
-    result = await harness.plugin.report_unit_results({"10": 9001}, "run-A", 1)
+    result = await harness.plugin.report_unit_results({"10": 9001}, "run-A", 1, 0)
 
     assert result == {"success": True, "count": 0, "ignored": True}
     # Run B's wait is untouched and nothing was bound.
+    assert not box.unit_complete_event.is_set()
+    assert await harness.plugin.get_app_id_rom_id_map() == {}
+
+
+async def test_report_unit_results_stale_chunk_ignored(harness):
+    """An ack for a superseded chunk of the ACTIVE unit is ignored (#1025). Run +
+    unit match, but the chunk index does not — pins the ``ignored`` shape and that
+    the in-flight chunk's wait event stays unset."""
+    import asyncio
+
+    box = harness.plugin._sync_service._box
+    box.current_sync_id = "run-1"
+    box.active_unit_id = 1
+    box.active_chunk_index = 1  # chunk 1 is in flight
+    box.unit_complete_event = asyncio.Event()
+
+    # Late ack for the already-committed chunk 0.
+    result = await harness.plugin.report_unit_results({"10": 9001}, "run-1", 1, 0)
+
+    assert result == {"success": True, "count": 0, "ignored": True}
     assert not box.unit_complete_event.is_set()
     assert await harness.plugin.get_app_id_rom_id_map() == {}
 
@@ -209,10 +231,12 @@ async def test_report_unit_results_late_ack_binds_orphan(harness):
     ``get_app_id_rom_id_map`` resolves the appId to the rom_id."""
     box = harness.plugin._sync_service._box
     # The state a heartbeat timeout leaves: pending_sync staged, event already
-    # None (the wait returned), unit flagged abandoned with its ROMs stashed.
-    # Run + unit identity survives the abandon window so the late ack validates.
+    # None (the wait returned), chunk flagged abandoned with its rows stashed.
+    # Run + unit + chunk identity survives the abandon window so the late ack
+    # validates.
     box.current_sync_id = "run-1"
     box.active_unit_id = 1
+    box.active_chunk_index = 0
     _entry = {
         "name": "Orphan Game",
         "fs_name": "orphan.gba",
@@ -221,7 +245,7 @@ async def test_report_unit_results_late_ack_binds_orphan(harness):
     }
     # ``pending_all_roms`` is the identity source for the group-aware persist;
     # ``pending_sync`` holds the emitted representative. Both survive the abandon
-    # window so the late ack can drive the full commit (ADR-0021).
+    # window so the late ack can drive the chunk's commit (ADR-0021).
     box.pending_sync = {42: _entry}
     box.pending_all_roms = {42: _entry}
     box.unit_complete_event = None
@@ -231,7 +255,7 @@ async def test_report_unit_results_late_ack_binds_orphan(harness):
     # Before the ack: the appId is NOT in the map (would be an orphan).
     assert await harness.plugin.get_app_id_rom_id_map() == {}
 
-    result = await harness.plugin.report_unit_results({"42": 100001}, "run-1", 1)
+    result = await harness.plugin.report_unit_results({"42": 100001}, "run-1", 1, 0)
 
     assert result == {"success": True, "count": 1}
     # The orphan is now a bound row — the next sync's getExistingRomMShortcuts

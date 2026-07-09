@@ -2257,11 +2257,12 @@ class TestReportUnitResults:
         box = plugin._sync_service._box
         box.current_sync_id = "run-1"
         box.active_unit_id = 1
+        box.active_chunk_index = 0
         event = asyncio.Event()
         box.unit_complete_event = event
         assert not event.is_set()
 
-        await plugin.report_unit_results({}, "run-1", 1)
+        await plugin.report_unit_results({}, "run-1", 1, 0)
 
         assert event.is_set()
         assert box.last_unit_results == {}
@@ -2272,9 +2273,10 @@ class TestReportUnitResults:
         box = plugin._sync_service._box
         box.current_sync_id = "run-1"
         box.active_unit_id = 1
+        box.active_chunk_index = 0
         box.unit_complete_event = asyncio.Event()
 
-        result = await plugin.report_unit_results({"10": 9001, "11": 9002}, "run-1", 1)
+        result = await plugin.report_unit_results({"10": 9001, "11": 9002}, "run-1", 1, 0)
 
         assert result["success"] is True
         assert result["count"] == 2
@@ -2292,11 +2294,12 @@ class TestReportUnitResults:
         # Run B is the active run, waiting on its own unit's event.
         box.current_sync_id = "run-B"
         box.active_unit_id = 7
+        box.active_chunk_index = 0
         event = asyncio.Event()
         box.unit_complete_event = event
 
         # Late ack from the cancelled run A (stale run id) for the old unit.
-        result = await plugin.report_unit_results({"10": 9001}, "run-A", 1)
+        result = await plugin.report_unit_results({"10": 9001}, "run-A", 1, 0)
 
         assert result == {"success": True, "count": 0, "ignored": True}
         # Run B is untouched: its event stays unset and no result was recorded.
@@ -2315,10 +2318,30 @@ class TestReportUnitResults:
         box = plugin._sync_service._box
         box.current_sync_id = "run-1"
         box.active_unit_id = 5  # unit 5 is the active one
+        box.active_chunk_index = 0
         event = asyncio.Event()
         box.unit_complete_event = event
 
-        result = await plugin.report_unit_results({"10": 9001}, "run-1", 99)
+        result = await plugin.report_unit_results({"10": 9001}, "run-1", 99, 0)
+
+        assert result == {"success": True, "count": 0, "ignored": True}
+        assert not event.is_set()
+        assert box.last_unit_results is None
+
+    @pytest.mark.asyncio
+    async def test_stale_chunk_index_same_unit_is_ignored(self, plugin):
+        """An ack for a superseded chunk of the ACTIVE unit is ignored — the
+        chunk-index guard rejects it even though run + unit match. A crash-late
+        ack for chunk 0 must never be credited to chunk 1 in flight."""
+        plugin._sync_service._pending_sync = {}
+        box = plugin._sync_service._box
+        box.current_sync_id = "run-1"
+        box.active_unit_id = 1
+        box.active_chunk_index = 1  # chunk 1 is the active one
+        event = asyncio.Event()
+        box.unit_complete_event = event
+
+        result = await plugin.report_unit_results({"10": 9001}, "run-1", 1, 0)
 
         assert result == {"success": True, "count": 0, "ignored": True}
         assert not event.is_set()
@@ -2340,6 +2363,7 @@ class TestReportUnitResults:
         # the abandon window so the late ack for the SAME unit validates.
         box.current_sync_id = "run-1"
         box.active_unit_id = 1
+        box.active_chunk_index = 0
         _entry = {"name": "Game", "fs_name": "game.z64", "platform_slug": "gb", "cover_path": ""}
         box.pending_sync = {42: _entry}
         box.pending_all_roms = {42: _entry}
@@ -2347,7 +2371,7 @@ class TestReportUnitResults:
         box.unit_abandoned = True
         box.pending_unit_roms = [{"id": 42, "metadatum": {"genres": ["RPG"]}}]
 
-        result = await plugin.report_unit_results({"42": 100001}, "run-1", 1)
+        result = await plugin.report_unit_results({"42": 100001}, "run-1", 1, 0)
 
         assert result == {"success": True, "count": 1}
         # The binding was committed (not discarded).
@@ -2364,9 +2388,10 @@ class TestReportUnitResults:
         assert box.pending_unit_roms == []
         assert box.pending_sync == {}
         assert box.last_unit_results is None
-        # The unit identity is cleared once the late ack commits, so a duplicate
-        # ack for the same unit no longer validates.
+        # The unit + chunk identity is cleared once the late ack commits, so a
+        # duplicate ack for the same chunk no longer validates.
         assert box.active_unit_id is None
+        assert box.active_chunk_index is None
 
     @pytest.mark.asyncio
     async def test_late_ack_binds_stashed_rom_without_metadatum_stamps_no_metadata(self, plugin):
@@ -2376,15 +2401,16 @@ class TestReportUnitResults:
         box = plugin._sync_service._box
         box.current_sync_id = "run-1"
         box.active_unit_id = 1
+        box.active_chunk_index = 0
         _entry = {"name": "A", "fs_name": "a.z64", "platform_slug": "gb", "cover_path": ""}
         box.pending_sync = {42: _entry}
         box.pending_all_roms = {42: _entry}
         box.unit_complete_event = None
         box.unit_abandoned = True
-        # The stash (the whole unit fetch) carries rom 42 without a metadatum.
+        # The stash (the chunk fetch) carries rom 42 without a metadatum.
         box.pending_unit_roms = [{"id": 42}]
 
-        result = await plugin.report_unit_results({"42": 100001}, "run-1", 1)
+        result = await plugin.report_unit_results({"42": 100001}, "run-1", 1, 0)
 
         assert result == {"success": True, "count": 1}
         with plugin._uow as uow:
@@ -2405,11 +2431,12 @@ class TestReportUnitResults:
         box = plugin._sync_service._box
         box.current_sync_id = "run-1"
         box.active_unit_id = 1
+        box.active_chunk_index = 0
         box.unit_complete_event = None
         box.unit_abandoned = False
         box.pending_sync = {}
 
-        result = await plugin.report_unit_results({"42": 100001}, "run-1", 1)
+        result = await plugin.report_unit_results({"42": 100001}, "run-1", 1, 0)
 
         assert result == {"success": True, "count": 1}
         # The mapping is still recorded, but NOTHING is committed.
@@ -2417,6 +2444,39 @@ class TestReportUnitResults:
         assert plugin._uow.committed is False
         with plugin._uow as uow:
             assert uow.roms.get(42) is None
+
+    @pytest.mark.asyncio
+    async def test_late_ack_of_timed_out_chunk_commits_only_that_chunk(self, plugin):
+        """A late ack for an abandoned CHUNK commits only that chunk's stashed rows
+        (the chunk subset), validated by run + unit + chunk index (#1025/#1052).
+
+        Models the state a chunk-1 heartbeat timeout leaves behind: the chunk's
+        two rows stashed, the abandoned flag set, and ``active_chunk_index`` still
+        1 so the ack for chunk 1 validates while an ack for any other chunk would
+        be rejected."""
+        box = plugin._sync_service._box
+        box.current_sync_id = "run-1"
+        box.active_unit_id = 1
+        box.active_chunk_index = 1
+        entries = {
+            3: {"name": "C", "fs_name": "c.z64", "platform_slug": "n64", "cover_path": ""},
+            4: {"name": "D", "fs_name": "d.z64", "platform_slug": "n64", "cover_path": ""},
+        }
+        box.pending_sync = entries
+        box.pending_all_roms = entries
+        box.unit_complete_event = None
+        box.unit_abandoned = True
+        box.pending_unit_roms = [{"id": 3}, {"id": 4}]
+
+        result = await plugin.report_unit_results({"3": 7003, "4": 7004}, "run-1", 1, 1)
+
+        assert result == {"success": True, "count": 2}
+        with plugin._uow as uow:
+            assert uow.roms.get(3).shortcut_app_id == 7003
+            assert uow.roms.get(4).shortcut_app_id == 7004
+        assert box.unit_abandoned is False
+        assert box.pending_unit_roms == []
+        assert box.active_chunk_index is None
 
 
 class TestLateAckReconciliationWithStaleScan:
@@ -2449,6 +2509,7 @@ class TestLateAckReconciliationWithStaleScan:
         # rom_id (2), which the frontend acks with the SAME reused appId.
         box.current_sync_id = "run-1"
         box.active_unit_id = 1
+        box.active_chunk_index = 0
         _entry = {"name": "A", "fs_name": "a.z64", "platform_slug": "n64", "cover_path": ""}
         box.pending_sync = {2: _entry}
         box.pending_all_roms = {2: _entry}
@@ -2457,7 +2518,7 @@ class TestLateAckReconciliationWithStaleScan:
         box.pending_unit_roms = [{"id": 2}]
 
         # Late ack: commits the binding AND records app 5000 in committed_app_ids.
-        await plugin.report_unit_results({"2": 5000}, "run-1", 1)
+        await plugin.report_unit_results({"2": 5000}, "run-1", 1, 0)
 
         assert 5000 in box.committed_app_ids
         # rom 2 now holds app 5000; rom 1 was unbound by the collision-safe save.
@@ -3093,6 +3154,218 @@ class TestSyncOneUnitCollectionAndCancel:
         # Unit flagged abandoned with its ROMs stashed for the late-ack commit.
         assert plugin._sync_service._box.unit_abandoned is True
         assert [r["id"] for r in plugin._sync_service._box.pending_unit_roms] == [1]
+
+
+class TestApplyChunking:
+    """A unit's apply is split into durable commit chunks (#1025).
+
+    Each chunk is emitted → acked → committed on its own, so a mid-unit CEF
+    crash forfeits only the in-flight chunk. These tests drive ``_sync_one_unit``
+    directly with a shrunk ``_APPLY_CHUNK_SIZE`` so a handful of singleton ROMs
+    exercises the multi-chunk loop; the exact partition maths is pinned in
+    ``tests/domain/test_sync_chunking.py``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_large_unit_emits_one_event_and_commit_per_chunk(self, plugin, fake_romm_api, monkeypatch):
+        """Five singletons at chunk size 2 → three ``sync_apply_unit`` events with
+        continuous unit-wide chunk fields, and one commit per chunk carrying only
+        that chunk's rows."""
+        import decky
+
+        from services.library import sync_orchestrator
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": i, "name": f"Game {i}"} for i in range(1, 6)],
+        )
+
+        commit_rows: list[list[int]] = []
+
+        async def capture_commit(_rid_to_aid, chunk_rows):
+            commit_rows.append([r["id"] for r in chunk_rows])
+
+        plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-chunk"
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        assert len(unit_events) == 3
+        assert [e["chunk_index"] for e in unit_events] == [0, 1, 2]
+        assert all(e["chunk_count"] == 3 for e in unit_events)
+        assert [e["chunk_offset"] for e in unit_events] == [0, 2, 4]
+        assert all(e["unit_total"] == 5 for e in unit_events)
+        assert [len(e["shortcuts"]) for e in unit_events] == [2, 2, 1]
+        # One commit per chunk, each with only its chunk's rows.
+        assert commit_rows == [[1, 2], [3, 4], [5]]
+
+    @pytest.mark.asyncio
+    async def test_small_unit_emits_exactly_one_chunk(self, plugin, fake_romm_api):
+        """A unit under the chunk size emits a single chunk — regression guard that
+        the chunk fields collapse to the today's one-shot behaviour."""
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": i, "name": f"G{i}"} for i in range(1, 4)],
+        )
+
+        plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-single"
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        assert len(unit_events) == 1
+        event = unit_events[0]
+        assert event["chunk_index"] == 0
+        assert event["chunk_count"] == 1
+        assert event["chunk_offset"] == 0
+        assert event["unit_total"] == 3
+        assert len(event["shortcuts"]) == 3
+
+    @pytest.mark.asyncio
+    async def test_user_cancel_between_chunks_keeps_committed_chunks(self, plugin, fake_romm_api, monkeypatch):
+        """A user cancel during chunk 1's wait discards the rest but leaves chunk 0
+        committed — the whole point of chunking (#1025)."""
+        from services.library import sync_orchestrator
+
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": i, "name": f"G{i}"} for i in range(1, 6)],
+        )
+
+        commit_rows: list[list[int]] = []
+
+        async def capture_commit(_rid_to_aid, chunk_rows):
+            commit_rows.append([r["id"] for r in chunk_rows])
+
+        plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        box = plugin._sync_service._box
+
+        async def wait(_unit, event):
+            if box.active_chunk_index == 0:
+                event.set()
+                return {}
+            box.sync_state = SyncState.CANCELLING  # user cancel during chunk 1
+            return None
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = wait
+        box.sync_state = SyncState.RUNNING
+        box.current_sync_id = "run-cancel-chunk"
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        # Only chunk 0 committed; the cancel discarded chunk 1 onward.
+        assert commit_rows == [[1, 2]]
+        # Staging + chunk identity cleared so a stray late ack can't commit.
+        assert box.pending_sync == {}
+        assert box.unit_complete_event is None
+        assert box.active_chunk_index is None
+        assert box.unit_abandoned is False
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_timeout_on_chunk_stashes_only_that_chunk(self, plugin, fake_romm_api, monkeypatch):
+        """A heartbeat timeout on chunk 1 stashes ONLY chunk 1's rows (not the whole
+        unit) and retains chunk 1's index, so a late ack commits just that chunk."""
+        from services.library import sync_orchestrator
+
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": i, "name": f"G{i}"} for i in range(1, 6)],
+        )
+
+        plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        box = plugin._sync_service._box
+
+        async def wait(_unit, event):
+            if box.active_chunk_index == 0:
+                event.set()
+                return {}
+            return None  # heartbeat timeout on chunk 1 (no cancel)
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = wait
+        box.sync_state = SyncState.RUNNING
+        box.current_sync_id = "run-timeout-chunk"
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        assert box.unit_abandoned is True
+        assert box.active_chunk_index == 1
+        # Only chunk 1's rows are stashed for the late ack, not the whole unit.
+        assert [r["id"] for r in box.pending_unit_roms] == [3, 4]
+        # The timeout requested cancel so the outer loop stops.
+        assert box.sync_state == SyncState.CANCELLING
 
 
 class TestPerUnitMetadataStamping:

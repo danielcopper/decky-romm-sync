@@ -362,8 +362,8 @@ class Plugin:
     async def get_sync_status(self):
         return self._sync_service.get_sync_status()
 
-    async def report_unit_results(self, rom_id_to_app_id, run_id, unit_id):
-        return await self._sync_service.report_unit_results(rom_id_to_app_id, run_id, unit_id)
+    async def report_unit_results(self, rom_id_to_app_id, run_id, unit_id, chunk_index):
+        return await self._sync_service.report_unit_results(rom_id_to_app_id, run_id, unit_id, chunk_index)
 
     async def get_registry_platforms(self):
         return self._sync_service.get_registry_platforms()

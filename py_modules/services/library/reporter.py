@@ -319,9 +319,9 @@ class SyncReporter:
     # ── Report unit results (per-unit pipeline) ──────────────────
 
     def _commit_unit_results_io(self, rom_id_to_app_id, unit_roms):
-        """Finalise artwork names, then persist EVERY fetched ROM of the unit.
+        """Finalise artwork names, then persist EVERY fetched ROM of the chunk.
 
-        Group-aware commit (ADR-0021): the unit's whole live RomM fetch
+        Group-aware commit (ADR-0021): this chunk's slice of the live RomM fetch
         (*unit_roms*) is upserted — one ``roms`` row per sibling for its
         identity + version metadata — while only the acked representatives
         carry a Steam-shortcut binding. A non-representative sibling keeps
@@ -452,39 +452,41 @@ class SyncReporter:
             return int(existing_value)
         return None
 
-    async def report_unit_results(self, rom_id_to_app_id, run_id, unit_id):
-        """Frontend-Callable: ack that this unit's shortcuts have been applied.
+    async def report_unit_results(self, rom_id_to_app_id, run_id, unit_id, chunk_index):
+        """Frontend-Callable: ack that this apply chunk's shortcuts are applied.
 
-        First validates the ack's identity against the active run/unit: the
-        ``run_id`` must match ``current_sync_id`` and ``unit_id`` must match
-        the dispatched ``active_unit_id`` (#1041). A late ack from a
-        **cancelled** run that arrives while a **new** run is in flight, or a
-        stray ack for a different unit, is ignored — neither recorded, signalled,
-        nor committed — so it can never be credited to the wrong unit/run.
-        Logged at debug, returns ``ignored: True`` with ``count: 0``.
+        First validates the ack's identity against the active run/unit/chunk: the
+        ``run_id`` must match ``current_sync_id``, ``unit_id`` must match the
+        dispatched ``active_unit_id`` (#1041), and ``chunk_index`` must match the
+        dispatched ``active_chunk_index``. A late ack from a **cancelled** run
+        that arrives while a **new** run is in flight, a stray ack for a different
+        unit, or an ack for a stale chunk is ignored — neither recorded,
+        signalled, nor committed — so it can never be credited to the wrong
+        unit/run/chunk. Logged at debug, returns ``ignored: True`` with
+        ``count: 0``.
 
         For a matching ack, records the rom_id→app_id mapping into the state
-        box, then routes by the unit's coordination state:
+        box, then routes by the chunk's coordination state:
 
         * The orchestrator is still waiting (``unit_complete_event`` live):
-          signal the event and let the orchestrator drive the per-unit
+          signal the event and let the orchestrator drive the per-chunk
           commit. The happy path — unchanged.
-        * The orchestrator abandoned the unit on a heartbeat timeout
+        * The orchestrator abandoned the chunk on a heartbeat timeout
           (``unit_abandoned``): the frontend already created the Steam
           shortcuts, so commit the delivered bindings here rather than
-          discard them (#1052). Passes the whole stashed unit fetch
+          discard them (#1052). Passes the stashed chunk fetch
           (``box.pending_unit_roms``) to ``commit_unit_results`` — every
-          fetched sibling is upserted (identity + metadata, the ``metadatum``
-          source) and only the acked representatives bind — then clears the
-          abandoned-unit stash.
-        * Neither (a stray duplicate ack for the active unit): no-op, so
+          fetched sibling of the chunk is upserted (identity + metadata, the
+          ``metadatum`` source) and only the acked representatives bind — then
+          clears the abandoned-chunk stash.
+        * Neither (a stray duplicate ack for the active chunk): no-op, so
           nothing is double-committed.
         """
         box = self._sync_state
-        if not self._ack_matches_active_unit(run_id, unit_id):
+        if not self._ack_matches_active_unit(run_id, unit_id, chunk_index):
             self._logger.debug(
-                f"Ignoring unit ack for run={run_id!r} unit={unit_id!r}: "
-                f"active run={box.current_sync_id!r} unit={box.active_unit_id!r}"
+                f"Ignoring unit ack for run={run_id!r} unit={unit_id!r} chunk={chunk_index!r}: "
+                f"active run={box.current_sync_id!r} unit={box.active_unit_id!r} chunk={box.active_chunk_index!r}"
             )
             return {"success": True, "count": 0, "ignored": True}
 
@@ -499,38 +501,46 @@ class SyncReporter:
             box.pending_all_roms = {}
             box.last_unit_results = None
             box.active_unit_id = None
+            box.active_chunk_index = None
 
         self._logger.info(f"Unit results acknowledged: {len(rom_id_to_app_id)} shortcuts")
         return {"success": True, "count": len(rom_id_to_app_id)}
 
-    def _ack_matches_active_unit(self, run_id, unit_id) -> bool:
-        """True when the ack's run/unit identity matches the dispatched unit.
+    def _ack_matches_active_unit(self, run_id, unit_id, chunk_index) -> bool:
+        """True when the ack's run/unit/chunk identity matches the dispatched chunk.
 
-        The frontend echoes back the ``run_id`` + ``unit_id`` carried in the
-        ``sync_apply_unit`` event. Both are compared by string value: the run
-        id is a UUID string, and the unit id is JSON-shaped (a number for a
-        platform, a string for a collection) so ``str()`` coercion on both
-        sides is robust to int-vs-str drift on the wire. An ack is rejected
-        when there is no active unit (``active_unit_id is None`` — the unit was
-        cancelled or already committed), so a stray late ack from a cancelled
-        run no-ops instead of being credited to a fresh run (#1041).
+        The frontend echoes back the ``run_id`` + ``unit_id`` + ``chunk_index``
+        carried in the ``sync_apply_unit`` event. ``run_id`` and ``unit_id`` are
+        compared by string value: the run id is a UUID string, and the unit id is
+        JSON-shaped (a number for a platform, a string for a collection) so
+        ``str()`` coercion on both sides is robust to int-vs-str drift on the
+        wire; ``chunk_index`` is compared as an int. An ack is rejected when there
+        is no active unit/chunk (``active_unit_id`` / ``active_chunk_index`` is
+        ``None`` — the unit was cancelled or already committed), so a stray late
+        ack from a cancelled run no-ops instead of being credited to a fresh run
+        (#1041).
         """
         box = self._sync_state
-        if box.active_unit_id is None:
+        if box.active_unit_id is None or box.active_chunk_index is None:
             return False
-        return str(run_id) == str(box.current_sync_id) and str(unit_id) == str(box.active_unit_id)
+        return (
+            str(run_id) == str(box.current_sync_id)
+            and str(unit_id) == str(box.active_unit_id)
+            and int(chunk_index) == box.active_chunk_index
+        )
 
     async def commit_unit_results(self, rom_id_to_app_id, unit_roms):
-        """Per-unit commit: cover-path finalize then atomic ``roms`` + metadata upsert.
+        """Per-chunk commit: cover-path finalize then atomic ``roms`` + metadata upsert.
 
-        Called once the frontend has acked the unit's shortcuts — by the
+        Called once the frontend has acked an apply chunk's shortcuts — by the
         orchestrator on the happy path, or by :meth:`report_unit_results`
         itself on the heartbeat-timeout late-ack path (#1052). ``unit_roms`` is
-        the whole unit's live RomM fetch: a ``roms`` row is upserted for EVERY
-        sibling (identity + version metadata, ADR-0021), but only the acked
-        representatives carry a binding. The upsert and the cached-metadata
-        stamp land in one write UoW (Rom row first, then ``rom_metadata`` —
-        FK-safe), so a ROM and its metadata are always consistent across a crash.
+        this chunk's slice of the live RomM fetch: a ``roms`` row is upserted for
+        EVERY sibling in the slice (identity + version metadata, ADR-0021), but
+        only the acked representatives carry a binding. The upsert and the
+        cached-metadata stamp land in one write UoW (Rom row first, then
+        ``rom_metadata`` — FK-safe), so a ROM and its metadata are always
+        consistent across a crash, and each committed chunk is durable on its own.
 
         Records every bound appId in the shared box so the stale-removal scan
         excludes appIds this run committed, whichever path drove the commit —

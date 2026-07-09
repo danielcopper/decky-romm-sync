@@ -739,6 +739,37 @@ class TestCommitUnitMetadataStamp:
             assert list(uow.rom_metadata.iter_all()) == []
 
 
+class TestAckMatchesActiveUnit:
+    """The reporter's ack identity guard now spans run + unit + chunk (#1025).
+
+    A chunked apply dispatches one chunk at a time; an ack must echo back the
+    active chunk index or it is rejected, so a crash-late ack for a superseded
+    chunk can never be credited to the chunk in flight.
+    """
+
+    def test_matches_when_run_unit_and_chunk_all_agree(self, plugin):
+        box = plugin._sync_service._box
+        box.current_sync_id = "run-1"
+        box.active_unit_id = 5
+        box.active_chunk_index = 2
+        assert plugin._sync_service._reporter._ack_matches_active_unit("run-1", 5, 2) is True
+
+    def test_rejects_wrong_chunk_index(self, plugin):
+        box = plugin._sync_service._box
+        box.current_sync_id = "run-1"
+        box.active_unit_id = 5
+        box.active_chunk_index = 2
+        # Run + unit agree, but the ack is for a stale chunk.
+        assert plugin._sync_service._reporter._ack_matches_active_unit("run-1", 5, 1) is False
+
+    def test_rejects_when_no_active_chunk(self, plugin):
+        box = plugin._sync_service._box
+        box.current_sync_id = "run-1"
+        box.active_unit_id = 5
+        box.active_chunk_index = None  # no chunk in flight (cancelled / committed)
+        assert plugin._sync_service._reporter._ack_matches_active_unit("run-1", 5, 0) is False
+
+
 class TestClearSyncCache:
     """Tests for clear_sync_cache() — Force Full Sync resets the completed-run history."""
 

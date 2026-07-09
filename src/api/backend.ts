@@ -228,7 +228,7 @@ export const getSgdbResolution = callable<[number], SgdbResolution>("get_sgdb_re
 export const searchSgdbGames = callable<[string], SgdbSearchResult>("search_sgdb_games");
 export const applySgdbGameId = callable<[number, number], { success: boolean }>("apply_sgdb_game_id");
 export const reportUnitResults = callable<
-  [Record<string, number>, string, number | string],
+  [Record<string, number>, string, number | string, number],
   { success: boolean; count: number; ignored?: boolean }
 >("report_unit_results");
 export const reportRemovalResults = callable<[(string | number)[]], { success: boolean; message: string }>(

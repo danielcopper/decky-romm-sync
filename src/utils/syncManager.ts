@@ -101,9 +101,11 @@ async function resolveShortcutAppId(item: SyncAddItem, existing: Map<number, num
 }
 
 /**
- * Process every shortcut for one unit at the CEF-safe 50ms cadence,
+ * Process every shortcut for one apply chunk at the CEF-safe 50ms cadence,
  * recording the rom_id→appId mapping and the artwork targets for the
- * follow-up artwork phase. Heartbeats are emitted every 10s. The loop
+ * follow-up artwork phase. Progress is unit-wide — ``chunk_offset`` carries the
+ * count from prior chunks so the QAM bar advances continuously across a unit's
+ * chunks against ``unit_total``. Heartbeats are emitted every 10s. The loop
  * exits early on cancel.
  */
 async function processUnitShortcuts(
@@ -111,14 +113,14 @@ async function processUnitShortcuts(
   existing: Map<number, number>,
   romIdToAppId: Record<string, number>,
   artworkTargets: ArtworkTarget[],
-  total: number,
 ): Promise<void> {
   let lastHeartbeat = Date.now();
   for (const [i, item] of data.shortcuts.entries()) {
+    const unitCurrent = data.chunk_offset + i + 1;
     try {
       updateSyncProgress({
-        current: i + 1,
-        message: `${data.unit_name}: ${i + 1}/${total}`,
+        current: unitCurrent,
+        message: `${data.unit_name}: ${unitCurrent}/${data.unit_total}`,
       });
       const appId = await resolveShortcutAppId(item, existing);
       if (appId) {
@@ -264,23 +266,27 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
 
       const total = data.shortcuts.length;
       logInfo(
-        `sync_apply_unit received: ${data.unit_type}=${data.unit_name} (${data.unit_index + 1}/${data.total_units}), ${total} shortcuts`,
+        `sync_apply_unit received: ${data.unit_type}=${data.unit_name} (${data.unit_index + 1}/${data.total_units}), ` +
+          `chunk ${data.chunk_index + 1}/${data.chunk_count}, ${total} shortcuts`,
       );
 
+      // Progress is unit-wide: seed from ``chunk_offset`` against ``unit_total``
+      // so the bar reads e.g. "PSX: 1200/3084" continuously across a unit's
+      // chunks rather than restarting at 0 each chunk.
       updateSyncProgress({
         running: true,
         stage: "applying",
-        current: 0,
-        total,
-        message: `${data.unit_name}: 0/${total}`,
+        current: data.chunk_offset,
+        total: data.unit_total,
+        message: `${data.unit_name}: ${data.chunk_offset}/${data.unit_total}`,
         step: data.unit_index + 1,
         totalSteps: data.total_units,
       });
 
       const existing = await resolveExistingShortcuts(data.run_id);
-      await processUnitShortcuts(data, existing, romIdToAppId, artworkTargets, total);
+      await processUnitShortcuts(data, existing, romIdToAppId, artworkTargets);
 
-      // Artwork — keep existing base64 path; per-unit-sized batch keeps the
+      // Artwork — keep existing base64 path; per-chunk-sized batch keeps the
       // payload comfortably under the decky.emit WebSocket size ceiling.
       await processUnitArtwork(artworkTargets);
 
@@ -293,14 +299,18 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
         logInfo(`Per-unit cancel observed for ${data.unit_name}; skipping reportUnitResults`);
       } else {
         try {
-          // Echo back the run + unit identity so the backend can reject a stale
-          // ack (cancelled run) instead of crediting it to a fresh run (#1041).
-          await reportUnitResults(romIdToAppId, data.run_id, data.unit_id);
+          // Echo back the run + unit + chunk identity so the backend can reject
+          // a stale ack (cancelled run or superseded chunk) instead of crediting
+          // it to a fresh run/chunk (#1041).
+          await reportUnitResults(romIdToAppId, data.run_id, data.unit_id, data.chunk_index);
         } catch (e) {
           logError(`Failed to report unit results for ${data.unit_name}: ${e}`);
         }
       }
-      logInfo(`sync_apply_unit complete: ${data.unit_name} (${Object.keys(romIdToAppId).length}/${total})`);
+      logInfo(
+        `sync_apply_unit complete: ${data.unit_name} chunk ${data.chunk_index + 1}/${data.chunk_count} ` +
+          `(${Object.keys(romIdToAppId).length}/${total})`,
+      );
     } finally {
       _isUnitRunning = false;
     }
