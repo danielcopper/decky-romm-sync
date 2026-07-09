@@ -143,13 +143,11 @@ function stageLabel(stage: SyncProgress["stage"]): string {
 }
 
 function formatProgressText(progress: SyncProgress | null): string {
+  // The bare fine-detail message. The coarse "step/totalSteps" is already shown
+  // on the bar row (sync-step), so it is not repeated here. The message wraps to
+  // up to two lines in the QAM via CSS rather than being clipped mid-word.
   if (!progress) return "Syncing...";
-  const step = progress.step && progress.totalSteps ? `[${progress.step}/${progress.totalSteps}] ` : "";
-  const msg = progress.message || "Syncing...";
-  // Truncate to ~40 chars to prevent multi-line jumping in the QAM panel
-  const maxLen = 40 - step.length;
-  const truncated = msg.length > maxLen ? msg.slice(0, maxLen - 1) + "\u2026" : msg;
-  return step + truncated;
+  return progress.message || "Syncing...";
 }
 
 function formatLastSync(iso: string | null): string {
@@ -661,7 +659,16 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                 marginBottom: "4px",
               }}
             >
-              <span data-testid="sync-stage">{stageLabel(syncProgress?.stage)}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {/* During silent phases (the initial "Fetching library" anchor
+                    frame, before any narrated fine-detail page frame) there is
+                    no fine line to carry a spinner, so the panel looks hung.
+                    Show the spinner inline with the stage label so a running
+                    sync always has motion. When the fine line is present it
+                    already has its own spinner — don't show two. */}
+                {!hasFineDetail && <Spinner width={14} height={14} />}
+                <span data-testid="sync-stage">{stageLabel(syncProgress?.stage)}</span>
+              </span>
               {stepText && <span data-testid="sync-step">{stepText}</span>}
             </div>
             <ProgressBar
@@ -674,9 +681,27 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           <PanelSectionRow>
             <Field
               label={
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
                   <Spinner width={14} height={14} />
-                  <span style={{ fontSize: "12px" }}>{formatProgressText(syncProgress)}</span>
+                  {/* Let the longer narrated messages ("Fetching Game Boy
+                      Advance (page 4/62)") wrap to up to two lines on word
+                      boundaries instead of being clipped mid-parenthesis. The
+                      flex child needs minWidth:0 to wrap; the clamp caps it at
+                      two lines so an unexpectedly long name can't blow up the
+                      row. */}
+                  <span
+                    style={{
+                      fontSize: "12px",
+                      minWidth: 0,
+                      whiteSpace: "normal",
+                      display: "-webkit-box",
+                      WebkitLineClamp: 2,
+                      WebkitBoxOrient: "vertical",
+                      overflow: "hidden",
+                    }}
+                  >
+                    {formatProgressText(syncProgress)}
+                  </span>
                 </div>
               }
             />

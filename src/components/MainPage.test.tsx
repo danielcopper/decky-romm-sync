@@ -1034,7 +1034,7 @@ describe("MainPage", () => {
       expect(container.querySelector('[data-testid="progress-indeterminate"]')?.textContent).toBe("true");
     });
 
-    it("detail line renders the fine current/total message with a step prefix", async () => {
+    it("detail line renders the bare fine current/total message (no step prefix)", async () => {
       vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
         stage: "applying",
@@ -1046,27 +1046,70 @@ describe("MainPage", () => {
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      // The detail line is the field-label; it carries the step-prefixed message.
-      expect(container.textContent).toContain("[1/2]");
+      // The detail line carries the bare message — the coarse "step/totalSteps"
+      // is shown once on the bar row (sync-step), not duplicated here.
       expect(container.textContent).toContain("N64: 4/8");
+      expect(container.textContent).not.toContain("[1/2]");
     });
 
-    it("truncates long detail messages with an ellipsis", async () => {
-      const longMsg = "x".repeat(60);
+    it("renders the full detail message without mid-word truncation (CSS wraps it)", async () => {
+      // The longer narrated messages must not be clipped mid-parenthesis with an
+      // ellipsis (the old formatProgressText behavior); they wrap in CSS instead.
+      const longMsg = "Fetching Game Boy Advance (page 4/62) and a lot more text";
       vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
         stage: "applying",
         step: 2,
         totalSteps: 5,
+        current: 4,
         total: 60,
         message: longMsg,
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      const labels = fieldLabels(container);
-      const detail = labels.find((l) => l.includes("…"));
-      expect(detail).toBeDefined();
-      expect((detail ?? "").length).toBeLessThanOrEqual(41);
+      expect(container.textContent).toContain(longMsg);
+      expect(container.textContent).not.toContain("…");
+    });
+
+    it("shows a spinner next to the stage label while running without fine detail", async () => {
+      // The initial anchor frame: running, a stage label, but no narrated
+      // fine-detail page frame yet (no total/message). Without a spinner here
+      // the panel looks hung — the stage label must carry one so a running sync
+      // always shows motion.
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "fetching",
+        step: 0,
+        totalSteps: 0,
+        // no total / message → hasFineDetail false
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const stage = container.querySelector('[data-testid="sync-stage"]');
+      expect(stage).not.toBeNull();
+      // The spinner sits inline with the stage label (its wrapping span).
+      expect(stage!.parentElement?.querySelector('[data-testid="spinner"]')).not.toBeNull();
+      // No second spinner — the fine line is absent, and the connection row is
+      // "Connected" (icon, no spinner).
+      expect(container.querySelectorAll('[data-testid="spinner"]').length).toBe(1);
+    });
+
+    it("shows only the fine-line spinner (no stage-label spinner) once fine detail exists", async () => {
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 2,
+        totalSteps: 5,
+        current: 3,
+        total: 10,
+        message: "N64: 3/10",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const stage = container.querySelector('[data-testid="sync-stage"]');
+      // No spinner beside the stage label — the fine line owns the only spinner.
+      expect(stage!.parentElement?.querySelector('[data-testid="spinner"]')).toBeNull();
+      expect(container.querySelectorAll('[data-testid="spinner"]').length).toBe(1);
     });
   });
 
