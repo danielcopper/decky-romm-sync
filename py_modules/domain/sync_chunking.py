@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
+from domain.sync_diff import BIND_ROM_ID_KEY
+
 
 class UnitChunk(NamedTuple):
     """One commit chunk of a unit's apply.
@@ -53,9 +55,10 @@ def build_unit_chunks(
     singleton, never merged with its neighbours).
 
     Each chunk's ``rom_ids`` are every *shortcuts_data* ROM whose group has an
-    emitted entry in that chunk (matched by ``sibling_group_key``; keyless
-    emitted entries match by their own ``rom_id``), so the chunk commits exactly
-    the rows its shortcuts bind or grandfather. Groups present in *shortcuts_data*
+    emitted entry in that chunk (matched by ``sibling_group_key``; a keyless
+    emitted entry matches by its binding target — ``bind_rom_id`` when present,
+    else its own ``rom_id``), so the chunk commits exactly the rows its shortcuts
+    bind or grandfather. Groups present in *shortcuts_data*
     with no emitted entry anywhere — plus any unmatched leftover ROMs — ride
     chunk 0's ``rom_ids`` (they need no frontend work; committing them with the
     first chunk keeps the row partition exact). An empty *emitted* yields exactly
@@ -139,9 +142,15 @@ def _index_emitted_groups(
     """Map each emitted group to the chunk that owns it.
 
     Returns ``(key_to_chunk, romid_to_chunk)``: non-``None`` keys route by key,
-    keyless entries route by their own ``rom_id``. ``setdefault`` keeps the first
-    chunk to carry a key as its owner, so the group-clustered contract yields one
-    chunk per group.
+    keyless entries route by their **binding target** — ``bind_rom_id`` when
+    present (a rebind entry: its own ``rom_id`` is the vanished sibling, absent
+    from ``shortcuts_data``, while the target is the surviving representative
+    whose row must commit in this chunk), else their own ``rom_id`` (a plain
+    keyless entry). Routing a keyless rebind by its own ``rom_id`` would strand
+    the representative's row in chunk 0's leftover while the entry sits in a later
+    chunk, so the binding is never persisted and the rebind re-fires every sync.
+    ``setdefault`` keeps the first chunk to carry a key as its owner, so the
+    group-clustered contract yields one chunk per group.
     """
     key_to_chunk: dict[str, int] = {}
     romid_to_chunk: dict[int, int] = {}
@@ -149,7 +158,7 @@ def _index_emitted_groups(
         for entry in entries:
             key = entry.get("sibling_group_key")
             if key is None:
-                romid_to_chunk.setdefault(entry["rom_id"], index)
+                romid_to_chunk.setdefault(int(entry.get(BIND_ROM_ID_KEY, entry["rom_id"])), index)
             else:
                 key_to_chunk.setdefault(key, index)
     return key_to_chunk, romid_to_chunk

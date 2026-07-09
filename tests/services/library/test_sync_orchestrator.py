@@ -3319,6 +3319,73 @@ class TestApplyChunking:
         assert box.unit_abandoned is False
 
     @pytest.mark.asyncio
+    async def test_cancel_in_inter_chunk_window_never_emits_next_chunk(self, plugin, fake_romm_api, monkeypatch):
+        """A cancel landing AFTER chunk 0's commit but BEFORE chunk 1's emit stops
+        the unit at the top of the loop: chunk 1 is never emitted, chunk 0's commit
+        persists, staging cleared. Complements
+        ``test_user_cancel_between_chunks_keeps_committed_chunks`` (cancel DURING
+        the wait) — this is the inter-chunk window, where an un-guarded loop would
+        still emit chunk 1 and leave ~200 shortcuts orphaned until the next sync
+        (#1025)."""
+        import decky
+
+        from services.library import sync_orchestrator
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": i, "name": f"G{i}"} for i in range(1, 6)],
+        )
+
+        commit_rows: list[list[int]] = []
+        box = plugin._sync_service._box
+
+        async def capture_commit(_rid_to_aid, chunk_rows):
+            commit_rows.append([r["id"] for r in chunk_rows])
+            # Cancel lands the instant chunk 0's commit resolves — before the loop
+            # returns to the top to emit chunk 1.
+            if len(commit_rows) == 1:
+                box.sync_state = SyncState.CANCELLING
+
+        plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        box.sync_state = SyncState.RUNNING
+        box.current_sync_id = "run-inter-chunk"
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        # Chunk 1 is never emitted — the loop stopped at its top before any emit —
+        # so the frontend has no orphaned chunk to churn and later fail the ack on.
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        assert len(unit_events) == 1
+        assert unit_events[0]["chunk_index"] == 0
+        # Chunk 0's commit persists.
+        assert commit_rows == [[1, 2]]
+        # Staging + chunk identity cleared so a stray late ack can't commit.
+        assert box.pending_sync == {}
+        assert box.pending_all_roms == {}
+        assert box.unit_complete_event is None
+        assert box.active_unit_id is None
+        assert box.active_chunk_index is None
+        assert box.unit_abandoned is False
+
+    @pytest.mark.asyncio
     async def test_heartbeat_timeout_on_chunk_stashes_only_that_chunk(self, plugin, fake_romm_api, monkeypatch):
         """A heartbeat timeout on chunk 1 stashes ONLY chunk 1's rows (not the whole
         unit) and retains chunk 1's index, so a late ack commits just that chunk."""

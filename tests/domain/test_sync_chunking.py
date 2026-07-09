@@ -91,6 +91,29 @@ class TestBuildUnitChunks:
         # The representative (bind target 10) and its siblings ride the rebind's chunk.
         assert sorted(chunks[1].rom_ids) == [10, 11, 12]
 
+    def test_keyless_rebind_target_row_lands_in_the_rebind_chunk(self):
+        """A KEYLESS rebind entry routes its representative's row into the rebind's
+        own chunk — not into chunk 0's leftover.
+
+        A keyless rebind (``sibling_group_key`` None, ``bind_rom_id`` set) has a
+        vanished sibling as its ``rom_id`` and the surviving representative as its
+        ``bind_rom_id``. Routing by the entry's own ``rom_id`` would leave the
+        representative's row in chunk 0's leftover while the entry sits in a later
+        chunk — that chunk's ack would then never commit the binding move and the
+        rebind would re-fire every sync. This pins the documented invariant "every
+        emitted entry's binding target lands in its own chunk's rom_ids" for the
+        keyless case too.
+        """
+        emitted = [_sd(1, None), {"rom_id": 99, "sibling_group_key": None, "bind_rom_id": 10}]
+        shortcuts_data = [_sd(1, None), _sd(10, None), _sd(11, None)]
+        chunks = build_unit_chunks(emitted, shortcuts_data, 1)
+        assert len(chunks) == 2
+        # The rebind entry (rom_id 99) is in chunk 1; its bind target (rom 10)
+        # must ride the SAME chunk so its ack commits the rebound representative.
+        rebind_chunk = next(ci for ci, c in enumerate(chunks) if any(e["rom_id"] == 99 for e in c.emitted))
+        assert rebind_chunk == 1
+        assert 10 in chunks[rebind_chunk].rom_ids
+
     def test_groups_with_no_emitted_entry_land_in_first_chunk(self):
         """Fetched groups the collapse emitted nothing for (partial-view grandfather)
         commit with chunk 0, so their rows are never dropped."""
@@ -176,3 +199,61 @@ def test_property_no_group_split_across_chunks(unit):
         for rid in chunk.rom_ids:
             key_chunks.setdefault(key_by_rid[rid], set()).add(ci)
     assert all(len(indices) == 1 for indices in key_chunks.values())
+
+
+@st.composite
+def _unit_with_rebinds(draw: st.DrawFn) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+    """Generate a (emitted, shortcuts_data, chunk_size) that includes REBIND lanes.
+
+    Each group is emitted via one of three lanes — ``new`` (one representative),
+    ``grandfather`` (a subset of members), or ``rebind`` (a synthetic entry whose
+    ``rom_id`` is a VANISHED sibling absent from shortcuts_data, carrying a
+    ``bind_rom_id`` pointing at a member representative that IS present). A group's
+    key is either a real key (keyed lane) or ``None`` (keyless lane), so the
+    generator exercises the keyless-rebind routing branch specifically — the one
+    that stranded the representative's row before the fix. Every emitted entry's
+    binding target is therefore always a member present in shortcuts_data.
+    """
+    n_groups = draw(st.integers(min_value=1, max_value=6))
+    chunk_size = draw(st.integers(min_value=1, max_value=4))
+    next_rid = 1
+    vanished_rid = 10_000  # disjoint from member ids so a vanished sibling never collides
+    emitted: list[dict[str, Any]] = []
+    shortcuts_data: list[dict[str, Any]] = []
+    for g in range(n_groups):
+        key = f"grp:{g}" if draw(st.booleans()) else None
+        n_members = draw(st.integers(min_value=1, max_value=3))
+        member_ids = list(range(next_rid, next_rid + n_members))
+        next_rid += n_members
+        shortcuts_data.extend(_sd(rid, key) for rid in member_ids)
+        lane = draw(st.sampled_from(["new", "grandfather", "rebind"]))
+        if lane == "new":
+            emitted.append(_sd(member_ids[0], key))
+        elif lane == "grandfather":
+            n_emit = draw(st.integers(min_value=1, max_value=n_members))
+            emitted.extend(_sd(rid, key) for rid in member_ids[:n_emit])
+        else:  # rebind: a vanished sibling emitted, bind target = a present member
+            emitted.append({"rom_id": vanished_rid, "sibling_group_key": key, "bind_rom_id": member_ids[0]})
+            vanished_rid += 1
+    return emitted, shortcuts_data, chunk_size
+
+
+@given(unit=_unit_with_rebinds())
+def test_property_binding_target_lands_in_own_chunk(unit):
+    """Every emitted entry's binding target commits in the entry's OWN chunk.
+
+    The binding target is ``bind_rom_id`` when present (a rebind entry) else the
+    entry's own ``rom_id``. It must land in the same chunk's ``rom_ids`` as the
+    entry, so that chunk's ack persists the binding. Fails for keyless rebind
+    entries before the fix (their target routed to chunk 0's leftover).
+    """
+    emitted, shortcuts_data, chunk_size = unit
+    chunks = build_unit_chunks(emitted, shortcuts_data, chunk_size)
+    rid_to_chunk: dict[int, int] = {}
+    for ci, chunk in enumerate(chunks):
+        for rid in chunk.rom_ids:
+            rid_to_chunk[rid] = ci
+    for ci, chunk in enumerate(chunks):
+        for entry in chunk.emitted:
+            target = int(entry.get("bind_rom_id", entry["rom_id"]))
+            assert rid_to_chunk.get(target) == ci

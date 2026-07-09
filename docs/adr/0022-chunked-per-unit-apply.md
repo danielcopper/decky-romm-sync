@@ -56,9 +56,12 @@ mid-unit failure forfeits only the in-flight chunk.**
   `active_unit_id`) gains `chunk_index` == `active_chunk_index`. The orchestrator stamps `active_chunk_index` before
   each chunk's emit and clears it at commit or cancel, so a late ack for a superseded chunk can never commit against a
   newer one — the same defense the run/unit identity already gave, at chunk granularity.
-- **Late-ack recovery is per chunk (#1052).** A heartbeat timeout still keeps the coordination state and lets the late
-  `report_unit_results` drive the commit itself, but it now stashes only the **abandoned chunk's** rows
-  (`pending_unit_roms`), not the whole unit's fetch — every chunk committed before the timeout stays committed.
+- **Late-ack recovery is per chunk (#1052) — currently best effort.** A heartbeat timeout keeps the coordination state
+  and stashes only the **abandoned chunk's** rows (`pending_unit_roms`), not the whole unit's fetch — every chunk
+  committed before the timeout stays committed. The recovery commit itself is not reachable in production today
+  (run-teardown clears the ack's identity before a late ack can arrive,
+  [#1367](https://github.com/danielcopper/decky-romm-sync/issues/1367)); until that lands, a timed-out chunk's shortcuts
+  stay unbound and self-heal on the next sync via the existing-shortcut scan.
 - **Cancel is chunk-atomic.** A user cancel or a timeout mid-unit forfeits only the in-flight chunk; every chunk
   committed before it survives. The `SyncRun` still completes **only at run end**, so a partial unit is never recorded
   as complete and the incremental-skip gate re-fetches it on the next run; the stale-removal scan is already skipped on

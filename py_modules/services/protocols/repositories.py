@@ -143,7 +143,13 @@ class RomMetadataRepository(Protocol):
         ...
 
     def iter_all(self) -> Iterator[tuple[int, RomMetadata]]:
-        """Iterate ``(rom_id, metadata)`` for every ROM. (library/reporter.py post-apply scan)"""
+        """Iterate ``(rom_id, metadata)`` for every ROM.
+
+        No production caller since the paged cache load (#1025) replaced the
+        full-scan read with :meth:`iter_page` + :meth:`count`; retained for
+        adapter/fake symmetry with the other repositories and exercised by the
+        SQLite adapter's own tests.
+        """
         ...
 
     def iter_page(self, offset: int, limit: int) -> Iterator[tuple[int, RomMetadata]]:

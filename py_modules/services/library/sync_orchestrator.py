@@ -880,6 +880,20 @@ class SyncOrchestrator:
         chunk_count = len(chunks)
         applied_count = 0
         for chunk_index, chunk in enumerate(chunks):
+            # A cancel landing in the inter-chunk window — after the prior chunk's
+            # commit but before this chunk's emit — discards the rest of the unit
+            # here, before any per-chunk mutation or emit. Without this the
+            # frontend would fully process another ~200-shortcut chunk (~2 min)
+            # whose ack the backend then rejects, orphaning those shortcuts until
+            # the next sync. Same cleanup as the mid-wait user-cancel branch below.
+            if box.is_cancelling():
+                box.pending_sync = {}
+                box.pending_all_roms = {}
+                box.unit_complete_event = None
+                box.active_unit_id = None
+                box.active_chunk_index = None
+                return applied_count
+
             chunk_rows = [roms_by_id[rid] for rid in chunk.rom_ids if rid in roms_by_id]
 
             # Fresh per-chunk coordination: a new event + identity (run + unit +

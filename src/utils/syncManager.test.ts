@@ -621,4 +621,56 @@ describe("syncManager — chunked apply (#1025)", () => {
     expect(vi.mocked(backend.reportUnitResults)).toHaveBeenNthCalledWith(1, { "1": 5001, "2": 5002 }, "run-ack", 1, 0);
     expect(vi.mocked(backend.reportUnitResults)).toHaveBeenNthCalledWith(2, { "3": 5003 }, "run-ack", 1, 1);
   });
+
+  it("drops a second sync_apply_unit that arrives while one is mid-processing", async () => {
+    // Event 1 hangs at the once-per-run existing-shortcut scan via a deferred
+    // promise, holding the module's in-flight guard set. Event 2 then arrives with
+    // a DIFFERENT run_id — so, were the guard absent, it would kick off its own
+    // (cache-missing) scan and its own ack. The guard must drop it instead. This
+    // is the overlap that, unguarded, corrupts the shared per-unit state.
+    let resolveScan!: (m: Map<number, number>) => void;
+    getExistingRomMShortcuts.mockReturnValue(
+      new Promise<Map<number, number>>((r) => {
+        resolveScan = r;
+      }),
+    );
+
+    initUnitSyncManager();
+
+    // Event 1: starts, suspends on the hung scan (in-flight guard now set).
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>(
+        "sync_apply_unit",
+        chunkOf([sc(1)], { chunkIndex: 0, chunkOffset: 0, chunkCount: 1, unitTotal: 1, runId: "run-guard-1" }),
+      );
+      await flush(0);
+    });
+
+    // Event 2: arrives while event 1 is still hung → dropped by the guard before
+    // it can scan or process anything.
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>(
+        "sync_apply_unit",
+        chunkOf([sc(2)], { chunkIndex: 0, chunkOffset: 0, chunkCount: 1, unitTotal: 1, runId: "run-guard-2" }),
+      );
+      await flush(0);
+    });
+
+    // Observable proof of the drop: only event 1's scan ever ran, and no ack has
+    // fired (event 1 is still hung, event 2 never processed).
+    expect(getExistingRomMShortcuts).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(backend.reportUnitResults)).not.toHaveBeenCalled();
+
+    // Release event 1 and let it run to completion.
+    await act(async () => {
+      resolveScan(new Map<number, number>([[1, 5001]]));
+      await flush(120);
+    });
+
+    // Event 1 finished normally and acked exactly once for its own run; event 2's
+    // binding never reached the backend — still one scan, one ack.
+    expect(getExistingRomMShortcuts).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "1": 5001 }, "run-guard-1", 1, 0);
+  });
 });
