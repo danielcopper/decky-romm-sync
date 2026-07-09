@@ -40,9 +40,7 @@ async function probeOnce(): Promise<void> {
  */
 export function registerConnectionHeartbeat(): () => void {
   mountedPages += 1;
-  if (timer === null) {
-    timer = setInterval(() => detach(probeOnce()), CONNECTION_HEARTBEAT_INTERVAL_MS);
-  }
+  timer ??= setInterval(() => detach(probeOnce()), CONNECTION_HEARTBEAT_INTERVAL_MS);
   return () => {
     mountedPages -= 1;
     if (mountedPages <= 0) {
