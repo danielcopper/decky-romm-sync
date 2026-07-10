@@ -327,37 +327,9 @@ class VersionSwitchService:
             }
             for m in local.members
         ]
-        for stub in server_only_stubs:
-            rom_id = int(stub["id"])
-            detail = detail_by_id.get(rom_id)
-            meta = extract_version_metadata(detail) if detail is not None else {}
-            target_is_local = rom_id in stub_local_group_keys
-            # A stub already synced under a (possibly different) local key is judged
-            # by key equality (#1359); a never-synced stub is judged by canonical
-            # compatibility against the bound key — its id at the bound canonical
-            # source must be absent-or-equal (its raw ``detail`` carries those ids),
-            # so a conflicting match is listed but not switchable (#1360). A missing
-            # detail (a transient fetch miss) can't be judged → non-switchable.
-            entries.append(
-                {
-                    "rom_id": rom_id,
-                    "name": (detail.get("name") if detail else None) or stub.get("name") or "",
-                    "label": stub.get("fs_name_no_ext") or stub.get("name") or str(rom_id),
-                    "regions": list(meta.get("regions") or []),
-                    "languages": list(meta.get("languages") or []),
-                    "revision": str(meta.get("revision") or ""),
-                    "tags": list(meta.get("tags") or []),
-                    "synced": False,
-                    "installed": False,
-                    "switchable": target_in_sibling_group(
-                        bound_group_key=local.group_key,
-                        target_group_key=stub_local_group_keys.get(rom_id) if target_is_local else None,
-                        target_ids=None if target_is_local else detail,
-                        target_is_local=target_is_local,
-                        target_is_server_sibling=True,
-                    ),
-                }
-            )
+        entries += [
+            self._server_only_entry(stub, local, detail_by_id, stub_local_group_keys) for stub in server_only_stubs
+        ]
 
         if len(entries) <= 1:
             return {"multi_version": False}
@@ -368,6 +340,45 @@ class VersionSwitchService:
             e["active"] = e["rom_id"] == local.bound_rom_id
             e["is_default"] = e["rom_id"] == default_rom_id
         return {"multi_version": True, "versions": entries, "server_query_failed": server_query_failed}
+
+    def _server_only_entry(
+        self,
+        stub: dict[str, Any],
+        local: _LocalGroup,
+        detail_by_id: dict[int, dict[str, Any]],
+        stub_local_group_keys: dict[int, str | None],
+    ) -> dict[str, Any]:
+        """Build one server-only stub's picker entry (``synced: False`` + switchable verdict).
+
+        A stub already synced under a (possibly different) local key is judged by key
+        equality (#1359); a never-synced stub is judged by canonical compatibility
+        against the bound key — its id at the bound canonical source must be
+        absent-or-equal (its raw ``detail`` carries those ids), so a conflicting match
+        is listed but not switchable (#1360). A missing detail (a transient fetch
+        miss) can't be judged → non-switchable.
+        """
+        rom_id = int(stub["id"])
+        detail = detail_by_id.get(rom_id)
+        meta = extract_version_metadata(detail) if detail is not None else {}
+        target_is_local = rom_id in stub_local_group_keys
+        return {
+            "rom_id": rom_id,
+            "name": (detail.get("name") if detail else None) or stub.get("name") or "",
+            "label": stub.get("fs_name_no_ext") or stub.get("name") or str(rom_id),
+            "regions": list(meta.get("regions") or []),
+            "languages": list(meta.get("languages") or []),
+            "revision": str(meta.get("revision") or ""),
+            "tags": list(meta.get("tags") or []),
+            "synced": False,
+            "installed": False,
+            "switchable": target_in_sibling_group(
+                bound_group_key=local.group_key,
+                target_group_key=stub_local_group_keys.get(rom_id) if target_is_local else None,
+                target_ids=None if target_is_local else detail,
+                target_is_local=target_is_local,
+                target_is_server_sibling=True,
+            ),
+        }
 
     def _resolve_default(
         self,

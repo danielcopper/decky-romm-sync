@@ -144,6 +144,24 @@ def compute_component_group_keys(
       cross-game bridge) or no source at all → every fresh member falls back to its
       own :func:`compute_sibling_group_key`.
     """
+    fresh_by_id, in_unit_resident = _partition_unit(unit_roms)
+    resident_lookup: dict[int, str] = {int(k): v for k, v in resident_keys.items()}
+    resident_lookup.update(in_unit_resident)
+
+    components, resident_candidates = _connect_components(fresh_by_id, resident_lookup)
+
+    result: dict[int, str] = {}
+    for member_ids in components.values():
+        _assign_component_keys(member_ids, fresh_by_id, resident_candidates, result)
+    return result
+
+
+def _partition_unit(unit_roms: list[dict[str, Any]]) -> tuple[dict[int, dict[str, Any]], dict[int, str]]:
+    """Split a fetched unit into ``{id: fresh dict}`` and ``{id: in-unit resident key}``.
+
+    A dict carrying a non-null ``sibling_group_key`` is resident (its key stays);
+    every other dict is fresh and gets a computed key.
+    """
     fresh_by_id: dict[int, dict[str, Any]] = {}
     in_unit_resident: dict[int, str] = {}
     for rom in unit_roms:
@@ -153,32 +171,57 @@ def compute_component_group_keys(
             in_unit_resident[rom_id] = key
         else:
             fresh_by_id[rom_id] = rom
-    fresh_ids = set(fresh_by_id)
-    resident_lookup: dict[int, str] = {int(k): v for k, v in resident_keys.items()}
-    resident_lookup.update(in_unit_resident)
+    return fresh_by_id, in_unit_resident
 
+
+def _connect_components(
+    fresh_by_id: dict[int, dict[str, Any]],
+    resident_lookup: dict[int, str],
+) -> tuple[dict[int, list[int]], dict[int, list[tuple[str, str]]]]:
+    """Union fresh members over their ``sibling_roms`` edges into connected components.
+
+    Returns ``(components_by_root, resident_candidates)``: components maps each root
+    to its member ids, and ``resident_candidates`` maps a fresh member id to the
+    ``(source, value)`` candidates its edges into resident ROMs contribute.
+    Processing is sorted by ``rom_id`` so the partition is order-independent.
+    """
+    fresh_ids = set(fresh_by_id)
     uf = _UnionFind(fresh_ids)
     resident_candidates: dict[int, list[tuple[str, str]]] = {}
     for rom_id in sorted(fresh_ids):
         for sibling in fresh_by_id[rom_id].get("sibling_roms") or []:
-            target_id = int(sibling.get("id", 0) or 0)
-            if target_id <= 0 or target_id == rom_id:
-                continue
-            if target_id in fresh_ids:
-                uf.union(rom_id, target_id)
-            elif target_id in resident_lookup:
-                parsed = _parse_group_key(resident_lookup[target_id])
-                if parsed is not None:
-                    resident_candidates.setdefault(rom_id, []).append(parsed)
+            _apply_edge(rom_id, sibling, fresh_ids, resident_lookup, uf, resident_candidates)
 
     components: dict[int, list[int]] = {}
     for rom_id in sorted(fresh_ids):
         components.setdefault(uf.find(rom_id), []).append(rom_id)
+    return components, resident_candidates
 
-    result: dict[int, str] = {}
-    for member_ids in components.values():
-        _assign_component_keys(member_ids, fresh_by_id, resident_candidates, result)
-    return result
+
+def _apply_edge(
+    rom_id: int,
+    sibling: dict[str, Any],
+    fresh_ids: set[int],
+    resident_lookup: dict[int, str],
+    uf: _UnionFind,
+    resident_candidates: dict[int, list[tuple[str, str]]],
+) -> None:
+    """Apply one ``sibling_roms`` edge: union two fresh members, or record a candidate.
+
+    An edge between two fresh members unions them; an edge to a resident ROM (in-unit
+    or DB) parses that resident's key to a canonical candidate for ``rom_id``'s
+    component (a ``romm:`` fallback parses to ``None`` and contributes nothing); an
+    edge to an unknown ROM does neither.
+    """
+    target_id = int(sibling.get("id", 0) or 0)
+    if target_id <= 0 or target_id == rom_id:
+        return
+    if target_id in fresh_ids:
+        uf.union(rom_id, target_id)
+    elif target_id in resident_lookup:
+        parsed = _parse_group_key(resident_lookup[target_id])
+        if parsed is not None:
+            resident_candidates.setdefault(rom_id, []).append(parsed)
 
 
 def _assign_component_keys(

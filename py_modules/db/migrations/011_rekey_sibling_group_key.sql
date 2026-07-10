@@ -22,4 +22,4 @@
 -- Transaction-safe DML only — the runner (adapters/sqlite_migrations.py) wraps
 -- BEGIN/COMMIT and stamps PRAGMA user_version = 11.
 -- -----------------------------------------------------------------------------
-UPDATE roms SET sibling_group_key = NULL;
+UPDATE roms SET sibling_group_key = NULL WHERE sibling_group_key IS NOT NULL;
