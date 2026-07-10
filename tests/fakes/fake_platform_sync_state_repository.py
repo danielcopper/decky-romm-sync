@@ -23,6 +23,9 @@ class FakePlatformSyncStateRepository:
         self.save_count += 1
         self._stamps[state.platform_slug] = copy.deepcopy(state)
 
+    def delete(self, platform_slug: str) -> None:
+        self._stamps.pop(platform_slug, None)
+
     def clear(self) -> None:
         self._stamps = {}
 

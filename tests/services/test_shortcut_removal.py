@@ -36,6 +36,14 @@ def _seed_platform_names(uow, mapping):
         uow.kv_config.set(_PLATFORM_NAMES_KEY, json.dumps(mapping))
 
 
+def _seed_stamp(uow, slug, *, at="2025-01-01T00:00:00", rom_count=100):
+    """Persist a per-platform completion stamp (ADR-0022) into the fake UoW."""
+    from domain.platform_sync_state import PlatformSyncState
+
+    with uow:
+        uow.platform_sync_state.save(PlatformSyncState.stamp(platform_slug=slug, at=at, rom_count=rom_count))
+
+
 @pytest.fixture
 def uow() -> FakeUnitOfWork:
     return FakeUnitOfWork()
@@ -431,6 +439,95 @@ def _artwork_integration_service(uow, steam_config, tmp_path) -> ShortcutRemoval
 
 
 # ── TestReportRemovalSteamInputCleanup ────────────────────────────────────────
+
+
+class TestReportRemovalInvalidatesStamps:
+    """DangerZone removals must drop the completion stamp (ADR-0022) of every platform
+    they touch, or the next sync's incremental-skip gate skips the platform wholesale
+    and never recreates the removed shortcuts (#1025)."""
+
+    @pytest.mark.asyncio
+    async def test_remove_all_clears_every_touched_platform_stamp(self, svc, uow):
+        """remove-all reports ROMs across all platforms → each touched slug's stamp is
+        dropped; a platform with no removed ROM keeps its stamp."""
+        _seed_rom(uow, 10, app_id=1001, platform_slug="n64")
+        _seed_rom(uow, 20, app_id=1002, platform_slug="snes")
+        _seed_stamp(uow, "n64")
+        _seed_stamp(uow, "snes")
+        _seed_stamp(uow, "gba")  # no ROM removed for gba
+
+        await svc.report_removal_results([10, 20])
+        with uow:
+            assert uow.platform_sync_state.get("n64") is None
+            assert uow.platform_sync_state.get("snes") is None
+            assert uow.platform_sync_state.get("gba") is not None
+
+    @pytest.mark.asyncio
+    async def test_per_platform_removal_clears_only_that_platform_stamp(self, svc, uow):
+        """A per-platform DangerZone removal reports only that platform's ROMs, so only
+        its stamp is dropped — sibling platforms are untouched."""
+        _seed_rom(uow, 10, app_id=1001, platform_slug="n64")
+        _seed_rom(uow, 11, app_id=1003, platform_slug="n64")
+        _seed_rom(uow, 20, app_id=1002, platform_slug="snes")
+        _seed_stamp(uow, "n64")
+        _seed_stamp(uow, "snes")
+
+        await svc.report_removal_results([10, 11])
+        with uow:
+            assert uow.platform_sync_state.get("n64") is None
+            assert uow.platform_sync_state.get("snes") is not None
+
+    @pytest.mark.asyncio
+    async def test_already_unbound_removed_rom_still_invalidates_stamp(self, svc, uow):
+        """remove-all reports every rom_id, including already-unbound siblings; the
+        platform is still being wiped, so its stamp must go even when this row had no
+        binding to clear."""
+        _seed_rom(uow, 10, app_id=None, platform_slug="n64")
+        _seed_stamp(uow, "n64")
+
+        await svc.report_removal_results([10])
+        with uow:
+            assert uow.platform_sync_state.get("n64") is None
+
+    @pytest.mark.asyncio
+    async def test_missing_rom_leaves_stamps_untouched(self, svc, uow):
+        """A rom_id with no row contributes no platform, so no stamp is invalidated."""
+        _seed_stamp(uow, "n64")
+
+        await svc.report_removal_results([99])
+        with uow:
+            assert uow.platform_sync_state.get("n64") is not None
+
+
+class TestReconcileInvalidatesStamps:
+    """A shortcut deleted through Steam's own UI unbinds its row; its platform's stamp
+    must go too so the next sync recreates the shortcut instead of skipping the platform
+    (completing #1046 under the persisted-count skip)."""
+
+    @pytest.mark.asyncio
+    async def test_reconcile_clears_stamps_of_unbound_platforms_only(self, svc, uow):
+        _seed_rom(uow, 10, app_id=100, platform_slug="n64")
+        _seed_rom(uow, 20, app_id=200, platform_slug="snes")
+        _seed_stamp(uow, "n64")
+        _seed_stamp(uow, "snes")
+
+        # Live set covers snes (200) but not n64 (100) → only n64 is unbound.
+        result = await svc.reconcile_live_shortcuts([200])
+        assert result["unbound_count"] == 1
+        with uow:
+            assert uow.platform_sync_state.get("n64") is None
+            assert uow.platform_sync_state.get("snes") is not None
+
+    @pytest.mark.asyncio
+    async def test_reconcile_keeps_stamp_when_nothing_unbound(self, svc, uow):
+        """When every binding is still live nothing is unbound, so no stamp is dropped."""
+        _seed_rom(uow, 10, app_id=100, platform_slug="n64")
+        _seed_stamp(uow, "n64")
+
+        result = await svc.reconcile_live_shortcuts([100])
+        assert result["unbound_count"] == 0
+        with uow:
+            assert uow.platform_sync_state.get("n64") is not None
 
 
 class TestReportRemovalSteamInputCleanup:

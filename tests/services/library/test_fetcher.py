@@ -571,6 +571,51 @@ class TestIncrementalSkipFromPlatformStamp:
         assert delta_calls[-1][1][1] == "2025-01-01T00:00:00"  # updated_after == completed-run last_sync
 
 
+class TestStaleStampPartialGapRegression:
+    """#1025 silent-gap: a stale stamp must never skip a platform left partially bound.
+
+    The whole fix — the apply-start stamp clear (``sync_orchestrator``) and the
+    local-removal stamp invalidation (``shortcut_removal``) — exists so this exact
+    state can't arise with a surviving stamp. This pins the fetcher end of the
+    contract: given the partial state, the presence or absence of the stamp is the
+    SOLE decider of the wrongful skip, so clearing the stamp is what closes the gap.
+    """
+
+    @pytest.mark.asyncio
+    async def test_stale_stamp_skips_partial_platform_but_cleared_stamp_refetches(self, plugin, fake_romm_api):
+        """The interrupted-re-apply aftermath: 5 persisted rows, only 2 rebound before a
+        crash, 3 still unbound. The server is unchanged (delta 0) and its rom_count (5)
+        still equals the 5 persisted rows — every count the skip matches on lines up,
+        and there is NO completed run, so the stamp alone can drive a skip.
+
+        With the stale stamp present the skip FIRES (the bug: the 3 unbound games are
+        never recreated). Once the stamp is cleared — exactly what the apply-start clear
+        / local-removal invalidation does — the platform full-fetches and recreates them.
+        """
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        # Two rebound representatives (chunk 0 committed before the crash) ...
+        _seed_persisted_rom(uow, 10, app_id=1010, group_key="igdb:10:1")
+        _seed_persisted_rom(uow, 11, app_id=1011, group_key="igdb:11:1")
+        # ... and three siblings the crashed run never rebound (still unbound).
+        _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:12:1")
+        _seed_persisted_rom(uow, 13, app_id=None, group_key="igdb:13:1")
+        _seed_persisted_rom(uow, 14, app_id=None, group_key="igdb:14:1")
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
+
+        # A surviving stale stamp (rom_count still matches the server) → wrongful skip.
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=5)
+        skipped = await plugin._sync_service._fetcher._try_unit_incremental_skip(unit)
+        assert skipped is not None, "baseline: a stale stamp over a partially-bound platform skips (the bug)"
+        assert {r["id"] for r in skipped} == {10, 11}  # only the 2 rebound rows reconstruct — 3 games lost
+
+        # The fix clears that stamp; with no stamp and no completed run there is no
+        # time reference at all, so the skip cannot fire and the platform re-fetches.
+        with uow:
+            uow.platform_sync_state.delete("n64")
+        assert await plugin._sync_service._fetcher._try_unit_incremental_skip(unit) is None
+
+
 class TestFetchPlatformUnit:
     """Tests for fetch_platform_unit() — wrong-type guard, error propagation, pagination."""
 

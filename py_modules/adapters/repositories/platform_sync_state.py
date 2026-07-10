@@ -2,8 +2,9 @@
 
 One row per platform, keyed by ``platform_slug`` — the per-platform completion
 stamp the incremental-skip gate reads (ADR-0022). A leaf table with no cascade
-children, so ``save`` upserts with ``INSERT OR REPLACE`` and ``clear`` drops the
-whole table (Force Full Sync).
+children, so ``save`` upserts with ``INSERT OR REPLACE``, ``delete`` drops one
+platform's row (apply-start clear + local destructive flows), and ``clear`` drops
+the whole table (Force Full Sync).
 """
 
 from __future__ import annotations
@@ -42,6 +43,9 @@ class SqlitePlatformSyncStateRepository(BaseRepository):
             f"INSERT OR REPLACE INTO platform_sync_state ({_COLUMNS}) VALUES (?, ?, ?)",
             (state.platform_slug, state.completed_at, state.rom_count),
         )
+
+    def delete(self, platform_slug: str) -> None:
+        self._conn.execute("DELETE FROM platform_sync_state WHERE platform_slug = ?", (platform_slug,))
 
     def clear(self) -> None:
         self._conn.execute("DELETE FROM platform_sync_state")

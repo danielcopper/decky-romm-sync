@@ -307,8 +307,20 @@ leaves no completed `SyncRun`, so the library-wide `last_sync` never advances) s
 re-walking every already-applied game through CEF. All the existing guards still gate the skip (zero-bound-rows,
 `sibling_group_key` backfill, the `updated_after` server-delta check, the persisted-row count match); additionally, when
 the skip rides a stamp, the stamp's `rom_count` must still equal the server's platform `rom_count` — a server-side count
-change invalidates it. "Force Full Sync" (`clear_sync_cache`) clears every stamp alongside the completed-run history, so
-both skip references reset together.
+change invalidates it.
+
+The stamp's contract is **stamp exists ⟺ the platform's most recent apply attempt ran to completion**, so a stale stamp
+can never skip a half-mirrored platform. Because unbinding keeps the `roms` row (ADR-0007), a platform's persisted-row
+count survives a partial re-apply or a local removal, so a surviving stamp with a matching `rom_count` would otherwise
+let the skip drop the un-recreated games (the #1025 silent gap). Two rules keep the contract true: the orchestrator
+**clears the stamp at a platform unit's apply start** (once the fetch succeeded and the apply is about to emit its first
+chunk) and only the final chunk re-writes it, so an apply interrupted by a crash / cancel / heartbeat-timeout before the
+final chunk leaves none; and the **local destructive flows** — DangerZone remove-all and per-platform removals (via
+`report_removal_results`) plus the Steam-UI-deletion reconcile (`reconcile_live_shortcuts`) — delete the touched
+platforms' stamps in the same write UoW as the unbind. The reporter's server-side stale removal is the deliberate
+exception (it leaves the stamp, since a server-dropped ROM lowers RomM's `rom_count` and the count guard catches it).
+"Force Full Sync" (`clear_sync_cache`) clears every stamp alongside the completed-run history, so both skip references
+reset together.
 
 **Single-owner run lifecycle (#1202).** The run-lifecycle pair — `sync_state` (idle/running/cancelling) and
 `current_sync_id` — is mutated **only** through four verb methods on `LibrarySyncStateBox`, never by direct field

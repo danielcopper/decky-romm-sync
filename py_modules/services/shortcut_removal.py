@@ -5,9 +5,12 @@ removal flows (the frontend removes shortcuts via SteamClient, this service
 unbinds the rows) and the sync-start reconcile against Steam's live shortcut
 set (a shortcut the user deleted through Steam's own UI is unbound so the next
 sync recreates it — #1046). Unbinding clears ``shortcut_app_id`` and keeps the
-row and its per-ROM children (ADR-0007), never deletes. Reads the synced-shortcut
-binding from ``uow.roms``; the offline ``platform_slug → display_name`` label
-comes from the ``kv_config`` cache the library sync refreshes each run.
+row and its per-ROM children (ADR-0007), never deletes. Every unbind here also
+invalidates the touched platforms' completion stamps (ADR-0022) so the next
+sync's incremental-skip gate can't skip a platform whose shortcuts were removed
+locally and leave the removal never recreated. Reads the synced-shortcut binding
+from ``uow.roms``; the offline ``platform_slug → display_name`` label comes from
+the ``kv_config`` cache the library sync refreshes each run.
 """
 
 from __future__ import annotations
@@ -134,14 +137,29 @@ class ShortcutRemovalService:
             if rom is not None and grid:
                 self._artwork_remover.remove_artwork_files(grid, rom_id, self._artwork_entry(rom))
 
-        # Unbind the removed ROMs — clear the Steam link, keep the row (ADR-0007).
+        # Unbind the removed ROMs — clear the Steam link, keep the row (ADR-0007) —
+        # and invalidate the completion stamp (ADR-0022) of every platform this
+        # removal touched. Unbinding keeps the row, so the platform's persisted-row
+        # count is unchanged and a still-valid stamp would let the next sync's
+        # incremental-skip gate skip the platform wholesale and never recreate the
+        # removed shortcuts (the #1025 silent-gap class). Both DangerZone flows —
+        # remove-all and per-platform removal — funnel their unbind here, so
+        # deleting the stamp per touched slug covers each: remove-all reports every
+        # ROM (all platforms invalidated), a per-platform removal reports only that
+        # platform's ROMs (only its slug invalidated). Same write UoW as the unbind.
         with self._uow_factory() as uow:
+            touched_slugs: set[str] = set()
             for rom_id in removed_rom_ids:
                 rom = uow.roms.get(int(rom_id))
-                if rom is None or rom.shortcut_app_id is None:
+                if rom is None:
+                    continue
+                touched_slugs.add(rom.platform_slug)
+                if rom.shortcut_app_id is None:
                     continue
                 rom.unbind_shortcut()
                 uow.roms.save(rom)
+            for slug in touched_slugs:
+                uow.platform_sync_state.delete(slug)
 
     @staticmethod
     def _artwork_entry(rom) -> ShortcutRegistryEntry:
@@ -179,13 +197,24 @@ class ShortcutRemovalService:
                 continue
 
         unbound = 0
+        touched_slugs: set[str] = set()
         with self._uow_factory() as uow:
             for rom in list(uow.roms.iter_all()):
                 if rom.shortcut_app_id is None or rom.shortcut_app_id in live:
                     continue
+                touched_slugs.add(rom.platform_slug)
                 rom.unbind_shortcut()
                 uow.roms.save(rom)
                 unbound += 1
+            # A shortcut deleted through Steam's own UI leaves the row's persisted
+            # count unchanged, so its platform's completion stamp (ADR-0022) would
+            # still let the next sync skip the platform and never recreate the
+            # shortcut — the same silent-gap class as the DangerZone flows (#1025).
+            # Invalidate the stamp of every platform we unbound here, in the same
+            # write UoW, so the platform full-fetches and recreates the shortcut
+            # (completing the #1046 recovery under the persisted-count skip).
+            for slug in touched_slugs:
+                uow.platform_sync_state.delete(slug)
         return unbound
 
     async def reconcile_live_shortcuts(self, live_app_ids: list[int | str]) -> dict[str, Any]:

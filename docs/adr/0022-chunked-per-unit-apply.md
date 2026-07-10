@@ -80,6 +80,18 @@ mid-unit failure forfeits only the in-flight chunk.**
   cancel are additionally stamped complete (`PlatformSyncState`, #1025) in the same write UoW as that final chunk, so
   the next run's incremental-skip gate skips them wholesale rather than re-walking every already-applied game through
   CEF — even though the cancelled run never completed its `SyncRun` and so never advanced the library-wide `last_sync`.
+- **The stamp's contract is `stamp exists ⟺ the platform's most recent apply attempt ran to completion`.** Two rules
+  keep it true. (1) The stamp is **cleared at a platform unit's apply start** (in `_sync_one_unit`, once the fetch has
+  succeeded and the apply is about to emit its first chunk) and re-written only by that unit's final chunk, so an apply
+  interrupted by a crash / cancel / heartbeat-timeout before the final chunk leaves **no** stamp — never a stale one
+  from a prior run. (2) The **local destructive flows** invalidate the stamp of every platform whose shortcuts they
+  unbind: the DangerZone remove-all and per-platform removals (both via `report_removal_results`) and the
+  Steam-UI-deletion reconcile (`reconcile_live_shortcuts`) delete the touched platforms' stamps in the same write UoW as
+  the unbind. Both rules exist because unbinding keeps the `roms` row (ADR-0007), so a platform's persisted-row count is
+  unchanged and a surviving stamp with a matching `rom_count` would let the skip gate skip a half-mirrored platform and
+  silently drop the un-recreated games (the #1025 gap). The server-side stale removal in the reporter is the deliberate
+  exception — it does **not** invalidate the stamp, because a ROM the server dropped lowers RomM's platform `rom_count`,
+  which the stamp's `rom_count` guard already catches on the next skip.
 - **More round-trips.** A 3084 unit now runs ~16 emit/ack/commit cycles instead of one. Each cycle adds an event, a
   callable ack, and a short write UoW; the added overhead is roughly 2% of the unit's apply time — negligible against
   the crash-recovery it buys.

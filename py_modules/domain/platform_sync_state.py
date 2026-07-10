@@ -13,8 +13,12 @@ later server-side count change invalidates the stamp).
 
 Keyed by ``platform_slug``. A thin record built whole and upserted — never a
 partial field mutation — so it carries a single ``stamp`` constructor and no
-verb-named mutators. Force Full Sync clears every stamp (the repository's
-``clear``), the same reset that drops the completed-run history.
+verb-named mutators. The contract is *stamp exists ⟺ the platform's most recent
+apply attempt ran to completion*: it is deleted at a platform unit's apply start
+(``sync_orchestrator``) so an interrupted re-apply leaves none and the final
+chunk re-writes it, deleted per touched platform by the local destructive flows
+(``shortcut_removal``) that unbind shortcuts outside a sync, and cleared wholesale
+by Force Full Sync (the repository's ``clear``) alongside the completed-run history.
 """
 
 from __future__ import annotations

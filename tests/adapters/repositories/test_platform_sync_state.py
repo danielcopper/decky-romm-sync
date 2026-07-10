@@ -53,6 +53,21 @@ class TestUpsert:
         assert snes.rom_count == 200
 
 
+class TestDelete:
+    def test_delete_removes_only_the_named_slug(self, uow: SqliteUnitOfWork):
+        uow.platform_sync_state.save(_stamp("n64"))
+        uow.platform_sync_state.save(_stamp("snes"))
+
+        uow.platform_sync_state.delete("n64")
+
+        assert uow.platform_sync_state.get("n64") is None
+        assert uow.platform_sync_state.get("snes") is not None
+
+    def test_delete_absent_slug_is_noop(self, uow: SqliteUnitOfWork):
+        uow.platform_sync_state.delete("nope")  # no row → no error
+        assert uow.platform_sync_state.get("nope") is None
+
+
 class TestClear:
     def test_clear_removes_every_stamp(self, uow: SqliteUnitOfWork):
         uow.platform_sync_state.save(_stamp("n64"))

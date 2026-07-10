@@ -176,6 +176,14 @@ def _seed_completed_run(plugin, *, at, platforms=None, collections=None, run_id=
         plugin._uow.sync_runs.save(run)
 
 
+def _seed_platform_stamp(plugin, slug, *, at, rom_count):
+    """Persist a per-platform completion stamp (ADR-0022) into the shared UoW."""
+    from domain.platform_sync_state import PlatformSyncState
+
+    with plugin._uow:
+        plugin._uow.platform_sync_state.save(PlatformSyncState.stamp(platform_slug=slug, at=at, rom_count=rom_count))
+
+
 async def _fake_wait_set_event(_unit, event):
     """Default ``_wait_for_unit_complete`` stand-in: set the event and
     return an empty rom_id_to_app_id map.
@@ -3810,6 +3818,202 @@ class TestPlatformCompletionStamp:
         # The collection committed (non-vacuous) but never carried a stamp.
         assert stamps, "collection unit should have committed at least one chunk"
         assert all(s is None for s in stamps)
+
+    @pytest.mark.asyncio
+    async def test_apply_start_clears_preexisting_stamp_on_cancel_mid_unit(self, plugin, fake_romm_api, monkeypatch):
+        """A pre-existing (stale) stamp is cleared when the apply begins, so a cancel
+        before the final chunk leaves NO stamp — the #1025 silent-gap regression.
+
+        Before the apply-start clear the stale stamp survived a mid-unit cancel and
+        let the next sync skip the half-applied platform, dropping every game the
+        cancelled run never re-bound.
+        """
+        from services.library import sync_orchestrator
+
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": i, "name": f"G{i}"} for i in range(1, 6)],
+        )
+        # A stale completion stamp left by a prior fully-synced run.
+        _seed_platform_stamp(plugin, "n64", at="2020-01-01T00:00:00+00:00", rom_count=5)
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        box = plugin._sync_service._box
+
+        async def wait(_unit, event):
+            if box.active_chunk_index == 0:
+                event.set()
+                return {}
+            box.sync_state = SyncState.CANCELLING  # user cancel during chunk 1
+            return None
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = wait
+        box.sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        with plugin._uow as uow:
+            assert uow.platform_sync_state.get("n64") is None
+
+    @pytest.mark.asyncio
+    async def test_apply_start_clears_preexisting_stamp_on_heartbeat_timeout(self, plugin, fake_romm_api):
+        """A heartbeat timeout abandons the chunk without committing it, and its late-ack
+        commit (unreachable today, #1367) carries no stamp — but the apply-start clear
+        already removed the pre-existing stamp, so none survives the interruption."""
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "A"}, {"id": 2, "name": "B"}],
+        )
+        _seed_platform_stamp(plugin, "n64", at="2020-01-01T00:00:00+00:00", rom_count=2)
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def timeout_wait(_unit, _event):
+            return None  # heartbeat timeout — box is NOT cancelling
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = timeout_wait
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        with plugin._uow as uow:
+            assert uow.platform_sync_state.get("n64") is None
+
+    @pytest.mark.asyncio
+    async def test_completing_reapply_refreshes_stale_stamp(self, plugin, fake_romm_api):
+        """A platform that re-applies to completion replaces a stale stamp with a fresh
+        one (current server count + the injected completion clock), not the old values."""
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "A"}, {"id": 2, "name": "B"}],
+        )
+        _seed_platform_stamp(plugin, "n64", at="2020-01-01T00:00:00+00:00", rom_count=99)
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def fake_wait(_u, event):
+            event.set()
+            return {"1": 5001, "2": 5002}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        with plugin._uow as uow:
+            stamp = uow.platform_sync_state.get("n64")
+        assert stamp is not None
+        assert stamp.completed_at == "2026-01-01T00:00:00+00:00"  # fresh clock, not the stale 2020 value
+        assert stamp.rom_count == 2  # current server count, not the stale 99
+
+    @pytest.mark.asyncio
+    async def test_skipped_platform_keeps_its_stamp(self, plugin, fake_romm_api):
+        """An incremental-skipped platform returns before the apply-start clear, so its
+        completion stamp is preserved untouched (the skip is what the stamp exists for)."""
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        # Stamp + one matching bound row + unchanged server → the fetch incremental-skips.
+        _seed_platform_stamp(plugin, "n64", at="2025-01-01T00:00:00", rom_count=1)
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="A", fs_name="a.z64")
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._reporter.commit_unit_results = AsyncMock()  # type: ignore[method-assign]
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+        applied = await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+        # Non-vacuous: the unit actually skipped (its ROM count flows back) rather than
+        # applying — the commit was never driven.
+        assert applied == 1
+        plugin._sync_service._reporter.commit_unit_results.assert_not_called()
+
+        with plugin._uow as uow:
+            stamp = uow.platform_sync_state.get("n64")
+        assert stamp is not None
+        assert stamp.rom_count == 1
+        assert stamp.completed_at == "2025-01-01T00:00:00"  # untouched
+
+    @pytest.mark.asyncio
+    async def test_fetch_failure_before_chunk_loop_keeps_stamp(self, plugin, fake_romm_api):
+        """A fetch that raises before the chunk loop is not an apply start, so the old
+        stamp is preserved (fetch failure ≠ apply started)."""
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        _seed_platform_stamp(plugin, "n64", at="2020-01-01T00:00:00+00:00", rom_count=5)
+
+        async def boom(*_args, **_kwargs):
+            raise RuntimeError("fetch exploded")
+
+        plugin._sync_service._orchestrator._sync_platform_unit = boom
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
+        with pytest.raises(RuntimeError, match="fetch exploded"):
+            await plugin._sync_service._orchestrator._sync_one_unit(
+                unit,
+                unit_index=0,
+                total_units=1,
+                synced_rom_ids=set(),
+                collection_memberships={},
+                platform_rom_ids=set(),
+            )
+
+        with plugin._uow as uow:
+            stamp = uow.platform_sync_state.get("n64")
+        assert stamp is not None
+        assert stamp.rom_count == 5  # untouched — the apply never started
 
 
 class TestRegression738CacheCorruption:

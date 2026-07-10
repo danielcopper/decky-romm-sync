@@ -769,6 +769,17 @@ class SyncOrchestrator:
             if key is not None:
                 rom["sibling_group_key"] = key
 
+    def _clear_platform_stamp_io(self, platform_slug: str) -> None:
+        """Delete *platform_slug*'s completion stamp in one short write UoW.
+
+        Called at a platform unit's apply start (ADR-0022 / #1025): the stamp
+        asserts "this platform's last apply completed", so a fresh apply must
+        drop it up front and let the final chunk re-write it only on a clean
+        finish. A no-op when no stamp exists.
+        """
+        with self._uow_factory() as uow:
+            uow.platform_sync_state.delete(platform_slug)
+
     async def _sync_one_unit(
         self,
         unit: WorkUnit,
@@ -895,6 +906,26 @@ class SyncOrchestrator:
 
         if box.is_cancelling():
             return 0
+
+        # Clear this platform's completion stamp now that its apply is actually
+        # beginning — the fetch succeeded, artwork is done, and the cancel guard
+        # above has passed, so the next line starts emitting chunks. The stamp's
+        # contract is "this platform's last apply ran to completion", which a
+        # fresh apply invalidates the instant it starts: a crash / cancel /
+        # heartbeat-timeout before the final chunk must leave NO stamp, so the
+        # skip gate can't honour a stale one over a half-applied platform (the
+        # #1025 silent-gap regression). The final chunk re-writes the stamp on a
+        # clean finish. A fetch that failed raised before here (fetch failure ≠
+        # apply started) and a cancel during fetch/artwork returned at a guard
+        # above with the old stamp intact, so an unstarted apply keeps it. A
+        # skipped platform returned before this point and keeps its stamp. Only
+        # platform units carry a skip gate, so only they are stamped/cleared.
+        # A dedicated short write UoW (not folded into the first chunk's commit)
+        # so the clear is unconditional at apply start — even a first-chunk
+        # heartbeat-timeout, whose late ack commits without the stamp, leaves no
+        # stale stamp behind (ADR-0022 / #1025).
+        if unit.type == "platform" and unit.slug:
+            await self._loop.run_in_executor(None, self._clear_platform_stamp_io, unit.slug)
 
         # Stage the emitted representatives for cover finalise + binding, and the
         # full built set for the ack-independent identity + version persist (the

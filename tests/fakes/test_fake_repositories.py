@@ -357,6 +357,15 @@ class TestFakePlatformSyncStateRepository:
         assert second is not None
         assert second.rom_count == 100  # stored copy untouched
 
+    def test_delete_removes_only_the_named_slug(self):
+        repo = FakePlatformSyncStateRepository()
+        repo.save(PlatformSyncState.stamp(platform_slug="n64", at="2026-01-01T00:00:00+00:00", rom_count=100))
+        repo.save(PlatformSyncState.stamp(platform_slug="snes", at="2026-01-01T00:00:00+00:00", rom_count=200))
+        repo.delete("n64")
+        assert repo.get("n64") is None
+        assert repo.get("snes") is not None
+        repo.delete("nope")  # absent slug is a no-op
+
 
 class TestFakeKvConfigRepository:
     def test_set_get_delete(self):

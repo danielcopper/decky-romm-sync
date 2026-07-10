@@ -337,6 +337,16 @@ class PlatformSyncStateRepository(Protocol):
         """Upsert the completion stamp. (library/reporter.py final-chunk commit)"""
         ...
 
+    def delete(self, platform_slug: str) -> None:
+        """Drop *platform_slug*'s stamp so that one platform full-fetches next run.
+
+        A no-op when no stamp exists. Called at a platform unit's apply start
+        (library/sync_orchestrator.py) so an interrupted re-apply leaves no stale
+        stamp, and by the local destructive flows (services/shortcut_removal.py)
+        that unbind a platform's shortcuts outside a sync (ADR-0022).
+        """
+        ...
+
     def clear(self) -> None:
         """Drop every stamp so no platform skips next run.
 
