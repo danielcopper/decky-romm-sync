@@ -1043,4 +1043,37 @@ describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estima
     expect(getSyncProgress().stage).toBe("applying");
     plugin.onDismount();
   });
+
+  it("does NOT clobber an etaSeconds already seeded by the preview path (handleApply)", async () => {
+    const plugin = pluginFactory();
+
+    // handleApply full-replaces the store with a tighter delta-based etaSeconds
+    // before sync_plan arrives; the listener must leave that seed intact. Both
+    // click paths full-replace at click time, so a present etaSeconds is always
+    // this run's preview seed, never a stale prior-run value.
+    const previewSeed = 321;
+    setSyncProgress({ running: true, stage: "applying", message: "Applying changes...", etaSeconds: previewSeed });
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-eta", units: [], total_units: 3, total_roms: 5400 });
+    });
+
+    // The crude 5400 * NEW_ITEM_SEC bound must NOT overwrite the preview seed.
+    expect(getSyncProgress().etaSeconds).toBe(previewSeed);
+    plugin.onDismount();
+  });
+
+  it("still seeds the total_roms bound when no preview seed is present (skip-preview path)", async () => {
+    const plugin = pluginFactory();
+
+    // Skip-preview never sets an etaSeconds — the store has none at sync_plan
+    // time, so the listener still supplies the upper bound. Regression guard for
+    // the etaSeconds-undefined gate.
+    expect(getSyncProgress().etaSeconds).toBeUndefined();
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-eta", units: [], total_units: 2, total_roms: 80 });
+    });
+
+    expect(getSyncProgress().etaSeconds).toBe(80 * NEW_ITEM_SEC);
+    plugin.onDismount();
+  });
 });

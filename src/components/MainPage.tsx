@@ -510,6 +510,14 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const handleApply = async () => {
     if (!preview) return;
     const previewId = preview.preview_id;
+    // Seed the apply ETA from the real preview delta (new + changed counts)
+    // rather than the sync_plan listener's crude ``total_roms`` upper bound — a
+    // resume with ~150 real creates otherwise reads "up to ~46 min" through the
+    // whole fetch phase. This delta seed lands in the optimistic store write, so
+    // the sync_plan listener sees an etaSeconds already present and leaves it be.
+    // Still an upper-boundish estimate; the live countdown replaces it seconds
+    // into the apply.
+    const etaSeconds = estimateApplySeconds(preview.summary.new_count, preview.summary.changed_count);
     // Clear any stale cancel flag before the apply run starts (#1198). A Cancel
     // in the apply window reads "" from the sync_progress store until the
     // backend stamps the run id, which the backend treats as an unconditional
@@ -519,7 +527,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     setLoading(true);
     setSyncing(true);
     setCancelling(false);
-    setStoredSyncProgress({ running: true, stage: "applying", message: "Applying changes..." });
+    setStoredSyncProgress({ running: true, stage: "applying", message: "Applying changes...", etaSeconds });
     try {
       const result = await syncApplyDelta(previewId);
       if (!result.success) {
@@ -625,6 +633,17 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // Sync is unavailable when the server test failed OR the plugin backend never
   // started — both gate the Sync buttons off.
   const connectionUnavailable = connected === false || connected === "backend_failed";
+
+  // The stamp/chunk sync model makes every re-sync an effective resume: a
+  // cancelled or interrupted run's committed chunks survive on disk, so the next
+  // run's incremental skip picks up where it stopped. ``last_attempt`` is
+  // non-null exactly when the newest terminal run did NOT complete, so surface it
+  // as "Resume Sync" — the button says what the run will actually do. "errored"
+  // stays "Sync Library": an errored run often fails before applying anything
+  // (e.g. a config error), so "resume" isn't the right mental model. A completed
+  // sync clears last_attempt on the stats refresh, flipping the label back.
+  const canResume = stats?.last_attempt?.status === "interrupted" || stats?.last_attempt?.status === "cancelled";
+  const syncButtonLabel = canResume ? "Resume Sync" : "Sync Library";
 
   if (versionError) {
     return <VersionErrorCard message={versionError} compact />;
@@ -802,7 +821,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
             onFocus={scrollToTop}
           >
-            Sync Library
+            {syncButtonLabel}
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>
@@ -813,7 +832,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             onChange={setSkipPreview}
           />
         </PanelSectionRow>
-        {stats?.last_sync && (
+        {/* Visible whenever ANY terminal run is recorded — a completed run OR a
+            cancelled/interrupted/errored attempt. A resume (last_attempt set,
+            last_sync null) is exactly when the user may want a forced fresh
+            start, so gating on last_sync alone hid the button after a
+            history-clear left only interrupted runs. Still hidden on a pristine
+            install (neither recorded). Pressing it clears the history, which
+            drops last_attempt on the stats refresh below — the main button flips
+            back to "Sync Library" and this button hides itself. */}
+        {(stats?.last_sync || stats?.last_attempt) && (
           <PanelSectionRow>
             <ButtonItem
               layout="below"

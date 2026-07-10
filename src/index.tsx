@@ -508,7 +508,16 @@ export default definePlugin(() => {
     // sync_progress listener below preserves it across backend frames. Shown as
     // "up to ~X min" only until the live rate estimator (below) has measured the
     // real apply speed, which then replaces it with a "~X min left" countdown.
-    updateSyncProgress({ etaSeconds: data.total_roms * NEW_ITEM_SEC });
+    //
+    // Only seed the bound when the store has NO etaSeconds yet: the preview path
+    // (handleApply) already seeded a tighter delta-based estimate into the store,
+    // and both click paths (handleSync / handleApply) FULL-REPLACE the store at
+    // click time — so an etaSeconds present here is always this run's preview
+    // seed, never a stale prior-run value. The skip-preview path never sets one,
+    // so it still gets this bound.
+    if (getSyncProgress().etaSeconds === undefined) {
+      updateSyncProgress({ etaSeconds: data.total_roms * NEW_ITEM_SEC });
+    }
     // Begin the run-scoped live-ETA estimator with the plan's per-unit weights
     // (rom_count in plan order) and total. MainPage samples the applying stage
     // against this to derive the countdown; a fresh plan resets any prior slope.

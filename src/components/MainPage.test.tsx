@@ -40,10 +40,10 @@ import { createElement, type ReactElement } from "react";
 import { MainPage } from "./MainPage";
 import * as backend from "../api/backend";
 import { useVersionError } from "./VersionErrorCard";
-import { setSyncProgress, updateSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
+import { setSyncProgress, updateSyncProgress, onSyncProgressChange, getSyncProgress } from "../utils/syncProgress";
 import { beginEtaRun, resetEta, liveEtaSeconds } from "../utils/syncEta";
 import * as syncEta from "../utils/syncEta";
-import { NEW_ITEM_SEC } from "../utils/syncEstimate";
+import { NEW_ITEM_SEC, UPDATED_ITEM_SEC } from "../utils/syncEstimate";
 import { setDownloads } from "../utils/downloadStore";
 import { showModal } from "@decky/ui";
 import * as syncManager from "../utils/syncManager";
@@ -1379,6 +1379,44 @@ describe("MainPage", () => {
       await flushAsync();
       expect(container.querySelector('[data-testid="estimate-time"]')).toBeNull();
     });
+
+    it("handleApply seeds the apply ETA from the preview delta (new + changed), not the crude bound", async () => {
+      // The preview path knows the real delta, so the optimistic apply frame
+      // carries estimateApplySeconds(new, changed) — a tighter seed than the
+      // sync_plan listener's total_roms upper bound. new=100, changed=200 →
+      // 100*NEW_ITEM_SEC + 200*UPDATED_ITEM_SEC = 155s.
+      vi.mocked(backend.syncPreview).mockResolvedValue({
+        success: true,
+        summary: {
+          new_count: 100,
+          changed_count: 200,
+          unchanged_count: 0,
+          remove_count: 0,
+          disabled_platform_remove_count: 0,
+        },
+        new_names: [],
+        changed_names: [],
+        preview_id: "p-eta",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      // Sync → preview with changes → Apply Sync appears.
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Apply → optimistic store write carries the delta-based seed.
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Apply Sync")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(getSyncProgress().etaSeconds).toBe(100 * NEW_ITEM_SEC + 200 * UPDATED_ITEM_SEC);
+      // Surfaced as the "up to ~X" upper bound (155s → ~3 min) until the live
+      // countdown takes over.
+      expect(container.querySelector('[data-testid="estimate-time"]')?.textContent).toBe("up to ~3 min");
+    });
   });
 
   describe("live ETA countdown (#1025)", () => {
@@ -1766,6 +1804,105 @@ describe("MainPage", () => {
         etaSpy.mockRestore();
         logSpy.mockRestore();
       }
+    });
+  });
+
+  describe("sync button label (resume vs fresh)", () => {
+    it("reads 'Resume Sync' when the newest attempt was interrupted (partial progress on disk)", async () => {
+      vi.mocked(backend.getSyncStats).mockResolvedValue({
+        ...defaultStats(),
+        last_attempt: { finished_at: "2026-06-01T17:48:00", status: "interrupted" },
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(buttonByExactText(container, "Resume Sync")).not.toBeNull();
+      expect(buttonByExactText(container, "Sync Library")).toBeNull();
+    });
+
+    it("reads 'Resume Sync' when the newest attempt was cancelled", async () => {
+      vi.mocked(backend.getSyncStats).mockResolvedValue({
+        ...defaultStats(),
+        last_attempt: { finished_at: "2026-06-01T17:48:00", status: "cancelled" },
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(buttonByExactText(container, "Resume Sync")).not.toBeNull();
+      expect(buttonByExactText(container, "Sync Library")).toBeNull();
+    });
+
+    it("keeps 'Sync Library' when the newest attempt errored (resume isn't the model)", async () => {
+      // An errored run often failed before applying anything (config error, etc.),
+      // so "resume" would mislead — the fresh label stays.
+      vi.mocked(backend.getSyncStats).mockResolvedValue({
+        ...defaultStats(),
+        last_attempt: { finished_at: "2026-06-01T17:48:00", status: "errored" },
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
+      expect(buttonByExactText(container, "Resume Sync")).toBeNull();
+    });
+
+    it("keeps 'Sync Library' when there is no last attempt (clean state)", async () => {
+      // defaultStats() has no last_attempt → the fresh label.
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
+      expect(buttonByExactText(container, "Resume Sync")).toBeNull();
+    });
+  });
+
+  describe("Force Full Sync button visibility", () => {
+    it("shows Force Full Sync with only an interrupted last_attempt (no completed run)", async () => {
+      // The resume situation — where a forced fresh start is most likely wanted.
+      vi.mocked(backend.getSyncStats).mockResolvedValue({
+        ...defaultStats(),
+        last_sync: null,
+        last_attempt: { finished_at: "2026-06-01T17:48:00", status: "interrupted" },
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(buttonByExactText(container, "Force Full Sync")).not.toBeNull();
+    });
+
+    it("hides Force Full Sync on a pristine install (no last_sync and no last_attempt)", async () => {
+      // defaultStats(): last_sync null, no last_attempt → nothing to clear.
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(buttonByExactText(container, "Force Full Sync")).toBeNull();
+    });
+
+    it("flips the sync button back to 'Sync Library' and hides Force after a force-clear wipes the history", async () => {
+      // First stats (mount): a resume situation. Second stats (post-clear): the
+      // history is gone, so no last_attempt.
+      vi.mocked(backend.getSyncStats)
+        .mockResolvedValueOnce({
+          ...defaultStats(),
+          last_sync: null,
+          last_attempt: { finished_at: "2026-06-01T17:48:00", status: "interrupted" },
+        })
+        .mockResolvedValue({ ...defaultStats(), last_sync: null });
+      vi.mocked(backend.clearSyncCache).mockResolvedValue({ success: true, message: "Cleared" });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      // Resume situation: label reads "Resume Sync", Force button shown.
+      expect(buttonByExactText(container, "Resume Sync")).not.toBeNull();
+      expect(buttonByExactText(container, "Force Full Sync")).not.toBeNull();
+
+      // Press Force Full Sync → clearSyncCache succeeds → stats refresh drops
+      // last_attempt.
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Force Full Sync")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await flushAsync();
+
+      // History cleared: the main button is a fresh start again and Force hides
+      // itself (nothing left to clear).
+      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
+      expect(buttonByExactText(container, "Resume Sync")).toBeNull();
+      expect(buttonByExactText(container, "Force Full Sync")).toBeNull();
     });
   });
 
