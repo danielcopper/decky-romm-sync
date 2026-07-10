@@ -8,7 +8,7 @@
  * are observable; backend callables default to the test-setup undefined-stub.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act } from "@testing-library/react";
 import * as backend from "../api/backend";
 import { emitDeckyEvent } from "../test-utils/decky-api-mock";
@@ -701,5 +701,174 @@ describe("syncManager — chunked apply (#1025)", () => {
     expect(getExistingRomMShortcuts).toHaveBeenCalledTimes(1);
     expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "1": 5001 }, "run-guard-1", 1, 0);
+  });
+});
+
+describe("syncManager — per-chunk cover mtime stamp (#1025)", () => {
+  const EXE = "/home/deck/homebrew/plugins/decky-romm-sync/bin/rom-launcher";
+
+  // appId → overview object. GetAppOverviewByAppID returns the object for a known
+  // appId (the stamp mutates it in place) or null for an unknown one.
+  let overviews: Map<number, { rt_custom_image_mtime?: number }>;
+  const getAppOverview = vi.fn((appId: number) => overviews.get(appId) ?? null);
+  // logInfo/logError are plain wrappers (not callables), so spy to observe them.
+  let logInfoSpy: ReturnType<typeof vi.spyOn>;
+  let logErrorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    setLaunchOptionsConfirmed.mockClear();
+    setLaunchOptionsConfirmed.mockResolvedValue(true);
+    addShortcut.mockReset();
+    getExistingRomMShortcuts.mockReset();
+    vi.mocked(backend.reportUnitResults).mockClear();
+    logInfoSpy = vi.spyOn(backend, "logInfo").mockImplementation(() => {});
+    logErrorSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+    resetSyncDelta();
+    resetSyncCancel();
+    overviews = new Map();
+    getAppOverview.mockClear();
+    // test-setup's afterEach vi.unstubAllGlobals wipes the ambient globals after
+    // the file's first test, so re-stub appStore (read by the stamp) + SteamClient.
+    vi.stubGlobal("appStore", { GetAppOverviewByAppID: getAppOverview, allApps: [] });
+    vi.stubGlobal("SteamClient", {
+      Apps: {
+        AddShortcut: vi.fn(),
+        SetShortcutName: vi.fn(),
+        SetShortcutExe: vi.fn(),
+        SetShortcutStartDir: vi.fn(),
+        SetAppLaunchOptions: vi.fn(),
+        SetCustomArtworkForApp: vi.fn().mockResolvedValue(undefined),
+        RemoveShortcut: vi.fn(),
+      },
+    });
+  });
+
+  afterEach(() => {
+    logInfoSpy.mockRestore();
+    logErrorSpy.mockRestore();
+  });
+
+  function seedOverview(appId: number): { rt_custom_image_mtime?: number } {
+    const o: { rt_custom_image_mtime?: number } = {};
+    overviews.set(appId, o);
+    return o;
+  }
+
+  function sc(romId: number): SyncApplyUnitData["shortcuts"][number] {
+    return {
+      rom_id: romId,
+      name: `ROM ${romId}`,
+      exe: EXE,
+      start_dir: "/home/deck",
+      launch_options: "",
+      platform_name: "PSX",
+      cover_path: "",
+    };
+  }
+
+  function chunkOf(shortcuts: SyncApplyUnitData["shortcuts"], runId: string): SyncApplyUnitData {
+    return {
+      run_id: runId,
+      unit_type: "platform",
+      unit_id: 1,
+      unit_name: "PSX",
+      unit_index: 0,
+      total_units: 1,
+      chunk_index: 0,
+      chunk_count: 1,
+      chunk_offset: 0,
+      unit_total: shortcuts.length,
+      shortcuts,
+    };
+  }
+
+  it("stamps rt_custom_image_mtime on each appId created in the chunk, after the ack resolves", async () => {
+    // All-creates chunk: addShortcut hands out 6000, 6001 for rom 10, 20.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    let next = 6000;
+    addShortcut.mockImplementation(async () => next++);
+    const o6000 = seedOverview(6000);
+    const o6001 = seedOverview(6001);
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", chunkOf([sc(10), sc(20)], "run-stamp"));
+      await flush(200);
+    });
+
+    // The ack committed the chunk, then both created shortcuts' overviews got the
+    // SAME stamp (one mtime per chunk), and the summary log recorded 2 stamped.
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalled();
+    expect(typeof o6000.rt_custom_image_mtime).toBe("number");
+    expect(typeof o6001.rt_custom_image_mtime).toBe("number");
+    expect(o6000.rt_custom_image_mtime).toBe(o6001.rt_custom_image_mtime);
+    expect(logInfoSpy).toHaveBeenCalledWith("[FE] cover mtime nudge (chunk): 2 stamped");
+  });
+
+  it("stamps nothing for an updated-only chunk (no creates)", async () => {
+    // Every rom already maps to an appId → all updates, zero creates.
+    getExistingRomMShortcuts.mockResolvedValue(
+      new Map<number, number>([
+        [10, 5001],
+        [20, 5002],
+      ]),
+    );
+    const o5001 = seedOverview(5001);
+    const o5002 = seedOverview(5002);
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", chunkOf([sc(10), sc(20)], "run-update-only"));
+      await flush(200);
+    });
+
+    // No creates → the stamp is a no-op: it never looks up an overview, and no
+    // updated shortcut's overview is touched.
+    expect(addShortcut).not.toHaveBeenCalled();
+    expect(getAppOverview).not.toHaveBeenCalled();
+    expect(o5001.rt_custom_image_mtime).toBeUndefined();
+    expect(o5002.rt_custom_image_mtime).toBeUndefined();
+  });
+
+  it("stamps nothing on the cancel path — a created-but-uncommitted shortcut is not stamped", async () => {
+    // Cancel during the once-per-run scan → the loop creates rom 10 (appId 6000)
+    // but then breaks, and the post-loop guard skips the ack. No ack means no
+    // commit, so the created shortcut must NOT be stamped.
+    getExistingRomMShortcuts.mockImplementation(async () => {
+      requestSyncCancel();
+      return new Map<number, number>();
+    });
+    addShortcut.mockResolvedValue(6000);
+    const o6000 = seedOverview(6000);
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", chunkOf([sc(10)], "run-cancel-stamp"));
+      await flush(120);
+    });
+
+    expect(vi.mocked(backend.reportUnitResults)).not.toHaveBeenCalled();
+    expect(getAppOverview).not.toHaveBeenCalled();
+    expect(o6000.rt_custom_image_mtime).toBeUndefined();
+  });
+
+  it("does not stamp and logs the error when reportUnitResults rejects", async () => {
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    addShortcut.mockResolvedValue(6000);
+    const o6000 = seedOverview(6000);
+    vi.mocked(backend.reportUnitResults).mockRejectedValueOnce(new Error("ack boom"));
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", chunkOf([sc(10)], "run-ack-fail"));
+      await flush(120);
+    });
+
+    // Ack rejected → the created overview is NOT stamped (grid files may not be
+    // committed; stamping would risk the 404 negative-cache), the failure is
+    // logged, and the handler did not throw (this test completing proves it).
+    expect(getAppOverview).not.toHaveBeenCalled();
+    expect(o6000.rt_custom_image_mtime).toBeUndefined();
+    expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to report unit results"));
   });
 });

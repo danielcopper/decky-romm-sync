@@ -352,6 +352,11 @@ export default definePlugin(() => {
     // wrote covers). ReportLibraryAssetCacheMiss(appId, 0) was tried and is a no-op
     // for non-erroring default tiles (on-device 2026-07-10). Fail-soft: a missing
     // overview or a throw must never break the teardown/toast above.
+    //
+    // Per-chunk stamping (syncManager, after each chunk's ack) is the PRIMARY path
+    // now — covers appear progressively during the run. This end-of-run sweep is
+    // the belt-and-braces net: it re-stamps the whole created set and also covers
+    // rebinds and any chunk the per-chunk stamp missed.
     const createdAppIds = getCreatedAppIds();
     try {
       const mtime = Math.floor(Date.now() / 1000);
