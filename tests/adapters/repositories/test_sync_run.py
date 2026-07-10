@@ -142,33 +142,39 @@ class TestUpsert:
         assert loaded.platforms_completed == ["snes"]
 
 
-class TestDeleteCompleted:
+class TestDeleteHistory:
     def test_removes_completed_runs(self, uow: SqliteUnitOfWork):
         run = _running("done")
         run.complete(at="2026-01-01T02:00:00Z", platforms=["snes"], collections=[])
         uow.sync_runs.save(run)
 
-        uow.sync_runs.delete_completed()
+        uow.sync_runs.delete_history()
 
         assert uow.sync_runs.get("done") is None
         assert uow.sync_runs.get_latest_completed() is None
 
-    def test_keeps_running_and_errored_runs(self, uow: SqliteUnitOfWork):
+    def test_removes_cancelled_and_errored_runs_keeps_running(self, uow: SqliteUnitOfWork):
         completed = _running("done")
         completed.complete(at="2026-01-01T02:00:00Z", platforms=[], collections=[])
         errored = _running("boom")
         errored.mark_errored(at="2026-01-01T02:00:00Z", error="x")
+        cancelled = _running("stopped")
+        cancelled.mark_cancelled(at="2026-01-01T02:00:00Z", reason="user")
         uow.sync_runs.save(completed)
         uow.sync_runs.save(_running("active"))
         uow.sync_runs.save(errored)
+        uow.sync_runs.save(cancelled)
 
-        uow.sync_runs.delete_completed()
+        uow.sync_runs.delete_history()
 
+        # Only the in-flight run survives — no terminal run lingers as a stale
+        # last-attempt hint after a Force Full Sync reset.
         assert uow.sync_runs.get("done") is None
+        assert uow.sync_runs.get("boom") is None
+        assert uow.sync_runs.get("stopped") is None
         assert uow.sync_runs.get("active") is not None
-        assert uow.sync_runs.get("boom") is not None
 
-    def test_idempotent_when_no_completed_runs(self, uow: SqliteUnitOfWork):
+    def test_idempotent_when_no_terminal_runs(self, uow: SqliteUnitOfWork):
         uow.sync_runs.save(_running("active"))
-        uow.sync_runs.delete_completed()
+        uow.sync_runs.delete_history()
         assert uow.sync_runs.get("active") is not None

@@ -45,8 +45,8 @@ class FakeSyncRunRepository:
                 return copy.deepcopy(run)
         return None
 
-    def delete_completed(self) -> None:
-        self._runs = {run_id: run for run_id, run in self._runs.items() if run.status != "completed"}
+    def delete_history(self) -> None:
+        self._runs = {run_id: run for run_id, run in self._runs.items() if run.status == "running"}
 
     def _snapshot(self) -> dict[str, SyncRun]:
         return copy.deepcopy(self._runs)

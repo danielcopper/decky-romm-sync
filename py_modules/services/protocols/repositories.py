@@ -307,12 +307,16 @@ class SyncRunRepository(Protocol):
         """Return any run with status ``running``, or ``None`` (is-a-sync-running check)."""
         ...
 
-    def delete_completed(self) -> None:
-        """Delete every ``completed`` run so ``get_latest_completed`` returns ``None``.
+    def delete_history(self) -> None:
+        """Delete every terminal run (keeping any ``running`` one) so both the
+        ``last_sync`` and last-attempt reads return ``None``.
 
-        Backs the "Force Full Sync" reset: clearing the completed-run history
-        resets the ``last_sync`` read the incremental-skip gate keys off, forcing
-        the next sync to full-fetch every platform. (library/reporter.py)
+        Backs the "Force Full Sync" reset: clearing the run history resets the
+        ``last_sync`` the incremental-skip gate keys off (forcing a full re-fetch)
+        AND drops the accumulated cancelled/errored runs the last-attempt hint
+        reads — otherwise a stale cancelled run would surface as the "Last sync"
+        state right after a reset. A ``running`` row is preserved so a reset can
+        never orphan an in-flight run. (library/reporter.py)
         """
         ...
 

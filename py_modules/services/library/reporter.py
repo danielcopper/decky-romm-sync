@@ -615,12 +615,14 @@ class SyncReporter:
         stamps (ADR-0022). "Force Full Sync" must reset BOTH — clearing only the
         runs would leave the per-platform stamps in place, and each stamp is its
         own ``effective_last_sync`` that would still skip an unchanged platform.
-        Deleting the completed runs and clearing every stamp in one short write
-        UoW resets both reads so every platform full-fetches next time (and the
-        "Force Full Sync" button hides until a fresh run completes).
+        Deleting the run history (every terminal run, not only completed ones, so
+        no stale cancelled/errored run lingers as the last-attempt "Last sync"
+        hint) and clearing every stamp in one short write UoW resets both reads so
+        every platform full-fetches next time (and "Last sync" honestly reads
+        "Never" until a fresh run completes).
         """
         with self._uow_factory() as uow:
-            uow.sync_runs.delete_completed()
+            uow.sync_runs.delete_history()
             uow.platform_sync_state.clear()
         self._logger.info("Sync cache cleared — next sync will do a full fetch")
         return {"success": True, "message": "Next sync will do a full fetch"}
