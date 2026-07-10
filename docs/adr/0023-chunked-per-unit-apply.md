@@ -103,6 +103,14 @@ mid-unit failure forfeits only the in-flight chunk.**
   the crash-recovery it buys.
 - **No wire-surface growth.** Extending the existing event and callable keeps the callable-manifest and event-parity
   gates green with no new names to police.
+- **The operational envelope this buys against.** The crash-resume emphasis rests on a measured finding, not a
+  hypothetical. Steam's renderer (`steamwebhelper` / CEF) accumulates memory as each shortcut is touched — roughly
+  0.8–1.5 MB per created shortcut observed on-device — against a finite per-session budget, with the process image seen
+  climbing to roughly 2.5 GB during a large first import before it OOM-crashed (#797). A mass first import of a
+  multi-thousand-game library can therefore exhaust the budget **mid-run**. Chunking does not raise that ceiling; it
+  converts hitting it from catastrophic loss (the whole unit forfeit) into a cheap resume — every chunk committed before
+  the crash is on disk, and the next sync continues from the first uncommitted game. Raising the ceiling itself is the
+  out-of-CEF bulk-import path below, out of scope for this decision.
 
 ## Alternatives considered
 

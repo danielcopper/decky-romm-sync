@@ -32,15 +32,16 @@ collections for platforms the run did not reach.
 
 ## Time estimate and progress
 
-Before you start, the sync preview shows an **Estimated time** for the run. It is a rough upper bound — it prices every
-game as a brand-new shortcut, so the real run usually finishes sooner, especially a re-sync that only updates a handful
-of games. If you sync without previewing first, the same upper bound appears once the run starts, shown as "up to ~X
-min".
+Before you start, the sync preview shows an **Estimated time** for the run. It is a deliberate upper bound — it assumes
+a slower pace than a re-sync usually runs at and counts every game the sync walks through, not just the handful that
+changed — so the real run almost always finishes sooner. If you sync without previewing first, the same upper bound
+appears once the run starts, shown as "up to ~X min".
 
-Once the sync has been creating shortcuts for a few seconds, the estimate switches from that upper bound to a **live
-countdown** — "~9 min left" — measured from the actual speed on your device and updated as the run proceeds. Because it
-reflects the real work (most re-sync items take the cheap update path, not a full create), the countdown is far closer
-to reality than the initial upper bound, and it ticks down as the run goes.
+Once the sync has been creating shortcuts for a few seconds, that "up to" ceiling is replaced by a **live countdown** —
+"~9 min left" — measured from the actual speed on your device and updated as the run proceeds. Because it reflects the
+real work (most re-sync games take the quick update path, not a full create), the countdown is far closer to reality
+than the initial ceiling, and it ticks down as the run goes. It holds steady across the short pauses where the sync
+fetches the next platform's game list, rather than jumping around.
 
 A few things worth knowing for a large library:
 
@@ -48,16 +49,34 @@ A few things worth knowing for a large library:
   page by page and then downloads cover art before it starts creating shortcuts; the line names what it is doing (e.g.
   "Fetching Game Boy Advance (page 12/62)" then "Preparing covers for Game Boy Advance"), so a fetch that takes minutes
   never looks stuck.
+- **Cover art fills in as the run goes.** Covers appear on your library tiles progressively while the sync creates
+  shortcuts, not only at the very end, so you can watch the library fill in. A few tiles may stay gray until the first
+  time you open that game's page (or the next time Steam restarts) — that is expected and does not mean the cover is
+  missing.
 - **Progress is saved as it goes** — roughly every 200 games. If Steam crashes or you cancel partway through, the games
   already created are kept, and the next sync picks up where it left off instead of starting over.
 - **Cancelling keeps finished games.** Everything added before you cancel stays in your library; cancelling never
   removes finished games (and never removes Steam collections).
-- **"Last sync" reflects a cancelled or interrupted run too.** The main page's **Last sync** line normally shows when
-  the last full sync finished. If your most recent run was cancelled (or interrupted by a crash) after the last
-  completed one, it shows that attempt instead — e.g. "17:48 (cancelled)" — so a partial run that still added hundreds
-  of games never reads a misleading "Never".
 - **Sleep is safe; keep it powered.** If the Deck sleeps mid-sync the run pauses and resumes on wake — it does not stall
   or lose progress. For a large first sync, plug it in so the battery lasts the whole run.
+
+## Resuming an interrupted sync
+
+Because progress is saved as the sync goes, a run that does not finish is never wasted — you just run sync again to
+complete the job.
+
+- **The main page tells you when the last run didn't finish.** The **Last sync** line normally shows when the last full
+  sync completed. If your most recent run ended early, a second line reports that attempt and how it ended — "last
+  attempt: 17:48 (interrupted)" if a crash or a Steam reload stopped it, or "(cancelled)" if you tapped Cancel Sync — so
+  a partial run that still added hundreds of games never reads a misleading "Never".
+- **The Sync button becomes "Resume Sync".** When a run was cancelled or interrupted and left games in your library, the
+  **Sync Library** button changes to **Resume Sync**. Pressing it completes the library: the platforms that already
+  synced in full are skipped, and only the one that was interrupted is re-checked — cheaply, since the games already
+  there take the quick update path. Once a run finishes in full, the button goes back to **Sync Library**.
+- **Force Full Sync starts over from scratch.** Under the sync buttons, **Force Full Sync** clears the plugin's record
+  of what it has already synced and re-fetches every platform from RomM on the next run. Reach for it if you suspect a
+  platform is out of sync or want a clean rebuild; a normal Sync (or Resume Sync) is enough for everyday updates. It
+  appears once you have run at least one sync.
 
 ## Multiple versions of a game
 

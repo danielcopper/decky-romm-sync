@@ -138,8 +138,16 @@ SteamGridDB, those slots fall back to Steam's defaults — you can contribute ar
 
 ### Artwork not appearing after sync
 
-**Fix**: Open the game's detail page and tap **Refresh Metadata** in the RomM Sync panel. This re-fetches all artwork
-and metadata.
+**Symptom**: After a sync, some library tiles show Steam's default placeholder instead of the cover art.
+
+**Explanation**: Covers are applied while the sync runs and fill in progressively, but Steam caches a brand-new
+shortcut's tile image and does not always refresh it right away. A tile that is still gray usually resolves on its own
+the first time you open that game's detail page, scroll it back into view, or the next time Steam restarts — the cover
+is already on disk; Steam just hasn't re-rendered the tile yet.
+
+**Fix**: If a tile stays blank after that, open the game's detail page and tap **Refresh Metadata** in the RomM Sync
+panel. This re-fetches all artwork and metadata. (Hero banners, logos, and wide grid images additionally need a
+[SteamGridDB API key](configuration.md#steamgriddb-api-key) — see above.)
 
 ## Shortcuts Appear on Other Devices
 

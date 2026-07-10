@@ -268,20 +268,31 @@ edits the `shortcuts.vdf` `icon` field — Steam is memory-authoritative and clo
 shortcut must go through `SteamClient` (see
 [shortcuts.vdf is memory-authoritative](#shortcutsvdf-is-memory-authoritative)).
 
-Covers are written into the grid dir server-side while the sync runs, but Steam resolves each fresh shortcut's tile to
-the default capsule at creation and caches that resolution outside the JS context — a JS-context reload does not
-re-resolve it; only a full client restart does — so a newly-written `{app_id}p.png` stays unseen until the tile is
-cache-busted. Steam builds the library tile's image URL as `/customimage/{appid}?v={mtime}`, keyed on the app overview's
-`rt_custom_image_mtime` field (the value a client restart normally stamps). After each run the frontend's
-`sync_complete` handler (`onSyncComplete`) stamps that field itself —
-`appStore.GetAppOverviewByAppID(appId).rt_custom_image_mtime = Math.floor(Date.now() / 1000)` — for every shortcut
-created this run (the created-appId set from `syncDeltaStore`, read before the per-run delta is reset; cancelled runs
-stamp too, since their committed chunks also wrote covers). The tile picks the cover up on its next render — scrolling
-the row out and back, or revisiting the library — with no forced global re-render. The stamp is fail-soft: a missing
-overview or a throwing call is summarized in a single log line (`N stamped, M no overview`) and never breaks the sync
-teardown. Covers on shortcuts that already existed, and any the stamp misses, are still picked up on the next client
-restart. (An earlier version fired `SteamClient.Apps.ReportLibraryAssetCacheMiss(appId, 0)`, Steam's own per-asset
-re-resolve signal, but that is a no-op for a non-erroring default tile — on-device 2026-07-10.)
+Covers are written into the grid dir server-side as `{app_id}p.png` at each chunk's commit, but Steam resolves each
+fresh shortcut's tile to the default capsule at creation and caches that resolution outside the JS context — a
+JS-context reload does not re-resolve it; only a full client restart does — so a newly-written cover stays unseen until
+the tile is cache-busted. Steam builds the library tile's image URL as `/customimage/{appid}?v={mtime}`, keyed on the
+app overview's `rt_custom_image_mtime` field (the value a client restart normally stamps), so the frontend stamps that
+field itself — `overview.rt_custom_image_mtime = Math.floor(Date.now() / 1000)` — to cache-bust the tile, which then
+picks the cover up on its next render (scrolling the row out and back, or revisiting the library) with no forced global
+re-render. Two stamp passes run, in order of importance:
+
+- **Per-chunk stamping is the primary path — covers appear _during_ the run.** After each chunk's `report_unit_results`
+  ack resolves, the frontend stamps the shortcuts _that chunk_ just created (`stampCoverMtime` in `syncManager.ts`). The
+  ack resolving is the signal that the backend has committed the chunk **and** written its `{app_id}p.png` grid files,
+  so the tile URL now resolves; stamping earlier — at create time — would key the URL at a not-yet-written file and risk
+  Steam caching the 404 in a negative cache. Covers therefore fill in progressively as the run proceeds, and a mid-run
+  pause, cancel, or interrupt leaves every committed-so-far cover visible rather than nothing until the end.
+- **The `sync_complete` sweep is the belt-and-braces net.** At run end the frontend re-stamps the whole created-appId
+  set (the `syncDeltaStore` set, read before the per-run delta is reset; cancelled runs stamp too, since their committed
+  chunks also wrote covers). It catches rebinds (which create no new shortcut but may re-point an existing tile at a
+  fresh cover) and any chunk the per-chunk stamp missed.
+
+Both passes are fail-soft: a missing overview or a throwing call is summarized in a single log line and never breaks the
+sync teardown. A small residue can still stay gray — covers on shortcuts that already existed, or any both passes miss —
+and those resolve the first time the game's page is opened or on the next client restart. (An earlier version fired
+`SteamClient.Apps.ReportLibraryAssetCacheMiss(appId, 0)`, Steam's own per-asset re-resolve signal, but that is a no-op
+for a non-erroring default tile — on-device 2026-07-10.)
 
 ## Key Files
 

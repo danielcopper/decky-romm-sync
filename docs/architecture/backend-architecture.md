@@ -361,6 +361,41 @@ handler resets that flag at its own start, but an incrementally-**skipped** unit
 run could otherwise carry a stale cancel from a prior cancelled run; resetting once per run on `sync_plan` is the
 reliable reset.
 
+#### Sync time estimate and live ETA (frontend)
+
+The QAM's time readout is a two-stage design layered on the `sync_progress` stream. It is pure frontend logic
+(`src/utils/syncEstimate.ts` and `src/utils/syncEta.ts`, both unit-tested); the backend only supplies the plan (per-unit
+weights + planned total, via `sync_plan`) and the applying frames.
+
+- **Static walk-cost ceiling (pre-run seed).** Before a run — in the preview, and again as the initial "up to ~X min"
+  the instant a skip-preview run starts — the estimate is a pure cost model: `new_count × NEW_ITEM_SEC` +
+  `changed_count × UPDATED_ITEM_SEC` + a flat fetch allowance. The per-item constants (currently ~0.45 s for a created
+  shortcut, ~0.20 s for an updated one) sit **deliberately above** the measured on-device apply rates and the allowance
+  (~90 s) covers the multi-page ROM/save fetch phases the per-item model ignores, so the seed is an honest **upper
+  bound** that reads long, never short. It is priced at **walk cost** (every unit the run will actually touch), not at
+  the delta only — a resume walks thousands of already-applied games through the cheap update path, so a delta-only
+  price would badly undershoot the real work.
+- **Measured live countdown (takes over within seconds).** Once the apply is underway, `syncEta.ts` measures the
+  **real** rate from the applying frames — one throttled sample per second over a ~30 s sliding window — and projects
+  `remaining = (planned_total − processed) / rate`, rendered rounded **up** ("~9 min left") so it never promises less
+  time than it expects. It replaces the static seed as soon as the window spans enough real time to trust the slope (a
+  couple of samples across a few seconds). Because it reflects the actual mix of cheap-update vs. full-create work, it
+  is far closer to reality than the ceiling and ticks down as the run proceeds.
+- **Estimator-owned sticky deadline.** The estimator, not the UI, owns the displayed value: each fresh measurement
+  re-anchors an absolute wall-clock deadline, and the countdown renders `max(0, deadline − now)`. This is what keeps the
+  readout smooth. The raw measurement re-arms to "not ready" between measurement segments, and a run's tail of small
+  units each finishes inside the readiness window — so a raw snapshot would blink back to the static "up to ~X" seed for
+  the whole tail; holding the last good deadline through those gaps keeps the countdown honestly ticking down instead.
+- **Segment break across fetch gaps.** Applying frames arrive roughly every second during real apply work, so a silence
+  longer than ~10 s is always a unit or fetch boundary, never apply progress. Crossing it starts a **fresh measurement
+  segment** (the prior samples are discarded), so the slope is never measured across the gap — pairing a pre-gap sample
+  with a post-gap one would be a tiny item delta over a long span, an absurd rate that would briefly spike the
+  countdown.
+
+The whole thing is an approximation by design (the plan's per-unit weight is the raw pre-collapse file count while the
+applying frame's counter is the post-collapse emitted-shortcut count; the measured rate absorbs most of the skew), and
+the readout always carries a leading `~` — it is an estimate, never a guarantee.
+
 #### Save-sync serialization (device gate)
 
 Every save-sync run on the device passes through a single **device-level serialization gate** (`SaveSyncGate`, in
@@ -882,7 +917,7 @@ call site: services may not call `datetime.now()` / `asyncio.sleep()` / `time.ti
 
 `scripts/check_aggregate_field_assignment.py` (also bundled into `mise run lint`) is a small custom AST linter that
 enforces the **mutation-only-via-methods** rule for aggregates — a rule no type checker can express directly. It
-collects the class names decorated with `@cosmic_aggregate` in `domain/` (currently the 8 aggregate roots), then scans
+collects the class names decorated with `@cosmic_aggregate` in `domain/` (currently the 9 aggregate roots), then scans
 `services/` for `<aggregate>.<field> = ...` assignments and fails CI on any it finds. The escape hatch is a trailing
 `# pragma: no aggregate-check` on the offending line. Full detail in [Database Design](database-design.md).
 
