@@ -1329,21 +1329,22 @@ describe("MainPage", () => {
     }
 
     it("renders an estimate row for a small preview", async () => {
-      // 3 new * 0.85s = 2.55s → sub-minute.
+      // 3 new * 0.45s + 90s fetch allowance = 91.35s → ~2 min (small libraries
+      // overshoot; the allowance covers the fetch/prep phase).
       const c = await renderPreviewWithCounts(3, 0);
-      expect(estimateText(c)).toBe("< 1 min");
+      expect(estimateText(c)).toBe("~2 min");
     });
 
     it("renders an estimate row for a large preview", async () => {
-      // 1000 new * 0.85s = 850s ≈ 14 min.
+      // 1000 new * 0.45s + 90s = 540s → ~9 min.
       const c = await renderPreviewWithCounts(1000, 0);
-      expect(estimateText(c)).toBe("~14 min");
+      expect(estimateText(c)).toBe("~9 min");
     });
 
     it("prices updated items into the preview estimate", async () => {
-      // 0 new + 100 updated * 0.35s = 35s → sub-minute.
+      // 100 updated * 0.20s + 90s = 110s → ~2 min.
       const c = await renderPreviewWithCounts(0, 100);
-      expect(estimateText(c)).toBe("< 1 min");
+      expect(estimateText(c)).toBe("~2 min");
     });
 
     it("shows the always-on info copy alongside the preview estimate", async () => {
@@ -1356,8 +1357,9 @@ describe("MainPage", () => {
     it("prices the preview row from the WALK cost (new + changed + unchanged), not the raw delta", async () => {
       // Resume-shaped: 153 real creates but ~3000 unchanged items the apply
       // re-walks. Delta-only priced this at "~2 min" on-device; walk cost is
-      // 153*NEW_ITEM_SEC + 3000*UPDATED_ITEM_SEC = 1180.05s → ~20 min. The number
-      // the user approves here is the same seed handleApply starts the run with.
+      // 153*NEW_ITEM_SEC + 3000*UPDATED_ITEM_SEC + 90s fetch allowance = 758.85s →
+      // ~13 min. The number the user approves here is the seed handleApply starts
+      // the run with.
       vi.mocked(backend.syncPreview).mockResolvedValue({
         success: true,
         summary: {
@@ -1378,7 +1380,7 @@ describe("MainPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(estimateText(container)).toBe("~20 min");
+      expect(estimateText(container)).toBe("~13 min");
       // An estimate must never promise less than reality — the delta-only value is gone.
       expect(estimateText(container)).not.toBe("~2 min");
     });
@@ -1446,23 +1448,25 @@ describe("MainPage", () => {
       // The apply re-walks every non-skipped item — unchanged ROMs of an
       // un-stamped platform still get cheap update touches — so all non-new items
       // (changed + unchanged) are priced at the update rate. new=100, changed=200,
-      // unchanged=600 → 100*NEW_ITEM_SEC + 800*UPDATED_ITEM_SEC = 365s.
+      // unchanged=600 → 100*NEW_ITEM_SEC + 800*UPDATED_ITEM_SEC + 90s allowance = 295s.
       const container = await applyPreviewSummary({ new_count: 100, changed_count: 200, unchanged_count: 600 });
-      expect(getSyncProgress().etaSeconds).toBe(100 * NEW_ITEM_SEC + (200 + 600) * UPDATED_ITEM_SEC);
-      // Surfaced as the "up to ~X" upper bound (365s → ~6 min) until the live
+      expect(getSyncProgress().etaSeconds).toBe(
+        100 * NEW_ITEM_SEC + (200 + 600) * UPDATED_ITEM_SEC + 90 /* fetch allowance */,
+      );
+      // Surfaced as the "up to ~X" upper bound (295s → ~5 min) until the live
       // countdown takes over.
-      expect(container.querySelector('[data-testid="estimate-time"]')?.textContent).toBe("up to ~6 min");
+      expect(container.querySelector('[data-testid="estimate-time"]')?.textContent).toBe("up to ~5 min");
     });
 
     it("prices a resume-shaped preview (few creates, many unchanged) as a large 'up to', not a sub-minute undershoot", async () => {
       // The on-device regression: a resume with ~90 real creates but ~3000
       // unchanged items re-walks all 3000. The old delta-only seed (new + changed)
       // read "< 1 min" for a ~10 min walk. Walk cost: 90*NEW_ITEM_SEC +
-      // 3000*UPDATED_ITEM_SEC = 1126.5s → ~19 min.
+      // 3000*UPDATED_ITEM_SEC + 90s allowance = 730.5s → ~12 min.
       const container = await applyPreviewSummary({ new_count: 90, changed_count: 0, unchanged_count: 3000 });
-      expect(getSyncProgress().etaSeconds).toBe(90 * NEW_ITEM_SEC + 3000 * UPDATED_ITEM_SEC);
+      expect(getSyncProgress().etaSeconds).toBe(90 * NEW_ITEM_SEC + 3000 * UPDATED_ITEM_SEC + 90 /* fetch allowance */);
       const text = container.querySelector('[data-testid="estimate-time"]')?.textContent;
-      expect(text).toBe("up to ~19 min");
+      expect(text).toBe("up to ~12 min");
       // An estimate must never promise less than reality — the delta-only undershoot is gone.
       expect(text).not.toBe("up to < 1 min");
     });

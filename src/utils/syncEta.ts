@@ -31,6 +31,13 @@ export interface EtaSample {
 // averaged away by the whole run.
 const SAMPLE_MIN_INTERVAL_MS = 1000;
 const WINDOW_MS = 30_000;
+// Segment boundary. Applying frames arrive every ~1s during real apply work, so a
+// silence longer than this is always a unit/fetch boundary, never apply progress.
+// Crossing it starts a fresh measurement segment (see observeApplyProgress) so the
+// slope is never measured across the gap — a pre-gap sample paired with a post-gap
+// one is a tiny item delta over a long span, an absurd rate that briefly spikes the
+// countdown before it settles.
+const SEGMENT_BREAK_MS = 10_000;
 // Readiness gate: the live countdown replaces the static "up to ~X" seed only
 // once the window spans enough real time to trust the slope. ~5s of applying
 // (≥2 throttled samples) is well inside the "measured within ~20s" target while
@@ -120,13 +127,23 @@ export function resetEta(): void {
 
 /**
  * Record one applying-stage sample. Throttled to ``SAMPLE_MIN_INTERVAL_MS`` so
- * the rate is measured over seconds; samples older than ``WINDOW_MS`` are dropped
- * (but the two most recent always survive, so a long quiet gap re-measures rather
- * than erasing the estimate). A no-op when no run is being measured. Feed ONLY
- * applying frames — fetch frames carry page/cover counters, not item progress.
+ * the rate is measured over seconds; samples older than ``WINDOW_MS`` are dropped.
+ * A silence longer than ``SEGMENT_BREAK_MS`` is a unit/fetch boundary: the prior
+ * samples are discarded and a fresh measurement segment begins (this sample
+ * bypasses the throttle), so no slope is ever measured across the gap — pairing a
+ * pre-gap sample with a post-gap one yields an absurd rate. The estimator re-arms
+ * to ``null`` until the new segment spans the readiness window. A no-op when no run
+ * is being measured. Feed ONLY applying frames — fetch frames carry page/cover
+ * counters, not item progress.
  */
 export function observeApplyProgress(step: number, current: number, tMs: number): void {
   if (_run === null) return;
+  // Segment break: a long silence is a boundary, not apply work. Drop the prior
+  // samples so the cross-gap slope is never measured; clearing the array also lets
+  // this sample bypass the throttle below (a fresh segment's first sample).
+  if (_run.samples.length > 0 && tMs - _run.lastSampleMs > SEGMENT_BREAK_MS) {
+    _run.samples = [];
+  }
   if (_run.samples.length > 0 && tMs - _run.lastSampleMs < SAMPLE_MIN_INTERVAL_MS) return;
   const processed = cumulativeProcessed(_run.unitWeights, step, current);
   _run.samples.push({ tMs, processed });

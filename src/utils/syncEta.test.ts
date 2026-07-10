@@ -177,4 +177,46 @@ describe("run-scoped estimator", () => {
     observeApplyProgress(1, 700, 6000);
     expect(liveEtaSeconds()).toBeNull();
   });
+
+  it("resets the segment across a >10s gap so no cross-gap slope is measured (50-min-spike regression)", () => {
+    beginEtaRun("run-1", [54700], 54700);
+    // A live segment: two samples 6s apart → a measurable rate.
+    observeApplyProgress(1, 100, 0);
+    observeApplyProgress(1, 700, 6000);
+    expect(liveEtaSeconds()).not.toBeNull();
+    // An inter-unit fetch gap > SEGMENT_BREAK_MS, then ONE post-gap sample. The
+    // old window kept the last two samples across the gap and paired a pre-gap
+    // sample with the post-gap one — a tiny item delta over an ~11s span, an
+    // absurd rate that spiked the countdown to tens of minutes. The segment break
+    // discards the pre-gap samples, so the lone post-gap sample measures nothing.
+    observeApplyProgress(1, 710, 17000);
+    // Null (not a huge number) is the whole point of the fix.
+    expect(liveEtaSeconds()).toBeNull();
+  });
+
+  it("measures only the post-gap slope after a segment break (ignores the pre-gap rate)", () => {
+    beginEtaRun("run-1", [100000], 100000);
+    // Pre-gap: a WILDLY fast segment (~10000 items/s).
+    observeApplyProgress(1, 0, 0);
+    observeApplyProgress(1, 60000, 6000);
+    // Gap > SEGMENT_BREAK_MS → the fast pre-gap samples are discarded.
+    observeApplyProgress(1, 90000, 17000);
+    // Post-gap: a slow segment (10 items/s) spanning ≥5s with ≥2 samples.
+    observeApplyProgress(1, 90060, 23000);
+    // rate = (90060-90000)/6s = 10/s → remaining = (100000-90060)/10 = 994s.
+    // A cross-gap slope would have folded in the ~10000/s pre-gap rate and read a
+    // few seconds — 994 proves the reset measured the post-gap rate alone.
+    expect(liveEtaSeconds()).toBe(994);
+  });
+
+  it("does not reset at a gap equal to the segment-break threshold (strict >, boundary)", () => {
+    beginEtaRun("run-1", [100000], 100000);
+    observeApplyProgress(1, 0, 0);
+    observeApplyProgress(1, 600, 6000);
+    // A gap of exactly SEGMENT_BREAK_MS (16000-6000 = 10000ms) is NOT > the
+    // threshold, so it is treated as ongoing apply work: the window still spans
+    // the pre-gap sample and a rate is measured.
+    observeApplyProgress(1, 700, 16000);
+    expect(liveEtaSeconds()).not.toBeNull();
+  });
 });

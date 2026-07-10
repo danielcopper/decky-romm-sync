@@ -1,23 +1,28 @@
 import { describe, it, expect } from "vitest";
 import { NEW_ITEM_SEC, UPDATED_ITEM_SEC, estimateApplySeconds, formatDuration } from "./syncEstimate";
 
+// The flat fetch allowance folded into every estimate (see FETCH_ALLOWANCE_SEC
+// in syncEstimate.ts). Not exported — the constant is internal to
+// estimateApplySeconds — so the tests pin it as a literal.
+const FETCH_ALLOWANCE = 90;
+
 describe("estimateApplySeconds", () => {
-  it("prices new and updated items with their respective per-item costs", () => {
-    expect(estimateApplySeconds(10, 0)).toBe(10 * NEW_ITEM_SEC);
-    expect(estimateApplySeconds(0, 10)).toBe(10 * UPDATED_ITEM_SEC);
-    expect(estimateApplySeconds(4, 6)).toBe(4 * NEW_ITEM_SEC + 6 * UPDATED_ITEM_SEC);
+  it("prices new and updated items with their per-item costs plus the fetch allowance", () => {
+    expect(estimateApplySeconds(10, 0)).toBe(10 * NEW_ITEM_SEC + FETCH_ALLOWANCE);
+    expect(estimateApplySeconds(0, 10)).toBe(10 * UPDATED_ITEM_SEC + FETCH_ALLOWANCE);
+    expect(estimateApplySeconds(4, 6)).toBe(4 * NEW_ITEM_SEC + 6 * UPDATED_ITEM_SEC + FETCH_ALLOWANCE);
   });
 
-  it("returns 0 for zero counts", () => {
-    expect(estimateApplySeconds(0, 0)).toBe(0);
+  it("returns the flat fetch allowance for zero counts (fetch/prep still runs)", () => {
+    expect(estimateApplySeconds(0, 0)).toBe(FETCH_ALLOWANCE);
   });
 
-  it("clamps negative counts to zero (never a negative estimate)", () => {
-    expect(estimateApplySeconds(-5, -3)).toBe(0);
-    expect(estimateApplySeconds(-5, 2)).toBe(2 * UPDATED_ITEM_SEC);
+  it("clamps negative counts to zero, but the allowance still applies (never below the allowance)", () => {
+    expect(estimateApplySeconds(-5, -3)).toBe(FETCH_ALLOWANCE);
+    expect(estimateApplySeconds(-5, 2)).toBe(2 * UPDATED_ITEM_SEC + FETCH_ALLOWANCE);
   });
 
-  it("prices a new item higher than an updated one (AddShortcut settle wait)", () => {
+  it("prices a new item higher than an updated one (create is dearer than update)", () => {
     expect(NEW_ITEM_SEC).toBeGreaterThan(UPDATED_ITEM_SEC);
   });
 });
