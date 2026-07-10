@@ -44,6 +44,7 @@ import {
 import { setMigrationStatus } from "./utils/migrationStore";
 import { fetchSettingsResetState } from "./utils/settingsResetStore";
 import { resetSyncDelta, recordSyncRemoved, getSyncDelta, getCreatedAppIds } from "./utils/syncDeltaStore";
+import { stampCoverMtimes, healCoverMtimes } from "./utils/coverMtime";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { setVersionError, setServerRetryProgress } from "./utils/connectionState";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
@@ -127,40 +128,65 @@ const QAMPanel: FC = () => {
   return <div ref={rootRef}>{content}</div>;
 };
 
-// Delay (ms) before the cover-stamp re-sweep (see onSyncComplete). The observed
-// overview wipe is done well under 30s, so 90s is a comfortable settle margin.
-const COVER_RESWEEP_DELAY_MS = 90_000;
+// Cover heal poll (see startCoverHealPoll). Steam re-materializes some fresh
+// shortcuts' overviews seconds after creation and wipes the JS-set stamp; a
+// verify-and-heal poll catches the ~1% victims within a round or two instead of a
+// blind fixed wait. Poll every 15s; exit after 2 consecutive clean rounds or 8
+// rounds (~2 min), whichever first.
+const COVER_HEAL_INTERVAL_MS = 15_000;
+const COVER_HEAL_STABLE_ROUNDS = 2;
+const COVER_HEAL_MAX_ROUNDS = 8;
 
-// At most one pending cover re-sweep across the plugin's lifetime: a fresh sync's
-// sweep supersedes the old (cleared before rescheduling), and onDismount clears it
-// so a plugin reload can't fire a stale callback.
-let coverResweepTimer: ReturnType<typeof setTimeout> | null = null;
+// At most one heal poll across the plugin's lifetime (chained setTimeout): a fresh
+// sync supersedes a running poll, and onDismount clears it so a reload can't fire a
+// stale callback.
+let coverHealTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
- * Stamp ``rt_custom_image_mtime`` on each created appId's Steam overview so a
- * freshly-written grid cover shows on the tile's next render (the per-app
- * cache-buster for ``/customimage/{appid}?v={mtime}``). Fail-soft: a missing
- * overview or a throw is summarized and never breaks the caller. ``label``
- * distinguishes the immediate sweep (``""``) from the delayed re-sweep in the log.
+ * Start (or restart) the post-sync cover-heal poll over *appIds*. Steam name-matches
+ * some fresh shortcuts against its own catalog and re-materializes their app overview
+ * seconds after creation, wiping the JS-set ``rt_custom_image_mtime`` (~1% of creates;
+ * census on-device 2026-07-10). Each round reads every created appId's overview (cheap
+ * in-memory) and re-stamps exactly the ones whose stamp went missing via the shared
+ * micro-batched helper. Exits after {@link COVER_HEAL_STABLE_ROUNDS} consecutive clean
+ * rounds (the wipe is a single early event, so this settles in ~15-30s) or
+ * {@link COVER_HEAL_MAX_ROUNDS} total (~2 min) as a pathological-case cap. Cancels any
+ * running poll first — a fresh sync supersedes it — and onDismount cancels it too.
  */
-function sweepCoverMtimes(appIds: number[], label: string): void {
-  try {
-    const mtime = Math.floor(Date.now() / 1000);
-    let stamped = 0;
-    let noOverview = 0;
-    for (const appId of appIds) {
-      const overview = appStore.GetAppOverviewByAppID(appId);
-      if (overview) {
-        overview.rt_custom_image_mtime = mtime;
-        stamped++;
-      } else {
-        noOverview++;
-      }
-    }
-    logInfo(`[FE] cover mtime nudge${label}: ${stamped} stamped, ${noOverview} no overview`);
-  } catch (e) {
-    logError(`[FE] cover mtime nudge${label} failed for ${appIds.length} appIds: ${e}`);
+function startCoverHealPoll(appIds: number[]): void {
+  if (coverHealTimer !== null) {
+    clearTimeout(coverHealTimer);
+    coverHealTimer = null;
   }
+  if (appIds.length === 0) return;
+  let round = 0;
+  let consecutiveClean = 0;
+  const tick = () => {
+    coverHealTimer = null;
+    round++;
+    // A null overview can't be healed this round — only present-but-unstamped counts.
+    const missing = appIds.filter((appId) => {
+      const overview = appStore.GetAppOverviewByAppID(appId);
+      return overview !== null && overview.rt_custom_image_mtime === undefined;
+    });
+    if (missing.length > 0) {
+      consecutiveClean = 0;
+      logInfo(`[FE] cover mtime heal: ${missing.length} re-stamped (round ${round})`);
+      void healCoverMtimes(missing);
+    } else {
+      consecutiveClean++;
+    }
+    if (consecutiveClean >= COVER_HEAL_STABLE_ROUNDS) {
+      logInfo(`[FE] cover mtime heal: stable after ${round} rounds`);
+      return;
+    }
+    if (round >= COVER_HEAL_MAX_ROUNDS) {
+      logInfo(`[FE] cover mtime heal: capped at ${round} rounds`);
+      return;
+    }
+    coverHealTimer = setTimeout(tick, COVER_HEAL_INTERVAL_MS);
+  };
+  coverHealTimer = setTimeout(tick, COVER_HEAL_INTERVAL_MS);
 }
 
 export default definePlugin(() => {
@@ -394,20 +420,14 @@ export default definePlugin(() => {
     // the belt-and-braces net: it re-stamps the whole created set and also covers
     // rebinds and any chunk the per-chunk stamp missed.
     const createdAppIds = getCreatedAppIds();
-    sweepCoverMtimes(createdAppIds, "");
-    // Delayed re-sweep: Steam name-matches some fresh shortcuts against its own
-    // catalog seconds after creation and RE-MATERIALIZES their app overview,
-    // wiping our JS-set rt_custom_image_mtime (census over 368 creates: exactly 4
-    // stamps vanished within ~30s of sync_complete, stable thereafter — a single
-    // early wipe, on-device 2026-07-10). One re-stamp after it settles is
-    // sufficient (re-stamping is idempotent), over the SAME captured createdAppIds.
-    // Keep at most one pending re-sweep — clear any prior timer so a fresh sync's
-    // sweep supersedes it — and onDismount clears it so a reload can't fire stale.
-    if (coverResweepTimer !== null) clearTimeout(coverResweepTimer);
-    coverResweepTimer = setTimeout(() => {
-      coverResweepTimer = null;
-      sweepCoverMtimes(createdAppIds, " (re-sweep)");
-    }, COVER_RESWEEP_DELAY_MS);
+    // Fire-and-forget (micro-batched inside): must not block the teardown below.
+    void stampCoverMtimes(createdAppIds, "");
+    // Then verify-and-heal poll: Steam re-materializes some fresh shortcuts'
+    // overviews seconds after creation and wipes the stamp (~1% of creates,
+    // on-device 2026-07-10). The poll re-reads and re-stamps only the missing ones
+    // over the SAME captured createdAppIds, healing them within a round or two
+    // instead of a blind fixed wait, and supersedes any poll still running.
+    startCoverHealPoll(createdAppIds);
 
     // Defensive reset; sync_plan also resets at the start of the next run.
     resetSyncDelta();
@@ -765,10 +785,10 @@ export default definePlugin(() => {
       removeEventListener("save_status_updated", saveStatusListener);
       removeEventListener("migration_relaunch_options", migrationRelaunchListener);
       removeEventListener("server_retry_progress", serverRetryListener);
-      // Drop any pending cover re-sweep so a reload can't fire a stale callback.
-      if (coverResweepTimer !== null) {
-        clearTimeout(coverResweepTimer);
-        coverResweepTimer = null;
+      // Cancel any running cover-heal poll so a reload can't fire a stale round.
+      if (coverHealTimer !== null) {
+        clearTimeout(coverHealTimer);
+        coverHealTimer = null;
       }
     },
   };

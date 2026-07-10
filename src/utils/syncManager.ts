@@ -9,6 +9,7 @@ import {
 } from "./steamShortcuts";
 import { updateSyncProgress } from "./syncProgress";
 import { recordSyncCreated } from "./syncDeltaStore";
+import { stampCoverMtimes } from "./coverMtime";
 import { registerRomMAppId } from "../patches/gameDetailPatch";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -105,8 +106,8 @@ async function resolveShortcutAppId(
  * and Steam loads that file lazily for visible entries only. Pushing every cover
  * through ``SetCustomArtworkForApp`` during sync forced Steam to decode and cache
  * all covers resident at once, overflowing the CEF heap on large libraries (the
- * #797 steamwebhelper SIGTRAP). The lightweight mtime stamp (see
- * {@link stampCoverMtime}) only cache-busts the tile URL — no decode, no heap.
+ * #797 steamwebhelper SIGTRAP). The lightweight mtime stamp
+ * ({@link stampCoverMtimes}) only cache-busts the tile URL — no decode, no heap.
  */
 async function processUnitShortcuts(
   data: SyncApplyUnitData,
@@ -166,35 +167,6 @@ async function processUnitShortcuts(
 }
 
 /**
- * Stamp ``rt_custom_image_mtime`` on each created appId's Steam overview — the
- * per-app cache-buster for the library tile URL (``/customimage/{appid}?v={mtime}``)
- * so a freshly-written grid cover shows on the tile's next render, with no forced
- * global re-render. MUST be called only AFTER the chunk's ack resolves: that
- * return means the backend committed the chunk and wrote the ``{app_id}p.png``
- * grid files, so the tile URL resolves — stamping earlier would key a URL at a
- * missing file and risk the client caching the 404. Fail-soft: a missing overview
- * or a throw is summarized and never breaks the run. A no-op for an empty list
- * (an updated-only chunk creates nothing to stamp).
- */
-function stampCoverMtime(createdAppIds: number[]): void {
-  if (createdAppIds.length === 0) return;
-  try {
-    const mtime = Math.floor(Date.now() / 1000);
-    let stamped = 0;
-    for (const appId of createdAppIds) {
-      const overview = appStore.GetAppOverviewByAppID(appId);
-      if (overview) {
-        overview.rt_custom_image_mtime = mtime;
-        stamped++;
-      }
-    }
-    logInfo(`[FE] cover mtime nudge (chunk): ${stamped} stamped`);
-  } catch (e) {
-    logError(`[FE] cover mtime nudge (chunk) failed for ${createdAppIds.length} appIds: ${e}`);
-  }
-}
-
-/**
  * Return the existing RomM-shortcut map for this run, scanning Steam at most
  * once per run. On a cache hit (``run_id`` matches the cached run) the stored
  * map is reused; on a miss the scan runs, the result is cached, and one
@@ -251,7 +223,7 @@ export async function reconcileStaleShortcuts(): Promise<void> {
  * events, processes each unit's shortcuts at the CEF-safe 50ms cadence, and
  * reports back via ``reportUnitResults`` so the backend can advance the work
  * queue. After each chunk's ack commits, it stamps the cover mtime of the
- * shortcuts this chunk created (see {@link stampCoverMtime}) so covers appear
+ * shortcuts this chunk created (see {@link stampCoverMtimes}) so covers appear
  * progressively during the run; the onSyncComplete sweep is the belt-and-braces
  * net for rebinds and any chunk the per-chunk stamp missed.
  */
@@ -313,7 +285,8 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
           // mid-run pause/interrupt then leaves everything committed-so-far
           // visible), not only at sync_complete. Skipped if the ack rejects (the
           // catch below) — no commit, so stamping would risk the 404 negative-cache.
-          stampCoverMtime(createdAppIds);
+          // Fire-and-forget (micro-batched inside): must NOT delay the next chunk.
+          void stampCoverMtimes(createdAppIds, " (chunk)");
         } catch (e) {
           logError(`Failed to report unit results for ${data.unit_name}: ${e}`);
         }

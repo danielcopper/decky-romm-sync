@@ -802,7 +802,7 @@ describe("syncManager — per-chunk cover mtime stamp (#1025)", () => {
     expect(typeof o6000.rt_custom_image_mtime).toBe("number");
     expect(typeof o6001.rt_custom_image_mtime).toBe("number");
     expect(o6000.rt_custom_image_mtime).toBe(o6001.rt_custom_image_mtime);
-    expect(logInfoSpy).toHaveBeenCalledWith("[FE] cover mtime nudge (chunk): 2 stamped");
+    expect(logInfoSpy).toHaveBeenCalledWith("[FE] cover mtime nudge (chunk): 2 stamped, 0 no overview");
   });
 
   it("stamps nothing for an updated-only chunk (no creates)", async () => {

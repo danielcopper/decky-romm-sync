@@ -542,7 +542,10 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
 
   beforeEach(() => {
     overviews = new Map();
-    getAppOverview.mockClear();
+    // Reset + re-establish the base impl so a prior test's mockImplementation
+    // override (the pathological heal test) can't leak into the next test.
+    getAppOverview.mockReset();
+    getAppOverview.mockImplementation((appId: number) => overviews.get(appId) ?? null);
     vi.stubGlobal("appStore", { GetAppOverviewByAppID: getAppOverview, allApps: [] });
     vi.stubGlobal("SteamClient", { Apps: {} });
     vi.mocked(registerRomMAppId).mockClear();
@@ -660,54 +663,72 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
     plugin.onDismount();
   });
 
-  it("re-sweeps the same created appIds ~90s later (recovers overviews Steam re-materialized)", async () => {
+  it("heals a wiped stamp on the next poll round and logs the heal (round 1)", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const plugin = pluginFactory();
       await vi.advanceTimersByTimeAsync(0); // settle startup
       const o100 = seedOverview(100);
-      const o200 = seedOverview(200);
+      seedOverview(200); // survives the wipe → round 1 sees only o100 missing
       recordSyncCreated(100);
       recordSyncCreated(200);
 
       emitSyncComplete({ platform_app_ids: {}, total_games: 2 });
       await vi.advanceTimersByTimeAsync(0); // settle the immediate sweep
       expect(typeof o100.rt_custom_image_mtime).toBe("number");
-      expect(vi.mocked(logInfo)).toHaveBeenCalledWith("[FE] cover mtime nudge: 2 stamped, 0 no overview");
 
-      // Steam re-materialized both overviews shortly after creation, wiping the
-      // JS-set stamps. Advancing past the re-sweep delay must re-stamp them.
-      getAppOverview.mockClear();
+      // Steam re-materialized o100's overview, wiping its stamp (o200 survived).
+      // The first poll round (15s) re-stamps only the missing one.
       vi.mocked(logInfo).mockClear();
       delete o100.rt_custom_image_mtime;
-      delete o200.rt_custom_image_mtime;
-      await vi.advanceTimersByTimeAsync(90_000);
+      await vi.advanceTimersByTimeAsync(15_000);
 
-      expect(getAppOverview).toHaveBeenCalledWith(100);
-      expect(getAppOverview).toHaveBeenCalledWith(200);
       expect(typeof o100.rt_custom_image_mtime).toBe("number");
-      expect(typeof o200.rt_custom_image_mtime).toBe("number");
-      expect(vi.mocked(logInfo)).toHaveBeenCalledWith("[FE] cover mtime nudge (re-sweep): 2 stamped, 0 no overview");
+      expect(vi.mocked(logInfo)).toHaveBeenCalledWith("[FE] cover mtime heal: 1 re-stamped (round 1)");
       plugin.onDismount();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("a second sync_complete before the timer fires supersedes the first (only the newer list re-swept)", async () => {
+  it("exits after two consecutive clean rounds and stops polling", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const plugin = pluginFactory();
+      await vi.advanceTimersByTimeAsync(0);
+      seedOverview(100);
+      recordSyncCreated(100);
+      emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      vi.mocked(logInfo).mockClear();
+
+      // The stamp stays intact → round 1 (15s) + round 2 (30s) are both clean.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(vi.mocked(logInfo)).toHaveBeenCalledWith("[FE] cover mtime heal: stable after 2 rounds");
+
+      // The loop has exited — no further reads happen even far past the interval.
+      getAppOverview.mockClear();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(getAppOverview).not.toHaveBeenCalled();
+      plugin.onDismount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a second sync_complete supersedes a running poll (only the newer list is polled)", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const plugin = pluginFactory();
       await vi.advanceTimersByTimeAsync(0);
 
-      // First run created appId 100 → schedules a re-sweep over [100].
+      // First run polls [100].
       const o100 = seedOverview(100);
       recordSyncCreated(100);
       emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
       await vi.advanceTimersByTimeAsync(0);
 
-      // Second run (before the first re-sweep fires) created appId 200. Its
-      // onSyncComplete clears the pending timer and reschedules over [200] only.
+      // Second run before the first poll's next round → supersedes it, polling [200].
       const o200 = seedOverview(200);
       recordSyncCreated(200);
       emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
@@ -716,10 +737,10 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
       getAppOverview.mockClear();
       delete o100.rt_custom_image_mtime;
       delete o200.rt_custom_image_mtime;
-      await vi.advanceTimersByTimeAsync(90_000);
+      await vi.advanceTimersByTimeAsync(15_000);
 
-      // Only the newer list [200] was re-swept — 100 is never re-looked-up, so its
-      // stamp stays wiped (the superseded first timer did not fire).
+      // The superseding poll reads only [200]; the first poll's [100] is gone, so
+      // 100 is never re-looked-up and its stamp stays wiped.
       expect(getAppOverview).toHaveBeenCalledWith(200);
       expect(getAppOverview).not.toHaveBeenCalledWith(100);
       expect(typeof o200.rt_custom_image_mtime).toBe("number");
@@ -730,7 +751,7 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
     }
   });
 
-  it("plugin cleanup clears the pending re-sweep (advance after unload → no re-sweep, no throw)", async () => {
+  it("plugin cleanup cancels the poll (advance after unload → no rounds, no throw)", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const plugin = pluginFactory();
@@ -740,15 +761,38 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
       emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
       await vi.advanceTimersByTimeAsync(0);
 
-      // Unload BEFORE the re-sweep delay elapses.
+      // Unload BEFORE the first round fires.
       plugin.onDismount();
       getAppOverview.mockClear();
       delete o100.rt_custom_image_mtime;
 
-      // The cleared timer must not fire when time advances past the delay.
-      await vi.advanceTimersByTimeAsync(90_000);
+      await vi.advanceTimersByTimeAsync(60_000);
       expect(getAppOverview).not.toHaveBeenCalled();
       expect(o100.rt_custom_image_mtime).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps at the max rounds even if a stamp keeps vanishing (pathological guard)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const plugin = pluginFactory();
+      await vi.advanceTimersByTimeAsync(0);
+      recordSyncCreated(100);
+      // Every lookup returns a FRESH unstamped overview — the stamp never persists,
+      // so every round finds 100 missing and the loop can never go clean.
+      getAppOverview.mockImplementation(() => ({}));
+      emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      vi.mocked(logInfo).mockClear();
+
+      // Drive past 8 rounds (8 * 15s = 120s).
+      await vi.advanceTimersByTimeAsync(8 * 15_000);
+      expect(vi.mocked(logInfo)).toHaveBeenCalledWith("[FE] cover mtime heal: capped at 8 rounds");
+      // It stopped at the cap — there is no round 9.
+      expect(vi.mocked(logInfo)).not.toHaveBeenCalledWith("[FE] cover mtime heal: 1 re-stamped (round 9)");
+      plugin.onDismount();
     } finally {
       vi.useRealTimers();
     }
