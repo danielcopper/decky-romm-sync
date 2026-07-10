@@ -217,10 +217,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // sync_in_progress reject and look like an instant finish (#1202, RC-B).
   const [cancelling, setCancelling] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
-  // Live apply-rate countdown (seconds), or null before the rate is measured (or
-  // between runs). Derived from the syncEta estimator on each progress frame;
-  // null falls the UI back to the static "up to ~X" seed carried on the store.
-  const [liveEta, setLiveEta] = useState<number | null>(null);
+  // Absolute wall-clock deadline (ms) the live apply-rate countdown targets, or
+  // null before the rate is first measured (or between runs). The estimator's
+  // READY gate re-arms ~5s after every inter-unit fetch gap, and the run's tail
+  // is many small units that each apply in <5s and so never re-arm it — so a raw
+  // seconds snapshot would blink back to the static seed for the whole tail.
+  // Holding the last good measurement as a deadline keeps the countdown ticking
+  // down honestly through the gaps (each progress frame re-renders), and every
+  // fresh measurement re-anchors it. Null measurements KEEP the deadline (sticky).
+  const [etaDeadlineMs, setEtaDeadlineMs] = useState<number | null>(null);
   const [status, setStatus] = useState("");
   const [preview, setPreview] = useState<SyncPreview | null>(null);
   const [skipPreview, setSkipPreview] = useState(false);
@@ -375,30 +380,40 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // in-progress UI is torn down ONLY on a terminal stage, never on a bare
     // running:false (which can transiently race a fresh run's first event).
     const unsubProgress = onSyncProgressChange(() => {
+      // The local mirror must update FIRST and unconditionally — it is what
+      // drives the re-render. Everything after it is derived work (terminal
+      // teardown, estimator feeding, ETA state) that must never be able to break
+      // the re-render chain (on-device freeze, cause not yet reproduced in tests).
       const progress = getSyncProgress();
       setSyncProgress(progress);
-      if (isTerminalStage(progress.stage)) {
-        // Tear down the run's live-ETA state so the next run measures fresh.
-        resetEta();
-        setLiveEta(null);
-        setSyncing(false);
-        setLoading(false);
-        // True terminal reached — re-arm the button out of any "Cancelling…"
-        // drain state (#1202, RC-B).
-        setCancelling(false);
-        showTransientStatus(progress.message || "Sync finished");
-        getSyncStats()
-          .then(setStats)
-          .catch((e) => logError(`Failed to refresh sync stats: ${e}`));
-      } else {
-        // Feed the live-rate estimator from applying frames only (fetch frames
-        // carry page/cover counters, not item progress), then re-derive the
-        // countdown. liveEtaSeconds() stays null until the rate is measured, so
-        // the UI holds the static "up to ~X" seed until then.
-        if (progress.stage === "applying" && progress.step !== undefined && progress.current !== undefined) {
-          observeApplyProgress(progress.step, progress.current, Date.now());
+      try {
+        if (isTerminalStage(progress.stage)) {
+          // Tear down the run's live-ETA state so the next run measures fresh.
+          resetEta();
+          setEtaDeadlineMs(null);
+          setSyncing(false);
+          setLoading(false);
+          // True terminal reached — re-arm the button out of any "Cancelling…"
+          // drain state (#1202, RC-B).
+          setCancelling(false);
+          showTransientStatus(progress.message || "Sync finished");
+          getSyncStats()
+            .then(setStats)
+            .catch((e) => logError(`Failed to refresh sync stats: ${e}`));
+        } else {
+          // Feed the live-rate estimator from applying frames only (fetch frames
+          // carry page/cover counters, not item progress), then re-anchor the
+          // countdown's deadline. A null measurement (the READY gate not yet
+          // re-armed after a fetch gap, or the tail's <5s units) KEEPS the prior
+          // deadline sticky rather than wiping it back to the static seed.
+          if (progress.stage === "applying" && progress.step !== undefined && progress.current !== undefined) {
+            observeApplyProgress(progress.step, progress.current, Date.now());
+          }
+          const s = liveEtaSeconds();
+          if (s !== null) setEtaDeadlineMs(Date.now() + s * 1000);
         }
-        setLiveEta(liveEtaSeconds());
+      } catch (e) {
+        logError(`sync-progress subscriber failed: ${e}`);
       }
     });
 
@@ -595,8 +610,8 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // ~X min"). Absent both, the row is omitted (honest silence).
   const staticEtaSeconds = syncProgress?.etaSeconds;
   const etaText =
-    liveEta !== null
-      ? formatEtaCountdown(liveEta)
+    etaDeadlineMs !== null
+      ? formatEtaCountdown(Math.max(0, (etaDeadlineMs - Date.now()) / 1000))
       : staticEtaSeconds !== undefined
         ? `up to ${formatDuration(staticEtaSeconds)}`
         : null;

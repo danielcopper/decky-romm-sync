@@ -40,8 +40,9 @@ import { createElement, type ReactElement } from "react";
 import { MainPage } from "./MainPage";
 import * as backend from "../api/backend";
 import { useVersionError } from "./VersionErrorCard";
-import { setSyncProgress } from "../utils/syncProgress";
-import { beginEtaRun, resetEta } from "../utils/syncEta";
+import { setSyncProgress, updateSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
+import { beginEtaRun, resetEta, liveEtaSeconds } from "../utils/syncEta";
+import * as syncEta from "../utils/syncEta";
 import { NEW_ITEM_SEC } from "../utils/syncEstimate";
 import { setDownloads } from "../utils/downloadStore";
 import { showModal } from "@decky/ui";
@@ -881,6 +882,22 @@ describe("MainPage", () => {
       expect(text).not.toContain("Never");
     });
 
+    it("renders the attempt time + status when the newest attempt was interrupted (crash-resume)", async () => {
+      // A crash-resumed run reports the "interrupted" terminal status the backend
+      // now also emits — the status string is rendered verbatim.
+      vi.mocked(backend.getSyncStats).mockResolvedValue({
+        ...defaultStats(),
+        last_sync: null,
+        last_attempt: { finished_at: "2026-06-01T17:48:00", status: "interrupted" },
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const text = lastSyncText(container);
+      expect(text).toContain("17:48");
+      expect(text).toContain("(interrupted)");
+      expect(text).not.toContain("Never");
+    });
+
     it("renders both the last_sync time and a subtle last-attempt line when both exist", async () => {
       vi.mocked(backend.getSyncStats).mockResolvedValue({
         ...defaultStats(),
@@ -1490,6 +1507,264 @@ describe("MainPage", () => {
         expect(estimateText(container)).toContain("up to");
       } finally {
         vi.useRealTimers();
+      }
+    });
+
+    it("keeps the live countdown across a fetch gap where the estimator re-arms to null (sticky)", async () => {
+      // The estimator's READY gate re-arms ~5s after every inter-unit fetch gap,
+      // and the run's tail is small units that each apply in <5s and never re-arm
+      // it. The countdown must NOT blink back to the static "up to ~X" seed on
+      // those null measurements — it holds the last good deadline and keeps
+      // counting down. (Fix: MainPage tracks an absolute deadline, not a raw
+      // seconds snapshot; a null measurement keeps the prior deadline.)
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      try {
+        vi.setSystemTime(0);
+        // Single unit of 54700, so cumulativeProcessed == current (step 1).
+        beginEtaRun("run-1", [54700], 54700);
+        const seed = 54700 * NEW_ITEM_SEC;
+        setSyncProgress({
+          running: true,
+          stage: "applying",
+          step: 1,
+          totalSteps: 1,
+          current: 100,
+          total: 54700,
+          message: "X: 100/54700",
+          runId: "run-1",
+          etaSeconds: seed,
+        });
+        vi.mocked(backend.getSyncStatus).mockResolvedValue({
+          running: true,
+          stage: "applying",
+          step: 1,
+          totalSteps: 1,
+          current: 100,
+          total: 54700,
+          message: "X: 100/54700",
+          runId: "run-1",
+        });
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
+        // One sample so far → static upper bound.
+        expect(estimateText(container)).toContain("up to");
+
+        // Second frame at t=6s → rate 100/s, remaining 540s → "~9 min left".
+        vi.setSystemTime(6000);
+        await act(async () => {
+          setSyncProgress({
+            running: true,
+            stage: "applying",
+            step: 1,
+            totalSteps: 1,
+            current: 700,
+            total: 54700,
+            message: "X: 700/54700",
+            runId: "run-1",
+            etaSeconds: seed,
+          });
+        });
+        expect(estimateText(container)).toBe("~9 min left");
+
+        // A fetch gap (no sample), then two applying frames far enough apart that
+        // the window ages down to just its two most recent samples spanning <5s —
+        // so liveEtaSeconds() re-arms to null exactly as it does at the start of a
+        // tail unit's apply.
+        vi.setSystemTime(30000);
+        await act(async () => {
+          setSyncProgress({
+            running: true,
+            stage: "fetching",
+            step: 1,
+            totalSteps: 1,
+            current: 20,
+            total: 62,
+            message: "Fetching (page 20/62)",
+            runId: "run-1",
+            etaSeconds: seed,
+          });
+        });
+        vi.setSystemTime(33000);
+        await act(async () => {
+          setSyncProgress({
+            running: true,
+            stage: "applying",
+            step: 1,
+            totalSteps: 1,
+            current: 800,
+            total: 54700,
+            message: "X: 800/54700",
+            runId: "run-1",
+            etaSeconds: seed,
+          });
+        });
+        vi.setSystemTime(37000);
+        await act(async () => {
+          setSyncProgress({
+            running: true,
+            stage: "applying",
+            step: 1,
+            totalSteps: 1,
+            current: 900,
+            total: 54700,
+            message: "X: 900/54700",
+            runId: "run-1",
+            etaSeconds: seed,
+          });
+        });
+        // Precondition: the estimator really is re-armed to null (window span 4s).
+        expect(liveEtaSeconds()).toBeNull();
+        // Sticky: the display still shows a "left" countdown, NOT the static seed.
+        const text = estimateText(container);
+        expect(text).toContain("left");
+        expect(text).not.toContain("up to");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("a throwing earlier listener cannot starve the mounted instance's re-render (freeze contract)", async () => {
+      // On-device an instance mounted before run start froze on the optimistic
+      // "Applying" frame and stopped re-rendering for the rest of the run — a
+      // subscriber throw aborting the store's notify loop before the re-render.
+      // Register a THROWING listener BEFORE mounting so it sits earlier in the
+      // store's listener array than MainPage's own subscriber: with the store's
+      // per-listener try/catch reverted this earlier throw aborts notify() and
+      // MainPage never re-renders, so the assertions below genuinely pin the
+      // hardening (not just a happy-path re-render smoke test).
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const unsubThrower = onSyncProgressChange(() => {
+        throw new Error("earlier listener boom");
+      });
+      try {
+        vi.mocked(backend.syncPreview).mockResolvedValue({
+          success: true,
+          summary: {
+            new_count: 5,
+            changed_count: 0,
+            unchanged_count: 0,
+            remove_count: 0,
+            disabled_platform_remove_count: 0,
+          },
+          new_names: ["a", "b"],
+          changed_names: [],
+          preview_id: "p-freeze",
+        });
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
+
+        // Sync → preview with changes → Apply Sync appears.
+        await act(async () => {
+          fireEvent.click(buttonByExactText(container, "Sync Library")!);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        // Apply → handleApply sets syncing + the optimistic "Applying" frame (the
+        // frame the frozen instance was stuck on).
+        await act(async () => {
+          fireEvent.click(buttonByExactText(container, "Apply Sync")!);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        expect(container.querySelector('[data-testid="sync-stage"]')?.textContent).toContain("Applying shortcuts");
+
+        // sync_plan listener shape — a partial update carrying only the ETA seed.
+        await act(async () => {
+          updateSyncProgress({ etaSeconds: 1000 });
+        });
+
+        // Per-item applying frames (syncManager processUnitShortcuts shape). Each
+        // must drive a fresh render despite the earlier listener throwing on every
+        // notify — the frozen instance stopped advancing here.
+        await act(async () => {
+          updateSyncProgress({
+            running: true,
+            stage: "applying",
+            current: 5,
+            total: 200,
+            message: "PSX: 5/200",
+            step: 2,
+            totalSteps: 8,
+          });
+        });
+        expect(container.textContent).toContain("PSX: 5/200");
+        expect(container.querySelector('[data-testid="sync-step"]')?.textContent).toContain("2/8");
+
+        await act(async () => {
+          updateSyncProgress({ current: 6, total: 200, message: "PSX: 6/200", step: 2, totalSteps: 8 });
+        });
+        // The mounted instance kept re-rendering — the fine line advanced.
+        expect(container.textContent).toContain("PSX: 6/200");
+        // Non-vacuous: the earlier listener really did throw on notify (isolated
+        // by the store to console.error), so the re-renders above prove isolation.
+        expect(consoleSpy).toHaveBeenCalledWith("[RomM] sync-progress listener threw:", expect.any(Error));
+      } finally {
+        unsubThrower();
+        consoleSpy.mockRestore();
+      }
+    });
+
+    it("logs and keeps advancing the local mirror when the subscriber's derived work throws", async () => {
+      // The subscriber's outer try/catch: the local mirror (setSyncProgress) is
+      // updated FIRST and unconditionally, then the derived work runs guarded. If
+      // the derived work throws, the catch must log AND the mirror must still
+      // advance on every later frame — the re-render chain must not break. Inject
+      // the throw by making liveEtaSeconds() (called in the non-terminal branch)
+      // throw on each applying frame.
+      const etaSpy = vi.spyOn(syncEta, "liveEtaSeconds").mockImplementation(() => {
+        throw new Error("derived boom");
+      });
+      const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+      try {
+        // Recover an in-flight applying run on mount so syncing=true (the
+        // in-flight body renders) and the subscriber fires with an applying frame.
+        vi.mocked(backend.getSyncStatus).mockResolvedValue({
+          running: true,
+          stage: "applying",
+          step: 2,
+          totalSteps: 8,
+          current: 5,
+          total: 200,
+          message: "PSX: 5/200",
+          runId: "run-throw",
+        });
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
+        // Post-catch state: the mirror advanced to the first frame despite the
+        // throw, and the catch surfaced the subscriber-failure log.
+        expect(container.textContent).toContain("PSX: 5/200");
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("sync-progress subscriber failed"));
+
+        // Subsequent frames keep advancing the local mirror — the throw on each
+        // frame never breaks the re-render chain.
+        await act(async () => {
+          updateSyncProgress({
+            running: true,
+            stage: "applying",
+            step: 2,
+            totalSteps: 8,
+            current: 6,
+            total: 200,
+            message: "PSX: 6/200",
+          });
+        });
+        expect(container.textContent).toContain("PSX: 6/200");
+
+        await act(async () => {
+          updateSyncProgress({
+            running: true,
+            stage: "applying",
+            step: 2,
+            totalSteps: 8,
+            current: 7,
+            total: 200,
+            message: "PSX: 7/200",
+          });
+        });
+        expect(container.textContent).toContain("PSX: 7/200");
+      } finally {
+        etaSpy.mockRestore();
+        logSpy.mockRestore();
       }
     });
   });

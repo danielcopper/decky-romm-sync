@@ -29,14 +29,31 @@ let _progress: SyncProgress = {
 };
 let _listeners: Array<() => void> = [];
 
+/**
+ * Notify every subscriber, each inside its own try/catch — a throwing subscriber
+ * can neither starve later listeners nor break the emitting call site (e.g. the
+ * per-item apply loop in syncManager, where a subscriber throw would otherwise
+ * skip that game's shortcut creation). Console, not the ``logError`` backend
+ * callable, at this store layer.
+ */
+function notify(): void {
+  _listeners.forEach((fn) => {
+    try {
+      fn();
+    } catch (e) {
+      console.error("[RomM] sync-progress listener threw:", e);
+    }
+  });
+}
+
 export function setSyncProgress(p: SyncProgress): void {
   _progress = p;
-  _listeners.forEach((fn) => fn());
+  notify();
 }
 
 export function updateSyncProgress(p: Partial<SyncProgress>): void {
   _progress = { ..._progress, ...p };
-  _listeners.forEach((fn) => fn());
+  notify();
 }
 
 export function getSyncProgress(): SyncProgress {
