@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.26.0...decky-romm-sync-v0.26.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* **library:** component-based sibling group keys with canonical-source agreement ([#1369](https://github.com/danielcopper/decky-romm-sync/issues/1369)) ([5f8715b](https://github.com/danielcopper/decky-romm-sync/commit/5f8715b5367bca85c984e9494ffa94168fc1d0bd))
+
 ## [0.26.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.25.0...decky-romm-sync-v0.26.0) (2026-07-09)
 
 
