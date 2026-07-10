@@ -31,7 +31,7 @@ import {
 } from "../api/backend";
 import { formatBytes } from "../utils/formatters";
 import { estimateApplySeconds, formatDuration } from "../utils/syncEstimate";
-import { observeApplyProgress, liveEtaSeconds, resetEta, formatEtaCountdown } from "../utils/syncEta";
+import { observeApplyProgress, displayedEtaSeconds, resetEta, formatEtaCountdown } from "../utils/syncEta";
 import { getSyncProgress, setSyncProgress as setStoredSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getDownloadState } from "../utils/downloadStore";
@@ -233,15 +233,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // sync_in_progress reject and look like an instant finish (#1202, RC-B).
   const [cancelling, setCancelling] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
-  // Absolute wall-clock deadline (ms) the live apply-rate countdown targets, or
-  // null before the rate is first measured (or between runs). The estimator's
-  // READY gate re-arms ~5s after every inter-unit fetch gap, and the run's tail
-  // is many small units that each apply in <5s and so never re-arm it — so a raw
-  // seconds snapshot would blink back to the static seed for the whole tail.
-  // Holding the last good measurement as a deadline keeps the countdown ticking
-  // down honestly through the gaps (each progress frame re-renders), and every
-  // fresh measurement re-anchors it. Null measurements KEEP the deadline (sticky).
-  const [etaDeadlineMs, setEtaDeadlineMs] = useState<number | null>(null);
+  // The live apply-rate countdown owns no UI state: syncEta holds the sticky
+  // deadline, and the render reads displayedEtaSeconds(Date.now()). The store
+  // subscription's setSyncProgress drives the re-renders that tick it down.
   const [status, setStatus] = useState("");
   const [preview, setPreview] = useState<SyncPreview | null>(null);
   const [skipPreview, setSkipPreview] = useState(false);
@@ -404,9 +398,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       setSyncProgress(progress);
       try {
         if (isTerminalStage(progress.stage)) {
-          // Tear down the run's live-ETA state so the next run measures fresh.
+          // Tear down the run's live-ETA state (deadline included) so the next run
+          // measures fresh.
           resetEta();
-          setEtaDeadlineMs(null);
           setSyncing(false);
           setLoading(false);
           // True terminal reached — re-arm the button out of any "Cancelling…"
@@ -418,15 +412,12 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             .catch((e) => logError(`Failed to refresh sync stats: ${e}`));
         } else {
           // Feed the live-rate estimator from applying frames only (fetch frames
-          // carry page/cover counters, not item progress), then re-anchor the
-          // countdown's deadline. A null measurement (the READY gate not yet
-          // re-armed after a fetch gap, or the tail's <5s units) KEEPS the prior
-          // deadline sticky rather than wiping it back to the static seed.
+          // carry page/cover counters, not item progress). syncEta re-anchors its
+          // sticky deadline internally; the render reads displayedEtaSeconds — no
+          // ETA state to manage here.
           if (progress.stage === "applying" && progress.step !== undefined && progress.current !== undefined) {
             observeApplyProgress(progress.step, progress.current, Date.now());
           }
-          const s = liveEtaSeconds();
-          if (s !== null) setEtaDeadlineMs(Date.now() + s * 1000);
         }
       } catch (e) {
         logError(`sync-progress subscriber failed: ${e}`);
@@ -630,9 +621,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // back to the static seed carried on the store as an upper bound ("up to
   // ~X min"). Absent both, the row is omitted (honest silence).
   const staticEtaSeconds = syncProgress?.etaSeconds;
+  const liveEta = displayedEtaSeconds(Date.now());
   const etaText =
-    etaDeadlineMs !== null
-      ? formatEtaCountdown(Math.max(0, (etaDeadlineMs - Date.now()) / 1000))
+    liveEta !== null
+      ? formatEtaCountdown(liveEta)
       : staticEtaSeconds !== undefined
         ? `up to ${formatDuration(staticEtaSeconds)}`
         : null;

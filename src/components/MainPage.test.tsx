@@ -1800,9 +1800,9 @@ describe("MainPage", () => {
       // updated FIRST and unconditionally, then the derived work runs guarded. If
       // the derived work throws, the catch must log AND the mirror must still
       // advance on every later frame — the re-render chain must not break. Inject
-      // the throw by making liveEtaSeconds() (called in the non-terminal branch)
-      // throw on each applying frame.
-      const etaSpy = vi.spyOn(syncEta, "liveEtaSeconds").mockImplementation(() => {
+      // the throw by making observeApplyProgress() (called in the non-terminal
+      // branch) throw on each applying frame.
+      const etaSpy = vi.spyOn(syncEta, "observeApplyProgress").mockImplementation(() => {
         throw new Error("derived boom");
       });
       const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});

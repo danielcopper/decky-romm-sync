@@ -47,16 +47,28 @@ export function estimateApplySeconds(newCount: number, changedCount: number): nu
 }
 
 /**
- * Render *seconds* as a coarse, approximate duration for the UI:
- * ``"< 1 min"`` under a minute, ``"~4 min"`` under an hour, ``"~1 h 10 min"``
- * (or ``"~1 h"`` on the hour) beyond. The leading ``~`` signals the value is an
- * estimate, not a countdown.
+ * Shared coarse-duration renderer for the sync UI's two readouts. Renders
+ * *seconds* as ``"< 1 min"`` under a minute, ``"~N min"`` under an hour, and
+ * ``"~H h M min"`` / ``"~H h"`` (on the hour) beyond, appending *suffix* to every
+ * branch. *roundMinutes* controls the minute rounding: ``Math.round`` for the
+ * neutral estimate, ``Math.ceil`` for the live countdown (which must never promise
+ * less time than it expects). The leading ``~`` signals an estimate.
  */
-export function formatDuration(seconds: number): string {
-  if (seconds < 60) return "< 1 min";
-  const totalMinutes = Math.round(seconds / 60);
-  if (totalMinutes < 60) return `~${totalMinutes} min`;
+export function formatApproxDuration(seconds: number, roundMinutes: (n: number) => number, suffix: string): string {
+  if (seconds < 60) return `< 1 min${suffix}`;
+  const totalMinutes = roundMinutes(seconds / 60);
+  if (totalMinutes < 60) return `~${totalMinutes} min${suffix}`;
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
-  return minutes > 0 ? `~${hours} h ${minutes} min` : `~${hours} h`;
+  return minutes > 0 ? `~${hours} h ${minutes} min${suffix}` : `~${hours} h${suffix}`;
+}
+
+/**
+ * Render *seconds* as a coarse, approximate duration for the UI:
+ * ``"< 1 min"`` under a minute, ``"~4 min"`` under an hour, ``"~1 h 10 min"``
+ * (or ``"~1 h"`` on the hour) beyond. The neutral estimate rounds to the nearest
+ * minute and carries no suffix.
+ */
+export function formatDuration(seconds: number): string {
+  return formatApproxDuration(seconds, Math.round, "");
 }

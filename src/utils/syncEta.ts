@@ -7,10 +7,12 @@
  *
  * The math is pure and unit-tested (``cumulativeProcessed`` / ``windowedRate`` /
  * ``remainingSeconds`` / ``formatEtaCountdown``). A thin run-scoped state layer
- * (``beginEtaRun`` / ``observeApplyProgress`` / ``liveEtaSeconds`` / ``resetEta``)
- * is the seam the ``sync_plan`` listener (index.tsx) and MainPage drive: the plan
- * sets the per-unit weights + total, and MainPage feeds one sample per applying
- * progress frame and reads back the current estimate.
+ * (``beginEtaRun`` / ``observeApplyProgress`` / ``liveEtaSeconds`` /
+ * ``displayedEtaSeconds`` / ``resetEta``) is the seam the ``sync_plan`` listener
+ * (index.tsx) and MainPage drive: the plan sets the per-unit weights + total, and
+ * MainPage feeds one sample per applying progress frame and renders the sticky
+ * countdown via ``displayedEtaSeconds`` — the module owns the deadline, so the UI
+ * holds no ETA state of its own.
  *
  * Approximation, by design: the plan's per-unit ``rom_count`` is the RAW
  * pre-collapse file count, while the applying stage's ``current`` is the
@@ -19,6 +21,8 @@
  * measured rate absorbs most of the skew and the countdown stays close enough to
  * be useful. It is an estimate, never a guarantee.
  */
+
+import { formatApproxDuration } from "./syncEstimate";
 
 export interface EtaSample {
   readonly tMs: number;
@@ -90,12 +94,7 @@ export function remainingSeconds(totalRoms: number, processed: number, rate: num
  * readout honest — a countdown should never promise less time than it expects.
  */
 export function formatEtaCountdown(seconds: number): string {
-  if (seconds < 60) return "< 1 min left";
-  const totalMinutes = Math.ceil(seconds / 60);
-  if (totalMinutes < 60) return `~${totalMinutes} min left`;
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return minutes > 0 ? `~${hours} h ${minutes} min left` : `~${hours} h left`;
+  return formatApproxDuration(seconds, Math.ceil, " left");
 }
 
 // ── Run-scoped state layer ────────────────────────────────────────────────
@@ -106,6 +105,11 @@ interface EtaRunState {
   totalRoms: number;
   samples: EtaSample[];
   lastSampleMs: number;
+  // Absolute wall-clock deadline (ms) the displayed countdown targets, re-anchored
+  // from the last non-null measurement and held across gaps (see
+  // observeApplyProgress / displayedEtaSeconds). ``null`` until the first ready
+  // measurement.
+  deadlineMs: number | null;
 }
 
 let _run: EtaRunState | null = null;
@@ -117,7 +121,7 @@ let _run: EtaRunState | null = null;
  * planned ROM total.
  */
 export function beginEtaRun(runId: string, unitWeights: number[], totalRoms: number): void {
-  _run = { runId, unitWeights: [...unitWeights], totalRoms, samples: [], lastSampleMs: 0 };
+  _run = { runId, unitWeights: [...unitWeights], totalRoms, samples: [], lastSampleMs: 0, deadlineMs: null };
 }
 
 /** Drop all ETA state — call at a terminal stage or when no run is in flight. */
@@ -151,13 +155,22 @@ export function observeApplyProgress(step: number, current: number, tMs: number)
   const cutoff = tMs - WINDOW_MS;
   const recent = _run.samples.filter((s) => s.tMs >= cutoff);
   _run.samples = recent.length >= 2 ? recent : _run.samples.slice(-2);
+  // Re-anchor the sticky countdown deadline from the fresh measurement. The
+  // readiness gate re-arms liveEtaSeconds() to null ~5s after every inter-unit
+  // fetch gap, and a run's tail of small units each applies in <5s and so never
+  // re-arms it — a raw seconds snapshot would blink the readout back to the static
+  // seed for the whole tail. Holding the last good measurement as an absolute
+  // deadline keeps the countdown ticking down honestly through the gaps; a null
+  // measurement KEEPS the prior deadline, so stickiness falls out naturally.
+  const seconds = liveEtaSeconds();
+  if (seconds !== null) _run.deadlineMs = tMs + seconds * 1000;
 }
 
 /**
  * The live remaining-seconds estimate, or ``null`` when the run isn't ready to
  * replace the static seed yet: no run, too few samples, too short a span, or a
- * flat/backward slope. MainPage shows the static "up to ~X" until this returns a
- * number, then switches to the "~X left" countdown.
+ * flat/backward slope. Re-arms to null between measurement segments; the sticky
+ * ``displayedEtaSeconds`` is what the UI actually renders.
  */
 export function liveEtaSeconds(): number | null {
   if (_run === null || _run.samples.length < READY_MIN_SAMPLES) return null;
@@ -168,4 +181,19 @@ export function liveEtaSeconds(): number | null {
   const rate = windowedRate(_run.samples);
   if (rate === null) return null;
   return remainingSeconds(_run.totalRoms, last.processed, rate);
+}
+
+/**
+ * The seconds the UI should display on the countdown, derived from the sticky
+ * deadline: ``max(0, (deadlineMs - nowMs) / 1000)`` while a deadline is set, else
+ * ``null``. Unlike {@link liveEtaSeconds} (which re-arms to null between
+ * measurement segments), this holds the last good deadline across fetch gaps and
+ * small-unit tails, so the readout counts down smoothly instead of snapping back
+ * to the static "up to ~X" seed. ``null`` before the first ready measurement and
+ * after {@link resetEta} (which clears the run, and with it the deadline). Renders
+ * tick as the caller passes a fresh ``nowMs`` on each progress frame.
+ */
+export function displayedEtaSeconds(nowMs: number): number | null {
+  if (_run === null || _run.deadlineMs === null) return null;
+  return Math.max(0, (_run.deadlineMs - nowMs) / 1000);
 }

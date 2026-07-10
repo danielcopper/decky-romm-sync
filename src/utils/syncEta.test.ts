@@ -7,6 +7,7 @@ import {
   beginEtaRun,
   observeApplyProgress,
   liveEtaSeconds,
+  displayedEtaSeconds,
   resetEta,
   type EtaSample,
 } from "./syncEta";
@@ -218,5 +219,56 @@ describe("run-scoped estimator", () => {
     // the pre-gap sample and a rate is measured.
     observeApplyProgress(1, 700, 16000);
     expect(liveEtaSeconds()).not.toBeNull();
+  });
+});
+
+describe("displayedEtaSeconds (sticky countdown deadline)", () => {
+  beforeEach(() => resetEta());
+
+  it("returns null when no run is in flight", () => {
+    expect(displayedEtaSeconds(0)).toBeNull();
+  });
+
+  it("returns null before the first ready measurement (no deadline anchored yet)", () => {
+    beginEtaRun("run-1", [54700], 54700);
+    observeApplyProgress(1, 100, 0); // one sample → not ready → no deadline
+    expect(liveEtaSeconds()).toBeNull();
+    expect(displayedEtaSeconds(0)).toBeNull();
+    expect(displayedEtaSeconds(1000)).toBeNull();
+  });
+
+  it("counts down as now advances against a fixed deadline, clamped at zero", () => {
+    beginEtaRun("run-1", [54700], 54700);
+    observeApplyProgress(1, 100, 0);
+    // Ready at t=6000: rate 100/s, remaining 540s → deadline = 6000 + 540_000.
+    observeApplyProgress(1, 700, 6000);
+    expect(displayedEtaSeconds(6000)).toBe(540);
+    // 60s later, with no new sample, it has ticked down.
+    expect(displayedEtaSeconds(66000)).toBe(480);
+    // Past the deadline never goes negative.
+    expect(displayedEtaSeconds(600000)).toBe(0);
+  });
+
+  it("holds the last deadline (sticky) when a segment break re-arms liveEtaSeconds to null", () => {
+    beginEtaRun("run-1", [54700], 54700);
+    observeApplyProgress(1, 100, 0);
+    observeApplyProgress(1, 700, 6000); // deadline anchored at 6000 + 540_000 = 546_000
+    expect(liveEtaSeconds()).not.toBeNull();
+    expect(displayedEtaSeconds(6000)).toBe(540);
+    // A >10s gap resets the measurement segment → liveEtaSeconds re-arms to null…
+    observeApplyProgress(1, 710, 17000);
+    expect(liveEtaSeconds()).toBeNull();
+    // …but the displayed countdown holds the prior deadline and keeps ticking,
+    // instead of snapping back to the static seed. (546_000 - 17_000) / 1000 = 529.
+    expect(displayedEtaSeconds(17000)).toBe(529);
+  });
+
+  it("returns null after resetEta clears the run (and with it the deadline)", () => {
+    beginEtaRun("run-1", [54700], 54700);
+    observeApplyProgress(1, 100, 0);
+    observeApplyProgress(1, 700, 6000);
+    expect(displayedEtaSeconds(6000)).not.toBeNull();
+    resetEta();
+    expect(displayedEtaSeconds(6000)).toBeNull();
   });
 });
