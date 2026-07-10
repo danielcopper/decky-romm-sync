@@ -1353,6 +1353,36 @@ describe("MainPage", () => {
       expect(c.textContent).toContain("Long syncs pause while the Deck sleeps and resume on wake");
     });
 
+    it("prices the preview row from the WALK cost (new + changed + unchanged), not the raw delta", async () => {
+      // Resume-shaped: 153 real creates but ~3000 unchanged items the apply
+      // re-walks. Delta-only priced this at "~2 min" on-device; walk cost is
+      // 153*NEW_ITEM_SEC + 3000*UPDATED_ITEM_SEC = 1180.05s → ~20 min. The number
+      // the user approves here is the same seed handleApply starts the run with.
+      vi.mocked(backend.syncPreview).mockResolvedValue({
+        success: true,
+        summary: {
+          new_count: 153,
+          changed_count: 0,
+          unchanged_count: 3000,
+          remove_count: 0,
+          disabled_platform_remove_count: 0,
+        },
+        new_names: [],
+        changed_names: [],
+        preview_id: "p-resume",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(estimateText(container)).toBe("~20 min");
+      // An estimate must never promise less than reality — the delta-only value is gone.
+      expect(estimateText(container)).not.toBe("~2 min");
+    });
+
     it("renders 'up to ~X min' while applying when etaSeconds is set", async () => {
       vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
@@ -1380,19 +1410,16 @@ describe("MainPage", () => {
       expect(container.querySelector('[data-testid="estimate-time"]')).toBeNull();
     });
 
-    it("handleApply seeds the apply ETA from the preview delta (new + changed), not the crude bound", async () => {
-      // The preview path knows the real delta, so the optimistic apply frame
-      // carries estimateApplySeconds(new, changed) — a tighter seed than the
-      // sync_plan listener's total_roms upper bound. new=100, changed=200 →
-      // 100*NEW_ITEM_SEC + 200*UPDATED_ITEM_SEC = 155s.
+    async function applyPreviewSummary(summary: Partial<SyncPreviewSummary>): Promise<HTMLElement> {
       vi.mocked(backend.syncPreview).mockResolvedValue({
         success: true,
         summary: {
-          new_count: 100,
-          changed_count: 200,
+          new_count: 0,
+          changed_count: 0,
           unchanged_count: 0,
           remove_count: 0,
           disabled_platform_remove_count: 0,
+          ...summary,
         },
         new_names: [],
         changed_names: [],
@@ -1406,16 +1433,38 @@ describe("MainPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      // Apply → optimistic store write carries the delta-based seed.
+      // Apply → the optimistic store write carries the walk-cost seed.
       await act(async () => {
         fireEvent.click(buttonByExactText(container, "Apply Sync")!);
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(getSyncProgress().etaSeconds).toBe(100 * NEW_ITEM_SEC + 200 * UPDATED_ITEM_SEC);
-      // Surfaced as the "up to ~X" upper bound (155s → ~3 min) until the live
+      return container;
+    }
+
+    it("handleApply seeds the apply ETA from the WALK cost (new + changed + unchanged), not the raw delta", async () => {
+      // The apply re-walks every non-skipped item — unchanged ROMs of an
+      // un-stamped platform still get cheap update touches — so all non-new items
+      // (changed + unchanged) are priced at the update rate. new=100, changed=200,
+      // unchanged=600 → 100*NEW_ITEM_SEC + 800*UPDATED_ITEM_SEC = 365s.
+      const container = await applyPreviewSummary({ new_count: 100, changed_count: 200, unchanged_count: 600 });
+      expect(getSyncProgress().etaSeconds).toBe(100 * NEW_ITEM_SEC + (200 + 600) * UPDATED_ITEM_SEC);
+      // Surfaced as the "up to ~X" upper bound (365s → ~6 min) until the live
       // countdown takes over.
-      expect(container.querySelector('[data-testid="estimate-time"]')?.textContent).toBe("up to ~3 min");
+      expect(container.querySelector('[data-testid="estimate-time"]')?.textContent).toBe("up to ~6 min");
+    });
+
+    it("prices a resume-shaped preview (few creates, many unchanged) as a large 'up to', not a sub-minute undershoot", async () => {
+      // The on-device regression: a resume with ~90 real creates but ~3000
+      // unchanged items re-walks all 3000. The old delta-only seed (new + changed)
+      // read "< 1 min" for a ~10 min walk. Walk cost: 90*NEW_ITEM_SEC +
+      // 3000*UPDATED_ITEM_SEC = 1126.5s → ~19 min.
+      const container = await applyPreviewSummary({ new_count: 90, changed_count: 0, unchanged_count: 3000 });
+      expect(getSyncProgress().etaSeconds).toBe(90 * NEW_ITEM_SEC + 3000 * UPDATED_ITEM_SEC);
+      const text = container.querySelector('[data-testid="estimate-time"]')?.textContent;
+      expect(text).toBe("up to ~19 min");
+      // An estimate must never promise less than reality — the delta-only undershoot is gone.
+      expect(text).not.toBe("up to < 1 min");
     });
   });
 

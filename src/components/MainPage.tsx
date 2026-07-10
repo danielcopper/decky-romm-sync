@@ -206,6 +206,22 @@ function formatPreviewDescription(s: SyncPreviewSummary): string {
   return sections.length > 0 ? sections.join("; ") : "Everything is up to date.";
 }
 
+/**
+ * Expected apply seconds for a preview — the WALK cost, not the raw delta. The
+ * apply re-walks every non-skipped item: an un-stamped platform's "unchanged"
+ * ROMs still get cheap update touches, not free skips, so pricing only new +
+ * changed undershoots badly on a resume (on-device: "~2 min" for 153 added while
+ * the apply walked ~3100 items). Pricing all non-new items (changed + unchanged)
+ * at the update rate gives an honest upper bound — platforms skipped by their
+ * completion stamp make it overshoot, which the "up to ~X"/"~X min" wording
+ * covers, and the live countdown corrects downward within seconds of applying.
+ * Used for BOTH the preview "Estimated time" row and the handleApply seed, so the
+ * number the user approves is the number the run starts with.
+ */
+function previewApplySeconds(s: SyncPreviewSummary): number {
+  return estimateApplySeconds(s.new_count, s.changed_count + s.unchanged_count);
+}
+
 export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [stats, setStats] = useState<SyncStats | null>(null);
   const [connected, setConnected] = useState<boolean | null | BackendFailed>(null);
@@ -510,14 +526,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const handleApply = async () => {
     if (!preview) return;
     const previewId = preview.preview_id;
-    // Seed the apply ETA from the real preview delta (new + changed counts)
-    // rather than the sync_plan listener's crude ``total_roms`` upper bound — a
-    // resume with ~150 real creates otherwise reads "up to ~46 min" through the
-    // whole fetch phase. This delta seed lands in the optimistic store write, so
-    // the sync_plan listener sees an etaSeconds already present and leaves it be.
-    // Still an upper-boundish estimate; the live countdown replaces it seconds
-    // into the apply.
-    const etaSeconds = estimateApplySeconds(preview.summary.new_count, preview.summary.changed_count);
+    // Seed the apply ETA from the walk cost (shared with the preview row via
+    // previewApplySeconds) so the number the user approved is the run's seed. It
+    // lands in the optimistic store write below, so the sync_plan listener sees an
+    // etaSeconds already present and leaves its cruder total_roms bound off.
+    const etaSeconds = previewApplySeconds(preview.summary);
     // Clear any stale cancel flag before the apply run starts (#1198). A Cancel
     // in the apply window reads "" from the sync_progress store until the
     // backend stamps the run id, which the backend treats as an unconditional
@@ -659,7 +672,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       preview.summary.new_count + preview.summary.changed_count + preview.summary.remove_count > 0 ||
       !!(preview.summary.collection_diff?.added.length || preview.summary.collection_diff?.removed.length) ||
       preview.summary.platform_collection_diff?.has_changes;
-    const estimateText = formatDuration(estimateApplySeconds(preview.summary.new_count, preview.summary.changed_count));
+    // Walk cost, shared with the handleApply seed (previewApplySeconds) so the
+    // approved number equals the run's seed. Delta-only pricing here read "~2 min"
+    // for a resume whose apply walked ~3100 items.
+    const estimateText = formatDuration(previewApplySeconds(preview.summary));
     syncBody = (
       <>
         <PanelSectionRow>
