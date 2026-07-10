@@ -718,6 +718,38 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
     plugin.onDismount();
   });
 
+  it("drives terminal teardown from sync_complete even if no stage:done frame follows", async () => {
+    // The on-device hang: the apply left the store on the optimistic "applying"
+    // frame, sync_complete arrived, but the separate backend stage:"done"
+    // sync_progress frame never did — so the QAM stayed stuck on "Applying".
+    // sync_complete alone must flip the store to a terminal stage.
+    const plugin = pluginFactory();
+    setSyncProgress({ running: true, stage: "applying", message: "Applying changes..." });
+
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", { platform_app_ids: {}, total_games: 42 });
+    });
+    await flush();
+
+    expect(getSyncProgress().running).toBe(false);
+    expect(getSyncProgress().stage).toBe("done");
+    plugin.onDismount();
+  });
+
+  it("flips the store to a cancelled stage when sync_complete is cancelled", async () => {
+    const plugin = pluginFactory();
+    setSyncProgress({ running: true, stage: "applying", message: "Applying changes..." });
+
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", { platform_app_ids: {}, total_games: 5, cancelled: true });
+    });
+    await flush();
+
+    expect(getSyncProgress().running).toBe(false);
+    expect(getSyncProgress().stage).toBe("cancelled");
+    plugin.onDismount();
+  });
+
   it("reports 'X added, Y removed' when both are non-zero (ignores total_games)", async () => {
     const plugin = pluginFactory();
 

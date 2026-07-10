@@ -328,6 +328,16 @@ export default definePlugin(() => {
       body = summary ? `Sync complete — ${summary}.` : "Library up to date.";
     }
     toaster.toast({ title: "RomM Sync", body });
+
+    // Drive the terminal UI teardown from ``sync_complete`` — the guaranteed
+    // terminal signal. The backend ALSO emits a separate stage:"done"/"cancelled"
+    // sync_progress frame, but that second frame can be dropped or raced (e.g. a
+    // failure in the post-complete bound-count read between the two emits),
+    // leaving the QAM stuck on the optimistic "Applying" frame. Flip the store to
+    // a terminal stage here (merge — keeps the fine fields) so MainPage's
+    // onSyncProgressChange tears the in-progress UI down regardless.
+    updateSyncProgress({ running: false, stage: data.cancelled ? "cancelled" : "done" });
+
     // Defensive reset; sync_plan also resets at the start of the next run.
     resetSyncDelta();
 
