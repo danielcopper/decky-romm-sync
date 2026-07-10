@@ -650,12 +650,19 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // The stamp/chunk sync model makes every re-sync an effective resume: a
   // cancelled or interrupted run's committed chunks survive on disk, so the next
   // run's incremental skip picks up where it stopped. ``last_attempt`` is
-  // non-null exactly when the newest terminal run did NOT complete, so surface it
-  // as "Resume Sync" — the button says what the run will actually do. "errored"
+  // non-null exactly when the newest terminal run did NOT complete. "errored"
   // stays "Sync Library": an errored run often fails before applying anything
   // (e.g. a config error), so "resume" isn't the right mental model. A completed
   // sync clears last_attempt on the stats refresh, flipping the label back.
-  const canResume = stats?.last_attempt?.status === "interrupted" || stats?.last_attempt?.status === "cancelled";
+  //
+  // But "resume" only holds while partial progress actually exists on disk. If
+  // the user removed all shortcuts after an incomplete run (e.g. DangerZone
+  // "remove all"), there are zero bound shortcuts and the next run is a full
+  // fresh import — nothing to resume — so the button must honestly read "Sync
+  // Library" again. ``stats.roms`` is the bound-shortcut count (registry-derived).
+  const incompleteAttempt =
+    stats?.last_attempt?.status === "interrupted" || stats?.last_attempt?.status === "cancelled";
+  const canResume = incompleteAttempt && (stats?.roms ?? 0) > 0;
   const syncButtonLabel = canResume ? "Resume Sync" : "Sync Library";
 
   if (versionError) {

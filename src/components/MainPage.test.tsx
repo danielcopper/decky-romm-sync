@@ -1857,9 +1857,11 @@ describe("MainPage", () => {
   });
 
   describe("sync button label (resume vs fresh)", () => {
-    it("reads 'Resume Sync' when the newest attempt was interrupted (partial progress on disk)", async () => {
+    it("reads 'Resume Sync' when the newest attempt was interrupted with bound shortcuts on disk", async () => {
+      // roms > 0 = partial progress actually exists to resume.
       vi.mocked(backend.getSyncStats).mockResolvedValue({
         ...defaultStats(),
+        roms: 42,
         last_attempt: { finished_at: "2026-06-01T17:48:00", status: "interrupted" },
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
@@ -1868,15 +1870,31 @@ describe("MainPage", () => {
       expect(buttonByExactText(container, "Sync Library")).toBeNull();
     });
 
-    it("reads 'Resume Sync' when the newest attempt was cancelled", async () => {
+    it("reads 'Resume Sync' when the newest attempt was cancelled with bound shortcuts on disk", async () => {
       vi.mocked(backend.getSyncStats).mockResolvedValue({
         ...defaultStats(),
+        roms: 42,
         last_attempt: { finished_at: "2026-06-01T17:48:00", status: "cancelled" },
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
       expect(buttonByExactText(container, "Resume Sync")).not.toBeNull();
       expect(buttonByExactText(container, "Sync Library")).toBeNull();
+    });
+
+    it("reads 'Sync Library' when an interrupted attempt left ZERO bound shortcuts (all removed — nothing to resume)", async () => {
+      // The regression: after an interrupted run the user removed every shortcut
+      // (DangerZone "remove all"), so roms is 0 — the next run is a full fresh
+      // import, and the label must not falsely promise a resume.
+      vi.mocked(backend.getSyncStats).mockResolvedValue({
+        ...defaultStats(),
+        roms: 0,
+        last_attempt: { finished_at: "2026-06-01T17:48:00", status: "interrupted" },
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
+      expect(buttonByExactText(container, "Resume Sync")).toBeNull();
     });
 
     it("keeps 'Sync Library' when the newest attempt errored (resume isn't the model)", async () => {
@@ -1927,6 +1945,7 @@ describe("MainPage", () => {
       vi.mocked(backend.getSyncStats)
         .mockResolvedValueOnce({
           ...defaultStats(),
+          roms: 42,
           last_sync: null,
           last_attempt: { finished_at: "2026-06-01T17:48:00", status: "interrupted" },
         })
