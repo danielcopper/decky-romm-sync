@@ -909,9 +909,9 @@ class TestFetchPlatformUnit:
     async def test_skips_when_registry_matches_count(self, plugin, fake_romm_api):
         _use_fake_romm(plugin, fake_romm_api)
         # No ROMs seeded on the fake; the platform's listing reports zero
-        # updates after last_sync so the incremental-skip path fires.
+        # updates after the completion stamp so the incremental-skip path fires.
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
-        _seed_completed_run(plugin, at="2025-01-01T00:00:00Z")
+        _seed_platform_stamp(plugin, "n64", at="2025-01-01T00:00:00Z", rom_count=2)
         _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="A", fs_name="a.z64")
         _seed_rom_row(plugin, 11, app_id=1011, platform_slug="n64", name="B", fs_name="b.z64")
 
@@ -1281,7 +1281,7 @@ class TestDoSyncPerUnit:
         _use_fake_romm(plugin, fake_romm_api)
 
         # roms matches platform count + zero updates → incremental skip.
-        _seed_completed_run(plugin, at="2025-01-01T00:00:00Z")
+        _seed_platform_stamp(plugin, "n64", at="2025-01-01T00:00:00Z", rom_count=1)
         _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="A", fs_name="a.z64")
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
         plugin.settings["enabled_platforms"] = {"1": True}
@@ -1339,6 +1339,7 @@ class TestDoSyncPerUnit:
         # rom_id 10 is the live N64 ROM (synced this run). rom_id 99 is a leftover
         # from a now-disabled platform — present in roms but in no enabled unit.
         _seed_completed_run(plugin, at="2025-01-01T00:00:00Z")
+        _seed_platform_stamp(plugin, "n64", at="2025-01-01T00:00:00Z", rom_count=1)
         _seed_rom_row(plugin, 10, app_id=1000, platform_slug="n64", name="A", fs_name="a.z64")
         _seed_rom_row(plugin, 99, app_id=9900, platform_slug="gba", name="Z", fs_name="z.gba")
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
@@ -1384,6 +1385,7 @@ class TestDoSyncPerUnit:
         _use_fake_romm(plugin, fake_romm_api)
 
         _seed_completed_run(plugin, at="2025-01-01T00:00:00Z")
+        _seed_platform_stamp(plugin, "n64", at="2025-01-01T00:00:00Z", rom_count=1)
         _seed_rom_row(plugin, 10, app_id=1000, platform_slug="n64", name="A", fs_name="a.z64")
         _seed_rom_row(plugin, 99, app_id=9900, platform_slug="gba", name="Z", fs_name="z.gba")
         _seed_rom_row(plugin, 77, app_id=None, platform_slug="snes", name="Y", fs_name="y.sfc")
@@ -1743,6 +1745,7 @@ class TestDoSyncPerUnit:
         plugin.settings["enabled_collections"] = {"user": {"7": True}}
 
         _seed_completed_run(plugin, at="2025-01-01T00:00:00Z")
+        _seed_platform_stamp(plugin, "n64", at="2025-01-01T00:00:00Z", rom_count=2)
         # Install first so the binding survives the _seed_rom_row overwrite.
         _seed_install(plugin, 10, file_path="/roms/n64/zelda_usa.z64", platform_slug="n64")
         _seed_rom_row(
@@ -3514,7 +3517,7 @@ class TestPerUnitMetadataStamping:
         _use_fake_romm(plugin, fake_romm_api)
 
         # roms matches platform rom_count + zero updates → incremental skip.
-        _seed_completed_run(plugin, at="2025-01-01T00:00:00Z")
+        _seed_platform_stamp(plugin, "n64", at="2025-01-01T00:00:00Z", rom_count=1)
         _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="A", fs_name="a.z64")
 
         commit_mock = AsyncMock()

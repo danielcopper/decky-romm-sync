@@ -339,12 +339,12 @@ class TestIncrementalSkipGroupParity:
     async def test_skips_when_all_persisted_rows_match_server_count(self, plugin, fake_romm_api):
         _wire_fake(plugin, fake_romm_api)
         uow = plugin._uow
-        _seed_completed_run(uow)
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=3)
         # A 3-sibling group: one bound representative + two unbound siblings.
         _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
         _seed_persisted_rom(uow, 11, app_id=None, group_key="igdb:100:1")
         _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:100:1")
-        # No server rows updated after last_sync → delta total 0. RomM's rom_count
+        # No server rows updated after the stamp → delta total 0. RomM's rom_count
         # (all siblings) matches the 3 persisted rows → skip. Under the old
         # bound-only count this platform full-fetched forever.
         unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=3)
@@ -435,7 +435,7 @@ class TestIncrementalSkipZeroBoundRows:
         """Guard is scoped to zero bindings: one surviving shortcut still skips."""
         _wire_fake(plugin, fake_romm_api)
         uow = plugin._uow
-        _seed_completed_run(uow)
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=3)
         # One bound representative survives + two unbound siblings → registry_count > 0.
         _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
         _seed_persisted_rom(uow, 11, app_id=None, group_key="igdb:100:1")
@@ -551,11 +551,13 @@ class TestIncrementalSkipFromPlatformStamp:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_no_stamp_falls_back_to_completed_run(self, plugin, fake_romm_api):
-        """Absent a stamp, the skip is unchanged: it rides the completed-run last_sync.
+    async def test_no_stamp_never_skips_even_with_completed_run(self, plugin, fake_romm_api):
+        """The stamp is the SOLE skip authority: no stamp → full fetch, run history irrelevant.
 
-        Asserts the fetcher sent the completed run's ``finished_at`` as the delta
-        reference — the pre-ADR-0022 behavior is preserved when no stamp exists.
+        A completed run alone cannot vouch for a platform's completeness — its
+        shortcuts may have been locally removed and only partially re-applied
+        since (the #1025 silent-gap scenario). With a completed run seeded but
+        no stamp, the skip must NOT fire and no delta probe is sent.
         """
         _wire_fake(plugin, fake_romm_api)
         uow = plugin._uow
@@ -565,10 +567,9 @@ class TestIncrementalSkipFromPlatformStamp:
 
         result = await plugin._sync_service._fetcher._try_unit_incremental_skip(unit)
 
-        assert result is not None
-        assert {r["id"] for r in result} == {10}
+        assert result is None
         delta_calls = [c for c in fake_romm_api.call_log if c[0] == "list_roms_updated_after"]
-        assert delta_calls[-1][1][1] == "2025-01-01T00:00:00"  # updated_after == completed-run last_sync
+        assert not delta_calls  # no stamp → no probe; the guard rejects before any server call
 
 
 class TestStaleStampPartialGapRegression:
@@ -845,7 +846,7 @@ class TestFetchProgressNarration:
 
         _wire_fake(plugin, fake_romm_api)
         uow = plugin._uow
-        _seed_completed_run(uow)
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=1)
         _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
         decky.emit.reset_mock()
 

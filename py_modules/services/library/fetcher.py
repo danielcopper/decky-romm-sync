@@ -456,18 +456,17 @@ class LibraryFetcher:
     ) -> tuple[str | None, int | None, list[dict[str, Any]], int, bool]:
         """Read the incremental-skip baseline for *platform_slug* from SQLite.
 
-        Returns ``(effective_last_sync, stamp_rom_count, reconstructed_roms,
+        Returns ``(stamp_completed_at, stamp_rom_count, reconstructed_roms,
         persisted_count, needs_backfill)``:
 
-        * ``effective_last_sync`` — the platform's own completion stamp
-          (``PlatformSyncState.completed_at``) when one exists, else the
-          ``finished_at`` of the newest completed ``SyncRun`` (the library-wide
-          ``last_sync``). The per-platform stamp lets a platform skip even when
-          the run that synced it was cancelled/crashed before completing, so the
-          library-wide ``last_sync`` never advanced (ADR-0022 / #1025).
-        * ``stamp_rom_count`` — the server ROM count captured when the platform
-          was stamped, or ``None`` when there is no stamp. A server-side count
-          change since the stamp invalidates the skip (checked by the caller).
+        * ``stamp_completed_at`` / ``stamp_rom_count`` — the platform's
+          completion stamp (``PlatformSyncState``), or ``None``/``None`` when
+          there is no stamp. The stamp is the **sole** skip authority
+          (ADR-0022): it exists iff the platform's most recent apply attempt
+          ran to completion, a property no run-scoped ``last_sync`` can carry —
+          a completed run says nothing about a platform whose shortcuts were
+          later removed locally and only partially re-applied before a crash.
+          No stamp means no skip, whatever the run history says.
         * ``reconstructed_roms`` — the platform's **bound** ``roms`` rows shaped
           like a RomM list response (thin — no ``metadatum``, so the skip-guard
           keeps them out of the metadata stamp). This is the shortcut set the
@@ -483,10 +482,8 @@ class LibraryFetcher:
         """
         with self._uow_factory() as uow:
             stamp = uow.platform_sync_state.get(platform_slug)
-            latest = uow.sync_runs.get_latest_completed()
-            last_sync = latest.finished_at if latest is not None else None
             all_rows = list(uow.roms.iter_by_platform(platform_slug))
-        effective_last_sync = stamp.completed_at if stamp is not None else last_sync
+        stamp_completed_at = stamp.completed_at if stamp is not None else None
         stamp_rom_count = stamp.rom_count if stamp is not None else None
         reconstructed = [
             {
@@ -503,7 +500,7 @@ class LibraryFetcher:
             if rom.shortcut_app_id is not None
         ]
         needs_backfill = any(rom.sibling_group_key is None for rom in all_rows)
-        return effective_last_sync, stamp_rom_count, reconstructed, len(all_rows), needs_backfill
+        return stamp_completed_at, stamp_rom_count, reconstructed, len(all_rows), needs_backfill
 
     @staticmethod
     def _decorate_reconstructed(
@@ -529,17 +526,20 @@ class LibraryFetcher:
 
         Returns the roms-reconstructed ROM list (the platform's bound rows =
         its shortcuts) when the platform is unchanged: the server reports zero
-        rows updated after the platform's ``effective_last_sync`` AND the unit's
+        rows updated after the platform's completion stamp AND the unit's
         ``rom_count`` matches the count of ALL persisted rows for the platform.
-        The time reference is the platform's own completion stamp
-        (``PlatformSyncState``) when present, else the newest completed
-        ``SyncRun``'s ``last_sync`` — so a platform whose sync completed inside a
-        run that was later cancelled/crashed still skips (ADR-0022 / #1025).
+        The stamp (``PlatformSyncState``) is the **sole** skip authority — it
+        exists iff the platform's most recent apply attempt ran to completion
+        (cleared at apply start and by local removals, rewritten by the final
+        chunk; ADR-0022). A completed-run ``last_sync`` is deliberately NOT a
+        fallback: it cannot see a locally-removed-then-partially-reapplied
+        platform, so trusting it can skip a platform with missing shortcuts.
         Group-aware sync persists every sibling (ADR-0021), so the count compares
         against all persisted rows — not the bound representatives — restoring
         skip parity on platforms that hold sibling groups. Returns ``None`` to
-        fall through to a full paginated fetch — no persisted rows, no time
-        reference at all, an un-backfilled row, a stamped ROM count that no
+        fall through to a full paginated fetch — no stamp (including every
+        platform's first sync after this contract shipped — a one-time re-walk),
+        no persisted rows, an un-backfilled row, a stamped ROM count that no
         longer matches the server, the delta check raised, or the server reports
         changes.
         """
@@ -547,7 +547,7 @@ class LibraryFetcher:
         platform_slug = unit.slug
 
         (
-            effective_last_sync,
+            stamp_completed_at,
             stamp_rom_count,
             reconstructed,
             persisted_count,
@@ -555,7 +555,10 @@ class LibraryFetcher:
         ) = await self._loop.run_in_executor(None, self._read_incremental_baseline, platform_slug)
         registry_count = len(reconstructed)
 
-        if not effective_last_sync or persisted_count == 0:
+        if not stamp_completed_at or stamp_rom_count is None:
+            self._logger.info(f"Per-unit fetch {platform_name}: no completion stamp — full fetch")
+            return None
+        if persisted_count == 0:
             return None
 
         # A skip's contract is "the local mirror already matches the server", so
@@ -582,13 +585,11 @@ class LibraryFetcher:
             self._logger.info(f"Per-unit fetch {platform_name}: version-metadata backfill needed — full fetch")
             return None
 
-        # Stamp-count guard (ADR-0022): when the skip is driven by a per-platform
-        # completion stamp, the server ROM count captured at stamp time must still
-        # equal the unit's current ``rom_count``. A server-side count change since
-        # the stamp invalidates it — the platform must re-fetch to reconcile.
-        # ``stamp_rom_count is None`` means there is no stamp (the skip is riding
-        # the completed-run ``last_sync``), so this guard is a no-op there.
-        if stamp_rom_count is not None and stamp_rom_count != unit.rom_count:
+        # Stamp-count guard (ADR-0022): the server ROM count captured at stamp
+        # time must still equal the unit's current ``rom_count``. A server-side
+        # count change since the stamp invalidates it — the platform must
+        # re-fetch to reconcile.
+        if stamp_rom_count != unit.rom_count:
             self._logger.info(
                 f"Per-unit fetch {platform_name}: stamped rom_count {stamp_rom_count} "
                 f"!= server {unit.rom_count} — full fetch"
@@ -603,7 +604,7 @@ class LibraryFetcher:
                 None,
                 self._romm_api.list_roms_updated_after,
                 int(unit.id),
-                effective_last_sync,
+                stamp_completed_at,
                 1,
                 0,
             )

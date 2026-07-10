@@ -80,12 +80,18 @@ mid-unit failure forfeits only the in-flight chunk.**
   cancel are additionally stamped complete (`PlatformSyncState`, #1025) in the same write UoW as that final chunk, so
   the next run's incremental-skip gate skips them wholesale rather than re-walking every already-applied game through
   CEF — even though the cancelled run never completed its `SyncRun` and so never advanced the library-wide `last_sync`.
-- **The stamp's contract is `stamp exists ⟺ the platform's most recent apply attempt ran to completion`.** Two rules
-  keep it true. (1) The stamp is **cleared at a platform unit's apply start** (in `_sync_one_unit`, once the fetch has
-  succeeded and the apply is about to emit its first chunk) and re-written only by that unit's final chunk, so an apply
-  interrupted by a crash / cancel / heartbeat-timeout before the final chunk leaves **no** stamp — never a stale one
-  from a prior run. (2) The **local destructive flows** invalidate the stamp of every platform whose shortcuts they
-  unbind: the DangerZone remove-all and per-platform removals (both via `report_removal_results`) and the
+- **The stamp is the sole skip authority; its contract is
+  `stamp exists ⟺ the platform's most recent apply attempt ran
+  to completion`.** A completed run's library-wide
+  `last_sync` is deliberately **not** a fallback for the skip: a run-scoped timestamp cannot see a platform whose
+  shortcuts were locally removed and only partially re-applied since, so trusting it can silently skip a platform with
+  missing shortcuts — the same gap in a second coat. No stamp means a full fetch; installations from before this
+  contract carry no stamps, so their first sync re-walks once (update-path cheap) and stamps everything it completes.
+  Two rules keep the contract true. (1) The stamp is **cleared at a platform unit's apply start** (in `_sync_one_unit`,
+  once the fetch has succeeded and the apply is about to emit its first chunk) and re-written only by that unit's final
+  chunk, so an apply interrupted by a crash / cancel / heartbeat-timeout before the final chunk leaves **no** stamp —
+  never a stale one from a prior run. (2) The **local destructive flows** invalidate the stamp of every platform whose
+  shortcuts they unbind: the DangerZone remove-all and per-platform removals (both via `report_removal_results`) and the
   Steam-UI-deletion reconcile (`reconcile_live_shortcuts`) delete the touched platforms' stamps in the same write UoW as
   the unbind. Both rules exist because unbinding keeps the `roms` row (ADR-0007), so a platform's persisted-row count is
   unchanged and a surviving stamp with a matching `rom_count` would let the skip gate skip a half-mirrored platform and
