@@ -187,3 +187,21 @@ class LibrarySyncStateBox:
     def is_cancelling(self) -> bool:
         """True while a cancel has been requested for the in-flight run."""
         return self.sync_state is SyncState.CANCELLING
+
+    def clear_active_unit(self) -> None:
+        """Tear down the active unit's in-flight dispatch state.
+
+        Resets the chunk-coordination quintet: the emitted + all-ROM staging
+        (``pending_sync`` / ``pending_all_roms``), the ack event
+        (``unit_complete_event``), and the unit + chunk identity
+        (``active_unit_id`` / ``active_chunk_index``). The single teardown for a
+        unit that finished, was cancelled, or whose inter-chunk window closed.
+        NOT called on the heartbeat-timeout branch, which deliberately KEEPS this
+        staging so a late ``report_unit_results`` can still commit the delivered
+        bindings (#1052).
+        """
+        self.pending_sync = {}
+        self.pending_all_roms = {}
+        self.unit_complete_event = None
+        self.active_unit_id = None
+        self.active_chunk_index = None

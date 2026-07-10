@@ -518,11 +518,8 @@ class SyncReporter:
             await self.commit_unit_results(dict(rom_id_to_app_id), box.pending_unit_roms)
             box.unit_abandoned = False
             box.pending_unit_roms = []
-            box.pending_sync = {}
-            box.pending_all_roms = {}
             box.last_unit_results = None
-            box.active_unit_id = None
-            box.active_chunk_index = None
+            box.clear_active_unit()
 
         self._logger.info(f"Unit results acknowledged: {len(rom_id_to_app_id)} shortcuts")
         return {"success": True, "count": len(rom_id_to_app_id)}

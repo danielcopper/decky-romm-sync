@@ -967,11 +967,7 @@ class SyncOrchestrator:
             # whose ack the backend then rejects, orphaning those shortcuts until
             # the next sync. Same cleanup as the mid-wait user-cancel branch below.
             if box.is_cancelling():
-                box.pending_sync = {}
-                box.pending_all_roms = {}
-                box.unit_complete_event = None
-                box.active_unit_id = None
-                box.active_chunk_index = None
+                box.clear_active_unit()
                 return applied_count
 
             chunk_rows = [roms_by_id[rid] for rid in chunk.rom_ids if rid in roms_by_id]
@@ -1012,11 +1008,7 @@ class SyncOrchestrator:
                     # User cancel: this chunk is intentionally discarded. Drop the
                     # whole-unit staging, null the event, and clear the unit +
                     # chunk identity so a stray late ack can't commit it.
-                    box.pending_sync = {}
-                    box.pending_all_roms = {}
-                    box.unit_complete_event = None
-                    box.active_unit_id = None
-                    box.active_chunk_index = None
+                    box.clear_active_unit()
                 else:
                     # Heartbeat timeout: the frontend already created this chunk's
                     # Steam shortcuts and will still fire its late
@@ -1064,11 +1056,7 @@ class SyncOrchestrator:
             await self._reporter.get().commit_unit_results(applied, chunk_rows, platform_stamp=platform_stamp)
             applied_count += len(applied)
 
-        box.pending_sync = {}
-        box.pending_all_roms = {}
-        box.unit_complete_event = None
-        box.active_unit_id = None
-        box.active_chunk_index = None
+        box.clear_active_unit()
         return applied_count
 
     async def _sync_platform_unit(

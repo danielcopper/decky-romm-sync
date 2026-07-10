@@ -9,6 +9,8 @@ a rapid Sync/Cancel can't leave a half-reset run id (#1202).
 
 from __future__ import annotations
 
+import asyncio
+
 from domain.sync_state import SyncState
 from services.library._state import LibrarySyncStateBox
 
@@ -119,6 +121,45 @@ class TestChunkCoordination:
         treats ``None`` as 'no active chunk' and rejects any ack (#1025)."""
         box = LibrarySyncStateBox()
         assert box.active_chunk_index is None
+
+    def test_clear_active_unit_resets_only_the_quintet(self):
+        """clear_active_unit tears down exactly the chunk-coordination quintet and
+        nothing else — the heartbeat-timeout-only fields
+        (``unit_abandoned`` / ``pending_unit_roms`` / ``last_unit_results``), the
+        run-interrupted flag, and the run-lifecycle pair survive so the late-ack
+        path can still commit the delivered bindings (#1052)."""
+        box = LibrarySyncStateBox()
+        # The quintet clear_active_unit owns …
+        box.pending_sync = {1: {"id": 1}}
+        box.pending_all_roms = {1: {"id": 1}, 2: {"id": 2}}
+        box.unit_complete_event = asyncio.Event()
+        box.active_unit_id = 7
+        box.active_chunk_index = 3
+        # … and every field it must leave untouched.
+        box.unit_abandoned = True
+        box.pending_unit_roms = [{"id": 2}]
+        box.last_unit_results = {"1": 1001}
+        box.run_interrupted = True
+        box.committed_app_ids = {1001}
+        box.current_sync_id = "run-1"
+        box.sync_state = SyncState.CANCELLING
+
+        box.clear_active_unit()
+
+        # Quintet reset.
+        assert box.pending_sync == {}
+        assert box.pending_all_roms == {}
+        assert box.unit_complete_event is None
+        assert box.active_unit_id is None
+        assert box.active_chunk_index is None
+        # Everything else survives.
+        assert box.unit_abandoned is True
+        assert box.pending_unit_roms == [{"id": 2}]
+        assert box.last_unit_results == {"1": 1001}
+        assert box.run_interrupted is True
+        assert box.committed_app_ids == {1001}
+        assert box.current_sync_id == "run-1"
+        assert box.sync_state is SyncState.CANCELLING
 
 
 class TestIsInFlight:
