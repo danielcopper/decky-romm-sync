@@ -268,15 +268,20 @@ edits the `shortcuts.vdf` `icon` field — Steam is memory-authoritative and clo
 shortcut must go through `SteamClient` (see
 [shortcuts.vdf is memory-authoritative](#shortcutsvdf-is-memory-authoritative)).
 
-Covers are written into the grid dir server-side while the sync runs, but Steam resolved each fresh shortcut's tile to
-the default capsule at creation and does not re-check the grid dir in-session — so a newly-written `{app_id}p.png` stays
-unseen until the library UI is told to re-resolve it. After each run the frontend's `sync_complete` handler
-(`onSyncComplete`) fires `SteamClient.Apps.ReportLibraryAssetCacheMiss(appId, 0)` — Steam's own per-asset re-resolve
-signal (assetType 0 = capsule/cover), which its UI otherwise calls only when a library image errors — for every shortcut
+Covers are written into the grid dir server-side while the sync runs, but Steam resolves each fresh shortcut's tile to
+the default capsule at creation and caches that resolution outside the JS context — a JS-context reload does not
+re-resolve it; only a full client restart does — so a newly-written `{app_id}p.png` stays unseen until the tile is
+cache-busted. Steam builds the library tile's image URL as `/customimage/{appid}?v={mtime}`, keyed on the app overview's
+`rt_custom_image_mtime` field (the value a client restart normally stamps). After each run the frontend's
+`sync_complete` handler (`onSyncComplete`) stamps that field itself —
+`appStore.GetAppOverviewByAppID(appId).rt_custom_image_mtime = Math.floor(Date.now() / 1000)` — for every shortcut
 created this run (the created-appId set from `syncDeltaStore`, read before the per-run delta is reset; cancelled runs
-nudge too, since their committed chunks also wrote covers). The call is fail-soft: a Steam build without the method, or
-a throwing call, is summarized in a single log line and never breaks the sync teardown. Covers on shortcuts that already
-existed, and any that the nudge misses, are still picked up on the next client restart.
+stamp too, since their committed chunks also wrote covers). The tile picks the cover up on its next render — scrolling
+the row out and back, or revisiting the library — with no forced global re-render. The stamp is fail-soft: a missing
+overview or a throwing call is summarized in a single log line (`N stamped, M no overview`) and never breaks the sync
+teardown. Covers on shortcuts that already existed, and any the stamp misses, are still picked up on the next client
+restart. (An earlier version fired `SteamClient.Apps.ReportLibraryAssetCacheMiss(appId, 0)`, Steam's own per-asset
+re-resolve signal, but that is a no-op for a non-erroring default tile — on-device 2026-07-10.)
 
 ## Key Files
 

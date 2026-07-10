@@ -338,31 +338,37 @@ export default definePlugin(() => {
     // onSyncProgressChange tears the in-progress UI down regardless.
     updateSyncProgress({ running: false, stage: data.cancelled ? "cancelled" : "done" });
 
-    // Nudge Steam's live library UI to re-resolve each freshly-created
-    // shortcut's cover. Covers are written server-side at each chunk's commit
-    // (ADR-0021 lazy model), but Steam resolved every new shortcut's tile to the
-    // default capsule at creation and never re-checks the grid dir in-session —
-    // so the covers sit on disk unseen until a client restart.
-    // ReportLibraryAssetCacheMiss(appId, 0) is Steam's own per-asset re-resolve
-    // signal (assetType 0 = capsule/cover), which its UI fires whenever a library
-    // image errors. Read the created set BEFORE the resetSyncDelta() below.
-    // Cancelled runs nudge too — their committed chunks also wrote covers.
-    // Fail-soft: a missing or throwing API must never break the teardown/toast
-    // above (the signal is UNVERIFIED for a non-erroring default tile — the next
-    // on-device sync is the check; hence the greppable summary line).
+    // Make each freshly-created shortcut's cover appear on its tile's next render
+    // without a client restart. Covers are written server-side at each chunk's
+    // commit (ADR-0021 lazy model), but Steam resolves a fresh shortcut's tile to
+    // the default capsule at creation and caches that resolution OUTSIDE the JS
+    // context — a JS-context reload does NOT re-resolve it; only a full client
+    // restart does. The tile URL is `/customimage/{appid}?v={mtime}`, keyed on the
+    // overview's `rt_custom_image_mtime` (the field a restart normally stamps), so
+    // stamping it ourselves per created appId is the per-app cache-buster: the tile
+    // picks the cover up on its NEXT render (scrolling the row out/in, revisiting
+    // the library) — no forced global re-render. Read the created set BEFORE the
+    // resetSyncDelta() below; cancelled runs stamp too (their committed chunks also
+    // wrote covers). ReportLibraryAssetCacheMiss(appId, 0) was tried and is a no-op
+    // for non-erroring default tiles (on-device 2026-07-10). Fail-soft: a missing
+    // overview or a throw must never break the teardown/toast above.
     const createdAppIds = getCreatedAppIds();
     try {
-      const canNudge = typeof SteamClient.Apps.ReportLibraryAssetCacheMiss === "function";
+      const mtime = Math.floor(Date.now() / 1000);
+      let stamped = 0;
+      let noOverview = 0;
       for (const appId of createdAppIds) {
-        SteamClient.Apps.ReportLibraryAssetCacheMiss?.(appId, 0);
+        const overview = appStore.GetAppOverviewByAppID(appId);
+        if (overview) {
+          overview.rt_custom_image_mtime = mtime;
+          stamped++;
+        } else {
+          noOverview++;
+        }
       }
-      logInfo(
-        canNudge
-          ? `[FE] cover cache-miss nudge: ${createdAppIds.length} appIds`
-          : `[FE] cover cache-miss nudge: API unavailable, ${createdAppIds.length} appIds skipped`,
-      );
+      logInfo(`[FE] cover mtime nudge: ${stamped} stamped, ${noOverview} no overview`);
     } catch (e) {
-      logError(`[FE] cover cache-miss nudge failed for ${createdAppIds.length} appIds: ${e}`);
+      logError(`[FE] cover mtime nudge failed for ${createdAppIds.length} appIds: ${e}`);
     }
 
     // Defensive reset; sync_plan also resets at the start of the next run.

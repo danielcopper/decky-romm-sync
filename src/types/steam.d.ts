@@ -15,13 +15,6 @@ declare var SteamClient: {
       assetType: number,
     ): Promise<void>;
     ClearCustomArtworkForApp(appId: number, assetType: number): Promise<void>;
-    // Force Steam's live library UI to re-resolve one app's library asset from
-    // the grid dir. Steam's own UI calls this whenever a library image errors
-    // (404) to retry the asset; the plugin fires it (assetType 0 = capsule/cover)
-    // for freshly-synced shortcuts so a cover written to the grid dir is picked
-    // up in-session instead of only after a client restart. Optional — absent on
-    // older Steam builds, so the cover-nudge guards for it and fails soft.
-    ReportLibraryAssetCacheMiss?(appId: number, assetType: number): void;
     // The runtime may invoke the callback with no details before the app's
     // data is loaded — `details` is genuinely absent on early fires.
     RegisterForAppDetails(
@@ -74,6 +67,11 @@ interface SteamAppOverview {
   minutes_playtime_last_two_weeks?: number;
   rt_last_time_played?: number;
   rt_last_time_played_or_installed?: number;
+  // Epoch-seconds cache-buster for the library tile's custom-image URL
+  // (`/customimage/{appid}?v={rt_custom_image_mtime}`). A full client restart
+  // normally stamps it; the cover nudge stamps it per created shortcut so a
+  // freshly-written grid cover is picked up on the tile's next render.
+  rt_custom_image_mtime?: number;
   m_setStoreCategories?: Set<number>;
   local_per_client_data?: SteamPerClientData;
   per_client_data?: SteamPerClientData[];
