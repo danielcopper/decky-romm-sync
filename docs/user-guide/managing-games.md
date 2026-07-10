@@ -39,14 +39,17 @@ icon), with markers for:
   and, failing that, your [Preferred region](configuration.md) setting. It's a suggestion, not a lock.
 - **Downloaded** — a version you already have on disk.
 - **not synced** — a version RomM has that isn't in your local library yet. Selecting it records it on the spot — unless
-  it's dimmed as a separate game entry (see below).
+  it's dimmed as a conflicting metadata match (see below).
 
-Some rows are **dimmed and can't be selected**, labelled _"separate game entry in RomM"_. RomM sometimes lists a version
-as a sibling because it shares one metadata id, even though its **primary match differs** — so RomM really treats it as
-its own separate game entry. This holds whether or not the version is already in your library: a dump you've already
-synced under a different match, and a not-yet-synced version whose primary id differs, are both shown (so you know they
-exist) but can't be switched to — either would move the shortcut onto a different game. To make one selectable, fix its
-metadata match in RomM so both share the same primary id, then re-sync.
+Some rows are **dimmed and can't be selected**, labelled _"conflicting metadata match in RomM"_. Versions of one game
+are grouped by the metadata match they agree on — even when their coverage is uneven. A US and a EU dump that scrapers
+matched differently (say one carries an IGDB id, the other only a ScreenScraper id) still group together and switch
+freely, as long as the highest-priority match they share agrees. A row is dimmed only when its match genuinely
+**conflicts** — it carries a _different_ id at that shared match, so RomM really treats it as a different game. This
+holds whether or not the version is already in your library: a dump you've already synced under a conflicting match, and
+a not-yet-synced version whose match conflicts, are both shown (so you know they exist) but can't be switched to —
+either would move the shortcut onto a different game. To make one selectable, fix its metadata match in RomM so it
+agrees with this game's, then re-sync.
 
 Selecting a different version **rebinds** the game to it: the Download button now fetches that version, the panel's
 title and Region/Languages rows update to reflect it, and its cover refreshes to the new version. The Steam shortcut

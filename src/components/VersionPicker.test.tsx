@@ -242,11 +242,11 @@ describe("VersionPicker — non-switchable rows (#1359)", () => {
     expect(laraRow).toBeTruthy();
     // …but the row is disabled and explains why.
     expect(laraRow?.getAttribute("aria-disabled")).toBe("true");
-    expect(laraRow?.textContent).toContain("separate game entry in RomM");
+    expect(laraRow?.textContent).toContain("conflicting metadata match in RomM");
     // The switchable active row is not disabled and carries no hint.
     const trRow = items.find((i) => i.textContent.includes("Tomb Raider II"));
     expect(trRow?.getAttribute("aria-disabled")).toBeNull();
-    expect(trRow?.textContent).not.toContain("separate game entry");
+    expect(trRow?.textContent).not.toContain("conflicting metadata match");
   });
 
   it("clicking a non-switchable row fires no switch and no toast", async () => {

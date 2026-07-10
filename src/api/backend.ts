@@ -357,10 +357,11 @@ export const selectDisc = callable<[number, string | null], SelectDiscResult>("s
  * persists one); `installed` marks a downloaded version; `active` is the bound
  * version the Download button fetches; `is_default` marks the version the
  * resolution chain + Preferred-region setting would pick as the default.
- * `switchable` is false for a RomM sibling that is actually a locally-synced ROM
- * under a different group key (RomM bridged two local groups on a shared metadata
- * id) — the picker lists it but disables the row, because switch_version would
- * reject it; every other row is switchable (#1359).
+ * `switchable` is false for a RomM sibling whose metadata match conflicts with
+ * this game's — a locally-synced ROM under a different group key (#1359) or a
+ * not-yet-synced sibling carrying a different id at the group's canonical source
+ * (#1360) — the picker lists it but disables the row, because switch_version would
+ * reject it; every other row is switchable (#1368).
  */
 export interface VersionInfo {
   rom_id: number;
@@ -425,7 +426,8 @@ export interface SwitchVersionUnsyncedSaves {
 
 /**
  * Other canonical `{success, reason, message}` failures — `not_found` (unknown
- * appId), `not_in_group`, `bound_elsewhere` (a grandfathered duplicate),
+ * appId), `not_in_group` (the target's metadata match conflicts with this game's),
+ * `bound_elsewhere` (a grandfathered duplicate),
  * `invalid_target` (a server-only target the aggregate rejects),
  * `download_in_progress` (a group download is running — cancel it first), or
  * `server_unreachable`. All surface via the picker's toast fallback

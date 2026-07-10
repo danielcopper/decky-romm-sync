@@ -1,0 +1,25 @@
+-- =============================================================================
+-- 011_rekey_sibling_group_key.sql — force a one-time sibling-group re-key
+-- Issue #1368 (component-based key with canonical-source agreement)
+-- =============================================================================
+--
+-- The sibling-group key derivation changed from per-ROM coalesce-first (the first
+-- non-null metadata id) to connected components over RomM's own ``sibling_roms``
+-- edges with canonical-source agreement. The two disagree whenever a game's dumps
+-- carry uneven metadata coverage (the norm for regional variants matched unevenly
+-- by scrapers) — the same game split into two groups, and the version switch was
+-- disabled with a misleading hint.
+--
+-- Existing rows still hold keys computed the old way. NULL them all so the next
+-- sync re-derives every key under the new kernel: a NULL ``sibling_group_key`` on
+-- a bound row already forces its platform's incremental-skip to fall through to a
+-- full fetch (the ``needs_backfill`` gate in fetcher.py), so one sync refetches
+-- and recomputes the whole library. NULL is a tolerated transient state on the
+-- read paths (a NULL bound key reads as a solo group in the picker; the download
+-- guards already treat it as its own group), so the window before that sync is
+-- safe — no data loss, only a re-derivation.
+--
+-- Transaction-safe DML only — the runner (adapters/sqlite_migrations.py) wraps
+-- BEGIN/COMMIT and stamps PRAGMA user_version = 11.
+-- -----------------------------------------------------------------------------
+UPDATE roms SET sibling_group_key = NULL;

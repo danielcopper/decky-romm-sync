@@ -3392,3 +3392,67 @@ class TestDownloadArtworkDelegation:
         assert is_cancelling() is False
         plugin._sync_service._box.sync_state = SyncState.CANCELLING
         assert is_cancelling() is True
+
+
+class TestComponentGroupKeyStamping:
+    """The per-unit / preview stamp of component sibling-group keys (#1368).
+
+    ``_stamp_component_group_keys`` delegates to the pure kernel and writes the
+    result back onto the raw ROM dicts before ``build_shortcuts_data`` so the whole
+    sync pipeline (shortcut build, group collapse, commit) reads the component key
+    rather than a per-ROM coalesce-first key.
+    """
+
+    @pytest.mark.asyncio
+    async def test_platform_unit_stamps_shared_component_key(self, plugin, fake_romm_api):
+        # Two dumps of one game with UNEVEN coverage — rom 10 igdb+ss, rom 11 ss
+        # only, RomM listing them as siblings. Both must persist under the SAME
+        # component key (igdb), so the ss-only dump does not split into its own
+        # group (the #1368 bug). A platform unit is a complete view → recompute.
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[
+                {"id": 10, "name": "Game (USA)", "igdb_id": 1001, "ss_id": 2002, "sibling_roms": [{"id": 11}]},
+                {"id": 11, "name": "Game (EU)", "ss_id": 2002, "sibling_roms": [{"id": 10}]},
+            ],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        with plugin._uow:
+            assert plugin._uow.roms.get(10).sibling_group_key == "igdb:1001:1"
+            assert plugin._uow.roms.get(11).sibling_group_key == "igdb:1001:1"
+
+    def test_stamp_preserves_resident_and_keys_fresh_against_resident_summaries(self, plugin):
+        # An in-unit resident (already keyed) is left untouched; a fresh member
+        # edging into it adopts its canonical summary; a fresh member edging into a
+        # DB-resident (fed via resident_keys) adopts THAT summary. The stamp mutates
+        # the raw dicts in place.
+        orch = plugin._sync_service._orchestrator
+        resident = {"id": 1, "platform_id": 57, "sibling_group_key": "igdb:100:57", "sibling_roms": [{"id": 2}]}
+        fresh_in_unit = {"id": 2, "platform_id": 57, "ss_id": 22, "sibling_roms": [{"id": 1}]}
+        fresh_vs_db = {"id": 3, "platform_id": 57, "moby_id": 9, "sibling_roms": [{"id": 99}]}
+        roms = [resident, fresh_in_unit, fresh_vs_db]
+
+        orch._stamp_component_group_keys(roms, {99: "igdb:777:57"})
+
+        assert resident["sibling_group_key"] == "igdb:100:57"
+        assert fresh_in_unit["sibling_group_key"] == "igdb:100:57"
+        assert fresh_vs_db["sibling_group_key"] == "igdb:777:57"
+
+    def test_read_resident_group_keys_filters_null_keys(self, plugin):
+        _seed_rom_row(plugin, 1, app_id=100, platform_slug="n64", sibling_group_key="igdb:5:1")
+        _seed_rom_row(plugin, 2, app_id=None, platform_slug="n64", sibling_group_key=None)
+
+        keys = plugin._sync_service._orchestrator._read_resident_group_keys()
+
+        assert keys == {1: "igdb:5:1"}

@@ -71,8 +71,9 @@ def _set_user_version(db_path: str, version: int) -> None:
 # + 003_unique_shortcut_app_id + 004_add_selected_disc
 # + 005_unconfirm_legacy_slot_confirmations + 006_native_play_sessions
 # + 007_add_last_played + 008_add_version_metadata
-# + 009_add_last_session_start_monotonic + 010_add_sibling_group_key_index).
-_SHIPPED_VERSION = 10
+# + 009_add_last_session_start_monotonic + 010_add_sibling_group_key_index
+# + 011_rekey_sibling_group_key).
+_SHIPPED_VERSION = 11
 
 # Tables after every shipped migration: the v1 set plus 006's play-session outbox.
 _SHIPPED_TABLES = _V1_TABLES | {"rom_playtime_sessions"}
@@ -649,6 +650,64 @@ class Test010SiblingGroupKeyIndex:
         finally:
             conn.close()
         assert count == 2
+
+
+class Test011RekeySiblingGroupKey:
+    """011 — NULLs every sibling_group_key so the next sync re-derives it under the
+    component kernel; the needs_backfill gate then forces a full refetch (#1368)."""
+
+    def test_nulls_all_sibling_group_keys(self, tmp_path: Path):
+        # Rows carrying old-style keys at v10 have every key NULLed by 011, so the
+        # incremental-skip's needs_backfill gate (any NULL key) forces a full
+        # refetch + recompute on the next sync.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 10)))
+        assert _user_version(db_path) == 10
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            _insert_rom(conn, 1, 5000)
+            _insert_rom(conn, 2, 6000)
+            conn.execute("UPDATE roms SET sibling_group_key = 'igdb:100:57' WHERE rom_id IN (1, 2)")
+        finally:
+            conn.close()
+
+        final_version = apply_migrations(db_path)
+        assert final_version == _SHIPPED_VERSION
+
+        conn = sqlite3.connect(db_path)
+        try:
+            keys = [row[0] for row in conn.execute("SELECT sibling_group_key FROM roms ORDER BY rom_id").fetchall()]
+        finally:
+            conn.close()
+        assert keys == [None, None]
+
+    def test_only_nulls_the_key_column_rows_survive(self, tmp_path: Path):
+        # 011 is a pure re-key — the rows and their other fields (the binding) are
+        # untouched; only sibling_group_key is cleared.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 10)))
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            _insert_rom(conn, 1, 5000)
+            conn.execute("UPDATE roms SET sibling_group_key = 'igdb:100:57', regions = '[\"USA\"]' WHERE rom_id = 1")
+        finally:
+            conn.close()
+
+        assert apply_migrations(db_path) == _SHIPPED_VERSION
+
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT rom_id, shortcut_app_id, sibling_group_key, regions FROM roms WHERE rom_id = 1"
+            ).fetchone()
+        finally:
+            conn.close()
+        # Binding + version dimensions survive; only the group key is NULLed.
+        assert row == (1, 5000, None, '["USA"]')
 
 
 def test_shipped_migrations_dir_resolves_to_real_schema():

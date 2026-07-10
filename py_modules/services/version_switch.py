@@ -165,11 +165,11 @@ class VersionSwitchService:
         server's ``sibling_roms`` add any not-yet-synced versions
         (``synced: False``). ``switchable`` is the same membership authority
         ``switch_version`` decides by (:func:`target_in_sibling_group`): a RomM
-        sibling whose group key differs from the bound group — whether already
-        synced locally under a different key (#1359) or never synced but with a
-        differing **would-be** key derived from its server metadata (#1360) — is
-        listed but ``switchable: False``, so the picker disables it instead of
-        offering a switch the backend would reject. When the server view can't be
+        sibling in a conflicting metadata match — whether already synced locally
+        under a different group key (#1359) or never synced but carrying a
+        *different* id at the bound group's canonical source (#1360) — is listed but
+        ``switchable: False``, so the picker disables it instead of offering a
+        switch the backend would reject. When the server view can't be
         fetched the local-only list is returned with the additive
         ``server_query_failed: True`` flag (partial-success carve-out) — the picker
         still works over what's synced.
@@ -332,13 +332,12 @@ class VersionSwitchService:
             detail = detail_by_id.get(rom_id)
             meta = extract_version_metadata(detail) if detail is not None else {}
             target_is_local = rom_id in stub_local_group_keys
-            # A stub already synced under a (possibly different) local key uses
-            # that key (#1359); a never-synced stub uses its WOULD-BE key — what
-            # selecting it would persist it under (``meta``'s ``sibling_group_key``,
-            # the same sync-time derivation) — so a bridged sibling in its own
-            # group is listed but not switchable (#1360). A missing detail (a
-            # transient fetch miss) yields no derivable key → non-switchable.
-            target_group_key = stub_local_group_keys.get(rom_id) if target_is_local else meta.get("sibling_group_key")
+            # A stub already synced under a (possibly different) local key is judged
+            # by key equality (#1359); a never-synced stub is judged by canonical
+            # compatibility against the bound key — its id at the bound canonical
+            # source must be absent-or-equal (its raw ``detail`` carries those ids),
+            # so a conflicting match is listed but not switchable (#1360). A missing
+            # detail (a transient fetch miss) can't be judged → non-switchable.
             entries.append(
                 {
                     "rom_id": rom_id,
@@ -352,7 +351,8 @@ class VersionSwitchService:
                     "installed": False,
                     "switchable": target_in_sibling_group(
                         bound_group_key=local.group_key,
-                        target_group_key=target_group_key,
+                        target_group_key=stub_local_group_keys.get(rom_id) if target_is_local else None,
+                        target_ids=None if target_is_local else detail,
                         target_is_local=target_is_local,
                         target_is_server_sibling=True,
                     ),
@@ -513,21 +513,24 @@ class VersionSwitchService:
                 "message": "RomM server not reachable.",
             }
 
-        # The target's WOULD-BE key — what persisting it will bind it under
-        # (extract_version_metadata is exactly what _persist_and_bind stores), so
-        # the picker's ``switchable`` flag, this guard, and the persisted row all
-        # agree: a bridged sibling in its own group is rejected here rather than
-        # binding the shortcut cross-group (#1360).
-        would_be_key = extract_version_metadata(target_dict)["sibling_group_key"]
+        # Canonical compatibility against the bound key: the target's id at the
+        # bound canonical source must be absent-or-equal (its raw ``target_dict``
+        # carries those ids). The picker's ``switchable`` flag decides the same
+        # way, so a conflicting match is rejected here rather than binding the
+        # shortcut cross-group, and a compatible one persists under the bound
+        # group's key — re-canonicalized for the whole component on the next sync
+        # (#1360, #1368).
         if not target_in_sibling_group(
             bound_group_key=ctx.group_key,
-            target_group_key=would_be_key,
+            target_ids=target_dict,
             target_is_local=False,
             target_is_server_sibling=self._is_sibling(target_dict, ctx.bound_rom_id, ctx.group_key),
         ):
             return self._not_in_group()
 
-        return await self._loop.run_in_executor(None, self._persist_and_bind, target_dict, app_id, ctx.platform_slug)
+        return await self._loop.run_in_executor(
+            None, self._persist_and_bind, target_dict, app_id, ctx.platform_slug, ctx.group_key
+        )
 
     async def _save_stranding_block(self, ctx: _SwitchContext, allow_stranded: bool) -> dict[str, Any] | None:
         """Soft-block the switch when the bound version has un-uploaded save drift.
@@ -665,7 +668,9 @@ class VersionSwitchService:
             target_installed = uow.rom_installs.get(target_rom_id) is not None
         return {"success": True, "target_installed": target_installed}
 
-    def _persist_and_bind(self, target_dict: dict[str, Any], app_id: int, fallback_platform: str) -> dict[str, Any]:
+    def _persist_and_bind(
+        self, target_dict: dict[str, Any], app_id: int, fallback_platform: str, bound_group_key: str | None
+    ) -> dict[str, Any]:
         """Persist a server-only target (server-derived facts) and bind it.
 
         Builds the ``Rom`` from the RomM detail via the shared version-metadata
@@ -678,6 +683,12 @@ class VersionSwitchService:
         a non-empty slug). A detail that the aggregate rejects (bad id, no
         resolvable slug) fails ``invalid_target`` — the target is a sibling, but
         its server payload can't become a local row.
+
+        The target adopts the **bound group's key**, not its self-computed
+        coalesce-first key: membership already proved them the same game, and the
+        next sync re-canonicalizes the whole component together. A NULL bound key
+        (an unbackfilled bound row can't summarize a group) falls back to the
+        target's own key.
         """
         meta = extract_version_metadata(target_dict)
         try:
@@ -689,7 +700,7 @@ class VersionSwitchService:
                 shortcut_app_id=None,
                 synced_at=self._clock.now().isoformat(),
                 igdb_id=target_dict.get("igdb_id"),
-                sibling_group_key=meta["sibling_group_key"],
+                sibling_group_key=bound_group_key or meta["sibling_group_key"],
                 regions=tuple(meta["regions"]),
                 languages=tuple(meta["languages"]),
                 revision=meta["revision"],
@@ -710,7 +721,7 @@ class VersionSwitchService:
             "success": False,
             "reason": "not_in_group",
             "message": (
-                "This version belongs to a different game entry in RomM — fix its metadata match to switch to it."
+                "This version's metadata match conflicts with this game's — fix the match in RomM to switch to it."
             ),
         }
 

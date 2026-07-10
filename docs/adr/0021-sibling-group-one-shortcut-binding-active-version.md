@@ -36,6 +36,16 @@ sibling nondeterministically while the remaining rows permanently read as unsync
 
 ### 1. Group identity is computed client-side, mirroring RomM's key; the fetch stays ungrouped
 
+> **Superseded by [ADR-0022](0022-component-based-sibling-group-key.md)
+> ([#1368](https://github.com/danielcopper/decky-romm-sync/issues/1368)).** The **key-derivation** decision below —
+> coalesce-first (the ROM's own first non-null metadata id) — and its premise that this "produces byte-identical group
+> membership" to RomM are reversed: the key is now a **connected component over RomM's `sibling_roms` edges**, keyed by
+> the highest-priority source the component _agrees_ on (uneven coverage merges; a genuine cross-game bridge falls
+> back). Everything else here still holds — the key is still persisted on `roms.sibling_group_key`, still scoped per
+> platform, still `romm:<id>:<platform>` for an unmatched ROM, still rides the sync UPSERT, and the fetch still stays
+> flat/ungrouped (the `group_by_meta_id` rejection below is unchanged). Where this section says "coalesce-first key,"
+> read ADR-0022.
+
 A pure domain function derives each ROM's sibling-group key from the same coalesced metadata id RomM partitions by (IGDB
 → SS → Moby → RA → Hasheous → LaunchBox → TGDB → Flashpoint, scoped per platform), falling back to the ROM's own id — an
 unmatched ROM is a solo group, exactly as on the server. The key is persisted on `roms` together with the version

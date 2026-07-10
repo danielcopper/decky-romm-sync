@@ -566,7 +566,7 @@ class TestSwitchVersion:
         result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
         assert result["reason"] == "not_in_group"
         assert result["message"] == (
-            "This version belongs to a different game entry in RomM — fix its metadata match to switch to it."
+            "This version's metadata match conflicts with this game's — fix the match in RomM to switch to it."
         )
         assert "sibling group" not in result["message"].lower()
         assert "error" not in result and "error_code" not in result
@@ -623,6 +623,61 @@ class TestSwitchVersion:
             assert persisted.regions == ("Japan",)
             assert persisted.sibling_group_key == "igdb:100:57"
             assert u.roms.get(1).shortcut_app_id is None
+
+    def test_uneven_coverage_server_only_switchable_and_adopts_bound_key(self, event_loop, service, uow, romm):
+        # #1368: the bound group keys on igdb; a never-synced sibling matched only on
+        # ss/hasheous (NO igdb) is canonical-compatible (absent at the canonical
+        # source), so it is switchable AND the switch persists it under the BOUND
+        # group's key — not its own ss:2002:57 (which the old would-be logic wrongly
+        # split on). The next sync re-canonicalizes the whole component together.
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID, group_key="igdb:1001:57")
+        romm.roms[1] = {"id": 1, "sibling_roms": [{"id": 5, "name": "Game (Europe)"}]}
+        romm.roms[5] = {
+            "id": 5,
+            "platform_id": 57,
+            "ss_id": 2002,
+            "hasheous_id": 3003,
+            "platform_slug": "snes",
+            "fs_name": "game_5.sfc",
+            "name": "Game (Europe)",
+            "sibling_roms": [{"id": 1}],
+        }
+
+        by_id = {v["rom_id"]: v for v in _run(event_loop, service.get_version_list(_APP_ID))["versions"]}
+        assert by_id[5]["switchable"] is True
+
+        switched = _run(event_loop, service.switch_version(_APP_ID, 5, True))
+        assert switched["success"] is True
+        assert switched["rom_id"] == 5
+        with uow as u:
+            assert u.roms.get(5).sibling_group_key == "igdb:1001:57"
+            assert u.roms.get(5).shortcut_app_id == _APP_ID
+            assert u.roms.get(1).shortcut_app_id is None
+
+    def test_canonical_conflict_server_only_listed_disabled_and_rejected(self, event_loop, service, uow, romm):
+        # #1368: a never-synced sibling carrying a DIFFERENT id at the bound
+        # canonical source (a genuine cross-game bridge) is listed but disabled, and
+        # the switch rejects it as not_in_group — nothing persisted.
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID, group_key="igdb:1001:57")
+        romm.roms[1] = {"id": 1, "sibling_roms": [{"id": 6, "name": "Other"}]}
+        romm.roms[6] = {
+            "id": 6,
+            "platform_id": 57,
+            "igdb_id": 2002,
+            "ss_id": 22,
+            "platform_slug": "snes",
+            "sibling_roms": [{"id": 1}],
+        }
+
+        by_id = {v["rom_id"]: v for v in _run(event_loop, service.get_version_list(_APP_ID))["versions"]}
+        assert set(by_id) == {1, 6}
+        assert by_id[6]["switchable"] is False
+
+        rejected = _run(event_loop, service.switch_version(_APP_ID, 6, True))
+        assert rejected["success"] is False
+        assert rejected["reason"] == "not_in_group"
+        with uow as u:
+            assert u.roms.get(6) is None
 
     def test_server_only_target_soft_blocks_on_bound_drift_before_fetch(
         self, event_loop, service, uow, romm, drift_probe

@@ -2,7 +2,21 @@
 
 from __future__ import annotations
 
-from domain.sibling_group import compute_sibling_group_key, target_in_sibling_group
+import itertools
+from typing import Any
+
+from domain.sibling_group import (
+    compute_component_group_keys,
+    compute_sibling_group_key,
+    target_in_sibling_group,
+)
+
+
+def _rom(rom_id: int, *, platform_id: int = 57, siblings: tuple[int, ...] = (), **ids: int) -> dict[str, Any]:
+    """Build a raw RomM ROM dict with ``sibling_roms`` edges and metadata ids."""
+    rom: dict[str, Any] = {"id": rom_id, "platform_id": platform_id, "sibling_roms": [{"id": s} for s in siblings]}
+    rom.update(ids)
+    return rom
 
 
 class TestCoalesceOrder:
@@ -116,12 +130,10 @@ class TestMissingAndNoneIds:
         assert compute_sibling_group_key(rom) == "igdb:0:57"
 
 
-class TestTargetInSiblingGroup:
-    """The membership authority shared by the picker's ``switchable`` flag and
-    ``switch_version``. A target is a member when it is eligible (has a local row
-    OR RomM lists it as a sibling) AND its group key — the local key for a synced
-    target, else the would-be key derived from its server metadata — matches the
-    bound key (a NULL bound key accepts any eligible target)."""
+class TestTargetInSiblingGroupLocal:
+    """A LOCAL target is judged by key equality — the component keys encode group
+    membership, so a differing persisted key is a different group (a NULL bound key
+    accepts any eligible target)."""
 
     def test_local_target_same_group_is_member(self):
         assert (
@@ -136,7 +148,7 @@ class TestTargetInSiblingGroup:
 
     def test_local_target_different_group_is_not_member(self):
         # The #1359 bug: a RomM sibling that is locally synced under a DIFFERENT
-        # key (bridged by a shared lower-priority metadata id) is not switchable.
+        # key (a conflicting metadata match) is not switchable.
         assert (
             target_in_sibling_group(
                 bound_group_key="igdb:1156:57",
@@ -159,58 +171,6 @@ class TestTargetInSiblingGroup:
             is True
         )
 
-    def test_server_only_target_with_matching_would_be_key_is_member(self):
-        # Not in the local library yet — its would-be key (derived from the server
-        # metadata) matches the bound group, so selecting it persists a new local
-        # row that joins the group.
-        assert (
-            target_in_sibling_group(
-                bound_group_key="igdb:100:57",
-                target_group_key="igdb:100:57",
-                target_is_local=False,
-                target_is_server_sibling=True,
-            )
-            is True
-        )
-
-    def test_server_only_target_with_different_would_be_key_is_not_member(self):
-        # The #1360 bug: a never-synced bridged sibling RomM lists (shared lower-
-        # priority id) whose would-be key lands it in its OWN group — switching to
-        # it would bind the shortcut cross-group, so it is not a member.
-        assert (
-            target_in_sibling_group(
-                bound_group_key="igdb:1156:57",
-                target_group_key="ss:19274:57",
-                target_is_local=False,
-                target_is_server_sibling=True,
-            )
-            is False
-        )
-
-    def test_null_bound_key_accepts_any_server_only_target(self):
-        # An unbackfilled / solo bound row can't discriminate — any RomM sibling
-        # is accepted regardless of its would-be key.
-        assert (
-            target_in_sibling_group(
-                bound_group_key=None,
-                target_group_key="ss:19274:57",
-                target_is_local=False,
-                target_is_server_sibling=True,
-            )
-            is True
-        )
-
-    def test_server_only_target_that_is_not_a_sibling_is_not_member(self):
-        assert (
-            target_in_sibling_group(
-                bound_group_key="igdb:100:57",
-                target_group_key="igdb:100:57",
-                target_is_local=False,
-                target_is_server_sibling=False,
-            )
-            is False
-        )
-
     def test_local_target_group_check_ignores_server_sibling_flag(self):
         # For a LOCAL target the server-sibling flag is irrelevant — the local key
         # decides. A cross-group local target stays a non-member even if RomM lists
@@ -226,40 +186,189 @@ class TestTargetInSiblingGroup:
         )
 
 
-class TestWouldBeKeyDerivation:
-    """The picker/switch derive a server-only target's would-be key by reusing the
-    same sync-time derivation over the server ROM's metadata ids — never a private
-    reimplementation — so a target's ``switchable`` verdict matches the group its
-    row would actually persist under."""
+class TestTargetInSiblingGroupServerOnly:
+    """A SERVER-ONLY target (no local row yet) is judged by canonical compatibility:
+    RomM must list it as a sibling AND its id at the bound key's canonical source
+    must be absent-or-equal — the persisted key doubles as the group's canonical
+    summary (#1360, #1368)."""
 
-    def test_would_be_key_equals_sync_derivation_for_server_dict(self):
-        # A server ROM dict fed to compute_sibling_group_key yields the very key a
-        # sync would stamp on it — the coalesce order (igdb first) is identical.
-        server_rom = {"id": 900, "platform_id": 57, "igdb_id": 100, "ss_id": 22}
-        assert compute_sibling_group_key(server_rom) == "igdb:100:57"
-
-    def test_server_only_member_iff_derived_key_matches_bound(self):
-        # Feeding the derived key into the authority: a server ROM sharing the
-        # bound group's top-priority id is a member; one that only shares a lower-
-        # priority id (a different derived key) is not.
-        bound = "igdb:100:57"
-        same = {"id": 900, "platform_id": 57, "igdb_id": 100, "ss_id": 22}
-        bridged = {"id": 901, "platform_id": 57, "igdb_id": 999, "ss_id": 22}
+    def test_matching_canonical_value_is_member(self):
         assert (
             target_in_sibling_group(
-                bound_group_key=bound,
-                target_group_key=compute_sibling_group_key(same),
+                bound_group_key="igdb:100:57",
+                target_ids={"igdb_id": 100, "ss_id": 22},
                 target_is_local=False,
                 target_is_server_sibling=True,
             )
             is True
         )
+
+    def test_absent_canonical_value_is_member(self):
+        # #1368 uneven coverage: the bound group keys on igdb; the sibling lacks an
+        # igdb id (matched only on ss/hasheous) → absent-at-canonical → in-group. It
+        # joins under the bound key and the next sync re-canonicalizes the component.
         assert (
             target_in_sibling_group(
-                bound_group_key=bound,
-                target_group_key=compute_sibling_group_key(bridged),
+                bound_group_key="igdb:1001:57",
+                target_ids={"ss_id": 2002, "hasheous_id": 3003, "launchbox_id": 4005},
+                target_is_local=False,
+                target_is_server_sibling=True,
+            )
+            is True
+        )
+
+    def test_conflicting_canonical_value_is_not_member(self):
+        # #1360: the sibling carries a DIFFERENT id at the canonical source (a
+        # genuine cross-game bridge) → rejected.
+        assert (
+            target_in_sibling_group(
+                bound_group_key="igdb:100:57",
+                target_ids={"igdb_id": 999, "ss_id": 22},
                 target_is_local=False,
                 target_is_server_sibling=True,
             )
             is False
         )
+
+    def test_higher_priority_source_is_member(self):
+        # The bound group keys on ss (no igdb). The sibling agrees on ss AND carries
+        # a higher-priority igdb — in-group; the switch persists the bound key and
+        # the next sync re-canonicalizes the whole component onto igdb.
+        assert (
+            target_in_sibling_group(
+                bound_group_key="ss:2002:57",
+                target_ids={"igdb_id": 100, "ss_id": 2002},
+                target_is_local=False,
+                target_is_server_sibling=True,
+            )
+            is True
+        )
+
+    def test_romm_fallback_bound_key_admits_no_server_target(self):
+        # A ``romm:`` bound key has no metadata source to compare against, so no
+        # server-only target can be proven compatible (preserves today's blocking).
+        assert (
+            target_in_sibling_group(
+                bound_group_key="romm:4409:57",
+                target_ids={"igdb_id": 100},
+                target_is_local=False,
+                target_is_server_sibling=True,
+            )
+            is False
+        )
+
+    def test_unfetched_detail_is_not_member(self):
+        # ``target_ids`` None (a transient detail-fetch miss) can't be judged →
+        # non-switchable, exactly as a missing would-be key blocked before.
+        assert (
+            target_in_sibling_group(
+                bound_group_key="igdb:100:57",
+                target_ids=None,
+                target_is_local=False,
+                target_is_server_sibling=True,
+            )
+            is False
+        )
+
+    def test_null_bound_key_accepts_any_server_only_target(self):
+        # An unbackfilled / solo bound row can't discriminate — any RomM sibling is
+        # accepted, even before its detail is fetched.
+        assert (
+            target_in_sibling_group(
+                bound_group_key=None,
+                target_ids=None,
+                target_is_local=False,
+                target_is_server_sibling=True,
+            )
+            is True
+        )
+
+    def test_not_a_sibling_is_not_member(self):
+        assert (
+            target_in_sibling_group(
+                bound_group_key="igdb:100:57",
+                target_ids={"igdb_id": 100},
+                target_is_local=False,
+                target_is_server_sibling=False,
+            )
+            is False
+        )
+
+
+class TestComputeComponentGroupKeys:
+    """The component kernel: connected components over ``sibling_roms`` edges keyed
+    by canonical-source agreement, seeded by resident (persisted) keys."""
+
+    def test_two_fresh_siblings_share_the_canonical_key(self):
+        roms = [_rom(1, igdb_id=100, siblings=(2,)), _rom(2, igdb_id=100, siblings=(1,))]
+        assert compute_component_group_keys(roms, {}) == {1: "igdb:100:57", 2: "igdb:100:57"}
+
+    def test_uneven_coverage_merges_on_igdb_despite_launchbox_divergence(self):
+        # rom A: igdb+ss+hasheous+launchbox; rom B: ss+hasheous+launchbox with the
+        # SAME ss/hasheous but a DIFFERENT launchbox and NO igdb. Both key on the
+        # canonical igdb — the low-priority launchbox divergence never blocks (#1368).
+        a = _rom(1, igdb_id=1001, ss_id=2002, hasheous_id=3003, launchbox_id=4004, siblings=(2,))
+        b = _rom(2, ss_id=2002, hasheous_id=3003, launchbox_id=4005, siblings=(1,))
+        assert compute_component_group_keys([a, b], {}) == {1: "igdb:1001:57", 2: "igdb:1001:57"}
+
+    def test_chain_smuggled_canonical_conflict_falls_back(self):
+        # A igdb:1+ss:5, B ss:5+moby:9, C igdb:2+moby:9 — A-B (ss) and B-C (moby)
+        # chain into one component whose canonical (igdb) holds two values {1,2}
+        # → no assumption-merge, every member keeps its own coalesce-first key.
+        a = _rom(1, igdb_id=1, ss_id=5, siblings=(2,))
+        b = _rom(2, ss_id=5, moby_id=9, siblings=(1, 3))
+        c = _rom(3, igdb_id=2, moby_id=9, siblings=(2,))
+        assert compute_component_group_keys([a, b, c], {}) == {1: "igdb:1:57", 2: "ss:5:57", 3: "igdb:2:57"}
+
+    def test_no_edge_matched_rom_keys_solo_by_own_top_source(self):
+        assert compute_component_group_keys([_rom(1, ss_id=22)], {}) == {1: "ss:22:57"}
+
+    def test_no_edge_no_ids_falls_back_to_romm(self):
+        assert compute_component_group_keys([_rom(1)], {}) == {1: "romm:1:57"}
+
+    def test_in_unit_resident_preserved_and_seeds_fresh_member(self):
+        # A already carries a key (an incremental-reconstructed resident); B is fresh
+        # and edges to A but has no igdb → B adopts A's canonical summary, and A is
+        # NOT re-keyed (absent from the result).
+        a = {"id": 1, "platform_id": 57, "sibling_group_key": "igdb:100:57", "sibling_roms": [{"id": 2}]}
+        b = _rom(2, ss_id=22, siblings=(1,))
+        assert compute_component_group_keys([a, b], {}) == {2: "igdb:100:57"}
+
+    def test_db_resident_key_seeds_fresh_member(self):
+        # B is fresh and edges to a DB-resident sibling (rom 1, not in the unit)
+        # whose persisted key is igdb:100:57 → B adopts it.
+        assert compute_component_group_keys([_rom(2, ss_id=22, siblings=(1,))], {1: "igdb:100:57"}) == {
+            2: "igdb:100:57"
+        }
+
+    def test_romm_fallback_resident_contributes_nothing(self):
+        # A DB-resident whose key is a romm: fallback offers no canonical candidate,
+        # so B keys off its own id.
+        assert compute_component_group_keys([_rom(2, ss_id=22, siblings=(1,))], {1: "romm:1:57"}) == {2: "ss:22:57"}
+
+    def test_fresh_member_edging_conflicting_resident_falls_back(self):
+        # B (igdb:999) edges to a DB-resident keyed igdb:100 → the component's
+        # canonical (igdb) holds {100, 999} → B keeps its own key, no merge.
+        assert compute_component_group_keys([_rom(2, igdb_id=999, ss_id=22, siblings=(1,))], {1: "igdb:100:57"}) == {
+            2: "igdb:999:57"
+        }
+
+    def test_platform_scopes_the_merged_key(self):
+        # A carries igdb, B has no ids but edges to A — both key on A's igdb, each
+        # scoped by its own platform id (siblings share a platform).
+        a = _rom(1, platform_id=12, igdb_id=100, siblings=(2,))
+        b = _rom(2, platform_id=12, siblings=(1,))
+        assert compute_component_group_keys([a, b], {}) == {1: "igdb:100:12", 2: "igdb:100:12"}
+
+    def test_edge_to_unknown_rom_is_ignored(self):
+        # An edge to a rom that is neither fresh nor resident (never fetched, not in
+        # the DB) unions nothing and offers no candidate.
+        assert compute_component_group_keys([_rom(2, ss_id=22, siblings=(99,))], {}) == {2: "ss:22:57"}
+
+    def test_deterministic_under_input_permutation(self):
+        a = _rom(1, igdb_id=1001, ss_id=2002, siblings=(2, 3))
+        b = _rom(2, ss_id=2002, siblings=(1, 3))
+        c = _rom(3, ss_id=2002, siblings=(1, 2))
+        results = [compute_component_group_keys(list(p), {}) for p in itertools.permutations([a, b, c])]
+        assert all(r == results[0] for r in results)
+        assert results[0] == {1: "igdb:1001:57", 2: "igdb:1001:57", 3: "igdb:1001:57"}

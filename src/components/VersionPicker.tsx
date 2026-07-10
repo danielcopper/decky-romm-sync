@@ -368,8 +368,9 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
                 alignItems: "center",
                 gap: "10px",
                 color: v.active ? ACTIVE_ACCENT : undefined,
-                // A non-switchable row (a different game entry in RomM) is dimmed —
-                // still visible so the user sees the version exists (#1359).
+                // A non-switchable row (its RomM metadata match conflicts with this
+                // game's) is dimmed — still visible so the user sees the version
+                // exists but can't be switched to until the match is fixed (#1368).
                 opacity: v.switchable ? undefined : 0.55,
               }}
             >
@@ -380,7 +381,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
               {v.switchable && !v.synced ? <Badge text="not synced" tone="muted" /> : null}
               {v.switchable ? null : (
                 <span style={{ marginLeft: "8px", fontSize: "11px", fontStyle: "italic", color: NEUTRAL_GREY }}>
-                  separate game entry in RomM
+                  conflicting metadata match in RomM
                 </span>
               )}
               {v.active ? <span style={{ marginLeft: "6px", fontWeight: 700 }}>✓</span> : null}

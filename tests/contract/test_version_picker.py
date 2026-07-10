@@ -147,6 +147,43 @@ async def test_get_version_list_never_synced_matching_key_switchable(harness):
         assert uow.roms.get(1).shortcut_app_id is None
 
 
+async def test_get_version_list_uneven_coverage_switchable_adopts_bound_key(harness):
+    """#1368: a never-synced sibling matched only on a lower-priority id (absent at
+    the bound group's canonical source) is switchable, and the switch persists it
+    under the BOUND group's key — not its own coalesce-first key. The whole
+    component re-canonicalizes on the next sync."""
+    _seed_rom(harness, rom_id=1, app_id=_APP_ID, group_key="igdb:1001:57")
+    harness.romm.roms[1] = {"id": 1, "sibling_roms": [{"id": 5, "name": "Game (EU)"}]}
+    # Rom 5 shares only ss/hasheous with the bound group (NO igdb) — its own
+    # coalesce-first key would be ss:2002:57, but it is canonical-compatible.
+    harness.romm.roms[5] = {
+        "id": 5,
+        "platform_id": 57,
+        "ss_id": 2002,
+        "hasheous_id": 3003,
+        "platform_slug": "snes",
+        "fs_name": "game_5.sfc",
+        "name": "Game (EU)",
+        "sibling_roms": [{"id": 1}],
+    }
+
+    result = await harness.plugin.get_version_list(_APP_ID)
+    by_id = {v["rom_id"]: v for v in result["versions"]}
+    assert set(by_id) == {1, 5}
+    assert by_id[5]["synced"] is False
+    assert by_id[5]["switchable"] is True
+
+    switched = await harness.plugin.switch_version(_APP_ID, 5, True)
+    assert switched["success"] is True
+    assert switched["rom_id"] == 5
+    with harness.uow_factory() as uow:
+        persisted = uow.roms.get(5)
+        assert persisted is not None
+        assert persisted.sibling_group_key == "igdb:1001:57"
+        assert persisted.shortcut_app_id == _APP_ID
+        assert uow.roms.get(1).shortcut_app_id is None
+
+
 async def test_get_version_list_never_synced_bridged_key_not_switchable(harness):
     """A never-synced RomM sibling whose would-be key differs (bridged on a lower-
     priority id) is listed but not switchable, and switch_version rejects it (#1360)."""

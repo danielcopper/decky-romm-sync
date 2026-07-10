@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.preview_delta import PreviewDelta
 from domain.shortcut_data import EmulatorInvocation, build_shortcuts_data
+from domain.sibling_group import compute_component_group_keys
 from domain.sibling_resolution import AUTO_REGION
 from domain.sync_diff import (
     BIND_ROM_ID_KEY,
@@ -217,6 +218,12 @@ class SyncOrchestrator:
 
             installed_paths = await self._loop.run_in_executor(None, self._scan_installed_paths)
             core_overrides = await self._loop.run_in_executor(None, self._build_core_overrides, all_roms)
+            # Stamp each fresh ROM's component sibling-group key before the build so
+            # the collapse below groups games, not dumps. The preview union is a
+            # complete view of every enabled platform's groups; the DB's persisted
+            # keys seed a member edging into a resident sibling on a skipped platform.
+            resident_keys = await self._loop.run_in_executor(None, self._read_resident_group_keys)
+            self._stamp_component_group_keys(all_roms, resident_keys)
             shortcuts_data = build_shortcuts_data(all_roms, self._plugin_dir, installed_paths, core_overrides)
             platform_name_set = {u.name for u in work_queue if u.type == "platform"}
             slug_to_name = {u.slug: u.name for u in work_queue if u.type == "platform" and u.slug}
@@ -705,6 +712,37 @@ class SyncOrchestrator:
                 if rom.shortcut_app_id is not None
             }
 
+    def _read_resident_group_keys(self) -> dict[int, str]:
+        """Read every persisted non-null ``sibling_group_key`` (``rom_id → key``).
+
+        The preview builds one shortcut set over every enabled platform, so it
+        needs the DB's canonical summaries for a fresh member that edges into a
+        sibling on a skipped (incremental) platform, which the preview reconstructs
+        only its bound rows of. One short read UoW.
+        """
+        with self._uow_factory() as uow:
+            return {
+                rom.rom_id: rom.sibling_group_key for rom in uow.roms.iter_all() if rom.sibling_group_key is not None
+            }
+
+    def _stamp_component_group_keys(self, roms: list[dict[str, Any]], resident_keys: dict[int, str]) -> None:
+        """Stamp each fresh ROM's component sibling-group key onto its raw dict.
+
+        Delegates the whole decision to :func:`compute_component_group_keys` (the
+        pure kernel: union-find over ``sibling_roms`` edges + canonical-source
+        agreement) and writes the result back so the downstream
+        :func:`build_shortcuts_data` / group collapse read the component key rather
+        than a per-ROM coalesce-first key. A resident dict (one that already carries
+        a key — an incremental-reconstructed row) is left untouched: the kernel
+        returns no key for it. Mutates *roms* in place, matching the other in-place
+        decorations (``platform_name``, popped ``files``) the fetch already applied.
+        """
+        keys = compute_component_group_keys(roms, resident_keys)
+        for rom in roms:
+            key = keys.get(int(rom["id"]))
+            if key is not None:
+                rom["sibling_group_key"] = key
+
     async def _sync_one_unit(
         self,
         unit: WorkUnit,
@@ -773,6 +811,15 @@ class SyncOrchestrator:
             None, self._read_installed_paths, {rom["id"] for rom in unit_roms}
         )
         core_overrides = await self._loop.run_in_executor(None, self._build_core_overrides, unit_roms)
+
+        # Read the bound-row registry once, before the build: its persisted keys
+        # seed the component keying (a fresh member edging into a DB-resident
+        # sibling adopts its canonical summary) AND drive the group collapse below.
+        registry = await self._loop.run_in_executor(None, self._read_apply_registry, unit)
+        resident_keys = {
+            int(rom_id): entry["sibling_group_key"] for rom_id, entry in registry.items() if entry["sibling_group_key"]
+        }
+        self._stamp_component_group_keys(unit_roms, resident_keys)
         shortcuts_data = build_shortcuts_data(unit_roms, self._plugin_dir, installed_paths, core_overrides)
 
         # Collapse to one Steam shortcut per sibling group (ADR-0021): only the
@@ -784,7 +831,6 @@ class SyncOrchestrator:
         # members, not a group's bound sibling on another/skipped platform) — the
         # collapse then only grandfathers, never rebinds a live binding onto an
         # uninstalled sibling (#1296).
-        registry = await self._loop.run_in_executor(None, self._read_apply_registry, unit)
         emitted = collapse_sibling_groups(
             shortcuts_data,
             registry,
