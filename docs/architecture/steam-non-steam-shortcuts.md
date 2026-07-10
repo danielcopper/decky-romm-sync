@@ -268,6 +268,16 @@ edits the `shortcuts.vdf` `icon` field — Steam is memory-authoritative and clo
 shortcut must go through `SteamClient` (see
 [shortcuts.vdf is memory-authoritative](#shortcutsvdf-is-memory-authoritative)).
 
+Covers are written into the grid dir server-side while the sync runs, but Steam resolved each fresh shortcut's tile to
+the default capsule at creation and does not re-check the grid dir in-session — so a newly-written `{app_id}p.png` stays
+unseen until the library UI is told to re-resolve it. After each run the frontend's `sync_complete` handler
+(`onSyncComplete`) fires `SteamClient.Apps.ReportLibraryAssetCacheMiss(appId, 0)` — Steam's own per-asset re-resolve
+signal (assetType 0 = capsule/cover), which its UI otherwise calls only when a library image errors — for every shortcut
+created this run (the created-appId set from `syncDeltaStore`, read before the per-run delta is reset; cancelled runs
+nudge too, since their committed chunks also wrote covers). The call is fail-soft: a Steam build without the method, or
+a throwing call, is summarized in a single log line and never breaks the sync teardown. Covers on shortcuts that already
+existed, and any that the nudge misses, are still picked up on the next client restart.
+
 ## Key Files
 
 | File                                      | Purpose                                                                                                                                                                                                                                                                                                                                        |

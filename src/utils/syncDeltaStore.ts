@@ -16,7 +16,8 @@
  *   - sync_plan listener in index.tsx (resetSyncDelta at run start)
  *
  * Read by:
- *   - onSyncComplete in index.tsx (getSyncDelta for the terminal toast)
+ *   - onSyncComplete in index.tsx (getSyncDelta for the terminal toast;
+ *     getCreatedAppIds for the cover cache-miss nudge)
  */
 
 const created = new Set<number>();
@@ -41,4 +42,9 @@ export function recordSyncRemoved(appId: number): void {
 /** The deduplicated created/removed counts for the current run. */
 export function getSyncDelta(): { added: number; removed: number } {
   return { added: created.size, removed: removed.size };
+}
+
+/** The deduplicated appIds created this run (real addShortcut calls). */
+export function getCreatedAppIds(): number[] {
+  return [...created];
 }

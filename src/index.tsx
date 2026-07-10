@@ -43,7 +43,7 @@ import {
 } from "./utils/collections";
 import { setMigrationStatus } from "./utils/migrationStore";
 import { fetchSettingsResetState } from "./utils/settingsResetStore";
-import { resetSyncDelta, recordSyncRemoved, getSyncDelta } from "./utils/syncDeltaStore";
+import { resetSyncDelta, recordSyncRemoved, getSyncDelta, getCreatedAppIds } from "./utils/syncDeltaStore";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { setVersionError, setServerRetryProgress } from "./utils/connectionState";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
@@ -337,6 +337,33 @@ export default definePlugin(() => {
     // a terminal stage here (merge — keeps the fine fields) so MainPage's
     // onSyncProgressChange tears the in-progress UI down regardless.
     updateSyncProgress({ running: false, stage: data.cancelled ? "cancelled" : "done" });
+
+    // Nudge Steam's live library UI to re-resolve each freshly-created
+    // shortcut's cover. Covers are written server-side at each chunk's commit
+    // (ADR-0021 lazy model), but Steam resolved every new shortcut's tile to the
+    // default capsule at creation and never re-checks the grid dir in-session —
+    // so the covers sit on disk unseen until a client restart.
+    // ReportLibraryAssetCacheMiss(appId, 0) is Steam's own per-asset re-resolve
+    // signal (assetType 0 = capsule/cover), which its UI fires whenever a library
+    // image errors. Read the created set BEFORE the resetSyncDelta() below.
+    // Cancelled runs nudge too — their committed chunks also wrote covers.
+    // Fail-soft: a missing or throwing API must never break the teardown/toast
+    // above (the signal is UNVERIFIED for a non-erroring default tile — the next
+    // on-device sync is the check; hence the greppable summary line).
+    const createdAppIds = getCreatedAppIds();
+    try {
+      const canNudge = typeof SteamClient.Apps.ReportLibraryAssetCacheMiss === "function";
+      for (const appId of createdAppIds) {
+        SteamClient.Apps.ReportLibraryAssetCacheMiss?.(appId, 0);
+      }
+      logInfo(
+        canNudge
+          ? `[FE] cover cache-miss nudge: ${createdAppIds.length} appIds`
+          : `[FE] cover cache-miss nudge: API unavailable, ${createdAppIds.length} appIds skipped`,
+      );
+    } catch (e) {
+      logError(`[FE] cover cache-miss nudge failed for ${createdAppIds.length} appIds: ${e}`);
+    }
 
     // Defensive reset; sync_plan also resets at the start of the next run.
     resetSyncDelta();

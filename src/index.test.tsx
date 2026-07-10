@@ -107,6 +107,10 @@ beforeEach(() => {
   // The sync-progress store is a real module — reset it so an etaSeconds set by
   // one test's sync_plan doesn't leak into the next.
   setSyncProgress({ running: false, stage: "", current: 0, total: 0, message: "" });
+  // The global afterEach's vi.unstubAllGlobals wipes SteamClient after the
+  // file's first test; onSyncComplete's cover cache-miss nudge reads it, so
+  // default it to a no-op here. The nudge describe below re-stubs with a spy.
+  vi.stubGlobal("SteamClient", { Apps: { ReportLibraryAssetCacheMiss: vi.fn() } });
 });
 
 describe("index.tsx — download_complete launch-options sync", () => {
@@ -504,6 +508,136 @@ describe("index.tsx — sync_complete registers RomM appIds (#1205)", () => {
 
     expect(registerRomMAppId).toHaveBeenCalledWith(777);
     expect(registerRomMAppId).toHaveBeenCalledWith(888);
+    plugin.onDismount();
+  });
+});
+
+describe("index.tsx — sync_complete cover cache-miss nudge (#1025)", () => {
+  type SyncCompletePayload = {
+    platform_app_ids: Record<string, number[]>;
+    romm_collection_app_ids?: Record<string, number[]>;
+    total_games: number;
+    cancelled?: boolean;
+  };
+
+  const reportCacheMiss = vi.fn();
+
+  function emitSyncComplete(payload: SyncCompletePayload): void {
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", payload);
+    });
+  }
+
+  beforeEach(() => {
+    reportCacheMiss.mockReset();
+    vi.stubGlobal("SteamClient", { Apps: { ReportLibraryAssetCacheMiss: reportCacheMiss } });
+    vi.mocked(registerRomMAppId).mockClear();
+    vi.mocked(toaster.toast).mockClear();
+    logError.mockClear();
+    vi.mocked(getAllPlaytime).mockResolvedValue({ playtime: {} });
+    vi.mocked(getAppIdRomIdMap).mockResolvedValue({});
+    vi.mocked(getInstalledRelaunchOptions).mockReset();
+    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue([]);
+    vi.stubGlobal("collectionStore", { userCollections: [] });
+    resetSyncDelta();
+  });
+
+  it("fires ReportLibraryAssetCacheMiss once per created appId with assetType 0", async () => {
+    const plugin = pluginFactory();
+    await flush(); // settle the startup detaches
+    reportCacheMiss.mockClear();
+    // Seed the created set exactly as the syncManager create path would.
+    recordSyncCreated(100);
+    recordSyncCreated(200);
+
+    emitSyncComplete({ platform_app_ids: {}, total_games: 2 });
+    await flush();
+
+    expect(reportCacheMiss).toHaveBeenCalledTimes(2);
+    expect(reportCacheMiss).toHaveBeenCalledWith(100, 0);
+    expect(reportCacheMiss).toHaveBeenCalledWith(200, 0);
+    plugin.onDismount();
+  });
+
+  it("nudges on a cancelled complete too (its committed chunks also wrote covers)", async () => {
+    const plugin = pluginFactory();
+    await flush();
+    reportCacheMiss.mockClear();
+    recordSyncCreated(300);
+
+    emitSyncComplete({ platform_app_ids: {}, total_games: 0, cancelled: true });
+    await flush();
+
+    expect(reportCacheMiss).toHaveBeenCalledWith(300, 0);
+    plugin.onDismount();
+  });
+
+  it("reads the created set BEFORE resetSyncDelta — a prior run's appIds are not re-nudged", async () => {
+    const plugin = pluginFactory();
+    await flush();
+    reportCacheMiss.mockClear();
+    recordSyncCreated(100);
+
+    // First complete nudges [100], then onSyncComplete's resetSyncDelta clears it.
+    emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
+    await flush();
+    expect(reportCacheMiss).toHaveBeenCalledTimes(1);
+    expect(reportCacheMiss).toHaveBeenCalledWith(100, 0);
+
+    // Second complete with no new creates: the set is empty, so nothing is
+    // re-nudged (proves the nudge reads the live set, not a stale snapshot).
+    reportCacheMiss.mockClear();
+    emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
+    await flush();
+    expect(reportCacheMiss).not.toHaveBeenCalled();
+    plugin.onDismount();
+  });
+
+  it("completes normally when the API is absent — teardown + toast still fire, no error", async () => {
+    // Steam build without the method: the guard skips the call and logs an
+    // info summary (not an error), and the handler runs to completion.
+    vi.stubGlobal("SteamClient", { Apps: {} });
+    const plugin = pluginFactory();
+    await flush();
+    vi.mocked(registerRomMAppId).mockClear();
+    vi.mocked(toaster.toast).mockClear();
+    logError.mockClear();
+    recordSyncCreated(100);
+
+    setSyncProgress({ running: true, stage: "applying", message: "Applying changes..." });
+    emitSyncComplete({ platform_app_ids: { PSX: [500] }, total_games: 1 });
+    await flush();
+
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalled();
+    expect(getSyncProgress().stage).toBe("done");
+    expect(registerRomMAppId).toHaveBeenCalledWith(500); // ran past the nudge
+    expect(logError).not.toHaveBeenCalledWith(expect.stringContaining("cover cache-miss nudge"));
+    plugin.onDismount();
+  });
+
+  it("summarizes (not throws) when the API throws — teardown + toast still fire", async () => {
+    vi.stubGlobal("SteamClient", {
+      Apps: {
+        ReportLibraryAssetCacheMiss: vi.fn(() => {
+          throw new Error("boom");
+        }),
+      },
+    });
+    const plugin = pluginFactory();
+    await flush();
+    vi.mocked(registerRomMAppId).mockClear();
+    vi.mocked(toaster.toast).mockClear();
+    logError.mockClear();
+    recordSyncCreated(100);
+
+    setSyncProgress({ running: true, stage: "applying", message: "Applying changes..." });
+    emitSyncComplete({ platform_app_ids: { PSX: [500] }, total_games: 1 });
+    await flush();
+
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalled();
+    expect(getSyncProgress().stage).toBe("done");
+    expect(registerRomMAppId).toHaveBeenCalledWith(500); // ran past the nudge
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining("cover cache-miss nudge failed"));
     plugin.onDismount();
   });
 });
