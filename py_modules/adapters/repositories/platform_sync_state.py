@@ -1,7 +1,7 @@
 """SQLite adapter for the ``PlatformSyncState`` aggregate over ``platform_sync_state``.
 
 One row per platform, keyed by ``platform_slug`` — the per-platform completion
-stamp the incremental-skip gate reads (ADR-0022). A leaf table with no cascade
+stamp the incremental-skip gate reads (ADR-0023). A leaf table with no cascade
 children, so ``save`` upserts with ``INSERT OR REPLACE``, ``delete`` drops one
 platform's row (apply-start clear + local destructive flows), and ``clear`` drops
 the whole table (Force Full Sync).

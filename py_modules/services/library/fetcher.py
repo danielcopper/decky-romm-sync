@@ -462,7 +462,7 @@ class LibraryFetcher:
         * ``stamp_completed_at`` / ``stamp_rom_count`` — the platform's
           completion stamp (``PlatformSyncState``), or ``None``/``None`` when
           there is no stamp. The stamp is the **sole** skip authority
-          (ADR-0022): it exists iff the platform's most recent apply attempt
+          (ADR-0023): it exists iff the platform's most recent apply attempt
           ran to completion, a property no run-scoped ``last_sync`` can carry —
           a completed run says nothing about a platform whose shortcuts were
           later removed locally and only partially re-applied before a crash.
@@ -531,7 +531,7 @@ class LibraryFetcher:
         The stamp (``PlatformSyncState``) is the **sole** skip authority — it
         exists iff the platform's most recent apply attempt ran to completion
         (cleared at apply start and by local removals, rewritten by the final
-        chunk; ADR-0022). A completed-run ``last_sync`` is deliberately NOT a
+        chunk; ADR-0023). A completed-run ``last_sync`` is deliberately NOT a
         fallback: it cannot see a locally-removed-then-partially-reapplied
         platform, so trusting it can skip a platform with missing shortcuts.
         Group-aware sync persists every sibling (ADR-0021), so the count compares
@@ -585,7 +585,7 @@ class LibraryFetcher:
             self._logger.info(f"Per-unit fetch {platform_name}: version-metadata backfill needed — full fetch")
             return None
 
-        # Stamp-count guard (ADR-0022): the server ROM count captured at stamp
+        # Stamp-count guard (ADR-0023): the server ROM count captured at stamp
         # time must still equal the unit's current ``rom_count``. A server-side
         # count change since the stamp invalidates it — the platform must
         # re-fetch to reconcile.

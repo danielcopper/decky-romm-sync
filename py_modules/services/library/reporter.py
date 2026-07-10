@@ -232,7 +232,7 @@ class SyncReporter:
         with self._uow_factory() as uow:
             # Stale removal only UNBINDS the row (ADR-0007 keeps it), so a
             # platform's persisted-row count is unchanged and its completion stamp
-            # (ADR-0022) stays valid — deliberately NOT invalidated here. If the
+            # (ADR-0023) stays valid — deliberately NOT invalidated here. If the
             # server actually dropped ROMs, the next skip catches it anyway: the
             # dropped ROM lowers RomM's platform rom_count, which no longer matches
             # the stamp's rom_count (nor the persisted-row count), so the platform
@@ -353,7 +353,7 @@ class SyncReporter:
         so a ROM and its metadata land atomically.
 
         ``platform_stamp`` (set by the orchestrator on the final chunk of a
-        platform unit, ADR-0022) is saved inside that same write UoW, so the
+        platform unit, ADR-0023) is saved inside that same write UoW, so the
         per-platform completion stamp commits atomically with the chunk's rom
         upserts — the platform is stamped complete iff its last chunk is durable.
         """
@@ -564,7 +564,7 @@ class SyncReporter:
         consistent across a crash, and each committed chunk is durable on its own.
 
         ``platform_stamp`` is passed only by the orchestrator on the **final
-        chunk of a platform unit** (ADR-0022); it rides the same write UoW so the
+        chunk of a platform unit** (ADR-0023); it rides the same write UoW so the
         per-platform completion stamp is atomic with the chunk's rom upserts. The
         heartbeat-timeout late-ack path never sets it — a timed-out platform is
         incomplete and must not be stamped.
@@ -617,7 +617,7 @@ class SyncReporter:
         The incremental-skip gate (fetcher) keys off two checkpoints: the newest
         completed ``SyncRun`` (the library-wide ``last_sync``, also read by
         ``get_sync_stats``) and the per-platform ``PlatformSyncState`` completion
-        stamps (ADR-0022). "Force Full Sync" must reset BOTH — clearing only the
+        stamps (ADR-0023). "Force Full Sync" must reset BOTH — clearing only the
         runs would leave the per-platform stamps in place, and each stamp is its
         own ``effective_last_sync`` that would still skip an unchanged platform.
         Deleting the run history (every terminal run, not only completed ones, so

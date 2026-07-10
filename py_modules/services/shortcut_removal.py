@@ -6,7 +6,7 @@ unbinds the rows) and the sync-start reconcile against Steam's live shortcut
 set (a shortcut the user deleted through Steam's own UI is unbound so the next
 sync recreates it — #1046). Unbinding clears ``shortcut_app_id`` and keeps the
 row and its per-ROM children (ADR-0007), never deletes. Every unbind here also
-invalidates the touched platforms' completion stamps (ADR-0022) so the next
+invalidates the touched platforms' completion stamps (ADR-0023) so the next
 sync's incremental-skip gate can't skip a platform whose shortcuts were removed
 locally and leave the removal never recreated. Reads the synced-shortcut binding
 from ``uow.roms``; the offline ``platform_slug → display_name`` label comes from
@@ -138,7 +138,7 @@ class ShortcutRemovalService:
                 self._artwork_remover.remove_artwork_files(grid, rom_id, self._artwork_entry(rom))
 
         # Unbind the removed ROMs — clear the Steam link, keep the row (ADR-0007) —
-        # and invalidate the completion stamp (ADR-0022) of every platform this
+        # and invalidate the completion stamp (ADR-0023) of every platform this
         # removal touched. Unbinding keeps the row, so the platform's persisted-row
         # count is unchanged and a still-valid stamp would let the next sync's
         # incremental-skip gate skip the platform wholesale and never recreate the
@@ -207,7 +207,7 @@ class ShortcutRemovalService:
                 uow.roms.save(rom)
                 unbound += 1
             # A shortcut deleted through Steam's own UI leaves the row's persisted
-            # count unchanged, so its platform's completion stamp (ADR-0022) would
+            # count unchanged, so its platform's completion stamp (ADR-0023) would
             # still let the next sync skip the platform and never recreate the
             # shortcut — the same silent-gap class as the DangerZone flows (#1025).
             # Invalidate the stamp of every platform we unbound here, in the same

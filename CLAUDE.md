@@ -41,7 +41,7 @@ silent omission. The CI check enforces this.
   the confirm poll's fat `AppDetails` cache hit. Use 50ms delay between operations in the apply loop.
 - **Large payloads**: Never send bulk base64 data through `decky.emit()` — WebSocket bridge has size limits. Use
   per-item callables instead. Bulk lists are chunked too: the library apply emits shortcuts ~200 at a time
-  (`_APPLY_CHUNK_SIZE`, ADR-0022) and the metadata cache is loaded page-by-page (`get_metadata_cache_page`), so a large
+  (`_APPLY_CHUNK_SIZE`, ADR-0023) and the metadata cache is loaded page-by-page (`get_metadata_cache_page`), so a large
   library never pushes a multi-MB frame in one response.
 - **User-Agent on outgoing HTTP**: SteamGridDB **and** RomM behind Cloudflare Tunnel reject the default `Python-urllib`
   UA with 403 (Bot Fight Mode at the edge). Every HTTP-talking adapter (`RommHttpAdapter`, `SteamGridDbAdapter`) takes a
@@ -273,7 +273,7 @@ purity.)
 
 **Aggregates** (CP chapters 1–7 scope — locked in #788, refined by
 [ADR-0003](docs/adr/0003-json-sqlite-persistence-boundary.md)). The aggregate roots, their tables, and the enforcement
-layers live in `docs/architecture/database-design.md` (canonical — 9 roots: ADR-0003's 8 plus ADR-0022's
+layers live in `docs/architecture/database-design.md` (canonical — 9 roots: ADR-0003's 8 plus ADR-0023's
 `PlatformSyncState`). Persistence boundary: config-shaped toggles (`save_sync_enabled`, `sync_before_launch`,
 `sync_after_exit`, `default_slot`, `autocleanup_limit`, `device_name`, `enabled_platforms`) live in `settings.json`, not
 SQLite — `SyncSettings`/`Platform`/`Device` were considered as aggregates and dropped. The rules below apply to the

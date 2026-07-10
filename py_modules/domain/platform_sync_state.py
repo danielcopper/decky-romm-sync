@@ -1,6 +1,6 @@
 """PlatformSyncState — the per-platform "this platform fully synced" completion stamp.
 
-Recorded when a platform work unit finishes its **last** apply chunk (ADR-0022),
+Recorded when a platform work unit finishes its **last** apply chunk (ADR-0023),
 so the incremental-skip gate can honor durable per-platform progress that a
 cancelled / crashed run leaves behind. A completed ``SyncRun`` advances the
 library-wide ``last_sync`` only when the *whole* run finishes; a run that

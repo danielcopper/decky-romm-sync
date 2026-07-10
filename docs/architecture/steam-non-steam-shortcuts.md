@@ -331,7 +331,7 @@ internal shortcut state. Without this delay, some shortcuts may silently fail to
 ### The apply is chunked; a heartbeat timeout must not discard a chunk's delivered bindings
 
 A unit's emitted shortcuts are split into fixed-size chunks (200,
-[ADR-0022](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0022-chunked-per-unit-apply.md)); the
+[ADR-0023](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0023-chunked-per-unit-apply.md)); the
 pipeline emits one `sync_apply_unit` per chunk (carrying `chunk_index` / `chunk_count` / `chunk_offset` / `unit_total`,
 `shortcuts` = the chunk slice), then waits for the frontend's `report_unit_results` ack — echoing the `chunk_index` back
 — and commits that chunk's `roms` rows durably before emitting the next. A mid-unit crash, cancel, or timeout forfeits

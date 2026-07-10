@@ -37,7 +37,7 @@ def _seed_platform_names(uow, mapping):
 
 
 def _seed_stamp(uow, slug, *, at="2025-01-01T00:00:00", rom_count=100):
-    """Persist a per-platform completion stamp (ADR-0022) into the fake UoW."""
+    """Persist a per-platform completion stamp (ADR-0023) into the fake UoW."""
     from domain.platform_sync_state import PlatformSyncState
 
     with uow:
@@ -442,7 +442,7 @@ def _artwork_integration_service(uow, steam_config, tmp_path) -> ShortcutRemoval
 
 
 class TestReportRemovalInvalidatesStamps:
-    """DangerZone removals must drop the completion stamp (ADR-0022) of every platform
+    """DangerZone removals must drop the completion stamp (ADR-0023) of every platform
     they touch, or the next sync's incremental-skip gate skips the platform wholesale
     and never recreates the removed shortcuts (#1025)."""
 

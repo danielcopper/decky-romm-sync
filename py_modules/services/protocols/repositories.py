@@ -12,7 +12,7 @@ concern — services see a single aggregate.
 The Protocols match the aggregate roots settled in ADR-0003 — ``Rom``,
 ``RomInstall``, ``RomMetadata``, ``Playtime``, ``RomSaveState``, ``BiosFile``,
 ``FirmwareCacheEntry``, ``SyncRun`` — plus ``PlatformSyncState`` (the per-platform
-completion stamp, ADR-0022) and the ``kv_config`` key-value surface.
+completion stamp, ADR-0023) and the ``kv_config`` key-value surface.
 ``SyncSettings``/``Platform``/``Device`` are NOT repositories — ADR-0003 dropped
 those aggregates.
 
@@ -327,7 +327,7 @@ class PlatformSyncStateRepository(Protocol):
 
     Identity is the ``platform_slug``. Backs the incremental-skip gate's honoring
     of durable per-platform progress a cancelled/crashed run leaves behind
-    (ADR-0022).
+    (ADR-0023).
     """
 
     def get(self, platform_slug: str) -> PlatformSyncState | None:
@@ -344,7 +344,7 @@ class PlatformSyncStateRepository(Protocol):
         A no-op when no stamp exists. Called at a platform unit's apply start
         (library/sync_orchestrator.py) so an interrupted re-apply leaves no stale
         stamp, and by the local destructive flows (services/shortcut_removal.py)
-        that unbind a platform's shortcuts outside a sync (ADR-0022).
+        that unbind a platform's shortcuts outside a sync (ADR-0023).
         """
         ...
 

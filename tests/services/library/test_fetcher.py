@@ -449,7 +449,7 @@ class TestIncrementalSkipZeroBoundRows:
 
 
 def _seed_platform_stamp(uow, slug, *, at, rom_count):
-    """Persist a per-platform completion stamp (ADR-0022) so the skip can honor it."""
+    """Persist a per-platform completion stamp (ADR-0023) so the skip can honor it."""
     from domain.platform_sync_state import PlatformSyncState
 
     with uow:
@@ -457,7 +457,7 @@ def _seed_platform_stamp(uow, slug, *, at, rom_count):
 
 
 class TestIncrementalSkipFromPlatformStamp:
-    """Per-platform completion stamp drives the skip even without a completed run (ADR-0022 / #1025).
+    """Per-platform completion stamp drives the skip even without a completed run (ADR-0023 / #1025).
 
     A run that durably synced a platform but was cancelled/crashed before the
     whole run finished leaves NO completed ``SyncRun`` (so the library-wide

@@ -105,7 +105,7 @@ class TestGetLatestTerminal:
 
     def test_returns_interrupted_when_it_is_the_newest_terminal(self, uow: SqliteUnitOfWork):
         # An interrupted run is terminal — it must surface as the newest terminal
-        # (the WHERE clause includes it, and migration 012's CHECK accepts the row).
+        # (the WHERE clause includes it, and migration 013's CHECK accepts the row).
         completed = _running("done", started_at="2026-01-01T00:00:00Z")
         completed.complete(at="2026-01-01T02:00:00Z", platforms=[], collections=[])
         interrupted = _running("interrupt", started_at="2026-01-02T00:00:00Z")

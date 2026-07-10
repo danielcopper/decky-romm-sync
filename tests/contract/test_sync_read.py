@@ -82,7 +82,7 @@ async def test_get_sync_stats_surfaces_cancelled_attempt(harness):
 
 async def test_get_sync_stats_surfaces_interrupted_attempt(harness):
     """An interrupted run (external death) → last_attempt carries the 'interrupted'
-    status through the real SQLite stack (migration 012's widened CHECK accepts the
+    status through the real SQLite stack (migration 013's widened CHECK accepts the
     row; get_latest_terminal surfaces it)."""
     from domain.sync_run import SyncRun
 

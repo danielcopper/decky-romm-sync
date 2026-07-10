@@ -1,6 +1,6 @@
 -- =============================================================================
 -- 012_add_platform_sync_state.sql — per-platform completion stamp table
--- Issue #1025 (chunked apply) / ADR-0022
+-- Issue #1025 (chunked apply) / ADR-0023
 -- =============================================================================
 --
 -- Backs the PlatformSyncState aggregate: one row per platform recording the

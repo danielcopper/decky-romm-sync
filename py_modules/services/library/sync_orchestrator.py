@@ -788,7 +788,7 @@ class SyncOrchestrator:
     def _clear_platform_stamp_io(self, platform_slug: str) -> None:
         """Delete *platform_slug*'s completion stamp in one short write UoW.
 
-        Called at a platform unit's apply start (ADR-0022 / #1025): the stamp
+        Called at a platform unit's apply start (ADR-0023 / #1025): the stamp
         asserts "this platform's last apply completed", so a fresh apply must
         drop it up front and let the final chunk re-write it only on a clean
         finish. A no-op when no stamp exists.
@@ -939,7 +939,7 @@ class SyncOrchestrator:
         # A dedicated short write UoW (not folded into the first chunk's commit)
         # so the clear is unconditional at apply start — even a first-chunk
         # heartbeat-timeout, whose late ack commits without the stamp, leaves no
-        # stale stamp behind (ADR-0022 / #1025).
+        # stale stamp behind (ADR-0023 / #1025).
         if unit.type == "platform" and unit.slug:
             await self._loop.run_in_executor(None, self._clear_platform_stamp_io, unit.slug)
 
@@ -1043,7 +1043,7 @@ class SyncOrchestrator:
             # carry a skip gate — collections have none, so they are never
             # stamped. A cancel or heartbeat timeout mid-unit returns above before
             # the final chunk, so an incomplete platform is never stamped
-            # (ADR-0022 / #1025).
+            # (ADR-0023 / #1025).
             platform_stamp = None
             if unit.type == "platform" and unit.slug and chunk_index == chunk_count - 1:
                 platform_stamp = PlatformSyncState.stamp(

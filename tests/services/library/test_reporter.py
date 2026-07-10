@@ -408,7 +408,7 @@ class TestCommitUnitResults:
 
     def test_commit_persists_platform_stamp_atomically(self, plugin):
         """A passed ``platform_stamp`` lands in the SAME committed UoW as the rom
-        upsert — the per-platform completion stamp is atomic with the chunk (ADR-0022)."""
+        upsert — the per-platform completion stamp is atomic with the chunk (ADR-0023)."""
         from domain.platform_sync_state import PlatformSyncState
 
         uow = plugin._uow
@@ -965,7 +965,7 @@ class TestClearSyncCache:
         assert stats["last_attempt"] is None
 
     def test_clears_platform_completion_stamps(self, plugin):
-        """Force Full Sync also drops the per-platform completion stamps (ADR-0022).
+        """Force Full Sync also drops the per-platform completion stamps (ADR-0023).
 
         Each stamp is its own effective ``last_sync``; leaving them would let an
         unchanged platform still skip after the user asked for a full re-fetch.

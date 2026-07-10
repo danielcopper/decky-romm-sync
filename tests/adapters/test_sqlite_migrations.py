@@ -716,7 +716,7 @@ class Test011RekeySiblingGroupKey:
 
 
 class Test012PlatformSyncState:
-    """012 — adds the platform_sync_state completion-stamp table (#1025 / ADR-0022)."""
+    """012 — adds the platform_sync_state completion-stamp table (#1025 / ADR-0023)."""
 
     def test_table_exists_after_full_apply(self, tmp_path: Path):
         db_path = str(tmp_path / "romm_sync.db")
@@ -867,7 +867,7 @@ class Test013InterruptedSyncRunStatus:
 
     @pytest.mark.parametrize("status", get_args(SyncRunStatus))
     def test_every_domain_status_accepted_by_check(self, tmp_path: Path, status: str):
-        # Bind the domain SyncRunStatus literal to migration 012's CHECK: every value
+        # Bind the domain SyncRunStatus literal to migration 013's CHECK: every value
         # the enum allows must INSERT cleanly. Adding a status to the literal without
         # widening the CHECK then fails CI here (the bogus-status test above guards
         # the reverse direction — a value in the CHECK but not the literal).

@@ -177,7 +177,7 @@ def _seed_completed_run(plugin, *, at, platforms=None, collections=None, run_id=
 
 
 def _seed_platform_stamp(plugin, slug, *, at, rom_count):
-    """Persist a per-platform completion stamp (ADR-0022) into the shared UoW."""
+    """Persist a per-platform completion stamp (ADR-0023) into the shared UoW."""
     from domain.platform_sync_state import PlatformSyncState
 
     with plugin._uow:
@@ -3633,7 +3633,7 @@ class TestPerUnitMetadataStamping:
 
 
 class TestPlatformCompletionStamp:
-    """Per-platform completion stamp written on the final platform chunk (ADR-0022 / #1025).
+    """Per-platform completion stamp written on the final platform chunk (ADR-0023 / #1025).
 
     The stamp lets the next sync's incremental-skip gate skip a platform that fully
     synced inside a run the user later cancelled — the run never completes, so the
@@ -4279,7 +4279,6 @@ class TestFetchNarrationInterplay:
             if c[0][0] == "sync_progress" and c[0][1].get("stage") == "fetching" and i < first_chunk_idx
         ]
         assert fetching_before_chunk
-
 
 
 class TestComponentGroupKeyStamping:
