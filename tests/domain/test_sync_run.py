@@ -151,6 +151,39 @@ class TestMarkCancelled:
             run.mark_cancelled(at="2026-05-28T10:06:00", reason="too late")
 
 
+class TestMarkInterrupted:
+    def test_transitions_to_interrupted_and_records_reason(self):
+        run = _running()
+        run.mark_interrupted(at="2026-05-28T10:05:00", reason="Steam UI stopped responding")
+        assert run.status == "interrupted"
+        assert run.finished_at == "2026-05-28T10:05:00"
+        assert run.error == "Steam UI stopped responding"
+
+    def test_leaves_completed_lists_none(self):
+        run = _running()
+        run.mark_interrupted(at="2026-05-28T10:05:00", reason="external death")
+        assert run.platforms_completed is None
+        assert run.collections_completed is None
+
+    def test_on_completed_run_raises(self):
+        run = _running()
+        run.complete(at="2026-05-28T10:05:00", platforms=[], collections=[])
+        with pytest.raises(ValueError, match="run is not running"):
+            run.mark_interrupted(at="2026-05-28T10:06:00", reason="too late")
+
+    def test_on_interrupted_run_raises(self):
+        run = _running()
+        run.mark_interrupted(at="2026-05-28T10:05:00", reason="external death")
+        with pytest.raises(ValueError, match="run is not running"):
+            run.mark_interrupted(at="2026-05-28T10:06:00", reason="again")
+
+    def test_on_errored_run_raises(self):
+        run = _running()
+        run.mark_errored(at="2026-05-28T10:05:00", error="boom")
+        with pytest.raises(ValueError, match="run is not running"):
+            run.mark_interrupted(at="2026-05-28T10:06:00", reason="too late")
+
+
 class TestMarkErrored:
     def test_transitions_to_errored_and_records_error(self):
         run = _running()

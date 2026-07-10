@@ -62,6 +62,11 @@ if TYPE_CHECKING:
 
 
 _SYNC_CANCELLED = "Sync cancelled"
+# Terminal reason when the run died externally (heartbeat timeout — the
+# frontend crashed or reloaded) rather than by the user's Cancel. Stored in
+# ``sync_runs.error`` via ``mark_interrupted``; the status split lets the UI
+# report "(interrupted)" instead of "(cancelled)" for a crash.
+_SYNC_INTERRUPTED = "Sync interrupted (Steam UI stopped responding)"
 _PREVIEW_MAX_AGE_SECONDS = 1800  # 30 minutes — preview snapshots stale beyond this
 
 # Per-unit heartbeat-based timeout. If the frontend stops calling
@@ -491,6 +496,7 @@ class SyncOrchestrator:
         # happy-path and late-ack commit paths). The stale scan excludes it so
         # a new rom_id reusing an old appId is never wrongly removed (#1036).
         box.committed_app_ids = set()
+        box.run_interrupted = False
         # Capture the run id up front so the terminal SyncRun writes and the
         # ``finally`` reset below operate on a stable id for the lifetime of
         # this run. Every terminal IDLE/None reset for this run is collapsed
@@ -596,7 +602,13 @@ class SyncOrchestrator:
             # mark cancelled; clean runs complete with the synced platform
             # and collection names derived from the built maps.
             if cancelled:
-                await self._loop.run_in_executor(None, self._mark_sync_run_cancelled, run_id, _SYNC_CANCELLED)
+                # A heartbeat-timeout cancel is an external death (frontend
+                # crash/reload) — record it as ``interrupted`` so the UI never
+                # blames a crash on the user's Cancel button.
+                if box.run_interrupted:
+                    await self._loop.run_in_executor(None, self._mark_sync_run_interrupted, run_id, _SYNC_INTERRUPTED)
+                else:
+                    await self._loop.run_in_executor(None, self._mark_sync_run_cancelled, run_id, _SYNC_CANCELLED)
             else:
                 await self._loop.run_in_executor(
                     None,
@@ -655,6 +667,10 @@ class SyncOrchestrator:
     def _mark_sync_run_cancelled(self, run_id: str | None, reason: str) -> None:
         """Transition the SyncRun to ``cancelled``."""
         self._terminate_sync_run(run_id, lambda run: run.mark_cancelled(self._clock.now().isoformat(), reason))
+
+    def _mark_sync_run_interrupted(self, run_id: str | None, reason: str) -> None:
+        """Transition the SyncRun to ``interrupted`` (external death, not user cancel)."""
+        self._terminate_sync_run(run_id, lambda run: run.mark_interrupted(self._clock.now().isoformat(), reason))
 
     def _mark_sync_run_errored(self, run_id: str | None, error: str) -> None:
         """Transition the SyncRun to ``errored``."""
@@ -1011,6 +1027,10 @@ class SyncOrchestrator:
                     # reporter drives that commit itself.
                     box.unit_abandoned = True
                     box.pending_unit_roms = chunk_rows
+                    # The run is ending because the frontend went dark, not
+                    # because the user cancelled — remember that so the terminal
+                    # SyncRun write records ``interrupted``.
+                    box.run_interrupted = True
                     box.request_cancel()
                 return applied_count
 

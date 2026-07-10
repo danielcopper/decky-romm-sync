@@ -3,7 +3,7 @@
 Owns the reconciliation steps that run after state is loaded and
 adapters are wired: drops ``rom_installs`` rows that no longer reflect
 what's on disk, and transitions any ``running`` ``SyncRun`` left behind
-by a crash into ``errored``. The install prune is skipped when the
+by a crash into ``interrupted``. The install prune is skipped when the
 RetroDECK home is missing on disk (boot-time SD-card mount race) so
 legitimate installs on a card that hasn't finished mounting don't get
 wiped on the next reload.
@@ -105,20 +105,21 @@ class StartupHealingService:
                     uow.rom_installs.delete(rom_id)
 
     def reconcile_orphaned_sync_runs(self) -> None:
-        """Transition a ``running`` ``SyncRun`` left by a crash into ``errored``.
+        """Transition a ``running`` ``SyncRun`` left by a crash into ``interrupted``.
 
         A hard crash (process kill, true ``asyncio.CancelledError``) mid-sync
         leaves the run record stuck in ``running`` because no terminal
-        transition fired. On the next startup that orphaned run is marked
-        ``errored`` in a short write UoW so the sync-run history reflects what
+        transition fired. A backend restart mid-run is an external death, not a
+        user Cancel, so on the next startup that orphaned run is marked
+        ``interrupted`` in a short write UoW — the sync-run history reflects what
         actually happened rather than an eternally-in-flight sync.
         """
         with self._uow_factory() as uow:
             run = uow.sync_runs.get_running()
             if run is None:
                 return
-            self._logger.info(f"Healing orphaned sync run {run.id}: marking errored (interrupted by restart)")
-            run.mark_errored(at=self._clock.now().isoformat(), error="interrupted by restart")
+            self._logger.info(f"Healing orphaned sync run {run.id}: marking interrupted (backend restarted mid-run)")
+            run.mark_interrupted(at=self._clock.now().isoformat(), reason="interrupted by restart")
             uow.sync_runs.save(run)
 
     def get_installed_relaunch_options(self) -> list[dict[str, Any]]:

@@ -214,8 +214,8 @@ class TestReconcileOrphanedSyncRuns:
         with uow:
             uow.sync_runs.save(run)
 
-    def test_running_run_marked_errored(self, logger):
-        """A crash-orphaned running run transitions to errored with the restart reason."""
+    def test_running_run_marked_interrupted(self, logger):
+        """A crash-orphaned running run transitions to interrupted with the restart reason."""
         uow = FakeUnitOfWork()
         clock = FakeClock()
         self._seed_run(
@@ -228,7 +228,7 @@ class TestReconcileOrphanedSyncRuns:
         with uow:
             healed = uow.sync_runs.get("run-1")
         assert healed is not None
-        assert healed.status == "errored"
+        assert healed.status == "interrupted"
         assert healed.error == "interrupted by restart"
         assert healed.finished_at == clock.now().isoformat()
         assert uow.committed is True

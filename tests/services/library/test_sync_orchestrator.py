@@ -2131,6 +2131,38 @@ class TestSyncRunLifecycle:
         assert run.error == "Sync cancelled"
 
     @pytest.mark.asyncio
+    async def test_heartbeat_timeout_run_persists_interrupted(self, plugin, fake_romm_api):
+        """A heartbeat timeout (the frontend stopped responding, not a user cancel)
+        ends the run as ``interrupted`` — the terminal write branches on
+        ``box.run_interrupted`` so a crash is never blamed on the user's Cancel."""
+        from services.library import sync_orchestrator
+
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 10, "name": "A"}])
+        plugin.settings["enabled_platforms"] = {"1": True}
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        # Heartbeat timeout: the wait gives up (None) while the box is still
+        # RUNNING — _sync_one_unit flags run_interrupted and requests the cancel.
+        async def wait_timeout(_u, _event):
+            return
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = wait_timeout
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-interrupted"
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        with plugin._uow as uow:
+            run = uow.sync_runs.get("run-interrupted")
+        assert run is not None
+        assert run.status == "interrupted"
+        assert run.finished_at is not None
+        assert run.error == sync_orchestrator._SYNC_INTERRUPTED
+
+    @pytest.mark.asyncio
     async def test_exception_in_unit_loop_persists_errored(self, plugin, fake_romm_api):
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)

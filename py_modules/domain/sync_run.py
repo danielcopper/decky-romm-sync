@@ -1,8 +1,11 @@
 """SyncRun — one sync operation modelled as a single-shot state machine.
 
 A run starts ``running`` and transitions exactly once into a terminal state
-(``completed`` / ``cancelled`` / ``errored``); the terminal transition is
-irreversible. Replaces the scattered last-sync scalars (last_sync timestamp,
+(``completed`` / ``cancelled`` / ``interrupted`` / ``errored``); the terminal
+transition is irreversible. ``cancelled`` records user intent; ``interrupted``
+records an external death (the frontend stopped responding, or the backend was
+restarted mid-run) — the split lets the UI say "interrupted" instead of blaming
+a crash on the user's Cancel button. Replaces the scattered last-sync scalars (last_sync timestamp,
 sync_stats, last_synced_platforms, last_synced_collections) with one record
 that carries the plan, the outcome, and the timestamps of a sync. The id and
 all timestamps are injected by the caller — domain owns no clock or id source.
@@ -14,7 +17,7 @@ from typing import Literal
 
 from domain._aggregate import cosmic_aggregate
 
-SyncRunStatus = Literal["running", "completed", "cancelled", "errored"]
+SyncRunStatus = Literal["running", "completed", "cancelled", "interrupted", "errored"]
 
 
 @cosmic_aggregate
@@ -67,6 +70,13 @@ class SyncRun:
         """Terminate the run as cancelled, recording the human-readable reason."""
         self._require_running()
         self.status = "cancelled"
+        self.finished_at = at
+        self.error = reason
+
+    def mark_interrupted(self, at: str, reason: str) -> None:
+        """Terminate the run as interrupted — ended by an external death, not user intent."""
+        self._require_running()
+        self.status = "interrupted"
         self.finished_at = at
         self.error = reason
 

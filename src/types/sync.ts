@@ -65,7 +65,7 @@ export interface SyncStats {
    * "Never" after thousands of shortcuts were applied. ``null`` (or absent) when
    * the most recent terminal run completed cleanly.
    */
-  last_attempt?: { finished_at: string; status: "cancelled" | "errored" } | null;
+  last_attempt?: { finished_at: string; status: "cancelled" | "errored" | "interrupted" } | null;
   platforms: number;
   collections?: number;
   roms: number;

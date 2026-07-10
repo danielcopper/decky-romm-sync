@@ -80,6 +80,22 @@ async def test_get_sync_stats_surfaces_cancelled_attempt(harness):
     assert result["last_attempt"] == {"finished_at": "2025-06-01T17:48:00", "status": "cancelled"}
 
 
+async def test_get_sync_stats_surfaces_interrupted_attempt(harness):
+    """An interrupted run (external death) → last_attempt carries the 'interrupted'
+    status through the real SQLite stack (migration 012's widened CHECK accepts the
+    row; get_latest_terminal surfaces it)."""
+    from domain.sync_run import SyncRun
+
+    run = SyncRun.start(id="run-i", at="2025-06-01T17:00:00", platforms_planned=1, roms_planned=1)
+    run.mark_interrupted("2025-06-01T17:48:00", "Sync interrupted (Steam UI stopped responding)")
+    with harness.uow_factory() as uow:
+        uow.sync_runs.save(run)
+
+    result = await harness.plugin.get_sync_stats()
+    assert result["last_sync"] is None
+    assert result["last_attempt"] == {"finished_at": "2025-06-01T17:48:00", "status": "interrupted"}
+
+
 async def test_get_sync_stats_counts_bound_roms(harness):
     """A bound ROM row lifts the roms / total_shortcuts counts."""
     seed_rom(harness, 11, platform_slug="snes")

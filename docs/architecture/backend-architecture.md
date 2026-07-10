@@ -149,10 +149,10 @@ SQLite, not JSON. The reporter upserts each acked ROM into the `roms` table via 
 / `assign_sgdb_id` (artwork and steamgrid patch `cover_path` / `sgdb_id` on the same aggregate during the per-unit
 commit) and, in the same write UoW, stamps the ROM's cached `rom_metadata` (`build_rom_metadata` maps the live RomM
 `metadatum` — Rom row saved first so the `rom_id` FK holds); the orchestrator drives the `SyncRun` lifecycle (`start` at
-apply-dispatch, `complete` / `mark_cancelled` / `mark_errored` at finalize). `sync_stats.roms` is a registry-derived
-bound-shortcut count computed at read time (the ROMs still bound to a shortcut in `roms`, i.e. `shortcut_app_id` not
-NULL), not a stored scalar. The old JSON `shortcut_registry` / `last_sync` / `sync_stats` are gone from this path; all
-writes go through the `roms` / `sync_runs` Repository Protocols behind a narrow Unit of Work (per
+apply-dispatch, `complete` / `mark_cancelled` / `mark_interrupted` / `mark_errored` at finalize). `sync_stats.roms` is a
+registry-derived bound-shortcut count computed at read time (the ROMs still bound to a shortcut in `roms`, i.e.
+`shortcut_app_id` not NULL), not a stored scalar. The old JSON `shortcut_registry` / `last_sync` / `sync_stats` are gone
+from this path; all writes go through the `roms` / `sync_runs` Repository Protocols behind a narrow Unit of Work (per
 [ADR-0006](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0006-narrow-unit-of-work-scope.md) the UoW
 spans only the DB write, never the up-to-60s frontend ack). The platform `slug → display_name` map resolves live from
 RomM each sync and is cached in a `kv_config` row for offline reads. Removing a shortcut **unbinds** the ROM

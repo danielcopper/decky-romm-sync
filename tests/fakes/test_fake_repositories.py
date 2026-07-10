@@ -329,6 +329,16 @@ class TestFakeSyncRunRepository:
         assert latest.id == "x1"
         assert latest.status == "cancelled"
 
+        # An interrupted run is also terminal — a newer one wins the hint.
+        interrupted = SyncRun.start(id="i1", at="2026-03-01T00:00:00Z", platforms_planned=1, roms_planned=1)
+        interrupted.mark_interrupted(at="2026-03-01T01:00:00Z", reason="external death")
+        repo.save(interrupted)
+
+        latest = repo.get_latest_terminal()
+        assert latest is not None
+        assert latest.id == "i1"
+        assert latest.status == "interrupted"
+
 
 class TestFakePlatformSyncStateRepository:
     def test_round_trip_upsert_clear(self):

@@ -302,11 +302,16 @@ class SyncReporter:
 
         total = await self._loop.run_in_executor(None, self._count_bound_roms)
         if cancelled:
+            # A heartbeat-timeout run routes through this same cancelled finalize,
+            # so key the leading word on the box's run_interrupted flag — the frame
+            # then reads "interrupted" instead of blaming the user's Cancel button
+            # (stage stays CANCELLED; last_attempt already reads "interrupted").
+            lead = "Sync interrupted" if self._sync_state.run_interrupted else "Sync cancelled"
             await self._emit_progress(
                 SyncStage.CANCELLED,
                 current=total_games,
                 total=total,
-                message=f"Sync cancelled: {total_games} of {total} games processed",
+                message=f"{lead}: {total_games} of {total} games processed",
                 running=False,
             )
         else:
@@ -616,8 +621,8 @@ class SyncReporter:
         runs would leave the per-platform stamps in place, and each stamp is its
         own ``effective_last_sync`` that would still skip an unchanged platform.
         Deleting the run history (every terminal run, not only completed ones, so
-        no stale cancelled/errored run lingers as the last-attempt "Last sync"
-        hint) and clearing every stamp in one short write UoW resets both reads so
+        no stale cancelled/interrupted/errored run lingers as the last-attempt "Last
+        sync" hint) and clearing every stamp in one short write UoW resets both reads so
         every platform full-fetches next time (and "Last sync" honestly reads
         "Never" until a fresh run completes).
         """
@@ -651,9 +656,9 @@ class SyncReporter:
         """Read ``(last_sync_iso, last_attempt, bound_rom_count)`` from SQLite.
 
         ``last_sync`` is the ``finished_at`` of the latest completed ``SyncRun``;
-        ``last_attempt`` surfaces the newest cancelled/errored run when it is newer
-        than that (see :meth:`_last_attempt`); the ROM count is the bound-shortcut
-        count in ``roms``.
+        ``last_attempt`` surfaces the newest cancelled/interrupted/errored run when
+        it is newer than that (see :meth:`_last_attempt`); the ROM count is the
+        bound-shortcut count in ``roms``.
         """
         with self._uow_factory() as uow:
             completed = uow.sync_runs.get_latest_completed()
@@ -664,14 +669,15 @@ class SyncReporter:
 
     @staticmethod
     def _last_attempt(completed: SyncRun | None, terminal: SyncRun | None) -> dict[str, str] | None:
-        """The newest cancelled/errored run, but only when it is newer than the last completed one.
+        """The newest cancelled/interrupted/errored run, but only when it is newer than the last completed one.
 
-        A run that ended without completing (cancelled or crash-interrupted) still
-        applied shortcuts; without this the last-completed-only ``last_sync`` read
-        reports "Never" even after thousands of games synced. Returns ``None`` when
-        the newest terminal run completed cleanly (``last_sync`` already covers it)
-        or when a completed run is at least as recent as the attempt. ``finished_at``
-        is guaranteed set on a terminal run (mark_cancelled/mark_errored stamp it).
+        A run that ended without completing (cancelled, interrupted, or errored)
+        still applied shortcuts; without this the last-completed-only ``last_sync``
+        read reports "Never" even after thousands of games synced. Returns ``None``
+        when the newest terminal run completed cleanly (``last_sync`` already covers
+        it) or when a completed run is at least as recent as the attempt.
+        ``finished_at`` is guaranteed set on a terminal run
+        (mark_cancelled/mark_interrupted/mark_errored stamp it).
         """
         if terminal is None or terminal.status == "completed":
             return None

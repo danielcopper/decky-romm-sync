@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
 from adapters.sqlite_migrations import MIGRATIONS_DIR, _discover_migrations, apply_migrations
+from domain.sync_run import SyncRunStatus
 
 # The 13 tables the shipped v1 schema (001_initial.sql) declares.
 _V1_TABLES = {
@@ -72,8 +74,9 @@ def _set_user_version(db_path: str, version: int) -> None:
 # + 005_unconfirm_legacy_slot_confirmations + 006_native_play_sessions
 # + 007_add_last_played + 008_add_version_metadata
 # + 009_add_last_session_start_monotonic + 010_add_sibling_group_key_index
-# + 011_rekey_sibling_group_key + 012_add_platform_sync_state).
-_SHIPPED_VERSION = 12
+# + 011_rekey_sibling_group_key + 012_add_platform_sync_state
+# + 013_add_interrupted_sync_run_status).
+_SHIPPED_VERSION = 13
 
 # Tables after every shipped migration: the v1 set plus 006's play-session outbox
 # and 012's per-platform completion stamp.
@@ -762,6 +765,122 @@ class Test012PlatformSyncState:
 
         assert final_version == _SHIPPED_VERSION
         assert "platform_sync_state" in _tables(db_path)
+
+
+def _insert_sync_run(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    status: str,
+    finished_at: str | None = None,
+    error: str | None = None,
+) -> None:
+    """Insert a minimal ``sync_runs`` row directly (bypassing the adapter) for migration tests."""
+    conn.execute(
+        "INSERT INTO sync_runs (id, started_at, status, platforms_planned, roms_planned, finished_at, error) "
+        "VALUES (?, '2026-05-28T10:00:00', ?, 3, 120, ?, ?)",
+        (run_id, status, finished_at, error),
+    )
+
+
+class Test013InterruptedSyncRunStatus:
+    """013 — widens the sync_runs status CHECK with 'interrupted' via an in-place table rebuild (#1025)."""
+
+    def test_rebuild_preserves_existing_rows(self, tmp_path: Path):
+        # Seed a completed + a cancelled run at v12 (before the rebuild), then apply
+        # 013 and assert every column of both rows survives the copy unchanged.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 12)))
+        assert _user_version(db_path) == 12
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            _insert_sync_run(conn, run_id="run-done", status="completed", finished_at="2026-05-28T10:05:00")
+            _insert_sync_run(
+                conn,
+                run_id="run-cancel",
+                status="cancelled",
+                finished_at="2026-05-28T11:05:00",
+                error="user aborted",
+            )
+        finally:
+            conn.close()
+
+        final_version = apply_migrations(db_path)
+
+        assert final_version == _SHIPPED_VERSION
+        assert _user_version(db_path) == 13
+        conn = sqlite3.connect(db_path)
+        try:
+            rows = conn.execute(
+                "SELECT id, started_at, status, platforms_planned, roms_planned, finished_at, "
+                "platforms_completed, collections_completed, error FROM sync_runs ORDER BY id"
+            ).fetchall()
+        finally:
+            conn.close()
+        assert rows == [
+            (
+                "run-cancel",
+                "2026-05-28T10:00:00",
+                "cancelled",
+                3,
+                120,
+                "2026-05-28T11:05:00",
+                None,
+                None,
+                "user aborted",
+            ),
+            ("run-done", "2026-05-28T10:00:00", "completed", 3, 120, "2026-05-28T10:05:00", None, None, None),
+        ]
+
+    def test_interrupted_status_accepted_after_rebuild(self, tmp_path: Path):
+        # The widened CHECK accepts the new terminal status.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path)
+        assert _user_version(db_path) == _SHIPPED_VERSION
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            _insert_sync_run(
+                conn,
+                run_id="run-int",
+                status="interrupted",
+                finished_at="2026-05-28T12:05:00",
+                error="external death",
+            )
+            status = conn.execute("SELECT status FROM sync_runs WHERE id = 'run-int'").fetchone()[0]
+        finally:
+            conn.close()
+        assert status == "interrupted"
+
+    def test_bogus_status_rejected_by_surviving_check(self, tmp_path: Path):
+        # The rebuilt table keeps its status CHECK — an unknown status still raises.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path)
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            with pytest.raises(sqlite3.IntegrityError):
+                _insert_sync_run(conn, run_id="run-bad", status="teleported", finished_at="2026-05-28T13:05:00")
+        finally:
+            conn.close()
+
+    @pytest.mark.parametrize("status", get_args(SyncRunStatus))
+    def test_every_domain_status_accepted_by_check(self, tmp_path: Path, status: str):
+        # Bind the domain SyncRunStatus literal to migration 012's CHECK: every value
+        # the enum allows must INSERT cleanly. Adding a status to the literal without
+        # widening the CHECK then fails CI here (the bogus-status test above guards
+        # the reverse direction — a value in the CHECK but not the literal).
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path)
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            _insert_sync_run(conn, run_id=f"run-{status}", status=status)
+            stored = conn.execute("SELECT status FROM sync_runs WHERE id = ?", (f"run-{status}",)).fetchone()[0]
+        finally:
+            conn.close()
+        assert stored == status
 
 
 def test_shipped_migrations_dir_resolves_to_real_schema():

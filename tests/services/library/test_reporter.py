@@ -141,6 +141,15 @@ class TestGetSyncStatsLastAttempt:
         with uow:
             uow.sync_runs.save(run)
 
+    @staticmethod
+    def _interrupted(uow, *, id, started, finished, reason="Sync interrupted (Steam UI stopped responding)"):
+        from domain.sync_run import SyncRun
+
+        run = SyncRun.start(id=id, at=started, platforms_planned=1, roms_planned=1)
+        run.mark_interrupted(finished, reason)
+        with uow:
+            uow.sync_runs.save(run)
+
     @pytest.mark.asyncio
     async def test_no_runs_reports_no_attempt(self, plugin):
         stats = await plugin.get_sync_stats()
@@ -179,6 +188,18 @@ class TestGetSyncStatsLastAttempt:
         stats = await plugin.get_sync_stats()
         assert stats["last_sync"] == "2025-06-01T09:30:00"
         assert stats["last_attempt"] == {"finished_at": "2025-06-02T08:20:00", "status": "cancelled"}
+
+    @pytest.mark.asyncio
+    async def test_interrupted_newer_than_completed_surfaces_attempt(self, plugin):
+        """An interrupted run (external death) newer than the last completed one →
+        last_attempt carries the 'interrupted' status (get_latest_terminal must
+        include interrupted, or this run would be invisible to the hint)."""
+        self._completed(plugin._uow, id="run-ok", started="2025-06-01T09:00:00", finished="2025-06-01T09:30:00")
+        self._interrupted(plugin._uow, id="run-i", started="2025-06-02T08:00:00", finished="2025-06-02T08:20:00")
+
+        stats = await plugin.get_sync_stats()
+        assert stats["last_sync"] == "2025-06-01T09:30:00"
+        assert stats["last_attempt"] == {"finished_at": "2025-06-02T08:20:00", "status": "interrupted"}
 
     @pytest.mark.asyncio
     async def test_completed_newer_than_cancelled_hides_attempt(self, plugin):
@@ -1080,6 +1101,49 @@ class TestFinalizePerUnitRun:
         complete_events = [c for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
         assert len(complete_events) == 1
         assert "cancelled" not in complete_events[0][0][1]
+
+    @pytest.mark.asyncio
+    async def test_cancelled_finalize_frame_says_cancelled_when_not_interrupted(self, plugin):
+        """A user cancel (box.run_interrupted False) → the terminal CANCELLED frame
+        leads with 'Sync cancelled:'."""
+        import decky
+
+        decky.emit.reset_mock()
+        plugin._sync_service._box.run_interrupted = False
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={},
+            pending_platform_rom_ids=set(),
+            total_games=3,
+            platform_names={},
+            cancelled=True,
+        )
+
+        progress = plugin._sync_service._sync_progress
+        assert progress["stage"] == "cancelled"
+        assert progress["message"].startswith("Sync cancelled: ")
+
+    @pytest.mark.asyncio
+    async def test_cancelled_finalize_frame_says_interrupted_when_run_interrupted(self, plugin):
+        """A heartbeat-timeout run routes through the same cancelled finalize; with
+        box.run_interrupted set the terminal frame leads with 'Sync interrupted:'
+        (stage stays CANCELLED — no new SyncStage)."""
+        import decky
+
+        decky.emit.reset_mock()
+        plugin._sync_service._box.run_interrupted = True
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={},
+            pending_platform_rom_ids=set(),
+            total_games=3,
+            platform_names={},
+            cancelled=True,
+        )
+
+        progress = plugin._sync_service._sync_progress
+        assert progress["stage"] == "cancelled"
+        assert progress["message"].startswith("Sync interrupted: ")
 
     @pytest.mark.asyncio
     async def test_does_not_reset_run_lifecycle(self, plugin):

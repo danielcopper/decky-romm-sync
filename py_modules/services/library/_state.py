@@ -109,6 +109,12 @@ class LibrarySyncStateBox:
     # observes this flag and drives the per-unit commit itself so the
     # delivered bindings are persisted rather than discarded (#1052).
     unit_abandoned: bool = False
+    # Set True (alongside ``unit_abandoned``) when a heartbeat timeout ends the
+    # run, so the terminal ``SyncRun`` write records ``interrupted`` — an
+    # external death (frontend crash/reload) — instead of ``cancelled``, which
+    # is reserved for the user's own Cancel. Reset at the start of each run;
+    # never reset by the per-chunk loop, so a timeout anywhere in the run wins.
+    run_interrupted: bool = False
     # The abandoned CHUNK's rows (the fetched ROMs of the in-flight chunk's
     # sibling groups, each the source of its ``metadatum``), stashed so a late
     # ack can rebuild ``acked_roms`` for the commit it drives. Only the chunk
