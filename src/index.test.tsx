@@ -659,6 +659,100 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
     expect(logError).toHaveBeenCalledWith(expect.stringContaining("cover mtime nudge failed"));
     plugin.onDismount();
   });
+
+  it("re-sweeps the same created appIds ~90s later (recovers overviews Steam re-materialized)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const plugin = pluginFactory();
+      await vi.advanceTimersByTimeAsync(0); // settle startup
+      const o100 = seedOverview(100);
+      const o200 = seedOverview(200);
+      recordSyncCreated(100);
+      recordSyncCreated(200);
+
+      emitSyncComplete({ platform_app_ids: {}, total_games: 2 });
+      await vi.advanceTimersByTimeAsync(0); // settle the immediate sweep
+      expect(typeof o100.rt_custom_image_mtime).toBe("number");
+      expect(vi.mocked(logInfo)).toHaveBeenCalledWith("[FE] cover mtime nudge: 2 stamped, 0 no overview");
+
+      // Steam re-materialized both overviews shortly after creation, wiping the
+      // JS-set stamps. Advancing past the re-sweep delay must re-stamp them.
+      getAppOverview.mockClear();
+      vi.mocked(logInfo).mockClear();
+      delete o100.rt_custom_image_mtime;
+      delete o200.rt_custom_image_mtime;
+      await vi.advanceTimersByTimeAsync(90_000);
+
+      expect(getAppOverview).toHaveBeenCalledWith(100);
+      expect(getAppOverview).toHaveBeenCalledWith(200);
+      expect(typeof o100.rt_custom_image_mtime).toBe("number");
+      expect(typeof o200.rt_custom_image_mtime).toBe("number");
+      expect(vi.mocked(logInfo)).toHaveBeenCalledWith("[FE] cover mtime nudge (re-sweep): 2 stamped, 0 no overview");
+      plugin.onDismount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a second sync_complete before the timer fires supersedes the first (only the newer list re-swept)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const plugin = pluginFactory();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // First run created appId 100 → schedules a re-sweep over [100].
+      const o100 = seedOverview(100);
+      recordSyncCreated(100);
+      emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Second run (before the first re-sweep fires) created appId 200. Its
+      // onSyncComplete clears the pending timer and reschedules over [200] only.
+      const o200 = seedOverview(200);
+      recordSyncCreated(200);
+      emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+
+      getAppOverview.mockClear();
+      delete o100.rt_custom_image_mtime;
+      delete o200.rt_custom_image_mtime;
+      await vi.advanceTimersByTimeAsync(90_000);
+
+      // Only the newer list [200] was re-swept — 100 is never re-looked-up, so its
+      // stamp stays wiped (the superseded first timer did not fire).
+      expect(getAppOverview).toHaveBeenCalledWith(200);
+      expect(getAppOverview).not.toHaveBeenCalledWith(100);
+      expect(typeof o200.rt_custom_image_mtime).toBe("number");
+      expect(o100.rt_custom_image_mtime).toBeUndefined();
+      plugin.onDismount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("plugin cleanup clears the pending re-sweep (advance after unload → no re-sweep, no throw)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const plugin = pluginFactory();
+      await vi.advanceTimersByTimeAsync(0);
+      const o100 = seedOverview(100);
+      recordSyncCreated(100);
+      emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Unload BEFORE the re-sweep delay elapses.
+      plugin.onDismount();
+      getAppOverview.mockClear();
+      delete o100.rt_custom_image_mtime;
+
+      // The cleared timer must not fire when time advances past the delay.
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(getAppOverview).not.toHaveBeenCalled();
+      expect(o100.rt_custom_image_mtime).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("index.tsx — corrupt-settings reset notice", () => {
