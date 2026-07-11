@@ -748,6 +748,29 @@ class LibraryFetcher:
 
         return unit_roms, False
 
+    async def _fetch_collection_page(
+        self, unit: WorkUnit, limit: int, offset: int
+    ) -> dict[str, Any] | list[dict[str, Any]]:
+        """Fetch one page of a collection unit's ROMs via its kind-specific endpoint.
+
+        A ``franchise`` collection is a RomM *virtual* collection (string id), a
+        ``smart`` collection a saved-search (int id), and the default a regular
+        user collection (int id) — each has its own list endpoint. ``dict | list``
+        keeps the caller's isinstance guard genuine: the paginated endpoints return
+        ``{"items": [...]}`` but a bare-list response shape is tolerated.
+        """
+        if unit.collection_kind == "franchise":
+            return await self._loop.run_in_executor(
+                None, self._romm_api.list_roms_by_virtual_collection, str(unit.id), limit, offset
+            )
+        if unit.collection_kind == "smart":
+            return await self._loop.run_in_executor(
+                None, self._romm_api.list_roms_by_smart_collection, int(unit.id), limit, offset
+            )
+        return await self._loop.run_in_executor(
+            None, self._romm_api.list_roms_by_collection, int(unit.id), limit, offset
+        )
+
     async def fetch_collection_unit(
         self, unit: WorkUnit, synced_rom_ids: set[int], *, progress_step: int = 0, progress_total_steps: int = 0
     ) -> tuple[list[dict[str, Any]], list[int]]:
@@ -790,21 +813,7 @@ class LibraryFetcher:
                 progress_step=progress_step,
                 progress_total_steps=progress_total_steps,
             )
-            if unit.collection_kind == "franchise":
-                # ``dict | list`` keeps the isinstance guard below genuine:
-                # the paginated endpoint returns ``{"items": [...]}`` but the
-                # else-branch tolerates a bare-list response shape.
-                page: dict[str, Any] | list[dict[str, Any]] = await self._loop.run_in_executor(
-                    None, self._romm_api.list_roms_by_virtual_collection, str(unit.id), limit, offset
-                )
-            elif unit.collection_kind == "smart":
-                page = await self._loop.run_in_executor(
-                    None, self._romm_api.list_roms_by_smart_collection, int(unit.id), limit, offset
-                )
-            else:
-                page = await self._loop.run_in_executor(
-                    None, self._romm_api.list_roms_by_collection, int(unit.id), limit, offset
-                )
+            page = await self._fetch_collection_page(unit, limit, offset)
 
             items = page.get("items", []) if isinstance(page, dict) else page
             for rom in items:

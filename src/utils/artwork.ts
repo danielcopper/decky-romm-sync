@@ -20,6 +20,21 @@ import { detach } from "./detach";
  */
 const artworkGenerations = new Map<number, number>();
 
+/**
+ * Apply the SGDB icon (type 4): the backend writes the PNG into Steam's grid dir
+ * and returns its path; pointing the shortcut at it must go through SteamClient
+ * (Steam owns shortcuts.vdf in memory and clobbers external writes). Returns
+ * whether the icon was actually applied — a save failure or a missing path is not.
+ */
+async function applyIcon(appId: number, base64: string): Promise<boolean> {
+  const iconResult = await saveShortcutIcon(appId, base64);
+  if (iconResult.success && iconResult.icon_path) {
+    SteamClient.Apps.SetShortcutIcon(appId, iconResult.icon_path);
+    return true;
+  }
+  return false;
+}
+
 /** Fetch SGDB artwork (hero, logo, wide grid, icon) and apply to Steam.
  *  Returns count of successfully applied images, or -1 when no SGDB API
  *  key is configured. */
@@ -46,34 +61,23 @@ export async function applyArtwork(romId: number, appId: number): Promise<number
     return applied;
   };
 
-  // SGDB type 1 = hero → Steam assetType 1
-  if (results[0].base64) {
+  // SGDB types 1-3 (hero / logo / wide grid) map 1:1 to Steam capsule assetTypes 1-3.
+  const customArt: Array<[base64: string | null, assetType: number]> = [
+    [results[0].base64, 1],
+    [results[1].base64, 2],
+    [results[2].base64, 3],
+  ];
+  for (const [base64, assetType] of customArt) {
+    if (!base64) continue;
     if (superseded()) return bail();
-    await SteamClient.Apps.SetCustomArtworkForApp(appId, results[0].base64, "png", 1);
+    await SteamClient.Apps.SetCustomArtworkForApp(appId, base64, "png", assetType);
     applied++;
   }
-  // SGDB type 2 = logo → Steam assetType 2
-  if (results[1].base64) {
-    if (superseded()) return bail();
-    await SteamClient.Apps.SetCustomArtworkForApp(appId, results[1].base64, "png", 2);
-    applied++;
-  }
-  // SGDB type 3 = wide grid → Steam assetType 3
-  if (results[2].base64) {
-    if (superseded()) return bail();
-    await SteamClient.Apps.SetCustomArtworkForApp(appId, results[2].base64, "png", 3);
-    applied++;
-  }
-  // Type 4 = icon. The backend writes the PNG into Steam's grid dir and
-  // returns its path; pointing the shortcut at it must go through SteamClient
-  // (Steam owns shortcuts.vdf in memory and clobbers external writes).
+
+  // Type 4 = icon (a distinct apply path — see applyIcon).
   if (results[3].base64) {
     if (superseded()) return bail();
-    const iconResult = await saveShortcutIcon(appId, results[3].base64);
-    if (iconResult.success && iconResult.icon_path) {
-      SteamClient.Apps.SetShortcutIcon(appId, iconResult.icon_path);
-      applied++;
-    }
+    if (await applyIcon(appId, results[3].base64)) applied++;
   }
 
   return applied;

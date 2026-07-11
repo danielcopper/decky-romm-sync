@@ -227,13 +227,15 @@ export default definePlugin(() => {
     const cache: Record<string, RomMetadata> = {};
     let collected = 0;
     let total = Number.POSITIVE_INFINITY;
-    for (let offset = 0; collected < total; offset += METADATA_PAGE_SIZE) {
+    let offset = 0;
+    while (collected < total) {
       const page = await withTimeout(getMetadataCachePage(offset, METADATA_PAGE_SIZE), CALLABLE_TIMEOUT);
       total = page.total;
       const keys = Object.keys(page.items);
       if (keys.length === 0) break;
       for (const key of keys) cache[key] = page.items[key]!;
       collected += keys.length;
+      offset += METADATA_PAGE_SIZE;
     }
 
     registerMetadataPatches(cache, appIdMap);

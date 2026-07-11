@@ -194,6 +194,6 @@ export function liveEtaSeconds(): number | null {
  * tick as the caller passes a fresh ``nowMs`` on each progress frame.
  */
 export function displayedEtaSeconds(nowMs: number): number | null {
-  if (_run === null || _run.deadlineMs === null) return null;
+  if (_run?.deadlineMs == null) return null;
   return Math.max(0, (_run.deadlineMs - nowMs) / 1000);
 }

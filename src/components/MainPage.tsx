@@ -179,6 +179,33 @@ function formatClockTime(iso: string): string {
   return `${hh}:${mm}`;
 }
 
+/** The "Last sync" field value. A completed run shows its relative time (plus a
+ *  subtle newer cancelled/crashed attempt line); with no completed run ever, a
+ *  cancelled/crashed attempt is surfaced so it never reads a bare "Never" after
+ *  thousands of games synced (#1367); otherwise "Never". */
+function lastSyncValue(stats: SyncStats): ReactNode {
+  if (stats.last_sync) {
+    return (
+      <span style={{ fontSize: "12px", display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+        <span>{formatLastSync(stats.last_sync)}</span>
+        {stats.last_attempt && (
+          <span style={{ opacity: 0.6 }}>
+            last attempt: {formatClockTime(stats.last_attempt.finished_at)} ({stats.last_attempt.status})
+          </span>
+        )}
+      </span>
+    );
+  }
+  if (stats.last_attempt) {
+    return (
+      <span style={{ fontSize: "12px" }}>
+        {formatClockTime(stats.last_attempt.finished_at)} ({stats.last_attempt.status})
+      </span>
+    );
+  }
+  return <span style={{ fontSize: "12px" }}>Never</span>;
+}
+
 function formatPreviewDescription(s: SyncPreviewSummary): string {
   const sections: string[] = [];
   const romChanges = formatChanges([
@@ -627,12 +654,12 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // back to the static seed carried on the store as an upper bound ("up to
   // ~X min"). Absent both, the row is omitted (honest silence).
   const staticEtaSeconds = syncProgress?.etaSeconds;
-  const etaText =
-    liveEtaDisplay !== null
-      ? formatEtaCountdown(liveEtaDisplay)
-      : staticEtaSeconds !== undefined
-        ? `up to ${formatDuration(staticEtaSeconds)}`
-        : null;
+  let etaText: string | null = null;
+  if (liveEtaDisplay !== null) {
+    etaText = formatEtaCountdown(liveEtaDisplay);
+  } else if (staticEtaSeconds !== undefined) {
+    etaText = `up to ${formatDuration(staticEtaSeconds)}`;
+  }
 
   const activeDownloads = downloads.filter((d) => d.status === "queued" || d.status === "downloading");
   const completedDownloads = downloads.filter(
@@ -919,31 +946,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         {stats && (
           <>
             <PanelSectionRow>
-              <Field label="Last sync">
-                {stats.last_sync ? (
-                  // A completed run exists. Show its relative time; when a newer
-                  // run ended without completing (cancelled/crashed), the backend
-                  // surfaces it as last_attempt — add a subtle second line so the
-                  // "Last sync" time isn't mistaken for the most recent activity.
-                  <span style={{ fontSize: "12px", display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                    <span>{formatLastSync(stats.last_sync)}</span>
-                    {stats.last_attempt && (
-                      <span style={{ opacity: 0.6 }}>
-                        last attempt: {formatClockTime(stats.last_attempt.finished_at)} ({stats.last_attempt.status})
-                      </span>
-                    )}
-                  </span>
-                ) : stats.last_attempt ? (
-                  // No completed run ever, but a cancelled/crashed run left rows
-                  // behind — surface the attempt so it never reads a bare "Never"
-                  // after thousands of games were synced (#1367-class report).
-                  <span style={{ fontSize: "12px" }}>
-                    {formatClockTime(stats.last_attempt.finished_at)} ({stats.last_attempt.status})
-                  </span>
-                ) : (
-                  <span style={{ fontSize: "12px" }}>Never</span>
-                )}
-              </Field>
+              <Field label="Last sync">{lastSyncValue(stats)}</Field>
             </PanelSectionRow>
             {stats.roms > 0 && (
               <PanelSectionRow>

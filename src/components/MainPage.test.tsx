@@ -1160,7 +1160,7 @@ describe("MainPage", () => {
       expect(stage!.parentElement?.querySelector('[data-testid="spinner"]')).not.toBeNull();
       // No second spinner — the fine line is absent, and the connection row is
       // "Connected" (icon, no spinner).
-      expect(container.querySelectorAll('[data-testid="spinner"]').length).toBe(1);
+      expect(container.querySelectorAll('[data-testid="spinner"]')).toHaveLength(1);
     });
 
     it("shows only the fine-line spinner (no stage-label spinner) once fine detail exists", async () => {
@@ -1178,7 +1178,7 @@ describe("MainPage", () => {
       const stage = container.querySelector('[data-testid="sync-stage"]');
       // No spinner beside the stage label — the fine line owns the only spinner.
       expect(stage!.parentElement?.querySelector('[data-testid="spinner"]')).toBeNull();
-      expect(container.querySelectorAll('[data-testid="spinner"]').length).toBe(1);
+      expect(container.querySelectorAll('[data-testid="spinner"]')).toHaveLength(1);
     });
   });
 
