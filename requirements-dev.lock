@@ -41,7 +41,7 @@ pytest-cov==7.1.0
     # via -r requirements-dev.txt
 rich==15.0.0
     # via import-linter
-ruff==0.15.20
+ruff==0.15.21
     # via -r requirements-dev.txt
 sortedcontainers==2.4.0
     # via hypothesis
