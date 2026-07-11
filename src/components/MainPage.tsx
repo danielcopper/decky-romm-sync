@@ -233,9 +233,12 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // sync_in_progress reject and look like an instant finish (#1202, RC-B).
   const [cancelling, setCancelling] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
-  // The live apply-rate countdown owns no UI state: syncEta holds the sticky
-  // deadline, and the render reads displayedEtaSeconds(Date.now()). The store
-  // subscription's setSyncProgress drives the re-renders that tick it down.
+  // A dumb mirror of syncEta's live countdown (seconds), or null when not measured
+  // yet / between runs. syncEta owns the sticky deadline; the impure now-read that
+  // resolves it to seconds lives in the store subscriber (an event handler), NOT
+  // the render — the render must stay pure. Progress frames drive the subscriber,
+  // so the countdown ticks per frame exactly as before.
+  const [liveEtaDisplay, setLiveEtaDisplay] = useState<number | null>(null);
   const [status, setStatus] = useState("");
   const [preview, setPreview] = useState<SyncPreview | null>(null);
   const [skipPreview, setSkipPreview] = useState(false);
@@ -399,8 +402,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       try {
         if (isTerminalStage(progress.stage)) {
           // Tear down the run's live-ETA state (deadline included) so the next run
-          // measures fresh.
+          // measures fresh, and clear the display mirror.
           resetEta();
+          setLiveEtaDisplay(null);
           setSyncing(false);
           setLoading(false);
           // True terminal reached — re-arm the button out of any "Cancelling…"
@@ -413,11 +417,13 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         } else {
           // Feed the live-rate estimator from applying frames only (fetch frames
           // carry page/cover counters, not item progress). syncEta re-anchors its
-          // sticky deadline internally; the render reads displayedEtaSeconds — no
-          // ETA state to manage here.
+          // sticky deadline internally; then mirror the current countdown into
+          // state here — the impure now-read must live in this subscriber (an
+          // event handler), never in render, which must stay pure.
           if (progress.stage === "applying" && progress.step !== undefined && progress.current !== undefined) {
             observeApplyProgress(progress.step, progress.current, Date.now());
           }
+          setLiveEtaDisplay(displayedEtaSeconds(Date.now()));
         }
       } catch (e) {
         logError(`sync-progress subscriber failed: ${e}`);
@@ -621,10 +627,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // back to the static seed carried on the store as an upper bound ("up to
   // ~X min"). Absent both, the row is omitted (honest silence).
   const staticEtaSeconds = syncProgress?.etaSeconds;
-  const liveEta = displayedEtaSeconds(Date.now());
   const etaText =
-    liveEta !== null
-      ? formatEtaCountdown(liveEta)
+    liveEtaDisplay !== null
+      ? formatEtaCountdown(liveEtaDisplay)
       : staticEtaSeconds !== undefined
         ? `up to ${formatDuration(staticEtaSeconds)}`
         : null;
@@ -654,7 +659,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // Library" again. ``stats.roms`` is the bound-shortcut count (registry-derived).
   const incompleteAttempt =
     stats?.last_attempt?.status === "interrupted" || stats?.last_attempt?.status === "cancelled";
-  const canResume = incompleteAttempt && (stats?.roms ?? 0) > 0;
+  // ``incompleteAttempt`` being true narrows ``stats`` non-null (it dereferenced
+  // stats.last_attempt), and ``roms`` is a required number — no ``?.``/``??`` needed.
+  const canResume = incompleteAttempt && stats.roms > 0;
   const syncButtonLabel = canResume ? "Resume Sync" : "Sync Library";
 
   if (versionError) {
