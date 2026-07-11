@@ -1,26 +1,12 @@
 import type { RomMetadata } from "../types";
 import { debugLog, logInfo } from "../api/backend";
 import { detach } from "../utils/detach";
+import { stateTransaction } from "../utils/steamState";
 
 // Module-level state
 let metadataCache: Record<string, RomMetadata> = {};
 let appIdToRomId: Record<number, number> = {};
 let registeredAppIds: Set<number> = new Set();
-
-/**
- * Wrap MobX state mutations so Steam's observable stores allow changes.
- */
-function stateTransaction<T>(block: () => T): T {
-  const globals = __mobxGlobals;
-  if (!globals) return block();
-  const prev = globals.allowStateChanges;
-  globals.allowStateChanges = true;
-  try {
-    return block();
-  } finally {
-    globals.allowStateChanges = prev;
-  }
-}
 
 /**
  * Look up cached metadata for a given Steam app ID.

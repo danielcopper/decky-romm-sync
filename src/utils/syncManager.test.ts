@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act } from "@testing-library/react";
 import * as backend from "../api/backend";
 import { emitDeckyEvent } from "../test-utils/decky-api-mock";
-import { resetSyncDelta, getSyncDelta } from "./syncDeltaStore";
+import { resetSyncDelta, getSyncDelta, getAckedCreatedAppIds } from "./syncDeltaStore";
 import { getSyncProgress, onSyncProgressChange } from "./syncProgress";
 import type { SyncApplyUnitData, SyncProgress } from "../types";
 
@@ -803,6 +803,8 @@ describe("syncManager — per-chunk cover mtime stamp (#1025)", () => {
     expect(typeof o6001.rt_custom_image_mtime).toBe("number");
     expect(o6000.rt_custom_image_mtime).toBe(o6001.rt_custom_image_mtime);
     expect(logInfoSpy).toHaveBeenCalledWith("[FE] cover mtime nudge (chunk): 2 stamped, 0 no overview");
+    // The acked chunk's creates are recorded as safe-to-stamp for onSyncComplete (#M1).
+    expect(getAckedCreatedAppIds().sort((a, b) => a - b)).toEqual([6000, 6001]);
   });
 
   it("stamps nothing for an updated-only chunk (no creates)", async () => {
@@ -850,6 +852,8 @@ describe("syncManager — per-chunk cover mtime stamp (#1025)", () => {
     expect(vi.mocked(backend.reportUnitResults)).not.toHaveBeenCalled();
     expect(getAppOverview).not.toHaveBeenCalled();
     expect(o6000.rt_custom_image_mtime).toBeUndefined();
+    // Not acked → not recorded as safe-to-stamp, so onSyncComplete won't touch it (#M1).
+    expect(getAckedCreatedAppIds()).toEqual([]);
   });
 
   it("does not stamp and logs the error when reportUnitResults rejects", async () => {
@@ -870,5 +874,7 @@ describe("syncManager — per-chunk cover mtime stamp (#1025)", () => {
     expect(getAppOverview).not.toHaveBeenCalled();
     expect(o6000.rt_custom_image_mtime).toBeUndefined();
     expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to report unit results"));
+    // The rejected ack means recordSyncAcked is never reached — nothing recorded (#M1).
+    expect(getAckedCreatedAppIds()).toEqual([]);
   });
 });

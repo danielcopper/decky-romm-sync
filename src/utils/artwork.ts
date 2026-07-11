@@ -72,8 +72,8 @@ export async function applyArtwork(romId: number, appId: number): Promise<number
     const iconResult = await saveShortcutIcon(appId, results[3].base64);
     if (iconResult.success && iconResult.icon_path) {
       SteamClient.Apps.SetShortcutIcon(appId, iconResult.icon_path);
+      applied++;
     }
-    applied++;
   }
 
   return applied;

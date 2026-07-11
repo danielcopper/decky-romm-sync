@@ -323,6 +323,7 @@ describe("RomMPlaySection", () => {
     vi.stubGlobal("SteamClient", {
       Apps: {
         SetCustomArtworkForApp: vi.fn().mockResolvedValue(undefined),
+        SetShortcutIcon: vi.fn(),
         OpenAppSettingsDialog: vi.fn(),
       },
     });
@@ -834,7 +835,9 @@ describe("RomMPlaySection", () => {
         .mockResolvedValueOnce({ base64: "BB==", no_api_key: false })
         .mockResolvedValueOnce({ base64: "CC==", no_api_key: false })
         .mockResolvedValueOnce({ base64: "DD==", no_api_key: false });
-      vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: true });
+      // Icon succeeds WITH a path so it counts toward the 4/4 total — a success
+      // without a path applies nothing and is not counted (#L4).
+      vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: true, icon_path: "/grid/icon.png" });
       await act(async () => {
         await items[0]!.props.onClick?.();
       });

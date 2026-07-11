@@ -58,7 +58,9 @@ describe("applyArtwork", () => {
       .mockResolvedValueOnce({ base64: null, no_api_key: false })
       .mockResolvedValueOnce({ base64: "DD==", no_api_key: false });
     vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: false });
-    await applyArtwork(42, 5000);
+    // Only the icon asset had base64, and it failed → count is 0 (the failed icon
+    // is NOT counted). Before the L4 fix `applied++` ran regardless and returned 1.
+    await expect(applyArtwork(42, 5000)).resolves.toBe(0);
     expect(vi.mocked(backend.saveShortcutIcon)).toHaveBeenCalledWith(5000, "DD==");
     expect(vi.mocked(SteamClient.Apps.SetShortcutIcon)).not.toHaveBeenCalled();
   });
@@ -70,8 +72,21 @@ describe("applyArtwork", () => {
       .mockResolvedValueOnce({ base64: null, no_api_key: false })
       .mockResolvedValueOnce({ base64: "DD==", no_api_key: false });
     vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: true });
-    await applyArtwork(42, 5000);
+    // Icon succeeded but returned no path → not applied, so not counted → 0 (#L4).
+    await expect(applyArtwork(42, 5000)).resolves.toBe(0);
     expect(vi.mocked(backend.saveShortcutIcon)).toHaveBeenCalledWith(5000, "DD==");
+    expect(vi.mocked(SteamClient.Apps.SetShortcutIcon)).not.toHaveBeenCalled();
+  });
+
+  it("counts a successful hero but NOT a failed icon in the same apply (#L4)", async () => {
+    vi.mocked(backend.getSgdbArtworkBase64)
+      .mockResolvedValueOnce({ base64: "AA==", no_api_key: false }) // hero → applied
+      .mockResolvedValueOnce({ base64: null, no_api_key: false })
+      .mockResolvedValueOnce({ base64: null, no_api_key: false })
+      .mockResolvedValueOnce({ base64: "DD==", no_api_key: false }); // icon → fails
+    vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: false });
+    // Hero counts (1), the failed icon does not → 1, not 2.
+    await expect(applyArtwork(42, 5000)).resolves.toBe(1);
     expect(vi.mocked(SteamClient.Apps.SetShortcutIcon)).not.toHaveBeenCalled();
   });
 
@@ -119,7 +134,9 @@ describe("applyArtwork — newest-apply-wins race guard", () => {
         SetShortcutIcon: vi.fn(),
       },
     });
-    vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: true });
+    // Icon succeeds WITH a path so it counts toward the applied total (these tests
+    // exercise all four assets applying) — a success without a path is not counted (#L4).
+    vi.mocked(backend.saveShortcutIcon).mockResolvedValue({ success: true, icon_path: "/grid/icon.png" });
   });
 
   it("a superseded in-flight apply writes nothing — only the newer apply's art lands for that appId", async () => {

@@ -11,6 +11,7 @@
  */
 
 import { logInfo, logError } from "../api/backend";
+import { stateTransaction } from "./steamState";
 
 // Stamp appIds in slices of this size, yielding once between slices.
 const STAMP_BATCH_SIZE = 25;
@@ -27,15 +28,19 @@ async function writeBatched(appIds: number[]): Promise<{ stamped: number; noOver
   let stamped = 0;
   let noOverview = 0;
   for (let i = 0; i < appIds.length; i += STAMP_BATCH_SIZE) {
-    for (const appId of appIds.slice(i, i + STAMP_BATCH_SIZE)) {
-      const overview = appStore.GetAppOverviewByAppID(appId);
-      if (overview) {
-        overview.rt_custom_image_mtime = mtime;
-        stamped++;
-      } else {
-        noOverview++;
+    // Wrap each slice's observable writes in a mobx state transaction (synchronous;
+    // the yield stays outside it) so they land on a strict-actions build too.
+    stateTransaction(() => {
+      for (const appId of appIds.slice(i, i + STAMP_BATCH_SIZE)) {
+        const overview = appStore.GetAppOverviewByAppID(appId);
+        if (overview) {
+          overview.rt_custom_image_mtime = mtime;
+          stamped++;
+        } else {
+          noOverview++;
+        }
       }
-    }
+    });
     // Yield BETWEEN slices (not after the last) so reactions flush in batches.
     if (i + STAMP_BATCH_SIZE < appIds.length) {
       await new Promise<void>((r) => setTimeout(r, 0));

@@ -26,7 +26,7 @@ import {
 import { getSettingsResetState, setSettingsResetState } from "./utils/settingsResetStore";
 import { getSyncProgress, setSyncProgress } from "./utils/syncProgress";
 import { NEW_ITEM_SEC } from "./utils/syncEstimate";
-import { recordSyncCreated, resetSyncDelta } from "./utils/syncDeltaStore";
+import { recordSyncCreated, recordSyncAcked, resetSyncDelta } from "./utils/syncDeltaStore";
 import { resetSyncCancel } from "./utils/syncManager";
 import type { DownloadCompleteEvent, SyncPlanData, SyncProgress, SyncStaleData } from "./types";
 
@@ -565,9 +565,8 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
     await flush(); // settle the startup detaches
     const o100 = seedOverview(100);
     const o200 = seedOverview(200);
-    // Seed the created set exactly as the syncManager create path would.
-    recordSyncCreated(100);
-    recordSyncCreated(200);
+    // Seed the acked set exactly as the syncManager per-chunk (post-ack) path would.
+    recordSyncAcked([100, 200]);
 
     emitSyncComplete({ platform_app_ids: {}, total_games: 2 });
     await flush();
@@ -584,7 +583,7 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
     const plugin = pluginFactory();
     await flush();
     const o300 = seedOverview(300);
-    recordSyncCreated(300);
+    recordSyncAcked([300]);
 
     emitSyncComplete({ platform_app_ids: {}, total_games: 0, cancelled: true });
     await flush();
@@ -597,7 +596,7 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
     const plugin = pluginFactory();
     await flush();
     seedOverview(100);
-    recordSyncCreated(100);
+    recordSyncAcked([100]);
 
     // First complete stamps [100], then onSyncComplete's resetSyncDelta clears it.
     emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
@@ -624,8 +623,7 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
     vi.mocked(logInfo).mockClear();
     logError.mockClear();
     const o100 = seedOverview(100); // 200 intentionally left without an overview
-    recordSyncCreated(100);
-    recordSyncCreated(200);
+    recordSyncAcked([100, 200]);
 
     setSyncProgress({ running: true, stage: "applying", message: "Applying changes..." });
     emitSyncComplete({ platform_app_ids: { PSX: [500] }, total_games: 2 });
@@ -650,7 +648,7 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
     vi.mocked(registerRomMAppId).mockClear();
     vi.mocked(toaster.toast).mockClear();
     logError.mockClear();
-    recordSyncCreated(100);
+    recordSyncAcked([100]);
 
     setSyncProgress({ running: true, stage: "applying", message: "Applying changes..." });
     emitSyncComplete({ platform_app_ids: { PSX: [500] }, total_games: 1 });
@@ -670,8 +668,7 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
       await vi.advanceTimersByTimeAsync(0); // settle startup
       const o100 = seedOverview(100);
       seedOverview(200); // survives the wipe → round 1 sees only o100 missing
-      recordSyncCreated(100);
-      recordSyncCreated(200);
+      recordSyncAcked([100, 200]);
 
       emitSyncComplete({ platform_app_ids: {}, total_games: 2 });
       await vi.advanceTimersByTimeAsync(0); // settle the immediate sweep
@@ -697,7 +694,7 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
       const plugin = pluginFactory();
       await vi.advanceTimersByTimeAsync(0);
       seedOverview(100);
-      recordSyncCreated(100);
+      recordSyncAcked([100]);
       emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
       await vi.advanceTimersByTimeAsync(0);
       vi.mocked(logInfo).mockClear();
@@ -724,13 +721,13 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
 
       // First run polls [100].
       const o100 = seedOverview(100);
-      recordSyncCreated(100);
+      recordSyncAcked([100]);
       emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
       await vi.advanceTimersByTimeAsync(0);
 
       // Second run before the first poll's next round → supersedes it, polling [200].
       const o200 = seedOverview(200);
-      recordSyncCreated(200);
+      recordSyncAcked([200]);
       emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
       await vi.advanceTimersByTimeAsync(0);
 
@@ -757,7 +754,7 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
       const plugin = pluginFactory();
       await vi.advanceTimersByTimeAsync(0);
       const o100 = seedOverview(100);
-      recordSyncCreated(100);
+      recordSyncAcked([100]);
       emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
       await vi.advanceTimersByTimeAsync(0);
 
@@ -779,7 +776,7 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
     try {
       const plugin = pluginFactory();
       await vi.advanceTimersByTimeAsync(0);
-      recordSyncCreated(100);
+      recordSyncAcked([100]);
       // Every lookup returns a FRESH unstamped overview — the stamp never persists,
       // so every round finds 100 missing and the loop can never go clean.
       getAppOverview.mockImplementation(() => ({}));
@@ -792,6 +789,84 @@ describe("index.tsx — sync_complete cover mtime nudge (#1025)", () => {
       expect(vi.mocked(logInfo)).toHaveBeenCalledWith("[FE] cover mtime heal: capped at 8 rounds");
       // It stopped at the cap — there is no round 9.
       expect(vi.mocked(logInfo)).not.toHaveBeenCalledWith("[FE] cover mtime heal: 1 re-stamped (round 9)");
+      plugin.onDismount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stamps only ACKED creates, not a cancelled run's uncommitted in-flight chunk (#M1)", async () => {
+    const plugin = pluginFactory();
+    await flush();
+    const oUnacked = seedOverview(100);
+    const oAcked = seedOverview(200);
+    // 100 was created frontend-side but its chunk's ack was skipped (cancel), so its
+    // cover was never written server-side; 200's chunk was acked. Only 200 is safe.
+    recordSyncCreated(100); // in `created` but NOT `ackedCreated`
+    recordSyncAcked([200]);
+
+    emitSyncComplete({ platform_app_ids: {}, total_games: 1, cancelled: true });
+    await flush();
+
+    // The sweep looks up only the acked appId — the unacked one is never stamped
+    // (stamping it would point the tile at a 404).
+    expect(getAppOverview).toHaveBeenCalledWith(200);
+    expect(getAppOverview).not.toHaveBeenCalledWith(100);
+    expect(typeof oAcked.rt_custom_image_mtime).toBe("number");
+    expect(oUnacked.rt_custom_image_mtime).toBeUndefined();
+    plugin.onDismount();
+  });
+
+  it("a throwing overview read in a heal round does not kill the poll — the next round still runs (#L5)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const plugin = pluginFactory();
+      await vi.advanceTimersByTimeAsync(0);
+      seedOverview(100);
+      recordSyncAcked([100]);
+      emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+      logError.mockClear();
+
+      // Round 1's read throws → logged (once), poll continues rather than dying.
+      getAppOverview.mockImplementationOnce(() => {
+        throw new Error("read boom");
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(logError).toHaveBeenCalledWith(expect.stringContaining("cover mtime heal: round 1 read failed"));
+
+      // Round 2 still fires and reads normally — the poll survived the throw.
+      getAppOverview.mockClear();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(getAppOverview).toHaveBeenCalledWith(100);
+      plugin.onDismount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a zero-created sync leaves a running heal poll alive (#L6)", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const plugin = pluginFactory();
+      await vi.advanceTimersByTimeAsync(0);
+      const o100 = seedOverview(100);
+      recordSyncAcked([100]);
+      emitSyncComplete({ platform_app_ids: {}, total_games: 1 });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // A second "Library up to date" sync has ZERO acked creates (resetSyncDelta
+      // cleared the set), so onSyncComplete calls startCoverHealPoll([]) — it must
+      // NOT cancel the first run's still-active poll over [100].
+      emitSyncComplete({ platform_app_ids: {}, total_games: 0 });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The first poll is alive: its round 1 fires and heals the wiped o100.
+      getAppOverview.mockClear();
+      delete o100.rt_custom_image_mtime;
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(getAppOverview).toHaveBeenCalledWith(100);
+      expect(typeof o100.rt_custom_image_mtime).toBe("number");
       plugin.onDismount();
     } finally {
       vi.useRealTimers();

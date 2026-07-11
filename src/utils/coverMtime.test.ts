@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as backend from "../api/backend";
+import * as steamState from "./steamState";
 import { stampCoverMtimes, healCoverMtimes } from "./coverMtime";
 
 // The stamp writes a MobX observable per appId; a synchronous burst flickers the
@@ -84,5 +85,20 @@ describe("stampCoverMtimes (micro-batched cover stamp)", () => {
     });
     await expect(healCoverMtimes([1])).resolves.toBeUndefined();
     expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("cover mtime heal failed"));
+  });
+
+  it("routes the observable writes through stateTransaction, and they still land (#M2)", async () => {
+    // Spy without a replacement impl so the real transaction runs (a no-op when
+    // __mobxGlobals is absent) — proving the write path is wrapped, not that it's
+    // stubbed. On a strict-actions build this is what keeps the write from bouncing.
+    const txSpy = vi.spyOn(steamState, "stateTransaction");
+    try {
+      overviews.set(1, {});
+      await stampCoverMtimes([1], "");
+      expect(txSpy).toHaveBeenCalled();
+      expect(typeof overviews.get(1)!.rt_custom_image_mtime).toBe("number");
+    } finally {
+      txSpy.mockRestore();
+    }
   });
 });

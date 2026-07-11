@@ -8,7 +8,7 @@ import {
   setLaunchOptionsConfirmed,
 } from "./steamShortcuts";
 import { updateSyncProgress } from "./syncProgress";
-import { recordSyncCreated } from "./syncDeltaStore";
+import { recordSyncCreated, recordSyncAcked } from "./syncDeltaStore";
 import { stampCoverMtimes } from "./coverMtime";
 import { registerRomMAppId } from "../patches/gameDetailPatch";
 
@@ -285,7 +285,11 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
           // mid-run pause/interrupt then leaves everything committed-so-far
           // visible), not only at sync_complete. Skipped if the ack rejects (the
           // catch below) — no commit, so stamping would risk the 404 negative-cache.
-          // Fire-and-forget (micro-batched inside): must NOT delay the next chunk.
+          // Record this acked chunk's creates as safe-to-stamp (committed + grid
+          // files written) so onSyncComplete's sweep/heal skip a cancelled run's
+          // uncommitted in-flight chunk (#M1). Fire-and-forget stamp (micro-batched
+          // inside): must NOT delay the next chunk.
+          recordSyncAcked(createdAppIds);
           void stampCoverMtimes(createdAppIds, " (chunk)");
         } catch (e) {
           logError(`Failed to report unit results for ${data.unit_name}: ${e}`);
