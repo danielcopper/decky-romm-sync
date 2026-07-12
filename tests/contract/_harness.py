@@ -46,6 +46,8 @@ from bootstrap import (
     bootstrap,
     wire_services,
 )
+from fakes.fake_renderer_gc import FakeRendererGc
+from fakes.fake_renderer_rss import FakeRendererRss
 from fakes.fake_romm_api import FakeRommApi
 from fakes.fake_steamgrid_db_api import FakeSteamGridDbApi
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
@@ -156,10 +158,16 @@ def build_contract_harness(tmp_path: Any) -> ContractHarness:
     fake_sgdb = FakeSteamGridDbApi()
     real_http = result.adapters.http_adapter
     real_http.with_retry = _single_attempt_pass_through  # type: ignore[method-assign]
+    # The session-budget seams read real /proc + localhost:8080 CDP; on a real
+    # Steam Deck (the dev box) that would sample the live renderer and force a GC
+    # on the actual Steam client mid-test. Swap in fakes: RSS unavailable + no-op
+    # GC leave the budget gate inert, so contract sync tests stay deterministic.
     patched_adapters = dataclasses.replace(
         result.adapters,
         romm_api=fake_romm,
         sgdb_adapter=fake_sgdb,
+        renderer_rss=FakeRendererRss(),
+        renderer_gc=FakeRendererGc(),
     )
 
     # Deterministic time/uuid/sleep seams so timestamped responses assert cleanly.

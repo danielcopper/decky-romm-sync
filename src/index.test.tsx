@@ -1049,6 +1049,8 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
     romm_collection_app_ids?: Record<string, number[]>;
     total_games: number;
     cancelled?: boolean;
+    interrupt_reason?: string;
+    restart_recommended?: boolean;
   };
 
   function lastToastBody(): string | undefined {
@@ -1237,6 +1239,76 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
     await flush();
 
     expect(lastToastBody()).toBe("Sync cancelled.");
+    plugin.onDismount();
+  });
+
+  it("on a session-budget pause → shows the pause guidance verbatim with the delta (#1383)", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-1", units: [], total_units: 3, total_roms: 10 });
+    });
+    recordSyncCreated(100);
+    recordSyncCreated(200);
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
+        platform_app_ids: {},
+        total_games: 53,
+        cancelled: true,
+        interrupt_reason:
+          "Sync paused: Steam's memory is nearly full. Restart Steam when convenient, then Resume Sync.",
+      });
+    });
+    await flush();
+
+    // The distinct reason wins over the generic "Sync cancelled — …" wording, and
+    // the reason's trailing period is stripped so the parenthetical reads cleanly.
+    expect(lastToastBody()).toBe(
+      "Sync paused: Steam's memory is nearly full. Restart Steam when convenient, then Resume Sync (2 added so far).",
+    );
+    plugin.onDismount();
+  });
+
+  it("on a session-budget pause with no delta → shows just the reason (#1383)", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-1", units: [], total_units: 3, total_roms: 10 });
+    });
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
+        platform_app_ids: {},
+        total_games: 53,
+        cancelled: true,
+        interrupt_reason:
+          "Sync paused: Steam's memory is nearly full. Restart Steam when convenient, then Resume Sync.",
+      });
+    });
+    await flush();
+
+    expect(lastToastBody()).toBe(
+      "Sync paused: Steam's memory is nearly full. Restart Steam when convenient, then Resume Sync.",
+    );
+    plugin.onDismount();
+  });
+
+  it("on a clean run with restart_recommended → appends the restart nudge (#1383)", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-1", units: [], total_units: 1, total_roms: 1 });
+    });
+    recordSyncCreated(100);
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
+        platform_app_ids: {},
+        total_games: 1,
+        restart_recommended: true,
+      });
+    });
+    await flush();
+
+    expect(lastToastBody()).toBe("Sync complete — 1 added. Steam restart recommended before further large operations.");
     plugin.onDismount();
   });
 });

@@ -384,6 +384,19 @@ export default definePlugin(() => {
     romm_collection_app_ids?: Record<string, number[]>;
     total_games: number;
     cancelled?: boolean;
+    /**
+     * Present only when the run paused itself at a chunk boundary because
+     * Steam's renderer is near its per-session heap budget (#1383). A
+     * full-sentence, resume-friendly guidance string shown verbatim instead of
+     * the generic "cancelled" wording.
+     */
+    interrupt_reason?: string;
+    /**
+     * Set on a CLEAN run whose post-run renderer RSS is high enough that the
+     * next large operation would likely pause or crash — the UI appends a
+     * "restart Steam" nudge to the completion toast (#1383).
+     */
+    restart_recommended?: boolean;
   }) => {
     logInfo(`sync_complete received: ${data.total_games} games, cancelled=${data.cancelled ?? false}`);
 
@@ -398,10 +411,19 @@ export default definePlugin(() => {
     if (removed > 0) parts.push(`${removed} removed`);
     const summary = parts.join(", ");
     let body: string;
-    if (data.cancelled) {
+    if (data.interrupt_reason) {
+      // A session-budget pause carries its own resume-friendly guidance — show it
+      // verbatim, appending the delta so the user sees what did get saved. Strip
+      // the reason's trailing period so the parenthetical reads as one sentence:
+      // "…then Resume Sync (2 added so far)." not "…Resume Sync. (2 added so far.)".
+      body = summary ? `${data.interrupt_reason.replace(/\.$/, "")} (${summary} so far).` : data.interrupt_reason;
+    } else if (data.cancelled) {
       body = summary ? `Sync cancelled — ${summary} so far.` : "Sync cancelled.";
     } else {
       body = summary ? `Sync complete — ${summary}.` : "Library up to date.";
+      if (data.restart_recommended) {
+        body += " Steam restart recommended before further large operations.";
+      }
     }
     toaster.toast({ title: "RomM Sync", body });
 

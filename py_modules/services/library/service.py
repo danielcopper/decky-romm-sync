@@ -36,6 +36,8 @@ if TYPE_CHECKING:
         DebugLogger,
         DiscResolver,
         EventEmitter,
+        RendererGcFn,
+        RendererRssFn,
         RommLibraryApi,
         SettingsPersister,
         Sleeper,
@@ -58,7 +60,10 @@ class LibraryServiceConfig:
     shared per-ROM ``active_core`` resolver (used to bake each ROM's full
     active core into ``launch_options`` at sync) and the shared ``disc_resolver``
     (used to bake each multi-disc ROM's selected disc into ``launch_options`` at
-    sync).
+    sync). The ``renderer_rss`` / ``renderer_gc`` seams feed the session-budget
+    gate: the RSS reader measures the Steam renderer's heap and the GC trigger
+    settles it before a reading, so the apply can pause before Steam's per-session
+    budget is exhausted.
     """
 
     romm_api: RommLibraryApi
@@ -77,6 +82,8 @@ class LibraryServiceConfig:
     uow_factory: UnitOfWorkFactory
     active_core: ActiveCoreReader
     disc_resolver: DiscResolver
+    renderer_rss: RendererRssFn
+    renderer_gc: RendererGcFn
 
 
 class LibraryService:
@@ -139,6 +146,8 @@ class LibraryService:
                 artwork=config.artwork,
                 active_core=config.active_core,
                 disc_resolver=config.disc_resolver,
+                renderer_rss=config.renderer_rss,
+                renderer_gc=config.renderer_gc,
             )
         )
 

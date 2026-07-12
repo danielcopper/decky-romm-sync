@@ -1009,6 +1009,54 @@ describe("MainPage", () => {
     });
   });
 
+  describe("session-budget advisory (#1383)", () => {
+    async function renderPreviewWithPause(pauseLikely: boolean | undefined): Promise<HTMLElement> {
+      const preview: SyncPreview = {
+        success: true,
+        summary: {
+          new_count: 2000,
+          changed_count: 0,
+          unchanged_count: 0,
+          remove_count: 0,
+          disabled_platform_remove_count: 0,
+        },
+        new_names: [],
+        changed_names: [],
+        preview_id: "p-budget",
+      };
+      // Omit pause_likely entirely when undefined (exactOptionalPropertyTypes)
+      // to model an older backend / unavailable reading that never sends the key.
+      if (pauseLikely !== undefined) preview.pause_likely = pauseLikely;
+      vi.mocked(backend.syncPreview).mockResolvedValue(preview);
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const sync = buttonByExactText(container, "Sync Library");
+      await act(async () => {
+        fireEvent.click(sync!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      return container;
+    }
+
+    it("shows the yellow pause advisory when pause_likely is true", async () => {
+      const c = await renderPreviewWithPause(true);
+      const advisory = c.querySelector('[data-testid="budget-advisory"]');
+      expect(advisory).not.toBeNull();
+      expect(advisory?.textContent).toContain("pause partway");
+    });
+
+    it("hides the advisory when pause_likely is false", async () => {
+      const c = await renderPreviewWithPause(false);
+      expect(c.querySelector('[data-testid="budget-advisory"]')).toBeNull();
+    });
+
+    it("hides the advisory when pause_likely is absent (older backend / unavailable reading)", async () => {
+      const c = await renderPreviewWithPause(undefined);
+      expect(c.querySelector('[data-testid="budget-advisory"]')).toBeNull();
+    });
+  });
+
   describe("two-level in-flight progress UI", () => {
     it("main bar interpolates within the running unit and shows the stage label", async () => {
       vi.mocked(backend.getSyncStatus).mockResolvedValue({

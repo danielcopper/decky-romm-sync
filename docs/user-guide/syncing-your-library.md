@@ -59,6 +59,13 @@ A few things worth knowing for a large library:
   removes finished games (and never removes Steam collections).
 - **Sleep is safe; keep it powered.** If the Deck sleeps mid-sync the run pauses and resumes on wake — it does not stall
   or lose progress. For a large first sync, plug it in so the battery lasts the whole run.
+- **A very large sync may pause itself to protect Steam.** Steam holds every shortcut it creates in memory for the rest
+  of the session, and that memory only frees on a Steam restart. A very large first import can approach that limit, so
+  the plugin watches Steam's memory and, when it gets close, pauses cleanly at a safe point rather than risking a Steam
+  crash. If the preview expects this, it shows a yellow note up front. When a pause happens you are told to **restart
+  Steam when convenient, then Resume Sync** — restarting frees the memory and the resume finishes the job. Nothing is
+  lost, and you are never forced out of what you were doing. After a big run finishes, the plugin may also suggest a
+  Steam restart before your next large sync, for the same reason.
 
 ## Resuming an interrupted sync
 

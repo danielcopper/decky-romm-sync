@@ -727,6 +727,24 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             Deck sleeps and resume on wake; keep it powered for a large first sync.
           </div>
         </PanelSectionRow>
+        {preview.pause_likely ? (
+          <PanelSectionRow>
+            <div
+              data-testid="budget-advisory"
+              style={{
+                fontSize: "12px",
+                color: "#ffcc66",
+                borderLeft: "3px solid rgba(255, 170, 0, 0.6)",
+                paddingLeft: "8px",
+                margin: "4px 0",
+                lineHeight: 1.4,
+              }}
+            >
+              This sync is large enough that it will likely pause partway to protect Steam&apos;s memory. That is normal
+              — restart Steam when prompted, then Resume Sync to finish.
+            </div>
+          </PanelSectionRow>
+        ) : null}
         {hasChanges ? (
           <>
             <PanelSectionRow>

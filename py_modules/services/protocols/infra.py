@@ -71,6 +71,32 @@ class PathExistsReader(Protocol):
         ...
 
 
+class RendererRssFn(Protocol):
+    """Current RSS of the Steam ``SharedJSContext`` renderer, in KB.
+
+    The session-budget gate consults this to decide whether the next apply
+    chunk would cross Steam's per-session heap budget. Returns ``None`` when the
+    renderer's RSS cannot be read (no ``steamwebhelper`` process, unreadable
+    ``/proc``) — the gate treats ``None`` as "measurement unavailable" and skips,
+    so a broken reading never blocks a sync (fail-open).
+    """
+
+    def __call__(self) -> int | None: ...
+
+
+class RendererGcFn(Protocol):
+    """Force a garbage collection in the Steam renderer, returning success.
+
+    Fired before an RSS reading so the measurement reflects settled heap rather
+    than transient garbage (Steam's natural GC is measured-unreliable). Drives
+    the CEF debugger over CDP. Returns ``False`` on any failure and never raises
+    — a failed GC only means the subsequent reading is less precise, never that
+    the sync should stop.
+    """
+
+    def __call__(self) -> bool: ...
+
+
 class PendingSyncReader(Protocol):
     """Read seam for the LibraryService pending-sync map.
 

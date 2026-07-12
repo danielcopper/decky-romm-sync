@@ -25,6 +25,8 @@ from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_path_exists_reader import FakePathExistsReader
 from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
+from fakes.fake_renderer_gc import FakeRendererGc
+from fakes.fake_renderer_rss import FakeRendererRss
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_rom_file_store import FakeRomFileStore
 from fakes.fake_save_file_store import FakeSaveFileStore
@@ -241,6 +243,8 @@ class TestWireServices:
             "rom_file_store": FakeRomFileStore(),
             "save_file_store": FakeSaveFileStore(),
             "path_probe": FakePathExistsReader(),
+            "renderer_rss": FakeRendererRss(),
+            "renderer_gc": FakeRendererGc(),
             "settings": settings,
             "loop": asyncio.new_event_loop(),
             "logger": logger,
@@ -290,6 +294,8 @@ class TestWireServices:
                 save_file_store=deps["save_file_store"],
                 path_probe=deps["path_probe"],
                 core_info_provider=deps["core_info_provider"],
+                renderer_rss=deps["renderer_rss"],
+                renderer_gc=deps["renderer_gc"],
             ),
             stores=StateBundle(
                 settings=deps["settings"],

@@ -261,6 +261,8 @@ class SyncReporter:
         platform_names: dict[str, str] | None = None,
         cancelled: bool = False,
         stale_rom_ids: list[int] | None = None,
+        interrupt_reason: str | None = None,
+        restart_recommended: bool = False,
     ):
         """Emit ``sync_collections`` + ``sync_complete`` after all units finish.
 
@@ -272,6 +274,14 @@ class SyncReporter:
         keeping the backend registry in sync with the frontend removals.
         ``platform_names`` is the live ``platform_slug → display_name``
         map from the work-queue, cached for offline registry queries.
+
+        Session-budget surfacing (#1383): ``interrupt_reason`` (present only
+        when a run was paused by the budget gate) rides the ``sync_complete``
+        payload and becomes the terminal progress message, so the UI shows the
+        resume-friendly pause guidance distinctly instead of the generic
+        cancelled/interrupted wording. ``restart_recommended`` (only on a clean
+        run whose post-run RSS is high) sets an additive payload flag the UI
+        turns into a "restart Steam" nudge.
         """
         names = platform_names or {}
         platform_app_ids, romm_collection_app_ids = await self._loop.run_in_executor(
@@ -291,27 +301,38 @@ class SyncReporter:
             },
         )
 
-        complete_payload = {
+        complete_payload: dict[str, Any] = {
             "platform_app_ids": platform_app_ids,
             "romm_collection_app_ids": romm_collection_app_ids,
             "total_games": total_games,
         }
         if cancelled:
             complete_payload["cancelled"] = True
+            if interrupt_reason:
+                complete_payload["interrupt_reason"] = interrupt_reason
+        elif restart_recommended:
+            complete_payload["restart_recommended"] = True
         await self._emit("sync_complete", complete_payload)
 
         total = await self._loop.run_in_executor(None, self._count_bound_roms)
         if cancelled:
-            # A heartbeat-timeout run routes through this same cancelled finalize,
-            # so key the leading word on the box's run_interrupted flag — the frame
-            # then reads "interrupted" instead of blaming the user's Cancel button
-            # (stage stays CANCELLED; last_attempt already reads "interrupted").
-            lead = "Sync interrupted" if self._sync_state.run_interrupted else "Sync cancelled"
+            # A budget pause carries its own full-sentence guidance — use it as the
+            # terminal message verbatim so the QAM status reads the resume-friendly
+            # reason. Otherwise a heartbeat-timeout run routes through this same
+            # cancelled finalize, so key the leading word on the box's
+            # run_interrupted flag — the frame then reads "interrupted" instead of
+            # blaming the user's Cancel button (stage stays CANCELLED; last_attempt
+            # already reads "interrupted").
+            if interrupt_reason:
+                message = interrupt_reason
+            else:
+                lead = "Sync interrupted" if self._sync_state.run_interrupted else "Sync cancelled"
+                message = f"{lead}: {total_games} of {total} games processed"
             await self._emit_progress(
                 SyncStage.CANCELLED,
                 current=total_games,
                 total=total,
-                message=f"{lead}: {total_games} of {total} games processed",
+                message=message,
                 running=False,
             )
         else:

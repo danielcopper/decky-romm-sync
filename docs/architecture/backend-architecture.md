@@ -192,6 +192,31 @@ teardown branches on the cause (#1052) — and either way, **every chunk committ
   binding is mapped by the next sync's existing-shortcut scan, so no active orphan deletion is needed (a Steam shortcut
   is the sole record of its tile).
 
+**Session-budget gate: GC-before-measure at each chunk boundary
+([ADR-0024](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0024-session-budget-rss-gate.md)).**
+Steam's `SharedJSContext` renderer OOM-crashes at ~2.45–2.53 GB RSS and never self-recovers within a session; each
+created shortcut costs 0.7–1.5 MB permanently (measured on-device). Chunking (ADR-0023) makes hitting that cliff a cheap
+resume; this gate stops the run _before_ it, at a chunk boundary, as a controlled pause. At each chunk boundary the
+orchestrator forces a renderer GC (`RendererGcFn`, `adapters/renderer_gc.py` — an `HeapProfiler.collectGarbage` over the
+CEF debugger on `localhost:8080`, so the reading reflects settled heap not transient garbage that Steam's
+measured-unreliable natural GC hasn't reclaimed), reads the renderer's RSS (`RendererRssFn`, `adapters/renderer_rss.py`
+— the max `VmRSS` across `steamwebhelper` processes from `/proc`), and runs the pure
+`domain/session_budget.py::gate_decision`: pause iff `rss + chunk_items × worst_case_rate ≥ cliff − margin`. The run's
+**very first chunk** is _predictive_-exempt (`chunk_items = 0`) so a run/resume below the ceiling always makes at least
+one chunk of forward progress rather than looping on a no-progress pause, but it still gets the _absolute_ check: if the
+settled RSS is already at/over the ceiling (a resume attempted without a Steam restart), it pauses immediately rather
+than driving a ~300 MB chunk into the cliff. On a pause it sets `run_interrupted` + a distinct `interrupt_reason` and
+requests cancel — the loop returns cleanly with prior chunks committed and the terminal write records the resumable
+`interrupted` (completed platforms keep their `PlatformSyncState` stamps, so Resume Sync redoes only the remainder).
+Every step is **fail-open**: an unavailable RSS reading (no `steamwebhelper`, unreadable `/proc`) skips the gate — and
+short-circuits further GC attempts — for the rest of the run (logged once), a seam error is caught locally, and a failed
+GC only makes the reading less precise; measurement never blocks a sync. The same seams feed two advisories:
+`sync_preview` returns `pause_likely` (a `predict_run_crosses` prognosis pricing only new creates + changed updates,
+never fully-unchanged items, so an unchanged re-sync never warns), and a clean run's `sync_complete` carries
+`restart_recommended` (`post_run_advisory`, RSS > ~1.8 GB, read GC-first). Both the RSS reader and GC trigger are wired
+through `SyncOrchestratorConfig`; the gate's per-item cost is a parameter so a later per-item cover term can be added
+without touching the kernel's shape.
+
 **Run/unit/chunk identity on the ack (#1041).** Every `sync_apply_unit` event carries the `run_id` (the run's
 `current_sync_id` UUID), the `unit_id` (the `WorkUnit.id`), and the `chunk_index`; the frontend echoes all three back on
 the `report_unit_results` ack. The orchestrator stamps the dispatched unit's id into `active_unit_id` and the current
@@ -694,25 +719,26 @@ identity survive. This heals drift from every cause at the next plugin load.
 
 Adapters own all I/O and implement the Protocols defined in `services/protocols/`. Selected adapters:
 
-| Module                                                                     | Role                                                                                                                                                                          |
-| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `romm/http.py`                                                             | `RommHttpAdapter` — HTTP transport: auth, SSL, retry, User-Agent, platform map                                                                                                |
-| `romm/romm_api.py`                                                         | `RommApiAdapter` — RomM REST surface (saves, ROMs, platforms, firmware, devices, play-sessions) over the HTTP transport                                                       |
-| `steam_config.py`                                                          | `SteamConfigAdapter` — Steam VDF read/write, grid dir, shortcut icon write, Steam Input config                                                                                |
-| `steamgriddb.py`                                                           | `SteamGridDbAdapter` — SteamGridDB REST client                                                                                                                                |
-| `sgdb_artwork_cache.py`                                                    | `SgdbArtworkCacheAdapter` — on-disk SGDB artwork cache                                                                                                                        |
-| `cover_art_file_store.py`                                                  | `CoverArtFileStoreAdapter` — RomM cover art I/O across the per-ROM cover cache and the Steam grid dir (download, `copy_file` publish/seed, read, prune)                       |
-| `persistence.py`                                                           | `PersistenceAdapter` + per-domain persister adapters — `settings.json` read/write plus the one-time legacy `save_sync_state.json` read that feeds the bootstrap settings fold |
-| `repositories/`                                                            | `SqliteUnitOfWork` + per-aggregate repository adapters — SQLite I/O (the live persistence path; see [Database Design](database-design.md))                                    |
-| `sqlite_migrations.py`                                                     | `apply_migrations` — schema migration runner (`db/migrations/NNN_*.sql`, `PRAGMA user_version`)                                                                               |
-| `download_file.py`                                                         | `DownloadFileAdapter` — download filesystem                                                                                                                                   |
-| `firmware_file.py` / `migration_file.py` / `rom_files.py` / `save_file.py` | per-subtree filesystem adapters (BIOS, RetroDECK migration, ROM removal, local saves)                                                                                         |
-| `retrodeck_paths.py`                                                       | `RetroDeckPathsAdapter` — reads `retrodeck.json` for ROMs/saves/BIOS/home paths                                                                                               |
-| `retroarch_config.py`                                                      | `RetroArchConfigAdapter` — reads `retroarch.cfg` save-sort flags                                                                                                              |
-| `retroarch_core_info.py`                                                   | `RetroArchCoreInfoAdapter` — reads RetroArch `.info` files (`corename`, metadata)                                                                                             |
-| `es_de_config.py`                                                          | `CoreResolver` — ES-DE `es_systems.xml` (system-layer default core + available cores); the gamelist is no longer read or written                                              |
-| `system_clock.py` / `system_uuid_gen.py` / `asyncio_sleeper.py`            | concrete `Clock` / `UuidGen` / `Sleeper` seams                                                                                                                                |
-| `hostname.py` / `path_probe.py` / `plugin_metadata.py` / `debug_logger.py` | hostname, path-exists probe, `package.json` version reader, settings-aware debug logger                                                                                       |
+| Module                                                                     | Role                                                                                                                                                                                           |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `romm/http.py`                                                             | `RommHttpAdapter` — HTTP transport: auth, SSL, retry, User-Agent, platform map                                                                                                                 |
+| `romm/romm_api.py`                                                         | `RommApiAdapter` — RomM REST surface (saves, ROMs, platforms, firmware, devices, play-sessions) over the HTTP transport                                                                        |
+| `steam_config.py`                                                          | `SteamConfigAdapter` — Steam VDF read/write, grid dir, shortcut icon write, Steam Input config                                                                                                 |
+| `steamgriddb.py`                                                           | `SteamGridDbAdapter` — SteamGridDB REST client                                                                                                                                                 |
+| `sgdb_artwork_cache.py`                                                    | `SgdbArtworkCacheAdapter` — on-disk SGDB artwork cache                                                                                                                                         |
+| `cover_art_file_store.py`                                                  | `CoverArtFileStoreAdapter` — RomM cover art I/O across the per-ROM cover cache and the Steam grid dir (download, `copy_file` publish/seed, read, prune)                                        |
+| `persistence.py`                                                           | `PersistenceAdapter` + per-domain persister adapters — `settings.json` read/write plus the one-time legacy `save_sync_state.json` read that feeds the bootstrap settings fold                  |
+| `repositories/`                                                            | `SqliteUnitOfWork` + per-aggregate repository adapters — SQLite I/O (the live persistence path; see [Database Design](database-design.md))                                                     |
+| `sqlite_migrations.py`                                                     | `apply_migrations` — schema migration runner (`db/migrations/NNN_*.sql`, `PRAGMA user_version`)                                                                                                |
+| `download_file.py`                                                         | `DownloadFileAdapter` — download filesystem                                                                                                                                                    |
+| `firmware_file.py` / `migration_file.py` / `rom_files.py` / `save_file.py` | per-subtree filesystem adapters (BIOS, RetroDECK migration, ROM removal, local saves)                                                                                                          |
+| `retrodeck_paths.py`                                                       | `RetroDeckPathsAdapter` — reads `retrodeck.json` for ROMs/saves/BIOS/home paths                                                                                                                |
+| `retroarch_config.py`                                                      | `RetroArchConfigAdapter` — reads `retroarch.cfg` save-sort flags                                                                                                                               |
+| `retroarch_core_info.py`                                                   | `RetroArchCoreInfoAdapter` — reads RetroArch `.info` files (`corename`, metadata)                                                                                                              |
+| `es_de_config.py`                                                          | `CoreResolver` — ES-DE `es_systems.xml` (system-layer default core + available cores); the gamelist is no longer read or written                                                               |
+| `system_clock.py` / `system_uuid_gen.py` / `asyncio_sleeper.py`            | concrete `Clock` / `UuidGen` / `Sleeper` seams                                                                                                                                                 |
+| `hostname.py` / `path_probe.py` / `plugin_metadata.py` / `debug_logger.py` | hostname, path-exists probe, `package.json` version reader, settings-aware debug logger                                                                                                        |
+| `renderer_rss.py` / `renderer_gc.py`                                       | `RendererRssFn` — max `steamwebhelper` `VmRSS` from `/proc`; `RendererGcFn` — `HeapProfiler.collectGarbage` over the CEF debugger. The session-budget gate's measure + settle seams (ADR-0024) |
 
 #### PersistenceAdapter notes
 

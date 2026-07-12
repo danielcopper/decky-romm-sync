@@ -31,6 +31,8 @@ from adapters.persistence import (
     SettingsPersisterAdapter,
 )
 from adapters.plugin_metadata import PluginMetadataAdapter
+from adapters.renderer_gc import RendererGcAdapter
+from adapters.renderer_rss import RendererRssAdapter
 from adapters.repositories.unit_of_work import SqliteUnitOfWork
 from adapters.retroarch_config import RetroArchConfigAdapter
 from adapters.retroarch_core_info import RetroArchCoreInfoAdapter
@@ -94,6 +96,8 @@ if TYPE_CHECKING:
         PathExistsReader,
         PlatformCoreReader,
         PluginMetadataReader,
+        RendererGcFn,
+        RendererRssFn,
         RetroArchSaveLayoutProvider,
         RetroDeckPaths,
         RomFileStore,
@@ -131,6 +135,8 @@ class AdapterBundle:
     save_file_store: SaveFileStore
     path_probe: PathExistsReader
     core_info_provider: CoreInfoProvider
+    renderer_rss: RendererRssFn
+    renderer_gc: RendererGcFn
 
 
 @dataclass(frozen=True)
@@ -348,6 +354,8 @@ def bootstrap(
     rom_file_store = RomFileAdapter()
     save_file_store = SaveFileAdapter()
     path_probe = PathProbeAdapter()
+    renderer_rss = RendererRssAdapter()
+    renderer_gc = RendererGcAdapter(logger=logger)
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
     hostname_provider = HostnameAdapter()
@@ -368,6 +376,8 @@ def bootstrap(
         save_file_store=save_file_store,
         path_probe=path_probe,
         core_info_provider=core_resolver,
+        renderer_rss=renderer_rss,
+        renderer_gc=renderer_gc,
     )
     stores = StateBundle(
         settings=settings,
@@ -599,6 +609,8 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             uow_factory=cfg.callbacks.uow_factory,
             active_core=active_core_resolver,
             disc_resolver=disc_launch_resolver,
+            renderer_rss=cfg.adapters.renderer_rss,
+            renderer_gc=cfg.adapters.renderer_gc,
         ),
     )
     pending_sync_binding.set(lambda: sync_service.pending_sync)

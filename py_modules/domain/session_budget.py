@@ -1,0 +1,118 @@
+"""Session-budget decision kernel — the pure math behind the RSS-based sync gate.
+
+Steam's ``SharedJSContext`` renderer (a child of ``steamwebhelper``) carries a
+hard per-session heap budget: it dies of an out-of-memory crash once its RSS
+reaches roughly 2.45-2.53 GB and the budget never self-recovers within a session
+— only a Steam client restart resets it to a fresh ~400-440 MB baseline. Every
+Steam shortcut the plugin creates costs 0.7-1.5 MB of that budget permanently
+(the rate is constant per client boot but varies between boots), so a very large
+first import can walk the renderer into the cliff.
+
+This module is the pure compute that decides, from a single RSS reading and a
+count of work about to be done, whether the run may proceed or must pause at a
+chunk boundary. It takes plain integers and returns plain values — no I/O, no
+clock, no ``None`` handling (the caller supplies a real reading or skips the gate
+entirely when measurement is unavailable). The reader that samples ``/proc`` and
+the CDP garbage-collect trigger that settles the heap before a reading live in
+``adapters/``; the chunk-loop integration lives in the sync orchestrator.
+
+Constants carry their measurement provenance inline — all figures measured
+on-device (Steam Deck, RetroDECK) on 2026-07-10/11.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+# Session cliff: the RSS at which the renderer OOM-crashes. The observed crash
+# cluster was 2456 / 2489 / 2514-2516 / 2528 MB RSS across two test days; this is
+# the conservative FLOOR of that cluster, so the gate reasons about the earliest
+# point a crash was ever seen rather than the average.
+CLIFF_KB = 2_450_000
+
+# Headroom below the cliff the gate refuses to spend. A chunk's real cost is only
+# known after it is applied, and the per-boot create rate varies, so the gate
+# keeps this margin as slack against an over-dense chunk or a rate above the
+# modelled worst case. ~150 MB ≈ one chunk's worst-case cost plus a cushion.
+SAFETY_MARGIN_KB = 150_000
+
+# The RSS ceiling the gate actually pauses at — the cliff minus the margin
+# (≈2.30 GB). Projecting the next chunk's cost past this line is what triggers a
+# pause. Shared by the per-chunk gate and the post-preview prognosis so both
+# reason about the same line.
+EFFECTIVE_CEILING_KB = CLIFF_KB - SAFETY_MARGIN_KB
+
+# Worst-case permanent RSS cost of one created shortcut, in KB. Measured creates
+# cost 0.7-1.5 MB/item depending on the client boot; the gate uses the top of
+# that range so a dense chunk on a bad boot still stops short of the cliff.
+# Exposed as the default ``per_item_kb`` so PR 2 can raise it with a per-item
+# cover term once API artwork (reclaimable, but transiently resident) returns.
+WORST_CASE_CREATE_KB = 1_500
+
+# Worst-case RSS cost of one UPDATE touch (a Set* walk over an existing shortcut),
+# in KB. An update walk of ~2300 items measured ≈ 1.4 GB on-device 2026-07-10
+# (~0.6 MB/item); 1000 KB is the rounded-up ceiling. Only CHANGED items pay this —
+# fully-unchanged items skip the per-item Set* touch entirely and cost nothing, so
+# they are not projected at all.
+UPDATE_TOUCH_KB = 1_000
+
+# Post-run advisory floor. A run that ends with RSS above this (≈1.8 GB) has
+# spent most of the session budget; the next large operation is likely to pause
+# or crash, so the UI recommends a Steam restart. Deliberately well below the
+# ceiling — this is a "restart soon" nudge, not the hard pause line.
+POST_RUN_ADVISORY_KB = 1_800_000
+
+
+@dataclass(frozen=True)
+class GateDecision:
+    """The per-chunk gate verdict plus the numbers behind it (for logging).
+
+    ``should_pause`` is the only field the caller acts on; ``projected_kb`` and
+    ``threshold_kb`` are surfaced so the pause log line can state exactly why the
+    gate fired without recomputing the arithmetic.
+    """
+
+    should_pause: bool
+    projected_kb: int
+    threshold_kb: int
+
+
+def gate_decision(rss_kb: int, chunk_items: int, per_item_kb: int = WORST_CASE_CREATE_KB) -> GateDecision:
+    """Decide whether applying the next chunk would cross the session budget.
+
+    Pauses iff the current renderer RSS plus the chunk's projected worst-case
+    cost (``chunk_items * per_item_kb``) reaches the effective ceiling. The
+    projection is deliberately worst-case (every item priced as a fresh create)
+    so the gate errs toward pausing early — a false pause costs a Steam restart,
+    a false proceed costs a renderer crash mid-apply.
+    """
+    projected_kb = rss_kb + chunk_items * per_item_kb
+    return GateDecision(
+        should_pause=projected_kb >= EFFECTIVE_CEILING_KB,
+        projected_kb=projected_kb,
+        threshold_kb=EFFECTIVE_CEILING_KB,
+    )
+
+
+def predict_run_crosses(
+    rss_kb: int,
+    new_items: int,
+    changed_items: int,
+    create_kb: int = WORST_CASE_CREATE_KB,
+    update_kb: int = UPDATE_TOUCH_KB,
+) -> bool:
+    """Prognose for the post-preview advisory: will the whole run cross the ceiling?
+
+    Projects each planned CREATE at the worst-case create rate and each planned
+    UPDATE (a changed item's Set* walk) at the lighter update rate; fully-unchanged
+    items are not projected at all, since they skip the per-item touch and cost no
+    renderer heap. A ``True`` result tells the UI to warn up front that the sync
+    will likely pause partway (and can always be resumed) — it does not stop
+    anything itself. A fully-unchanged re-sync therefore never warns.
+    """
+    return rss_kb + new_items * create_kb + changed_items * update_kb >= EFFECTIVE_CEILING_KB
+
+
+def post_run_advisory(rss_kb: int) -> bool:
+    """Whether a finished run's RSS is high enough to recommend a Steam restart."""
+    return rss_kb > POST_RUN_ADVISORY_KB

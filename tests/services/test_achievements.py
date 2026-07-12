@@ -8,6 +8,8 @@ import pytest
 from conftest import _make_testable_plugin
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_disc_resolver import FakeDiscResolver
+from fakes.fake_renderer_gc import FakeRendererGc
+from fakes.fake_renderer_rss import FakeRendererRss
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
@@ -89,6 +91,8 @@ def plugin(clock):
             uow_factory=FakeUnitOfWorkFactory(),
             active_core=FakeActiveCoreResolver(default=(None, None)),
             disc_resolver=FakeDiscResolver(),
+            renderer_rss=FakeRendererRss(),
+            renderer_gc=FakeRendererGc(),
         ),
     )
     p._achievements_service = AchievementsService(

@@ -127,6 +127,23 @@ class LibrarySyncStateBox:
     # reuses an old appId (CRC32 of unchanged exe+name) can't wipe the shortcut
     # the run just bound (#1036). Reset at the start of each run.
     committed_app_ids: set[int] = field(default_factory=set)
+    # Count of apply chunks emitted so far this run — the session-budget gate
+    # skips its very first chunk (this counter still 0) so every run/resume makes
+    # at least one chunk of forward progress before it can pause, never an
+    # immediate no-progress pause loop. Incremented after each ``sync_apply_unit``
+    # emit; reset at the start of each run (#1383).
+    chunks_emitted_this_run: int = 0
+    # Distinct terminal reason for an ``interrupted`` run, when the interrupt was
+    # a deliberate session-budget pause rather than a heartbeat timeout. Set by
+    # the gate alongside ``run_interrupted``; ``None`` leaves the interrupted
+    # write on its default heartbeat-timeout reason. Surfaced in the
+    # ``sync_complete`` payload so the UI shows the pause guidance distinctly.
+    # Reset at the start of each run (#1383).
+    interrupt_reason: str | None = None
+    # One-shot guard so the session-budget gate logs "RSS unavailable" at most
+    # once per run instead of on every chunk boundary (the reading is fail-open —
+    # a ``None`` reading skips the gate). Reset at the start of each run (#1383).
+    budget_measure_unavailable_logged: bool = False
 
     # ── Run lifecycle — the only writers of sync_state / current_sync_id ──
     #

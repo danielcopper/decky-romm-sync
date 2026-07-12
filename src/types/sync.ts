@@ -125,6 +125,14 @@ export interface SyncPreview {
   preview_id: string;
   message?: string;
   blocked_by_migration?: boolean;
+  /**
+   * Post-preview session-budget prognosis (#1383): ``true`` when the backend
+   * predicts that applying every planned touch would push Steam's renderer past
+   * its per-session heap budget, so the sync will likely pause partway (and can
+   * always be resumed). Drives the yellow advisory hint on the preview. Absent /
+   * ``false`` when the reading is unavailable or the run fits under the budget.
+   */
+  pause_likely?: boolean;
 }
 
 interface SyncPlanUnit {

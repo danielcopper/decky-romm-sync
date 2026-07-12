@@ -71,6 +71,8 @@ from services.protocols.infra import (
     MachineIdReader,
     PathExistsReader,
     PendingSyncReader,
+    RendererGcFn,
+    RendererRssFn,
 )
 from services.protocols.paths import (
     CoreInfoProvider,
@@ -162,6 +164,8 @@ __all__ = [
     "PluginMetadataReader",
     "ReachabilityProbeFn",
     "RelaunchOptionsReader",
+    "RendererGcFn",
+    "RendererRssFn",
     "RetroArchConfigReader",
     "RetroArchCoreInfoReader",
     "RetroArchSaveLayoutProvider",
