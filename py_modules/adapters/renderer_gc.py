@@ -134,7 +134,9 @@ def _handshake(sock: socket.socket, host: str, port: int, path: str) -> bool:
     # returns, and we enable no CDP domains, so the server pushes nothing before
     # that request — the reply frame cannot have been buffered into ``response``
     # yet, so nothing is lost.
-    expected = base64.b64encode(hashlib.sha1((key + _WS_GUID).encode("ascii")).digest()).decode("ascii")
+    # RFC 6455 fixes SHA-1 for Sec-WebSocket-Accept; not a security use.
+    accept_digest = hashlib.sha1((key + _WS_GUID).encode("ascii"), usedforsecurity=False).digest()
+    expected = base64.b64encode(accept_digest).decode("ascii")
     return expected.lower().encode("ascii") in response.lower()
 
 

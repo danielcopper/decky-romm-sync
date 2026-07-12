@@ -1452,7 +1452,7 @@ describe("MainPage", () => {
         await act(async () => {
           await vi.advanceTimersByTimeAsync(20_000);
         });
-        expect(vi.mocked(backend.getSessionBudgetStatus).mock.calls.length).toBe(callsAfterTerminal);
+        expect(vi.mocked(backend.getSessionBudgetStatus).mock.calls).toHaveLength(callsAfterTerminal);
       } finally {
         vi.useRealTimers();
       }
@@ -1472,7 +1472,7 @@ describe("MainPage", () => {
         await act(async () => {
           await vi.advanceTimersByTimeAsync(15_000);
         });
-        expect(vi.mocked(backend.getSessionBudgetStatus).mock.calls.length).toBe(before);
+        expect(vi.mocked(backend.getSessionBudgetStatus).mock.calls).toHaveLength(before);
       } finally {
         vi.useRealTimers();
       }
@@ -2331,42 +2331,23 @@ describe("MainPage", () => {
   });
 
   describe("sync button label (resume vs fresh)", () => {
-    it("reads 'Resume Sync' when the newest attempt was interrupted with bound shortcuts on disk", async () => {
-      // roms > 0 = partial progress actually exists to resume.
-      vi.mocked(backend.getSyncStats).mockResolvedValue({
-        ...defaultStats(),
-        roms: 42,
-        last_attempt: { finished_at: "2026-06-01T17:48:00", status: "interrupted" },
-      });
-      const { container } = render(<MainPage onNavigate={vi.fn()} />);
-      await flushAsync();
-      expect(buttonByExactText(container, "Resume Sync")).not.toBeNull();
-      expect(buttonByExactText(container, "Sync Library")).toBeNull();
-    });
-
-    it("reads 'Resume Sync' when the newest attempt was cancelled with bound shortcuts on disk", async () => {
-      vi.mocked(backend.getSyncStats).mockResolvedValue({
-        ...defaultStats(),
-        roms: 42,
-        last_attempt: { finished_at: "2026-06-01T17:48:00", status: "cancelled" },
-      });
-      const { container } = render(<MainPage onNavigate={vi.fn()} />);
-      await flushAsync();
-      expect(buttonByExactText(container, "Resume Sync")).not.toBeNull();
-      expect(buttonByExactText(container, "Sync Library")).toBeNull();
-    });
-
-    it("reads 'Resume Sync' when the newest attempt was a session-budget pause (#1383)", async () => {
-      vi.mocked(backend.getSyncStats).mockResolvedValue({
-        ...defaultStats(),
-        roms: 42,
-        last_attempt: { finished_at: "2026-07-11T17:48:00", status: "paused" },
-      });
-      const { container } = render(<MainPage onNavigate={vi.fn()} />);
-      await flushAsync();
-      expect(buttonByExactText(container, "Resume Sync")).not.toBeNull();
-      expect(buttonByExactText(container, "Sync Library")).toBeNull();
-    });
+    // roms > 0 = partial progress actually exists to resume. Every non-completed,
+    // non-errored terminal status resumes: interrupted, cancelled, and the #1383
+    // session-budget pause.
+    it.each(["interrupted", "cancelled", "paused"] as const)(
+      "reads 'Resume Sync' when the newest attempt was %s with bound shortcuts on disk",
+      async (status) => {
+        vi.mocked(backend.getSyncStats).mockResolvedValue({
+          ...defaultStats(),
+          roms: 42,
+          last_attempt: { finished_at: "2026-06-01T17:48:00", status },
+        });
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
+        expect(buttonByExactText(container, "Resume Sync")).not.toBeNull();
+        expect(buttonByExactText(container, "Sync Library")).toBeNull();
+      },
+    );
 
     it("reads 'Sync Library' when an interrupted attempt left ZERO bound shortcuts (all removed — nothing to resume)", async () => {
       // The regression: after an interrupted run the user removed every shortcut

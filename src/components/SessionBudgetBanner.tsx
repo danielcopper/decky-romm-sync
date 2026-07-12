@@ -121,13 +121,14 @@ export const SessionBudgetBanner: FC<SessionBudgetBannerProps> = ({
   // the paused banner announces memory is free and the restart button is pointless.
   const memoryFreedForResume = paused && resumeReady === true;
 
+  const liveReadingSuffix = rssKb != null ? ` (${formatGb(rssKb)})` : "";
+  const memoryDetailSuffix =
+    rssKb != null
+      ? ` Steam memory: ${formatGb(rssKb)} (pauses when a chunk would cross ~2.2 GB; Steam crashes near ~2.4 GB).`
+      : "";
   const pausedBody = memoryFreedForResume
-    ? `Steam memory is free again${rssKb != null ? ` (${formatGb(rssKb)})` : ""} — press Resume Sync to continue.`
-    : `Restart Steam when convenient, then Resume Sync.${
-        rssKb != null
-          ? ` Steam memory: ${formatGb(rssKb)} (pauses when a chunk would cross ~2.2 GB; Steam crashes near ~2.4 GB).`
-          : ""
-      }`;
+    ? `Steam memory is free again${liveReadingSuffix} — press Resume Sync to continue.`
+    : `Restart Steam when convenient, then Resume Sync.${memoryDetailSuffix}`;
 
   const card = paused
     ? bannerCard("#3d9df6", "rgba(61, 157, 246, 0.15)", "budget-paused-banner", "Sync paused", pausedBody)
