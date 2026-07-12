@@ -1165,17 +1165,22 @@ class SyncOrchestrator:
             # cancel, so the check just below returns cleanly with the prior chunks
             # committed — the terminal finalize then records the resumable ``paused``
             # state (the deliberate sibling of a heartbeat timeout's
-            # ``interrupted``). Two modes by position in the run:
-            #  - The very FIRST chunk of the run gets an ABSOLUTE check (``chunk_items
-            #    = 0`` → pause iff RSS is already at/over the ceiling). It is exempt
-            #    from the PREDICTIVE projection so a fresh run/resume below the
-            #    ceiling always makes at least one chunk of forward progress, but a
-            #    resume that starts already at 2.3+ GB (no Steam restart) re-pauses
-            #    cleanly here instead of driving a ~300 MB chunk into the cliff.
-            #  - Every LATER chunk gets the PREDICTIVE check (pause iff RSS plus this
-            #    chunk's worst-case cost crosses the ceiling).
-            gate_chunk_items = len(chunk.emitted) if box.chunks_emitted_this_run > 0 else 0
-            await self._maybe_pause_for_budget(box, chunk_items=gate_chunk_items)
+            # ``interrupted``). Both modes are PREDICTIVE (RSS plus this chunk's
+            # worst-case cost) and differ only in the line the projection is
+            # measured against:
+            #  - Every LATER chunk projects against the effective ceiling
+            #    (``cliff - margin`` ≈ 2.2 GB), keeping the anti-thrash safety margin.
+            #  - The run's very FIRST chunk projects against the CLIFF itself
+            #    (``CLIFF_KB`` ≈ 2.45 GB). Forward progress must be guaranteed — the
+            #    run has to apply at least one chunk or it loops forever on a
+            #    no-progress pause — so the first chunk is allowed to spend into the
+            #    safety margin, but the predictive projection still stops it before
+            #    the crash line. Net effect: a resume proceeds only when this chunk's
+            #    worst-case peak stays below the cliff (≈ 2.15 GB for a full 200-item
+            #    chunk) and can never be projected past it; at/above that it re-pauses
+            #    with zero progress and the banner directs the user to restart Steam.
+            budget_limit_kb = CLIFF_KB if box.chunks_emitted_this_run == 0 else EFFECTIVE_CEILING_KB
+            await self._maybe_pause_for_budget(box, chunk_items=len(chunk.emitted), limit_kb=budget_limit_kb)
             if box.is_cancelling():
                 box.clear_active_unit()
                 return applied_count
@@ -1296,17 +1301,20 @@ class SyncOrchestrator:
             self._logger.debug("Session-budget measurement unavailable: renderer RSS not readable")
         return rss_kb
 
-    async def _maybe_pause_for_budget(self, box: LibrarySyncStateBox, *, chunk_items: int) -> None:
-        """GC, measure renderer RSS, and pause the run if this chunk would cross.
+    async def _maybe_pause_for_budget(
+        self, box: LibrarySyncStateBox, *, chunk_items: int, limit_kb: int = EFFECTIVE_CEILING_KB
+    ) -> None:
+        """GC, measure renderer RSS, and pause the run if this chunk would cross ``limit_kb``.
 
-        Fired at a chunk boundary before emitting *chunk_items* more shortcuts
-        (``chunk_items == 0`` on the run's first chunk makes this the ABSOLUTE
-        "already at/over the ceiling?" check). :func:`domain.session_budget.gate_decision`
-        decides whether the projected cost crosses the effective ceiling. On a pause
-        it sets ``run_paused`` with the distinct session-budget reason and
-        requests cancel — the chunk loop's next ``is_cancelling`` check returns
-        cleanly with the prior chunks committed, and the terminal finalize records
-        the resumable ``paused`` state.
+        Fired at a chunk boundary before emitting *chunk_items* more shortcuts.
+        :func:`domain.session_budget.gate_decision` decides whether the projected
+        cost crosses ``limit_kb`` — the effective ceiling for a later chunk, or the
+        cliff itself for the run's first chunk (whose forward-progress guarantee is
+        allowed to spend the safety margin but is still projected to stop before the
+        crash line). On a pause it sets ``run_paused`` with the distinct
+        session-budget reason and requests cancel — the chunk loop's next
+        ``is_cancelling`` check returns cleanly with the prior chunks committed, and
+        the terminal finalize records the resumable ``paused`` state.
 
         Fail-open throughout: an unavailable reading or any seam error skips the gate
         entirely — measurement must never block a sync.
@@ -1315,11 +1323,11 @@ class SyncOrchestrator:
             rss_kb = await self._gc_then_measure_rss(box)
             if rss_kb is None:
                 return
-            decision = gate_decision(rss_kb, chunk_items)
+            decision = gate_decision(rss_kb, chunk_items, limit_kb=limit_kb)
             if decision.should_pause:
                 self._logger.info(
                     f"Session-budget pause at chunk boundary: renderer RSS {rss_kb} KB + "
-                    f"{chunk_items} items projects {decision.projected_kb} KB >= ceiling "
+                    f"{chunk_items} items projects {decision.projected_kb} KB >= limit "
                     f"{decision.threshold_kb} KB"
                 )
                 box.run_paused = True

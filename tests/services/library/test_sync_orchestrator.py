@@ -4407,6 +4407,47 @@ class TestSessionBudgetGate:
         assert box.is_cancelling() is False
         assert box.budget_measure_unavailable_logged is True
 
+    @pytest.mark.asyncio
+    async def test_cliff_limit_proceeds_just_below_the_cliff_bound(self, plugin):
+        from domain.session_budget import CLIFF_KB, WORST_CASE_CREATE_KB
+
+        # The first-chunk call passes limit_kb=CLIFF. One KB below the full-chunk
+        # cliff bound the gate lets the chunk through (spends into the margin, never
+        # past the crash line).
+        orch = plugin._sync_service._orchestrator
+        box = plugin._sync_service._box
+        box.sync_state = SyncState.RUNNING
+        box.current_sync_id = "run-1"
+        plugin._renderer_gc.result = True
+        plugin._renderer_rss.rss_kb = CLIFF_KB - 200 * WORST_CASE_CREATE_KB - 1  # 2_149_999
+
+        await orch._maybe_pause_for_budget(box, chunk_items=200, limit_kb=CLIFF_KB)
+
+        assert box.run_paused is False
+        assert box.is_cancelling() is False
+
+    @pytest.mark.asyncio
+    async def test_cliff_limit_pauses_when_full_chunk_would_reach_the_cliff(self, plugin):
+        from domain.session_budget import CLIFF_KB, WORST_CASE_CREATE_KB
+        from services.library.sync_orchestrator import _SYNC_PAUSED_BUDGET
+
+        # At the full-chunk cliff bound the projection reaches the cliff exactly and
+        # the gate pauses (>=) — a first chunk this high is stopped before the crash
+        # line even though it would clear the more-permissive absolute-ceiling check
+        # the old first-chunk mode used.
+        orch = plugin._sync_service._orchestrator
+        box = plugin._sync_service._box
+        box.sync_state = SyncState.RUNNING
+        box.current_sync_id = "run-1"
+        plugin._renderer_gc.result = True
+        plugin._renderer_rss.rss_kb = CLIFF_KB - 200 * WORST_CASE_CREATE_KB  # 2_150_000
+
+        await orch._maybe_pause_for_budget(box, chunk_items=200, limit_kb=CLIFF_KB)
+
+        assert box.run_paused is True
+        assert box.interrupt_reason == _SYNC_PAUSED_BUDGET
+        assert box.is_cancelling() is True
+
     # ── _gc_then_measure_rss (GC-skip below the floor, LOW-3) ────
 
     @pytest.mark.asyncio
@@ -4471,8 +4512,9 @@ class TestSessionBudgetGate:
 
         self._arm_two_chunk_apply(plugin, fake_romm_api, monkeypatch)
         plugin._renderer_gc.result = True
-        # Just under the ceiling: the first chunk's ABSOLUTE check (chunk_items=0)
-        # passes, but the second chunk's PREDICTIVE check (+1500) crosses.
+        # Just under the ceiling: the first chunk's predictive-vs-CLIFF check
+        # (2.199 GB + one item's 1500 KB well below the 2.45 GB cliff) passes, but
+        # the second chunk's predictive-vs-ceiling check (+1500 ≥ 2.2 GB) crosses.
         plugin._renderer_rss.rss_kb = 2_199_000
 
         decky.emit.reset_mock()
@@ -4485,8 +4527,9 @@ class TestSessionBudgetGate:
         # reserved for an external death — a crash/heartbeat timeout).
         assert run.status == "paused"
         assert run.error == _SYNC_PAUSED_BUDGET
-        # The first chunk's absolute check passed (below ceiling) so it committed its
-        # ROM; the gate fired the GC before measuring on both chunk boundaries.
+        # The first chunk's predictive-vs-cliff check passed (well below the cliff)
+        # so it committed its ROM; the gate fired the GC before measuring on both
+        # chunk boundaries.
         assert plugin._renderer_gc.calls >= 2
         # The distinct pause reason reaches the frontend via sync_complete so the
         # toast + QAM status read the resume-friendly guidance, not "cancelled".
@@ -4515,14 +4558,15 @@ class TestSessionBudgetGate:
         plugin._sync_service._box.current_sync_id = run_id
 
     @pytest.mark.asyncio
-    async def test_first_chunk_predictive_exempt_proceeds_below_ceiling(self, plugin, fake_romm_api, monkeypatch):
-        # One ROM → one chunk = the run's first. It is exempt from the PREDICTIVE
-        # projection, so below the ceiling it proceeds and the run completes — even
-        # though its worst-case chunk cost would nominally cross. The gate DID run
-        # (absolute check), so the GC fired.
+    async def test_first_chunk_proceeds_when_projection_stays_below_cliff(self, plugin, fake_romm_api, monkeypatch):
+        # One ROM → one chunk = the run's first. It is gated PREDICTIVELY against the
+        # CLIFF (2.45 GB), not the ceiling: at 2.4 GB — ABOVE the 2.2 GB ceiling the
+        # old absolute first-chunk check would have paused at — this light 1-item
+        # chunk projects 2.4015 GB, still below the cliff, so it proceeds into the
+        # safety margin and the run completes. The gate DID run, so the GC fired.
         self._arm_single_chunk_apply(plugin, fake_romm_api, monkeypatch, run_id="run-solo")
         plugin._renderer_gc.result = True
-        plugin._renderer_rss.rss_kb = 2_199_000  # below the 2.2M ceiling → absolute check passes
+        plugin._renderer_rss.rss_kb = 2_400_000  # above the 2.2M ceiling, below the 2.45M cliff
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -4530,18 +4574,19 @@ class TestSessionBudgetGate:
             run = uow.sync_runs.get("run-solo")
         assert run is not None
         assert run.status == "completed"
-        assert plugin._renderer_gc.calls >= 1  # the absolute check GCs + measures
+        assert plugin._renderer_gc.calls >= 1  # the predictive-vs-cliff check GCs + measures
 
     @pytest.mark.asyncio
-    async def test_first_chunk_absolute_cap_repauses_at_or_over_ceiling(self, plugin, fake_romm_api, monkeypatch):
+    async def test_first_chunk_repauses_when_projection_reaches_cliff(self, plugin, fake_romm_api, monkeypatch):
         from services.library.sync_orchestrator import _SYNC_PAUSED_BUDGET
 
-        # A resume that starts already at/over the ceiling (no Steam restart) must
-        # re-pause on its very first chunk — the absolute cap — never emit an
-        # unchecked chunk into the cliff. Zero forward progress here is intended.
+        # A resume whose first chunk would be PROJECTED to reach the cliff (no Steam
+        # restart) must re-pause on that very first chunk rather than drive it into
+        # the crash line. At 2.449 GB even the light 1-item chunk projects ≥ the
+        # 2.45 GB cliff, so the run re-pauses with zero forward progress — intended.
         self._arm_single_chunk_apply(plugin, fake_romm_api, monkeypatch, run_id="run-over")
         plugin._renderer_gc.result = True
-        plugin._renderer_rss.rss_kb = 2_400_000  # over the ceiling
+        plugin._renderer_rss.rss_kb = 2_449_000  # +1500 for the one item ≥ the 2.45M cliff
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 

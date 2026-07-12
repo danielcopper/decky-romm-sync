@@ -59,13 +59,16 @@ is fail-open — a measurement failure never blocks a sync.**
   reading still holds transient garbage, so the settled value can only be lower, and below that floor even the
   worst-case max chunk (1.5 + 0.5 = 2.0 < 2.2 GB ceiling; 1.5 < 1.8 GB advisory) clears every threshold. Small syncs
   therefore pay zero GC cost; only a run genuinely approaching the cliff pays for the settle.
-- **The first chunk is predictive-exempt but absolute-capped.** The run's very first chunk is exempt from the
-  _predictive_ projection (`chunk_items = 0` → no per-chunk cost is added), so a fresh run/resume below the ceiling
-  always commits at least one chunk of forward progress rather than pausing with zero progress and looping forever. But
-  it still gets an _absolute_ check: if the GC-settled RSS is already at/over `cliff − margin`, it pauses immediately
-  with the same distinct reason instead of driving a ~300 MB chunk into the cliff. After a real Steam restart (baseline
-  ~430 MB) the absolute check never fires; a resume attempted _without_ a restart at 2.3+ GB re-pauses cleanly and tells
-  the user to restart — the run cannot cross the cliff on its own.
+- **The first chunk is gated predictively against the cliff, not the ceiling.** Both modes are predictive
+  (`rss + chunk_items × worst_case_rate ≥ limit`); they differ only in the `limit` line. Every _later_ chunk projects
+  against `cliff − margin` (≈2.2 GB), keeping the anti-thrash safety margin. The run's very _first_ chunk projects
+  against `CLIFF_KB` (≈2.45 GB) instead: forward progress must be guaranteed (the run has to apply at least one chunk or
+  it loops forever on a no-progress pause), so that one chunk is allowed to spend _into_ the safety margin — but the
+  predictive projection still stops it before the crash line itself. Net effect: a resume's first chunk proceeds only
+  when its worst-case peak stays below the cliff (≈2.15 GB for a full 200-item chunk) and can never be projected past
+  it; at/above that it re-pauses with zero progress and the banner directs the user to restart. After a real Steam
+  restart (baseline ~430 MB) the first-chunk check never fires; a resume attempted _without_ a restart re-pauses cleanly
+  and tells the user to restart — the run cannot cross the cliff on its own.
 - **A pause is a first-class `paused` run status, reusing ADR-0023's stop mechanics.** The gate sets `run_paused` + a
   distinct `interrupt_reason` and requests cancel; the chunk loop returns cleanly with prior chunks committed, and the
   terminal `SyncRun` write records the new terminal status **`paused`** (migration 014 widens the `sync_runs` status
@@ -140,10 +143,13 @@ is fail-open — a measurement failure never blocks a sync.**
 
 - **A large first import becomes a planned, consent-based multi-stage process** instead of a per-boot crash lottery: it
   applies as far as the budget allows, pauses cleanly, and the user restarts Steam (resetting the budget) and resumes.
-- **A resume can never drive itself over the cliff.** The first-chunk absolute cap closes the earlier hole where a
-  resume that started already near the ceiling (no Steam restart) would emit one unchecked ~300 MB chunk and risk the
-  crash the gate exists to prevent. A resume above the ceiling now re-pauses immediately with the restart guidance, so
-  forward progress is guaranteed only when there is real headroom — exactly when it is safe.
+- **A resume can never drive itself over the cliff.** Making the first chunk _predictive against the cliff_ closes the
+  earlier hole where the absolute-vs-ceiling first-chunk check let a resume at up to `cliff − margin` (≈2.2 GB) emit one
+  unchecked chunk whose worst-case peak (≈2.2 + 0.3 = 2.5 GB) landed _above_ the crash floor — the ~50 MB window that
+  made ADR-0023's "a resume can never cross the cliff" only almost true. The first chunk now projects its real cost
+  against the cliff, so it proceeds only when that projected peak stays below the crash line and re-pauses otherwise:
+  forward progress is guaranteed only when there is real headroom, exactly when it is safe. The claim is now literally
+  true.
 - **A single oversized platform re-touches its chunks across restarts (no crash).** A resume redoes an interrupted
   platform's chunks from the start (platform-level skip only), so a platform whose own apply exceeds one session's
   budget is applied in stages across Steam restarts, re-touching the already-applied chunks each time. It never crashes

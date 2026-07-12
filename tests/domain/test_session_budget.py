@@ -82,6 +82,42 @@ def test_gate_explicit_per_item_rate_overrides_default() -> None:
     assert gate_decision(rss_kb=rss, chunk_items=100, per_item_kb=5_000).should_pause is True
 
 
+def test_gate_default_limit_is_the_effective_ceiling() -> None:
+    # No explicit limit → the projection is measured against the effective ceiling,
+    # and the verdict reports that ceiling as the threshold.
+    decision = gate_decision(rss_kb=1_000_000, chunk_items=200)
+    assert decision.threshold_kb == EFFECTIVE_CEILING_KB
+
+
+def test_gate_cliff_limit_proceeds_one_kb_below_the_cliff_bound() -> None:
+    # The run's FIRST chunk is gated against the CLIFF (not the ceiling). With a
+    # full 200-item chunk the projection is rss + 300_000; one KB below the cliff
+    # bound the run proceeds and the verdict reports the cliff as the threshold.
+    rss = CLIFF_KB - 200 * WORST_CASE_CREATE_KB - 1
+    decision = gate_decision(rss_kb=rss, chunk_items=200, limit_kb=CLIFF_KB)
+    assert decision.projected_kb == CLIFF_KB - 1
+    assert decision.threshold_kb == CLIFF_KB
+    assert decision.should_pause is False
+
+
+def test_gate_cliff_limit_pauses_when_projection_reaches_the_cliff() -> None:
+    # At the cliff bound the full-chunk projection equals the cliff exactly; the
+    # gate pauses at ``>=`` so this first chunk re-pauses with zero progress.
+    rss = CLIFF_KB - 200 * WORST_CASE_CREATE_KB
+    decision = gate_decision(rss_kb=rss, chunk_items=200, limit_kb=CLIFF_KB)
+    assert decision.projected_kb == CLIFF_KB
+    assert decision.should_pause is True
+
+
+def test_gate_cliff_limit_still_pauses_a_run_that_would_pass_the_ceiling_check() -> None:
+    # A first chunk at 2.199 GB clears the CLIFF check for a light (1-item) chunk
+    # but a full 200-item chunk projects 2.199 + 0.3 = 2.499 GB ≥ the 2.45 GB cliff,
+    # so the same RSS that the old absolute-ceiling check let through now re-pauses.
+    rss = 2_199_000
+    assert gate_decision(rss_kb=rss, chunk_items=1, limit_kb=CLIFF_KB).should_pause is False
+    assert gate_decision(rss_kb=rss, chunk_items=200, limit_kb=CLIFF_KB).should_pause is True
+
+
 # ── predict_run_crosses ──────────────────────────────────────────
 
 

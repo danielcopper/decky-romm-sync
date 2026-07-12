@@ -101,20 +101,35 @@ class GateDecision:
     threshold_kb: int
 
 
-def gate_decision(rss_kb: int, chunk_items: int, per_item_kb: int = WORST_CASE_CREATE_KB) -> GateDecision:
-    """Decide whether applying the next chunk would cross the session budget.
+def gate_decision(
+    rss_kb: int,
+    chunk_items: int,
+    per_item_kb: int = WORST_CASE_CREATE_KB,
+    limit_kb: int = EFFECTIVE_CEILING_KB,
+) -> GateDecision:
+    """Decide whether applying the next chunk would cross ``limit_kb``.
 
     Pauses iff the current renderer RSS plus the chunk's projected worst-case
-    cost (``chunk_items * per_item_kb``) reaches the effective ceiling. The
-    projection is deliberately worst-case (every item priced as a fresh create)
-    so the gate errs toward pausing early — a false pause costs a Steam restart,
-    a false proceed costs a renderer crash mid-apply.
+    cost (``chunk_items * per_item_kb``) reaches ``limit_kb``. The projection is
+    deliberately worst-case (every item priced as a fresh create) so the gate
+    errs toward pausing early — a false pause costs a Steam restart, a false
+    proceed costs a renderer crash mid-apply.
+
+    ``limit_kb`` selects which line the projection is measured against, chosen by
+    the chunk's position in the run. Every LATER chunk uses the default effective
+    ceiling (``cliff - margin``), keeping the anti-thrash safety margin intact. A
+    run's FIRST chunk instead passes ``CLIFF_KB``: forward progress must be
+    guaranteed (the run has to apply at least one chunk or it would loop forever
+    on a no-progress pause), so that one chunk is allowed to spend into the safety
+    margin — but the predictive projection still stops it before the crash line
+    itself. So the first chunk trades the margin's cushion for guaranteed
+    progress; it can never be projected to peak past the cliff.
     """
     projected_kb = rss_kb + chunk_items * per_item_kb
     return GateDecision(
-        should_pause=projected_kb >= EFFECTIVE_CEILING_KB,
+        should_pause=projected_kb >= limit_kb,
         projected_kb=projected_kb,
-        threshold_kb=EFFECTIVE_CEILING_KB,
+        threshold_kb=limit_kb,
     )
 
 
@@ -145,16 +160,17 @@ def post_run_advisory(rss_kb: int) -> bool:
 def resume_would_proceed(rss_kb: int) -> bool:
     """Whether a resume would make sustained progress under the steady-state predictive gate.
 
-    Deliberately stricter than "one chunk of progress": the resume's FIRST chunk
-    only faces the absolute ceiling check, so any resume below the ceiling applies
-    one chunk regardless — this models the predictive condition that governs every
-    later chunk, which is the honest bar for telling the user "press Resume now".
-    Exactly the predictive gate's condition for a maxed chunk: the run proceeds iff
-    the current RSS plus one full chunk's worst-case cost stays *below* the effective
-    ceiling (the gate pauses at ``>=``). So after a Steam restart drops RSS to the
-    fresh baseline this returns ``True`` and the UI can tell the user a paused run is
-    resumable again; at a still-high RSS it returns ``False``. ``None`` handling
-    (unreadable RSS → undecidable) stays with the caller.
+    Deliberately stricter than the run's own first-chunk pass bar: it prices a
+    full worst-case chunk against the effective ceiling — the line every LATER
+    chunk is measured against — not the more permissive cliff the first chunk is
+    allowed to spend toward. That conservative ceiling-based bar is the honest one
+    for telling the user "press Resume now": it promises the run keeps moving with
+    the full anti-thrash margin intact, not just the single guaranteed first chunk.
+    So the run proceeds iff the current RSS plus one full chunk's worst-case cost
+    stays *below* the effective ceiling (the gate pauses at ``>=``). After a Steam
+    restart drops RSS to the fresh baseline this returns ``True`` and the UI can
+    tell the user a paused run is resumable again; at a still-high RSS it returns
+    ``False``. ``None`` handling (unreadable RSS → undecidable) stays with the caller.
     """
     return rss_kb + FULL_CHUNK_WORST_KB < EFFECTIVE_CEILING_KB
 
