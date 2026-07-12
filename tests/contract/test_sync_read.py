@@ -311,6 +311,7 @@ async def test_get_session_budget_status_shape_rss_none(harness):
         "rss_kb": None,
         "ceiling_kb": EFFECTIVE_CEILING_KB,
         "cliff_kb": CLIFF_KB,
+        "memory_delta_kb": None,
     }
 
 
@@ -326,6 +327,7 @@ async def test_get_session_budget_status_shape_rss_present(harness):
         "rss_kb": 2_100_000,
         "ceiling_kb": EFFECTIVE_CEILING_KB,
         "cliff_kb": CLIFF_KB,
+        "memory_delta_kb": None,
     }
 
 
@@ -337,6 +339,16 @@ async def test_reload_steam_ui_idle_success(harness):
     result = await harness.plugin.reload_steam_ui()
     assert result["success"] is True
     assert "message" in result
+
+
+async def test_reload_steam_ui_seam_failure_shape(harness):
+    """The reload seam couldn't reach Steam (UI still alive) → canonical failure
+    shape with a reload_failed reason the frontend turns into a toast."""
+    harness.plugin._sync_service._orchestrator._renderer_reload.result = False
+    result = await harness.plugin.reload_steam_ui()
+    assert result["success"] is False
+    assert result["reason"] == "reload_failed"
+    assert isinstance(result["message"], str)
 
 
 async def test_reload_steam_ui_refused_while_sync_active(harness):

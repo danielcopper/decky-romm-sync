@@ -62,6 +62,17 @@ UPDATE_TOUCH_KB = 1_000
 # ceiling — this is a "restart soon" nudge, not the hard pause line.
 POST_RUN_ADVISORY_KB = 1_800_000
 
+# RSS floor below which the chunk gate skips its GC-before-measure round-trip.
+# A raw reading (no GC) still holds transient garbage, so the true settled
+# resident value can only be LOWER than the raw one. Below this floor even the
+# most conservative check passes every threshold — 1.5 GB + 0.5 GB max chunk
+# worst-case = 2.0 < 2.3 GB ceiling, and 1.5 < 1.8 GB advisory — so a GC could
+# not change any decision here. The gate therefore trusts the raw reading and
+# skips the ~5 s GC entirely, making small syncs pay zero GC cost. Only when the
+# raw reading is at/above this floor is the GC worth its round-trip to settle the
+# reading before the gate reasons about the ceiling.
+GC_SKIP_BELOW_KB = 1_500_000
+
 
 @dataclass(frozen=True)
 class GateDecision:
@@ -116,3 +127,16 @@ def predict_run_crosses(
 def post_run_advisory(rss_kb: int) -> bool:
     """Whether a finished run's RSS is high enough to recommend a Steam restart."""
     return rss_kb > POST_RUN_ADVISORY_KB
+
+
+def session_memory_delta(start_kb: int | None, end_kb: int | None) -> int | None:
+    """Signed renderer-RSS growth across a run (``end - start``), in KB.
+
+    Positive means the run grew the renderer heap, negative means it shrank
+    (a GC or reload reclaimed more than the run added). Returns ``None`` when
+    either endpoint was unmeasurable, so the UI shows no delta rather than a
+    number derived from a missing reading.
+    """
+    if start_kb is None or end_kb is None:
+        return None
+    return end_kb - start_kb

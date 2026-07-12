@@ -3,8 +3,10 @@
 Boundary-focused: the gate/prognosis fire exactly at the effective ceiling and
 not one KB below it, the worst-case rate is the default, an explicit rate
 overrides it (the PR-2 cover-term seam), and the zero-item / large-item edges
-behave. ``None`` handling is deliberately NOT tested here — the kernel takes
-ints only; the caller owns the fail-open ``None`` skip.
+behave. The gate/prognosis kernels take ints only, so their ``None`` handling is
+the caller's fail-open skip and is not tested here; ``session_memory_delta`` is
+the one kernel that DOES accept ``None`` endpoints, so its ``None`` cases live
+below.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 from domain.session_budget import (
     CLIFF_KB,
     EFFECTIVE_CEILING_KB,
+    GC_SKIP_BELOW_KB,
     POST_RUN_ADVISORY_KB,
     SAFETY_MARGIN_KB,
     UPDATE_TOUCH_KB,
@@ -19,6 +22,7 @@ from domain.session_budget import (
     gate_decision,
     post_run_advisory,
     predict_run_crosses,
+    session_memory_delta,
 )
 
 
@@ -128,3 +132,38 @@ def test_post_run_advisory_below_threshold_is_false() -> None:
 def test_post_run_advisory_above_threshold_is_true() -> None:
     assert post_run_advisory(POST_RUN_ADVISORY_KB + 1) is True
     assert post_run_advisory(2_400_000) is True
+
+
+# ── GC-skip floor ────────────────────────────────────────────────
+
+
+def test_gc_skip_floor_leaves_worst_case_below_every_threshold() -> None:
+    # The floor's rationale: at the floor, the worst-case max-chunk cost still
+    # clears the pause ceiling, and the floor itself clears the advisory — so a GC
+    # below it could not flip any decision. Pin that arithmetic so a threshold move
+    # can't silently invalidate the skip.
+    assert GC_SKIP_BELOW_KB + 500_000 < EFFECTIVE_CEILING_KB
+    assert GC_SKIP_BELOW_KB < POST_RUN_ADVISORY_KB
+
+
+# ── session_memory_delta ─────────────────────────────────────────
+
+
+def test_memory_delta_positive_growth() -> None:
+    assert session_memory_delta(500_000, 1_300_000) == 800_000
+
+
+def test_memory_delta_negative_when_run_shrank_heap() -> None:
+    assert session_memory_delta(1_300_000, 1_000_000) == -300_000
+
+
+def test_memory_delta_none_when_start_missing() -> None:
+    assert session_memory_delta(None, 1_300_000) is None
+
+
+def test_memory_delta_none_when_end_missing() -> None:
+    assert session_memory_delta(500_000, None) is None
+
+
+def test_memory_delta_none_when_both_missing() -> None:
+    assert session_memory_delta(None, None) is None

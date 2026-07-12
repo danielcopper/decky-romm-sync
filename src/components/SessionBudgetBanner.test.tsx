@@ -7,8 +7,9 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
-import { SessionBudgetBanner, formatGb, HIGH_HEAP_KB } from "./SessionBudgetBanner";
+import { render, fireEvent, waitFor } from "@testing-library/react";
+import { toaster } from "@decky/api";
+import { SessionBudgetBanner, formatGb, formatSignedGb, HIGH_HEAP_KB } from "./SessionBudgetBanner";
 import * as backend from "../api/backend";
 
 function buttonByText(container: HTMLElement, text: string): HTMLButtonElement | null {
@@ -21,6 +22,14 @@ describe("formatGb", () => {
     expect(formatGb(2252712)).toBe("2.3 GB");
     expect(formatGb(1900000)).toBe("1.9 GB");
     expect(formatGb(440000)).toBe("0.4 GB");
+  });
+});
+
+describe("formatSignedGb", () => {
+  it("prefixes an explicit sign", () => {
+    expect(formatSignedGb(800000)).toBe("+0.8 GB");
+    expect(formatSignedGb(-300000)).toBe("-0.3 GB");
+    expect(formatSignedGb(0)).toBe("+0.0 GB");
   });
 });
 
@@ -79,6 +88,7 @@ describe("SessionBudgetBanner — Free Steam memory button (#31)", () => {
   beforeEach(() => {
     vi.mocked(backend.reloadSteamUi).mockReset();
     vi.mocked(backend.reloadSteamUi).mockResolvedValue({ success: true, message: "" });
+    vi.mocked(toaster.toast).mockReset();
   });
 
   it("renders the reload button on the paused banner and fires reloadSteamUi on click", () => {
@@ -107,5 +117,49 @@ describe("SessionBudgetBanner — Free Steam memory button (#31)", () => {
   it("shows no reload button when no banner is shown", () => {
     const { container } = render(<SessionBudgetBanner lastAttemptStatus="completed" rssKb={440000} />);
     expect(buttonByText(container, "Free Steam memory")).toBeNull();
+  });
+
+  it("surfaces a failure toast when the reload seam reports failure (MEDIUM-1)", async () => {
+    // On a real reload the JS context dies before the response is read, so the only
+    // response the UI ever observes is a genuine failure — which must reach the user.
+    const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+    vi.mocked(backend.reloadSteamUi).mockResolvedValue({
+      success: false,
+      message: "Couldn't reach Steam to free memory — try a full Steam restart.",
+    });
+    const { container } = render(<SessionBudgetBanner lastAttemptStatus="paused" rssKb={2299000} />);
+    fireEvent.click(buttonByText(container, "Free Steam memory")!);
+    await waitFor(() =>
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
+        expect.objectContaining({ body: "Couldn't reach Steam to free memory — try a full Steam restart." }),
+      ),
+    );
+    expect(logSpy).not.toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
+
+  it("does not toast on a (never-observed) success response", async () => {
+    vi.mocked(backend.reloadSteamUi).mockResolvedValue({ success: true, message: "Reloading" });
+    const { container } = render(<SessionBudgetBanner lastAttemptStatus="paused" rssKb={2299000} />);
+    fireEvent.click(buttonByText(container, "Free Steam memory")!);
+    await waitFor(() => expect(vi.mocked(backend.reloadSteamUi)).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
+  });
+
+  it("logs the error when the reload call rejects (LOW-1, catch branch)", async () => {
+    // A transport-level rejection (not a false result) routes to the .catch — assert
+    // the observable side effect (logError with the message), not merely that the
+    // rejecting call was made.
+    const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+    vi.mocked(backend.reloadSteamUi).mockRejectedValue(new Error("bridge down"));
+    const { container } = render(<SessionBudgetBanner lastAttemptStatus="paused" rssKb={2299000} />);
+    fireEvent.click(buttonByText(container, "Free Steam memory")!);
+    await waitFor(() =>
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to trigger Steam UI reload")),
+    );
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("bridge down"));
+    expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
+    logSpy.mockRestore();
   });
 });

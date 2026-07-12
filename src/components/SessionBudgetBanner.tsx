@@ -1,5 +1,6 @@
 import { FC, ReactNode } from "react";
 import { PanelSectionRow, ButtonItem } from "@decky/ui";
+import { toaster } from "@decky/api";
 import { reloadSteamUi, logError } from "../api/backend";
 import { detach } from "../utils/detach";
 
@@ -18,13 +19,34 @@ export function formatGb(kb: number): string {
 }
 
 /**
- * Fire the renderer reload — the "free Steam memory" action. This destroys the
- * very UI that requested it (the whole JS context reloads), so there is no
- * response to await or optimistic state to set; Decky reinjects a fresh frontend
- * afterwards. A rejection before the reload takes effect is logged.
+ * Format a signed KB delta as a one-decimal decimal-GB string with an explicit
+ * ``+``/``-`` sign, e.g. ``+800000 → "+0.8 GB"``, ``-300000 → "-0.3 GB"``. Zero
+ * (and anything rounding to it) reads ``+0.0 GB``. Used for the "last sync" memory
+ * delta row (#1383).
+ */
+export function formatSignedGb(kb: number): string {
+  const gb = kb / 1_000_000;
+  return `${gb >= 0 ? "+" : "-"}${Math.abs(gb).toFixed(1)} GB`;
+}
+
+/**
+ * Fire the renderer reload — the "free Steam memory" action. On a REAL reload the
+ * JS context is torn down before the promise resolves, so the ``success: true``
+ * branch can never actually run and there is no optimistic state to set; Decky
+ * reinjects a fresh frontend afterwards. The only response the UI ever observes is
+ * a genuine failure (the reload seam couldn't reach Steam, so the UI is still
+ * alive) — surface it as a toast. A rejection (transport error) is logged.
  */
 function freeSteamMemory(): void {
-  detach(reloadSteamUi().catch((e) => logError(`Failed to trigger Steam UI reload: ${e}`)));
+  detach(
+    reloadSteamUi()
+      .then((r) => {
+        if (!r.success) {
+          toaster.toast({ title: "RomM Sync", body: r.message });
+        }
+      })
+      .catch((e) => logError(`Failed to trigger Steam UI reload: ${e}`)),
+  );
 }
 
 function bannerCard(accent: string, background: string, testId: string, title: string, body: string): ReactNode {

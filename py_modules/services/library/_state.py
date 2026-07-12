@@ -151,6 +151,20 @@ class LibrarySyncStateBox:
     # once per run instead of on every chunk boundary (the reading is fail-open —
     # a ``None`` reading skips the gate). Reset at the start of each run (#1383).
     budget_measure_unavailable_logged: bool = False
+    # Renderer RSS (KB) captured at run START — a RAW read (may include transient
+    # garbage; not GC-settled), taken before any chunk is applied. The run-end
+    # advisory read is differenced against it to report roughly how much the run
+    # grew Steam's memory; the delta is an approximation for information only, which
+    # a raw baseline is fine for. ``None`` when the run-start reading was unavailable
+    # (delta then unmeasurable). Set at the start of each run (#1383).
+    run_start_rss_kb: int | None = None
+    # Signed renderer-RSS growth (KB) of the last CLEAN run (end - start), retained
+    # across runs so ``get_session_budget_status`` can surface "last sync: ±X GB"
+    # on a QAM remount. In-memory only — lost on plugin reload, which is acceptable
+    # (no migration). ``None`` when either endpoint of the last clean run was
+    # unmeasurable. NOT reset per-run: a paused/cancelled run leaves the last clean
+    # run's delta in place (#1383).
+    last_run_delta_kb: int | None = None
 
     # ── Run lifecycle — the only writers of sync_state / current_sync_id ──
     #

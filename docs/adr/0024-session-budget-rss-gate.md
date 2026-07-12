@@ -46,12 +46,17 @@ is fail-open — a measurement failure never blocks a sync.**
   kernel (`domain/session_budget.py`). The kernel holds the measured constants with provenance and three functions:
   `gate_decision` (per-chunk pause), `predict_run_crosses` (post-preview prognosis), `post_run_advisory` (post-run
   restart nudge). It takes plain integers and returns plain values; `None`-handling stays in the caller.
-- **The gate is at every chunk boundary, GC-before-measure.** In the ADR-0023 chunk loop
-  (`sync_orchestrator.py::_apply_unit_in_chunks`), at each chunk boundary: fire the GC (fail-open), read RSS
-  (fail-open), and pause if the projection crosses `cliff − margin`. The projection is worst-case (every item priced as
-  a fresh create) so the gate errs toward pausing early — a false pause costs a Steam restart, a false proceed costs a
-  renderer crash mid-apply. The chunk boundary is the only decision point because it is the only place the run can stop
-  cleanly and durably.
+- **The gate is at every chunk boundary, GC-before-measure — but the GC is skipped when it can't matter.** In the
+  ADR-0023 chunk loop (`sync_orchestrator.py::_apply_unit_in_chunks`), at each chunk boundary: read RSS (fail-open),
+  fire the GC (fail-open) to settle the reading, re-read, and pause if the projection crosses `cliff − margin`. The
+  projection is worst-case (every item priced as a fresh create) so the gate errs toward pausing early — a false pause
+  costs a Steam restart, a false proceed costs a renderer crash mid-apply. The chunk boundary is the only decision point
+  because it is the only place the run can stop cleanly and durably. **GC-skip below a floor:** the ~5 s GC only earns
+  its cost near the ceiling, so the measure reads RSS raw first and, when that raw reading is already below
+  `GC_SKIP_BELOW_KB` (1.5 GB), returns it directly with no GC — a raw reading still holds transient garbage, so the
+  settled value can only be lower, and below that floor even the worst-case max chunk (1.5 + 0.5 = 2.0 < 2.3 GB ceiling;
+  1.5 < 1.8 GB advisory) clears every threshold. Small syncs therefore pay zero GC cost; only a run genuinely
+  approaching the cliff pays for the settle.
 - **The first chunk is predictive-exempt but absolute-capped.** The run's very first chunk is exempt from the
   _predictive_ projection (`chunk_items = 0` → no per-chunk cost is added), so a fresh run/resume below the ceiling
   always commits at least one chunk of forward progress rather than pausing with zero progress and looping forever. But
@@ -82,6 +87,15 @@ is fail-open — a measurement failure never blocks a sync.**
   live RSS exceeds ~1.8 GB after a completed run (it self-clears after a restart, since the next read is low — no
   dismissed-state to persist). Both drop the number but keep their text when `rss_kb` is null. The pause toast stays for
   immediacy (with a longer duration so it isn't truncated), but the banners are the source of truth.
+- **An always-on memory row with the last-run delta.** The QAM Status section carries a permanent "Steam memory: X.X GB"
+  row (the same live reading, omitted entirely when `rss_kb` is null) with a "last sync: ±X GB" sub-line — the last
+  clean run's signed RSS growth, `end - start`. A **raw** read taken at run start (captured unconditionally in the
+  run-scoped box, so even a fully-incremental-skip run that applies nothing still records a baseline and reports ≈ +0.0
+  GB) is the start; the post-run advisory read is the end. The delta is an approximation for information only — a raw
+  start baseline (which may hold transient garbage) is fine for it. The signed value is retained in memory so
+  `get_session_budget_status` returns it on a QAM remount (`memory_delta_kb`; in-memory only — a plugin reload loses it,
+  no migration); the UI reads it from that callable, so it is deliberately NOT put on the `sync_complete` wire. It
+  degrades to no sub-line whenever either endpoint was unmeasurable, so a stale number is never shown.
 - **"Free Steam memory" reloads the renderer without a client restart.** Both banners carry a **Free Steam memory**
   button that fires a new `reload_steam_ui()` callable, which drives `Page.reload` on the SharedJSContext target over
   the same CDP client. `Page.reload` replaces the renderer PROCESS wholesale — a full session-budget reset (measured
@@ -90,13 +104,17 @@ is fail-open — a measurement failure never blocks a sync.**
   optimistic UI or toast (neither would survive the reload); after reinjection the banner reflects the fresh low RSS
   (the yellow banner self-clears; the blue paused banner now shows the low number with Resume Sync). The callable
   **refuses while a sync is in flight** (`{success: False, reason: "sync_active"}`) — a reload mid-apply would tear down
-  the frontend the apply drives; it is allowed only from idle (which includes after a run has paused or completed). The
-  reload seam is fail-open like the GC/RSS seams.
+  the frontend the apply drives; it is allowed only from idle (which includes after a run has paused or completed). On a
+  REAL reload the JS context is torn down before the response is read, so the `success: True` branch never reaches the
+  frontend — which means the ONLY response the frontend ever observes is a genuine failure: the reload seam returned
+  `False` (CEF debugger unreachable, no renderer torn down, UI still alive), returned as
+  `{success: False, reason: "reload_failed"}` and surfaced as a "try a full Steam restart" toast. The seam itself is
+  fail-open like the GC/RSS seams, but a fail is now visible rather than silent.
 - **Minimal new wire surface.** The advisories ride an added field on the existing `sync_preview` response
   (`pause_likely`, plus `sync_platform_count` / `sync_collection_count` for the preview scope line) and added fields on
   the existing `sync_complete` payload (`interrupt_reason`, `restart_recommended`). The only new names are the
-  `get_session_budget_status` and `reload_steam_ui` callables (no new emit event); the callable-manifest and
-  event-parity gates stay green.
+  `get_session_budget_status` (which returns `rss_kb` + the fixed budget lines + the retained `memory_delta_kb`) and
+  `reload_steam_ui` callables (no new emit event); the callable-manifest and event-parity gates stay green.
 - **Parameterized for reclaimable API artwork (PR 2).** The gate's per-item cost is a parameter defaulting to the
   worst-case create rate. This PR does **not** reintroduce API artwork; the parameter is the seam PR 2 uses to add a
   per-item cover term once `SetCustomArtworkForApp` (transiently resident, GC-reclaimable — hence the GC-before-measure)
@@ -116,8 +134,10 @@ is fail-open — a measurement failure never blocks a sync.**
   — the predictive gate stops each stage before the cliff — but the re-touch is wasted work until the delta-restricted
   apply tracked in #1383 lands. Measured budgets (~2000+ items/boot) exceed realistic single-platform sizes, so this is
   a rare edge PR 1 accepts.
-- **~5 s of GC overhead per chunk boundary.** Negligible against a chunk's ~2-minute apply, and it buys a truer reading
-  than the unreliable natural GC.
+- **~5 s of GC overhead per chunk boundary — only near the ceiling.** A small sync whose RSS stays below the 1.5 GB
+  GC-skip floor pays zero GC cost (the raw reading already clears every threshold); only a run genuinely approaching the
+  cliff pays the ~5 s settle, negligible against a chunk's ~2-minute apply, and it buys a truer reading than the
+  unreliable natural GC.
 - **Every path is fail-open.** No `steamwebhelper` process, unreadable `/proc`, or an unreachable debugger yields a
   skipped gate (logged once per run) — the sync proceeds exactly as it did before this decision. Measurement is a safety
   net, never a dependency.

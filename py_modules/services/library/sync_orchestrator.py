@@ -26,9 +26,11 @@ from domain.preview_delta import PreviewDelta
 from domain.session_budget import (
     CLIFF_KB,
     EFFECTIVE_CEILING_KB,
+    GC_SKIP_BELOW_KB,
     gate_decision,
     post_run_advisory,
     predict_run_crosses,
+    session_memory_delta,
 )
 from domain.shortcut_data import EmulatorInvocation, build_shortcuts_data
 from domain.sibling_group import compute_component_group_keys
@@ -494,16 +496,25 @@ class SyncOrchestrator:
         Reads the renderer's current RSS (no GC — this is a cheap on-render poll,
         not the gate's settled measurement) alongside the two fixed budget lines so
         the frontend can render "Steam memory: X.X GB" against the ceiling/cliff.
-        Fail-open: ``rss_kb`` is ``None`` when the reading is unavailable (no
-        ``steamwebhelper`` / unreadable ``/proc``) or any seam raises — the banner
-        then drops the number but keeps its guidance text.
+        Also returns ``memory_delta_kb`` — the last clean run's signed RSS growth,
+        retained in memory — so a QAM remount can show "last sync: ±X GB" without a
+        live sync. Fail-open: ``rss_kb`` is ``None`` when the reading is unavailable
+        (no ``steamwebhelper`` / unreadable ``/proc``) or any seam raises — the
+        banner then drops the number but keeps its guidance text; ``memory_delta_kb``
+        is ``None`` until a clean run has measured both endpoints.
         """
         rss_kb: int | None = None
         try:
             rss_kb = await self._loop.run_in_executor(None, self._renderer_rss)
         except Exception as e:  # fail-open: a status poll must never raise
             self._logger.debug(f"Session-budget status read failed: {e}")
-        return {"success": True, "rss_kb": rss_kb, "ceiling_kb": EFFECTIVE_CEILING_KB, "cliff_kb": CLIFF_KB}
+        return {
+            "success": True,
+            "rss_kb": rss_kb,
+            "ceiling_kb": EFFECTIVE_CEILING_KB,
+            "cliff_kb": CLIFF_KB,
+            "memory_delta_kb": self._sync_state.last_run_delta_kb,
+        }
 
     async def reload_steam_ui(self) -> dict[str, Any]:
         """Reload the Steam renderer to free its session heap (the "free memory" action, #1383).
@@ -513,9 +524,14 @@ class SyncOrchestrator:
         restart. Refuses while a sync run is in flight (``sync_active``): a reload
         mid-apply would tear down the frontend the apply is driving. It is allowed
         only from an idle state (which includes after a run has paused or
-        completed). The reload destroys the very UI that requested it, so the
-        frontend never sees this response — Decky reinjects a fresh frontend after
-        the ~30 s renderer teardown. Fail-open on the reload seam itself.
+        completed).
+
+        On a REAL reload the renderer's JS context is torn down before this response
+        can be read, so the ``success: True`` branch never actually reaches the
+        frontend — Decky reinjects a fresh frontend after the ~30 s teardown. That
+        means the ONLY response the frontend ever observes is the failure one: the
+        reload seam returned ``False`` (CEF debugger unreachable, no renderer torn
+        down, UI still alive), which surfaces as a "try a full Steam restart" toast.
         """
         if self._sync_state.is_in_flight():
             return {
@@ -526,6 +542,11 @@ class SyncOrchestrator:
         ok = await self._loop.run_in_executor(None, self._renderer_reload)
         if not ok:
             self._logger.warning("Renderer reload could not be triggered (CEF debugger unreachable?)")
+            return {
+                "success": False,
+                "reason": "reload_failed",
+                "message": "Couldn't reach Steam to free memory — try a full Steam restart.",
+            }
         return {"success": True, "message": "Reloading Steam's interface to free memory"}
 
     # ── Sync termination ─────────────────────────────────────────
@@ -590,6 +611,19 @@ class SyncOrchestrator:
         box.chunks_emitted_this_run = 0
         box.interrupt_reason = None
         box.budget_measure_unavailable_logged = False
+        # Run-start RSS baseline for the last-run memory delta (#1383). A RAW read
+        # (no GC — the settle isn't worth it for an informational number) captured
+        # UNCONDITIONALLY at run start, before any chunk is applied, so even a
+        # fully-incremental-skip run (nothing to apply, no chunk gate ever fires)
+        # still records a baseline and reports an honest ≈ "+0.0 GB" delta instead of
+        # wiping it to None. Fail-open: an unavailable reading leaves it None (the
+        # delta is then unmeasurable). ``last_run_delta_kb`` is deliberately NOT reset
+        # (it retains the previous clean run's delta for QAM remounts).
+        box.run_start_rss_kb = None
+        try:
+            box.run_start_rss_kb = await self._loop.run_in_executor(None, self._renderer_rss)
+        except Exception as e:  # fail-open: the baseline read must never block a sync
+            self._logger.debug(f"Session-budget run-start baseline read skipped: {e}")
         # Capture the run id up front so the terminal SyncRun writes and the
         # ``finally`` reset below operate on a stable id for the lifetime of
         # this run. Every terminal IDLE/None reset for this run is collapsed
@@ -1218,19 +1252,32 @@ class SyncOrchestrator:
             box.request_cancel()
 
     async def _gc_then_measure_rss(self, box: LibrarySyncStateBox) -> int | None:
-        """Force a renderer GC, then read RSS — the shared GC-before-measure seam.
+        """Read RSS, GC-settling it first only when it matters — the measure seam.
 
-        The GC settles the renderer heap so the reading reflects retained memory,
-        not transient garbage. Returns the RSS in KB, or ``None`` when measurement
-        is unavailable or any seam raises (fail-open). Once a run finds RSS
-        unavailable it stays that way (no ``steamwebhelper`` / unreadable ``/proc``),
-        so the once-per-run flag both suppresses repeat logging AND short-circuits
-        further GC + read attempts for the rest of the run (no point paying the GC
-        round-trip when the reading can't succeed).
+        Reads RSS raw first (no GC). When the raw reading is already below
+        :data:`GC_SKIP_BELOW_KB` it is returned as-is: a raw reading still holds
+        transient garbage, so the true settled value can only be lower, and below
+        that floor even the most conservative check passes every threshold — the
+        ~5 s GC round-trip could not change any decision, so a small sync pays zero
+        GC cost. Only a raw reading at/above the floor pays for a GC and a re-read,
+        so the gate reasons about the settled heap near the ceiling.
+
+        Returns the RSS in KB, or ``None`` when measurement is unavailable or any
+        seam raises (fail-open). Once a run finds RSS unavailable it stays that way
+        (no ``steamwebhelper`` / unreadable ``/proc``), so the once-per-run flag
+        both suppresses repeat logging AND short-circuits further read attempts for
+        the rest of the run.
         """
         if box.budget_measure_unavailable_logged:
             return None
         try:
+            raw_kb = await self._loop.run_in_executor(None, self._renderer_rss)
+            if raw_kb is None:
+                box.budget_measure_unavailable_logged = True
+                self._logger.debug("Session-budget measurement unavailable: renderer RSS not readable")
+                return None
+            if raw_kb < GC_SKIP_BELOW_KB:
+                return raw_kb
             await self._loop.run_in_executor(None, self._renderer_gc)
             rss_kb = await self._loop.run_in_executor(None, self._renderer_rss)
         except Exception as e:  # fail-open: measurement must never block a sync
@@ -1416,16 +1463,23 @@ class SyncOrchestrator:
         # reason into the terminal payload; a CLEAN run instead GCs then measures the
         # renderer's post-run RSS (same GC-before-measure the chunk gate uses, so the
         # reading reflects settled heap) and recommends a Steam restart when it is
-        # high (the next large operation would likely pause/crash). Fail-open — an
-        # unavailable reading or any seam error recommends nothing.
+        # high (the next large operation would likely pause/crash). The same post-run
+        # reading, differenced against this run's raw run-start baseline, is the
+        # memory delta — retained IN THE BOX only, surfaced to the QAM via
+        # get_session_budget_status (not the sync_complete wire; the UI reads it from
+        # the callable). Fail-open — an unavailable reading or any seam error
+        # recommends nothing and leaves the delta unmeasurable (never a stale number).
         interrupt_reason = self._sync_state.interrupt_reason if cancelled else None
         restart_recommended = False
         if not cancelled:
+            memory_delta_kb: int | None = None
             try:
                 rss_kb = await self._gc_then_measure_rss(self._sync_state)
                 restart_recommended = rss_kb is not None and post_run_advisory(rss_kb)
+                memory_delta_kb = session_memory_delta(self._sync_state.run_start_rss_kb, rss_kb)
             except Exception as e:  # fail-open: the advisory must never fail finalize
                 self._logger.debug(f"Session-budget post-run advisory skipped: {e}")
+            self._sync_state.last_run_delta_kb = memory_delta_kb
 
         return await self._reporter.get().finalize_per_unit_run(
             pending_collection_memberships=collection_memberships,

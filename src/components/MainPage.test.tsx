@@ -323,6 +323,7 @@ describe("MainPage", () => {
       rss_kb: null,
       ceiling_kb: 2_300_000,
       cliff_kb: 2_450_000,
+      memory_delta_kb: null,
     });
     vi.mocked(backend.testConnection).mockResolvedValue({
       success: true,
@@ -1102,6 +1103,11 @@ describe("MainPage", () => {
       expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("1 platform");
     });
 
+    it("omits the platforms part on a collections-only run (LOW-6)", async () => {
+      const c = await renderPreviewScope(0, 3);
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("3 collections");
+    });
+
     it("renders always (even with zero diffs)", async () => {
       const c = await renderPreviewScope(5, 0);
       // The preview description reads 'Everything is up to date.' yet the scope line still shows.
@@ -1123,6 +1129,7 @@ describe("MainPage", () => {
         rss_kb: rssKb,
         ceiling_kb: 2_300_000,
         cliff_kb: 2_450_000,
+        memory_delta_kb: null,
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
@@ -1156,6 +1163,45 @@ describe("MainPage", () => {
       const c = await renderIdle(undefined, 440_000);
       expect(c.querySelector('[data-testid="budget-paused-banner"]')).toBeNull();
       expect(c.querySelector('[data-testid="budget-high-heap-banner"]')).toBeNull();
+    });
+  });
+
+  describe("STATUS memory row (#32)", () => {
+    async function renderMemoryRow(rssKb: number | null, memoryDeltaKb: number | null): Promise<HTMLElement> {
+      vi.mocked(backend.getSessionBudgetStatus).mockResolvedValue({
+        success: true,
+        rss_kb: rssKb,
+        ceiling_kb: 2_300_000,
+        cliff_kb: 2_450_000,
+        memory_delta_kb: memoryDeltaKb,
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      return container;
+    }
+
+    it("shows the live memory value and the signed last-sync delta", async () => {
+      const c = await renderMemoryRow(440_000, 800_000);
+      const row = c.querySelector('[data-testid="steam-memory"]');
+      expect(row?.textContent).toContain("0.4 GB");
+      expect(row?.textContent).toContain("last sync: +0.8 GB");
+    });
+
+    it("renders a negative delta with a minus sign", async () => {
+      const c = await renderMemoryRow(1_000_000, -300_000);
+      expect(c.querySelector('[data-testid="steam-memory"]')?.textContent).toContain("last sync: -0.3 GB");
+    });
+
+    it("omits the delta line when the delta is unmeasurable (null)", async () => {
+      const c = await renderMemoryRow(1_200_000, null);
+      const row = c.querySelector('[data-testid="steam-memory"]');
+      expect(row?.textContent).toContain("1.2 GB");
+      expect(row?.textContent).not.toContain("last sync:");
+    });
+
+    it("omits the whole row when the live reading is unavailable (rss_kb null)", async () => {
+      const c = await renderMemoryRow(null, null);
+      expect(c.querySelector('[data-testid="steam-memory"]')).toBeNull();
     });
   });
 

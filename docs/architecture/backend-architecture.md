@@ -197,10 +197,12 @@ teardown branches on the cause (#1052) — and either way, **every chunk committ
 Steam's `SharedJSContext` renderer OOM-crashes at ~2.45–2.53 GB RSS and never self-recovers within a session; each
 created shortcut costs 0.7–1.5 MB permanently (measured on-device). Chunking (ADR-0023) makes hitting that cliff a cheap
 resume; this gate stops the run _before_ it, at a chunk boundary, as a controlled pause. At each chunk boundary the
-orchestrator forces a renderer GC (`RendererGcFn`, `adapters/renderer_gc.py` — an `HeapProfiler.collectGarbage` over the
-CEF debugger on `localhost:8080`, so the reading reflects settled heap not transient garbage that Steam's
-measured-unreliable natural GC hasn't reclaimed), reads the renderer's RSS (`RendererRssFn`, `adapters/renderer_rss.py`
-— the max `VmRSS` across `steamwebhelper` processes from `/proc`), and runs the pure
+orchestrator reads the renderer's RSS (`RendererRssFn`, `adapters/renderer_rss.py` — the max `VmRSS` across
+`steamwebhelper` processes from `/proc`) and, when that raw reading is at/above `GC_SKIP_BELOW_KB` (1.5 GB), forces a
+renderer GC (`RendererGcFn`, `adapters/renderer_gc.py` — an `HeapProfiler.collectGarbage` over the CEF debugger on
+`localhost:8080`, so the reading reflects settled heap not transient garbage that Steam's measured-unreliable natural GC
+hasn't reclaimed) and re-reads; below the floor the raw reading (which can only over-estimate) already clears every
+threshold, so the ~5 s GC is skipped and a small sync pays zero GC cost. It then runs the pure
 `domain/session_budget.py::gate_decision`: pause iff `rss + chunk_items × worst_case_rate ≥ cliff − margin`. The run's
 **very first chunk** is _predictive_-exempt (`chunk_items = 0`) so a run/resume below the ceiling always makes at least
 one chunk of forward progress rather than looping on a no-progress pause, but it still gets the _absolute_ check: if the
@@ -216,12 +218,21 @@ surfaces: `sync_preview` returns `pause_likely` (a `predict_run_crosses` prognos
 updates, never fully-unchanged items, so an unchanged re-sync never warns), a clean run's `sync_complete` carries
 `restart_recommended` (`post_run_advisory`, RSS > ~1.8 GB, read GC-first), and the `get_session_budget_status` callable
 returns a live RSS reading (no GC) plus the fixed ceiling/cliff lines for the persistent QAM banners (a blue "paused"
-banner, a yellow high-heap banner). Both banners also offer a **Free Steam memory** button — the `reload_steam_ui`
-callable drives `Page.reload` on the renderer via the CDP client (`RendererReloadFn`), replacing the renderer process to
-reset the whole session budget without a Steam client restart (validated ~2.0 GB → ~455 MB on-device); it refuses
-(`sync_active`) while a run is in flight. The RSS reader, GC trigger, and reload trigger are all wired through
-`SyncOrchestratorConfig`; the gate's per-item cost is a parameter so a later per-item cover term can be added without
-touching the kernel's shape.
+banner, a yellow high-heap banner) and the always-on "Steam memory" status row. That row also shows the **last clean
+run's signed RSS growth** ("last sync: ±X GB"): a RAW read taken unconditionally at run start is the baseline
+(`run_start_rss_kb` — captured before any chunk, so even a fully-incremental-skip run still records one and reports ≈
++0.0 GB), the post-run advisory read is the end, and `session_memory_delta` differences them (an approximation for
+information only, which a raw start baseline is fine for). The value is retained in `last_run_delta_kb` so
+`get_session_budget_status` surfaces it on a QAM remount (in-memory only, lost on reload, no migration; `None` when
+either endpoint was unmeasurable, so a stale delta is never shown); the UI reads it from that callable, so it is
+deliberately NOT put on the `sync_complete` wire. Both banners also offer a **Free Steam memory** button — the
+`reload_steam_ui` callable drives `Page.reload` on the renderer via the CDP client (`RendererReloadFn`), replacing the
+renderer process to reset the whole session budget without a Steam client restart (validated ~2.0 GB → ~455 MB
+on-device); it refuses (`sync_active`) while a run is in flight. Because a real reload tears down the JS context before
+the response is read, the only response the frontend ever observes is a genuine seam failure
+(`{success: False, reason: "reload_failed"}`, CEF debugger unreachable), which surfaces as a "try a full Steam restart"
+toast. The RSS reader, GC trigger, and reload trigger are all wired through `SyncOrchestratorConfig`; the gate's
+per-item cost is a parameter so a later per-item cover term can be added without touching the kernel's shape.
 
 **Run/unit/chunk identity on the ack (#1041).** Every `sync_apply_unit` event carries the `run_id` (the run's
 `current_sync_id` UUID), the `unit_id` (the `WorkUnit.id`), and the `chunk_index`; the frontend echoes all three back on

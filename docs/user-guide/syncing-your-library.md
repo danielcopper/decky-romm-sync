@@ -72,7 +72,12 @@ A few things worth knowing for a large library:
   reloads Steam's interface — this frees the memory without a full Steam restart and takes up to a minute. Your running
   games keep running. The screen (and this plugin's menu) will reload as part of it — that is expected; when it comes
   back, memory is reset and you can Resume Sync. The button is unavailable while a sync is actively running (free the
-  memory once it pauses or finishes).
+  memory once it pauses or finishes). On the rare occasion the plugin can't reach Steam to do the reload, a toast tells
+  you to do a full Steam restart instead — nothing happened, so just restart Steam.
+- **The Status section shows Steam's current memory.** A **"Steam memory: X.X GB"** row sits alongside Connection and
+  Last sync, so you can see how close Steam is to its limit at a glance (it's hidden only if the reading can't be
+  taken). After a completed sync it adds a **"last sync: ±X GB"** line — how much that run grew Steam's memory — so a
+  big import showing "+0.8 GB" tells you why the number climbed.
 
 ## Resuming an interrupted sync
 

@@ -1122,6 +1122,9 @@ class TestFinalizePerUnitRun:
         complete_events = [c for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
         assert len(complete_events) == 1
         assert "cancelled" not in complete_events[0][0][1]
+        # The last-run memory delta is retained in the box and read via
+        # get_session_budget_status, NOT ridden on the sync_complete wire (#1383 LOW-3).
+        assert "memory_delta_kb" not in complete_events[0][0][1]
 
     @pytest.mark.asyncio
     async def test_cancelled_finalize_frame_says_cancelled_when_not_interrupted(self, plugin):

@@ -52,7 +52,7 @@ import { WarningCard } from "./WarningCard";
 import { MigrationBlockedPage } from "./MigrationBlockedPage";
 import { SettingsResetBanner } from "./SettingsResetBanner";
 import { PlaytimeScopeBanner } from "./PlaytimeScopeBanner";
-import { SessionBudgetBanner } from "./SessionBudgetBanner";
+import { SessionBudgetBanner, formatGb, formatSignedGb } from "./SessionBudgetBanner";
 import type {
   SyncProgress,
   SyncStage,
@@ -239,15 +239,18 @@ function formatPreviewDescription(s: SyncPreviewSummary): string {
 /**
  * Informational scope line for the preview — "N platforms · M collections" — the
  * count of enabled platforms/collections the run spans, shown always (independent
- * of the change diffs, #29). The collections part is omitted when the run syncs
- * no collections. Counts default to 0 when an older backend omits them.
+ * of the change diffs, #29). Each part is omitted when its count is 0, so a
+ * collections-only run reads "3 collections" (not "0 platforms · 3 collections")
+ * and a platforms-only run reads "5 platforms". Counts default to 0 when an older
+ * backend omits them; a fully-empty scope falls back to "0 platforms".
  */
 function formatSyncScope(s: SyncPreviewSummary): string {
   const platforms = s.sync_platform_count ?? 0;
   const collections = s.sync_collection_count ?? 0;
-  const parts = [`${platforms} platform${platforms === 1 ? "" : "s"}`];
+  const parts: string[] = [];
+  if (platforms > 0) parts.push(`${platforms} platform${platforms === 1 ? "" : "s"}`);
   if (collections > 0) parts.push(`${collections} collection${collections === 1 ? "" : "s"}`);
-  return parts.join(" · ");
+  return parts.length > 0 ? parts.join(" · ") : "0 platforms";
 }
 
 /**
@@ -1026,6 +1029,24 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               </PanelSectionRow>
             )}
           </>
+        )}
+        {/* Steam renderer memory (#1383): the live RSS as an always-on info row,
+            plus the last completed sync's signed growth. Omitted entirely when the
+            reading is unavailable (rss_kb null) rather than shown as a blank. */}
+        {budgetStatus?.rss_kb != null && (
+          <PanelSectionRow>
+            <Field label="Steam memory">
+              <span
+                data-testid="steam-memory"
+                style={{ fontSize: "12px", display: "flex", flexDirection: "column", alignItems: "flex-end" }}
+              >
+                <span>{formatGb(budgetStatus.rss_kb)}</span>
+                {budgetStatus.memory_delta_kb != null && (
+                  <span style={{ opacity: 0.6 }}>last sync: {formatSignedGb(budgetStatus.memory_delta_kb)}</span>
+                )}
+              </span>
+            </Field>
+          </PanelSectionRow>
         )}
         {retroarchWarning?.warning && (
           <PanelSectionRow>

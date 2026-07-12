@@ -68,6 +68,13 @@ export interface SessionBudgetStatus {
   ceiling_kb: number;
   /** The measured OOM cliff in KB (~2.45 GB) the renderer crashes at. */
   cliff_kb: number;
+  /**
+   * Signed renderer-RSS growth (KB) of the last completed sync (end − start),
+   * retained in backend memory so a QAM remount can show "last sync: ±X GB"
+   * without a live run. ``null`` when no clean run has measured both endpoints
+   * (or after a plugin reload). Rendered sign-formatted (#1383).
+   */
+  memory_delta_kb: number | null;
 }
 
 export interface SyncStats {

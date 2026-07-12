@@ -4363,8 +4363,10 @@ class TestSessionBudgetGate:
 
         await orch._maybe_pause_for_budget(box, chunk_items=200)
 
-        assert plugin._renderer_gc.calls == 1  # GC fired before the reading
-        assert plugin._renderer_rss.calls == 1
+        # 2.1M is above the GC-skip floor, so the reading is GC-settled: one GC and
+        # two RSS reads (raw sample + post-GC re-read).
+        assert plugin._renderer_gc.calls == 1
+        assert plugin._renderer_rss.calls == 2
         # A budget stop flags run_paused (→ 'paused'), NOT run_interrupted.
         assert box.run_paused is True
         assert box.run_interrupted is False
@@ -4382,8 +4384,10 @@ class TestSessionBudgetGate:
 
         await orch._maybe_pause_for_budget(box, chunk_items=200)
 
-        assert plugin._renderer_gc.calls == 1
-        assert plugin._renderer_rss.calls == 1
+        # 440K is below the GC-skip floor: even the worst-case chunk cost can't cross
+        # the ceiling, so the raw reading is trusted and the ~5 s GC is skipped.
+        assert plugin._renderer_gc.calls == 0
+        assert plugin._renderer_rss.calls == 1  # a single raw sample, no re-read
         assert box.run_interrupted is False
         assert box.interrupt_reason is None
         assert box.is_cancelling() is False
@@ -4402,6 +4406,34 @@ class TestSessionBudgetGate:
         assert box.run_interrupted is False
         assert box.is_cancelling() is False
         assert box.budget_measure_unavailable_logged is True
+
+    # ── _gc_then_measure_rss (GC-skip below the floor, LOW-3) ────
+
+    @pytest.mark.asyncio
+    async def test_gc_skipped_below_floor_returns_raw_reading(self, plugin):
+        orch = plugin._sync_service._orchestrator
+        box = plugin._sync_service._box
+        plugin._renderer_gc.result = True
+        plugin._renderer_rss.rss_kb = 1_400_000  # below the 1.5M GC-skip floor
+
+        result = await orch._gc_then_measure_rss(box)
+
+        assert result == 1_400_000  # the raw reading is returned as-is
+        assert plugin._renderer_gc.calls == 0  # GC skipped — buys nothing this low
+        assert plugin._renderer_rss.calls == 1  # a single raw read, no re-read
+
+    @pytest.mark.asyncio
+    async def test_gc_fires_and_rereads_at_or_above_floor(self, plugin):
+        orch = plugin._sync_service._orchestrator
+        box = plugin._sync_service._box
+        plugin._renderer_gc.result = True
+        plugin._renderer_rss.rss_kb = 1_600_000  # at/above the floor → settle first
+
+        result = await orch._gc_then_measure_rss(box)
+
+        assert result == 1_600_000
+        assert plugin._renderer_gc.calls == 1  # GC fired to settle the reading
+        assert plugin._renderer_rss.calls == 2  # raw sample + post-GC re-read
 
     # ── End-to-end through the chunk loop ────────────────────────
 
@@ -4533,10 +4565,10 @@ class TestSessionBudgetGate:
         assert run is not None
         assert run.status == "completed"  # both chunks applied, no pause
         assert plugin._sync_service._box.budget_measure_unavailable_logged is True
-        # LOW-2: once RSS is known-unavailable the run stops attempting GC, so the
-        # first chunk's measure is the only GC of the run (the second chunk + the
-        # post-run advisory both short-circuit on the flag).
-        assert plugin._renderer_gc.calls == 1
+        # The raw-first measure detects the unavailable reading (raw is None) BEFORE
+        # any GC, and the once-per-run flag short-circuits every later measure, so a
+        # run whose renderer RSS is unreadable never GCs at all.
+        assert plugin._renderer_gc.calls == 0
 
     # ── Preview prognosis + post-run advisory ────────────────────
 
@@ -4649,6 +4681,83 @@ class TestSessionBudgetGate:
         assert complete, "sync_complete must be emitted"
         assert complete[-1].get("restart_recommended") is True
 
+    # ── Last-run memory delta (#32) ──────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_finalize_computes_and_retains_memory_delta(self, plugin):
+        # The signed growth is retained in the box for QAM remounts
+        # (get_session_budget_status). It is NOT put on the sync_complete wire — the
+        # UI reads it from the callable, so the payload must not carry it (#1383 LOW-3).
+        import decky
+
+        orch = plugin._sync_service._orchestrator
+        box = plugin._sync_service._box
+        box.committed_app_ids = set()
+        box.run_start_rss_kb = 500_000  # raw baseline captured at run start
+        plugin._renderer_rss.rss_kb = 1_300_000  # post-run reading (below floor → raw)
+
+        decky.emit.reset_mock()
+        await orch._finalize_per_unit(
+            total_games_applied=0,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+            platform_names={},
+            cancelled=False,
+        )
+
+        assert box.last_run_delta_kb == 800_000
+        complete = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
+        assert complete and "memory_delta_kb" not in complete[-1]
+
+    @pytest.mark.asyncio
+    async def test_finalize_no_delta_when_run_start_unmeasured(self, plugin):
+        # A run whose run-start baseline read was unavailable (None) leaves the delta
+        # unmeasurable — no number retained (degrade gracefully, never a stale delta).
+        orch = plugin._sync_service._orchestrator
+        box = plugin._sync_service._box
+        box.committed_app_ids = set()
+        box.run_start_rss_kb = None
+        plugin._renderer_rss.rss_kb = 1_300_000
+
+        await orch._finalize_per_unit(
+            total_games_applied=0,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+            platform_names={},
+            cancelled=False,
+        )
+
+        assert box.last_run_delta_kb is None
+
+    @pytest.mark.asyncio
+    async def test_baseline_captured_at_run_start_so_skip_only_run_reports_zero_delta(self, plugin, fake_romm_api):
+        # LOW-1: the baseline is captured at RUN START, not at the first chunk gate,
+        # so a fully-incremental-skip run (nothing applied, no gate ever fires) still
+        # records a baseline and reports an honest ≈ +0.0 GB delta instead of wiping
+        # last_run_delta_kb to None on every no-op re-sync.
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        # roms matches platform count + zero updates → the platform incremental-skips.
+        _seed_platform_stamp(plugin, "n64", at="2025-01-01T00:00:00Z", rom_count=1)
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="A", fs_name="a.z64")
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._renderer_rss.rss_kb = 1_200_000  # below the GC-skip floor → raw both ends
+        # A stale delta from a prior run — the fresh no-op run must overwrite it, not
+        # leave it and not wipe it to None.
+        plugin._sync_service._box.last_run_delta_kb = 500_000
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-skip"
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        box = plugin._sync_service._box
+        assert box.run_start_rss_kb == 1_200_000  # captured at run start despite no chunk
+        assert box.last_run_delta_kb == 0  # honest zero, not None
+
     # ── get_session_budget_status callable ───────────────────────
 
     @pytest.mark.asyncio
@@ -4665,6 +4774,8 @@ class TestSessionBudgetGate:
             "rss_kb": 1_234_000,
             "ceiling_kb": EFFECTIVE_CEILING_KB,
             "cliff_kb": CLIFF_KB,
+            # No clean run has completed in this test, so the retained delta is None.
+            "memory_delta_kb": None,
         }
 
     @pytest.mark.asyncio
@@ -4680,6 +4791,20 @@ class TestSessionBudgetGate:
         assert result["rss_kb"] is None
         assert result["ceiling_kb"] == EFFECTIVE_CEILING_KB
         assert result["cliff_kb"] == CLIFF_KB
+        assert result["memory_delta_kb"] is None
+
+    @pytest.mark.asyncio
+    async def test_session_budget_status_returns_retained_delta(self, plugin):
+        # A prior clean run's delta is retained in the box and surfaced on a QAM
+        # remount even though the live RSS read is a separate poll.
+        plugin.loop = asyncio.get_event_loop()
+        plugin._renderer_rss.rss_kb = 1_234_000
+        plugin._sync_service._box.last_run_delta_kb = 800_000
+
+        result = await plugin.get_session_budget_status()
+
+        assert result["rss_kb"] == 1_234_000
+        assert result["memory_delta_kb"] == 800_000
 
     # ── reload_steam_ui (free Steam memory) ──────────────────────
 
@@ -4719,14 +4844,19 @@ class TestSessionBudgetGate:
         assert plugin._renderer_reload.calls == 0
 
     @pytest.mark.asyncio
-    async def test_reload_steam_ui_success_even_when_adapter_fails(self, plugin):
-        # The CEF debugger unreachable → adapter returns False, but the callable
-        # still reports success (fire-and-forget; a warning is logged). Fail-open.
+    async def test_reload_steam_ui_surfaces_failure_when_adapter_fails(self, plugin):
+        # The CEF debugger unreachable → adapter returns False, the UI was NOT torn
+        # down, so the callable reports the canonical failure shape the frontend
+        # turns into a "try a full Steam restart" toast. On a REAL reload the JS
+        # context dies before this response is read, so only a genuine failure ever
+        # reaches the frontend.
         plugin.loop = asyncio.get_event_loop()
         plugin._sync_service._box.sync_state = SyncState.IDLE
         plugin._renderer_reload.result = False
 
         result = await plugin.reload_steam_ui()
 
-        assert result["success"] is True
+        assert result["success"] is False
+        assert result["reason"] == "reload_failed"
+        assert isinstance(result["message"], str)
         assert plugin._renderer_reload.calls == 1
