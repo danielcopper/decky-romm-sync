@@ -2,7 +2,7 @@
 
 History table — one row per run. ``get_latest_completed`` finds the newest
 ``completed`` row; ``get_latest_terminal`` finds the newest row in any terminal
-state (completed/cancelled/interrupted/errored) by ``finished_at``; ``get_running``
+state (completed/cancelled/interrupted/paused/errored) by ``finished_at``; ``get_running``
 finds the single in-flight run. The platforms_completed/collections_completed
 columns are nullable JSON arrays.
 """
@@ -71,7 +71,7 @@ class SqliteSyncRunRepository(BaseRepository):
         # terminal status.
         row = self._conn.execute(
             f"SELECT {_COLUMNS} FROM sync_runs "
-            f"WHERE status IN ('completed', 'cancelled', 'interrupted', 'errored') "
+            f"WHERE status IN ('completed', 'cancelled', 'interrupted', 'paused', 'errored') "
             f"ORDER BY finished_at DESC LIMIT 1",
         ).fetchone()
         return self._row_to_run(row) if row is not None else None

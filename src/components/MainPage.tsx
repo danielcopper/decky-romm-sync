@@ -26,6 +26,7 @@ import {
   clearSyncCache,
   refreshMigrationState,
   getSyncStatus,
+  getSessionBudgetStatus,
   getRetroDeckStatus,
   logError,
 } from "../api/backend";
@@ -51,12 +52,14 @@ import { WarningCard } from "./WarningCard";
 import { MigrationBlockedPage } from "./MigrationBlockedPage";
 import { SettingsResetBanner } from "./SettingsResetBanner";
 import { PlaytimeScopeBanner } from "./PlaytimeScopeBanner";
+import { SessionBudgetBanner } from "./SessionBudgetBanner";
 import type {
   SyncProgress,
   SyncStage,
   SyncStats,
   SyncPreview,
   SyncPreviewSummary,
+  SessionBudgetStatus,
   DownloadItem,
   MigrationStatus,
 } from "../types";
@@ -234,6 +237,20 @@ function formatPreviewDescription(s: SyncPreviewSummary): string {
 }
 
 /**
+ * Informational scope line for the preview — "N platforms · M collections" — the
+ * count of enabled platforms/collections the run spans, shown always (independent
+ * of the change diffs, #29). The collections part is omitted when the run syncs
+ * no collections. Counts default to 0 when an older backend omits them.
+ */
+function formatSyncScope(s: SyncPreviewSummary): string {
+  const platforms = s.sync_platform_count ?? 0;
+  const collections = s.sync_collection_count ?? 0;
+  const parts = [`${platforms} platform${platforms === 1 ? "" : "s"}`];
+  if (collections > 0) parts.push(`${collections} collection${collections === 1 ? "" : "s"}`);
+  return parts.join(" · ");
+}
+
+/**
  * Expected apply seconds for a preview — the WALK cost, not the raw delta. The
  * apply re-walks every non-skipped item: an un-stamped platform's "unchanged"
  * ROMs still get cheap update touches, not free skips, so pricing only new +
@@ -251,6 +268,7 @@ function previewApplySeconds(s: SyncPreviewSummary): number {
 
 export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [stats, setStats] = useState<SyncStats | null>(null);
+  const [budgetStatus, setBudgetStatus] = useState<SessionBudgetStatus | null>(null);
   const [connected, setConnected] = useState<boolean | null | BackendFailed>(null);
   const versionError = useVersionError();
   const [syncing, setSyncing] = useState(false);
@@ -302,6 +320,12 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     getSyncStats()
       .then(setStats)
       .catch((e) => logError(`Failed to load sync stats: ${e}`));
+    // Live renderer-heap reading for the session-budget banners (#1383). Fail-open:
+    // the backend always resolves (rss_kb null when unreadable), so the banners
+    // degrade to text-only rather than erroring.
+    getSessionBudgetStatus()
+      .then(setBudgetStatus)
+      .catch((e) => logError(`Failed to load session budget status: ${e}`));
 
     // Probe the backend for the connection row. Each attempt has a deadline
     // because the callable hangs (rather than rejects) while the backend is
@@ -441,6 +465,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           getSyncStats()
             .then(setStats)
             .catch((e) => logError(`Failed to refresh sync stats: ${e}`));
+          // Refresh the live heap reading so the paused / high-heap banner reflects
+          // the run's end state (a pause leaves it high; a completed run may too).
+          getSessionBudgetStatus()
+            .then(setBudgetStatus)
+            .catch((e) => logError(`Failed to refresh session budget status: ${e}`));
         } else {
           // Feed the live-rate estimator from applying frames only (fetch frames
           // carry page/cover counters, not item progress). syncEta re-anchors its
@@ -685,7 +714,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // fresh import — nothing to resume — so the button must honestly read "Sync
   // Library" again. ``stats.roms`` is the bound-shortcut count (registry-derived).
   const incompleteAttempt =
-    stats?.last_attempt?.status === "interrupted" || stats?.last_attempt?.status === "cancelled";
+    stats?.last_attempt?.status === "interrupted" ||
+    stats?.last_attempt?.status === "cancelled" ||
+    stats?.last_attempt?.status === "paused";
   // ``incompleteAttempt`` being true narrows ``stats`` non-null (it dereferenced
   // stats.last_attempt), and ``roms`` is a required number — no ``?.``/``??`` needed.
   const canResume = incompleteAttempt && stats.roms > 0;
@@ -709,10 +740,18 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // approved number equals the run's seed. Delta-only pricing here read "~2 min"
     // for a resume whose apply walked ~3100 items.
     const estimateText = formatDuration(previewApplySeconds(preview.summary));
+    const scopeText = formatSyncScope(preview.summary);
     syncBody = (
       <>
         <PanelSectionRow>
           <Field label="Preview" description={formatPreviewDescription(preview.summary)} />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <Field label="Scope">
+            <span data-testid="sync-scope" style={{ fontSize: "12px" }}>
+              {scopeText}
+            </span>
+          </Field>
         </PanelSectionRow>
         <PanelSectionRow>
           <Field label="Estimated time">
@@ -733,8 +772,8 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               data-testid="budget-advisory"
               style={{
                 fontSize: "12px",
-                color: "#ffcc66",
-                borderLeft: "3px solid rgba(255, 170, 0, 0.6)",
+                color: "#7fbcff",
+                borderLeft: "3px solid rgba(61, 157, 246, 0.6)",
                 paddingLeft: "8px",
                 margin: "4px 0",
                 lineHeight: 1.4,
@@ -878,6 +917,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   } else {
     syncBody = (
       <>
+        {/* Persistent session-budget banner (#1383): blue while the last run was
+            paused (restart Steam, then Resume Sync), or yellow when the live heap
+            is high after a completed run. Only in the idle state, so it clears the
+            moment a resume/new sync starts. */}
+        <SessionBudgetBanner
+          lastAttemptStatus={stats?.last_attempt?.status}
+          rssKb={budgetStatus?.rss_kb ?? null}
+          reloadDisabled={loading || connectionUnavailable}
+        />
         <PanelSectionRow>
           <ButtonItem
             layout="below"

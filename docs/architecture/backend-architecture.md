@@ -205,17 +205,19 @@ measured-unreliable natural GC hasn't reclaimed), reads the renderer's RSS (`Ren
 **very first chunk** is _predictive_-exempt (`chunk_items = 0`) so a run/resume below the ceiling always makes at least
 one chunk of forward progress rather than looping on a no-progress pause, but it still gets the _absolute_ check: if the
 settled RSS is already at/over the ceiling (a resume attempted without a Steam restart), it pauses immediately rather
-than driving a ~300 MB chunk into the cliff. On a pause it sets `run_interrupted` + a distinct `interrupt_reason` and
-requests cancel — the loop returns cleanly with prior chunks committed and the terminal write records the resumable
-`interrupted` (completed platforms keep their `PlatformSyncState` stamps, so Resume Sync redoes only the remainder).
-Every step is **fail-open**: an unavailable RSS reading (no `steamwebhelper`, unreadable `/proc`) skips the gate — and
-short-circuits further GC attempts — for the rest of the run (logged once), a seam error is caught locally, and a failed
-GC only makes the reading less precise; measurement never blocks a sync. The same seams feed two advisories:
-`sync_preview` returns `pause_likely` (a `predict_run_crosses` prognosis pricing only new creates + changed updates,
-never fully-unchanged items, so an unchanged re-sync never warns), and a clean run's `sync_complete` carries
-`restart_recommended` (`post_run_advisory`, RSS > ~1.8 GB, read GC-first). Both the RSS reader and GC trigger are wired
-through `SyncOrchestratorConfig`; the gate's per-item cost is a parameter so a later per-item cover term can be added
-without touching the kernel's shape.
+than driving a ~300 MB chunk into the cliff. On a pause it sets `run_paused` + a distinct `interrupt_reason` and
+requests cancel — the loop returns cleanly with prior chunks committed and the terminal write records the new terminal
+status **`paused`** (migration 014, its own status distinct from a crash's `interrupted`; both resumable, but the split
+lets the UI say "(paused)"). Completed platforms keep their `PlatformSyncState` stamps, so Resume Sync redoes only the
+remainder. Every step is **fail-open**: an unavailable RSS reading (no `steamwebhelper`, unreadable `/proc`) skips the
+gate — and short-circuits further GC attempts — for the rest of the run (logged once), a seam error is caught locally,
+and a failed GC only makes the reading less precise; measurement never blocks a sync. The same seams feed three
+surfaces: `sync_preview` returns `pause_likely` (a `predict_run_crosses` prognosis pricing only new creates + changed
+updates, never fully-unchanged items, so an unchanged re-sync never warns), a clean run's `sync_complete` carries
+`restart_recommended` (`post_run_advisory`, RSS > ~1.8 GB, read GC-first), and the `get_session_budget_status` callable
+returns a live RSS reading (no GC) plus the fixed ceiling/cliff lines for the persistent QAM banners (a blue "paused"
+banner, a yellow high-heap banner). Both the RSS reader and GC trigger are wired through `SyncOrchestratorConfig`; the
+gate's per-item cost is a parameter so a later per-item cover term can be added without touching the kernel's shape.
 
 **Run/unit/chunk identity on the ack (#1041).** Every `sync_apply_unit` event carries the `run_id` (the run's
 `current_sync_id` UUID), the `unit_id` (the `WorkUnit.id`), and the `chunk_index`; the frontend echoes all three back on

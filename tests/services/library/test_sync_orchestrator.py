@@ -4351,7 +4351,7 @@ class TestSessionBudgetGate:
     # ── _maybe_pause_for_budget (the gate primitive) ─────────────
 
     @pytest.mark.asyncio
-    async def test_pauses_and_marks_interrupted_when_over_budget(self, plugin):
+    async def test_pauses_and_marks_paused_when_over_budget(self, plugin):
         from services.library.sync_orchestrator import _SYNC_PAUSED_BUDGET
 
         orch = plugin._sync_service._orchestrator
@@ -4365,7 +4365,9 @@ class TestSessionBudgetGate:
 
         assert plugin._renderer_gc.calls == 1  # GC fired before the reading
         assert plugin._renderer_rss.calls == 1
-        assert box.run_interrupted is True
+        # A budget stop flags run_paused (→ 'paused'), NOT run_interrupted.
+        assert box.run_paused is True
+        assert box.run_interrupted is False
         assert box.interrupt_reason == _SYNC_PAUSED_BUDGET
         assert box.is_cancelling() is True
 
@@ -4430,9 +4432,7 @@ class TestSessionBudgetGate:
         plugin._sync_service._box.current_sync_id = "run-budget"
 
     @pytest.mark.asyncio
-    async def test_pause_at_second_chunk_persists_interrupted_with_budget_reason(
-        self, plugin, fake_romm_api, monkeypatch
-    ):
+    async def test_pause_at_second_chunk_persists_paused_with_budget_reason(self, plugin, fake_romm_api, monkeypatch):
         import decky
 
         from services.library.sync_orchestrator import _SYNC_PAUSED_BUDGET
@@ -4449,7 +4449,9 @@ class TestSessionBudgetGate:
         with plugin._uow as uow:
             run = uow.sync_runs.get("run-budget")
         assert run is not None
-        assert run.status == "interrupted"
+        # A deliberate session-budget stop is 'paused', NOT 'interrupted' (which is
+        # reserved for an external death — a crash/heartbeat timeout).
+        assert run.status == "paused"
         assert run.error == _SYNC_PAUSED_BUDGET
         # The first chunk's absolute check passed (below ceiling) so it committed its
         # ROM; the gate fired the GC before measuring on both chunk boundaries.
@@ -4514,7 +4516,7 @@ class TestSessionBudgetGate:
         with plugin._uow as uow:
             run = uow.sync_runs.get("run-over")
         assert run is not None
-        assert run.status == "interrupted"
+        assert run.status == "paused"
         assert run.error == _SYNC_PAUSED_BUDGET
         assert plugin._renderer_gc.calls >= 1
 
@@ -4646,3 +4648,85 @@ class TestSessionBudgetGate:
         complete = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
         assert complete, "sync_complete must be emitted"
         assert complete[-1].get("restart_recommended") is True
+
+    # ── get_session_budget_status callable ───────────────────────
+
+    @pytest.mark.asyncio
+    async def test_session_budget_status_happy(self, plugin):
+        from domain.session_budget import CLIFF_KB, EFFECTIVE_CEILING_KB
+
+        plugin.loop = asyncio.get_event_loop()
+        plugin._renderer_rss.rss_kb = 1_234_000
+
+        result = await plugin.get_session_budget_status()
+
+        assert result == {
+            "success": True,
+            "rss_kb": 1_234_000,
+            "ceiling_kb": EFFECTIVE_CEILING_KB,
+            "cliff_kb": CLIFF_KB,
+        }
+
+    @pytest.mark.asyncio
+    async def test_session_budget_status_rss_none(self, plugin):
+        from domain.session_budget import CLIFF_KB, EFFECTIVE_CEILING_KB
+
+        plugin.loop = asyncio.get_event_loop()
+        plugin._renderer_rss.rss_kb = None  # measurement unavailable → fail-open
+
+        result = await plugin.get_session_budget_status()
+
+        assert result["success"] is True
+        assert result["rss_kb"] is None
+        assert result["ceiling_kb"] == EFFECTIVE_CEILING_KB
+        assert result["cliff_kb"] == CLIFF_KB
+
+    # ── reload_steam_ui (free Steam memory) ──────────────────────
+
+    @pytest.mark.asyncio
+    async def test_reload_steam_ui_when_idle_fires_reload(self, plugin):
+        plugin.loop = asyncio.get_event_loop()
+        plugin._sync_service._box.sync_state = SyncState.IDLE
+        plugin._renderer_reload.result = True
+
+        result = await plugin.reload_steam_ui()
+
+        assert result["success"] is True
+        assert plugin._renderer_reload.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_reload_steam_ui_refused_while_sync_active(self, plugin):
+        plugin.loop = asyncio.get_event_loop()
+        plugin._sync_service._box.sync_state = SyncState.RUNNING  # a sync is applying
+
+        result = await plugin.reload_steam_ui()
+
+        assert result["success"] is False
+        assert result["reason"] == "sync_active"
+        assert "message" in result
+        # The guard blocks BEFORE the reload seam fires.
+        assert plugin._renderer_reload.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_reload_steam_ui_refused_while_cancelling(self, plugin):
+        plugin.loop = asyncio.get_event_loop()
+        plugin._sync_service._box.sync_state = SyncState.CANCELLING
+
+        result = await plugin.reload_steam_ui()
+
+        assert result["success"] is False
+        assert result["reason"] == "sync_active"
+        assert plugin._renderer_reload.calls == 0
+
+    @pytest.mark.asyncio
+    async def test_reload_steam_ui_success_even_when_adapter_fails(self, plugin):
+        # The CEF debugger unreachable → adapter returns False, but the callable
+        # still reports success (fire-and-forget; a warning is logged). Fail-open.
+        plugin.loop = asyncio.get_event_loop()
+        plugin._sync_service._box.sync_state = SyncState.IDLE
+        plugin._renderer_reload.result = False
+
+        result = await plugin.reload_steam_ui()
+
+        assert result["success"] is True
+        assert plugin._renderer_reload.calls == 1

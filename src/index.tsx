@@ -411,12 +411,18 @@ export default definePlugin(() => {
     if (removed > 0) parts.push(`${removed} removed`);
     const summary = parts.join(", ");
     let body: string;
+    // A session-budget pause needs the full guidance readable — persistent QAM
+    // banners carry the numbers, but the toast is the immediate cue, so give it a
+    // longer on-screen duration than the default so the guidance isn't truncated
+    // away before it is read (#1383).
+    let duration: number | undefined;
     if (data.interrupt_reason) {
       // A session-budget pause carries its own resume-friendly guidance — show it
       // verbatim, appending the delta so the user sees what did get saved. Strip
       // the reason's trailing period so the parenthetical reads as one sentence:
       // "…then Resume Sync (2 added so far)." not "…Resume Sync. (2 added so far.)".
       body = summary ? `${data.interrupt_reason.replace(/\.$/, "")} (${summary} so far).` : data.interrupt_reason;
+      duration = 15000;
     } else if (data.cancelled) {
       body = summary ? `Sync cancelled — ${summary} so far.` : "Sync cancelled.";
     } else {
@@ -425,7 +431,7 @@ export default definePlugin(() => {
         body += " Steam restart recommended before further large operations.";
       }
     }
-    toaster.toast({ title: "RomM Sync", body });
+    toaster.toast({ title: "RomM Sync", body, ...(duration !== undefined ? { duration } : {}) });
 
     // Drive the terminal UI teardown from ``sync_complete`` — the guaranteed
     // terminal signal. The backend ALSO emits a separate stage:"done"/"cancelled"

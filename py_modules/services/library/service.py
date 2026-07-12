@@ -37,6 +37,7 @@ if TYPE_CHECKING:
         DiscResolver,
         EventEmitter,
         RendererGcFn,
+        RendererReloadFn,
         RendererRssFn,
         RommLibraryApi,
         SettingsPersister,
@@ -63,7 +64,9 @@ class LibraryServiceConfig:
     sync). The ``renderer_rss`` / ``renderer_gc`` seams feed the session-budget
     gate: the RSS reader measures the Steam renderer's heap and the GC trigger
     settles it before a reading, so the apply can pause before Steam's per-session
-    budget is exhausted.
+    budget is exhausted. The ``renderer_reload`` seam backs the "free Steam memory"
+    action — a renderer reload that resets the budget without a Steam client
+    restart.
     """
 
     romm_api: RommLibraryApi
@@ -84,6 +87,7 @@ class LibraryServiceConfig:
     disc_resolver: DiscResolver
     renderer_rss: RendererRssFn
     renderer_gc: RendererGcFn
+    renderer_reload: RendererReloadFn
 
 
 class LibraryService:
@@ -148,6 +152,7 @@ class LibraryService:
                 disc_resolver=config.disc_resolver,
                 renderer_rss=config.renderer_rss,
                 renderer_gc=config.renderer_gc,
+                renderer_reload=config.renderer_reload,
             )
         )
 
@@ -307,6 +312,12 @@ class LibraryService:
 
     def get_sync_status(self):
         return self._orchestrator.get_sync_status()
+
+    async def get_session_budget_status(self):
+        return await self._orchestrator.get_session_budget_status()
+
+    async def reload_steam_ui(self):
+        return await self._orchestrator.reload_steam_ui()
 
     # Reporting
     async def report_unit_results(self, rom_id_to_app_id, run_id, unit_id, chunk_index):

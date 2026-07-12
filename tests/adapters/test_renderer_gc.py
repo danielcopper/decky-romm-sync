@@ -19,11 +19,15 @@ from unittest.mock import MagicMock
 
 from adapters import renderer_gc
 from adapters.renderer_gc import (
+    _GC_MESSAGE,
+    _RELOAD_MESSAGE,
     RendererGcAdapter,
-    _await_gc_reply,
+    RendererReloadAdapter,
+    _await_cdp_reply,
     _encode_text_frame,
     _parse_ws_url,
     _recv_frame,
+    _send_cdp_command,
 )
 
 if TYPE_CHECKING:
@@ -88,7 +92,7 @@ def test_encode_text_frame_extended_length_roundtrips() -> None:
     assert payload == message.encode("utf-8")
 
 
-# ── _recv_frame / _await_gc_reply over a socketpair ──────────────
+# ── _recv_frame / _await_cdp_reply over a socketpair ──────────────
 
 
 def test_recv_frame_reads_unmasked_server_text_frame() -> None:
@@ -105,44 +109,44 @@ def test_recv_frame_reads_unmasked_server_text_frame() -> None:
         b.close()
 
 
-def test_await_gc_reply_true_on_id_match() -> None:
+def test_await_cdp_reply_true_on_id_match() -> None:
     a, b = socket.socketpair()
     try:
         b.sendall(_server_text_frame(json.dumps({"id": 1, "result": {}})))
-        assert _await_gc_reply(a) is True
+        assert _await_cdp_reply(a) is True
     finally:
         a.close()
         b.close()
 
 
-def test_await_gc_reply_skips_other_ids_until_match() -> None:
+def test_await_cdp_reply_skips_other_ids_until_match() -> None:
     a, b = socket.socketpair()
     try:
         b.sendall(_server_text_frame(json.dumps({"id": 99, "result": {}})))
         b.sendall(_server_text_frame(json.dumps({"id": 1, "result": {}})))
         # A reply whose id is not ours is still a valid text frame, so the loop
         # continues to the next frame rather than bailing.
-        assert _await_gc_reply(a) is True
+        assert _await_cdp_reply(a) is True
     finally:
         a.close()
         b.close()
 
 
-def test_await_gc_reply_false_on_close_frame() -> None:
+def test_await_cdp_reply_false_on_close_frame() -> None:
     a, b = socket.socketpair()
     try:
         b.sendall(bytes([0x88, 0x00]))  # opcode 0x8 = close, empty payload
-        assert _await_gc_reply(a) is False
+        assert _await_cdp_reply(a) is False
     finally:
         a.close()
         b.close()
 
 
-def test_await_gc_reply_false_on_eof() -> None:
+def test_await_cdp_reply_false_on_eof() -> None:
     a, b = socket.socketpair()
     b.close()  # immediate EOF
     try:
-        assert _await_gc_reply(a) is False
+        assert _await_cdp_reply(a) is False
     finally:
         a.close()
 
@@ -178,8 +182,10 @@ def test_call_returns_false_when_no_shared_js_context_target(monkeypatch: pytest
 # ── end-to-end handshake + reply over a socketpair ───────────────
 
 
-def test_collect_garbage_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
+def _roundtrip_cdp(monkeypatch: pytest.MonkeyPatch, message: str) -> tuple[bool, bytes]:
+    """Drive ``_send_cdp_command`` against an in-thread WS server; return (result, request_frame)."""
     client, server = socket.socketpair()
+    captured: dict[str, bytes] = {}
 
     def _serve() -> None:
         request = server.recv(4096).decode("ascii")
@@ -196,16 +202,57 @@ def test_collect_garbage_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
                 f"Sec-WebSocket-Accept: {accept}\r\n\r\n"
             ).encode("ascii")
         )
-        server.recv(4096)  # the masked GC request — content irrelevant to the test
+        captured["frame"] = server.recv(4096)  # the masked command frame
         server.sendall(_server_text_frame(json.dumps({"id": 1, "result": {}})))
 
     thread = threading.Thread(target=_serve)
     thread.start()
     try:
         monkeypatch.setattr(renderer_gc.socket, "create_connection", lambda *_a, **_k: client)
-        result = RendererGcAdapter(logger=MagicMock())._collect_garbage("ws://localhost:8080/devtools/page/ABC")
-        assert result is True
+        result = _send_cdp_command("ws://localhost:8080/devtools/page/ABC", message, MagicMock(), "test")
     finally:
         thread.join(timeout=2)
         client.close()
         server.close()
+    return result, captured.get("frame", b"")
+
+
+def test_send_cdp_command_collect_garbage_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, frame = _roundtrip_cdp(monkeypatch, _GC_MESSAGE)
+    assert result is True
+    _opcode, payload = _decode_client_frame(frame)
+    assert json.loads(payload)["method"] == "HeapProfiler.collectGarbage"
+
+
+def test_send_cdp_command_reload_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, frame = _roundtrip_cdp(monkeypatch, _RELOAD_MESSAGE)
+    assert result is True
+    _opcode, payload = _decode_client_frame(frame)
+    sent = json.loads(payload)
+    assert sent["method"] == "Page.reload"
+    assert sent["params"] == {"ignoreCache": False}
+
+
+def test_reload_adapter_call_fail_open_when_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(*_a: object, **_k: object) -> object:
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(renderer_gc, "urlopen", _boom)
+    logger = MagicMock()
+    assert RendererReloadAdapter(logger=logger)() is False
+    assert logger.debug.called
+
+
+def test_reload_adapter_call_false_when_no_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Resp:
+        def __enter__(self) -> _Resp:
+            return self
+
+        def __exit__(self, *_a: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b'[{"title": "Steam", "webSocketDebuggerUrl": "ws://x/y"}]'
+
+    monkeypatch.setattr(renderer_gc, "urlopen", lambda *_a, **_k: _Resp())
+    assert RendererReloadAdapter(logger=MagicMock())() is False

@@ -639,7 +639,7 @@ class SyncReporter:
         runs would leave the per-platform stamps in place, and each stamp is its
         own ``effective_last_sync`` that would still skip an unchanged platform.
         Deleting the run history (every terminal run, not only completed ones, so
-        no stale cancelled/interrupted/errored run lingers as the last-attempt "Last
+        no stale cancelled/interrupted/paused/errored run lingers as the last-attempt "Last
         sync" hint) and clearing every stamp in one short write UoW resets both reads so
         every platform full-fetches next time (and "Last sync" honestly reads
         "Never" until a fresh run completes).
@@ -674,7 +674,7 @@ class SyncReporter:
         """Read ``(last_sync_iso, last_attempt, bound_rom_count)`` from SQLite.
 
         ``last_sync`` is the ``finished_at`` of the latest completed ``SyncRun``;
-        ``last_attempt`` surfaces the newest cancelled/interrupted/errored run when
+        ``last_attempt`` surfaces the newest cancelled/interrupted/paused/errored run when
         it is newer than that (see :meth:`_last_attempt`); the ROM count is the
         bound-shortcut count in ``roms``.
         """
@@ -687,9 +687,9 @@ class SyncReporter:
 
     @staticmethod
     def _last_attempt(completed: SyncRun | None, terminal: SyncRun | None) -> dict[str, str] | None:
-        """The newest cancelled/interrupted/errored run, but only when it is newer than the last completed one.
+        """The newest cancelled/interrupted/paused/errored run, but only when it is newer than the last completed one.
 
-        A run that ended without completing (cancelled, interrupted, or errored)
+        A run that ended without completing (cancelled, interrupted, paused, or errored)
         still applied shortcuts; without this the last-completed-only ``last_sync``
         read reports "Never" even after thousands of games synced. Returns ``None``
         when the newest terminal run completed cleanly (``last_sync`` already covers

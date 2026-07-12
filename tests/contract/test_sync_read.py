@@ -295,3 +295,59 @@ async def test_report_unit_results_late_ack_binds_orphan(harness):
     # The abandoned-unit stash is cleared so a duplicate ack no-ops.
     assert box.unit_abandoned is False
     assert box.pending_unit_roms == []
+
+
+# ── get_session_budget_status ────────────────────────────────────────────
+
+
+async def test_get_session_budget_status_shape_rss_none(harness):
+    """Fail-open shape: the harness's fake renderer RSS is unavailable (None), so
+    the callable still resolves with success + the fixed budget lines (#1383)."""
+    from domain.session_budget import CLIFF_KB, EFFECTIVE_CEILING_KB
+
+    result = await harness.plugin.get_session_budget_status()
+    assert result == {
+        "success": True,
+        "rss_kb": None,
+        "ceiling_kb": EFFECTIVE_CEILING_KB,
+        "cliff_kb": CLIFF_KB,
+    }
+
+
+async def test_get_session_budget_status_shape_rss_present(harness):
+    """A readable RSS flows through unchanged alongside the fixed budget lines."""
+    from domain.session_budget import CLIFF_KB, EFFECTIVE_CEILING_KB
+
+    harness.plugin._sync_service._orchestrator._renderer_rss.rss_kb = 2_100_000
+
+    result = await harness.plugin.get_session_budget_status()
+    assert result == {
+        "success": True,
+        "rss_kb": 2_100_000,
+        "ceiling_kb": EFFECTIVE_CEILING_KB,
+        "cliff_kb": CLIFF_KB,
+    }
+
+
+# ── reload_steam_ui (free Steam memory) ──────────────────────────────────
+
+
+async def test_reload_steam_ui_idle_success(harness):
+    """Idle: the reload is triggered and reports the canonical success shape."""
+    result = await harness.plugin.reload_steam_ui()
+    assert result["success"] is True
+    assert "message" in result
+
+
+async def test_reload_steam_ui_refused_while_sync_active(harness):
+    """A run in flight is refused with the canonical failure shape + sync_active reason."""
+    from domain.sync_state import SyncState
+
+    harness.plugin._sync_service._box.sync_state = SyncState.RUNNING
+    try:
+        result = await harness.plugin.reload_steam_ui()
+    finally:
+        harness.plugin._sync_service._box.sync_state = SyncState.IDLE
+    assert result["success"] is False
+    assert result["reason"] == "sync_active"
+    assert isinstance(result["message"], str)

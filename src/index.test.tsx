@@ -1266,6 +1266,27 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
     expect(lastToastBody()).toBe(
       "Sync paused: Steam's memory is nearly full. Restart Steam when convenient, then Resume Sync (2 added so far).",
     );
+    // The pause toast gets a longer duration so the guidance isn't truncated away
+    // before it is read (#1383).
+    const toastCalls = vi.mocked(toaster.toast).mock.calls;
+    const lastToast = toastCalls[toastCalls.length - 1]![0] as { duration?: number };
+    expect(lastToast.duration).toBe(15000);
+    plugin.onDismount();
+  });
+
+  it("a non-pause completion toast carries no custom duration (default lifetime)", async () => {
+    const plugin = pluginFactory();
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-1", units: [], total_units: 1, total_roms: 1 });
+    });
+    recordSyncCreated(100);
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", { platform_app_ids: {}, total_games: 1 });
+    });
+    await flush();
+    const toastCalls = vi.mocked(toaster.toast).mock.calls;
+    const lastToast = toastCalls[toastCalls.length - 1]![0] as { duration?: number };
+    expect(lastToast.duration).toBeUndefined();
     plugin.onDismount();
   });
 

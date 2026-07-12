@@ -56,6 +56,20 @@ export interface SyncProgress {
   etaSeconds?: number;
 }
 
+export interface SessionBudgetStatus {
+  success: boolean;
+  /**
+   * Live renderer RSS in KB, or ``null`` when unreadable (no ``steamwebhelper`` /
+   * unreadable ``/proc``). The banners drop the number but keep their text when
+   * this is ``null`` (#1383).
+   */
+  rss_kb: number | null;
+  /** The effective pause ceiling in KB (~2.3 GB) — a chunk projected past this pauses. */
+  ceiling_kb: number;
+  /** The measured OOM cliff in KB (~2.45 GB) the renderer crashes at. */
+  cliff_kb: number;
+}
+
 export interface SyncStats {
   last_sync: string | null;
   /**
@@ -65,7 +79,7 @@ export interface SyncStats {
    * "Never" after thousands of shortcuts were applied. ``null`` (or absent) when
    * the most recent terminal run completed cleanly.
    */
-  last_attempt?: { finished_at: string; status: "cancelled" | "errored" | "interrupted" } | null;
+  last_attempt?: { finished_at: string; status: "cancelled" | "errored" | "interrupted" | "paused" } | null;
   platforms: number;
   collections?: number;
   roms: number;
@@ -105,6 +119,10 @@ export interface SyncPreviewSummary {
   unchanged_count: number;
   remove_count: number;
   disabled_platform_remove_count: number;
+  /** Scope of the run — how many platforms this sync spans (always shown, independent of diffs). */
+  sync_platform_count?: number;
+  /** Scope of the run — how many collections this sync spans. */
+  sync_collection_count?: number;
   collection_diff?: {
     has_changes: boolean;
     added: string[];

@@ -318,6 +318,12 @@ describe("MainPage", () => {
       save_sort: { pending: false },
     });
     vi.mocked(backend.getSyncStats).mockResolvedValue(defaultStats());
+    vi.mocked(backend.getSessionBudgetStatus).mockResolvedValue({
+      success: true,
+      rss_kb: null,
+      ceiling_kb: 2_300_000,
+      cliff_kb: 2_450_000,
+    });
     vi.mocked(backend.testConnection).mockResolvedValue({
       success: true,
       message: "",
@@ -1039,11 +1045,13 @@ describe("MainPage", () => {
       return container;
     }
 
-    it("shows the yellow pause advisory when pause_likely is true", async () => {
+    it("shows the BLUE (info) pause advisory when pause_likely is true", async () => {
       const c = await renderPreviewWithPause(true);
-      const advisory = c.querySelector('[data-testid="budget-advisory"]');
+      const advisory = c.querySelector('[data-testid="budget-advisory"]') as HTMLElement | null;
       expect(advisory).not.toBeNull();
       expect(advisory?.textContent).toContain("pause partway");
+      // Recolored from amber to blue — it announces normal, planned behavior (#1383).
+      expect(advisory?.style.color).toBe("#7fbcff");
     });
 
     it("hides the advisory when pause_likely is false", async () => {
@@ -1054,6 +1062,100 @@ describe("MainPage", () => {
     it("hides the advisory when pause_likely is absent (older backend / unavailable reading)", async () => {
       const c = await renderPreviewWithPause(undefined);
       expect(c.querySelector('[data-testid="budget-advisory"]')).toBeNull();
+    });
+  });
+
+  describe("preview scope line (#29)", () => {
+    async function renderPreviewScope(platforms: number, collections: number): Promise<HTMLElement> {
+      vi.mocked(backend.syncPreview).mockResolvedValue({
+        success: true,
+        summary: {
+          new_count: 0,
+          changed_count: 0,
+          unchanged_count: 0,
+          remove_count: 0,
+          disabled_platform_remove_count: 0,
+          sync_platform_count: platforms,
+          sync_collection_count: collections,
+        },
+        new_names: [],
+        changed_names: [],
+        preview_id: "p-scope",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      return container;
+    }
+
+    it("shows 'N platforms · M collections' with both counts", async () => {
+      const c = await renderPreviewScope(3, 2);
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("3 platforms · 2 collections");
+    });
+
+    it("omits the collections part when the run syncs none, and singularizes", async () => {
+      const c = await renderPreviewScope(1, 0);
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("1 platform");
+    });
+
+    it("renders always (even with zero diffs)", async () => {
+      const c = await renderPreviewScope(5, 0);
+      // The preview description reads 'Everything is up to date.' yet the scope line still shows.
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("5 platforms");
+    });
+  });
+
+  describe("persistent session-budget banners (#1383)", () => {
+    async function renderIdle(lastAttemptStatus: string | undefined, rssKb: number | null): Promise<HTMLElement> {
+      vi.mocked(backend.getSyncStats).mockResolvedValue({
+        ...defaultStats(),
+        roms: 42,
+        last_attempt: lastAttemptStatus
+          ? { finished_at: "2026-07-11T17:48:00", status: lastAttemptStatus as "paused" }
+          : null,
+      });
+      vi.mocked(backend.getSessionBudgetStatus).mockResolvedValue({
+        success: true,
+        rss_kb: rssKb,
+        ceiling_kb: 2_300_000,
+        cliff_kb: 2_450_000,
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      return container;
+    }
+
+    it("shows the blue paused banner with the live number after a paused run", async () => {
+      const c = await renderIdle("paused", 2_299_000);
+      const banner = c.querySelector('[data-testid="budget-paused-banner"]');
+      expect(banner).not.toBeNull();
+      expect(banner?.textContent).toContain("Steam memory: 2.3 GB");
+    });
+
+    it("degrades the paused banner to text-only when the reading is unavailable", async () => {
+      const c = await renderIdle("paused", null);
+      const banner = c.querySelector('[data-testid="budget-paused-banner"]');
+      expect(banner).not.toBeNull();
+      expect(banner?.textContent).toContain("Resume Sync");
+      expect(banner?.textContent).not.toContain("GB");
+    });
+
+    it("shows the yellow high-heap banner after a completed run with a high live heap", async () => {
+      const c = await renderIdle(undefined, 1_900_000);
+      const banner = c.querySelector('[data-testid="budget-high-heap-banner"]');
+      expect(banner).not.toBeNull();
+      expect(banner?.textContent).toContain("Steam memory is high: 1.9 GB of ~2.4 GB");
+      expect(c.querySelector('[data-testid="budget-paused-banner"]')).toBeNull();
+    });
+
+    it("shows no banner when idle with a low live heap and no paused attempt", async () => {
+      const c = await renderIdle(undefined, 440_000);
+      expect(c.querySelector('[data-testid="budget-paused-banner"]')).toBeNull();
+      expect(c.querySelector('[data-testid="budget-high-heap-banner"]')).toBeNull();
     });
   });
 
@@ -1927,6 +2029,18 @@ describe("MainPage", () => {
         ...defaultStats(),
         roms: 42,
         last_attempt: { finished_at: "2026-06-01T17:48:00", status: "cancelled" },
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(buttonByExactText(container, "Resume Sync")).not.toBeNull();
+      expect(buttonByExactText(container, "Sync Library")).toBeNull();
+    });
+
+    it("reads 'Resume Sync' when the newest attempt was a session-budget pause (#1383)", async () => {
+      vi.mocked(backend.getSyncStats).mockResolvedValue({
+        ...defaultStats(),
+        roms: 42,
+        last_attempt: { finished_at: "2026-07-11T17:48:00", status: "paused" },
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();

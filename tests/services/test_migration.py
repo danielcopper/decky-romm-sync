@@ -16,6 +16,7 @@ from fakes.fake_migration_file_store import FakeMigrationFileStore
 from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_relaunch_options_resolver import FakeRelaunchOptionsResolver
 from fakes.fake_renderer_gc import FakeRendererGc
+from fakes.fake_renderer_reload import FakeRendererReload
 from fakes.fake_renderer_rss import FakeRendererRss
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_settings_persister import FakeSettingsPersister
@@ -122,6 +123,7 @@ def plugin(tmp_path, fake_romm_api):
             disc_resolver=FakeDiscResolver(),
             renderer_rss=FakeRendererRss(),
             renderer_gc=FakeRendererGc(),
+            renderer_reload=FakeRendererReload(),
         ),
     )
 

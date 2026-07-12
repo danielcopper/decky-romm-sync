@@ -9,6 +9,7 @@ from conftest import _make_testable_plugin
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_renderer_gc import FakeRendererGc
+from fakes.fake_renderer_reload import FakeRendererReload
 from fakes.fake_renderer_rss import FakeRendererRss
 from fakes.fake_settings_persister import FakeSettingsPersister
 from fakes.fake_sgdb_artwork_cache import FakeSgdbArtworkCache
@@ -84,6 +85,7 @@ def plugin(sgdb_artwork_cache, fake_romm_api, fake_steamgrid_db_api, uow):
             disc_resolver=FakeDiscResolver(),
             renderer_rss=FakeRendererRss(),
             renderer_gc=FakeRendererGc(),
+            renderer_reload=FakeRendererReload(),
         ),
     )
 
@@ -973,6 +975,7 @@ class TestDebugLoggerProtocolSeam:
                 disc_resolver=FakeDiscResolver(),
                 renderer_rss=FakeRendererRss(),
                 renderer_gc=FakeRendererGc(),
+                renderer_reload=FakeRendererReload(),
             ),
         )
 

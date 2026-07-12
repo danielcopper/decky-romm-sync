@@ -150,6 +150,15 @@ class TestGetSyncStatsLastAttempt:
         with uow:
             uow.sync_runs.save(run)
 
+    @staticmethod
+    def _paused(uow, *, id, started, finished, reason="Sync paused: Steam's memory is nearly full."):
+        from domain.sync_run import SyncRun
+
+        run = SyncRun.start(id=id, at=started, platforms_planned=1, roms_planned=1)
+        run.mark_paused(finished, reason)
+        with uow:
+            uow.sync_runs.save(run)
+
     @pytest.mark.asyncio
     async def test_no_runs_reports_no_attempt(self, plugin):
         stats = await plugin.get_sync_stats()
@@ -210,6 +219,18 @@ class TestGetSyncStatsLastAttempt:
         stats = await plugin.get_sync_stats()
         assert stats["last_sync"] == "2025-06-02T09:30:00"
         assert stats["last_attempt"] is None
+
+    @pytest.mark.asyncio
+    async def test_paused_newer_than_completed_surfaces_resumable_attempt(self, plugin):
+        """A session-budget 'paused' run newer than the last completed one → last_attempt
+        carries the 'paused' status (get_latest_terminal must include paused, or the
+        run — and the Resume Sync affordance it drives — would be invisible, #1383)."""
+        self._completed(plugin._uow, id="run-ok", started="2025-07-11T09:00:00", finished="2025-07-11T09:30:00")
+        self._paused(plugin._uow, id="run-p", started="2025-07-11T10:00:00", finished="2025-07-11T10:20:00")
+
+        stats = await plugin.get_sync_stats()
+        assert stats["last_sync"] == "2025-07-11T09:30:00"
+        assert stats["last_attempt"] == {"finished_at": "2025-07-11T10:20:00", "status": "paused"}
 
 
 class TestGetRegistryPlatforms:

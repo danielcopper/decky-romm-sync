@@ -23,7 +23,13 @@ from typing import TYPE_CHECKING, Any
 
 from domain.platform_sync_state import PlatformSyncState
 from domain.preview_delta import PreviewDelta
-from domain.session_budget import gate_decision, post_run_advisory, predict_run_crosses
+from domain.session_budget import (
+    CLIFF_KB,
+    EFFECTIVE_CEILING_KB,
+    gate_decision,
+    post_run_advisory,
+    predict_run_crosses,
+)
 from domain.shortcut_data import EmulatorInvocation, build_shortcuts_data
 from domain.sibling_group import compute_component_group_keys
 from domain.sibling_resolution import AUTO_REGION
@@ -57,6 +63,7 @@ if TYPE_CHECKING:
         DiscResolver,
         EventEmitter,
         RendererGcFn,
+        RendererReloadFn,
         RendererRssFn,
         Sleeper,
         UnitOfWorkFactory,
@@ -139,6 +146,7 @@ class SyncOrchestratorConfig:
     disc_resolver: DiscResolver
     renderer_rss: RendererRssFn
     renderer_gc: RendererGcFn
+    renderer_reload: RendererReloadFn
 
 
 class SyncOrchestrator:
@@ -162,6 +170,7 @@ class SyncOrchestrator:
         self._disc_resolver = config.disc_resolver
         self._renderer_rss = config.renderer_rss
         self._renderer_gc = config.renderer_gc
+        self._renderer_reload = config.renderer_reload
 
     # ── Sync control ─────────────────────────────────────────────
 
@@ -299,6 +308,7 @@ class SyncOrchestrator:
 
             preview_id = self._uuid_gen.uuid4()
             platforms_count = sum(1 for u in work_queue if u.type == "platform")
+            collections_count = sum(1 for u in work_queue if u.type == "collection")
             box.pending_delta = PreviewDelta(
                 preview_id=preview_id,
                 created_at=self._clock.time(),
@@ -331,6 +341,11 @@ class SyncOrchestrator:
                     "unchanged_count": len(unchanged_ids),
                     "remove_count": len(stale),
                     "disabled_platform_remove_count": disabled_count,
+                    # Scope of the run (#29): how many platforms / collections this
+                    # sync spans, shown as an always-on informational line
+                    # independent of the change diffs.
+                    "sync_platform_count": platforms_count,
+                    "sync_collection_count": collections_count,
                     "collection_diff": compute_collection_diff(
                         collection_memberships,
                         last_synced_collections,
@@ -473,6 +488,46 @@ class SyncOrchestrator:
         """
         return self._sync_state.sync_progress
 
+    async def get_session_budget_status(self) -> dict[str, Any]:
+        """Live renderer-heap reading for the QAM banners (#1383).
+
+        Reads the renderer's current RSS (no GC — this is a cheap on-render poll,
+        not the gate's settled measurement) alongside the two fixed budget lines so
+        the frontend can render "Steam memory: X.X GB" against the ceiling/cliff.
+        Fail-open: ``rss_kb`` is ``None`` when the reading is unavailable (no
+        ``steamwebhelper`` / unreadable ``/proc``) or any seam raises — the banner
+        then drops the number but keeps its guidance text.
+        """
+        rss_kb: int | None = None
+        try:
+            rss_kb = await self._loop.run_in_executor(None, self._renderer_rss)
+        except Exception as e:  # fail-open: a status poll must never raise
+            self._logger.debug(f"Session-budget status read failed: {e}")
+        return {"success": True, "rss_kb": rss_kb, "ceiling_kb": EFFECTIVE_CEILING_KB, "cliff_kb": CLIFF_KB}
+
+    async def reload_steam_ui(self) -> dict[str, Any]:
+        """Reload the Steam renderer to free its session heap (the "free memory" action, #1383).
+
+        Fires ``Page.reload`` on the SharedJSContext renderer, which replaces the
+        renderer process — a full session-budget reset without a Steam client
+        restart. Refuses while a sync run is in flight (``sync_active``): a reload
+        mid-apply would tear down the frontend the apply is driving. It is allowed
+        only from an idle state (which includes after a run has paused or
+        completed). The reload destroys the very UI that requested it, so the
+        frontend never sees this response — Decky reinjects a fresh frontend after
+        the ~30 s renderer teardown. Fail-open on the reload seam itself.
+        """
+        if self._sync_state.is_in_flight():
+            return {
+                "success": False,
+                "reason": "sync_active",
+                "message": "Can't free Steam memory while a sync is running — wait for it to finish or pause first.",
+            }
+        ok = await self._loop.run_in_executor(None, self._renderer_reload)
+        if not ok:
+            self._logger.warning("Renderer reload could not be triggered (CEF debugger unreachable?)")
+        return {"success": True, "message": "Reloading Steam's interface to free memory"}
+
     # ── Sync termination ─────────────────────────────────────────
 
     async def _finish_sync(self, message):
@@ -528,9 +583,10 @@ class SyncOrchestrator:
         # a new rom_id reusing an old appId is never wrongly removed (#1036).
         box.committed_app_ids = set()
         box.run_interrupted = False
-        # Session-budget gate run-scoped state (#1383): the emitted-chunk counter
-        # (first chunk exempt → guaranteed forward progress), the distinct pause
-        # reason, and the once-per-run "RSS unavailable" log guard.
+        # Session-budget gate run-scoped state (#1383): the paused flag, the
+        # emitted-chunk counter (first chunk exempt → guaranteed forward progress),
+        # the distinct pause reason, and the once-per-run "RSS unavailable" log guard.
+        box.run_paused = False
         box.chunks_emitted_this_run = 0
         box.interrupt_reason = None
         box.budget_measure_unavailable_logged = False
@@ -635,14 +691,18 @@ class SyncOrchestrator:
                 cancelled=cancelled,
             )
 
-            # SyncRun terminal status — short write UoW. Cancelled runs
-            # mark cancelled; clean runs complete with the synced platform
-            # and collection names derived from the built maps.
+            # SyncRun terminal status — short write UoW. Clean runs complete;
+            # a stopped run records WHY, in priority order: a deliberate
+            # session-budget ``paused`` (#1383) wins, then a heartbeat-timeout
+            # ``interrupted`` (an external death — frontend crash/reload), else the
+            # user's own ``cancelled``. The split keeps the UI from blaming a
+            # self-imposed pause or a crash on the Cancel button.
             if cancelled:
-                # A heartbeat-timeout cancel is an external death (frontend
-                # crash/reload) — record it as ``interrupted`` so the UI never
-                # blames a crash on the user's Cancel button.
-                if box.run_interrupted:
+                if box.run_paused:
+                    await self._loop.run_in_executor(
+                        None, self._mark_sync_run_paused, run_id, box.interrupt_reason or _SYNC_PAUSED_BUDGET
+                    )
+                elif box.run_interrupted:
                     reason = box.interrupt_reason or _SYNC_INTERRUPTED
                     await self._loop.run_in_executor(None, self._mark_sync_run_interrupted, run_id, reason)
                 else:
@@ -709,6 +769,10 @@ class SyncOrchestrator:
     def _mark_sync_run_interrupted(self, run_id: str | None, reason: str) -> None:
         """Transition the SyncRun to ``interrupted`` (external death, not user cancel)."""
         self._terminate_sync_run(run_id, lambda run: run.mark_interrupted(self._clock.now().isoformat(), reason))
+
+    def _mark_sync_run_paused(self, run_id: str | None, reason: str) -> None:
+        """Transition the SyncRun to ``paused`` (a deliberate session-budget gate stop)."""
+        self._terminate_sync_run(run_id, lambda run: run.mark_paused(self._clock.now().isoformat(), reason))
 
     def _mark_sync_run_errored(self, run_id: str | None, error: str) -> None:
         """Transition the SyncRun to ``errored``."""
@@ -1055,10 +1119,11 @@ class SyncOrchestrator:
             # Session-budget gate (#1383): at every chunk boundary force a renderer
             # GC + measure RSS and pause here — a clean chunk boundary — if applying
             # this chunk would cross Steam's per-session heap budget. On pause the
-            # gate sets ``run_interrupted`` + ``interrupt_reason`` and requests
+            # gate sets ``run_paused`` + ``interrupt_reason`` and requests
             # cancel, so the check just below returns cleanly with the prior chunks
-            # committed — the same resumable ``interrupted`` finalize a heartbeat
-            # timeout uses. Two modes by position in the run:
+            # committed — the terminal finalize then records the resumable ``paused``
+            # state (the deliberate sibling of a heartbeat timeout's
+            # ``interrupted``). Two modes by position in the run:
             #  - The very FIRST chunk of the run gets an ABSOLUTE check (``chunk_items
             #    = 0`` → pause iff RSS is already at/over the ceiling). It is exempt
             #    from the PREDICTIVE projection so a fresh run/resume below the
@@ -1183,10 +1248,10 @@ class SyncOrchestrator:
         (``chunk_items == 0`` on the run's first chunk makes this the ABSOLUTE
         "already at/over the ceiling?" check). :func:`domain.session_budget.gate_decision`
         decides whether the projected cost crosses the effective ceiling. On a pause
-        it marks the run ``interrupted`` with the distinct session-budget reason and
+        it sets ``run_paused`` with the distinct session-budget reason and
         requests cancel — the chunk loop's next ``is_cancelling`` check returns
         cleanly with the prior chunks committed, and the terminal finalize records
-        the resumable ``interrupted`` state.
+        the resumable ``paused`` state.
 
         Fail-open throughout: an unavailable reading or any seam error skips the gate
         entirely — measurement must never block a sync.
@@ -1202,7 +1267,7 @@ class SyncOrchestrator:
                     f"{chunk_items} items projects {decision.projected_kb} KB >= ceiling "
                     f"{decision.threshold_kb} KB"
                 )
-                box.run_interrupted = True
+                box.run_paused = True
                 box.interrupt_reason = _SYNC_PAUSED_BUDGET
                 box.request_cancel()
         except Exception as e:  # fail-open: the gate must never fail the run

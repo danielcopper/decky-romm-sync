@@ -59,22 +59,34 @@ is fail-open — a measurement failure never blocks a sync.**
   with the same distinct reason instead of driving a ~300 MB chunk into the cliff. After a real Steam restart (baseline
   ~430 MB) the absolute check never fires; a resume attempted _without_ a restart at 2.3+ GB re-pauses cleanly and tells
   the user to restart — the run cannot cross the cliff on its own.
-- **A pause is a controlled `interrupted`, reusing ADR-0023's mechanics.** The gate sets `run_interrupted` + a distinct
-  `interrupt_reason` and requests cancel; the chunk loop returns cleanly with prior chunks committed, and the terminal
-  `SyncRun` write records `interrupted` — the same resumable path a heartbeat timeout uses. Completed platforms keep
-  their `PlatformSyncState` stamps, so Resume Sync redoes only the remainder. The pause reason is distinct and
-  user-facing ("Sync paused: Steam's memory is nearly full. Restart Steam when convenient, then Resume Sync.") and rides
-  the `sync_complete` payload so the toast and QAM status read the resume-friendly guidance, not the generic
-  "cancelled".
+- **A pause is a first-class `paused` run status, reusing ADR-0023's stop mechanics.** The gate sets `run_paused` + a
+  distinct `interrupt_reason` and requests cancel; the chunk loop returns cleanly with prior chunks committed, and the
+  terminal `SyncRun` write records the new terminal status **`paused`** (migration 014 widens the `sync_runs` status
+  CHECK). `paused` is deliberately its own status, distinct from `interrupted`: `interrupted` is an external death (a
+  frontend crash / backend restart), `paused` is the gate's own consented stop. Both are resumable — everywhere
+  `interrupted` reads as resumable (`canResume`, `get_latest_terminal`, the "last attempt" line) `paused` joins it — but
+  the split lets the UI say "(paused)" with restart-and-resume guidance rather than reusing the crash wording. Completed
+  platforms keep their `PlatformSyncState` stamps, so Resume Sync redoes only the remainder. The distinct reason ("Sync
+  paused: Steam's memory is nearly full. Restart Steam when convenient, then Resume Sync.") rides the `sync_complete`
+  payload so the toast and QAM status read the resume-friendly guidance.
 - **Two advisories, RSS-based, no forced action.** After the **preview**, `predict_run_crosses` projects the run's real
   work — new creates at the worst-case create rate plus changed updates at the lighter Set*-walk rate (~1 MB/item);
-  fully-unchanged items are not priced, so a large unchanged re-sync never warns — and drives a yellow hint that the
-  sync will likely pause and can be resumed. After a **clean run**, `post_run_advisory` (RSS > ~1.8 GB, read GC-first
-  for the same settled-heap consistency) appends a "restart Steam before further large operations" nudge to the
-  completion toast. Both are informational; consent stays with the user.
-- **No new wire surface.** The advisories ride an added field on the existing `sync_preview` response (`pause_likely`)
-  and added fields on the existing `sync_complete` payload (`interrupt_reason`, `restart_recommended`). No new callable,
-  no new emit event — the callable-manifest and event-parity gates stay green with no names to police.
+  fully-unchanged items are not priced, so a large unchanged re-sync never warns — and drives a **blue/info** hint (it
+  announces normal, planned behavior) that the sync will likely pause and can be resumed. After a **clean run**,
+  `post_run_advisory` (RSS > ~1.8 GB, read GC-first for the same settled-heap consistency) recommends a Steam restart.
+  Both are informational; consent stays with the user.
+- **Persistent QAM banners with live numbers.** Toasts are missed and truncate, so the durable surfaces are two
+  persistent banners in the QAM sync section, fed by a new `get_session_budget_status()` callable (a live `/proc` RSS
+  read — no GC — plus the fixed ceiling/cliff lines; fail-open `rss_kb: null`). A **blue** banner shows while the last
+  run is `paused` ("restart Steam, then Resume Sync" + "Steam memory: X.X GB …"); a **yellow** banner shows whenever the
+  live RSS exceeds ~1.8 GB after a completed run (it self-clears after a restart, since the next read is low — no
+  dismissed-state to persist). Both drop the number but keep their text when `rss_kb` is null. The pause toast stays for
+  immediacy (with a longer duration so it isn't truncated), but the banners are the source of truth.
+- **Minimal new wire surface.** The advisories ride an added field on the existing `sync_preview` response
+  (`pause_likely`, plus `sync_platform_count` / `sync_collection_count` for the preview scope line) and added fields on
+  the existing `sync_complete` payload (`interrupt_reason`, `restart_recommended`). The only new name is the
+  `get_session_budget_status` read callable (no new emit event); the callable-manifest and event-parity gates stay
+  green.
 - **Parameterized for reclaimable API artwork (PR 2).** The gate's per-item cost is a parameter defaulting to the
   worst-case create rate. This PR does **not** reintroduce API artwork; the parameter is the seam PR 2 uses to add a
   per-item cover term once `SetCustomArtworkForApp` (transiently resident, GC-reclaimable — hence the GC-before-measure)

@@ -297,8 +297,8 @@ class SyncRunRepository(Protocol):
     def get_latest_terminal(self) -> SyncRun | None:
         """Return the newest run in a terminal state, or ``None``.
 
-        Terminal = ``completed`` / ``cancelled`` / ``interrupted`` / ``errored``,
-        ordered by ``finished_at``. Backs the "Last sync" last-attempt hint: when
+        Terminal = ``completed`` / ``cancelled`` / ``paused`` / ``interrupted`` /
+        ``errored``, ordered by ``finished_at``. Backs the "Last sync" last-attempt hint: when
         the newest terminal run did NOT complete, it is surfaced so a cancelled,
         interrupted, or crash-resumed run reads as an attempt instead of "Never". (library/reporter.py)
         """
@@ -314,7 +314,7 @@ class SyncRunRepository(Protocol):
 
         Backs the "Force Full Sync" reset: clearing the run history resets the
         ``last_sync`` the incremental-skip gate keys off (forcing a full re-fetch)
-        AND drops the accumulated cancelled/interrupted/errored runs the last-attempt
+        AND drops the accumulated cancelled/paused/interrupted/errored runs the last-attempt
         hint reads — otherwise a stale cancelled run would surface as the "Last sync"
         state right after a reset. A ``running`` row is preserved so a reset can
         never orphan an in-flight run. (library/reporter.py)

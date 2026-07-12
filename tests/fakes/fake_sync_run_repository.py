@@ -35,7 +35,9 @@ class FakeSyncRunRepository:
 
     def get_latest_terminal(self) -> SyncRun | None:
         terminal = [
-            run for run in self._runs.values() if run.status in ("completed", "cancelled", "interrupted", "errored")
+            run
+            for run in self._runs.values()
+            if run.status in ("completed", "cancelled", "interrupted", "paused", "errored")
         ]
         if not terminal:
             return None

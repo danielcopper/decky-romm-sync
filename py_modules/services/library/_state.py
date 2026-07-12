@@ -115,6 +115,13 @@ class LibrarySyncStateBox:
     # is reserved for the user's own Cancel. Reset at the start of each run;
     # never reset by the per-chunk loop, so a timeout anywhere in the run wins.
     run_interrupted: bool = False
+    # Set True when the session-budget gate stops the run deliberately at a chunk
+    # boundary (Steam's renderer is near its heap budget). The terminal ``SyncRun``
+    # write then records ``paused`` — a resumable, self-imposed stop distinct from
+    # both ``cancelled`` (the user's Cancel) and ``interrupted`` (an external
+    # death). Takes precedence over ``run_interrupted`` in the terminal branch.
+    # Reset at the start of each run (#1383).
+    run_paused: bool = False
     # The abandoned CHUNK's rows (the fetched ROMs of the in-flight chunk's
     # sibling groups, each the source of its ``metadatum``), stashed so a late
     # ack can rebuild ``acked_roms`` for the commit it drives. Only the chunk

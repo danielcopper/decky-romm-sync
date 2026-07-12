@@ -1,11 +1,17 @@
-"""CDP garbage-collect adapter — concrete ``RendererGcFn`` over the CEF debugger.
+"""CDP renderer adapters — ``RendererGcFn`` + ``RendererReloadFn`` over the CEF debugger.
 
-Forces a garbage collection in Steam's ``SharedJSContext`` renderer so the
-session-budget gate's next RSS reading reflects settled heap rather than
-transient garbage. Steam's natural GC is measured-unreliable (sometimes minutes,
-sometimes absent for 12+ min); an explicit ``HeapProfiler.collectGarbage`` over
-the Chrome DevTools Protocol reclaims it deterministically (measured: 496 MB in
-~5 s on-device 2026-07-11).
+Two operations on Steam's ``SharedJSContext`` renderer, both driven through the
+same minimal Chrome DevTools Protocol client:
+
+- **Garbage collect** (``HeapProfiler.collectGarbage``): settles the renderer heap
+  so the session-budget gate's next RSS reading reflects retained memory rather
+  than transient garbage. Steam's natural GC is measured-unreliable (sometimes
+  minutes, absent for 12+ min); the explicit collect reclaims deterministically
+  (measured: 496 MB in ~5 s on-device 2026-07-11).
+- **Reload** (``Page.reload``): replaces the renderer PROCESS wholesale — a full
+  session-budget reset without a Steam client restart (the "free Steam memory"
+  action; measured 2026-07-12: ~2.0 GB → ~455 MB, Decky reinjects the frontend
+  cleanly). This destroys the very UI that triggered it; that is expected.
 
 Transport: the CEF remote-debugging endpoint on ``localhost:8080`` — a Decky
 platform invariant (Decky Loader itself requires CEF debugging enabled), and
@@ -16,9 +22,8 @@ client (a single request/response — vendoring a websocket package for one call
 not warranted).
 
 Fail-open contract: every failure path returns ``False`` with a debug log and the
-call never raises into the sync path, never blocks more than a few seconds total.
-A failed GC only means the following RSS reading is less precise — never that the
-sync should stop.
+call never raises into the caller, never blocks more than a few seconds total (the
+reload's ~30 s renderer teardown happens after the ack, off this path).
 """
 
 from __future__ import annotations
@@ -40,11 +45,23 @@ _TARGET_TITLE = "SharedJSContext"
 # RFC 6455 handshake GUID — appended to the client key to derive the expected
 # Sec-WebSocket-Accept.
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-# Per-operation timeout. Kept small so the whole GC attempt (HTTP list + connect
+# Per-operation timeout. Kept small so the whole attempt (HTTP list + connect
 # + handshake + one round-trip) stays well under ~5 s even when every step waits.
+# The renderer teardown that a reload triggers happens AFTER the ack, so it does
+# not extend this — we only wait for the command to be accepted.
 _TIMEOUT_SEC = 1.5
-_GC_REQUEST_ID = 1
-_GC_MESSAGE = json.dumps({"id": _GC_REQUEST_ID, "method": "HeapProfiler.collectGarbage"})
+# Every CDP command in this module uses request id 1 and awaits the id-1 reply.
+_CDP_REQUEST_ID = 1
+_GC_MESSAGE = json.dumps({"id": _CDP_REQUEST_ID, "method": "HeapProfiler.collectGarbage"})
+# ``Page.reload`` replaces the renderer PROCESS wholesale (validated on-device
+# 2026-07-12: the old renderer PID tears down over ~30 s and a fresh renderer
+# settles at ~455 MB — a full session-budget reset without a Steam client
+# restart, after which Decky reinjects the frontend cleanly). ``ignoreCache:false``
+# keeps the disk cache. Note: a ``Runtime.evaluate`` approach (calling
+# ``SteamClient.Browser.RestartJSContext()``) is NOT viable — CDP reports "Cannot
+# find default execution context" on this target even after ``Runtime.enable``;
+# ``Page.reload`` needs no JS execution context.
+_RELOAD_MESSAGE = json.dumps({"id": _CDP_REQUEST_ID, "method": "Page.reload", "params": {"ignoreCache": False}})
 
 
 class RendererGcAdapter:
@@ -56,42 +73,72 @@ class RendererGcAdapter:
     def __call__(self) -> bool:
         """Force a renderer GC; return ``True`` on the acked collect, else ``False``.
 
-        Wraps the whole attempt in a broad ``except`` so no transport, parse, or
-        protocol error ever escapes into the sync path (fail-open).
+        Fail-open: any transport, parse, or protocol error returns ``False`` and
+        never escapes into the sync path.
         """
-        try:
-            ws_url = self._find_target_ws_url()
-            if ws_url is None:
-                self._logger.debug("Renderer GC skipped: no %s debug target", _TARGET_TITLE)
-                return False
-            return self._collect_garbage(ws_url)
-        except Exception as e:  # fail-open: never raise into the sync path
-            self._logger.debug("Renderer GC failed: %s", e)
+        return _run_cdp_command(_GC_MESSAGE, self._logger, "Renderer GC")
+
+
+class RendererReloadAdapter:
+    """Real ``RendererReloadFn`` that reloads the SharedJSContext renderer over CDP.
+
+    Drives ``Page.reload`` on the SharedJSContext page target, which replaces the
+    renderer process entirely — a full session-budget reset without a Steam client
+    restart (the "free Steam memory" action). Shares the minimal RFC 6455 client
+    with :class:`RendererGcAdapter`. Fail-open: returns ``False`` on any failure and
+    never raises. It does not wait for the (~30 s) renderer teardown, only for the
+    command to be acked.
+    """
+
+    def __init__(self, *, logger: logging.Logger) -> None:
+        self._logger = logger
+
+    def __call__(self) -> bool:
+        """Reload the renderer; return ``True`` on the acked reload, else ``False``."""
+        return _run_cdp_command(_RELOAD_MESSAGE, self._logger, "Renderer reload")
+
+
+def _run_cdp_command(message: str, logger: logging.Logger, label: str) -> bool:
+    """Find the SharedJSContext target and send *message*, awaiting its id-1 reply.
+
+    The single fail-open entry point both adapters share: any transport, parse, or
+    protocol error is caught and returns ``False`` with a debug log under *label*.
+    """
+    try:
+        ws_url = _find_target_ws_url()
+        if ws_url is None:
+            logger.debug("%s skipped: no %s debug target", label, _TARGET_TITLE)
             return False
+        return _send_cdp_command(ws_url, message, logger, label)
+    except Exception as e:  # fail-open: never raise into the caller
+        logger.debug("%s failed: %s", label, e)
+        return False
 
-    def _find_target_ws_url(self) -> str | None:
-        """Return the ``SharedJSContext`` target's ``webSocketDebuggerUrl``, or ``None``."""
-        with urlopen(_DEBUGGER_URL, timeout=_TIMEOUT_SEC) as resp:  # fixed localhost URL
-            targets = json.load(resp)
-        for target in targets:
-            if isinstance(target, dict) and target.get("title") == _TARGET_TITLE:
-                url = target.get("webSocketDebuggerUrl")
-                return url if isinstance(url, str) else None
-        return None
 
-    def _collect_garbage(self, ws_url: str) -> bool:
-        """Open *ws_url*, send the collectGarbage request, await its id-matched reply."""
-        host, port, path = _parse_ws_url(ws_url)
-        sock = socket.create_connection((host, port), timeout=_TIMEOUT_SEC)
-        try:
-            sock.settimeout(_TIMEOUT_SEC)
-            if not _handshake(sock, host, port, path):
-                self._logger.debug("Renderer GC failed: WebSocket handshake rejected")
-                return False
-            sock.sendall(_encode_text_frame(_GC_MESSAGE))
-            return _await_gc_reply(sock)
-        finally:
-            sock.close()
+def _find_target_ws_url() -> str | None:
+    """Return the ``SharedJSContext`` target's ``webSocketDebuggerUrl``, or ``None``."""
+    with urlopen(_DEBUGGER_URL, timeout=_TIMEOUT_SEC) as resp:  # fixed localhost URL
+        targets = json.load(resp)
+    for target in targets:
+        if isinstance(target, dict) and target.get("title") == _TARGET_TITLE:
+            url = target.get("webSocketDebuggerUrl")
+            return url if isinstance(url, str) else None
+    return None
+
+
+def _send_cdp_command(ws_url: str, message: str, logger: logging.Logger, label: str) -> bool:
+    """Open *ws_url*, send *message*, and await its id-matched reply."""
+    host, port, path = _parse_ws_url(ws_url)
+    sock = socket.create_connection((host, port), timeout=_TIMEOUT_SEC)
+    try:
+        sock.settimeout(_TIMEOUT_SEC)
+        if not _handshake(sock, host, port, path):
+            logger.debug("%s failed: WebSocket handshake rejected", label)
+            return False
+        sock.sendall(_encode_text_frame(message))
+        return _await_cdp_reply(sock)
+    finally:
+        sock.close()
 
 
 def _parse_ws_url(ws_url: str) -> tuple[str, int, str]:
@@ -118,10 +165,10 @@ def _handshake(sock: socket.socket, host: str, port: int, path: str) -> bool:
     if response is None:
         return False
     # Any bytes ``_recv_until`` read past the header terminator are discarded, and
-    # that is safe here: the caller sends the collectGarbage request only AFTER this
-    # handshake returns, and we enable no CDP domains, so the server pushes nothing
-    # before that request — the reply frame cannot have been buffered into
-    # ``response`` yet, so nothing is lost.
+    # that is safe here: the caller sends the CDP command only AFTER this handshake
+    # returns, and we enable no CDP domains, so the server pushes nothing before
+    # that request — the reply frame cannot have been buffered into ``response``
+    # yet, so nothing is lost.
     expected = base64.b64encode(hashlib.sha1((key + _WS_GUID).encode("ascii")).digest()).decode("ascii")
     return expected.lower().encode("ascii") in response.lower()
 
@@ -147,7 +194,7 @@ def _encode_text_frame(message: str) -> bytes:
     if length < 126:
         header.append(0x80 | length)  # mask bit + 7-bit length
     else:
-        # 16-bit extended length. The fixed collectGarbage request is well under 126
+        # 16-bit extended length. The fixed CDP command is well under 126
         # bytes so this branch is not hit today, but it is kept so the encoder stays
         # a correct RFC 6455 client if the message ever grows. The 64-bit form is
         # never needed for a request this small.
@@ -159,10 +206,10 @@ def _encode_text_frame(message: str) -> bytes:
     return bytes(header) + masked
 
 
-def _await_gc_reply(sock: socket.socket) -> bool:
-    """Read server frames until the ``id``-matched collectGarbage reply arrives.
+def _await_cdp_reply(sock: socket.socket) -> bool:
+    """Read server frames until the ``id``-matched command reply arrives.
 
-    Returns ``True`` once a text frame carrying ``id == _GC_REQUEST_ID`` is seen.
+    Returns ``True`` once a text frame carrying ``id == _CDP_REQUEST_ID`` is seen.
     Returns ``False`` on a closed/timed-out connection or any non-text /
     fragmented frame (fragmentation is not expected for this tiny reply — bail
     rather than reassemble).
@@ -175,7 +222,7 @@ def _await_gc_reply(sock: socket.socket) -> bool:
         if opcode != 0x1:  # not a text frame (close / ping / continuation) — bail
             return False
         try:
-            if json.loads(payload).get("id") == _GC_REQUEST_ID:
+            if json.loads(payload).get("id") == _CDP_REQUEST_ID:
                 return True
         except (ValueError, TypeError):
             return False

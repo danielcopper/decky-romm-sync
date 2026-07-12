@@ -47,6 +47,7 @@ from bootstrap import (
     wire_services,
 )
 from fakes.fake_renderer_gc import FakeRendererGc
+from fakes.fake_renderer_reload import FakeRendererReload
 from fakes.fake_renderer_rss import FakeRendererRss
 from fakes.fake_romm_api import FakeRommApi
 from fakes.fake_steamgrid_db_api import FakeSteamGridDbApi
@@ -168,6 +169,7 @@ def build_contract_harness(tmp_path: Any) -> ContractHarness:
         sgdb_adapter=fake_sgdb,
         renderer_rss=FakeRendererRss(),
         renderer_gc=FakeRendererGc(),
+        renderer_reload=FakeRendererReload(),
     )
 
     # Deterministic time/uuid/sleep seams so timestamped responses assert cleanly.

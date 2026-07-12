@@ -31,7 +31,7 @@ from adapters.persistence import (
     SettingsPersisterAdapter,
 )
 from adapters.plugin_metadata import PluginMetadataAdapter
-from adapters.renderer_gc import RendererGcAdapter
+from adapters.renderer_gc import RendererGcAdapter, RendererReloadAdapter
 from adapters.renderer_rss import RendererRssAdapter
 from adapters.repositories.unit_of_work import SqliteUnitOfWork
 from adapters.retroarch_config import RetroArchConfigAdapter
@@ -97,6 +97,7 @@ if TYPE_CHECKING:
         PlatformCoreReader,
         PluginMetadataReader,
         RendererGcFn,
+        RendererReloadFn,
         RendererRssFn,
         RetroArchSaveLayoutProvider,
         RetroDeckPaths,
@@ -137,6 +138,7 @@ class AdapterBundle:
     core_info_provider: CoreInfoProvider
     renderer_rss: RendererRssFn
     renderer_gc: RendererGcFn
+    renderer_reload: RendererReloadFn
 
 
 @dataclass(frozen=True)
@@ -356,6 +358,7 @@ def bootstrap(
     path_probe = PathProbeAdapter()
     renderer_rss = RendererRssAdapter()
     renderer_gc = RendererGcAdapter(logger=logger)
+    renderer_reload = RendererReloadAdapter(logger=logger)
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
     hostname_provider = HostnameAdapter()
@@ -378,6 +381,7 @@ def bootstrap(
         core_info_provider=core_resolver,
         renderer_rss=renderer_rss,
         renderer_gc=renderer_gc,
+        renderer_reload=renderer_reload,
     )
     stores = StateBundle(
         settings=settings,
@@ -611,6 +615,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             disc_resolver=disc_launch_resolver,
             renderer_rss=cfg.adapters.renderer_rss,
             renderer_gc=cfg.adapters.renderer_gc,
+            renderer_reload=cfg.adapters.renderer_reload,
         ),
     )
     pending_sync_binding.set(lambda: sync_service.pending_sync)

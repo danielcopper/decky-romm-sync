@@ -97,6 +97,19 @@ class RendererGcFn(Protocol):
     def __call__(self) -> bool: ...
 
 
+class RendererReloadFn(Protocol):
+    """Reload the Steam ``SharedJSContext`` renderer, returning success.
+
+    Drives ``Page.reload`` over the CEF debugger, which replaces the renderer
+    process wholesale — a full session-budget reset without a Steam client
+    restart (the "free Steam memory" action). Returns ``False`` on any failure and
+    never raises. Note that this destroys the very UI that requested it; the
+    frontend is reinjected by Decky afterwards.
+    """
+
+    def __call__(self) -> bool: ...
+
+
 class PendingSyncReader(Protocol):
     """Read seam for the LibraryService pending-sync map.
 

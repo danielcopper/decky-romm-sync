@@ -75,8 +75,8 @@ def _set_user_version(db_path: str, version: int) -> None:
 # + 007_add_last_played + 008_add_version_metadata
 # + 009_add_last_session_start_monotonic + 010_add_sibling_group_key_index
 # + 011_rekey_sibling_group_key + 012_add_platform_sync_state
-# + 013_add_interrupted_sync_run_status).
-_SHIPPED_VERSION = 13
+# + 013_add_interrupted_sync_run_status + 014_add_paused_sync_run_status).
+_SHIPPED_VERSION = 14
 
 # Tables after every shipped migration: the v1 set plus 006's play-session outbox
 # and 012's per-platform completion stamp.
@@ -809,7 +809,7 @@ class Test013InterruptedSyncRunStatus:
         final_version = apply_migrations(db_path)
 
         assert final_version == _SHIPPED_VERSION
-        assert _user_version(db_path) == 13
+        assert _user_version(db_path) == _SHIPPED_VERSION
         conn = sqlite3.connect(db_path)
         try:
             rows = conn.execute(
@@ -881,6 +881,88 @@ class Test013InterruptedSyncRunStatus:
         finally:
             conn.close()
         assert stored == status
+
+
+class Test014PausedSyncRunStatus:
+    """014 — widens the sync_runs status CHECK with 'paused' via an in-place table rebuild (#1383)."""
+
+    def test_rebuild_from_13_preserves_existing_rows(self, tmp_path: Path):
+        # Seed a completed + an interrupted run at v13 (before the 014 rebuild),
+        # then apply 014 and assert every column of both rows survives the copy.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 13)))
+        assert _user_version(db_path) == 13
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            _insert_sync_run(conn, run_id="run-done", status="completed", finished_at="2026-07-11T10:05:00")
+            _insert_sync_run(
+                conn,
+                run_id="run-int",
+                status="interrupted",
+                finished_at="2026-07-11T11:05:00",
+                error="external death",
+            )
+        finally:
+            conn.close()
+
+        final_version = apply_migrations(db_path)
+
+        assert final_version == _SHIPPED_VERSION
+        assert _user_version(db_path) == 14
+        conn = sqlite3.connect(db_path)
+        try:
+            rows = conn.execute("SELECT id, status, finished_at, error FROM sync_runs ORDER BY id").fetchall()
+        finally:
+            conn.close()
+        assert rows == [
+            ("run-done", "completed", "2026-07-11T10:05:00", None),
+            ("run-int", "interrupted", "2026-07-11T11:05:00", "external death"),
+        ]
+
+    def test_paused_status_accepted_after_rebuild(self, tmp_path: Path):
+        # The widened CHECK accepts the new terminal status.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path)
+        assert _user_version(db_path) == _SHIPPED_VERSION
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            _insert_sync_run(
+                conn,
+                run_id="run-paused",
+                status="paused",
+                finished_at="2026-07-11T12:05:00",
+                error="Sync paused: Steam's memory is nearly full.",
+            )
+            status = conn.execute("SELECT status FROM sync_runs WHERE id = 'run-paused'").fetchone()[0]
+        finally:
+            conn.close()
+        assert status == "paused"
+
+    def test_bogus_status_still_rejected(self, tmp_path: Path):
+        # The rebuilt table keeps its status CHECK — an unknown status still raises.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path)
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            with pytest.raises(sqlite3.IntegrityError):
+                _insert_sync_run(conn, run_id="run-bad", status="hibernated", finished_at="2026-07-11T13:05:00")
+        finally:
+            conn.close()
+
+    def test_paused_absent_before_014(self, tmp_path: Path):
+        # At v13 the CHECK does not yet accept 'paused'.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 13)))
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            with pytest.raises(sqlite3.IntegrityError):
+                _insert_sync_run(conn, run_id="run-early", status="paused", finished_at="2026-07-11T14:05:00")
+        finally:
+            conn.close()
 
 
 def test_shipped_migrations_dir_resolves_to_real_schema():

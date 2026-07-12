@@ -62,10 +62,12 @@ A few things worth knowing for a large library:
 - **A very large sync may pause itself to protect Steam.** Steam holds every shortcut it creates in memory for the rest
   of the session, and that memory only frees on a Steam restart. A very large first import can approach that limit, so
   the plugin watches Steam's memory and, when it gets close, pauses cleanly at a safe point rather than risking a Steam
-  crash. If the preview expects this, it shows a yellow note up front. When a pause happens you are told to **restart
-  Steam when convenient, then Resume Sync** — restarting frees the memory and the resume finishes the job. Nothing is
-  lost, and you are never forced out of what you were doing. After a big run finishes, the plugin may also suggest a
-  Steam restart before your next large sync, for the same reason.
+  crash. If the preview expects this, it shows a blue note up front ("this sync is large enough that it will likely
+  pause partway… that is normal"). When a pause happens, the sync page shows a **blue banner** — "Sync paused — restart
+  Steam when convenient, then Resume Sync. Steam memory: X.X GB…" — that stays until you resume, and a toast says the
+  same. Restarting Steam frees the memory and the resume finishes the job. Nothing is lost, and you are never forced out
+  of what you were doing. After a big run finishes with memory still high, a **yellow banner** recommends a Steam
+  restart before your next large sync; it clears itself once you restart.
 
 ## Resuming an interrupted sync
 
@@ -74,11 +76,12 @@ complete the job.
 
 - **The main page tells you when the last run didn't finish.** The **Last sync** line normally shows when the last full
   sync completed. If your most recent run ended early, a second line reports that attempt and how it ended — "last
-  attempt: 17:48 (interrupted)" if a crash or a Steam reload stopped it, or "(cancelled)" if you tapped Cancel Sync — so
-  a partial run that still added hundreds of games never reads a misleading "Never".
-- **The Sync button becomes "Resume Sync".** When a run was cancelled or interrupted and left games in your library, the
-  **Sync Library** button changes to **Resume Sync**. Pressing it completes the library: the platforms that already
-  synced in full are skipped, and only the one that was interrupted is re-checked — cheaply, since the games already
+  attempt: 17:48 (interrupted)" if a crash or a Steam reload stopped it, "(paused)" if the memory guard paused it, or
+  "(cancelled)" if you tapped Cancel Sync — so a partial run that still added hundreds of games never reads a misleading
+  "Never".
+- **The Sync button becomes "Resume Sync".** When a run was cancelled, interrupted, or paused and left games in your
+  library, the **Sync Library** button changes to **Resume Sync**. Pressing it completes the library: the platforms that
+  already synced in full are skipped, and only the one that stopped is re-checked — cheaply, since the games already
   there take the quick update path. Once a run finishes in full, the button goes back to **Sync Library**.
 - **Force Full Sync starts over from scratch.** Under the sync buttons, **Force Full Sync** clears the plugin's record
   of what it has already synced and re-fetches every platform from RomM on the next run. Reach for it if you suspect a
