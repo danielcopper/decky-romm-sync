@@ -158,3 +158,8 @@ export function readPrimaryRunningApp(): { app: RunningApp | null; diagnostics: 
 export function isAppRunning(appId: number): boolean {
   return readRunningApps().apps.some((app) => app.appid === appId);
 }
+
+/** Is ANY app currently running per ANY source? Never throws. */
+export function isAnyAppRunning(): boolean {
+  return readRunningApps().apps.length > 0;
+}

@@ -365,9 +365,6 @@ class Plugin:
     async def get_session_budget_status(self):
         return await self._sync_service.get_session_budget_status()
 
-    async def reload_steam_ui(self):
-        return await self._sync_service.reload_steam_ui()
-
     async def report_unit_results(self, rom_id_to_app_id, run_id, unit_id, chunk_index):
         return await self._sync_service.report_unit_results(rom_id_to_app_id, run_id, unit_id, chunk_index)
 

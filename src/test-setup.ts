@@ -26,6 +26,9 @@ vi.stubGlobal("SteamClient", {
   System: {
     GetSystemInfo: vi.fn().mockResolvedValue({ sHostname: "test" }),
   },
+  User: {
+    StartRestart: vi.fn(),
+  },
 });
 vi.stubGlobal("appStore", { GetAppOverviewByAppID: vi.fn(), allApps: [] });
 vi.stubGlobal("appDetailsStore", { GetAppDetails: vi.fn() });

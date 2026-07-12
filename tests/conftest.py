@@ -100,7 +100,6 @@ def _make_testable_plugin():
         _m3u_supported: Any
         _renderer_rss: Any
         _renderer_gc: Any
-        _renderer_reload: Any
 
     instance = TestablePlugin()
     instance._migration_service = MagicMock()

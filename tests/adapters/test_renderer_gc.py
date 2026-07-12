@@ -20,9 +20,7 @@ from unittest.mock import MagicMock
 from adapters import renderer_gc
 from adapters.renderer_gc import (
     _GC_MESSAGE,
-    _RELOAD_MESSAGE,
     RendererGcAdapter,
-    RendererReloadAdapter,
     _await_cdp_reply,
     _encode_text_frame,
     _parse_ws_url,
@@ -222,37 +220,3 @@ def test_send_cdp_command_collect_garbage_end_to_end(monkeypatch: pytest.MonkeyP
     assert result is True
     _opcode, payload = _decode_client_frame(frame)
     assert json.loads(payload)["method"] == "HeapProfiler.collectGarbage"
-
-
-def test_send_cdp_command_reload_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
-    result, frame = _roundtrip_cdp(monkeypatch, _RELOAD_MESSAGE)
-    assert result is True
-    _opcode, payload = _decode_client_frame(frame)
-    sent = json.loads(payload)
-    assert sent["method"] == "Page.reload"
-    assert sent["params"] == {"ignoreCache": False}
-
-
-def test_reload_adapter_call_fail_open_when_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _boom(*_a: object, **_k: object) -> object:
-        raise OSError("connection refused")
-
-    monkeypatch.setattr(renderer_gc, "urlopen", _boom)
-    logger = MagicMock()
-    assert RendererReloadAdapter(logger=logger)() is False
-    assert logger.debug.called
-
-
-def test_reload_adapter_call_false_when_no_target(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _Resp:
-        def __enter__(self) -> _Resp:
-            return self
-
-        def __exit__(self, *_a: object) -> None:
-            return None
-
-        def read(self) -> bytes:
-            return b'[{"title": "Steam", "webSocketDebuggerUrl": "ws://x/y"}]'
-
-    monkeypatch.setattr(renderer_gc, "urlopen", lambda *_a, **_k: _Resp())
-    assert RendererReloadAdapter(logger=MagicMock())() is False

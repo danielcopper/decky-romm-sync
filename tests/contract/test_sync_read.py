@@ -303,12 +303,13 @@ async def test_report_unit_results_late_ack_binds_orphan(harness):
 async def test_get_session_budget_status_shape_rss_none(harness):
     """Fail-open shape: the harness's fake renderer RSS is unavailable (None), so
     the callable still resolves with success + the fixed budget lines (#1383)."""
-    from domain.session_budget import CLIFF_KB, EFFECTIVE_CEILING_KB
+    from domain.session_budget import CLIFF_KB, EFFECTIVE_CEILING_KB, POST_RUN_ADVISORY_KB
 
     result = await harness.plugin.get_session_budget_status()
     assert result == {
         "success": True,
         "rss_kb": None,
+        "warn_kb": POST_RUN_ADVISORY_KB,
         "ceiling_kb": EFFECTIVE_CEILING_KB,
         "cliff_kb": CLIFF_KB,
         "memory_delta_kb": None,
@@ -317,7 +318,7 @@ async def test_get_session_budget_status_shape_rss_none(harness):
 
 async def test_get_session_budget_status_shape_rss_present(harness):
     """A readable RSS flows through unchanged alongside the fixed budget lines."""
-    from domain.session_budget import CLIFF_KB, EFFECTIVE_CEILING_KB
+    from domain.session_budget import CLIFF_KB, EFFECTIVE_CEILING_KB, POST_RUN_ADVISORY_KB
 
     harness.plugin._sync_service._orchestrator._renderer_rss.rss_kb = 2_100_000
 
@@ -325,41 +326,8 @@ async def test_get_session_budget_status_shape_rss_present(harness):
     assert result == {
         "success": True,
         "rss_kb": 2_100_000,
+        "warn_kb": POST_RUN_ADVISORY_KB,
         "ceiling_kb": EFFECTIVE_CEILING_KB,
         "cliff_kb": CLIFF_KB,
         "memory_delta_kb": None,
     }
-
-
-# ── reload_steam_ui (free Steam memory) ──────────────────────────────────
-
-
-async def test_reload_steam_ui_idle_success(harness):
-    """Idle: the reload is triggered and reports the canonical success shape."""
-    result = await harness.plugin.reload_steam_ui()
-    assert result["success"] is True
-    assert "message" in result
-
-
-async def test_reload_steam_ui_seam_failure_shape(harness):
-    """The reload seam couldn't reach Steam (UI still alive) → canonical failure
-    shape with a reload_failed reason the frontend turns into a toast."""
-    harness.plugin._sync_service._orchestrator._renderer_reload.result = False
-    result = await harness.plugin.reload_steam_ui()
-    assert result["success"] is False
-    assert result["reason"] == "reload_failed"
-    assert isinstance(result["message"], str)
-
-
-async def test_reload_steam_ui_refused_while_sync_active(harness):
-    """A run in flight is refused with the canonical failure shape + sync_active reason."""
-    from domain.sync_state import SyncState
-
-    harness.plugin._sync_service._box.sync_state = SyncState.RUNNING
-    try:
-        result = await harness.plugin.reload_steam_ui()
-    finally:
-        harness.plugin._sync_service._box.sync_state = SyncState.IDLE
-    assert result["success"] is False
-    assert result["reason"] == "sync_active"
-    assert isinstance(result["message"], str)

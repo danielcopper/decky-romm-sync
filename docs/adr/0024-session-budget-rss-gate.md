@@ -48,15 +48,17 @@ is fail-open — a measurement failure never blocks a sync.**
   restart nudge). It takes plain integers and returns plain values; `None`-handling stays in the caller.
 - **The gate is at every chunk boundary, GC-before-measure — but the GC is skipped when it can't matter.** In the
   ADR-0023 chunk loop (`sync_orchestrator.py::_apply_unit_in_chunks`), at each chunk boundary: read RSS (fail-open),
-  fire the GC (fail-open) to settle the reading, re-read, and pause if the projection crosses `cliff − margin`. The
-  projection is worst-case (every item priced as a fresh create) so the gate errs toward pausing early — a false pause
-  costs a Steam restart, a false proceed costs a renderer crash mid-apply. The chunk boundary is the only decision point
-  because it is the only place the run can stop cleanly and durably. **GC-skip below a floor:** the ~5 s GC only earns
-  its cost near the ceiling, so the measure reads RSS raw first and, when that raw reading is already below
-  `GC_SKIP_BELOW_KB` (1.5 GB), returns it directly with no GC — a raw reading still holds transient garbage, so the
-  settled value can only be lower, and below that floor even the worst-case max chunk (1.5 + 0.5 = 2.0 < 2.3 GB ceiling;
-  1.5 < 1.8 GB advisory) clears every threshold. Small syncs therefore pay zero GC cost; only a run genuinely
-  approaching the cliff pays for the settle.
+  fire the GC (fail-open) to settle the reading, re-read, and pause if the projection crosses `cliff − margin` (≈2.2 GB
+  — the margin is 250 MB, widened from 150 MB after on-device observation 2026-07-12 that near V8's heap limit the
+  renderer enters aggressive GC thrash and the UI turns sluggish _before_ it crashes; pausing 250 MB below the cliff
+  keeps a chunk's transient peak out of that zone). The projection is worst-case (every item priced as a fresh create)
+  so the gate errs toward pausing early — a false pause costs a Steam restart, a false proceed costs a renderer crash
+  mid-apply. The chunk boundary is the only decision point because it is the only place the run can stop cleanly and
+  durably. **GC-skip below a floor:** the ~5 s GC only earns its cost near the ceiling, so the measure reads RSS raw
+  first and, when that raw reading is already below `GC_SKIP_BELOW_KB` (1.5 GB), returns it directly with no GC — a raw
+  reading still holds transient garbage, so the settled value can only be lower, and below that floor even the
+  worst-case max chunk (1.5 + 0.5 = 2.0 < 2.2 GB ceiling; 1.5 < 1.8 GB advisory) clears every threshold. Small syncs
+  therefore pay zero GC cost; only a run genuinely approaching the cliff pays for the settle.
 - **The first chunk is predictive-exempt but absolute-capped.** The run's very first chunk is exempt from the
   _predictive_ projection (`chunk_items = 0` → no per-chunk cost is added), so a fresh run/resume below the ceiling
   always commits at least one chunk of forward progress rather than pausing with zero progress and looping forever. But
@@ -88,33 +90,39 @@ is fail-open — a measurement failure never blocks a sync.**
   dismissed-state to persist). Both drop the number but keep their text when `rss_kb` is null. The pause toast stays for
   immediacy (with a longer duration so it isn't truncated), but the banners are the source of truth.
 - **An always-on memory row with the last-run delta.** The QAM Status section carries a permanent "Steam memory: X.X GB"
-  row (the same live reading, omitted entirely when `rss_kb` is null) with a "last sync: ±X GB" sub-line — the last
-  clean run's signed RSS growth, `end - start`. A **raw** read taken at run start (captured unconditionally in the
-  run-scoped box, so even a fully-incremental-skip run that applies nothing still records a baseline and reports ≈ +0.0
-  GB) is the start; the post-run advisory read is the end. The delta is an approximation for information only — a raw
-  start baseline (which may hold transient garbage) is fine for it. The signed value is retained in memory so
-  `get_session_budget_status` returns it on a QAM remount (`memory_delta_kb`; in-memory only — a plugin reload loses it,
-  no migration); the UI reads it from that callable, so it is deliberately NOT put on the `sync_complete` wire. It
-  degrades to no sub-line whenever either endpoint was unmeasurable, so a stale number is never shown.
-- **"Free Steam memory" reloads the renderer without a client restart.** Both banners carry a **Free Steam memory**
-  button that fires a new `reload_steam_ui()` callable, which drives `Page.reload` on the SharedJSContext target over
-  the same CDP client. `Page.reload` replaces the renderer PROCESS wholesale — a full session-budget reset (measured
-  on-device 2026-07-12: ~2.0 GB → ~455 MB after the old PID tears down over ~30 s; Decky reinjects the frontend cleanly,
-  the QAM is functional afterwards). It destroys the very UI that requested it — that is expected, so there is no
-  optimistic UI or toast (neither would survive the reload); after reinjection the banner reflects the fresh low RSS
-  (the yellow banner self-clears; the blue paused banner now shows the low number with Resume Sync). The callable
-  **refuses while a sync is in flight** (`{success: False, reason: "sync_active"}`) — a reload mid-apply would tear down
-  the frontend the apply drives; it is allowed only from idle (which includes after a run has paused or completed). On a
-  REAL reload the JS context is torn down before the response is read, so the `success: True` branch never reaches the
-  frontend — which means the ONLY response the frontend ever observes is a genuine failure: the reload seam returned
-  `False` (CEF debugger unreachable, no renderer torn down, UI still alive), returned as
-  `{success: False, reason: "reload_failed"}` and surfaced as a "try a full Steam restart" toast. The seam itself is
-  fail-open like the GC/RSS seams, but a fail is now visible rather than silent.
+  row (the same live reading, omitted entirely when `rss_kb` is null) with a "last run: ±X GB" sub-line — the last run's
+  signed RSS growth, `end - start`, measured at EVERY terminal (completed, paused, cancelled, interrupted) so a paused
+  run reads honestly as _that_ run's consumption-so-far (~+1.5 GB) rather than leaving a prior clean run's number. A
+  **raw** read taken at run start (captured unconditionally in the run-scoped box, so even a fully-incremental-skip run
+  that applies nothing still records a baseline and reports ≈ +0.0 GB) is the start; the terminal RSS read is the end.
+  The delta is an approximation for information only — a raw start baseline (which may hold transient garbage) is fine
+  for it. The signed value is retained in memory so `get_session_budget_status` returns it on a QAM remount
+  (`memory_delta_kb`; in-memory only — a plugin reload loses it, no migration); the UI reads it from that callable, so
+  it is deliberately NOT put on the `sync_complete` wire. It degrades to no sub-line whenever either endpoint was
+  unmeasurable, so a stale number is never shown. The value text is traffic-light coloured — green below the advisory
+  floor, yellow at/above it (`warn_kb`, the same line as the yellow banner), red at/above the pause ceiling
+  (`ceiling_kb`) — and all three thresholds ride the `get_session_budget_status` payload so the frontend holds no
+  threshold magic numbers. While a sync is running the row polls the callable every ~5 s so the number (and its colour)
+  track the climbing RSS instead of the stale mount-time reading.
+- **"Restart Steam now" — a deterministic full client restart, not a renderer reload.** Both banners carry a **Restart
+  Steam now** button that calls `SteamClient.User.StartRestart(false)` directly from the frontend (no backend callable).
+  A full Steam client restart deterministically resets the renderer's per-session heap budget to the ~430 MB baseline.
+  It **replaces** an earlier `Page.reload` "free Steam memory" mechanism that proved non-deterministic on-device
+  (2026-07-12): Steam sometimes rebuilds the whole page family and the OLD renderer generation lingers (a ~2.2 GB
+  process hosting the previous `uid2` page generation), so total footprint went UP and the UI stayed sluggish — the
+  reload could not be relied on to free memory. `StartRestart` is fire-and-forget FE-side (the restart tears the whole
+  client down and back up). The button is **disabled while a game is running** and hard-guarded on click
+  (`isAnyAppRunning`, reusing the existing running-app detection) so a restart can NEVER close a running game — the
+  guard covers the race where a game starts between render and click. This keeps the "no forced restarts — explicit
+  consent click only, guarded while gaming" principle: the plugin never restarts Steam on its own; the user does, when
+  convenient.
 - **Minimal new wire surface.** The advisories ride an added field on the existing `sync_preview` response
   (`pause_likely`, plus `sync_platform_count` / `sync_collection_count` for the preview scope line) and added fields on
-  the existing `sync_complete` payload (`interrupt_reason`, `restart_recommended`). The only new names are the
-  `get_session_budget_status` (which returns `rss_kb` + the fixed budget lines + the retained `memory_delta_kb`) and
-  `reload_steam_ui` callables (no new emit event); the callable-manifest and event-parity gates stay green.
+  the existing `sync_complete` payload (`interrupt_reason`, `restart_recommended`). The only new backend name is the
+  `get_session_budget_status` callable (which returns `rss_kb` + the fixed threshold lines `warn_kb`/`ceiling_kb`/
+  `cliff_kb` + the retained `memory_delta_kb`); the "free memory" action is a pure frontend
+  `SteamClient.User.StartRestart` call, so it adds no callable. No new emit event; the callable-manifest and
+  event-parity gates stay green.
 - **Parameterized for reclaimable API artwork (PR 2).** The gate's per-item cost is a parameter defaulting to the
   worst-case create rate. This PR does **not** reintroduce API artwork; the parameter is the seam PR 2 uses to add a
   per-item cover term once `SetCustomArtworkForApp` (transiently resident, GC-reclaimable — hence the GC-before-measure)
@@ -150,14 +158,16 @@ is fail-open — a measurement failure never blocks a sync.**
 - **A continuous RSS-watcher background task.** Rejected: the chunk boundary is the only point the run can stop cleanly
   and durably, so a watcher would only ever act there anyway — it adds a concurrency surface (racing the apply's shared
   state) for no earlier decision.
-- **Forced restart / `RestartJSContext` when near the cliff.** Rejected as an _automatic_ action: it kicks the user out
-  of Big Picture and breaks the QAM mid-interaction. Pausing keeps consent with the user. (The user _may_ free memory on
-  demand via the Free Steam memory button — see below — which is consent-based, not forced.)
-- **Freeing memory via `Runtime.evaluate` of `SteamClient.Browser.RestartJSContext()`.** Rejected for the Free Steam
-  memory button: CDP reports "Cannot find default execution context" on the SharedJSContext target even after
-  `Runtime.enable`, so JS evaluation is not available there. `Page.reload` needs no JS execution context and was
-  validated on-device to replace the renderer process and reset the budget (~2.0 GB → ~455 MB) with a clean Decky
-  frontend reinjection — so it is the button's mechanism.
+- **Forced restart when near the cliff.** Rejected as an _automatic_ action: it kicks the user out of Big Picture and
+  breaks the QAM mid-interaction. Pausing keeps consent with the user. (The user _may_ restart on demand via the Restart
+  Steam now button — consent-based, not forced, and disabled while a game is running.)
+- **`Page.reload` on the SharedJSContext renderer for the "free memory" button.** Tried and rejected: on-device
+  (2026-07-12) the reload was non-deterministic — Steam sometimes rebuilds the whole page family and the OLD renderer
+  generation lingers (a ~2.2 GB process hosting the previous `uid2` page generation), so total footprint went UP and the
+  UI stayed sluggish. A `Runtime.evaluate` of `SteamClient.Browser.RestartJSContext()` was also ruled out (CDP reports
+  "Cannot find default execution context" on that target even after `Runtime.enable`). The button now does a
+  deterministic full Steam client restart via `SteamClient.User.StartRestart` from the frontend instead — the renderer's
+  per-session budget resets cleanly because the whole client restarts.
 - **Relying on natural GC to keep RSS down.** Rejected: measured unreliable (minutes, or absent for 12+ minutes). An
   explicit GC before each reading is what makes the measurement trustworthy.
 - **Raising the ceiling via an out-of-CEF bulk import** (`shortcuts.vdf` / an out-of-process importer). Deliberately out

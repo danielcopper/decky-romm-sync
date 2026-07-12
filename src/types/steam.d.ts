@@ -36,6 +36,12 @@ declare var SteamClient: {
   System: {
     GetSystemInfo(): Promise<{ sHostname: string; [key: string]: any }>;
   };
+  User: {
+    // Restart the whole Steam client (closes and reopens Steam). `force` skips the
+    // "are you sure" path. Used as the deterministic "free memory" action — a full
+    // client restart resets the renderer's per-session heap budget (#1383).
+    StartRestart(force: boolean): void;
+  };
 };
 
 interface SteamAppDetails {

@@ -26,7 +26,6 @@ import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_renderer_gc import FakeRendererGc
-from fakes.fake_renderer_reload import FakeRendererReload
 from fakes.fake_renderer_rss import FakeRendererRss
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
@@ -115,7 +114,6 @@ class TestSyncOrchestratorBakeSite:
                 disc_resolver=disc_resolver,
                 renderer_rss=FakeRendererRss(),
                 renderer_gc=FakeRendererGc(),
-                renderer_reload=FakeRendererReload(),
             )
         )
 

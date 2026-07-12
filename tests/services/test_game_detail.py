@@ -15,7 +15,6 @@ from fakes.fake_machine_id_reader import FakeMachineIdReader
 from fakes.fake_platform_core_reader import FakePlatformCoreReader
 from fakes.fake_plugin_metadata_reader import FakePluginMetadataReader
 from fakes.fake_renderer_gc import FakeRendererGc
-from fakes.fake_renderer_reload import FakeRendererReload
 from fakes.fake_renderer_rss import FakeRendererRss
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_save_api import FakeSaveApi
@@ -78,7 +77,6 @@ def plugin(tmp_path):
             disc_resolver=FakeDiscResolver(),
             renderer_rss=FakeRendererRss(),
             renderer_gc=FakeRendererGc(),
-            renderer_reload=FakeRendererReload(),
         ),
     )
     decky.DECKY_USER_HOME = str(tmp_path)

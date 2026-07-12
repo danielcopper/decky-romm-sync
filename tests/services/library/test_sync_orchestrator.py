@@ -4359,7 +4359,7 @@ class TestSessionBudgetGate:
         box.sync_state = SyncState.RUNNING
         box.current_sync_id = "run-1"
         plugin._renderer_gc.result = True
-        plugin._renderer_rss.rss_kb = 2_100_000  # + 200*1500 = 2.4M ≥ ceiling 2.3M
+        plugin._renderer_rss.rss_kb = 2_100_000  # + 200*1500 = 2.4M ≥ ceiling 2.2M
 
         await orch._maybe_pause_for_budget(box, chunk_items=200)
 
@@ -4473,7 +4473,7 @@ class TestSessionBudgetGate:
         plugin._renderer_gc.result = True
         # Just under the ceiling: the first chunk's ABSOLUTE check (chunk_items=0)
         # passes, but the second chunk's PREDICTIVE check (+1500) crosses.
-        plugin._renderer_rss.rss_kb = 2_299_000
+        plugin._renderer_rss.rss_kb = 2_199_000
 
         decky.emit.reset_mock()
         await plugin._sync_service._orchestrator._do_sync_per_unit()
@@ -4522,7 +4522,7 @@ class TestSessionBudgetGate:
         # (absolute check), so the GC fired.
         self._arm_single_chunk_apply(plugin, fake_romm_api, monkeypatch, run_id="run-solo")
         plugin._renderer_gc.result = True
-        plugin._renderer_rss.rss_kb = 2_299_000  # below the 2.3M ceiling → absolute check passes
+        plugin._renderer_rss.rss_kb = 2_199_000  # below the 2.2M ceiling → absolute check passes
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -4581,7 +4581,7 @@ class TestSessionBudgetGate:
         _use_fake_romm(plugin, fake_romm_api)
         _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 1, "name": "A"}])
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._renderer_rss.rss_kb = 2_299_000  # 1 planned touch (+1500) crosses 2.3M ceiling
+        plugin._renderer_rss.rss_kb = 2_199_000  # 1 planned touch (+1500) crosses 2.2M ceiling
 
         result = await plugin.sync_preview()
 
@@ -4645,7 +4645,7 @@ class TestSessionBudgetGate:
         _seed_rom_row(plugin, 2, app_id=1002, platform_slug="n64", name="B", fs_name="b.z64")
         _seed_rom_row(plugin, 3, app_id=1003, platform_slug="n64", name="C", fs_name="c.z64")
         # rss + 3*1500 would cross (the old formula); rss + 0 new + 0 changed does not.
-        plugin._renderer_rss.rss_kb = 2_299_000
+        plugin._renderer_rss.rss_kb = 2_199_000
 
         result = await plugin.sync_preview()
 
@@ -4732,6 +4732,34 @@ class TestSessionBudgetGate:
         assert box.last_run_delta_kb is None
 
     @pytest.mark.asyncio
+    async def test_finalize_stores_delta_on_a_stopped_run(self, plugin):
+        # #36: the delta is measured at EVERY terminal, not just clean completion —
+        # so a paused/cancelled run overwrites a PRIOR run's delta with ITS OWN
+        # consumption-so-far instead of leaving the stale number on the row.
+        from services.library.sync_orchestrator import _SYNC_PAUSED_BUDGET
+
+        orch = plugin._sync_service._orchestrator
+        box = plugin._sync_service._box
+        box.committed_app_ids = set()
+        box.run_start_rss_kb = 500_000  # this run's raw run-start baseline
+        box.last_run_delta_kb = 700_000  # a PRIOR clean run's delta, must not linger
+        box.run_paused = True
+        box.interrupt_reason = _SYNC_PAUSED_BUDGET
+        plugin._renderer_rss.rss_kb = 2_100_000  # terminal reading — the run grew memory
+
+        await orch._finalize_per_unit(
+            total_games_applied=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+            platform_names={},
+            cancelled=True,  # a stopped (paused) run
+        )
+
+        # 2_100_000 - 500_000 = 1_600_000 — this paused run's own growth, overwriting 700_000.
+        assert box.last_run_delta_kb == 1_600_000
+
+    @pytest.mark.asyncio
     async def test_baseline_captured_at_run_start_so_skip_only_run_reports_zero_delta(self, plugin, fake_romm_api):
         # LOW-1: the baseline is captured at RUN START, not at the first chunk gate,
         # so a fully-incremental-skip run (nothing applied, no gate ever fires) still
@@ -4762,7 +4790,7 @@ class TestSessionBudgetGate:
 
     @pytest.mark.asyncio
     async def test_session_budget_status_happy(self, plugin):
-        from domain.session_budget import CLIFF_KB, EFFECTIVE_CEILING_KB
+        from domain.session_budget import CLIFF_KB, EFFECTIVE_CEILING_KB, POST_RUN_ADVISORY_KB
 
         plugin.loop = asyncio.get_event_loop()
         plugin._renderer_rss.rss_kb = 1_234_000
@@ -4772,6 +4800,8 @@ class TestSessionBudgetGate:
         assert result == {
             "success": True,
             "rss_kb": 1_234_000,
+            # All three colour thresholds ride the payload (single source of truth).
+            "warn_kb": POST_RUN_ADVISORY_KB,
             "ceiling_kb": EFFECTIVE_CEILING_KB,
             "cliff_kb": CLIFF_KB,
             # No clean run has completed in this test, so the retained delta is None.
@@ -4780,7 +4810,7 @@ class TestSessionBudgetGate:
 
     @pytest.mark.asyncio
     async def test_session_budget_status_rss_none(self, plugin):
-        from domain.session_budget import CLIFF_KB, EFFECTIVE_CEILING_KB
+        from domain.session_budget import CLIFF_KB, EFFECTIVE_CEILING_KB, POST_RUN_ADVISORY_KB
 
         plugin.loop = asyncio.get_event_loop()
         plugin._renderer_rss.rss_kb = None  # measurement unavailable → fail-open
@@ -4789,6 +4819,7 @@ class TestSessionBudgetGate:
 
         assert result["success"] is True
         assert result["rss_kb"] is None
+        assert result["warn_kb"] == POST_RUN_ADVISORY_KB
         assert result["ceiling_kb"] == EFFECTIVE_CEILING_KB
         assert result["cliff_kb"] == CLIFF_KB
         assert result["memory_delta_kb"] is None
@@ -4805,58 +4836,3 @@ class TestSessionBudgetGate:
 
         assert result["rss_kb"] == 1_234_000
         assert result["memory_delta_kb"] == 800_000
-
-    # ── reload_steam_ui (free Steam memory) ──────────────────────
-
-    @pytest.mark.asyncio
-    async def test_reload_steam_ui_when_idle_fires_reload(self, plugin):
-        plugin.loop = asyncio.get_event_loop()
-        plugin._sync_service._box.sync_state = SyncState.IDLE
-        plugin._renderer_reload.result = True
-
-        result = await plugin.reload_steam_ui()
-
-        assert result["success"] is True
-        assert plugin._renderer_reload.calls == 1
-
-    @pytest.mark.asyncio
-    async def test_reload_steam_ui_refused_while_sync_active(self, plugin):
-        plugin.loop = asyncio.get_event_loop()
-        plugin._sync_service._box.sync_state = SyncState.RUNNING  # a sync is applying
-
-        result = await plugin.reload_steam_ui()
-
-        assert result["success"] is False
-        assert result["reason"] == "sync_active"
-        assert "message" in result
-        # The guard blocks BEFORE the reload seam fires.
-        assert plugin._renderer_reload.calls == 0
-
-    @pytest.mark.asyncio
-    async def test_reload_steam_ui_refused_while_cancelling(self, plugin):
-        plugin.loop = asyncio.get_event_loop()
-        plugin._sync_service._box.sync_state = SyncState.CANCELLING
-
-        result = await plugin.reload_steam_ui()
-
-        assert result["success"] is False
-        assert result["reason"] == "sync_active"
-        assert plugin._renderer_reload.calls == 0
-
-    @pytest.mark.asyncio
-    async def test_reload_steam_ui_surfaces_failure_when_adapter_fails(self, plugin):
-        # The CEF debugger unreachable → adapter returns False, the UI was NOT torn
-        # down, so the callable reports the canonical failure shape the frontend
-        # turns into a "try a full Steam restart" toast. On a REAL reload the JS
-        # context dies before this response is read, so only a genuine failure ever
-        # reaches the frontend.
-        plugin.loop = asyncio.get_event_loop()
-        plugin._sync_service._box.sync_state = SyncState.IDLE
-        plugin._renderer_reload.result = False
-
-        result = await plugin.reload_steam_ui()
-
-        assert result["success"] is False
-        assert result["reason"] == "reload_failed"
-        assert isinstance(result["message"], str)
-        assert plugin._renderer_reload.calls == 1

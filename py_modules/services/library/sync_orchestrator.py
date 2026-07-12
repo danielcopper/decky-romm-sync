@@ -27,6 +27,7 @@ from domain.session_budget import (
     CLIFF_KB,
     EFFECTIVE_CEILING_KB,
     GC_SKIP_BELOW_KB,
+    POST_RUN_ADVISORY_KB,
     gate_decision,
     post_run_advisory,
     predict_run_crosses,
@@ -65,7 +66,6 @@ if TYPE_CHECKING:
         DiscResolver,
         EventEmitter,
         RendererGcFn,
-        RendererReloadFn,
         RendererRssFn,
         Sleeper,
         UnitOfWorkFactory,
@@ -148,7 +148,6 @@ class SyncOrchestratorConfig:
     disc_resolver: DiscResolver
     renderer_rss: RendererRssFn
     renderer_gc: RendererGcFn
-    renderer_reload: RendererReloadFn
 
 
 class SyncOrchestrator:
@@ -172,7 +171,6 @@ class SyncOrchestrator:
         self._disc_resolver = config.disc_resolver
         self._renderer_rss = config.renderer_rss
         self._renderer_gc = config.renderer_gc
-        self._renderer_reload = config.renderer_reload
 
     # ── Sync control ─────────────────────────────────────────────
 
@@ -494,14 +492,19 @@ class SyncOrchestrator:
         """Live renderer-heap reading for the QAM banners (#1383).
 
         Reads the renderer's current RSS (no GC — this is a cheap on-render poll,
-        not the gate's settled measurement) alongside the two fixed budget lines so
-        the frontend can render "Steam memory: X.X GB" against the ceiling/cliff.
-        Also returns ``memory_delta_kb`` — the last clean run's signed RSS growth,
-        retained in memory — so a QAM remount can show "last sync: ±X GB" without a
-        live sync. Fail-open: ``rss_kb`` is ``None`` when the reading is unavailable
-        (no ``steamwebhelper`` / unreadable ``/proc``) or any seam raises — the
-        banner then drops the number but keeps its guidance text; ``memory_delta_kb``
-        is ``None`` until a clean run has measured both endpoints.
+        not the gate's settled measurement) alongside the three fixed budget lines so
+        the frontend can render "Steam memory: X.X GB" and colour it against the
+        thresholds: ``warn_kb`` (the advisory floor, ≈1.8 GB — where the yellow
+        high-heap banner also appears), ``ceiling_kb`` (the effective pause ceiling,
+        ≈2.2 GB), and ``cliff_kb`` (the OOM crash line, ≈2.45 GB). The frontend owns
+        no thresholds of its own — all three ride the payload so there is a single
+        source of truth. Also returns ``memory_delta_kb`` — the last clean run's
+        signed RSS growth, retained in memory — so a QAM remount can show
+        "last sync: ±X GB" without a live sync. Fail-open: ``rss_kb`` is ``None`` when
+        the reading is unavailable (no ``steamwebhelper`` / unreadable ``/proc``) or
+        any seam raises — the banner then drops the number but keeps its guidance
+        text; ``memory_delta_kb`` is ``None`` until a clean run has measured both
+        endpoints.
         """
         rss_kb: int | None = None
         try:
@@ -511,43 +514,11 @@ class SyncOrchestrator:
         return {
             "success": True,
             "rss_kb": rss_kb,
+            "warn_kb": POST_RUN_ADVISORY_KB,
             "ceiling_kb": EFFECTIVE_CEILING_KB,
             "cliff_kb": CLIFF_KB,
             "memory_delta_kb": self._sync_state.last_run_delta_kb,
         }
-
-    async def reload_steam_ui(self) -> dict[str, Any]:
-        """Reload the Steam renderer to free its session heap (the "free memory" action, #1383).
-
-        Fires ``Page.reload`` on the SharedJSContext renderer, which replaces the
-        renderer process — a full session-budget reset without a Steam client
-        restart. Refuses while a sync run is in flight (``sync_active``): a reload
-        mid-apply would tear down the frontend the apply is driving. It is allowed
-        only from an idle state (which includes after a run has paused or
-        completed).
-
-        On a REAL reload the renderer's JS context is torn down before this response
-        can be read, so the ``success: True`` branch never actually reaches the
-        frontend — Decky reinjects a fresh frontend after the ~30 s teardown. That
-        means the ONLY response the frontend ever observes is the failure one: the
-        reload seam returned ``False`` (CEF debugger unreachable, no renderer torn
-        down, UI still alive), which surfaces as a "try a full Steam restart" toast.
-        """
-        if self._sync_state.is_in_flight():
-            return {
-                "success": False,
-                "reason": "sync_active",
-                "message": "Can't free Steam memory while a sync is running — wait for it to finish or pause first.",
-            }
-        ok = await self._loop.run_in_executor(None, self._renderer_reload)
-        if not ok:
-            self._logger.warning("Renderer reload could not be triggered (CEF debugger unreachable?)")
-            return {
-                "success": False,
-                "reason": "reload_failed",
-                "message": "Couldn't reach Steam to free memory — try a full Steam restart.",
-            }
-        return {"success": True, "message": "Reloading Steam's interface to free memory"}
 
     # ── Sync termination ─────────────────────────────────────────
 
@@ -1460,26 +1431,30 @@ class SyncOrchestrator:
         )
 
         # Session-budget surfacing (#1383): a budget pause carries its distinct
-        # reason into the terminal payload; a CLEAN run instead GCs then measures the
-        # renderer's post-run RSS (same GC-before-measure the chunk gate uses, so the
-        # reading reflects settled heap) and recommends a Steam restart when it is
-        # high (the next large operation would likely pause/crash). The same post-run
-        # reading, differenced against this run's raw run-start baseline, is the
-        # memory delta — retained IN THE BOX only, surfaced to the QAM via
+        # reason into the terminal payload; a CLEAN run recommends a Steam restart
+        # when its post-run RSS is high (the next large operation would likely
+        # pause/crash). The memory delta is measured at every terminal this
+        # finalize reaches — completed/paused/cancelled/interrupted; an errored
+        # run aborts before this path and keeps the prior delta (#36). It is the
+        # GC-settled terminal RSS differenced against this run's raw run-start
+        # baseline, so a paused/cancelled/interrupted run reports ITS OWN
+        # consumption-so-far ("last run: +X GB") instead of leaving a prior clean
+        # run's number in place. The restart advisory stays clean-run-only. The delta
+        # is retained IN THE BOX only, surfaced to the QAM via
         # get_session_budget_status (not the sync_complete wire; the UI reads it from
         # the callable). Fail-open — an unavailable reading or any seam error
         # recommends nothing and leaves the delta unmeasurable (never a stale number).
         interrupt_reason = self._sync_state.interrupt_reason if cancelled else None
         restart_recommended = False
-        if not cancelled:
-            memory_delta_kb: int | None = None
-            try:
-                rss_kb = await self._gc_then_measure_rss(self._sync_state)
+        memory_delta_kb: int | None = None
+        try:
+            rss_kb = await self._gc_then_measure_rss(self._sync_state)
+            memory_delta_kb = session_memory_delta(self._sync_state.run_start_rss_kb, rss_kb)
+            if not cancelled:
                 restart_recommended = rss_kb is not None and post_run_advisory(rss_kb)
-                memory_delta_kb = session_memory_delta(self._sync_state.run_start_rss_kb, rss_kb)
-            except Exception as e:  # fail-open: the advisory must never fail finalize
-                self._logger.debug(f"Session-budget post-run advisory skipped: {e}")
-            self._sync_state.last_run_delta_kb = memory_delta_kb
+        except Exception as e:  # fail-open: the advisory/delta must never fail finalize
+            self._logger.debug(f"Session-budget terminal advisory/delta skipped: {e}")
+        self._sync_state.last_run_delta_kb = memory_delta_kb
 
         return await self._reporter.get().finalize_per_unit_run(
             pending_collection_memberships=collection_memberships,

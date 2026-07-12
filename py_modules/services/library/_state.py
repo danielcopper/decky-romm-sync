@@ -158,12 +158,13 @@ class LibrarySyncStateBox:
     # a raw baseline is fine for. ``None`` when the run-start reading was unavailable
     # (delta then unmeasurable). Set at the start of each run (#1383).
     run_start_rss_kb: int | None = None
-    # Signed renderer-RSS growth (KB) of the last CLEAN run (end - start), retained
-    # across runs so ``get_session_budget_status`` can surface "last sync: ±X GB"
-    # on a QAM remount. In-memory only — lost on plugin reload, which is acceptable
-    # (no migration). ``None`` when either endpoint of the last clean run was
-    # unmeasurable. NOT reset per-run: a paused/cancelled run leaves the last clean
-    # run's delta in place (#1383).
+    # Signed renderer-RSS growth (KB) of the last run to reach the terminal
+    # finalize (end - start) — completed, paused, cancelled, and interrupted all
+    # overwrite it with THEIR OWN delta (#36), so ``get_session_budget_status``
+    # can surface "last run: ±X GB" on a QAM remount. An errored run aborts
+    # before the finalize and keeps the prior value. In-memory only — lost on
+    # plugin reload, which is acceptable (no migration). ``None`` when either
+    # endpoint of that run was unmeasurable.
     last_run_delta_kb: int | None = None
 
     # ── Run lifecycle — the only writers of sync_state / current_sync_id ──

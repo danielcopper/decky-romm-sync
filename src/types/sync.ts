@@ -64,15 +64,23 @@ export interface SessionBudgetStatus {
    * this is ``null`` (#1383).
    */
   rss_kb: number | null;
-  /** The effective pause ceiling in KB (~2.3 GB) — a chunk projected past this pauses. */
+  /**
+   * The advisory floor in KB (~1.8 GB) — strictly above this the value colours
+   * yellow (and the yellow high-heap banner appears). Backend-supplied so the
+   * frontend holds no threshold magic numbers (#1383).
+   */
+  warn_kb: number;
+  /** The effective pause ceiling in KB (~2.2 GB) — a chunk projected past this pauses; value colours red at/above it. */
   ceiling_kb: number;
   /** The measured OOM cliff in KB (~2.45 GB) the renderer crashes at. */
   cliff_kb: number;
   /**
-   * Signed renderer-RSS growth (KB) of the last completed sync (end − start),
-   * retained in backend memory so a QAM remount can show "last sync: ±X GB"
-   * without a live run. ``null`` when no clean run has measured both endpoints
-   * (or after a plugin reload). Rendered sign-formatted (#1383).
+   * Signed renderer-RSS growth (KB) of the last run (end − start), measured at
+   * EVERY terminal — completed, paused, cancelled, or interrupted — so the row
+   * reflects that run's consumption, not a prior clean run's. Retained in backend
+   * memory so a QAM remount can show "last run: ±X GB" without a live run. ``null``
+   * when either endpoint was unmeasurable (or after a plugin reload). Rendered
+   * sign-formatted (#1383 / #36).
    */
   memory_delta_kb: number | null;
 }

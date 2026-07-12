@@ -1,17 +1,13 @@
-"""CDP renderer adapters — ``RendererGcFn`` + ``RendererReloadFn`` over the CEF debugger.
+"""CDP renderer adapter — ``RendererGcFn`` over the CEF debugger.
 
-Two operations on Steam's ``SharedJSContext`` renderer, both driven through the
-same minimal Chrome DevTools Protocol client:
+One operation on Steam's ``SharedJSContext`` renderer, driven through a minimal
+Chrome DevTools Protocol client:
 
 - **Garbage collect** (``HeapProfiler.collectGarbage``): settles the renderer heap
   so the session-budget gate's next RSS reading reflects retained memory rather
   than transient garbage. Steam's natural GC is measured-unreliable (sometimes
   minutes, absent for 12+ min); the explicit collect reclaims deterministically
   (measured: 496 MB in ~5 s on-device 2026-07-11).
-- **Reload** (``Page.reload``): replaces the renderer PROCESS wholesale — a full
-  session-budget reset without a Steam client restart (the "free Steam memory"
-  action; measured 2026-07-12: ~2.0 GB → ~455 MB, Decky reinjects the frontend
-  cleanly). This destroys the very UI that triggered it; that is expected.
 
 Transport: the CEF remote-debugging endpoint on ``localhost:8080`` — a Decky
 platform invariant (Decky Loader itself requires CEF debugging enabled), and
@@ -22,8 +18,7 @@ client (a single request/response — vendoring a websocket package for one call
 not warranted).
 
 Fail-open contract: every failure path returns ``False`` with a debug log and the
-call never raises into the caller, never blocks more than a few seconds total (the
-reload's ~30 s renderer teardown happens after the ack, off this path).
+call never raises into the caller, never blocks more than a few seconds total.
 """
 
 from __future__ import annotations
@@ -47,21 +42,10 @@ _TARGET_TITLE = "SharedJSContext"
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 # Per-operation timeout. Kept small so the whole attempt (HTTP list + connect
 # + handshake + one round-trip) stays well under ~5 s even when every step waits.
-# The renderer teardown that a reload triggers happens AFTER the ack, so it does
-# not extend this — we only wait for the command to be accepted.
 _TIMEOUT_SEC = 1.5
 # Every CDP command in this module uses request id 1 and awaits the id-1 reply.
 _CDP_REQUEST_ID = 1
 _GC_MESSAGE = json.dumps({"id": _CDP_REQUEST_ID, "method": "HeapProfiler.collectGarbage"})
-# ``Page.reload`` replaces the renderer PROCESS wholesale (validated on-device
-# 2026-07-12: the old renderer PID tears down over ~30 s and a fresh renderer
-# settles at ~455 MB — a full session-budget reset without a Steam client
-# restart, after which Decky reinjects the frontend cleanly). ``ignoreCache:false``
-# keeps the disk cache. Note: a ``Runtime.evaluate`` approach (calling
-# ``SteamClient.Browser.RestartJSContext()``) is NOT viable — CDP reports "Cannot
-# find default execution context" on this target even after ``Runtime.enable``;
-# ``Page.reload`` needs no JS execution context.
-_RELOAD_MESSAGE = json.dumps({"id": _CDP_REQUEST_ID, "method": "Page.reload", "params": {"ignoreCache": False}})
 
 
 class RendererGcAdapter:
@@ -79,29 +63,10 @@ class RendererGcAdapter:
         return _run_cdp_command(_GC_MESSAGE, self._logger, "Renderer GC")
 
 
-class RendererReloadAdapter:
-    """Real ``RendererReloadFn`` that reloads the SharedJSContext renderer over CDP.
-
-    Drives ``Page.reload`` on the SharedJSContext page target, which replaces the
-    renderer process entirely — a full session-budget reset without a Steam client
-    restart (the "free Steam memory" action). Shares the minimal RFC 6455 client
-    with :class:`RendererGcAdapter`. Fail-open: returns ``False`` on any failure and
-    never raises. It does not wait for the (~30 s) renderer teardown, only for the
-    command to be acked.
-    """
-
-    def __init__(self, *, logger: logging.Logger) -> None:
-        self._logger = logger
-
-    def __call__(self) -> bool:
-        """Reload the renderer; return ``True`` on the acked reload, else ``False``."""
-        return _run_cdp_command(_RELOAD_MESSAGE, self._logger, "Renderer reload")
-
-
 def _run_cdp_command(message: str, logger: logging.Logger, label: str) -> bool:
     """Find the SharedJSContext target and send *message*, awaiting its id-1 reply.
 
-    The single fail-open entry point both adapters share: any transport, parse, or
+    The fail-open entry point the GC adapter uses: any transport, parse, or
     protocol error is caught and returns ``False`` with a debug log under *label*.
     """
     try:

@@ -30,6 +30,13 @@ def test_effective_ceiling_is_cliff_minus_margin() -> None:
     assert EFFECTIVE_CEILING_KB == CLIFF_KB - SAFETY_MARGIN_KB
 
 
+def test_margin_and_ceiling_pin_the_widened_thrash_cushion() -> None:
+    # The margin was widened 150 → 250 MB so the gate pauses ~2.2 GB, keeping a
+    # chunk's transient peak out of V8's aggressive-GC thrash zone below the cliff.
+    assert SAFETY_MARGIN_KB == 250_000
+    assert EFFECTIVE_CEILING_KB == 2_200_000
+
+
 # ── gate_decision ────────────────────────────────────────────────
 
 

@@ -9,7 +9,6 @@ from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_path_exists_reader import FakePathExistsReader
 from fakes.fake_relaunch_options_resolver import FakeRelaunchOptionsResolver
 from fakes.fake_renderer_gc import FakeRendererGc
-from fakes.fake_renderer_reload import FakeRendererReload
 from fakes.fake_renderer_rss import FakeRendererRss
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_settings_persister import FakeSettingsPersister
@@ -75,7 +74,6 @@ def plugin():
             disc_resolver=FakeDiscResolver(),
             renderer_rss=FakeRendererRss(),
             renderer_gc=FakeRendererGc(),
-            renderer_reload=FakeRendererReload(),
         ),
     )
 
@@ -779,7 +777,6 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "get_sync_status",
     "get_sync_stats",
     "get_session_budget_status",
-    "reload_steam_ui",
     "get_rom_by_steam_app_id",
     "get_download_queue",
     "get_installed_rom",
@@ -1007,7 +1004,6 @@ class TestMainStartupOrdering:
                 core_info_provider=MagicMock(),
                 renderer_rss=FakeRendererRss(),
                 renderer_gc=FakeRendererGc(),
-                renderer_reload=FakeRendererReload(),
             ),
             stores=StateBundle(
                 settings={},

@@ -125,7 +125,6 @@ export const syncApplyDelta = callable<[string], BackendResult>("sync_apply_delt
 export const syncCancelPreview = callable<[], BackendResult>("sync_cancel_preview");
 export const getSyncStatus = callable<[], SyncProgress>("get_sync_status");
 export const getSessionBudgetStatus = callable<[], SessionBudgetStatus>("get_session_budget_status");
-export const reloadSteamUi = callable<[], BackendResult>("reload_steam_ui");
 export const clearSyncCache = callable<[], BackendResult>("clear_sync_cache");
 export const getSyncStats = callable<[], SyncStats>("get_sync_stats");
 export const startDownload = callable<[number], BackendResult>("start_download");

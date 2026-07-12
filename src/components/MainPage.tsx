@@ -52,7 +52,7 @@ import { WarningCard } from "./WarningCard";
 import { MigrationBlockedPage } from "./MigrationBlockedPage";
 import { SettingsResetBanner } from "./SettingsResetBanner";
 import { PlaytimeScopeBanner } from "./PlaytimeScopeBanner";
-import { SessionBudgetBanner, formatGb, formatSignedGb } from "./SessionBudgetBanner";
+import { SessionBudgetBanner, formatGb, formatSignedGb, memoryLevelColor } from "./SessionBudgetBanner";
 import type {
   SyncProgress,
   SyncStage,
@@ -511,6 +511,21 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     };
   }, []);
 
+  // While a sync run is in flight, poll the live renderer-heap reading so the
+  // "Steam memory" status row tracks the climbing RSS mid-apply instead of showing
+  // the stale mount-time value (the run-terminal fetch in the progress subscriber
+  // above is the final refresh once this stops). Dumb fixed-interval poll; the
+  // interval is torn down when the run ends (``syncing`` flips false) or on unmount.
+  useEffect(() => {
+    if (!syncing) return;
+    const id = setInterval(() => {
+      getSessionBudgetStatus()
+        .then(setBudgetStatus)
+        .catch((e) => logError(`Failed to poll session budget status: ${e}`));
+    }, 5000);
+    return () => clearInterval(id);
+  }, [syncing]);
+
   // A start/apply call never reached a running backend sync (rejected up
   // front or threw). Reset both the local UI and the MODULE store so the
   // store mirrors reality — the optimistic running:true must not linger.
@@ -927,7 +942,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         <SessionBudgetBanner
           lastAttemptStatus={stats?.last_attempt?.status}
           rssKb={budgetStatus?.rss_kb ?? null}
-          reloadDisabled={loading || connectionUnavailable}
+          restartDisabled={loading || connectionUnavailable}
         />
         <PanelSectionRow>
           <ButtonItem
@@ -1040,9 +1055,18 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                 data-testid="steam-memory"
                 style={{ fontSize: "12px", display: "flex", flexDirection: "column", alignItems: "flex-end" }}
               >
-                <span>{formatGb(budgetStatus.rss_kb)}</span>
+                {/* Only the value gets traffic-light colouring (green/yellow/red),
+                    driven by the payload thresholds; the label + delta stay uncoloured. */}
+                <span
+                  data-testid="steam-memory-value"
+                  style={{
+                    color: memoryLevelColor(budgetStatus.rss_kb, budgetStatus.warn_kb, budgetStatus.ceiling_kb),
+                  }}
+                >
+                  {formatGb(budgetStatus.rss_kb)}
+                </span>
                 {budgetStatus.memory_delta_kb != null && (
-                  <span style={{ opacity: 0.6 }}>last sync: {formatSignedGb(budgetStatus.memory_delta_kb)}</span>
+                  <span style={{ opacity: 0.6 }}>last run: {formatSignedGb(budgetStatus.memory_delta_kb)}</span>
                 )}
               </span>
             </Field>

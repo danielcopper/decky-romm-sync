@@ -1,8 +1,7 @@
 import { FC, ReactNode } from "react";
 import { PanelSectionRow, ButtonItem } from "@decky/ui";
 import { toaster } from "@decky/api";
-import { reloadSteamUi, logError } from "../api/backend";
-import { detach } from "../utils/detach";
+import { isAnyAppRunning } from "../utils/runningApps";
 
 /**
  * Live renderer RSS (KB) above which a completed run recommends a Steam restart.
@@ -30,23 +29,32 @@ export function formatSignedGb(kb: number): string {
 }
 
 /**
- * Fire the renderer reload — the "free Steam memory" action. On a REAL reload the
- * JS context is torn down before the promise resolves, so the ``success: true``
- * branch can never actually run and there is no optimistic state to set; Decky
- * reinjects a fresh frontend afterwards. The only response the UI ever observes is
- * a genuine failure (the reload seam couldn't reach Steam, so the UI is still
- * alive) — surface it as a toast. A rejection (transport error) is logged.
+ * Traffic-light colour for a live memory reading, decided entirely by the
+ * backend-supplied thresholds (no frontend magic numbers, #1383): RED at/above the
+ * pause ceiling (every further chunk would pause), YELLOW strictly above the
+ * advisory floor (high heap — the same strict trigger as the yellow banner and the
+ * backend advisory), else GREEN. The hexes match the existing status palette.
  */
-function freeSteamMemory(): void {
-  detach(
-    reloadSteamUi()
-      .then((r) => {
-        if (!r.success) {
-          toaster.toast({ title: "RomM Sync", body: r.message });
-        }
-      })
-      .catch((e) => logError(`Failed to trigger Steam UI reload: ${e}`)),
-  );
+export function memoryLevelColor(rssKb: number, warnKb: number, ceilingKb: number): string {
+  if (rssKb >= ceilingKb) return "#d4343c";
+  if (rssKb > warnKb) return "#d4a72c";
+  return "#59bf40";
+}
+
+/**
+ * Restart the Steam client — the deterministic "free memory" action. A full client
+ * restart resets the renderer's per-session heap budget.
+ * Fire-and-forget frontend-side — ``StartRestart`` tears the client down
+ * and back up. Hard-guarded on a running game so a click can NEVER kill one
+ * mid-session; the button is also disabled while a game runs, but this guard covers
+ * the race where a game started between render and click.
+ */
+function restartSteam(): void {
+  if (isAnyAppRunning()) {
+    toaster.toast({ title: "RomM Sync", body: "Close your running game before restarting Steam." });
+    return;
+  }
+  SteamClient.User.StartRestart(false);
 }
 
 function bannerCard(accent: string, background: string, testId: string, title: string, body: string): ReactNode {
@@ -74,11 +82,12 @@ interface SessionBudgetBannerProps {
   /** Live renderer RSS in KB from ``get_session_budget_status``; ``null`` when unreadable. */
   rssKb: number | null;
   /**
-   * Disables the "Free Steam memory" button. The banner only renders idle, but the
-   * button reloads Steam's renderer, so callers pass ``true`` while anything is
-   * mid-flight; the backend also refuses (``sync_active``) as the real guard.
+   * Disables the "Restart Steam now" button for reasons the caller knows about
+   * (mid-flight / not connected). The banner ALSO disables it while a game is
+   * running — checked here via ``isAnyAppRunning`` — so a restart can never close a
+   * running game.
    */
-  reloadDisabled?: boolean | undefined;
+  restartDisabled?: boolean | undefined;
 }
 
 /**
@@ -88,10 +97,10 @@ interface SessionBudgetBannerProps {
  * run. A paused run takes precedence (it is high-heap anyway). Returns nothing
  * when neither applies. When ``rssKb`` is ``null`` (measurement unavailable) the
  * live number is dropped but the guidance text stays. Both banners offer a
- * **Free Steam memory** button that reloads Steam's renderer to reset its heap
- * without a full client restart.
+ * **Restart Steam now** button — a deterministic full client restart that resets
+ * the renderer's per-session heap budget — disabled while a game is running.
  */
-export const SessionBudgetBanner: FC<SessionBudgetBannerProps> = ({ lastAttemptStatus, rssKb, reloadDisabled }) => {
+export const SessionBudgetBanner: FC<SessionBudgetBannerProps> = ({ lastAttemptStatus, rssKb, restartDisabled }) => {
   const paused = lastAttemptStatus === "paused";
   const highHeap = rssKb != null && rssKb > HIGH_HEAP_KB;
   if (!paused && !highHeap) return null;
@@ -104,7 +113,7 @@ export const SessionBudgetBanner: FC<SessionBudgetBannerProps> = ({ lastAttemptS
         "Sync paused",
         `Restart Steam when convenient, then Resume Sync.${
           rssKb != null
-            ? ` Steam memory: ${formatGb(rssKb)} (pauses when a chunk would cross ~2.3 GB; Steam crashes near ~2.4 GB, measured on Steam Deck).`
+            ? ` Steam memory: ${formatGb(rssKb)} (pauses when a chunk would cross ~2.2 GB; Steam crashes near ~2.4 GB).`
             : ""
         }`,
       )
@@ -116,17 +125,24 @@ export const SessionBudgetBanner: FC<SessionBudgetBannerProps> = ({ lastAttemptS
         `Steam memory is high: ${formatGb(rssKb!)} of ~2.4 GB — restart Steam before further large syncs.`,
       );
 
+  // A restart would close a running game, so disable (and hard-guard on click) when
+  // one is detected.
+  const gameRunning = isAnyAppRunning();
   return (
     <>
       {card}
       <PanelSectionRow>
         <ButtonItem
           layout="below"
-          onClick={freeSteamMemory}
-          disabled={reloadDisabled ?? false}
-          description="Reloads Steam's interface (up to a minute) to free memory without a full Steam restart. Running games keep running."
+          onClick={restartSteam}
+          disabled={(restartDisabled ?? false) || gameRunning}
+          description={
+            gameRunning
+              ? "Close your running game first — restarting Steam would close it."
+              : "Restarts the Steam client (closes and reopens Steam) to free its memory. Do this when convenient."
+          }
         >
-          Free Steam memory
+          Restart Steam now
         </ButtonItem>
       </PanelSectionRow>
     </>

@@ -54,6 +54,7 @@ import type {
   SyncStats,
   SyncPreview,
   SyncPreviewSummary,
+  SessionBudgetStatus,
   DownloadItem,
   PluginSettings,
 } from "../types";
@@ -321,7 +322,8 @@ describe("MainPage", () => {
     vi.mocked(backend.getSessionBudgetStatus).mockResolvedValue({
       success: true,
       rss_kb: null,
-      ceiling_kb: 2_300_000,
+      warn_kb: 1_800_000,
+      ceiling_kb: 2_200_000,
       cliff_kb: 2_450_000,
       memory_delta_kb: null,
     });
@@ -1127,7 +1129,8 @@ describe("MainPage", () => {
       vi.mocked(backend.getSessionBudgetStatus).mockResolvedValue({
         success: true,
         rss_kb: rssKb,
-        ceiling_kb: 2_300_000,
+        warn_kb: 1_800_000,
+        ceiling_kb: 2_200_000,
         cliff_kb: 2_450_000,
         memory_delta_kb: null,
       });
@@ -1171,7 +1174,8 @@ describe("MainPage", () => {
       vi.mocked(backend.getSessionBudgetStatus).mockResolvedValue({
         success: true,
         rss_kb: rssKb,
-        ceiling_kb: 2_300_000,
+        warn_kb: 1_800_000,
+        ceiling_kb: 2_200_000,
         cliff_kb: 2_450_000,
         memory_delta_kb: memoryDeltaKb,
       });
@@ -1180,28 +1184,158 @@ describe("MainPage", () => {
       return container;
     }
 
-    it("shows the live memory value and the signed last-sync delta", async () => {
+    it("shows the live memory value and the signed last-run delta", async () => {
       const c = await renderMemoryRow(440_000, 800_000);
       const row = c.querySelector('[data-testid="steam-memory"]');
       expect(row?.textContent).toContain("0.4 GB");
-      expect(row?.textContent).toContain("last sync: +0.8 GB");
+      // Label is "last run" (not "last sync"), so a paused run reads honestly as
+      // that run's consumption so far (#36).
+      expect(row?.textContent).toContain("last run: +0.8 GB");
     });
 
     it("renders a negative delta with a minus sign", async () => {
       const c = await renderMemoryRow(1_000_000, -300_000);
-      expect(c.querySelector('[data-testid="steam-memory"]')?.textContent).toContain("last sync: -0.3 GB");
+      expect(c.querySelector('[data-testid="steam-memory"]')?.textContent).toContain("last run: -0.3 GB");
     });
 
     it("omits the delta line when the delta is unmeasurable (null)", async () => {
       const c = await renderMemoryRow(1_200_000, null);
       const row = c.querySelector('[data-testid="steam-memory"]');
       expect(row?.textContent).toContain("1.2 GB");
-      expect(row?.textContent).not.toContain("last sync:");
+      expect(row?.textContent).not.toContain("last run:");
     });
 
     it("omits the whole row when the live reading is unavailable (rss_kb null)", async () => {
       const c = await renderMemoryRow(null, null);
       expect(c.querySelector('[data-testid="steam-memory"]')).toBeNull();
+    });
+
+    // Traffic-light colouring of the value text, driven by the payload thresholds
+    // (renderMemoryRow supplies warn_kb 1.8 GB, ceiling_kb 2.2 GB). Yellow is
+    // strict (above the floor, matching the yellow banner); red is inclusive
+    // (at the ceiling the gate pauses).
+    const valueColor = (c: HTMLElement) =>
+      (c.querySelector('[data-testid="steam-memory-value"]') as HTMLElement).style.color;
+
+    it("colours the value GREEN below the advisory floor", async () => {
+      const c = await renderMemoryRow(440_000, null);
+      expect(valueColor(c)).toBe("#59bf40");
+    });
+
+    it("colours the value YELLOW strictly above the advisory floor", async () => {
+      const c = await renderMemoryRow(1_800_001, null);
+      expect(valueColor(c)).toBe("#d4a72c");
+    });
+
+    it("colours the value RED at/above the pause ceiling", async () => {
+      const c = await renderMemoryRow(2_200_000, null);
+      expect(valueColor(c)).toBe("#d4343c");
+    });
+
+    it("does not colour the label or the delta sub-line", async () => {
+      const c = await renderMemoryRow(2_200_000, 800_000);
+      // The delta sub-line stays uncoloured (only the value carries the colour).
+      const deltaLine = Array.from(c.querySelectorAll("span")).find((s) => s.textContent.startsWith("last run:"));
+      expect(deltaLine).toBeDefined();
+      expect((deltaLine as HTMLElement).style.color).toBe("");
+    });
+  });
+
+  describe("Steam memory row live poll during a sync (#33)", () => {
+    const budget = (rssKb: number | null): SessionBudgetStatus => ({
+      success: true,
+      rss_kb: rssKb,
+      warn_kb: 1_800_000,
+      ceiling_kb: 2_200_000,
+      cliff_kb: 2_450_000,
+      memory_delta_kb: null,
+    });
+    const runningStatus = {
+      running: true,
+      stage: "applying" as const,
+      step: 1,
+      totalSteps: 1,
+      current: 0,
+      total: 10,
+      message: "N64: 0/10",
+    };
+    const memoryRowText = (c: HTMLElement) => c.querySelector('[data-testid="steam-memory"]')?.textContent ?? "";
+
+    it("re-polls the live reading every ~5s while running and updates the row", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      try {
+        // Mount into a live run (getSyncStatus seeds syncing=true). The mount fetch
+        // reads 0.6 GB; every poll thereafter reads the climbed 1.3 GB.
+        vi.mocked(backend.getSyncStatus).mockResolvedValue(runningStatus);
+        vi.mocked(backend.getSessionBudgetStatus)
+          .mockResolvedValueOnce(budget(600_000))
+          .mockResolvedValue(budget(1_300_000));
+
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
+        expect(memoryRowText(container)).toContain("0.6 GB"); // stale mount value
+
+        // One 5s poll tick → re-fetch → the row tracks the climbed reading. Non-vacuous:
+        // the displayed value actually changes, so a dead interval would fail here.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5000);
+        });
+        expect(memoryRowText(container)).toContain("1.3 GB");
+        expect(memoryRowText(container)).not.toContain("0.6 GB");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("stops polling once the run reaches a terminal stage", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      try {
+        vi.mocked(backend.getSyncStatus).mockResolvedValue(runningStatus);
+        vi.mocked(backend.getSessionBudgetStatus).mockResolvedValue(budget(1_000_000));
+
+        render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(10_000); // two poll ticks while running
+        });
+        expect(vi.mocked(backend.getSessionBudgetStatus).mock.calls.length).toBeGreaterThan(1);
+
+        // Terminal frame flips syncing→false: the subscriber does one final refresh
+        // and the poll effect tears its interval down.
+        await act(async () => {
+          setSyncProgress({ running: false, stage: "done", message: "Sync complete" });
+        });
+        await flushAsync();
+        const callsAfterTerminal = vi.mocked(backend.getSessionBudgetStatus).mock.calls.length;
+
+        // Well past several poll intervals: no further polls fire.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(20_000);
+        });
+        expect(vi.mocked(backend.getSessionBudgetStatus).mock.calls.length).toBe(callsAfterTerminal);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("tears the poll interval down on unmount", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      try {
+        vi.mocked(backend.getSyncStatus).mockResolvedValue(runningStatus);
+        vi.mocked(backend.getSessionBudgetStatus).mockResolvedValue(budget(1_000_000));
+
+        const { unmount } = render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
+        const before = vi.mocked(backend.getSessionBudgetStatus).mock.calls.length;
+
+        unmount();
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(15_000);
+        });
+        expect(vi.mocked(backend.getSessionBudgetStatus).mock.calls.length).toBe(before);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

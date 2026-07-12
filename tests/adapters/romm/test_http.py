@@ -10,7 +10,6 @@ import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_renderer_gc import FakeRendererGc
-from fakes.fake_renderer_reload import FakeRendererReload
 from fakes.fake_renderer_rss import FakeRendererRss
 from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 from fakes.library_peers import FakeArtworkManager
@@ -74,7 +73,6 @@ def plugin():
             disc_resolver=FakeDiscResolver(),
             renderer_rss=FakeRendererRss(),
             renderer_gc=FakeRendererGc(),
-            renderer_reload=FakeRendererReload(),
         ),
     )
 

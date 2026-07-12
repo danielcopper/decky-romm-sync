@@ -72,7 +72,6 @@ from services.protocols.infra import (
     PathExistsReader,
     PendingSyncReader,
     RendererGcFn,
-    RendererReloadFn,
     RendererRssFn,
 )
 from services.protocols.paths import (
@@ -166,7 +165,6 @@ __all__ = [
     "ReachabilityProbeFn",
     "RelaunchOptionsReader",
     "RendererGcFn",
-    "RendererReloadFn",
     "RendererRssFn",
     "RetroArchConfigReader",
     "RetroArchCoreInfoReader",

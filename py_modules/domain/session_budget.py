@@ -33,11 +33,16 @@ CLIFF_KB = 2_450_000
 # Headroom below the cliff the gate refuses to spend. A chunk's real cost is only
 # known after it is applied, and the per-boot create rate varies, so the gate
 # keeps this margin as slack against an over-dense chunk or a rate above the
-# modelled worst case. ~150 MB ≈ one chunk's worst-case cost plus a cushion.
-SAFETY_MARGIN_KB = 150_000
+# modelled worst case. Widened to ~250 MB (from 150) after on-device observation
+# (2026-07-12): near V8's heap limit the renderer enters aggressive GC thrash and
+# the whole UI turns sluggish *before* it OOM-crashes, so a chunk whose transient
+# peak reaches that zone degrades the experience even when it never crashes.
+# Pausing 250 MB below the cliff keeps the final chunk's transient peak out of the
+# thrash zone — a cushion against sluggishness, not just against the crash.
+SAFETY_MARGIN_KB = 250_000
 
 # The RSS ceiling the gate actually pauses at — the cliff minus the margin
-# (≈2.30 GB). Projecting the next chunk's cost past this line is what triggers a
+# (≈2.20 GB). Projecting the next chunk's cost past this line is what triggers a
 # pause. Shared by the per-chunk gate and the post-preview prognosis so both
 # reason about the same line.
 EFFECTIVE_CEILING_KB = CLIFF_KB - SAFETY_MARGIN_KB
@@ -66,7 +71,7 @@ POST_RUN_ADVISORY_KB = 1_800_000
 # A raw reading (no GC) still holds transient garbage, so the true settled
 # resident value can only be LOWER than the raw one. Below this floor even the
 # most conservative check passes every threshold — 1.5 GB + 0.5 GB max chunk
-# worst-case = 2.0 < 2.3 GB ceiling, and 1.5 < 1.8 GB advisory — so a GC could
+# worst-case = 2.0 < 2.2 GB ceiling, and 1.5 < 1.8 GB advisory — so a GC could
 # not change any decision here. The gate therefore trusts the raw reading and
 # skips the ~5 s GC entirely, making small syncs pay zero GC cost. Only when the
 # raw reading is at/above this floor is the GC worth its round-trip to settle the
