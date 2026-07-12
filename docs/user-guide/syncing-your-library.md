@@ -68,6 +68,11 @@ A few things worth knowing for a large library:
   same. Restarting Steam frees the memory and the resume finishes the job. Nothing is lost, and you are never forced out
   of what you were doing. After a big run finishes with memory still high, a **yellow banner** recommends a Steam
   restart before your next large sync; it clears itself once you restart.
+- **Or tap "Free Steam memory" instead of a full restart.** Both banners include a **Free Steam memory** button that
+  reloads Steam's interface — this frees the memory without a full Steam restart and takes up to a minute. Your running
+  games keep running. The screen (and this plugin's menu) will reload as part of it — that is expected; when it comes
+  back, memory is reset and you can Resume Sync. The button is unavailable while a sync is actively running (free the
+  memory once it pauses or finishes).
 
 ## Resuming an interrupted sync
 

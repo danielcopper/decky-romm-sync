@@ -101,7 +101,7 @@ export const SessionBudgetBanner: FC<SessionBudgetBannerProps> = ({ lastAttemptS
         <ButtonItem
           layout="below"
           onClick={freeSteamMemory}
-          disabled={reloadDisabled}
+          disabled={reloadDisabled ?? false}
           description="Reloads Steam's interface (up to a minute) to free memory without a full Steam restart. Running games keep running."
         >
           Free Steam memory

@@ -82,11 +82,21 @@ is fail-open — a measurement failure never blocks a sync.**
   live RSS exceeds ~1.8 GB after a completed run (it self-clears after a restart, since the next read is low — no
   dismissed-state to persist). Both drop the number but keep their text when `rss_kb` is null. The pause toast stays for
   immediacy (with a longer duration so it isn't truncated), but the banners are the source of truth.
+- **"Free Steam memory" reloads the renderer without a client restart.** Both banners carry a **Free Steam memory**
+  button that fires a new `reload_steam_ui()` callable, which drives `Page.reload` on the SharedJSContext target over
+  the same CDP client. `Page.reload` replaces the renderer PROCESS wholesale — a full session-budget reset (measured
+  on-device 2026-07-12: ~2.0 GB → ~455 MB after the old PID tears down over ~30 s; Decky reinjects the frontend cleanly,
+  the QAM is functional afterwards). It destroys the very UI that requested it — that is expected, so there is no
+  optimistic UI or toast (neither would survive the reload); after reinjection the banner reflects the fresh low RSS
+  (the yellow banner self-clears; the blue paused banner now shows the low number with Resume Sync). The callable
+  **refuses while a sync is in flight** (`{success: False, reason: "sync_active"}`) — a reload mid-apply would tear down
+  the frontend the apply drives; it is allowed only from idle (which includes after a run has paused or completed). The
+  reload seam is fail-open like the GC/RSS seams.
 - **Minimal new wire surface.** The advisories ride an added field on the existing `sync_preview` response
   (`pause_likely`, plus `sync_platform_count` / `sync_collection_count` for the preview scope line) and added fields on
-  the existing `sync_complete` payload (`interrupt_reason`, `restart_recommended`). The only new name is the
-  `get_session_budget_status` read callable (no new emit event); the callable-manifest and event-parity gates stay
-  green.
+  the existing `sync_complete` payload (`interrupt_reason`, `restart_recommended`). The only new names are the
+  `get_session_budget_status` and `reload_steam_ui` callables (no new emit event); the callable-manifest and
+  event-parity gates stay green.
 - **Parameterized for reclaimable API artwork (PR 2).** The gate's per-item cost is a parameter defaulting to the
   worst-case create rate. This PR does **not** reintroduce API artwork; the parameter is the seam PR 2 uses to add a
   per-item cover term once `SetCustomArtworkForApp` (transiently resident, GC-reclaimable — hence the GC-before-measure)
@@ -120,8 +130,14 @@ is fail-open — a measurement failure never blocks a sync.**
 - **A continuous RSS-watcher background task.** Rejected: the chunk boundary is the only point the run can stop cleanly
   and durably, so a watcher would only ever act there anyway — it adds a concurrency surface (racing the apply's shared
   state) for no earlier decision.
-- **Forced restart / `RestartJSContext` when near the cliff.** Rejected: it kicks the user out of Big Picture and breaks
-  the QAM mid-interaction. Pausing keeps consent with the user, who restarts Steam when convenient.
+- **Forced restart / `RestartJSContext` when near the cliff.** Rejected as an _automatic_ action: it kicks the user out
+  of Big Picture and breaks the QAM mid-interaction. Pausing keeps consent with the user. (The user _may_ free memory on
+  demand via the Free Steam memory button — see below — which is consent-based, not forced.)
+- **Freeing memory via `Runtime.evaluate` of `SteamClient.Browser.RestartJSContext()`.** Rejected for the Free Steam
+  memory button: CDP reports "Cannot find default execution context" on the SharedJSContext target even after
+  `Runtime.enable`, so JS evaluation is not available there. `Page.reload` needs no JS execution context and was
+  validated on-device to replace the renderer process and reset the budget (~2.0 GB → ~455 MB) with a clean Decky
+  frontend reinjection — so it is the button's mechanism.
 - **Relying on natural GC to keep RSS down.** Rejected: measured unreliable (minutes, or absent for 12+ minutes). An
   explicit GC before each reading is what makes the measurement trustworthy.
 - **Raising the ceiling via an out-of-CEF bulk import** (`shortcuts.vdf` / an out-of-process importer). Deliberately out
