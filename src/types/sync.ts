@@ -83,6 +83,14 @@ export interface SessionBudgetStatus {
    * sign-formatted (#1383 / #36).
    */
   memory_delta_kb: number | null;
+  /**
+   * Whether resuming a paused run now would apply at least one full chunk without
+   * re-pausing — the gate's own predictive condition against the live reading. Once
+   * a Steam restart drops RSS this flips ``true`` and the paused banner tells the
+   * user memory is free again (and hides the restart button). ``null`` when the
+   * reading is unavailable (undecidable → conservative fail-open). (#1383)
+   */
+  resume_ready: boolean | null;
 }
 
 export interface SyncStats {

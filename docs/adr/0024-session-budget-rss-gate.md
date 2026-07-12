@@ -89,6 +89,14 @@ is fail-open — a measurement failure never blocks a sync.**
   live RSS exceeds ~1.8 GB after a completed run (it self-clears after a restart, since the next read is low — no
   dismissed-state to persist). Both drop the number but keep their text when `rss_kb` is null. The pause toast stays for
   immediacy (with a longer duration so it isn't truncated), but the banners are the source of truth.
+- **The blue paused banner notices a restart.** The live reading decides — no flag, no persisted state. The callable
+  also returns `resume_ready` (`domain.session_budget.resume_would_proceed`: the gate's own predictive condition for a
+  full chunk, `rss + FULL_CHUNK_WORST_KB < ceiling`, i.e. `rss < ~1.9 GB`; `None` when RSS is unreadable). When it flips
+  `true` — e.g. after a Steam restart drops RSS to the fresh baseline — the blue banner changes to "Steam memory is free
+  again (X.X GB) — press Resume Sync" and hides the restart button; `false`/`null` keeps the restart guidance
+  (conservative fail-open). Because the poll runs only during a sync, the QAM also polls the callable every ~10 s while
+  a paused banner is showing, so the flip happens on its own after the user restarts — the user isn't left staring at
+  stale "restart Steam" copy over a fresh green reading.
 - **An always-on memory row with the last-run delta.** The QAM Status section carries a permanent "Steam memory: X.X GB"
   row (the same live reading, omitted entirely when `rss_kb` is null) with a "last run: ±X GB" sub-line — the last run's
   signed RSS growth, `end - start`, measured at EVERY terminal (completed, paused, cancelled, interrupted) so a paused
@@ -120,7 +128,7 @@ is fail-open — a measurement failure never blocks a sync.**
   (`pause_likely`, plus `sync_platform_count` / `sync_collection_count` for the preview scope line) and added fields on
   the existing `sync_complete` payload (`interrupt_reason`, `restart_recommended`). The only new backend name is the
   `get_session_budget_status` callable (which returns `rss_kb` + the fixed threshold lines `warn_kb`/`ceiling_kb`/
-  `cliff_kb` + the retained `memory_delta_kb`); the "free memory" action is a pure frontend
+  `cliff_kb` + the retained `memory_delta_kb` + the live `resume_ready`); the "free memory" action is a pure frontend
   `SteamClient.User.StartRestart` call, so it adds no callable. No new emit event; the callable-manifest and
   event-parity gates stay green.
 - **Parameterized for reclaimable API artwork (PR 2).** The gate's per-item cost is a parameter defaulting to the

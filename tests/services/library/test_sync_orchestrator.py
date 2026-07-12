@@ -4686,19 +4686,16 @@ class TestSessionBudgetGate:
     @pytest.mark.asyncio
     async def test_finalize_computes_and_retains_memory_delta(self, plugin):
         # The signed growth is retained in the box for QAM remounts
-        # (get_session_budget_status). It is NOT put on the sync_complete wire — the
-        # UI reads it from the callable, so the payload must not carry it (#1383 LOW-3).
-        import decky
-
+        # (get_session_budget_status). _finalize_per_unit itself no longer emits
+        # sync_complete (that moved to the orchestrator's post-write emit_sync_complete,
+        # #39), so this test just pins the retained box value.
         orch = plugin._sync_service._orchestrator
         box = plugin._sync_service._box
         box.committed_app_ids = set()
         box.run_start_rss_kb = 500_000  # raw baseline captured at run start
         plugin._renderer_rss.rss_kb = 1_300_000  # post-run reading (below floor → raw)
 
-        decky.emit.reset_mock()
         await orch._finalize_per_unit(
-            total_games_applied=0,
             synced_rom_ids=set(),
             collection_memberships={},
             platform_rom_ids=set(),
@@ -4707,8 +4704,6 @@ class TestSessionBudgetGate:
         )
 
         assert box.last_run_delta_kb == 800_000
-        complete = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
-        assert complete and "memory_delta_kb" not in complete[-1]
 
     @pytest.mark.asyncio
     async def test_finalize_no_delta_when_run_start_unmeasured(self, plugin):
@@ -4721,7 +4716,6 @@ class TestSessionBudgetGate:
         plugin._renderer_rss.rss_kb = 1_300_000
 
         await orch._finalize_per_unit(
-            total_games_applied=0,
             synced_rom_ids=set(),
             collection_memberships={},
             platform_rom_ids=set(),
@@ -4748,7 +4742,6 @@ class TestSessionBudgetGate:
         plugin._renderer_rss.rss_kb = 2_100_000  # terminal reading — the run grew memory
 
         await orch._finalize_per_unit(
-            total_games_applied=1,
             synced_rom_ids=set(),
             collection_memberships={},
             platform_rom_ids=set(),
@@ -4786,6 +4779,52 @@ class TestSessionBudgetGate:
         assert box.run_start_rss_kb == 1_200_000  # captured at run start despite no chunk
         assert box.last_run_delta_kb == 0  # honest zero, not None
 
+    # ── Terminal emit ordering (#39): sync_complete AFTER the SyncRun write ──
+
+    @staticmethod
+    async def _capture_run_status_at_sync_complete(plugin, run_id: str) -> str | None:
+        """Run the pipeline with a decky.emit hook that reads the run's persisted
+        status the instant ``sync_complete`` is emitted; return that status."""
+        import decky
+
+        seen: dict[str, str | None] = {}
+
+        async def _hook(event, payload=None):
+            if event == "sync_complete" and "value" not in seen:
+                with plugin._uow as uow:
+                    run = uow.sync_runs.get(run_id)
+                    seen["value"] = run.status if run is not None else None
+
+        decky.emit.side_effect = _hook
+        try:
+            await plugin._sync_service._orchestrator._do_sync_per_unit()
+        finally:
+            decky.emit.side_effect = None
+        return seen.get("value")
+
+    @pytest.mark.asyncio
+    async def test_sync_complete_emits_after_completed_syncrun_persisted(self, plugin, fake_romm_api, monkeypatch):
+        # A clean run: when sync_complete fires, the SyncRun is ALREADY 'completed', so
+        # a frontend stats refetch can't read the prior run's status (#39).
+        self._arm_single_chunk_apply(plugin, fake_romm_api, monkeypatch, run_id="run-order-done")
+        plugin._renderer_rss.rss_kb = 440_000  # low → completes
+
+        status = await self._capture_run_status_at_sync_complete(plugin, "run-order-done")
+
+        assert status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_sync_complete_emits_after_paused_syncrun_persisted(self, plugin, fake_romm_api, monkeypatch):
+        # A budget-paused run: when sync_complete fires, the SyncRun is ALREADY 'paused'
+        # — the emit-last ordering that closes the emit-before-persist race (#39).
+        self._arm_two_chunk_apply(plugin, fake_romm_api, monkeypatch)  # run id "run-budget"
+        plugin._renderer_gc.result = True
+        plugin._renderer_rss.rss_kb = 2_199_000  # first chunk passes, second pauses
+
+        status = await self._capture_run_status_at_sync_complete(plugin, "run-budget")
+
+        assert status == "paused"
+
     # ── get_session_budget_status callable ───────────────────────
 
     @pytest.mark.asyncio
@@ -4806,6 +4845,8 @@ class TestSessionBudgetGate:
             "cliff_kb": CLIFF_KB,
             # No clean run has completed in this test, so the retained delta is None.
             "memory_delta_kb": None,
+            # 1.234 + 0.3 = 1.534 < 2.2 ceiling → a paused run could resume now.
+            "resume_ready": True,
         }
 
     @pytest.mark.asyncio
@@ -4823,6 +4864,17 @@ class TestSessionBudgetGate:
         assert result["ceiling_kb"] == EFFECTIVE_CEILING_KB
         assert result["cliff_kb"] == CLIFF_KB
         assert result["memory_delta_kb"] is None
+        assert result["resume_ready"] is None  # RSS unreadable → undecidable
+
+    @pytest.mark.asyncio
+    async def test_session_budget_status_resume_not_ready_at_high_rss(self, plugin):
+        # A still-high RSS (a paused run before a Steam restart): resume would re-pause.
+        plugin.loop = asyncio.get_event_loop()
+        plugin._renderer_rss.rss_kb = 2_100_000  # 2.1 + 0.3 = 2.4 ≥ 2.2 ceiling
+
+        result = await plugin.get_session_budget_status()
+
+        assert result["resume_ready"] is False
 
     @pytest.mark.asyncio
     async def test_session_budget_status_returns_retained_delta(self, plugin):

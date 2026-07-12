@@ -511,20 +511,35 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     };
   }, []);
 
-  // While a sync run is in flight, poll the live renderer-heap reading so the
-  // "Steam memory" status row tracks the climbing RSS mid-apply instead of showing
-  // the stale mount-time value (the run-terminal fetch in the progress subscriber
-  // above is the final refresh once this stops). Dumb fixed-interval poll; the
-  // interval is torn down when the run ends (``syncing`` flips false) or on unmount.
+  // Poll the live renderer-heap reading while it can still change: during a sync (so
+  // the "Steam memory" row tracks the climbing RSS mid-apply) AND while the last run
+  // is paused (so the paused banner notices once a Steam restart frees memory and
+  // ``resume_ready`` flips — otherwise it sits stale after the restart). One dumb
+  // interval, faster during a sync than while merely waiting for a restart; torn down
+  // when neither condition holds or on unmount.
+  const lastRunPaused = stats?.last_attempt?.status === "paused";
   useEffect(() => {
-    if (!syncing) return;
-    const id = setInterval(() => {
-      getSessionBudgetStatus()
-        .then(setBudgetStatus)
-        .catch((e) => logError(`Failed to poll session budget status: ${e}`));
-    }, 5000);
+    if (!syncing && !lastRunPaused) return;
+    const id = setInterval(
+      () => {
+        getSessionBudgetStatus()
+          .then(setBudgetStatus)
+          .catch((e) => logError(`Failed to poll session budget status: ${e}`));
+        // Belt-and-braces on top of the backend emit-last fix (#39): while the paused
+        // banner is showing (idle), also re-read stats so the "Last sync" line + the
+        // paused banner (which keys on last_attempt) recover if the one-shot terminal
+        // refetch was ever missed/dropped. Then this poll self-stops (last_attempt is
+        // no longer paused).
+        if (!syncing) {
+          getSyncStats()
+            .then(setStats)
+            .catch((e) => logError(`Failed to poll sync stats: ${e}`));
+        }
+      },
+      syncing ? 5000 : 10000,
+    );
     return () => clearInterval(id);
-  }, [syncing]);
+  }, [syncing, lastRunPaused]);
 
   // A start/apply call never reached a running backend sync (rejected up
   // front or threw). Reset both the local UI and the MODULE store so the
@@ -942,6 +957,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         <SessionBudgetBanner
           lastAttemptStatus={stats?.last_attempt?.status}
           rssKb={budgetStatus?.rss_kb ?? null}
+          resumeReady={budgetStatus?.resume_ready ?? null}
           restartDisabled={loading || connectionUnavailable}
         />
         <PanelSectionRow>

@@ -61,6 +61,14 @@ WORST_CASE_CREATE_KB = 1_500
 # they are not projected at all.
 UPDATE_TOUCH_KB = 1_000
 
+# Worst-case RSS cost of applying one FULL apply chunk — 200 fresh creates at the
+# worst-case create rate. 200 is the apply chunk size (``_APPLY_CHUNK_SIZE`` in the
+# sync orchestrator), kept as a literal here so the domain kernel stays service-free.
+# This is the predictive gate's own per-chunk projection for a maxed chunk, reused by
+# ``resume_would_proceed`` to decide whether a paused run could resume and make at
+# least one chunk of forward progress.
+FULL_CHUNK_WORST_KB = 200 * WORST_CASE_CREATE_KB
+
 # Post-run advisory floor. A run that ends with RSS above this (≈1.8 GB) has
 # spent most of the session budget; the next large operation is likely to pause
 # or crash, so the UI recommends a Steam restart. Deliberately well below the
@@ -132,6 +140,23 @@ def predict_run_crosses(
 def post_run_advisory(rss_kb: int) -> bool:
     """Whether a finished run's RSS is high enough to recommend a Steam restart."""
     return rss_kb > POST_RUN_ADVISORY_KB
+
+
+def resume_would_proceed(rss_kb: int) -> bool:
+    """Whether a resume would make sustained progress under the steady-state predictive gate.
+
+    Deliberately stricter than "one chunk of progress": the resume's FIRST chunk
+    only faces the absolute ceiling check, so any resume below the ceiling applies
+    one chunk regardless — this models the predictive condition that governs every
+    later chunk, which is the honest bar for telling the user "press Resume now".
+    Exactly the predictive gate's condition for a maxed chunk: the run proceeds iff
+    the current RSS plus one full chunk's worst-case cost stays *below* the effective
+    ceiling (the gate pauses at ``>=``). So after a Steam restart drops RSS to the
+    fresh baseline this returns ``True`` and the UI can tell the user a paused run is
+    resumable again; at a still-high RSS it returns ``False``. ``None`` handling
+    (unreadable RSS → undecidable) stays with the caller.
+    """
+    return rss_kb + FULL_CHUNK_WORST_KB < EFFECTIVE_CEILING_KB
 
 
 def session_memory_delta(start_kb: int | None, end_kb: int | None) -> int | None:

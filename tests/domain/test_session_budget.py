@@ -14,6 +14,7 @@ from __future__ import annotations
 from domain.session_budget import (
     CLIFF_KB,
     EFFECTIVE_CEILING_KB,
+    FULL_CHUNK_WORST_KB,
     GC_SKIP_BELOW_KB,
     POST_RUN_ADVISORY_KB,
     SAFETY_MARGIN_KB,
@@ -22,6 +23,7 @@ from domain.session_budget import (
     gate_decision,
     post_run_advisory,
     predict_run_crosses,
+    resume_would_proceed,
     session_memory_delta,
 )
 
@@ -139,6 +141,35 @@ def test_post_run_advisory_below_threshold_is_false() -> None:
 def test_post_run_advisory_above_threshold_is_true() -> None:
     assert post_run_advisory(POST_RUN_ADVISORY_KB + 1) is True
     assert post_run_advisory(2_400_000) is True
+
+
+# ── resume_would_proceed ─────────────────────────────────────────
+
+
+def test_full_chunk_worst_is_chunk_size_times_create_rate() -> None:
+    assert FULL_CHUNK_WORST_KB == 200 * WORST_CASE_CREATE_KB  # 300_000
+
+
+def test_resume_ready_just_below_the_threshold() -> None:
+    # Resumable iff rss + one full chunk stays strictly below the ceiling — the
+    # highest resumable RSS is one KB under (ceiling - full-chunk).
+    rss = EFFECTIVE_CEILING_KB - FULL_CHUNK_WORST_KB - 1
+    assert resume_would_proceed(rss) is True
+
+
+def test_resume_not_ready_at_the_threshold() -> None:
+    # At exactly ceiling - full-chunk the projection equals the ceiling, and the gate
+    # pauses at ``>=`` — so this is NOT resumable (mirrors the predictive gate).
+    rss = EFFECTIVE_CEILING_KB - FULL_CHUNK_WORST_KB
+    assert resume_would_proceed(rss) is False
+
+
+def test_resume_ready_after_a_fresh_restart_baseline() -> None:
+    assert resume_would_proceed(440_000) is True
+
+
+def test_resume_not_ready_at_a_still_high_rss() -> None:
+    assert resume_would_proceed(2_000_000) is False  # 2.0 + 0.3 = 2.3 ≥ 2.2 ceiling
 
 
 # ── GC-skip floor ────────────────────────────────────────────────

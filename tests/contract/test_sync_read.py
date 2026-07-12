@@ -313,6 +313,7 @@ async def test_get_session_budget_status_shape_rss_none(harness):
         "ceiling_kb": EFFECTIVE_CEILING_KB,
         "cliff_kb": CLIFF_KB,
         "memory_delta_kb": None,
+        "resume_ready": None,
     }
 
 
@@ -330,4 +331,6 @@ async def test_get_session_budget_status_shape_rss_present(harness):
         "ceiling_kb": EFFECTIVE_CEILING_KB,
         "cliff_kb": CLIFF_KB,
         "memory_delta_kb": None,
+        # 2.1 + 0.3 = 2.4 ≥ 2.2 ceiling → resuming would re-pause.
+        "resume_ready": False,
     }

@@ -82,6 +82,13 @@ interface SessionBudgetBannerProps {
   /** Live renderer RSS in KB from ``get_session_budget_status``; ``null`` when unreadable. */
   rssKb: number | null;
   /**
+   * ``resume_ready`` from ``get_session_budget_status`` — ``true`` once the live
+   * reading is low enough that resuming a paused run would proceed (e.g. after a
+   * Steam restart). Flips the paused banner to "memory is free, press Resume Sync"
+   * and hides the restart button. ``false``/``null`` keeps the restart guidance.
+   */
+  resumeReady?: boolean | null | undefined;
+  /**
    * Disables the "Restart Steam now" button for reasons the caller knows about
    * (mid-flight / not connected). The banner ALSO disables it while a game is
    * running — checked here via ``isAnyAppRunning`` — so a restart can never close a
@@ -100,23 +107,30 @@ interface SessionBudgetBannerProps {
  * **Restart Steam now** button — a deterministic full client restart that resets
  * the renderer's per-session heap budget — disabled while a game is running.
  */
-export const SessionBudgetBanner: FC<SessionBudgetBannerProps> = ({ lastAttemptStatus, rssKb, restartDisabled }) => {
+export const SessionBudgetBanner: FC<SessionBudgetBannerProps> = ({
+  lastAttemptStatus,
+  rssKb,
+  resumeReady,
+  restartDisabled,
+}) => {
   const paused = lastAttemptStatus === "paused";
   const highHeap = rssKb != null && rssKb > HIGH_HEAP_KB;
   if (!paused && !highHeap) return null;
 
+  // Once the live reading says a resume would proceed (e.g. after a Steam restart),
+  // the paused banner announces memory is free and the restart button is pointless.
+  const memoryFreedForResume = paused && resumeReady === true;
+
+  const pausedBody = memoryFreedForResume
+    ? `Steam memory is free again${rssKb != null ? ` (${formatGb(rssKb)})` : ""} — press Resume Sync to continue.`
+    : `Restart Steam when convenient, then Resume Sync.${
+        rssKb != null
+          ? ` Steam memory: ${formatGb(rssKb)} (pauses when a chunk would cross ~2.2 GB; Steam crashes near ~2.4 GB).`
+          : ""
+      }`;
+
   const card = paused
-    ? bannerCard(
-        "#3d9df6",
-        "rgba(61, 157, 246, 0.15)",
-        "budget-paused-banner",
-        "Sync paused",
-        `Restart Steam when convenient, then Resume Sync.${
-          rssKb != null
-            ? ` Steam memory: ${formatGb(rssKb)} (pauses when a chunk would cross ~2.2 GB; Steam crashes near ~2.4 GB).`
-            : ""
-        }`,
-      )
+    ? bannerCard("#3d9df6", "rgba(61, 157, 246, 0.15)", "budget-paused-banner", "Sync paused", pausedBody)
     : bannerCard(
         "#d4a72c",
         "rgba(212, 167, 44, 0.15)",
@@ -131,20 +145,22 @@ export const SessionBudgetBanner: FC<SessionBudgetBannerProps> = ({ lastAttemptS
   return (
     <>
       {card}
-      <PanelSectionRow>
-        <ButtonItem
-          layout="below"
-          onClick={restartSteam}
-          disabled={(restartDisabled ?? false) || gameRunning}
-          description={
-            gameRunning
-              ? "Close your running game first — restarting Steam would close it."
-              : "Restarts the Steam client (closes and reopens Steam) to free its memory. Do this when convenient."
-          }
-        >
-          Restart Steam now
-        </ButtonItem>
-      </PanelSectionRow>
+      {!memoryFreedForResume && (
+        <PanelSectionRow>
+          <ButtonItem
+            layout="below"
+            onClick={restartSteam}
+            disabled={(restartDisabled ?? false) || gameRunning}
+            description={
+              gameRunning
+                ? "Close your running game first — restarting Steam would close it."
+                : "Restarts the Steam client (closes and reopens Steam) to free its memory. Do this when convenient."
+            }
+          >
+            Restart Steam now
+          </ButtonItem>
+        </PanelSectionRow>
+      )}
     </>
   );
 };

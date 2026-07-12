@@ -257,14 +257,10 @@ class SyncReporter:
         self,
         pending_collection_memberships: dict[str, list[int]],
         pending_platform_rom_ids: set[int] | None,
-        total_games: int,
         platform_names: dict[str, str] | None = None,
-        cancelled: bool = False,
         stale_rom_ids: list[int] | None = None,
-        interrupt_reason: str | None = None,
-        restart_recommended: bool = False,
     ):
-        """Emit ``sync_collections`` + ``sync_complete`` after all units finish.
+        """Unbind stale ROMs, rebuild Steam-collection maps, and emit ``sync_collections``.
 
         Stale-removal is emitted separately by the orchestrator via
         ``sync_stale`` so the frontend can apply removals before
@@ -275,13 +271,13 @@ class SyncReporter:
         ``platform_names`` is the live ``platform_slug → display_name``
         map from the work-queue, cached for offline registry queries.
 
-        Session-budget surfacing (#1383): ``interrupt_reason`` (present only
-        when a run was paused by the budget gate) rides the ``sync_complete``
-        payload and becomes the terminal progress message, so the UI shows the
-        resume-friendly pause guidance distinctly instead of the generic
-        cancelled/interrupted wording. ``restart_recommended`` (only on a clean
-        run whose post-run RSS is high) sets an additive payload flag the UI
-        turns into a "restart Steam" nudge.
+        Returns the ``(platform_app_ids, romm_collection_app_ids)`` maps the caller
+        needs for the completed-run ``SyncRun`` write and the terminal emit. The
+        terminal ``sync_complete`` + progress frame is deliberately NOT emitted here
+        — it is the orchestrator's separate :meth:`emit_sync_complete` call made
+        AFTER the terminal ``SyncRun`` status is persisted, so a frontend stats
+        refetch triggered by those terminal signals reads the fresh run status
+        instead of racing the DB write (#39).
         """
         names = platform_names or {}
         platform_app_ids, romm_collection_app_ids = await self._loop.run_in_executor(
@@ -301,6 +297,32 @@ class SyncReporter:
             },
         )
 
+        return platform_app_ids, romm_collection_app_ids
+
+    async def emit_sync_complete(
+        self,
+        *,
+        platform_app_ids: dict[str, list[int]],
+        romm_collection_app_ids: dict[str, list[int]],
+        total_games: int,
+        cancelled: bool,
+        interrupt_reason: str | None,
+        restart_recommended: bool,
+    ) -> None:
+        """Emit the terminal ``sync_complete`` event + the terminal progress frame.
+
+        Called by the orchestrator AFTER the terminal ``SyncRun`` status is
+        persisted — this is the "emit last" ordering that closes the emit-before-
+        persist race (#39): a frontend stats refetch triggered by these terminal
+        signals now reads the freshly-written run status, not the prior run's.
+
+        Session-budget surfacing (#1383): ``interrupt_reason`` (present only when a
+        run was paused by the budget gate) rides the ``sync_complete`` payload and
+        becomes the terminal progress message, so the UI shows the resume-friendly
+        pause guidance distinctly instead of the generic cancelled/interrupted
+        wording. ``restart_recommended`` (only on a clean run whose post-run RSS is
+        high) sets an additive payload flag the UI turns into a "restart Steam" nudge.
+        """
         complete_payload: dict[str, Any] = {
             "platform_app_ids": platform_app_ids,
             "romm_collection_app_ids": romm_collection_app_ids,
@@ -343,8 +365,6 @@ class SyncReporter:
                 message=f"Sync complete: {total} games from {len(platform_app_ids)} platforms",
                 running=False,
             )
-
-        return platform_app_ids, romm_collection_app_ids
 
     def _count_bound_roms(self) -> int:
         """Count ROMs that still carry a Steam-shortcut binding."""

@@ -65,9 +65,11 @@ A few things worth knowing for a large library:
   crash. If the preview expects this, it shows a blue note up front ("this sync is large enough that it will likely
   pause partway… that is normal"). When a pause happens, the sync page shows a **blue banner** — "Sync paused — restart
   Steam when convenient, then Resume Sync. Steam memory: X.X GB…" — that stays until you resume, and a toast says the
-  same. Restarting Steam frees the memory and the resume finishes the job. Nothing is lost, and you are never forced out
-  of what you were doing. After a big run finishes with memory still high, a **yellow banner** recommends a Steam
-  restart before your next large sync; it clears itself once you restart.
+  same. Restarting Steam frees the memory and the resume finishes the job. Once you've restarted, the banner notices on
+  its own — it changes to "Steam memory is free again — press Resume Sync to continue" and drops the restart button, so
+  you know a resume will actually work now rather than pausing again. Nothing is lost, and you are never forced out of
+  what you were doing. After a big run finishes with memory still high, a **yellow banner** recommends a Steam restart
+  before your next large sync; it clears itself once you restart.
 - **Tap "Restart Steam now" to free the memory.** Both banners include a **Restart Steam now** button. It restarts the
   Steam client (Steam closes and reopens) — the reliable way to reset its memory — and you can Resume Sync once it comes
   back. The button is disabled while a game is running (a restart would close your game), so close your game first; it

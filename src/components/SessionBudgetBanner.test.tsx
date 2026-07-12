@@ -77,6 +77,43 @@ describe("SessionBudgetBanner — paused (blue)", () => {
   });
 });
 
+describe("SessionBudgetBanner — paused, resume ready (#38)", () => {
+  function restartButton(container: HTMLElement) {
+    return buttonByText(container, "Restart Steam now");
+  }
+
+  it("flips to 'memory is free' and hides the restart button when resumeReady is true", () => {
+    const { queryByTestId, container } = render(
+      <SessionBudgetBanner lastAttemptStatus="paused" rssKb={500000} resumeReady={true} />,
+    );
+    const banner = queryByTestId("budget-paused-banner");
+    expect(banner).not.toBeNull();
+    expect(banner!.textContent).toContain("Steam memory is free again (0.5 GB)");
+    expect(banner!.textContent).toContain("press Resume Sync to continue");
+    // The old restart guidance is gone, and the restart button is hidden (pointless).
+    expect(banner!.textContent).not.toContain("Restart Steam when convenient");
+    expect(restartButton(container)).toBeNull();
+  });
+
+  it("keeps the restart guidance + button when resumeReady is false (still high)", () => {
+    const { queryByTestId, container } = render(
+      <SessionBudgetBanner lastAttemptStatus="paused" rssKb={2199000} resumeReady={false} />,
+    );
+    const banner = queryByTestId("budget-paused-banner");
+    expect(banner!.textContent).toContain("Restart Steam when convenient, then Resume Sync.");
+    expect(banner!.textContent).not.toContain("Steam memory is free again");
+    expect(restartButton(container)).not.toBeNull();
+  });
+
+  it("keeps the restart guidance + button when resumeReady is null (undecidable → conservative)", () => {
+    const { queryByTestId, container } = render(
+      <SessionBudgetBanner lastAttemptStatus="paused" rssKb={2199000} resumeReady={null} />,
+    );
+    expect(queryByTestId("budget-paused-banner")!.textContent).toContain("Restart Steam when convenient");
+    expect(restartButton(container)).not.toBeNull();
+  });
+});
+
 describe("SessionBudgetBanner — high heap (yellow)", () => {
   it("shows the yellow banner when the live heap is above the threshold after a non-paused run", () => {
     const { queryByTestId } = render(<SessionBudgetBanner lastAttemptStatus="completed" rssKb={1900000} />);

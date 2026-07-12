@@ -31,6 +31,7 @@ from domain.session_budget import (
     gate_decision,
     post_run_advisory,
     predict_run_crosses,
+    resume_would_proceed,
     session_memory_delta,
 )
 from domain.shortcut_data import EmulatorInvocation, build_shortcuts_data
@@ -148,6 +149,24 @@ class SyncOrchestratorConfig:
     disc_resolver: DiscResolver
     renderer_rss: RendererRssFn
     renderer_gc: RendererGcFn
+
+
+@dataclass(frozen=True)
+class FinalizeOutcome:
+    """What ``_finalize_per_unit`` produces for the run's terminal phase.
+
+    Carries the reporter's collection maps (the completed-run ``SyncRun`` write
+    needs their keys) plus the two session-budget surfacing values computed at
+    finalize (``interrupt_reason`` / ``restart_recommended``), so the orchestrator
+    can persist the terminal ``SyncRun`` status FIRST and only THEN emit
+    ``sync_complete`` from these — the "emit last" ordering that closes the
+    emit-before-persist race (#39).
+    """
+
+    platform_app_ids: dict[str, list[int]]
+    romm_collection_app_ids: dict[str, list[int]]
+    interrupt_reason: str | None
+    restart_recommended: bool
 
 
 class SyncOrchestrator:
@@ -500,11 +519,15 @@ class SyncOrchestrator:
         no thresholds of its own — all three ride the payload so there is a single
         source of truth. Also returns ``memory_delta_kb`` — the last clean run's
         signed RSS growth, retained in memory — so a QAM remount can show
-        "last sync: ±X GB" without a live sync. Fail-open: ``rss_kb`` is ``None`` when
-        the reading is unavailable (no ``steamwebhelper`` / unreadable ``/proc``) or
-        any seam raises — the banner then drops the number but keeps its guidance
-        text; ``memory_delta_kb`` is ``None`` until a clean run has measured both
-        endpoints.
+        "last run: ±X GB" without a live sync — and ``resume_ready`` — whether the
+        live reading is low enough that resuming a paused run would apply at least one
+        full chunk without re-pausing (the gate's own predictive condition), so the
+        paused banner can flip to "memory is free, press Resume Sync" once a Steam
+        restart drops RSS. Fail-open: ``rss_kb`` is ``None`` when the reading is
+        unavailable (no ``steamwebhelper`` / unreadable ``/proc``) or any seam raises
+        — the banner then drops the number but keeps its guidance text;
+        ``memory_delta_kb`` is ``None`` until a clean run has measured both endpoints,
+        and ``resume_ready`` is ``None`` when RSS is unreadable (undecidable).
         """
         rss_kb: int | None = None
         try:
@@ -518,6 +541,7 @@ class SyncOrchestrator:
             "ceiling_kb": EFFECTIVE_CEILING_KB,
             "cliff_kb": CLIFF_KB,
             "memory_delta_kb": self._sync_state.last_run_delta_kb,
+            "resume_ready": resume_would_proceed(rss_kb) if rss_kb is not None else None,
         }
 
     # ── Sync termination ─────────────────────────────────────────
@@ -687,8 +711,7 @@ class SyncOrchestrator:
                     step=total_units,
                     total_steps=total_units,
                 )
-            platform_app_ids, romm_collection_app_ids = await self._finalize_per_unit(
-                total_games_applied=total_games_applied,
+            outcome = await self._finalize_per_unit(
                 synced_rom_ids=synced_rom_ids,
                 collection_memberships=collection_memberships,
                 platform_rom_ids=platform_rom_ids,
@@ -717,9 +740,23 @@ class SyncOrchestrator:
                     None,
                     self._complete_sync_run,
                     run_id,
-                    list(platform_app_ids.keys()),
-                    list(romm_collection_app_ids.keys()),
+                    list(outcome.platform_app_ids.keys()),
+                    list(outcome.romm_collection_app_ids.keys()),
                 )
+
+            # Emit the terminal signals LAST — only now that the terminal SyncRun
+            # status is persisted, so a frontend stats refetch triggered by
+            # ``sync_complete`` / the terminal progress frame reads the fresh run
+            # status instead of racing the DB write (#39). The error path below never
+            # reaches here, so it never double-emits sync_complete.
+            await self._reporter.get().emit_sync_complete(
+                platform_app_ids=outcome.platform_app_ids,
+                romm_collection_app_ids=outcome.romm_collection_app_ids,
+                total_games=total_games_applied,
+                cancelled=cancelled,
+                interrupt_reason=outcome.interrupt_reason,
+                restart_recommended=outcome.restart_recommended,
+            )
         except Exception as e:
             import traceback
 
@@ -1397,17 +1434,19 @@ class SyncOrchestrator:
     async def _finalize_per_unit(
         self,
         *,
-        total_games_applied: int,
         synced_rom_ids: set[int],
         collection_memberships: dict[str, list[int]],
         platform_rom_ids: set[int],
         platform_names: dict[str, str],
         cancelled: bool,
-    ):
-        """Emit stale-removal, collection mappings, and the terminal sync_complete.
+    ) -> FinalizeOutcome:
+        """Emit stale-removal + collection mappings; measure the run's memory delta.
 
-        Returns ``(platform_app_ids, romm_collection_app_ids)`` so the
-        caller can derive the SyncRun's completed platform/collection names.
+        Does NOT emit the terminal ``sync_complete`` — that is deferred to the
+        caller's :meth:`SyncReporter.emit_sync_complete` after the terminal SyncRun
+        write (#39). Returns a :class:`FinalizeOutcome` carrying the collection maps
+        (the completed-run write needs their keys) plus the ``interrupt_reason`` /
+        ``restart_recommended`` surfacing values the deferred emit needs.
         """
         # Stale ROMs: any bound ROM in the registry whose rom_id wasn't
         # seen by any processed unit. Only meaningful on a non-cancelled run
@@ -1456,13 +1495,15 @@ class SyncOrchestrator:
             self._logger.debug(f"Session-budget terminal advisory/delta skipped: {e}")
         self._sync_state.last_run_delta_kb = memory_delta_kb
 
-        return await self._reporter.get().finalize_per_unit_run(
+        platform_app_ids, romm_collection_app_ids = await self._reporter.get().finalize_per_unit_run(
             pending_collection_memberships=collection_memberships,
             pending_platform_rom_ids=platform_rom_ids,
-            total_games=total_games_applied,
             platform_names=platform_names,
-            cancelled=cancelled,
             stale_rom_ids=[rom_id for rom_id, _app_id in stale],
+        )
+        return FinalizeOutcome(
+            platform_app_ids=platform_app_ids,
+            romm_collection_app_ids=romm_collection_app_ids,
             interrupt_reason=interrupt_reason,
             restart_recommended=restart_recommended,
         )

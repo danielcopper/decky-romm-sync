@@ -149,10 +149,14 @@ SQLite, not JSON. The reporter upserts each acked ROM into the `roms` table via 
 / `assign_sgdb_id` (artwork and steamgrid patch `cover_path` / `sgdb_id` on the same aggregate during the per-unit
 commit) and, in the same write UoW, stamps the ROM's cached `rom_metadata` (`build_rom_metadata` maps the live RomM
 `metadatum` — Rom row saved first so the `rom_id` FK holds); the orchestrator drives the `SyncRun` lifecycle (`start` at
-apply-dispatch, `complete` / `mark_cancelled` / `mark_interrupted` / `mark_errored` at finalize). `sync_stats.roms` is a
-registry-derived bound-shortcut count computed at read time (the ROMs still bound to a shortcut in `roms`, i.e.
-`shortcut_app_id` not NULL), not a stored scalar. The old JSON `shortcut_registry` / `last_sync` / `sync_stats` are gone
-from this path; all writes go through the `roms` / `sync_runs` Repository Protocols behind a narrow Unit of Work (per
+apply-dispatch, `complete` / `mark_cancelled` / `mark_interrupted` / `mark_errored` at finalize). The terminal
+`sync_complete` event (and its progress frame) is emitted LAST — `reporter.emit_sync_complete`, called by the
+orchestrator only AFTER that terminal `SyncRun` status is persisted — so a frontend stats refetch triggered by the event
+reads the fresh run status instead of racing the write (the #39 lag); `reporter.finalize_per_unit_run` keeps only the
+stale-unbind + `sync_collections` emit and returns the app-id maps. `sync_stats.roms` is a registry-derived
+bound-shortcut count computed at read time (the ROMs still bound to a shortcut in `roms`, i.e. `shortcut_app_id` not
+NULL), not a stored scalar. The old JSON `shortcut_registry` / `last_sync` / `sync_stats` are gone from this path; all
+writes go through the `roms` / `sync_runs` Repository Protocols behind a narrow Unit of Work (per
 [ADR-0006](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0006-narrow-unit-of-work-scope.md) the UoW
 spans only the DB write, never the up-to-60s frontend ack). The platform `slug → display_name` map resolves live from
 RomM each sync and is cached in a `kv_config` row for offline reads. Removing a shortcut **unbinds** the ROM
@@ -221,7 +225,11 @@ returns a live RSS reading (no GC) plus the three fixed threshold lines (`warn_k
 `cliff_kb` ≈2.45 GB) for the persistent QAM banners (a blue "paused" banner, a yellow high-heap banner) and the
 always-on "Steam memory" status row. The row's value text is traffic-light coloured against those three thresholds —
 green / yellow (`warn_kb`) / red (`ceiling_kb`) — so the frontend holds no threshold magic numbers, and while a sync
-runs the row polls the callable every ~5 s so the number tracks the climbing RSS. That row also shows the **last run's
+runs (or a paused banner is showing) the row polls the callable (~5 s during a sync, ~10 s while paused) so the number
+tracks the climbing RSS and the blue paused banner notices once a Steam restart frees memory. That notice is driven by
+`resume_ready` on the callable (`domain.session_budget.resume_would_proceed`: `rss + FULL_CHUNK_WORST_KB < ceiling`, the
+gate's own full-chunk predictive condition; `None` when RSS is unreadable) — when it flips `true` the blue banner reads
+"Steam memory is free again — press Resume Sync" and hides the restart button. That row also shows the **last run's
 signed RSS growth** ("last run: ±X GB"), measured at EVERY terminal (completed / paused / cancelled / interrupted) so a
 paused run reads as _its own_ consumption-so-far rather than a prior clean run's: a RAW read taken unconditionally at
 run start is the baseline (`run_start_rss_kb` — captured before any chunk, so even a fully-incremental-skip run still
