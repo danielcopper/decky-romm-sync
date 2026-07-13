@@ -126,8 +126,9 @@ backend-only changes, restarting the plugin loader is sufficient without rebuild
 For frontend iteration there is a much faster loop: after a one-time `mise run dev:setup`,
 `mise run dev:watch [display]` hot-reloads the **frontend** into a windowed Big Picture on the desktop as you save, with
 no loader restarts at all — put it on a second monitor with a display target like `dp2`. Backend changes are pushed on
-demand with `mise run dev:push-backend`. See [Frontend dev loop](frontend-dev-loop.md) for the full workflow, keyboard
-shortcuts, and caveats.
+demand with `mise run dev:push-backend`. That windowed Big Picture gives the QAM panel ~59% more vertical room than the
+Deck does, so judge layout and overflow under `mise run dev:ui-scale`, which forces Steam's display scale to Game
+Mode's. See [Frontend dev loop](frontend-dev-loop.md) for the full workflow, keyboard shortcuts, and caveats.
 
 ## Deploying to Device
 

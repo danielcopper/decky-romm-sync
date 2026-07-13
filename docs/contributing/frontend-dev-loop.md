@@ -9,7 +9,9 @@ Three pieces line up:
 
 - **Desktop Big Picture is the real UI.** Desktop Steam's Big Picture window runs the same gamepadui React app as Game
   Mode — same routes, same game-detail pages — and Decky Loader injects into desktop Steam too. What you see in the
-  windowed BPM is the plugin's actual UI, not an approximation.
+  windowed BPM is the plugin's actual UI, not an approximation. It is _not_ WYSIWYG about **vertical space**, though —
+  by default the windowed BPM gives the QAM panel far more height than the Deck does. See
+  [Display scale: the dev loop lies about height](#display-scale-the-dev-loop-lies-about-height).
 - **decky-loader ships a hot-reload watcher.** The loader watches `~/homebrew/plugins` and reacts to create/modify
   events on exactly two files per plugin: `dist/index.js` and `main.py`. On a match it reloads the plugin in place —
   backend subprocess restart plus a cache-busted frontend re-import (the plugin unmounts cleanly first, so router
@@ -78,6 +80,100 @@ and only the placement is skipped. The BPM window stays a normal desktop window:
 With [mise shell completions](https://mise.jdx.dev/installing-mise.html#shells) enabled (requires the `usage` CLI, e.g.
 `eval "$(mise completion bash)"` in your shell rc), the display argument tab-completes with those targets.
 
+## Display scale: the dev loop lies about height
+
+The windowed Big Picture renders the plugin's real UI, but **not at the Deck's real size**. Measured on-device:
+
+| View                            | Big Picture window   | QuickAccess (QAM) panel  |
+| ------------------------------- | -------------------- | ------------------------ |
+| Game Mode (Deck internal panel) | dpr 1.5, CSS 853x533 | dpr 1.5, CSS **854x454** |
+| Desktop windowed BPM (default)  | dpr 1, CSS 1280x800  | dpr 1, CSS **854x720**   |
+
+The dev loop hands the QAM panel ~59% more vertical room than the device. CSS **width is 854 in both**, so layout,
+wrapping and truncation are faithful — only **height** lies. A panel that fits comfortably in the windowed BPM can
+overflow in Game Mode.
+
+The 1.5 is **Steam's own per-display "GamepadUI display scale"** — not gamescope, and not a Chromium flag (Chromium is
+pinned to `--force-device-scale-factor=1` by `steamclient.so`). Steam derives it from the display's resolution and
+physical size and pushes it into each CEF browser view; it is the same value the user sees under **Settings → Display →
+UI Scale** (range 0.5–2.5). Steam's default is **automatic**, which on the desktop's 1280x800 window comes out as 1.
+
+### `mise run dev:ui-scale`
+
+```bash
+mise run dev:ui-scale          # deck (default): force 1.5 — exact Game Mode metrics
+mise run dev:ui-scale 2.4      # a user on "Larger text" — worst case, least vertical room
+mise run dev:ui-scale steam    # adopt whatever UI Scale you have set in Steam
+mise run dev:ui-scale auto     # rescue: force automatic scaling back on, and exit
+```
+
+The task drives the two undocumented calls Steam's own settings UI uses
+(`SteamClient.Window.SetGamepadUIAutoDisplayScale` / `SetGamepadUIManualDisplayScaleFactor`) through the CEF debugger on
+`localhost:8080`, so the views are **really re-laid out and repainted** — unlike CDP's
+`Emulation.setDeviceMetricsOverride`, which only fakes `devicePixelRatio` and leaves the window unpainted. It then
+measures and prints what both views actually became, next to the Game Mode reference:
+
+```text
+$ mise run dev:ui-scale deck
+Captured prior state: AUTOMATIC scaling at dpr 1.0 (source: Steam's live settings store)
+Forcing GamepadUI display scale 1.5 (auto scaling OFF)...
+
+Measured (real, repainted — not a CDP emulation override):
+  Big Picture  dpr 1.5  CSS 854x534
+  QuickAccess  dpr 1.5  CSS 854x454
+  => QAM matches the Game Mode reference (854x454) — what you see is what the Deck renders.
+```
+
+The forcing modes **hold until Ctrl-C**. Useful factors:
+
+| Factor  | What it reproduces              | Measured QAM   |
+| ------- | ------------------------------- | -------------- |
+| 1.5     | Deck internal panel (Game Mode) | 854x454        |
+| 2.0–2.4 | A user who picked "Larger text" | 855x255 @ 2.4  |
+| ~1.28   | Docked 1080p                    | 855x546 @ 1.28 |
+| ~1.71   | Docked 1440p                    | —              |
+
+#### What it restores on exit
+
+The tool **captures the scale you were on before it ran** and puts back exactly that — on Ctrl-C, on SIGTERM, and on any
+error. If you were on automatic scaling, you get automatic scaling back. If you had deliberately set a **manual** UI
+Scale (an accessibility "Larger text" value, say), you get **that factor** back — it is never silently flipped to auto,
+which would destroy the setting. The restore is then verified against Steam's live state and the rendered
+`devicePixelRatio`, and a restore that didn't land is reported as a warning rather than assumed.
+
+`mise run dev:ui-scale auto` is different on purpose: it **unconditionally** forces automatic scaling back on. It is the
+rescue path for when a previous run was hard-killed and the state it captured died with it — it has nothing to restore,
+so it cannot honour a manual scale. If you are a manual-UI-Scale user and ever have to use it, re-set your scale in
+Steam → Settings → Display afterwards.
+
+!!! warning "A hard kill leaves the forced scale behind"
+
+    Steam persists the factor to `~/.local/share/Steam/config/config.vdf` (`UI → display → Current → ScaleFactor`,
+    flushed within seconds), keyed by a display identity the Deck **shares with Game Mode**. Ctrl-C, SIGTERM and errors
+    all restore — but a **hard kill (SIGKILL) skips the restore**, and the forced scale is what Steam keeps. If that
+    happens, or if the UI ever comes up at the wrong size, run `mise run dev:ui-scale auto`.
+
+    This is also why the prior state is read from Steam's **live settings store**
+    (`window.settingsStore.settings`) rather than from `config.vdf`: the file's `AutoScaleFactor` is **not** re-flushed
+    in-session (measured: it stayed `1` while a manual factor was applied and rendering), so trusting it would report a
+    manual-scale user as "automatic" — and restore them to the wrong thing. `config.vdf` is only the fallback source.
+
+The QAM is a popup view that Steam can recreate; Steam's scale is display state, so a recreated view picks it up. No
+re-apply loop is needed (and none should be added).
+
+### What this means for our panels
+
+**The QAM's usable height is a runtime variable, not a constant.** The user can pick any UI Scale, and docking changes
+it automatically — measured on this Deck the same QAM panel ranged from **255 CSS px** (scale 2.4) to **720 CSS px**
+(unscaled desktop window), with Game Mode's 454 in between. So:
+
+- **Never assume a pixel budget.** No fixed heights, no `maxHeight` tuned against one screenshot, nothing that only fits
+  at 454 px.
+- **Every row must be focusable**, so gamepad navigation can reach content that is scrolled out of view.
+- **Let Steam's scroll container do its job** — the panel scrolls; content below the fold is reachable, not lost.
+
+Validate a panel at 1.5 (the device) and at 2.4 (the worst case) before calling a layout done.
+
 ## Backend changes
 
 ```bash
@@ -129,5 +225,8 @@ journalctl -u plugin_loader -f
 - **The QAM Performance tab is non-functional in desktop BPM** (it needs gamescope). Irrelevant for this plugin's UI.
 - **Desktop-BPM injection is best-effort** on Decky's side — re-verify the loop still works after Decky or Steam
   updates.
-- **Do a final Game Mode pass before a release.** The windowed BPM covers UI iteration, but controller focus behavior
-  and gamescope rendering are only real in Game Mode.
+- **Game Mode comes up at the wrong size** — a `dev:ui-scale` run was hard-killed and left Steam on a forced scale (it
+  persists in `config.vdf` under the display identity Game Mode shares). Run `mise run dev:ui-scale auto`.
+- **Do a final Game Mode pass before a release.** `dev:ui-scale deck` reproduces Game Mode's CSS metrics exactly, so
+  layout and overflow can be judged from the desktop — but controller focus behavior and gamescope rendering are still
+  only real in Game Mode.
