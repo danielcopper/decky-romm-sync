@@ -113,6 +113,15 @@ class RomRepository(Protocol):
         """
         ...
 
+    def clear_all_applied_launch_options(self) -> None:
+        """Reset every recorded launch command to "unknown" (NULL).
+
+        NULL never matches a target, so the next apply re-touches everything —
+        Force Full Sync's escape hatch for Steam-side drift the recorded value
+        cannot see.
+        """
+        ...
+
 
 class RomInstallRepository(Protocol):
     """Persistence seam for the ``RomInstall`` aggregate (installed-ROM file records)."""

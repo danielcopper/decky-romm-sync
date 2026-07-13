@@ -1007,6 +1007,23 @@ class TestClearSyncCache:
         with uow:
             assert uow.sync_runs.get_running() is not None
 
+    def test_resets_recorded_launch_options_so_the_next_apply_skips_nothing(self, plugin):
+        """Force Full Sync must force past the per-item delta skip (ADR-0025).
+
+        The recorded launch command is the skip's evidence; resetting it to NULL
+        (never matches a target) makes the next apply re-touch every shortcut —
+        the repair path for Steam-side drift the recorded value cannot see.
+        """
+        uow = plugin._uow
+        _seed_rom(uow, 7, app_id=111, platform_slug="n64")
+        with uow:
+            uow.roms.set_applied_launch_options(7, "flatpak run app 'x.zip'")
+
+        plugin._sync_service.clear_sync_cache()
+
+        with uow:
+            assert uow.roms.get(7).applied_launch_options is None
+
     def test_reset_leaves_last_sync_never_not_a_stale_cancelled_attempt(self, plugin):
         """After Force Full Sync, "Last sync" reads Never — not a stale cancelled run.
 

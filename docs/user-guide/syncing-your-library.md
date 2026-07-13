@@ -99,9 +99,10 @@ complete the job.
   remaining work. This is true whether or not you restart Steam in between. Once a run finishes in full, the button goes
   back to **Sync Library**.
 - **Force Full Sync starts over from scratch.** Under the sync buttons, **Force Full Sync** clears the plugin's record
-  of what it has already synced and re-fetches every platform from RomM on the next run. Reach for it if you suspect a
-  platform is out of sync or want a clean rebuild; a normal Sync (or Resume Sync) is enough for everyday updates. It
-  appears once you have run at least one sync.
+  of what it has already synced and re-fetches every platform from RomM on the next run — and that run also rewrites
+  every shortcut instead of skipping the ones that look correct, so it repairs anything that drifted on the Steam side
+  (a manually edited or broken shortcut). Reach for it if you suspect a platform is out of sync or want a clean rebuild;
+  a normal Sync (or Resume Sync) is enough for everyday updates. It appears once you have run at least one sync.
 
 ## Multiple versions of a game
 

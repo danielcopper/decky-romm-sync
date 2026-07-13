@@ -668,7 +668,7 @@ class SyncReporter:
     # ── Cache / stats ────────────────────────────────────────────
 
     def clear_sync_cache(self):
-        """Force a full re-fetch on the next sync by clearing the sync checkpoints.
+        """Force a full re-fetch AND a full re-apply on the next sync.
 
         The incremental-skip gate (fetcher) keys off two checkpoints: the newest
         completed ``SyncRun`` (the library-wide ``last_sync``, also read by
@@ -681,12 +681,19 @@ class SyncReporter:
         sync" hint) and clearing every stamp in one short write UoW resets both reads so
         every platform full-fetches next time (and "Last sync" honestly reads
         "Never" until a fresh run completes).
+
+        The recorded ``applied_launch_options`` are reset to NULL in the same
+        UoW, so the delta apply (ADR-0025) skips nothing on that run: "force"
+        also means force past the per-item skip — the one repair path for
+        Steam-side drift the recorded value cannot see (a manually edited or
+        corrupted shortcut). The re-apply re-records every value.
         """
         with self._uow_factory() as uow:
             uow.sync_runs.delete_history()
             uow.platform_sync_state.clear()
-        self._logger.info("Sync cache cleared — next sync will do a full fetch")
-        return {"success": True, "message": "Next sync will do a full fetch"}
+            uow.roms.clear_all_applied_launch_options()
+        self._logger.info("Sync cache cleared — next sync will fully re-fetch and re-apply")
+        return {"success": True, "message": "Next sync will fully re-fetch and re-apply"}
 
     def get_sync_stats(self):
         enabled_platforms = self._settings.get("enabled_platforms", {})

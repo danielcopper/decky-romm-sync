@@ -95,6 +95,10 @@ class FakeRomRepository:
         if rom is not None:
             rom.applied_launch_options = launch_options
 
+    def clear_all_applied_launch_options(self) -> None:
+        for rom in self._roms.values():
+            rom.applied_launch_options = None
+
     def _snapshot(self) -> dict[int, Rom]:
         return copy.deepcopy(self._roms)
 

@@ -195,6 +195,16 @@ class SqliteRomRepository(BaseRepository):
             (launch_options, rom_id),
         )
 
+    def clear_all_applied_launch_options(self) -> None:
+        """Reset every ROM's recorded launch command to "unknown" (NULL).
+
+        The Force Full Sync escape hatch: NULL never matches a target, so the
+        next apply re-touches every shortcut instead of delta-skipping it —
+        the repair path for Steam-side drift the recorded value cannot see
+        (e.g. a manually edited shortcut).
+        """
+        self._conn.execute("UPDATE roms SET applied_launch_options = NULL")
+
     def delete(self, rom_id: int) -> None:
         self._conn.execute("DELETE FROM roms WHERE rom_id = ?", (rom_id,))
 
