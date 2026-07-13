@@ -1125,10 +1125,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         {stats && (
           <>
             <PanelSectionRow>
-              <Field label="Last sync" description={lastAttemptLine(stats)} focusable={true} bottomSeparator="none">
+              <Field label="Last sync" focusable={true} bottomSeparator="none">
                 {lastSyncValue(stats)}
               </Field>
             </PanelSectionRow>
+            {/* Own full-width row: inside the Field the description slot shares
+                the row with the value column and can't be stretched, so the
+                attempt line floated mid-row. Sandwiched between focusable rows,
+                so it needs no focus of its own. */}
+            {lastAttemptLine(stats) && <PanelSectionRow>{lastAttemptLine(stats)}</PanelSectionRow>}
             {stats.roms > 0 && (
               <PanelSectionRow>
                 <Field

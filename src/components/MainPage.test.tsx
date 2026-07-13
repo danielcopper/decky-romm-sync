@@ -918,11 +918,11 @@ describe("MainPage", () => {
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      const text = lastSyncText(container);
-      // Primary line: the completed run's relative time.
-      expect(text).toContain("5m ago");
-      // Secondary line: the newer cancelled attempt.
-      expect(text).toContain("last attempt: 18:03 (cancelled)");
+      // Primary line: the completed run's relative time in the field value.
+      expect(lastSyncText(container)).toContain("5m ago");
+      // Secondary line: the newer cancelled attempt as its own full-width row
+      // below the field (the in-field description slot floated mid-row).
+      expect(container.textContent).toContain("last attempt: 18:03 (cancelled)");
     });
 
     it("renders 'Never' when neither last_sync nor last_attempt is present", async () => {
