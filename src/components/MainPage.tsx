@@ -215,7 +215,9 @@ function lastSyncValue(stats: SyncStats): ReactNode {
 function lastAttemptLine(stats: SyncStats): ReactNode | undefined {
   if (!stats.last_sync || !stats.last_attempt) return undefined;
   return (
-    <div style={{ textAlign: "right", fontSize: "12px", opacity: 0.6 }}>
+    // width 100% — Steam's Field description slot doesn't stretch the child,
+    // so text-align alone leaves the line floating mid-row.
+    <div style={{ width: "100%", textAlign: "right", fontSize: "12px", opacity: 0.6 }}>
       last attempt: {formatClockTime(stats.last_attempt.finished_at)} ({stats.last_attempt.status})
     </div>
   );
@@ -1129,7 +1131,16 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             </PanelSectionRow>
             {stats.roms > 0 && (
               <PanelSectionRow>
-                <Field label="Library" description={formatLibraryLine(stats)} focusable={true} bottomSeparator="none" />
+                <Field
+                  label="Library"
+                  description={
+                    <div style={{ width: "100%", textAlign: "right", fontSize: "12px" }}>
+                      {formatLibraryLine(stats)}
+                    </div>
+                  }
+                  focusable={true}
+                  bottomSeparator="none"
+                />
               </PanelSectionRow>
             )}
           </>
