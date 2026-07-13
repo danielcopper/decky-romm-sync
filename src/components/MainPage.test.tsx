@@ -120,8 +120,6 @@ vi.mock("../utils/syncManager", () => ({
   resetSyncCancel: vi.fn(),
 }));
 
-vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
-
 // Local @decky/ui re-mock — global stub lacks ProgressBarWithInfo (used to
 // render sync + download progress). Mirror the rest with thin pass-throughs
 // + a vi.fn showModal so we can capture ConfirmModal calls.
@@ -138,6 +136,9 @@ vi.mock("@decky/ui", async () => {
         p.children as never,
       ),
     PanelSectionRow: passthrough("div"),
+    // Focusable wrappers around read-only rows (info fields, banners, progress) —
+    // pass children through a plain div so the wrapped content stays queryable.
+    Focusable: passthrough("div"),
     ButtonItem: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
       ce("button", { onClick, disabled }, children as never),
     Field: (p: AnyProps & { label?: unknown; description?: unknown }) =>
@@ -412,11 +413,14 @@ describe("MainPage", () => {
       expect(queryByTestId("version-error-card")).toBeNull();
     });
 
-    it("renders the full panel with Status / Sync / Settings sections by default", async () => {
+    it("renders the full panel with the untitled status block plus Sync / Settings sections by default", async () => {
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
       const titles = Array.from(container.querySelectorAll('[data-testid="panel-title"]')).map((n) => n.textContent);
-      expect(titles).toEqual(expect.arrayContaining(["Status", "Sync", "Settings"]));
+      // The status block leads the panel untitled; the section titles provide
+      // the block breaks.
+      expect(titles).toEqual(expect.arrayContaining(["Sync", "Settings"]));
+      expect(titles).not.toContain("Status");
     });
   });
 
@@ -456,11 +460,10 @@ describe("MainPage", () => {
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      // Library line includes "42 games" — the stat counts bound shortcuts
-      // (sibling groups), so the label says games, not ROMs (#1298 audit).
-      expect(container.textContent).toContain("42 games");
-      expect(container.textContent).toContain("3 platforms");
-      expect(container.textContent).toContain("2 collections");
+      // Pin the joined one-line library form (order, "·" separators, plural
+      // forms). The stat counts bound shortcuts (sibling groups), so the label
+      // says games, not ROMs (#1298 audit).
+      expect(container.textContent).toContain("42 games · 3 platforms · 2 collections");
     });
 
     it("testConnection success sets connected=true and clears versionError", async () => {
@@ -972,17 +975,18 @@ describe("MainPage", () => {
       expect(descs).toContain("Everything is up to date.");
     });
 
-    it("renders ROMs section with added/updated/removed counts", async () => {
+    it("renders the Games category in signed notation (added / updated / removed)", async () => {
       const c = await renderPreview({
         new_count: 3,
         changed_count: 1,
         remove_count: 2,
       });
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
-      expect(descs.some((d) => d.includes("Games: 3 added, 1 updated, 2 removed"))).toBe(true);
+      // U+2212 minus for the removed segment; " / "-separated; " · " between categories.
+      expect(descs.some((d) => d.includes("Games +3 / ~1 / −2"))).toBe(true);
     });
 
-    it("renders Platforms section from platform_collection_diff", async () => {
+    it("renders the Platforms category from platform_collection_diff", async () => {
       const c = await renderPreview({
         platform_collection_diff: {
           has_changes: true,
@@ -991,10 +995,10 @@ describe("MainPage", () => {
         },
       });
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
-      expect(descs.some((d) => d.includes("Platforms: 2 added, 1 removed"))).toBe(true);
+      expect(descs.some((d) => d.includes("Platforms +2 / −1"))).toBe(true);
     });
 
-    it("renders Collections section from collection_diff", async () => {
+    it("renders the Collections category from collection_diff", async () => {
       const c = await renderPreview({
         collection_diff: {
           has_changes: true,
@@ -1003,19 +1007,32 @@ describe("MainPage", () => {
         },
       });
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
-      expect(descs.some((d) => d.includes("Collections: 2 added, 1 removed"))).toBe(true);
+      expect(descs.some((d) => d.includes("Collections +2 / −1"))).toBe(true);
     });
 
-    it("filters zero counts from formatChanges (e.g. 0 removed → not rendered)", async () => {
+    it("joins multiple categories with ' · ' and omits zero segments", async () => {
+      const c = await renderPreview({
+        new_count: 1001,
+        changed_count: 50,
+        remove_count: 1200,
+        platform_collection_diff: { has_changes: true, added_count: 1, removed_count: 0 },
+        collection_diff: { has_changes: true, added: ["A", "B"], removed: [] },
+      });
+      const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
+      // Zero segments (platform removed, collection removed) drop out entirely.
+      expect(descs).toContain("Games +1001 / ~50 / −1200 · Platforms +1 · Collections +2");
+    });
+
+    it("omits zero segments within a category (0 removed → not rendered)", async () => {
       const c = await renderPreview({
         new_count: 1,
         changed_count: 0,
         remove_count: 0,
       });
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
-      // Should render "Games: 1 added" — no "updated" or "removed" tokens.
-      const romsLine = descs.find((d) => d.startsWith("Games:"));
-      expect(romsLine).toBe("Games: 1 added");
+      // Should render "Games +1" — no "~" or "−" segments.
+      const gamesLine = descs.find((d) => d.startsWith("Games"));
+      expect(gamesLine).toBe("Games +1");
     });
   });
 
@@ -1053,7 +1070,8 @@ describe("MainPage", () => {
       const c = await renderPreviewWithPause(true);
       const advisory = c.querySelector('[data-testid="budget-advisory"]') as HTMLElement | null;
       expect(advisory).not.toBeNull();
-      expect(advisory?.textContent).toContain("pause partway");
+      expect(advisory?.textContent).toContain("Will likely pause partway to protect Steam");
+      expect(advisory?.textContent).toContain("Restart Steam when prompted, then Resume Sync.");
       // Recolored from amber to blue — it announces normal, planned behavior (#1383).
       expect(advisory?.style.color).toBe("#7fbcff");
     });
@@ -1096,25 +1114,33 @@ describe("MainPage", () => {
       return container;
     }
 
-    it("shows 'N platforms · M collections' with both counts", async () => {
+    // The Scope row now carries the estimate too (the separate "Estimated time"
+    // preview row was merged in): "<scope> · <estimate>". These summaries have zero
+    // diffs, so the estimate is the bare fetch allowance → "~2 min".
+    it("shows 'N platforms · M collections · <estimate>' with both counts", async () => {
       const c = await renderPreviewScope(3, 2);
-      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("3 platforms · 2 collections");
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("3 platforms · 2 collections · ~2 min");
     });
 
     it("omits the collections part when the run syncs none, and singularizes", async () => {
       const c = await renderPreviewScope(1, 0);
-      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("1 platform");
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("1 platform · ~2 min");
     });
 
     it("omits the platforms part on a collections-only run (LOW-6)", async () => {
       const c = await renderPreviewScope(0, 3);
-      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("3 collections");
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("3 collections · ~2 min");
     });
 
     it("renders always (even with zero diffs)", async () => {
       const c = await renderPreviewScope(5, 0);
       // The preview description reads 'Everything is up to date.' yet the scope line still shows.
-      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("5 platforms");
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("5 platforms · ~2 min");
+    });
+
+    it("shows the estimate alone when the backend omits both scope counts (empty scope)", async () => {
+      const c = await renderPreviewScope(0, 0);
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("~2 min");
     });
   });
 
@@ -1323,25 +1349,25 @@ describe("MainPage", () => {
       return container;
     }
 
-    it("shows the live memory value and the signed last-run delta", async () => {
+    it("shows the live memory value and the signed last-run delta on one line", async () => {
       const c = await renderMemoryRow(440_000, 800_000);
       const row = c.querySelector('[data-testid="steam-memory"]');
-      expect(row?.textContent).toContain("0.4 GB");
-      // Label is "last run" (not "last sync"), so a paused run reads honestly as
-      // that run's consumption so far (#36).
-      expect(row?.textContent).toContain("last run: +0.8 GB");
+      // One line "0.4 GB · last run +0.8": the delta drops its GB unit (inline
+      // after the GB reading) and reads "last run" (not "last sync"), so a paused
+      // run reads honestly as that run's consumption so far (#36).
+      expect(row?.textContent).toBe("0.4 GB · last run +0.8");
     });
 
     it("renders a negative delta with a minus sign", async () => {
       const c = await renderMemoryRow(1_000_000, -300_000);
-      expect(c.querySelector('[data-testid="steam-memory"]')?.textContent).toContain("last run: -0.3 GB");
+      expect(c.querySelector('[data-testid="steam-memory"]')?.textContent).toBe("1.0 GB · last run -0.3");
     });
 
-    it("omits the delta line when the delta is unmeasurable (null)", async () => {
+    it("omits the delta part when the delta is unmeasurable (null)", async () => {
       const c = await renderMemoryRow(1_200_000, null);
       const row = c.querySelector('[data-testid="steam-memory"]');
-      expect(row?.textContent).toContain("1.2 GB");
-      expect(row?.textContent).not.toContain("last run:");
+      expect(row?.textContent).toBe("1.2 GB");
+      expect(row?.textContent).not.toContain("last run");
     });
 
     it("omits the whole row when the live reading is unavailable (rss_kb null)", async () => {
@@ -1371,12 +1397,12 @@ describe("MainPage", () => {
       expect(valueColor(c)).toBe("#d4343c");
     });
 
-    it("does not colour the label or the delta sub-line", async () => {
+    it("does not colour the label or the delta part", async () => {
       const c = await renderMemoryRow(2_200_000, 800_000);
-      // The delta sub-line stays uncoloured (only the value carries the colour).
-      const deltaLine = Array.from(c.querySelectorAll("span")).find((s) => s.textContent.startsWith("last run:"));
-      expect(deltaLine).toBeDefined();
-      expect((deltaLine as HTMLElement).style.color).toBe("");
+      // The delta part stays uncoloured (only the value carries the traffic-light colour).
+      const deltaPart = c.querySelector('[data-testid="steam-memory-delta"]') as HTMLElement | null;
+      expect(deltaPart).not.toBeNull();
+      expect(deltaPart!.style.color).toBe("");
     });
   });
 
@@ -1794,34 +1820,50 @@ describe("MainPage", () => {
       return container;
     }
 
+    // Applying-state readout — the separate "Estimated time" Field (sync-scope's
+    // sibling only while a run is in flight).
     function estimateText(container: HTMLElement): string | undefined {
       return container.querySelector('[data-testid="estimate-time"]')?.textContent ?? undefined;
     }
 
-    it("renders an estimate row for a small preview", async () => {
+    // Preview-state readout — the estimate now shares the Scope row (the separate
+    // preview "Estimated time" Field was merged in). These summaries carry no scope
+    // counts, so the scope segment is empty and the row is the bare estimate.
+    function scopeLine(container: HTMLElement): string | undefined {
+      return container.querySelector('[data-testid="sync-scope"]')?.textContent ?? undefined;
+    }
+
+    it("renders an estimate on the scope row for a small preview", async () => {
       // 3 new * 0.45s + 90s fetch allowance = 91.35s → ~2 min (small libraries
       // overshoot; the allowance covers the fetch/prep phase).
       const c = await renderPreviewWithCounts(3, 0);
-      expect(estimateText(c)).toBe("~2 min");
+      expect(scopeLine(c)).toBe("~2 min");
     });
 
-    it("renders an estimate row for a large preview", async () => {
+    it("renders an estimate on the scope row for a large preview", async () => {
       // 1000 new * 0.45s + 90s = 540s → ~9 min.
       const c = await renderPreviewWithCounts(1000, 0);
-      expect(estimateText(c)).toBe("~9 min");
+      expect(scopeLine(c)).toBe("~9 min");
     });
 
     it("prices updated items into the preview estimate", async () => {
       // 100 updated * 0.20s + 90s = 110s → ~2 min.
       const c = await renderPreviewWithCounts(0, 100);
-      expect(estimateText(c)).toBe("~2 min");
+      expect(scopeLine(c)).toBe("~2 min");
     });
 
-    it("shows the always-on info copy alongside the preview estimate", async () => {
+    it("shows the compact info copy alongside the preview estimate (short sync → no sleep caveat)", async () => {
+      // ~2 min preview (< 10 min threshold): the always-shown line only.
       const c = await renderPreviewWithCounts(1, 0);
-      expect(c.textContent).toContain("Progress is saved every ~200 games");
-      expect(c.textContent).toContain("Cancelling is safe");
-      expect(c.textContent).toContain("Long syncs pause while the Deck sleeps and resume on wake");
+      expect(c.textContent).toContain("Progress is saved every ~200 games — cancelling is safe.");
+      expect(c.textContent).not.toContain("Long syncs pause during sleep");
+    });
+
+    it("appends the sleep-pause caveat only when the estimate is ≥ 10 min", async () => {
+      // 1200 new * 0.45s + 90s = 630s ≥ 600s (10 min) → the caveat sentence appears.
+      const c = await renderPreviewWithCounts(1200, 0);
+      expect(c.textContent).toContain("Progress is saved every ~200 games — cancelling is safe.");
+      expect(c.textContent).toContain("Long syncs pause during sleep; keep the Deck powered.");
     });
 
     it("prices the preview row from the WALK cost (new + changed + unchanged), not the raw delta", async () => {
@@ -1850,9 +1892,9 @@ describe("MainPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(estimateText(container)).toBe("~13 min");
+      expect(scopeLine(container)).toBe("~13 min");
       // An estimate must never promise less than reality — the delta-only value is gone.
-      expect(estimateText(container)).not.toBe("~2 min");
+      expect(scopeLine(container)).not.toBe("~2 min");
     });
 
     it("renders 'up to ~X min' while applying when etaSeconds is set", async () => {

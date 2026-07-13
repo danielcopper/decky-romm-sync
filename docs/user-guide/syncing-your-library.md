@@ -32,10 +32,11 @@ collections for platforms the run did not reach.
 
 ## Time estimate and progress
 
-Before you start, the sync preview shows an **Estimated time** for the run. It is a deliberate upper bound — it assumes
-a slower pace than a re-sync usually runs at and counts every game the sync walks through, not just the handful that
-changed — so the real run almost always finishes sooner. If you sync without previewing first, the same upper bound
-appears once the run starts, shown as "up to ~X min".
+Before you start, the sync preview shows an estimated time for the run on the same line as its platform/collection scope
+(for example "3 platforms · 2 collections · ~12 min"). It is a deliberate upper bound — it assumes a slower pace than a
+re-sync usually runs at and counts every game the sync walks through, not just the handful that changed — so the real
+run almost always finishes sooner. If you sync without previewing first, the same upper bound appears once the run
+starts as an **Estimated time** line, shown as "up to ~X min".
 
 Once the sync has been creating shortcuts for a few seconds, that "up to" ceiling is replaced by a **live countdown** —
 "~9 min left" — measured from the actual speed on your device and updated as the run proceeds. Because it reflects the
@@ -62,24 +63,24 @@ A few things worth knowing for a large library:
 - **A very large sync may pause itself to protect Steam.** Steam holds every shortcut it creates in memory for the rest
   of the session, and that memory only frees on a Steam restart. A very large first import can approach that limit, so
   the plugin watches Steam's memory and, when it gets close, pauses cleanly at a safe point rather than risking a Steam
-  crash. If the preview expects this, it shows a blue note up front ("this sync is large enough that it will likely
-  pause partway… that is normal"). When a pause happens, the sync page shows a **blue banner** — "Sync paused — restart
-  Steam when convenient, then Resume Sync. Steam memory: X.X GB…" — that stays until you resume, and a toast says the
-  same. Restarting Steam frees the memory and the resume finishes the job. Once you've restarted, the banner notices on
-  its own — it changes to "Steam memory is free again — press Resume Sync to continue" and drops the restart button, so
-  you know a resume will actually work now rather than pausing again. Nothing is lost, and you are never forced out of
-  what you were doing. After a big run finishes with memory still high, a **yellow banner** recommends a Steam restart
-  before your next large sync; it clears itself once you restart.
+  crash. If the preview expects this, it shows a blue note up front ("will likely pause partway to protect Steam's
+  memory — normal for large syncs"). When a pause happens, the sync page shows a **blue banner** — "Sync paused —
+  restart Steam when convenient, then Resume Sync. Steam memory: X.X GB…" — that stays until you resume, and a toast
+  says the same. Restarting Steam frees the memory and the resume finishes the job. Once you've restarted, the banner
+  notices on its own — it changes to "Steam memory is free again — press Resume Sync to continue" and drops the restart
+  button, so you know a resume will actually work now rather than pausing again. Nothing is lost, and you are never
+  forced out of what you were doing. After a big run finishes with memory still high, a **yellow banner** recommends a
+  Steam restart before your next large sync; it clears itself once you restart.
 - **Tap "Restart Steam now" to free the memory.** Both banners include a **Restart Steam now** button. It restarts the
   Steam client (Steam closes and reopens) — the reliable way to reset its memory — and you can Resume Sync once it comes
   back. The button is disabled while a game is running (a restart would close your game), so close your game first; it
   is also unavailable while a sync is actively running.
-- **The Status section shows Steam's current memory.** A **"Steam memory: X.X GB"** row sits alongside Connection and
-  Last sync, so you can see how close Steam is to its limit at a glance (it's hidden only if the reading can't be
-  taken); while a sync is running it refreshes every few seconds so you can watch the number climb. The number is
-  colour-coded — green when there's plenty of headroom, yellow as it gets high, red once it's near the limit where syncs
-  pause. It also shows a **"last run: ±X GB"** line — how much the last sync (whether it finished, paused, or was
-  cancelled) grew Steam's memory — so a big import showing "+1.5 GB" tells you why the number climbed.
+- **The top of the panel shows Steam's current memory.** A **Steam memory** row sits alongside Connection and Last sync,
+  so you can see how close Steam is to its limit at a glance (it's hidden only if the reading can't be taken); while a
+  sync is running it refreshes every few seconds so you can watch the number climb. The number is colour-coded — green
+  when there's plenty of headroom, yellow as it gets high, red once it's near the limit where syncs pause. On the same
+  line it shows how much the last run (whether it finished, paused, or was cancelled) grew Steam's memory — for example
+  "0.6 GB · last run +1.5" — so a big import tells you why the number climbed.
 
 ## Resuming an interrupted sync
 

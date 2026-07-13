@@ -233,19 +233,20 @@ while paused) so the number tracks the climbing RSS and the blue paused banner n
 memory. That notice is driven by `resume_ready` on the callable (`domain.session_budget.resume_would_proceed`:
 `rss + FULL_CHUNK_WORST_KB < ceiling`, the gate's own full-chunk predictive condition; `None` when RSS is unreadable) —
 when it flips `true` the blue banner reads "Steam memory is free again — press Resume Sync" and hides the restart
-button. That row also shows the **last run's signed RSS growth** ("last run: ±X GB"), measured at EVERY terminal
-(completed / paused / cancelled / interrupted) so a paused run reads as _its own_ consumption-so-far rather than a prior
-clean run's: a RAW read taken unconditionally at run start is the baseline (`run_start_rss_kb` — captured before any
-chunk, so even a fully-incremental-skip run still records one and reports ≈ +0.0 GB), the terminal RSS read is the end,
-and `session_memory_delta` differences them (an approximation for information only, which a raw start baseline is fine
-for). The value is retained in `last_run_delta_kb` so `get_session_budget_status` surfaces it on a QAM remount
-(in-memory only, lost on reload, no migration; `None` when either endpoint was unmeasurable, so a stale delta is never
-shown); the UI reads it from that callable, so it is deliberately NOT put on the `sync_complete` wire. Both banners also
-offer a **Restart Steam now** button that calls `SteamClient.User.StartRestart` directly from the frontend — a
-deterministic full client restart that resets the renderer's per-session budget to the ~430 MB baseline. The button is
-disabled while a game is running and hard-guarded on click (`isAnyAppRunning`) so a restart can never close a game. The
-RSS reader and GC trigger are wired through `SyncOrchestratorConfig`; the gate's per-item cost is a parameter so a later
-per-item cover term can be added without touching the kernel's shape.
+button. That row also shows the **last run's signed RSS growth**, appended inline after the value ("X.X GB · last run
+±Y"), measured at EVERY terminal (completed / paused / cancelled / interrupted) so a paused run reads as _its own_
+consumption-so-far rather than a prior clean run's: a RAW read taken unconditionally at run start is the baseline
+(`run_start_rss_kb` — captured before any chunk, so even a fully-incremental-skip run still records one and reports ≈
++0.0 GB), the terminal RSS read is the end, and `session_memory_delta` differences them (an approximation for
+information only, which a raw start baseline is fine for). The value is retained in `last_run_delta_kb` so
+`get_session_budget_status` surfaces it on a QAM remount (in-memory only, lost on reload, no migration; `None` when
+either endpoint was unmeasurable, so a stale delta is never shown); the UI reads it from that callable, so it is
+deliberately NOT put on the `sync_complete` wire. Both banners also offer a **Restart Steam now** button that calls
+`SteamClient.User.StartRestart` directly from the frontend — a deterministic full client restart that resets the
+renderer's per-session budget to the ~430 MB baseline. The button is disabled while a game is running and hard-guarded
+on click (`isAnyAppRunning`) so a restart can never close a game. The RSS reader and GC trigger are wired through
+`SyncOrchestratorConfig`; the gate's per-item cost is a parameter so a later per-item cover term can be added without
+touching the kernel's shape.
 
 **Run/unit/chunk identity on the ack (#1041).** Every `sync_apply_unit` event carries the `run_id` (the run's
 `current_sync_id` UUID), the `unit_id` (the `WorkUnit.id`), and the `chunk_index`; the frontend echoes all three back on

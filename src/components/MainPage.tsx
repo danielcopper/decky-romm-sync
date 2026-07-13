@@ -4,6 +4,7 @@ import {
   PanelSectionRow,
   ButtonItem,
   Field,
+  Focusable,
   ProgressBar,
   ProgressBarWithInfo,
   ToggleField,
@@ -31,10 +32,10 @@ import {
   logError,
 } from "../api/backend";
 import { formatBytes } from "../utils/formatters";
+import { pluralize } from "../utils/pluralize";
 import { estimateApplySeconds, formatDuration } from "../utils/syncEstimate";
 import { observeApplyProgress, displayedEtaSeconds, resetEta, formatEtaCountdown } from "../utils/syncEta";
 import { getSyncProgress, setSyncProgress as setStoredSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
-import { scrollToTop } from "../utils/scrollHelpers";
 import { getDownloadState } from "../utils/downloadStore";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
 import { getSettingsResetState, onSettingsResetChange } from "../utils/settingsResetStore";
@@ -87,11 +88,17 @@ const CONNECTION_CALLABLE_TIMEOUT = 5000;
 /** Backend never answered after the retry budget — distinct from `false` ("not connected"). */
 type BackendFailed = "backend_failed";
 
-function formatChanges(pairs: [number, string][]): string {
+/** U+2212 MINUS SIGN — the removed-count prefix in the compact preview notation. */
+const MINUS_SIGN = "−";
+
+/** Compact signed segments — ``[[count, prefix], …]`` → ``"+N / ~M"``: each
+ *  positive count rendered as ``<prefix><count>``, zero counts dropped, joined
+ *  with `` / ``. Empty when every count is zero. */
+function signedSegments(pairs: [number, string][]): string {
   return pairs
     .filter(([n]) => n > 0)
-    .map(([n, label]) => `${n} ${label}`)
-    .join(", ");
+    .map(([n, prefix]) => `${prefix}${n}`)
+    .join(" / ");
 }
 
 const ConnectionIndicator: FC<{ connected: boolean | null | BackendFailed }> = ({ connected }) => {
@@ -209,48 +216,69 @@ function lastSyncValue(stats: SyncStats): ReactNode {
   return <span style={{ fontSize: "12px" }}>Never</span>;
 }
 
+/**
+ * Compact signed change notation for the preview — e.g.
+ * ``"Games +1001 / ~50 / −1200 · Platforms +1 · Collections +2"``. Per category
+ * the segments are added (``+N``), updated (``~N``), removed (``−N``, U+2212), in
+ * that order, ``/``-separated; a zero segment is omitted and a wholly-unchanged
+ * category is dropped. Categories join with `` · ``. Falls back to the unchanged
+ * message when nothing differs.
+ */
 function formatPreviewDescription(s: SyncPreviewSummary): string {
-  const sections: string[] = [];
-  const romChanges = formatChanges([
-    [s.new_count, "added"],
-    [s.changed_count, "updated"],
-    [s.remove_count, "removed"],
+  const categories: string[] = [];
+  const games = signedSegments([
+    [s.new_count, "+"],
+    [s.changed_count, "~"],
+    [s.remove_count, MINUS_SIGN],
   ]);
-  if (romChanges) sections.push(`Games: ${romChanges}`);
+  if (games) categories.push(`Games ${games}`);
   const p = s.platform_collection_diff;
   if (p?.has_changes) {
-    const platChanges = formatChanges([
-      [p.added_count, "added"],
-      [p.removed_count, "removed"],
+    const platforms = signedSegments([
+      [p.added_count, "+"],
+      [p.removed_count, MINUS_SIGN],
     ]);
-    if (platChanges) sections.push(`Platforms: ${platChanges}`);
+    if (platforms) categories.push(`Platforms ${platforms}`);
   }
   const d = s.collection_diff;
   if (d?.has_changes) {
-    const collChanges = formatChanges([
-      [d.added.length, "added"],
-      [d.removed.length, "removed"],
+    const collections = signedSegments([
+      [d.added.length, "+"],
+      [d.removed.length, MINUS_SIGN],
     ]);
-    if (collChanges) sections.push(`Collections: ${collChanges}`);
+    if (collections) categories.push(`Collections ${collections}`);
   }
-  return sections.length > 0 ? sections.join("; ") : "Everything is up to date.";
+  return categories.length > 0 ? categories.join(" · ") : "Everything is up to date.";
 }
 
 /**
  * Informational scope line for the preview — "N platforms · M collections" — the
- * count of enabled platforms/collections the run spans, shown always (independent
- * of the change diffs, #29). Each part is omitted when its count is 0, so a
- * collections-only run reads "3 collections" (not "0 platforms · 3 collections")
- * and a platforms-only run reads "5 platforms". Counts default to 0 when an older
- * backend omits them; a fully-empty scope falls back to "0 platforms".
+ * count of enabled platforms/collections the run spans, shown independent of the
+ * change diffs (#29). Each part is omitted when its count is 0, so a
+ * collections-only run reads "3 collections" and a platforms-only run "5
+ * platforms". Empty when both counts are 0 (an older backend that omits them) —
+ * the caller then shows the estimate alone rather than a misleading "0 platforms".
  */
 function formatSyncScope(s: SyncPreviewSummary): string {
   const platforms = s.sync_platform_count ?? 0;
   const collections = s.sync_collection_count ?? 0;
   const parts: string[] = [];
-  if (platforms > 0) parts.push(`${platforms} platform${platforms === 1 ? "" : "s"}`);
-  if (collections > 0) parts.push(`${collections} collection${collections === 1 ? "" : "s"}`);
-  return parts.length > 0 ? parts.join(" · ") : "0 platforms";
+  if (platforms > 0) parts.push(pluralize(platforms, "platform"));
+  if (collections > 0) parts.push(pluralize(collections, "collection"));
+  return parts.join(" · ");
+}
+
+/**
+ * The Library row's one-line summary — "N games · M platforms · K collections" —
+ * each part correctly singular/plural, zero parts omitted. Games is always
+ * present (the row renders only when ``roms > 0``).
+ */
+function formatLibraryLine(stats: SyncStats): string {
+  const parts = [pluralize(stats.roms, "game")];
+  if (stats.platforms > 0) parts.push(pluralize(stats.platforms, "platform"));
+  const collections = stats.collections ?? 0;
+  if (collections > 0) parts.push(pluralize(collections, "collection"));
+  return parts.join(" · ");
 }
 
 /**
@@ -268,6 +296,11 @@ function formatSyncScope(s: SyncPreviewSummary): string {
 function previewApplySeconds(s: SyncPreviewSummary): number {
   return estimateApplySeconds(s.new_count, s.changed_count + s.unchanged_count);
 }
+
+/** Preview apply-time (seconds) at/above which the hint appends the sleep-pause
+ *  caveat. Below ~10 minutes a sync finishes fast enough that the sleep/resume
+ *  note is noise rather than useful guidance; 10 min = 600 s. */
+const LONG_SYNC_HINT_THRESHOLD_SEC = 600;
 
 export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [stats, setStats] = useState<SyncStats | null>(null);
@@ -772,49 +805,57 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // Walk cost, shared with the handleApply seed (previewApplySeconds) so the
     // approved number equals the run's seed. Delta-only pricing here read "~2 min"
     // for a resume whose apply walked ~3100 items.
-    const estimateText = formatDuration(previewApplySeconds(preview.summary));
+    const applySeconds = previewApplySeconds(preview.summary);
+    const estimateText = formatDuration(applySeconds);
+    // Scope and estimate share one row: "1 platform · 2 collections · ~12 min".
+    // An older backend that omits the scope counts leaves scopeText empty, so the
+    // row shows the estimate alone.
     const scopeText = formatSyncScope(preview.summary);
+    const scopeLine = scopeText ? `${scopeText} · ${estimateText}` : estimateText;
+    // The sleep-pause caveat is only worth the extra line for a genuinely long run.
+    const hintText =
+      "Progress is saved every ~200 games — cancelling is safe." +
+      (applySeconds >= LONG_SYNC_HINT_THRESHOLD_SEC ? " Long syncs pause during sleep; keep the Deck powered." : "");
     syncBody = (
       <>
         <PanelSectionRow>
-          <Field label="Preview" description={formatPreviewDescription(preview.summary)} />
+          <Field
+            label="Preview"
+            description={formatPreviewDescription(preview.summary)}
+            focusable={true}
+            bottomSeparator="none"
+          />
         </PanelSectionRow>
         <PanelSectionRow>
-          <Field label="Scope">
+          <Field label="Scope" focusable={true} bottomSeparator="none">
             <span data-testid="sync-scope" style={{ fontSize: "12px" }}>
-              {scopeText}
+              {scopeLine}
             </span>
           </Field>
         </PanelSectionRow>
         <PanelSectionRow>
-          <Field label="Estimated time">
-            <span data-testid="estimate-time" style={{ fontSize: "12px" }}>
-              {estimateText}
-            </span>
-          </Field>
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.6)", padding: "4px 0" }}>
-            Progress is saved every ~200 games. Cancelling is safe — finished games are kept. Long syncs pause while the
-            Deck sleeps and resume on wake; keep it powered for a large first sync.
-          </div>
+          <Focusable>
+            <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.6)", padding: "4px 0" }}>{hintText}</div>
+          </Focusable>
         </PanelSectionRow>
         {preview.pause_likely ? (
           <PanelSectionRow>
-            <div
-              data-testid="budget-advisory"
-              style={{
-                fontSize: "12px",
-                color: "#7fbcff",
-                borderLeft: "3px solid rgba(61, 157, 246, 0.6)",
-                paddingLeft: "8px",
-                margin: "4px 0",
-                lineHeight: 1.4,
-              }}
-            >
-              This sync is large enough that it will likely pause partway to protect Steam&apos;s memory. That is normal
-              — restart Steam when prompted, then Resume Sync to finish.
-            </div>
+            <Focusable>
+              <div
+                data-testid="budget-advisory"
+                style={{
+                  fontSize: "12px",
+                  color: "#7fbcff",
+                  borderLeft: "3px solid rgba(61, 157, 246, 0.6)",
+                  paddingLeft: "8px",
+                  margin: "4px 0",
+                  lineHeight: 1.4,
+                }}
+              >
+                Will likely pause partway to protect Steam&apos;s memory — normal for large syncs. Restart Steam when
+                prompted, then Resume Sync.
+              </div>
+            </Focusable>
           </PanelSectionRow>
         ) : null}
         {hasChanges ? (
@@ -822,11 +863,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             <PanelSectionRow>
               <ButtonItem
                 layout="below"
+                bottomSeparator="none"
                 onClick={() => {
                   detach(handleApply());
                 }}
-                // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
-                onFocus={scrollToTop}
               >
                 Apply Sync
               </ButtonItem>
@@ -834,6 +874,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             <PanelSectionRow>
               <ButtonItem
                 layout="below"
+                bottomSeparator="none"
                 onClick={() => {
                   detach(handleDismiss());
                 }}
@@ -846,11 +887,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           <PanelSectionRow>
             <ButtonItem
               layout="below"
+              bottomSeparator="none"
               onClick={() => {
                 detach(handleDismiss());
               }}
-              // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
-              onFocus={scrollToTop}
             >
               Dismiss
             </ButtonItem>
@@ -867,8 +907,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               ProgressBarWithInfo is a Steam Field (label column | bar column);
               with no label text the empty column shoves the bar into the right
               half and clips it (#751). The bare ProgressBar is just the bar and
-              spans the full panel width. */}
-          <div style={{ width: "100%" }}>
+              spans the full panel width. Focusable so Steam's focus engine can
+              scroll the progress row into view under gamepad navigation. */}
+          <Focusable style={{ width: "100%" }}>
             <div
               style={{
                 display: "flex",
@@ -893,11 +934,13 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               indeterminate={coarseFraction === undefined}
               {...(coarseFraction !== undefined ? { nProgress: coarseFraction } : {})}
             />
-          </div>
+          </Focusable>
         </PanelSectionRow>
         {hasFineDetail && (
           <PanelSectionRow>
             <Field
+              focusable={true}
+              bottomSeparator="none"
               label={
                 <div style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
                   <Spinner width={14} height={14} />
@@ -925,7 +968,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         )}
         {etaText !== null && (
           <PanelSectionRow>
-            <Field label="Estimated time">
+            <Field label="Estimated time" focusable={true} bottomSeparator="none">
               <span data-testid="estimate-time" style={{ fontSize: "12px" }}>
                 {etaText}
               </span>
@@ -935,12 +978,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         <PanelSectionRow>
           <ButtonItem
             layout="below"
+            bottomSeparator="none"
             disabled={cancelling}
             onClick={() => {
               detach(handleCancel());
             }}
-            // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
-            onFocus={scrollToTop}
           >
             {cancelling ? "Cancelling…" : "Cancel Sync"}
           </ButtonItem>
@@ -963,12 +1005,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         <PanelSectionRow>
           <ButtonItem
             layout="below"
+            bottomSeparator="none"
             onClick={() => {
               detach(handleSync());
             }}
             disabled={loading || connectionUnavailable}
-            // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
-            onFocus={scrollToTop}
           >
             {syncButtonLabel}
           </ButtonItem>
@@ -979,6 +1020,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             description="Apply changes immediately without preview"
             checked={skipPreview}
             onChange={setSkipPreview}
+            bottomSeparator="none"
           />
         </PanelSectionRow>
         {/* Visible whenever ANY terminal run is recorded — a completed run OR a
@@ -993,6 +1035,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           <PanelSectionRow>
             <ButtonItem
               layout="below"
+              bottomSeparator="none"
               description="Clear cached sync data to re-fetch all platforms"
               onClick={() => {
                 detach(
@@ -1025,15 +1068,25 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     <>
       {settingsReset.pending && <SettingsResetBanner backedUpTo={settingsReset.backedUpTo} />}
       {playtimeScope.pending && <PlaytimeScopeBanner />}
-      <PanelSection title="Status">
+      {/* Untitled status block (Connection / Last sync / Library / Steam memory)
+          leads the panel — the following PanelSection titles provide the block
+          breaks, so no "Status" title is needed. */}
+      <PanelSection>
         {retrodeckBanner && (
           <PanelSectionRow>
-            <WarningCard title={retrodeckBanner.title} message={retrodeckBanner.message} compact />
+            {/* WarningCard is shared with the game-detail context, so it carries no
+                focusable child of its own — wrap it here (QAM-only) so gamepad focus
+                can reach it. */}
+            <Focusable>
+              <WarningCard title={retrodeckBanner.title} message={retrodeckBanner.message} compact />
+            </Focusable>
           </PanelSectionRow>
         )}
         <PanelSectionRow>
           <Field
             label="Connection"
+            focusable={true}
+            bottomSeparator="none"
             description={
               connected === "backend_failed" ? "Plugin backend failed to start — check Decky logs." : undefined
             }
@@ -1046,17 +1099,13 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         {stats && (
           <>
             <PanelSectionRow>
-              <Field label="Last sync">{lastSyncValue(stats)}</Field>
+              <Field label="Last sync" focusable={true} bottomSeparator="none">
+                {lastSyncValue(stats)}
+              </Field>
             </PanelSectionRow>
             {stats.roms > 0 && (
               <PanelSectionRow>
-                <Field label="Library">
-                  <span style={{ fontSize: "12px", display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-                    <span>{stats.roms} games</span>
-                    {stats.platforms > 0 && <span>{stats.platforms} platforms</span>}
-                    {(stats.collections ?? 0) > 0 && <span>{stats.collections} collections</span>}
-                  </span>
-                </Field>
+                <Field label="Library" description={formatLibraryLine(stats)} focusable={true} bottomSeparator="none" />
               </PanelSectionRow>
             )}
           </>
@@ -1066,13 +1115,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             reading is unavailable (rss_kb null) rather than shown as a blank. */}
         {budgetStatus?.rss_kb != null && (
           <PanelSectionRow>
-            <Field label="Steam memory">
-              <span
-                data-testid="steam-memory"
-                style={{ fontSize: "12px", display: "flex", flexDirection: "column", alignItems: "flex-end" }}
-              >
+            <Field label="Steam memory" focusable={true} bottomSeparator="none">
+              <span data-testid="steam-memory" style={{ fontSize: "12px" }}>
                 {/* Only the value gets traffic-light colouring (green/yellow/red),
-                    driven by the payload thresholds; the label + delta stay uncoloured. */}
+                    driven by the payload thresholds; the delta stays muted. Both sit
+                    on one line: "0.6 GB · last run +0.7". */}
                 <span
                   data-testid="steam-memory-value"
                   style={{
@@ -1082,7 +1129,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                   {formatGb(budgetStatus.rss_kb)}
                 </span>
                 {budgetStatus.memory_delta_kb != null && (
-                  <span style={{ opacity: 0.6 }}>last run: {formatSignedGb(budgetStatus.memory_delta_kb)}</span>
+                  <span data-testid="steam-memory-delta" style={{ opacity: 0.6 }}>
+                    {" · last run "}
+                    {formatSignedGb(budgetStatus.memory_delta_kb)}
+                  </span>
                 )}
               </span>
             </Field>
@@ -1090,7 +1140,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         )}
         {retroarchWarning?.warning && (
           <PanelSectionRow>
-            <Field label="RetroArch: input_driver issue" description={`Using "${retroarchWarning.current}"`}>
+            <Field
+              label="RetroArch: input_driver issue"
+              description={`Using "${retroarchWarning.current}"`}
+              bottomSeparator="none"
+            >
               <DialogButton
                 onClick={() =>
                   showModal(
@@ -1116,7 +1170,6 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                     />,
                   )
                 }
-                onFocus={scrollToTop}
               >
                 Fix
               </DialogButton>
@@ -1126,30 +1179,27 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         {saveSortMigration.pending && (
           <>
             <PanelSectionRow>
-              <div
-                style={{
-                  padding: "8px 12px",
-                  backgroundColor: "rgba(212, 167, 44, 0.15)",
-                  borderLeft: "3px solid #d4a72c",
-                  borderRadius: "4px",
-                  fontSize: "12px",
-                }}
-              >
-                <div style={{ fontWeight: "bold", color: "#d4a72c", marginBottom: "4px" }}>
-                  {"\u26A0\uFE0F"} RetroArch save sorting changed
+              <Focusable>
+                <div
+                  style={{
+                    padding: "8px 12px",
+                    backgroundColor: "rgba(212, 167, 44, 0.15)",
+                    borderLeft: "3px solid #d4a72c",
+                    borderRadius: "4px",
+                    fontSize: "12px",
+                  }}
+                >
+                  <div style={{ fontWeight: "bold", color: "#d4a72c", marginBottom: "4px" }}>
+                    {"\u26A0\uFE0F"} RetroArch save sorting changed
+                  </div>
+                  <div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
+                    {saveSortMigration.saves_count ?? 0} save file(s) to migrate
+                  </div>
                 </div>
-                <div style={{ color: "rgba(255, 255, 255, 0.7)" }}>
-                  {saveSortMigration.saves_count ?? 0} save file(s) to migrate
-                </div>
-              </div>
+              </Focusable>
             </PanelSectionRow>
             <PanelSectionRow>
-              <ButtonItem
-                layout="below"
-                onClick={() => onNavigate("settings")}
-                // @ts-expect-error onFocus works at runtime; not in Decky's ButtonItem types
-                onFocus={scrollToTop}
-              >
+              <ButtonItem layout="below" bottomSeparator="none" onClick={() => onNavigate("settings")}>
                 Go to Settings
               </ButtonItem>
             </PanelSectionRow>
@@ -1161,7 +1211,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         {syncBody}
         {status && !syncing && !preview && (
           <PanelSectionRow>
-            <Field label={status} />
+            <Field label={status} focusable={true} bottomSeparator="none" />
           </PanelSectionRow>
         )}
       </PanelSection>
@@ -1184,16 +1234,20 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           ))}
           {activeDownloads.length > 2 && (
             <PanelSectionRow>
-              <Field label={`+${activeDownloads.length - 2} more downloading`} />
+              <Field
+                label={`+${activeDownloads.length - 2} more downloading`}
+                focusable={true}
+                bottomSeparator="none"
+              />
             </PanelSectionRow>
           )}
           {completedDownloads.length > 0 && (
             <PanelSectionRow>
-              <Field label={`${completedDownloads.length} completed`} />
+              <Field label={`${completedDownloads.length} completed`} focusable={true} bottomSeparator="none" />
             </PanelSectionRow>
           )}
           <PanelSectionRow>
-            <ButtonItem layout="below" onClick={() => onNavigate("downloads")}>
+            <ButtonItem layout="below" bottomSeparator="none" onClick={() => onNavigate("downloads")}>
               View All
             </ButtonItem>
           </PanelSectionRow>
@@ -1202,22 +1256,22 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
 
       <PanelSection title="Settings">
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => onNavigate("library")}>
+          <ButtonItem layout="below" bottomSeparator="none" onClick={() => onNavigate("library")}>
             Library
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => onNavigate("system")}>
+          <ButtonItem layout="below" bottomSeparator="none" onClick={() => onNavigate("system")}>
             System
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => onNavigate("settings")}>
+          <ButtonItem layout="below" bottomSeparator="none" onClick={() => onNavigate("settings")}>
             Settings
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => onNavigate("data")}>
+          <ButtonItem layout="below" bottomSeparator="none" onClick={() => onNavigate("data")}>
             Data Management
           </ButtonItem>
         </PanelSectionRow>

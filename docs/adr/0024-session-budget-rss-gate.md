@@ -100,21 +100,22 @@ is fail-open — a measurement failure never blocks a sync.**
   (conservative fail-open). Because the poll runs only during a sync, the QAM also polls the callable every ~10 s while
   a paused banner is showing, so the flip happens on its own after the user restarts — the user isn't left staring at
   stale "restart Steam" copy over a fresh green reading.
-- **An always-on memory row with the last-run delta.** The QAM Status section carries a permanent "Steam memory: X.X GB"
-  row (the same live reading, omitted entirely when `rss_kb` is null) with a "last run: ±X GB" sub-line — the last run's
-  signed RSS growth, `end - start`, measured at EVERY terminal (completed, paused, cancelled, interrupted) so a paused
-  run reads honestly as _that_ run's consumption-so-far (~+1.5 GB) rather than leaving a prior clean run's number. A
-  **raw** read taken at run start (captured unconditionally in the run-scoped box, so even a fully-incremental-skip run
-  that applies nothing still records a baseline and reports ≈ +0.0 GB) is the start; the terminal RSS read is the end.
-  The delta is an approximation for information only — a raw start baseline (which may hold transient garbage) is fine
-  for it. The signed value is retained in memory so `get_session_budget_status` returns it on a QAM remount
-  (`memory_delta_kb`; in-memory only — a plugin reload loses it, no migration); the UI reads it from that callable, so
-  it is deliberately NOT put on the `sync_complete` wire. It degrades to no sub-line whenever either endpoint was
-  unmeasurable, so a stale number is never shown. The value text is traffic-light coloured — green below the advisory
-  floor, yellow at/above it (`warn_kb`, the same line as the yellow banner), red at/above the pause ceiling
-  (`ceiling_kb`) — and all three thresholds ride the `get_session_budget_status` payload so the frontend holds no
-  threshold magic numbers. While a sync is running the row polls the callable every ~5 s so the number (and its colour)
-  track the climbing RSS instead of the stale mount-time reading.
+- **An always-on memory row with the last-run delta.** The QAM status block carries a permanent Steam memory row (the
+  same live reading, omitted entirely when `rss_kb` is null) with the last run's signed RSS growth appended inline on
+  the same line ("X.X GB · last run +Y", the delta's GB unit dropped as redundant next to the reading) — `end - start`,
+  measured at EVERY terminal (completed, paused, cancelled, interrupted) so a paused run reads honestly as _that_ run's
+  consumption-so-far (~+1.5 GB) rather than leaving a prior clean run's number. A **raw** read taken at run start
+  (captured unconditionally in the run-scoped box, so even a fully-incremental-skip run that applies nothing still
+  records a baseline and reports ≈ +0.0 GB) is the start; the terminal RSS read is the end. The delta is an
+  approximation for information only — a raw start baseline (which may hold transient garbage) is fine for it. The
+  signed value is retained in memory so `get_session_budget_status` returns it on a QAM remount (`memory_delta_kb`;
+  in-memory only — a plugin reload loses it, no migration); the UI reads it from that callable, so it is deliberately
+  NOT put on the `sync_complete` wire. It degrades to no delta segment whenever either endpoint was unmeasurable, so a
+  stale number is never shown. The value text is traffic-light coloured — green below the advisory floor, yellow
+  at/above it (`warn_kb`, the same line as the yellow banner), red at/above the pause ceiling (`ceiling_kb`) — and all
+  three thresholds ride the `get_session_budget_status` payload so the frontend holds no threshold magic numbers. While
+  a sync is running the row polls the callable every ~5 s so the number (and its colour) track the climbing RSS instead
+  of the stale mount-time reading.
 - **"Restart Steam now" — a deterministic full client restart, not a renderer reload.** Both banners carry a **Restart
   Steam now** button that calls `SteamClient.User.StartRestart(false)` directly from the frontend (no backend callable).
   A full Steam client restart deterministically resets the renderer's per-session heap budget to the ~430 MB baseline.

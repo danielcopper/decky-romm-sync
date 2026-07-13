@@ -1,5 +1,5 @@
 import { FC, ReactNode } from "react";
-import { PanelSectionRow, ButtonItem } from "@decky/ui";
+import { PanelSectionRow, ButtonItem, Focusable } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { isAnyAppRunning } from "../utils/runningApps";
 
@@ -18,14 +18,15 @@ export function formatGb(kb: number): string {
 }
 
 /**
- * Format a signed KB delta as a one-decimal decimal-GB string with an explicit
- * ``+``/``-`` sign, e.g. ``+800000 → "+0.8 GB"``, ``-300000 → "-0.3 GB"``. Zero
- * (and anything rounding to it) reads ``+0.0 GB``. Used for the "last sync" memory
- * delta row (#1383).
+ * Format a signed KB delta as a one-decimal, unit-less decimal-GB string with an
+ * explicit ``+``/``-`` sign, e.g. ``+800000 → "+0.8"``, ``-300000 → "-0.3"``. Zero
+ * (and anything rounding to it) reads ``+0.0``. The GB unit is dropped because the
+ * only caller renders it inline right after the unit-carrying live reading
+ * ("0.6 GB · last run +0.7"), so repeating "GB" would read redundantly (#1383).
  */
 export function formatSignedGb(kb: number): string {
   const gb = kb / 1_000_000;
-  return `${gb >= 0 ? "+" : "-"}${Math.abs(gb).toFixed(1)} GB`;
+  return `${gb >= 0 ? "+" : "-"}${Math.abs(gb).toFixed(1)}`;
 }
 
 /**
@@ -60,18 +61,23 @@ function restartSteam(): void {
 function bannerCard(accent: string, background: string, testId: string, title: string, body: string): ReactNode {
   return (
     <PanelSectionRow>
-      <div
-        data-testid={testId}
-        style={{
-          padding: "8px 12px",
-          backgroundColor: background,
-          borderLeft: `3px solid ${accent}`,
-          borderRadius: "4px",
-        }}
-      >
-        <div style={{ fontSize: "13px", fontWeight: "bold", color: accent, marginBottom: "6px" }}>{title}</div>
-        <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.85)", lineHeight: 1.5 }}>{body}</div>
-      </div>
+      {/* Focusable so Steam's gamepad focus engine can reach and scroll the banner
+          into view — this component is QAM-only. The card div keeps the testId +
+          styling; the wrapper adds only the focus highlight. */}
+      <Focusable>
+        <div
+          data-testid={testId}
+          style={{
+            padding: "8px 12px",
+            backgroundColor: background,
+            borderLeft: `3px solid ${accent}`,
+            borderRadius: "4px",
+          }}
+        >
+          <div style={{ fontSize: "13px", fontWeight: "bold", color: accent, marginBottom: "6px" }}>{title}</div>
+          <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.85)", lineHeight: 1.5 }}>{body}</div>
+        </div>
+      </Focusable>
     </PanelSectionRow>
   );
 }

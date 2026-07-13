@@ -25,10 +25,10 @@ describe("formatGb", () => {
 });
 
 describe("formatSignedGb", () => {
-  it("prefixes an explicit sign", () => {
-    expect(formatSignedGb(800000)).toBe("+0.8 GB");
-    expect(formatSignedGb(-300000)).toBe("-0.3 GB");
-    expect(formatSignedGb(0)).toBe("+0.0 GB");
+  it("prefixes an explicit sign and drops the unit (rendered inline after the GB reading)", () => {
+    expect(formatSignedGb(800000)).toBe("+0.8");
+    expect(formatSignedGb(-300000)).toBe("-0.3");
+    expect(formatSignedGb(0)).toBe("+0.0");
   });
 });
 
