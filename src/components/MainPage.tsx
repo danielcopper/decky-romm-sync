@@ -827,11 +827,18 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           />
         </PanelSectionRow>
         <PanelSectionRow>
-          <Field label="Scope" focusable={true} bottomSeparator="none">
-            <span data-testid="sync-scope" style={{ fontSize: "12px" }}>
-              {scopeLine}
-            </span>
-          </Field>
+          {/* Full-width description line like Preview above: the scope+estimate
+              text wraps badly when squeezed into a Field's narrow value column. */}
+          <Field
+            label="Scope"
+            description={
+              <span data-testid="sync-scope" style={{ fontSize: "12px" }}>
+                {scopeLine}
+              </span>
+            }
+            focusable={true}
+            bottomSeparator="none"
+          />
         </PanelSectionRow>
         <PanelSectionRow>
           <Focusable>
