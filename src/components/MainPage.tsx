@@ -215,9 +215,10 @@ function lastSyncValue(stats: SyncStats): ReactNode {
 function lastAttemptLine(stats: SyncStats): ReactNode | undefined {
   if (!stats.last_sync || !stats.last_attempt) return undefined;
   return (
-    // width 100% — Steam's Field description slot doesn't stretch the child,
-    // so text-align alone leaves the line floating mid-row.
-    <div style={{ width: "100%", textAlign: "right", fontSize: "12px", opacity: 0.6 }}>
+    // Full-width right-aligned line. The negative top margin swallows the
+    // stacked PanelSectionRow padding so the gap to its field matches the
+    // in-field description gap of the Library row.
+    <div style={{ width: "100%", textAlign: "right", fontSize: "12px", opacity: 0.6, marginTop: "-8px" }}>
       last attempt: {formatClockTime(stats.last_attempt.finished_at)} ({stats.last_attempt.status})
     </div>
   );
@@ -1113,6 +1114,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             label="Connection"
             focusable={true}
             bottomSeparator="none"
+            padding="compact"
             description={
               connected === "backend_failed" ? "Plugin backend failed to start — check Decky logs." : undefined
             }
@@ -1125,7 +1127,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         {stats && (
           <>
             <PanelSectionRow>
-              <Field label="Last sync" focusable={true} bottomSeparator="none">
+              <Field label="Last sync" focusable={true} bottomSeparator="none" padding="compact">
                 {lastSyncValue(stats)}
               </Field>
             </PanelSectionRow>
@@ -1138,6 +1140,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               <PanelSectionRow>
                 <Field
                   label="Library"
+                  padding="compact"
                   description={
                     <div style={{ width: "100%", textAlign: "right", fontSize: "12px" }}>
                       {formatLibraryLine(stats)}
@@ -1155,7 +1158,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             reading is unavailable (rss_kb null) rather than shown as a blank. */}
         {budgetStatus?.rss_kb != null && (
           <PanelSectionRow>
-            <Field label="Steam memory" focusable={true} bottomSeparator="none">
+            <Field label="Steam memory" focusable={true} bottomSeparator="none" padding="compact">
               <span data-testid="steam-memory" style={{ fontSize: "12px" }}>
                 {/* Only the value gets traffic-light colouring (green/yellow/red),
                     driven by the payload thresholds; the delta stays muted. Both sit
