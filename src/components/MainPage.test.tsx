@@ -1092,7 +1092,9 @@ describe("MainPage", () => {
       vi.mocked(backend.syncPreview).mockResolvedValue({
         success: true,
         summary: {
-          new_count: 0,
+          // One new item: the scope/hint rows describe the run Apply would
+          // start, so they only render when the delta is non-empty.
+          new_count: 1,
           changed_count: 0,
           unchanged_count: 0,
           remove_count: 0,
@@ -1132,15 +1134,41 @@ describe("MainPage", () => {
       expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("3 collections · ~2 min");
     });
 
-    it("renders always (even with zero diffs)", async () => {
-      const c = await renderPreviewScope(5, 0);
-      // The preview description reads 'Everything is up to date.' yet the scope line still shows.
-      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("5 platforms · ~2 min");
-    });
-
     it("shows the estimate alone when the backend omits both scope counts (empty scope)", async () => {
       const c = await renderPreviewScope(0, 0);
       expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("~2 min");
+    });
+
+    it("hides the scope line and the progress hint on an empty delta (nothing to apply)", async () => {
+      // Scope/estimate and "Progress is saved…" describe the run Apply would
+      // start; with 'Everything is up to date.' + Dismiss there is no run.
+      vi.mocked(backend.syncPreview).mockResolvedValue({
+        success: true,
+        summary: {
+          new_count: 0,
+          changed_count: 0,
+          unchanged_count: 0,
+          remove_count: 0,
+          disabled_platform_remove_count: 0,
+          sync_platform_count: 5,
+          sync_collection_count: 0,
+        },
+        new_names: [],
+        changed_names: [],
+        preview_id: "p-empty",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const descs = Array.from(container.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
+      expect(descs).toContain("Everything is up to date.");
+      expect(container.querySelector('[data-testid="sync-scope"]')).toBeNull();
+      expect(container.textContent).not.toContain("Progress is saved");
+      expect(buttonByExactText(container, "Dismiss")).not.toBeNull();
     });
   });
 
@@ -3443,7 +3471,11 @@ describe("MainPage", () => {
         },
       ]);
       const container = await renderAndTick();
-      expect(container.textContent).toContain("2 completed");
+      // Self-describing label — the heading-less downloads block gives the row
+      // no context of its own.
+      expect(container.textContent).toContain("2 downloads completed");
+      // The block ends in a rule so it doesn't run into the menu buttons.
+      expect(container.querySelectorAll('[data-testid="block-separator"]')).toHaveLength(3);
     });
 
     it("active item with total_bytes > 0 renders nProgress = (bytes/total)*100, indeterminate=false", async () => {

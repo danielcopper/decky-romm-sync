@@ -839,25 +839,32 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             bottomSeparator="none"
           />
         </PanelSectionRow>
-        <PanelSectionRow>
-          {/* Full-width description line like Preview above: the scope+estimate
-              text wraps badly when squeezed into a Field's narrow value column. */}
-          <Field
-            label="Scope"
-            description={
-              <span data-testid="sync-scope" style={{ fontSize: "12px" }}>
-                {scopeLine}
-              </span>
-            }
-            focusable={true}
-            bottomSeparator="none"
-          />
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <Focusable>
-            <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.6)", padding: "4px 0" }}>{hintText}</div>
-          </Focusable>
-        </PanelSectionRow>
+        {/* Scope/estimate and the progress-is-saved hint describe the run the
+            Apply button would start — with an empty delta there is no run, so
+            "Everything is up to date." + Dismiss stand alone. */}
+        {hasChanges && (
+          <PanelSectionRow>
+            {/* Full-width description line like Preview above: the scope+estimate
+                text wraps badly when squeezed into a Field's narrow value column. */}
+            <Field
+              label="Scope"
+              description={
+                <span data-testid="sync-scope" style={{ fontSize: "12px" }}>
+                  {scopeLine}
+                </span>
+              }
+              focusable={true}
+              bottomSeparator="none"
+            />
+          </PanelSectionRow>
+        )}
+        {hasChanges && (
+          <PanelSectionRow>
+            <Focusable>
+              <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.6)", padding: "4px 0" }}>{hintText}</div>
+            </Focusable>
+          </PanelSectionRow>
+        )}
         {preview.pause_likely ? (
           <PanelSectionRow>
             <Focusable>
@@ -1259,7 +1266,13 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           )}
           {completedDownloads.length > 0 && (
             <PanelSectionRow>
-              <Field label={`${completedDownloads.length} completed`} focusable={true} bottomSeparator="none" />
+              {/* Self-describing — the downloads block carries no heading, so a
+                  bare "1 completed" floats without context. */}
+              <Field
+                label={`${pluralize(completedDownloads.length, "download")} completed`}
+                focusable={true}
+                bottomSeparator="none"
+              />
             </PanelSectionRow>
           )}
           <PanelSectionRow>
@@ -1267,6 +1280,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               View All
             </ButtonItem>
           </PanelSectionRow>
+          <BlockSeparator />
         </PanelSection>
       )}
 
