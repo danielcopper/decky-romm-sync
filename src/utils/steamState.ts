@@ -2,9 +2,9 @@
  * Wrap MobX state mutations so Steam's observable stores allow direct writes.
  * On a strict-actions mobx build ``__mobxGlobals.allowStateChanges`` gates writes
  * to observables; flipping it true around the block (and restoring the prior
- * value) keeps direct overview mutations — metadata fields, cover
- * ``rt_custom_image_mtime`` — working there and on today's permissive build. A
- * no-op when mobx globals aren't present.
+ * value) keeps direct overview mutations — e.g. the metadata-patch fields —
+ * working there and on today's permissive build. A no-op when mobx globals
+ * aren't present.
  */
 export function stateTransaction<T>(block: () => T): T {
   // `typeof` guard so a bare global reference never throws where mobx isn't

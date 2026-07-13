@@ -74,9 +74,8 @@ interface SteamAppOverview {
   rt_last_time_played?: number;
   rt_last_time_played_or_installed?: number;
   // Epoch-seconds cache-buster for the library tile's custom-image URL
-  // (`/customimage/{appid}?v={rt_custom_image_mtime}`). A full client restart
-  // normally stamps it; the cover nudge stamps it per created shortcut so a
-  // freshly-written grid cover is picked up on the tile's next render.
+  // (`/customimage/{appid}?v={rt_custom_image_mtime}`). Steam stamps it itself
+  // when artwork is set through SetCustomArtworkForApp or on a client restart.
   rt_custom_image_mtime?: number;
   m_setStoreCategories?: Set<number>;
   local_per_client_data?: SteamPerClientData;

@@ -1,9 +1,11 @@
-"""Tests for ``domain.sync_chunking.build_unit_chunks`` — per-unit apply chunking.
+"""Tests for ``domain.sync_chunking`` — per-unit apply chunking + wire shaping.
 
 The chunker slices a unit's emitted shortcuts into durable commit chunks. It is
 pure and load-bearing for two safety properties: no sibling group is ever split
 across a chunk boundary (so a group's rows always commit together), and every
 fetched ROM lands in exactly one chunk's ``rom_ids`` (so each row commits once).
+``wire_shortcuts`` projects a chunk's entries to the frontend shape, stripping the
+backend-internal keys.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from typing import Any
 from hypothesis import given
 from hypothesis import strategies as st
 
-from domain.sync_chunking import UnitChunk, build_unit_chunks
+from domain.sync_chunking import UnitChunk, build_unit_chunks, wire_shortcuts
 
 
 def _sd(rom_id: int, key: str | None) -> dict[str, Any]:
@@ -257,3 +259,45 @@ def test_property_binding_target_lands_in_own_chunk(unit):
         for entry in chunk.emitted:
             target = int(entry.get("bind_rom_id", entry["rom_id"]))
             assert rid_to_chunk.get(target) == ci
+
+
+class TestWireShortcuts:
+    def test_strips_cover_path_and_bind_rom_id_but_keeps_frontend_fields(self):
+        """The wire entry drops backend-internal keys, keeps what the frontend reads."""
+        entry = {
+            "rom_id": 1,
+            "name": "Game",
+            "exe": "/bin/rom-launcher",
+            "start_dir": "/bin",
+            "launch_options": "",
+            "platform_name": "N64",
+            "cover_path": "/cache/1.png",
+            "bind_rom_id": 2,
+        }
+        wire = wire_shortcuts([entry])
+        assert wire == [
+            {
+                "rom_id": 1,
+                "name": "Game",
+                "exe": "/bin/rom-launcher",
+                "start_dir": "/bin",
+                "launch_options": "",
+                "platform_name": "N64",
+            }
+        ]
+
+    def test_does_not_mutate_the_source_entries(self):
+        """The source entries keep their internal keys — pending_sync reads them at commit."""
+        entry = {"rom_id": 1, "cover_path": "/cache/1.png", "bind_rom_id": 2}
+        wire_shortcuts([entry])
+        assert entry == {"rom_id": 1, "cover_path": "/cache/1.png", "bind_rom_id": 2}
+
+    def test_entry_without_internal_keys_passes_through_unchanged(self):
+        """A plain create entry (no cover_path / bind_rom_id) is copied verbatim."""
+        entry = {"rom_id": 9, "name": "Solo", "launch_options": ""}
+        wire = wire_shortcuts([entry])
+        assert wire == [entry]
+        assert wire[0] is not entry  # a fresh copy, never the same object
+
+    def test_empty_list_yields_empty_list(self):
+        assert wire_shortcuts([]) == []

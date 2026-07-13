@@ -16,24 +16,16 @@
  *   - sync_plan listener in index.tsx (resetSyncDelta at run start)
  *
  * Read by:
- *   - onSyncComplete in index.tsx (getSyncDelta for the terminal toast;
- *     getAckedCreatedAppIds for the cover-mtime sweep + heal poll)
+ *   - onSyncComplete in index.tsx (getSyncDelta for the terminal toast)
  */
 
 const created = new Set<number>();
 const removed = new Set<number>();
-// Subset of `created` whose chunk's ack the backend actually committed (grid
-// files written). onSyncComplete cover-stamps only these — a cancelled/interrupted
-// run's final in-flight chunk creates shortcuts frontend-side (in `created`) whose
-// ack was skipped, so their covers were never written; stamping them would point
-// the tile at a 404. Recorded by the syncManager per-chunk stamp site, post-ack.
-const ackedCreated = new Set<number>();
 
 /** Clear all sets at the start of a run (sync_plan fires once per run). */
 export function resetSyncDelta(): void {
   created.clear();
   removed.clear();
-  ackedCreated.clear();
 }
 
 /** Record a newly created shortcut's appId (real addShortcut call). */
@@ -46,30 +38,7 @@ export function recordSyncRemoved(appId: number): void {
   removed.add(appId);
 }
 
-/**
- * Record the appIds a chunk newly created AND whose ack the backend committed
- * (grid files written) — the safe-to-cover-stamp subset. Called by the syncManager
- * per-chunk stamp site after ``reportUnitResults`` resolves.
- */
-export function recordSyncAcked(appIds: number[]): void {
-  for (const appId of appIds) ackedCreated.add(appId);
-}
-
 /** The deduplicated created/removed counts for the current run. */
 export function getSyncDelta(): { added: number; removed: number } {
   return { added: created.size, removed: removed.size };
-}
-
-/** The deduplicated appIds created this run (real addShortcut calls). */
-export function getCreatedAppIds(): number[] {
-  return [...created];
-}
-
-/**
- * The deduplicated appIds created this run whose chunk was ACKED (committed +
- * grid files written). The safe set to cover-stamp — excludes a cancelled run's
- * uncommitted in-flight chunk (whose covers don't exist server-side yet).
- */
-export function getAckedCreatedAppIds(): number[] {
-  return [...ackedCreated];
 }

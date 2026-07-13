@@ -256,7 +256,6 @@ describe("addShortcut — overview-readiness poll + empty-launch-options skip", 
       start_dir: "/home/deck",
       launch_options: launchOptions,
       platform_name: "PSX",
-      cover_path: "",
     };
   }
 

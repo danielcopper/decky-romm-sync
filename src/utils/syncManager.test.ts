@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act } from "@testing-library/react";
 import * as backend from "../api/backend";
 import { emitDeckyEvent } from "../test-utils/decky-api-mock";
-import { resetSyncDelta, getSyncDelta, getAckedCreatedAppIds } from "./syncDeltaStore";
+import { resetSyncDelta, getSyncDelta } from "./syncDeltaStore";
 import { getSyncProgress, onSyncProgressChange } from "./syncProgress";
 import type { SyncApplyUnitData, SyncProgress } from "../types";
 
@@ -55,7 +55,6 @@ function unit(launchOptions: string, runId = "run-1"): SyncApplyUnitData {
         start_dir: "/home/deck",
         launch_options: launchOptions,
         platform_name: "PSX",
-        cover_path: "",
       },
     ],
   };
@@ -130,15 +129,14 @@ describe("syncManager — group-aware emit: one Steam shortcut per game (ADR-002
       start_dir: "/home/deck",
       launch_options: "",
       platform_name: "N64",
-      cover_path: "",
       ...overrides,
     };
   }
 
   it("reuses the existing shortcut for a rebind entry without applying cover artwork", async () => {
     // The backend collapsed a rebinding group to ONE entry keyed to the vanished
-    // bound sibling's rom_id (already in Steam as appId 5000), naming the
-    // representative in bind_rom_id. The frontend reuses that shortcut.
+    // bound sibling's rom_id (already in Steam as appId 5000). The frontend reuses
+    // that shortcut by rom_id, so a rebind lands on the update path.
     getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>([[1, 5000]]));
     vi.mocked(backend.getArtworkBase64).mockClear();
     const jpCmd = 'flatpak run net.retrodeck.retrodeck "/games/zelda_jp.z64"';
@@ -153,7 +151,7 @@ describe("syncManager — group-aware emit: one Steam shortcut per game (ADR-002
       chunk_count: 1,
       chunk_offset: 0,
       unit_total: 1,
-      shortcuts: [groupItem({ rom_id: 1, name: "Zelda (USA)", launch_options: jpCmd, bind_rom_id: 2 })],
+      shortcuts: [groupItem({ rom_id: 1, name: "Zelda (USA)", launch_options: jpCmd })],
     };
 
     initUnitSyncManager();
@@ -167,9 +165,8 @@ describe("syncManager — group-aware emit: one Steam shortcut per game (ADR-002
     expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(5000, jpCmd);
     expect(addShortcut).not.toHaveBeenCalled();
     expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "1": 5000 }, "run-rebind", 1, 0);
-    // Covers are NOT pushed through CEF during sync — the backend writes each
-    // {app_id}p.png grid file at commit and Steam loads it lazily. Applying every
-    // cover here overflowed the CEF heap on large libraries (#797 / Option A).
+    // Covers are applied to CREATES only. A rebind is an update (existing shortcut),
+    // so no cover is fetched or pushed here — its existing grid file stays.
     expect(vi.mocked(backend.getArtworkBase64)).not.toHaveBeenCalled();
     expect(SteamClient.Apps.SetCustomArtworkForApp).not.toHaveBeenCalled();
   });
@@ -248,7 +245,6 @@ describe("syncManager — registers resolved appIds as RomM-owned at ack time (#
       start_dir: "/home/deck",
       launch_options: "",
       platform_name: "PSX",
-      cover_path: "",
       ...overrides,
     };
   }
@@ -303,18 +299,19 @@ describe("syncManager — registers resolved appIds as RomM-owned at ack time (#
     expect(addShortcut).not.toHaveBeenCalled();
   });
 
-  it("registers the reused shortcut's appId for a rebind entry (bind_rom_id)", async () => {
+  it("registers the reused shortcut's appId for a rebind entry", async () => {
     // Rebind: the entry is keyed to the vanished bound sibling (rom 1, already in
     // Steam as appId 5000). The shortcut is reused by rom_id, so 5000 is the appId
-    // the game-detail patch + launch interceptor must recognise — NOT the
-    // representative's (bind_rom_id 2, which only steers artwork).
+    // the game-detail patch + launch interceptor must recognise. The binding target
+    // rides the backend's internal state, never the wire — the frontend needs only
+    // the entry's own rom_id here.
     getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>([[1, 5000]]));
 
     initUnitSyncManager();
     await act(async () => {
       emitDeckyEvent<[SyncApplyUnitData]>(
         "sync_apply_unit",
-        unitOf([item({ rom_id: 1, name: "Zelda (USA)", bind_rom_id: 2 })], "run-reg-rebind"),
+        unitOf([item({ rom_id: 1, name: "Zelda (USA)" })], "run-reg-rebind"),
       );
       await flush(150);
     });
@@ -522,7 +519,6 @@ describe("syncManager — chunked apply (#1025)", () => {
       start_dir: "/home/deck",
       launch_options: "",
       platform_name: "PSX",
-      cover_path: "",
     };
   }
 
@@ -704,15 +700,10 @@ describe("syncManager — chunked apply (#1025)", () => {
   });
 });
 
-describe("syncManager — per-chunk cover mtime stamp (#1025)", () => {
+describe("syncManager — applies cover artwork to created shortcuts via the API (#1391)", () => {
   const EXE = "/home/deck/homebrew/plugins/decky-romm-sync/bin/rom-launcher";
-
-  // appId → overview object. GetAppOverviewByAppID returns the object for a known
-  // appId (the stamp mutates it in place) or null for an unknown one.
-  let overviews: Map<number, { rt_custom_image_mtime?: number }>;
-  const getAppOverview = vi.fn((appId: number) => overviews.get(appId) ?? null);
-  // logInfo/logError are plain wrappers (not callables), so spy to observe them.
-  let logInfoSpy: ReturnType<typeof vi.spyOn>;
+  const setCustomArtwork = vi.fn().mockResolvedValue(undefined);
+  // logError is a plain wrapper (not a callable), so spy to observe the fail-soft path.
   let logErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -721,15 +712,15 @@ describe("syncManager — per-chunk cover mtime stamp (#1025)", () => {
     addShortcut.mockReset();
     getExistingRomMShortcuts.mockReset();
     vi.mocked(backend.reportUnitResults).mockClear();
-    logInfoSpy = vi.spyOn(backend, "logInfo").mockImplementation(() => {});
+    vi.mocked(backend.getArtworkBase64).mockReset();
+    setCustomArtwork.mockClear();
+    setCustomArtwork.mockResolvedValue(undefined);
     logErrorSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
     resetSyncDelta();
     resetSyncCancel();
-    overviews = new Map();
-    getAppOverview.mockClear();
-    // test-setup's afterEach vi.unstubAllGlobals wipes the ambient globals after
-    // the file's first test, so re-stub appStore (read by the stamp) + SteamClient.
-    vi.stubGlobal("appStore", { GetAppOverviewByAppID: getAppOverview, allApps: [] });
+    // test-setup's afterEach vi.unstubAllGlobals wipes the ambient globals after the
+    // file's first test, so re-stub SteamClient with the artwork method the create
+    // path pushes covers through.
     vi.stubGlobal("SteamClient", {
       Apps: {
         AddShortcut: vi.fn(),
@@ -737,22 +728,15 @@ describe("syncManager — per-chunk cover mtime stamp (#1025)", () => {
         SetShortcutExe: vi.fn(),
         SetShortcutStartDir: vi.fn(),
         SetAppLaunchOptions: vi.fn(),
-        SetCustomArtworkForApp: vi.fn().mockResolvedValue(undefined),
+        SetCustomArtworkForApp: setCustomArtwork,
         RemoveShortcut: vi.fn(),
       },
     });
   });
 
   afterEach(() => {
-    logInfoSpy.mockRestore();
     logErrorSpy.mockRestore();
   });
-
-  function seedOverview(appId: number): { rt_custom_image_mtime?: number } {
-    const o: { rt_custom_image_mtime?: number } = {};
-    overviews.set(appId, o);
-    return o;
-  }
 
   function sc(romId: number): SyncApplyUnitData["shortcuts"][number] {
     return {
@@ -762,7 +746,6 @@ describe("syncManager — per-chunk cover mtime stamp (#1025)", () => {
       start_dir: "/home/deck",
       launch_options: "",
       platform_name: "PSX",
-      cover_path: "",
     };
   }
 
@@ -782,99 +765,101 @@ describe("syncManager — per-chunk cover mtime stamp (#1025)", () => {
     };
   }
 
-  it("stamps rt_custom_image_mtime on each appId created in the chunk, after the ack resolves", async () => {
-    // All-creates chunk: addShortcut hands out 6000, 6001 for rom 10, 20.
+  it("applies the fetched cover to each newly created shortcut (appId, base64, png, 0)", async () => {
     getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
-    let next = 6000;
-    addShortcut.mockImplementation(async () => next++);
-    const o6000 = seedOverview(6000);
-    const o6001 = seedOverview(6001);
+    addShortcut.mockResolvedValue(6000);
+    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "COVERPNG" });
 
     initUnitSyncManager();
     await act(async () => {
-      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", chunkOf([sc(10), sc(20)], "run-stamp"));
-      await flush(200);
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", chunkOf([sc(42)], "run-cover-create"));
+      await flush(120);
     });
 
-    // The ack committed the chunk, then both created shortcuts' overviews got the
-    // SAME stamp (one mtime per chunk), and the summary log recorded 2 stamped.
-    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalled();
-    expect(typeof o6000.rt_custom_image_mtime).toBe("number");
-    expect(typeof o6001.rt_custom_image_mtime).toBe("number");
-    expect(o6000.rt_custom_image_mtime).toBe(o6001.rt_custom_image_mtime);
-    expect(logInfoSpy).toHaveBeenCalledWith("[FE] cover mtime nudge (chunk): 2 stamped, 0 no overview");
-    // The acked chunk's creates are recorded as safe-to-stamp for onSyncComplete (#M1).
-    expect(getAckedCreatedAppIds().sort((a, b) => a - b)).toEqual([6000, 6001]);
+    // The cover is fetched by the item's OWN rom_id (the representative on create)
+    // and pushed through Steam's artwork API for the created appId, "png", flag 0.
+    expect(vi.mocked(backend.getArtworkBase64)).toHaveBeenCalledWith(42);
+    expect(setCustomArtwork).toHaveBeenCalledWith(6000, "COVERPNG", "png", 0);
   });
 
-  it("stamps nothing for an updated-only chunk (no creates)", async () => {
-    // Every rom already maps to an appId → all updates, zero creates.
-    getExistingRomMShortcuts.mockResolvedValue(
-      new Map<number, number>([
-        [10, 5001],
-        [20, 5002],
-      ]),
-    );
-    const o5001 = seedOverview(5001);
-    const o5002 = seedOverview(5002);
+  it("does NOT apply a cover on the update path (existing shortcut)", async () => {
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>([[42, 5000]]));
+    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "COVERPNG" });
 
     initUnitSyncManager();
     await act(async () => {
-      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", chunkOf([sc(10), sc(20)], "run-update-only"));
-      await flush(200);
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", chunkOf([sc(42)], "run-cover-update"));
+      await flush(120);
     });
 
-    // No creates → the stamp is a no-op: it never looks up an overview, and no
-    // updated shortcut's overview is touched.
+    // An updated shortcut keeps its existing grid file — no cover fetched or applied.
     expect(addShortcut).not.toHaveBeenCalled();
-    expect(getAppOverview).not.toHaveBeenCalled();
-    expect(o5001.rt_custom_image_mtime).toBeUndefined();
-    expect(o5002.rt_custom_image_mtime).toBeUndefined();
+    expect(vi.mocked(backend.getArtworkBase64)).not.toHaveBeenCalled();
+    expect(setCustomArtwork).not.toHaveBeenCalled();
   });
 
-  it("stamps nothing on the cancel path — a created-but-uncommitted shortcut is not stamped", async () => {
-    // Cancel during the once-per-run scan → the loop creates rom 10 (appId 6000)
-    // but then breaks, and the post-loop guard skips the ack. No ack means no
-    // commit, so the created shortcut must NOT be stamped.
+  it("fetches the cover but applies nothing (no error) when the ROM has no cover (base64: null)", async () => {
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    addShortcut.mockResolvedValue(6000);
+    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", chunkOf([sc(42)], "run-cover-null"));
+      await flush(120);
+    });
+
+    // base64 null → the artwork API is never called and nothing errors; the shortcut
+    // is still created and acked.
+    expect(vi.mocked(backend.getArtworkBase64)).toHaveBeenCalledWith(42);
+    expect(setCustomArtwork).not.toHaveBeenCalled();
+    expect(logErrorSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 6000 }, "run-cover-null", 1, 0);
+  });
+
+  it("fail-soft: a cover apply failure is logged and the created shortcut is still acked", async () => {
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    addShortcut.mockResolvedValue(6000);
+    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "COVERPNG" });
+    setCustomArtwork.mockRejectedValueOnce(new Error("artwork boom"));
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", chunkOf([sc(42)], "run-cover-fail"));
+      await flush(120);
+    });
+
+    // The failure is logged and the item is NOT failed — its binding is still acked
+    // (a cover that can't apply never breaks the shortcut; the backend grid copy is
+    // the durability net).
+    expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("failed to apply cover for rom 42"));
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 6000 }, "run-cover-fail", 1, 0);
+  });
+
+  it("applies no cover for items reached after the cancel check breaks the loop", async () => {
+    // Cancel is requested during the once-per-run scan, before the loop. The first
+    // item is processed and applies its cover, then the post-item cancel check breaks
+    // the loop — the second item is never reached, so its cover is never fetched, and
+    // the cancelled unit is not acked.
     getExistingRomMShortcuts.mockImplementation(async () => {
       requestSyncCancel();
       return new Map<number, number>();
     });
-    addShortcut.mockResolvedValue(6000);
-    const o6000 = seedOverview(6000);
+    let next = 6000;
+    addShortcut.mockImplementation(async () => next++);
+    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "COVERPNG" });
 
     initUnitSyncManager();
     await act(async () => {
-      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", chunkOf([sc(10)], "run-cancel-stamp"));
-      await flush(120);
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", chunkOf([sc(10), sc(20)], "run-cover-cancel"));
+      await flush(200);
     });
 
+    // Only the first item's cover was fetched/applied; the second item after the
+    // cancel check got none, and the cancelled unit is not acked.
+    expect(vi.mocked(backend.getArtworkBase64)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(backend.getArtworkBase64)).toHaveBeenCalledWith(10);
+    expect(setCustomArtwork).toHaveBeenCalledTimes(1);
     expect(vi.mocked(backend.reportUnitResults)).not.toHaveBeenCalled();
-    expect(getAppOverview).not.toHaveBeenCalled();
-    expect(o6000.rt_custom_image_mtime).toBeUndefined();
-    // Not acked → not recorded as safe-to-stamp, so onSyncComplete won't touch it (#M1).
-    expect(getAckedCreatedAppIds()).toEqual([]);
-  });
-
-  it("does not stamp and logs the error when reportUnitResults rejects", async () => {
-    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
-    addShortcut.mockResolvedValue(6000);
-    const o6000 = seedOverview(6000);
-    vi.mocked(backend.reportUnitResults).mockRejectedValueOnce(new Error("ack boom"));
-
-    initUnitSyncManager();
-    await act(async () => {
-      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", chunkOf([sc(10)], "run-ack-fail"));
-      await flush(120);
-    });
-
-    // Ack rejected → the created overview is NOT stamped (grid files may not be
-    // committed; stamping would risk the 404 negative-cache), the failure is
-    // logged, and the handler did not throw (this test completing proves it).
-    expect(getAppOverview).not.toHaveBeenCalled();
-    expect(o6000.rt_custom_image_mtime).toBeUndefined();
-    expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("Failed to report unit results"));
-    // The rejected ack means recordSyncAcked is never reached — nothing recorded (#M1).
-    expect(getAckedCreatedAppIds()).toEqual([]);
   });
 });

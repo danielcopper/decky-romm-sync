@@ -18,6 +18,30 @@ from typing import Any, NamedTuple
 
 from domain.sync_diff import BIND_ROM_ID_KEY
 
+# Keys an emitted entry carries for the backend's own bookkeeping but which the
+# frontend never reads, so they are stripped from the wire payload:
+#   - ``cover_path``: the staged per-ROM cache cover path. The commit's grid write
+#     reads it from the box's ``pending_sync`` (kept intact); the frontend fetches
+#     a created shortcut's cover through ``get_artwork_base64(rom_id)`` instead, so
+#     the path never needs to cross the wire.
+#   - ``bind_rom_id``: a rebind entry's binding target. The commit resolves it from
+#     ``pending_sync``; the frontend reuses the shortcut by the entry's own
+#     ``rom_id`` (a rebind lands on the update path) and applies no cover there, so
+#     the target is irrelevant to the frontend.
+_WIRE_STRIPPED_KEYS = frozenset({"cover_path", BIND_ROM_ID_KEY})
+
+
+def wire_shortcuts(emitted: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Project a chunk's emitted entries to the frontend wire shape.
+
+    Returns a fresh list of shallow-copied entries with the backend-internal keys
+    in :data:`_WIRE_STRIPPED_KEYS` removed, so a ``sync_apply_unit`` frame carries
+    only what the frontend applies. The source entries are left untouched — they
+    stay in the box's ``pending_sync`` / ``pending_all_roms`` state where the
+    per-chunk commit reads the stripped keys.
+    """
+    return [{k: v for k, v in entry.items() if k not in _WIRE_STRIPPED_KEYS} for entry in emitted]
+
 
 class UnitChunk(NamedTuple):
     """One commit chunk of a unit's apply.

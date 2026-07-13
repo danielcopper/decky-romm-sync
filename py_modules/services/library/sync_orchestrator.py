@@ -25,9 +25,11 @@ from domain.platform_sync_state import PlatformSyncState
 from domain.preview_delta import PreviewDelta
 from domain.session_budget import (
     CLIFF_KB,
+    COVER_TRANSIENT_KB,
     EFFECTIVE_CEILING_KB,
     GC_SKIP_BELOW_KB,
     POST_RUN_ADVISORY_KB,
+    WORST_CASE_CREATE_KB,
     gate_decision,
     post_run_advisory,
     predict_run_crosses,
@@ -37,7 +39,7 @@ from domain.session_budget import (
 from domain.shortcut_data import EmulatorInvocation, build_shortcuts_data
 from domain.sibling_group import compute_component_group_keys
 from domain.sibling_resolution import AUTO_REGION
-from domain.sync_chunking import build_unit_chunks
+from domain.sync_chunking import build_unit_chunks, wire_shortcuts
 from domain.sync_diff import (
     BIND_ROM_ID_KEY,
     classify_roms,
@@ -104,6 +106,14 @@ _UNIT_WAIT_POLL_SEC = 1.0
 # chunk. A chunk may overflow this to keep a sibling group whole (see
 # :func:`domain.sync_chunking.build_unit_chunks`).
 _APPLY_CHUNK_SIZE = 200
+
+# Worst-case per-item cost of a created shortcut when the apply also pushes its
+# cover through Steam's artwork API: the shortcut's permanent create cost plus the
+# cover's transient peak. The chunk gate prices every emitted item at this rate
+# (worst case = every item a cover-applying create) and the preview prognosis
+# prices each planned CREATE at it; a CHANGED item stays at the lighter
+# ``UPDATE_TOUCH_KB`` (an update reuses its existing grid file, no cover applied).
+_CREATE_WITH_COVER_KB = WORST_CASE_CREATE_KB + COVER_TRANSIENT_KB
 
 
 @dataclass(frozen=True)
@@ -347,7 +357,9 @@ class SyncOrchestrator:
             pause_likely = False
             try:
                 rss_kb = await self._loop.run_in_executor(None, self._renderer_rss)
-                pause_likely = rss_kb is not None and predict_run_crosses(rss_kb, len(new), len(changed))
+                pause_likely = rss_kb is not None and predict_run_crosses(
+                    rss_kb, len(new), len(changed), create_kb=_CREATE_WITH_COVER_KB
+                )
             except Exception as e:  # fail-open: an advisory must never fail the preview
                 self._logger.debug(f"Session-budget prognosis skipped: {e}")
 
@@ -1176,9 +1188,10 @@ class SyncOrchestrator:
             #    no-progress pause — so the first chunk is allowed to spend into the
             #    safety margin, but the predictive projection still stops it before
             #    the crash line. Net effect: a resume proceeds only when this chunk's
-            #    worst-case peak stays below the cliff (≈ 2.15 GB for a full 200-item
-            #    chunk) and can never be projected past it; at/above that it re-pauses
-            #    with zero progress and the banner directs the user to restart Steam.
+            #    worst-case peak stays below the cliff (≈ 1.95 GB for a full 200-item
+            #    chunk of cover-applying creates, each priced create + cover) and can
+            #    never be projected past it; at/above that it re-pauses with zero
+            #    progress and the banner directs the user to restart Steam.
             budget_limit_kb = CLIFF_KB if box.chunks_emitted_this_run == 0 else EFFECTIVE_CEILING_KB
             await self._maybe_pause_for_budget(box, chunk_items=len(chunk.emitted), limit_kb=budget_limit_kb)
             if box.is_cancelling():
@@ -1210,7 +1223,11 @@ class SyncOrchestrator:
                     "chunk_count": chunk_count,
                     "chunk_offset": chunk.offset,
                     "unit_total": len(emitted),
-                    "shortcuts": chunk.emitted,
+                    # Strip backend-internal keys (staged cover path, rebind target)
+                    # from the wire — the frontend fetches a created shortcut's cover
+                    # via get_artwork_base64(rom_id); the commit reads them from
+                    # pending_sync, which keeps the full entries.
+                    "shortcuts": wire_shortcuts(chunk.emitted),
                 },
             )
             # Count this emit so the session-budget gate exempts only the very
@@ -1323,7 +1340,7 @@ class SyncOrchestrator:
             rss_kb = await self._gc_then_measure_rss(box)
             if rss_kb is None:
                 return
-            decision = gate_decision(rss_kb, chunk_items, limit_kb=limit_kb)
+            decision = gate_decision(rss_kb, chunk_items, per_item_kb=_CREATE_WITH_COVER_KB, limit_kb=limit_kb)
             if decision.should_pause:
                 self._logger.info(
                     f"Session-budget pause at chunk boundary: renderer RSS {rss_kb} KB + "

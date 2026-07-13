@@ -102,7 +102,13 @@ class SyncReporter:
     # ── Report sync results (frontend callback) ──────────────────
 
     def _finalize_cover_path(self, grid, cover_path, app_id, rom_id_str):
-        """Delegate to ArtworkService for the final ``{app_id}p.png`` cover-path."""
+        """Delegate to ArtworkService for the final ``{app_id}p.png`` cover-path.
+
+        The frontend already applies a created shortcut's cover through Steam's
+        artwork API during apply, and Steam writes the same ``{app_id}p.png`` grid
+        file itself. This commit-time copy is the durability net: it lands the grid
+        file even if the per-item API call failed, and costs no renderer heap.
+        """
         return self._artwork.finalize_cover_path(grid, cover_path, app_id, rom_id_str)
 
     def _build_collection_app_ids(

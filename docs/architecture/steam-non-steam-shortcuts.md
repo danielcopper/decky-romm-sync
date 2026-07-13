@@ -268,31 +268,30 @@ edits the `shortcuts.vdf` `icon` field — Steam is memory-authoritative and clo
 shortcut must go through `SteamClient` (see
 [shortcuts.vdf is memory-authoritative](#shortcutsvdf-is-memory-authoritative)).
 
-Covers are written into the grid dir server-side as `{app_id}p.png` at each chunk's commit, but Steam resolves each
-fresh shortcut's tile to the default capsule at creation and caches that resolution outside the JS context — a
-JS-context reload does not re-resolve it; only a full client restart does — so a newly-written cover stays unseen until
-the tile is cache-busted. Steam builds the library tile's image URL as `/customimage/{appid}?v={mtime}`, keyed on the
-app overview's `rt_custom_image_mtime` field (the value a client restart normally stamps), so the frontend stamps that
-field itself — `overview.rt_custom_image_mtime = Math.floor(Date.now() / 1000)` — to cache-bust the tile, which then
-picks the cover up on its next render (scrolling the row out and back, or revisiting the library) with no forced global
-re-render. Two stamp passes run, in order of importance:
+Covers are applied per created shortcut through Steam's own artwork API during the apply, so tiles show their real cover
+in-session with no client restart. Right after a newly created shortcut resolves its `appId` in the per-item apply loop
+(`applyCoverArtwork` in `syncManager.ts`), the frontend fetches the cover bytes for that ROM
+(`get_artwork_base64(rom_id)`) and hands them to `SteamClient.Apps.SetCustomArtworkForApp(appId, base64, "png", 0)`.
+Steam decodes the image, owns the tile, and writes the file itself as `{app_id}p.png` in the grid dir — the same path
+the backend also writes — so the cover appears as the shortcut is created and Steam refreshes the tile in-session.
 
-- **Per-chunk stamping is the primary path — covers appear _during_ the run.** After each chunk's `report_unit_results`
-  ack resolves, the frontend stamps the shortcuts _that chunk_ just created (`stampCoverMtime` in `syncManager.ts`). The
-  ack resolving is the signal that the backend has committed the chunk **and** written its `{app_id}p.png` grid files,
-  so the tile URL now resolves; stamping earlier — at create time — would key the URL at a not-yet-written file and risk
-  Steam caching the 404 in a negative cache. Covers therefore fill in progressively as the run proceeds, and a mid-run
-  pause, cancel, or interrupt leaves every committed-so-far cover visible rather than nothing until the end.
-- **The `sync_complete` sweep is the belt-and-braces net.** At run end the frontend re-stamps the whole created-appId
-  set (the `syncDeltaStore` set, read before the per-run delta is reset; cancelled runs stamp too, since their committed
-  chunks also wrote covers). It catches rebinds (which create no new shortcut but may re-point an existing tile at a
-  fresh cover) and any chunk the per-chunk stamp missed.
+The key properties:
 
-Both passes are fail-soft: a missing overview or a throwing call is summarized in a single log line and never breaks the
-sync teardown. A small residue can still stay gray — covers on shortcuts that already existed, or any both passes miss —
-and those resolve the first time the game's page is opened or on the next client restart. (An earlier version fired
-`SteamClient.Apps.ReportLibraryAssetCacheMiss(appId, 0)`, Steam's own per-asset re-resolve signal, but that is a no-op
-for a non-erroring default tile — on-device 2026-07-10.)
+- **Creates only.** A cover is applied only when the item is a fresh create. An updated or rebound shortcut keeps its
+  existing grid file (in-session cover refresh on a version/metadata change is tracked separately, `#1386`).
+- **One cover per item, under the session-budget gate.** The cover is fetched and applied _inside_ the existing 50
+  ms-paced per-item loop — never prefetched or batched. Decoding many covers resident at once is exactly the CEF heap
+  overflow (`#797`) that crashed `SharedJSContext` on large libraries; the session-budget gate (see
+  [ADR-0024](../adr/0024-session-budget-rss-gate.md)) prices each create at its permanent cost plus the cover's
+  transient peak and pauses the run before the renderer nears its heap cliff.
+- **Fail-soft.** A cover that can't be fetched (`base64: null`) or applied (a throwing `SetCustomArtworkForApp`) is
+  logged and never fails the shortcut — the shortcut is already created, and the backend's commit-time grid write is the
+  durability net.
+
+The backend also writes each `{app_id}p.png` grid file at commit (`SyncReporter._finalize_cover_path` →
+`ArtworkService.finalize_cover_path`). That copy costs no renderer heap and is the durability net: it lands the grid
+file even if a per-item API call failed, so a residual gray tile resolves the next time the game's page is opened or on
+the next client restart.
 
 ## Key Files
 

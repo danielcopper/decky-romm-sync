@@ -1,6 +1,13 @@
 import { addEventListener } from "@decky/api";
 import type { SyncAddItem, SyncApplyUnitData } from "../types";
-import { reconcileShortcuts, reportUnitResults, syncHeartbeat, logInfo, logError } from "../api/backend";
+import {
+  reconcileShortcuts,
+  reportUnitResults,
+  syncHeartbeat,
+  getArtworkBase64,
+  logInfo,
+  logError,
+} from "../api/backend";
 import {
   getExistingRomMShortcuts,
   getLiveRomMShortcutAppIds,
@@ -8,8 +15,7 @@ import {
   setLaunchOptionsConfirmed,
 } from "./steamShortcuts";
 import { updateSyncProgress } from "./syncProgress";
-import { recordSyncCreated, recordSyncAcked } from "./syncDeltaStore";
-import { stampCoverMtimes } from "./coverMtime";
+import { recordSyncCreated } from "./syncDeltaStore";
 import { registerRomMAppId } from "../patches/gameDetailPatch";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -69,7 +75,7 @@ export function isCancelRequested(): boolean {
  * update fields on the existing shortcut when one is present (``created: false``),
  * otherwise create a new shortcut (``created: true`` iff the create produced an
  * appId). ``appId`` is ``undefined`` when creation failed. The ``created`` flag
- * lets the caller stamp only fresh shortcuts' cover mtime, not updates/rebinds.
+ * lets the caller apply cover artwork to fresh shortcuts only, not updates/rebinds.
  */
 async function resolveShortcutAppId(
   item: SyncAddItem,
@@ -93,28 +99,48 @@ async function resolveShortcutAppId(
 }
 
 /**
+ * Fetch a newly created shortcut's cover and push it through Steam's native
+ * artwork API so the tile shows the real cover in-session, with no client
+ * restart. ``SetCustomArtworkForApp`` writes ``{app_id}p.png`` — the same grid
+ * file the backend also writes at commit, which stays as the durability net if
+ * this call fails. ``rom_id`` is the emitted entry's own id, which the backend
+ * always resolves to the representative's cover through the in-flight
+ * pending-sync path, so no separate bind key is needed. Fail-soft: a cover that
+ * can't be fetched (``base64: null``) or applied never fails the shortcut — the
+ * item is already created, and the backend grid copy still lands. One cover per
+ * item, awaited inside the 50ms-paced loop: batching covers resident is exactly
+ * the #797 CEF-heap overflow the session-budget gate protects against.
+ */
+async function applyCoverArtwork(appId: number, romId: number): Promise<void> {
+  try {
+    const { base64 } = await getArtworkBase64(romId);
+    if (base64) {
+      await SteamClient.Apps.SetCustomArtworkForApp(appId, base64, "png", 0);
+    }
+  } catch (e) {
+    logError(`Per-unit: failed to apply cover for rom ${romId} (appId ${appId}): ${e}`);
+  }
+}
+
+/**
  * Process every shortcut for one apply chunk at the CEF-safe 50ms cadence,
- * recording the rom_id→appId mapping and returning the appIds this chunk NEWLY
- * created (not updates/rebinds) so the handler can stamp their cover mtime once
- * the ack commits. Progress is unit-wide — ``chunk_offset`` carries the count
- * from prior chunks so the QAM bar advances continuously across a unit's chunks
- * against ``unit_total``. Heartbeats are emitted every 10s. The loop exits early
- * on cancel.
+ * recording the rom_id→appId mapping. Progress is unit-wide — ``chunk_offset``
+ * carries the count from prior chunks so the QAM bar advances continuously across
+ * a unit's chunks against ``unit_total``. Heartbeats are emitted every 10s. The
+ * loop exits early on cancel.
  *
- * Cover artwork is NOT pushed here: the backend already writes each cover to the
- * Steam grid dir as ``{app_id}p.png`` at commit (reporter._finalize_cover_path),
- * and Steam loads that file lazily for visible entries only. Pushing every cover
- * through ``SetCustomArtworkForApp`` during sync forced Steam to decode and cache
- * all covers resident at once, overflowing the CEF heap on large libraries (the
- * #797 steamwebhelper SIGTRAP). The lightweight mtime stamp
- * ({@link stampCoverMtimes}) only cache-busts the tile URL — no decode, no heap.
+ * A NEWLY CREATED shortcut has its cover applied through Steam's artwork API in
+ * the same iteration (see {@link applyCoverArtwork}) so covers appear as the
+ * shortcuts are created — one per item under the 50ms pacing, safe under the
+ * session-budget gate that brakes a large run before the CEF heap overflows.
+ * Updates/rebinds keep their existing grid file (cover refresh on change is #1386,
+ * out of scope). A cover failure is fail-soft and never fails the item/chunk.
  */
 async function processUnitShortcuts(
   data: SyncApplyUnitData,
   existing: Map<number, number>,
   romIdToAppId: Record<string, number>,
-): Promise<number[]> {
-  const createdAppIds: number[] = [];
+): Promise<void> {
   let lastHeartbeat = Date.now();
   for (const [i, item] of data.shortcuts.entries()) {
     const unitCurrent = data.chunk_offset + i + 1;
@@ -145,9 +171,10 @@ async function processUnitShortcuts(
         // reach platform_app_ids at all (#1205). Idempotent (Set.add); covers
         // created, updated, and rebind entries alike.
         registerRomMAppId(appId);
-        // Collect only NEWLY CREATED appIds for the post-ack cover stamp — an
-        // updated/rebound shortcut already resolved its cover before this run.
-        if (created) createdAppIds.push(appId);
+        // Apply cover artwork only to NEWLY CREATED shortcuts — an updated/rebound
+        // shortcut keeps its existing grid file (cover refresh on change is #1386).
+        // Awaited so covers stay one-per-item under the 50ms pacing; fail-soft.
+        if (created) await applyCoverArtwork(appId, item.rom_id);
       }
     } catch (e) {
       logError(`Per-unit: failed to process shortcut for rom ${item.rom_id}: ${e}`);
@@ -163,7 +190,6 @@ async function processUnitShortcuts(
       break;
     }
   }
-  return createdAppIds;
 }
 
 /**
@@ -220,12 +246,10 @@ export async function reconcileStaleShortcuts(): Promise<void> {
 
 /**
  * Initialize the per-unit pipeline handler. Listens for ``sync_apply_unit``
- * events, processes each unit's shortcuts at the CEF-safe 50ms cadence, and
- * reports back via ``reportUnitResults`` so the backend can advance the work
- * queue. After each chunk's ack commits, it stamps the cover mtime of the
- * shortcuts this chunk created (see {@link stampCoverMtimes}) so covers appear
- * progressively during the run; the onSyncComplete sweep is the belt-and-braces
- * net for rebinds and any chunk the per-chunk stamp missed.
+ * events, processes each unit's shortcuts at the CEF-safe 50ms cadence — applying
+ * each newly created shortcut's cover through Steam's artwork API as it goes (see
+ * {@link processUnitShortcuts}) — and reports back via ``reportUnitResults`` so
+ * the backend can advance the work queue and durably commit the chunk.
  */
 export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
   return addEventListener("sync_apply_unit", async (data: SyncApplyUnitData) => {
@@ -263,14 +287,13 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
       });
 
       const existing = await resolveExistingShortcuts(data.run_id);
-      const createdAppIds = await processUnitShortcuts(data, existing, romIdToAppId);
+      await processUnitShortcuts(data, existing, romIdToAppId);
 
       // Do NOT ack a cancelled unit: the backend has already discarded this
       // run's in-flight state, so a post-cancel ack only risks being credited
       // to whatever run started next (the cross-run collision + rapid-restart
       // self-cancel in #1041). The backend also validates run_id/unit_id, but
-      // not sending is the first line of defence. (No cover stamp on this path
-      // either — nothing was committed.)
+      // not sending is the first line of defence.
       if (isCancelRequested()) {
         logInfo(`Per-unit cancel observed for ${data.unit_name}; skipping reportUnitResults`);
       } else {
@@ -279,18 +302,6 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
           // a stale ack (cancelled run or superseded chunk) instead of crediting
           // it to a fresh run/chunk (#1041).
           await reportUnitResults(romIdToAppId, data.run_id, data.unit_id, data.chunk_index);
-          // Ack resolved → the backend committed the chunk AND wrote its grid
-          // covers, so the tile URLs now resolve. Stamp the created shortcuts'
-          // cover mtime so their covers appear progressively during the run (a
-          // mid-run pause/interrupt then leaves everything committed-so-far
-          // visible), not only at sync_complete. Skipped if the ack rejects (the
-          // catch below) — no commit, so stamping would risk the 404 negative-cache.
-          // Record this acked chunk's creates as safe-to-stamp (committed + grid
-          // files written) so onSyncComplete's sweep/heal skip a cancelled run's
-          // uncommitted in-flight chunk (#M1). Fire-and-forget stamp (micro-batched
-          // inside): must NOT delay the next chunk.
-          recordSyncAcked(createdAppIds);
-          void stampCoverMtimes(createdAppIds, " (chunk)");
         } catch (e) {
           logError(`Failed to report unit results for ${data.unit_name}: ${e}`);
         }

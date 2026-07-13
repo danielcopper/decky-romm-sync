@@ -2,8 +2,9 @@
 
 Boundary-focused: the gate/prognosis fire exactly at the effective ceiling and
 not one KB below it, the worst-case rate is the default, an explicit rate
-overrides it (the PR-2 cover-term seam), and the zero-item / large-item edges
-behave. The gate/prognosis kernels take ints only, so their ``None`` handling is
+overrides it (how the orchestrator prices in the transient cover term), and the
+zero-item / large-item edges behave. The gate/prognosis kernels take ints only,
+so their ``None`` handling is
 the caller's fail-open skip and is not tested here; ``session_memory_delta`` is
 the one kernel that DOES accept ``None`` endpoints, so its ``None`` cases live
 below.
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 from domain.session_budget import (
     CLIFF_KB,
+    COVER_TRANSIENT_KB,
     EFFECTIVE_CEILING_KB,
     FULL_CHUNK_WORST_KB,
     GC_SKIP_BELOW_KB,
@@ -75,11 +77,19 @@ def test_gate_zero_items_at_ceiling_pauses() -> None:
 
 
 def test_gate_explicit_per_item_rate_overrides_default() -> None:
-    # A higher per-item rate (the PR-2 cover-term seam) pauses where the default
-    # rate would have proceeded, for the same RSS + chunk size.
+    # A higher per-item rate — how the orchestrator prices in the transient cover
+    # term for a cover-applying create — pauses where the bare create rate would
+    # have proceeded, for the same RSS + chunk size.
     rss = 2_000_000
     assert gate_decision(rss_kb=rss, chunk_items=100, per_item_kb=WORST_CASE_CREATE_KB).should_pause is False
     assert gate_decision(rss_kb=rss, chunk_items=100, per_item_kb=5_000).should_pause is True
+
+
+def test_cover_transient_kb_is_the_measured_per_cover_cost() -> None:
+    # The transient renderer cost of applying one cover through the artwork API
+    # (~1.0 MB, GC-reclaimable) — the term the orchestrator adds to a create's
+    # worst-case price at both the chunk gate and the preview prognosis.
+    assert COVER_TRANSIENT_KB == 1_000
 
 
 def test_gate_default_limit_is_the_effective_ceiling() -> None:
@@ -182,8 +192,11 @@ def test_post_run_advisory_above_threshold_is_true() -> None:
 # ── resume_would_proceed ─────────────────────────────────────────
 
 
-def test_full_chunk_worst_is_chunk_size_times_create_rate() -> None:
-    assert FULL_CHUNK_WORST_KB == 200 * WORST_CASE_CREATE_KB  # 300_000
+def test_full_chunk_worst_is_chunk_size_times_create_plus_cover_rate() -> None:
+    # A full chunk is 200 cover-applying creates, each priced create + cover — so
+    # ``resume_would_proceed`` promises only progress the steady-state chunk gate
+    # (which prices the same cover term) would actually make.
+    assert FULL_CHUNK_WORST_KB == 200 * (WORST_CASE_CREATE_KB + COVER_TRANSIENT_KB)  # 500_000
 
 
 def test_resume_ready_just_below_the_threshold() -> None:
@@ -205,18 +218,19 @@ def test_resume_ready_after_a_fresh_restart_baseline() -> None:
 
 
 def test_resume_not_ready_at_a_still_high_rss() -> None:
-    assert resume_would_proceed(2_000_000) is False  # 2.0 + 0.3 = 2.3 ≥ 2.2 ceiling
+    assert resume_would_proceed(2_000_000) is False  # 2.0 + 0.5 = 2.5 ≥ 2.2 ceiling
 
 
 # ── GC-skip floor ────────────────────────────────────────────────
 
 
 def test_gc_skip_floor_leaves_worst_case_below_every_threshold() -> None:
-    # The floor's rationale: at the floor, the worst-case max-chunk cost still
-    # clears the pause ceiling, and the floor itself clears the advisory — so a GC
-    # below it could not flip any decision. Pin that arithmetic so a threshold move
-    # can't silently invalidate the skip.
-    assert GC_SKIP_BELOW_KB + 500_000 < EFFECTIVE_CEILING_KB
+    # The floor's rationale: at the floor, the worst-case max-chunk cost (one full
+    # chunk of cover-applying creates) still clears the pause ceiling, and the floor
+    # itself clears the advisory — so a GC below it could not flip any decision. Pin
+    # that arithmetic against ``FULL_CHUNK_WORST_KB`` so raising the create/cover
+    # price (which lifts the max-chunk cost) can't silently invalidate the skip.
+    assert GC_SKIP_BELOW_KB + FULL_CHUNK_WORST_KB < EFFECTIVE_CEILING_KB
     assert GC_SKIP_BELOW_KB < POST_RUN_ADVISORY_KB
 
 

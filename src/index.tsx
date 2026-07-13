@@ -43,8 +43,7 @@ import {
 } from "./utils/collections";
 import { setMigrationStatus } from "./utils/migrationStore";
 import { fetchSettingsResetState } from "./utils/settingsResetStore";
-import { resetSyncDelta, recordSyncRemoved, getSyncDelta, getAckedCreatedAppIds } from "./utils/syncDeltaStore";
-import { stampCoverMtimes, healCoverMtimes } from "./utils/coverMtime";
+import { resetSyncDelta, recordSyncRemoved, getSyncDelta } from "./utils/syncDeltaStore";
 import { setSaveSortMigrationStatus } from "./utils/saveSortMigrationStore";
 import { setVersionError, setServerRetryProgress } from "./utils/connectionState";
 import { initSessionManager, destroySessionManager } from "./utils/sessionManager";
@@ -127,79 +126,6 @@ const QAMPanel: FC = () => {
 
   return <div ref={rootRef}>{content}</div>;
 };
-
-// Cover heal poll (see startCoverHealPoll). Steam re-materializes some fresh
-// shortcuts' overviews seconds after creation and wipes the JS-set stamp; a
-// verify-and-heal poll catches the ~1% victims within a round or two instead of a
-// blind fixed wait. Poll every 15s; exit after 2 consecutive clean rounds or 8
-// rounds (~2 min), whichever first.
-const COVER_HEAL_INTERVAL_MS = 15_000;
-const COVER_HEAL_STABLE_ROUNDS = 2;
-const COVER_HEAL_MAX_ROUNDS = 8;
-
-// At most one heal poll across the plugin's lifetime (chained setTimeout): a fresh
-// sync supersedes a running poll, and onDismount clears it so a reload can't fire a
-// stale callback.
-let coverHealTimer: ReturnType<typeof setTimeout> | null = null;
-
-/**
- * Start (or restart) the post-sync cover-heal poll over *appIds*. Steam name-matches
- * some fresh shortcuts against its own catalog and re-materializes their app overview
- * seconds after creation, wiping the JS-set ``rt_custom_image_mtime`` (~1% of creates;
- * census on-device 2026-07-10). Each round reads every created appId's overview (cheap
- * in-memory) and re-stamps exactly the ones whose stamp went missing via the shared
- * micro-batched helper. Exits after {@link COVER_HEAL_STABLE_ROUNDS} consecutive clean
- * rounds (the wipe is a single early event, so this settles in ~15-30s) or
- * {@link COVER_HEAL_MAX_ROUNDS} total (~2 min) as a pathological-case cap. A non-empty
- * call cancels any running poll first — a fresh sync supersedes it — and onDismount
- * cancels it too; a zero-created ("Library up to date") sync is a no-op that leaves a
- * running poll alone (#L6).
- */
-function startCoverHealPoll(appIds: number[]): void {
-  // Zero created → nothing to heal. Return BEFORE cancelling, so a "Library up to
-  // date" sync never aborts the previous run's still-active heal window (#L6).
-  if (appIds.length === 0) return;
-  if (coverHealTimer !== null) {
-    clearTimeout(coverHealTimer);
-    coverHealTimer = null;
-  }
-  let round = 0;
-  let consecutiveClean = 0;
-  const tick = () => {
-    coverHealTimer = null;
-    round++;
-    try {
-      // A null overview can't be healed this round — only present-but-unstamped counts.
-      const missing = appIds.filter((appId) => {
-        const overview = appStore.GetAppOverviewByAppID(appId);
-        return overview !== null && overview.rt_custom_image_mtime === undefined;
-      });
-      if (missing.length > 0) {
-        consecutiveClean = 0;
-        logInfo(`[FE] cover mtime heal: ${missing.length} re-stamped (round ${round})`);
-        void healCoverMtimes(missing);
-      } else {
-        consecutiveClean++;
-      }
-    } catch (e) {
-      // Fail-soft: a throwing read must not kill the poll. Treat the round as
-      // inconclusive (not clean, so it can't exit "stable") and continue — the
-      // round still counts toward the cap, so a persistently throwing read exits.
-      consecutiveClean = 0;
-      logError(`[FE] cover mtime heal: round ${round} read failed: ${e}`);
-    }
-    if (consecutiveClean >= COVER_HEAL_STABLE_ROUNDS) {
-      logInfo(`[FE] cover mtime heal: stable after ${round} rounds`);
-      return;
-    }
-    if (round >= COVER_HEAL_MAX_ROUNDS) {
-      logInfo(`[FE] cover mtime heal: capped at ${round} rounds`);
-      return;
-    }
-    coverHealTimer = setTimeout(tick, COVER_HEAL_INTERVAL_MS);
-  };
-  coverHealTimer = setTimeout(tick, COVER_HEAL_INTERVAL_MS);
-}
 
 /**
  * Build the completion-toast body (and optional on-screen duration) for a
@@ -460,36 +386,11 @@ export default definePlugin(() => {
     // onSyncProgressChange tears the in-progress UI down regardless.
     updateSyncProgress({ running: false, stage: data.cancelled ? "cancelled" : "done" });
 
-    // Make each freshly-created shortcut's cover appear on its tile's next render
-    // without a client restart. Covers are written server-side at each chunk's
-    // commit (ADR-0021 lazy model), but Steam resolves a fresh shortcut's tile to
-    // the default capsule at creation and caches that resolution OUTSIDE the JS
-    // context — a JS-context reload does NOT re-resolve it; only a full client
-    // restart does. The tile URL is `/customimage/{appid}?v={mtime}`, keyed on the
-    // overview's `rt_custom_image_mtime` (the field a restart normally stamps), so
-    // stamping it ourselves per created appId is the per-app cache-buster: the tile
-    // picks the cover up on its NEXT render (scrolling the row out/in, revisiting
-    // the library) — no forced global re-render. Read the acked-created set BEFORE
-    // the resetSyncDelta() below. Only ACKED creates are stamped: a cancelled run's
-    // final in-flight chunk creates shortcuts frontend-side whose ack was skipped,
-    // so their covers were never written server-side — stamping them would point the
-    // tile at a 404 (#M1). ReportLibraryAssetCacheMiss(appId, 0) was tried and is a
-    // no-op for non-erroring default tiles (on-device 2026-07-10). Fail-soft: a
-    // missing overview or a throw must never break the teardown/toast above.
-    //
-    // Per-chunk stamping (syncManager, after each chunk's ack) is the PRIMARY path
-    // now — covers appear progressively during the run. This end-of-run sweep is
-    // the belt-and-braces net that re-stamps the whole acked set.
-    const ackedAppIds = getAckedCreatedAppIds();
-    // Fire-and-forget (micro-batched inside): must not block the teardown below.
-    void stampCoverMtimes(ackedAppIds, "");
-    // Then verify-and-heal poll: Steam re-materializes some fresh shortcuts'
-    // overviews seconds after creation and wipes the stamp (~1% of creates,
-    // on-device 2026-07-10). The poll re-reads and re-stamps only the missing ones
-    // over the SAME acked set, healing them within a round or two instead of a blind
-    // fixed wait, and supersedes any poll still running (a zero-created sync leaves
-    // a running poll alone).
-    startCoverHealPoll(ackedAppIds);
+    // Covers are applied per created shortcut during the run through Steam's
+    // artwork API (syncManager.applyCoverArtwork), so tiles show their real cover
+    // in-session as they are created — no end-of-run sweep or client restart
+    // needed. The backend also writes each {app_id}p.png grid file at commit as the
+    // durability net.
 
     // Defensive reset; sync_plan also resets at the start of the next run.
     resetSyncDelta();
@@ -839,11 +740,6 @@ export default definePlugin(() => {
       removeEventListener("save_status_updated", saveStatusListener);
       removeEventListener("migration_relaunch_options", migrationRelaunchListener);
       removeEventListener("server_retry_progress", serverRetryListener);
-      // Cancel any running cover-heal poll so a reload can't fire a stale round.
-      if (coverHealTimer !== null) {
-        clearTimeout(coverHealTimer);
-        coverHealTimer = null;
-      }
     },
   };
 });

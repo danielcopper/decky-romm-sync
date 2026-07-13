@@ -1695,7 +1695,10 @@ class TestDoSyncPerUnit:
         emitted = unit_events[0]["shortcuts"]
         assert len(emitted) == 1
         assert emitted[0]["rom_id"] == 1
-        assert emitted[0][BIND_ROM_ID_KEY] == 2
+        # The rebind target is backend-internal — it drives the commit below via
+        # pending_sync, and is stripped from the wire (the frontend reuses the
+        # shortcut by rom_id). The binding move is verified by the roms rows below.
+        assert BIND_ROM_ID_KEY not in emitted[0]
 
         # No stale removal — the appId is preserved, not wiped.
         stale_events = [c.args[1] for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_stale"]
@@ -4359,7 +4362,7 @@ class TestSessionBudgetGate:
         box.sync_state = SyncState.RUNNING
         box.current_sync_id = "run-1"
         plugin._renderer_gc.result = True
-        plugin._renderer_rss.rss_kb = 2_100_000  # + 200*1500 = 2.4M ≥ ceiling 2.2M
+        plugin._renderer_rss.rss_kb = 2_100_000  # + 200*2500 = 2.6M ≥ ceiling 2.2M
 
         await orch._maybe_pause_for_budget(box, chunk_items=200)
 
@@ -4409,17 +4412,17 @@ class TestSessionBudgetGate:
 
     @pytest.mark.asyncio
     async def test_cliff_limit_proceeds_just_below_the_cliff_bound(self, plugin):
-        from domain.session_budget import CLIFF_KB, WORST_CASE_CREATE_KB
+        from domain.session_budget import CLIFF_KB, COVER_TRANSIENT_KB, WORST_CASE_CREATE_KB
 
         # The first-chunk call passes limit_kb=CLIFF. One KB below the full-chunk
         # cliff bound the gate lets the chunk through (spends into the margin, never
-        # past the crash line).
+        # past the crash line). Each item is priced create + cover (2500).
         orch = plugin._sync_service._orchestrator
         box = plugin._sync_service._box
         box.sync_state = SyncState.RUNNING
         box.current_sync_id = "run-1"
         plugin._renderer_gc.result = True
-        plugin._renderer_rss.rss_kb = CLIFF_KB - 200 * WORST_CASE_CREATE_KB - 1  # 2_149_999
+        plugin._renderer_rss.rss_kb = CLIFF_KB - 200 * (WORST_CASE_CREATE_KB + COVER_TRANSIENT_KB) - 1  # 1_949_999
 
         await orch._maybe_pause_for_budget(box, chunk_items=200, limit_kb=CLIFF_KB)
 
@@ -4428,19 +4431,19 @@ class TestSessionBudgetGate:
 
     @pytest.mark.asyncio
     async def test_cliff_limit_pauses_when_full_chunk_would_reach_the_cliff(self, plugin):
-        from domain.session_budget import CLIFF_KB, WORST_CASE_CREATE_KB
+        from domain.session_budget import CLIFF_KB, COVER_TRANSIENT_KB, WORST_CASE_CREATE_KB
         from services.library.sync_orchestrator import _SYNC_PAUSED_BUDGET
 
-        # At the full-chunk cliff bound the projection reaches the cliff exactly and
-        # the gate pauses (>=) — a first chunk this high is stopped before the crash
-        # line even though it would clear the more-permissive absolute-ceiling check
-        # the old first-chunk mode used.
+        # At the full-chunk cliff bound (each item priced create + cover = 2500) the
+        # projection reaches the cliff exactly and the gate pauses (>=) — a first
+        # chunk this high is stopped before the crash line even though it would clear
+        # the more-permissive absolute-ceiling check the old first-chunk mode used.
         orch = plugin._sync_service._orchestrator
         box = plugin._sync_service._box
         box.sync_state = SyncState.RUNNING
         box.current_sync_id = "run-1"
         plugin._renderer_gc.result = True
-        plugin._renderer_rss.rss_kb = CLIFF_KB - 200 * WORST_CASE_CREATE_KB  # 2_150_000
+        plugin._renderer_rss.rss_kb = CLIFF_KB - 200 * (WORST_CASE_CREATE_KB + COVER_TRANSIENT_KB)  # 1_950_000
 
         await orch._maybe_pause_for_budget(box, chunk_items=200, limit_kb=CLIFF_KB)
 
@@ -4513,8 +4516,8 @@ class TestSessionBudgetGate:
         self._arm_two_chunk_apply(plugin, fake_romm_api, monkeypatch)
         plugin._renderer_gc.result = True
         # Just under the ceiling: the first chunk's predictive-vs-CLIFF check
-        # (2.199 GB + one item's 1500 KB well below the 2.45 GB cliff) passes, but
-        # the second chunk's predictive-vs-ceiling check (+1500 ≥ 2.2 GB) crosses.
+        # (2.199 GB + one item's 2500 KB well below the 2.45 GB cliff) passes, but
+        # the second chunk's predictive-vs-ceiling check (+2500 ≥ 2.2 GB) crosses.
         plugin._renderer_rss.rss_kb = 2_199_000
 
         decky.emit.reset_mock()
@@ -4562,8 +4565,9 @@ class TestSessionBudgetGate:
         # One ROM → one chunk = the run's first. It is gated PREDICTIVELY against the
         # CLIFF (2.45 GB), not the ceiling: at 2.4 GB — ABOVE the 2.2 GB ceiling the
         # old absolute first-chunk check would have paused at — this light 1-item
-        # chunk projects 2.4015 GB, still below the cliff, so it proceeds into the
-        # safety margin and the run completes. The gate DID run, so the GC fired.
+        # chunk projects 2.4025 GB (create + cover), still below the cliff, so it
+        # proceeds into the safety margin and the run completes. The gate DID run, so
+        # the GC fired.
         self._arm_single_chunk_apply(plugin, fake_romm_api, monkeypatch, run_id="run-solo")
         plugin._renderer_gc.result = True
         plugin._renderer_rss.rss_kb = 2_400_000  # above the 2.2M ceiling, below the 2.45M cliff
@@ -4586,7 +4590,7 @@ class TestSessionBudgetGate:
         # 2.45 GB cliff, so the run re-pauses with zero forward progress — intended.
         self._arm_single_chunk_apply(plugin, fake_romm_api, monkeypatch, run_id="run-over")
         plugin._renderer_gc.result = True
-        plugin._renderer_rss.rss_kb = 2_449_000  # +1500 for the one item ≥ the 2.45M cliff
+        plugin._renderer_rss.rss_kb = 2_449_000  # +2500 (create + cover) for the one item ≥ the 2.45M cliff
 
         await plugin._sync_service._orchestrator._do_sync_per_unit()
 
@@ -4626,7 +4630,7 @@ class TestSessionBudgetGate:
         _use_fake_romm(plugin, fake_romm_api)
         _seed_platform(fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 1, "name": "A"}])
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin._renderer_rss.rss_kb = 2_199_000  # 1 planned touch (+1500) crosses 2.2M ceiling
+        plugin._renderer_rss.rss_kb = 2_199_000  # 1 planned create (+2500) crosses 2.2M ceiling
 
         result = await plugin.sync_preview()
 
@@ -4689,7 +4693,8 @@ class TestSessionBudgetGate:
         _seed_rom_row(plugin, 1, app_id=1001, platform_slug="n64", name="A", fs_name="a.z64")
         _seed_rom_row(plugin, 2, app_id=1002, platform_slug="n64", name="B", fs_name="b.z64")
         _seed_rom_row(plugin, 3, app_id=1003, platform_slug="n64", name="C", fs_name="c.z64")
-        # rss + 3*1500 would cross (the old formula); rss + 0 new + 0 changed does not.
+        # rss + 3*2500 would cross (if unchanged were priced as creates); rss + 0 new
+        # + 0 changed does not.
         plugin._renderer_rss.rss_kb = 2_199_000
 
         result = await plugin.sync_preview()
@@ -4890,7 +4895,7 @@ class TestSessionBudgetGate:
             "cliff_kb": CLIFF_KB,
             # No clean run has completed in this test, so the retained delta is None.
             "memory_delta_kb": None,
-            # 1.234 + 0.3 = 1.534 < 2.2 ceiling → a paused run could resume now.
+            # 1.234 + 0.5 = 1.734 < 2.2 ceiling → a paused run could resume now.
             "resume_ready": True,
         }
 
@@ -4915,7 +4920,7 @@ class TestSessionBudgetGate:
     async def test_session_budget_status_resume_not_ready_at_high_rss(self, plugin):
         # A still-high RSS (a paused run before a Steam restart): resume would re-pause.
         plugin.loop = asyncio.get_event_loop()
-        plugin._renderer_rss.rss_kb = 2_100_000  # 2.1 + 0.3 = 2.4 ≥ 2.2 ceiling
+        plugin._renderer_rss.rss_kb = 2_100_000  # 2.1 + 0.5 = 2.6 ≥ 2.2 ceiling
 
         result = await plugin.get_session_budget_status()
 

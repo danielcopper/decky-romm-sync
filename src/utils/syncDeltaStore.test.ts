@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { resetSyncDelta, recordSyncCreated, recordSyncRemoved, getSyncDelta, getCreatedAppIds } from "./syncDeltaStore";
+import { resetSyncDelta, recordSyncCreated, recordSyncRemoved, getSyncDelta } from "./syncDeltaStore";
 
 describe("syncDeltaStore", () => {
   beforeEach(() => {
@@ -54,20 +54,5 @@ describe("syncDeltaStore", () => {
     recordSyncRemoved(900);
     resetSyncDelta();
     expect(getSyncDelta()).toEqual({ added: 0, removed: 0 });
-  });
-
-  it("getCreatedAppIds returns the deduplicated created appIds (not removed)", () => {
-    recordSyncCreated(100);
-    recordSyncCreated(200);
-    recordSyncCreated(100); // duplicate — collapsed by the Set
-    recordSyncRemoved(900); // removed set is excluded
-    expect(getCreatedAppIds()).toEqual([100, 200]);
-  });
-
-  it("getCreatedAppIds is empty on a fresh run and after reset", () => {
-    expect(getCreatedAppIds()).toEqual([]);
-    recordSyncCreated(100);
-    resetSyncDelta();
-    expect(getCreatedAppIds()).toEqual([]);
   });
 });
