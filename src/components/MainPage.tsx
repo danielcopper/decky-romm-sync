@@ -91,6 +91,11 @@ type BackendFailed = "backend_failed";
 /** U+2212 MINUS SIGN — the removed-count prefix in the compact preview notation. */
 const MINUS_SIGN = "−";
 
+/** Pulls a status row's vertical field padding in so the status block sits
+ *  tighter than Steam's default row rhythm. Vertical only — a compact field
+ *  padding would also cut the left/right inset. */
+const tightRow = { margin: "-5px 0", width: "100%" } as const;
+
 /** Compact signed segments — ``[[count, label], …]`` → ``"+N / M updated"``:
  *  a one-char label (``+``/``−``, self-explanatory) renders as prefix, a word
  *  label renders as suffix (``1758 updated`` — a bare ``~`` read as noise);
@@ -1110,26 +1115,29 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           </PanelSectionRow>
         )}
         <PanelSectionRow>
-          <Field
-            label="Connection"
-            focusable={true}
-            bottomSeparator="none"
-            padding="compact"
-            description={
-              connected === "backend_failed" ? "Plugin backend failed to start — check Decky logs." : undefined
-            }
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <ConnectionIndicator connected={connected} />
-            </div>
-          </Field>
+          <div style={tightRow}>
+            <Field
+              label="Connection"
+              focusable={true}
+              bottomSeparator="none"
+              description={
+                connected === "backend_failed" ? "Plugin backend failed to start — check Decky logs." : undefined
+              }
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <ConnectionIndicator connected={connected} />
+              </div>
+            </Field>
+          </div>
         </PanelSectionRow>
         {stats && (
           <>
             <PanelSectionRow>
-              <Field label="Last sync" focusable={true} bottomSeparator="none" padding="compact">
-                {lastSyncValue(stats)}
-              </Field>
+              <div style={tightRow}>
+                <Field label="Last sync" focusable={true} bottomSeparator="none">
+                  {lastSyncValue(stats)}
+                </Field>
+              </div>
             </PanelSectionRow>
             {/* Own full-width row: inside the Field the description slot shares
                 the row with the value column and can't be stretched, so the
@@ -1138,17 +1146,18 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             {lastAttemptLine(stats) && <PanelSectionRow>{lastAttemptLine(stats)}</PanelSectionRow>}
             {stats.roms > 0 && (
               <PanelSectionRow>
-                <Field
-                  label="Library"
-                  padding="compact"
-                  description={
-                    <div style={{ width: "100%", textAlign: "right", fontSize: "12px" }}>
-                      {formatLibraryLine(stats)}
-                    </div>
-                  }
-                  focusable={true}
-                  bottomSeparator="none"
-                />
+                <div style={tightRow}>
+                  <Field
+                    label="Library"
+                    description={
+                      <div style={{ width: "100%", textAlign: "right", fontSize: "12px" }}>
+                        {formatLibraryLine(stats)}
+                      </div>
+                    }
+                    focusable={true}
+                    bottomSeparator="none"
+                  />
+                </div>
               </PanelSectionRow>
             )}
           </>
@@ -1158,27 +1167,29 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             reading is unavailable (rss_kb null) rather than shown as a blank. */}
         {budgetStatus?.rss_kb != null && (
           <PanelSectionRow>
-            <Field label="Steam memory" focusable={true} bottomSeparator="none" padding="compact">
-              <span data-testid="steam-memory" style={{ fontSize: "12px" }}>
-                {/* Only the value gets traffic-light colouring (green/yellow/red),
+            <div style={tightRow}>
+              <Field label="Steam memory" focusable={true} bottomSeparator="none">
+                <span data-testid="steam-memory" style={{ fontSize: "12px" }}>
+                  {/* Only the value gets traffic-light colouring (green/yellow/red),
                     driven by the payload thresholds; the delta stays muted. Both sit
                     on one line: "0.6 GB · last run +0.7". */}
-                <span
-                  data-testid="steam-memory-value"
-                  style={{
-                    color: memoryLevelColor(budgetStatus.rss_kb, budgetStatus.warn_kb, budgetStatus.ceiling_kb),
-                  }}
-                >
-                  {formatGb(budgetStatus.rss_kb)}
-                </span>
-                {budgetStatus.memory_delta_kb != null && (
-                  <span data-testid="steam-memory-delta" style={{ opacity: 0.6 }}>
-                    {" · last run "}
-                    {formatSignedGb(budgetStatus.memory_delta_kb)}
+                  <span
+                    data-testid="steam-memory-value"
+                    style={{
+                      color: memoryLevelColor(budgetStatus.rss_kb, budgetStatus.warn_kb, budgetStatus.ceiling_kb),
+                    }}
+                  >
+                    {formatGb(budgetStatus.rss_kb)}
                   </span>
-                )}
-              </span>
-            </Field>
+                  {budgetStatus.memory_delta_kb != null && (
+                    <span data-testid="steam-memory-delta" style={{ opacity: 0.6 }}>
+                      {" · last run "}
+                      {formatSignedGb(budgetStatus.memory_delta_kb)}
+                    </span>
+                  )}
+                </span>
+              </Field>
+            </div>
           </PanelSectionRow>
         )}
         {retroarchWarning?.warning && (
