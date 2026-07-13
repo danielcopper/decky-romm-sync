@@ -157,6 +157,48 @@ If the QAM does **not** come out at the expected size (KWin unreachable, or Stea
 prints a loud `EMULATION FAILED` block with the measured-vs-expected numbers and the window's real pixel size, and says
 that any layout judgement made on those numbers is invalid. It never reports Deck metrics it did not achieve.
 
+#### Open the QAM once
+
+Steam creates the QuickAccess view together with the Big Picture window but **lays it out only on the first QAM open of
+that session**. Until then it measures **1x1 CSS**, and there is simply nothing to verify — so a run started against a
+fresh Big Picture says so instead of crying wolf:
+
+```text
+Measured (real, repainted — not a CDP emulation override):
+  Big Picture  dpr 1.5  CSS 854x534
+  QuickAccess  dpr 1.5  CSS 1x1 — created, never rendered
+
+QAM NOT VERIFIED YET — the emulation is applied, the QAM has simply never been opened.
+  Big Picture: 1280x800 physical, scale forced to 1.5 (rendering at dpr 1.5).
+  ...
+  => OPEN THE QAM ONCE. This tool re-applies the scale to it the moment it renders, and
+     then verifies it against the 854x454 a Deck shows at scale 1.5.
+```
+
+**Open the QAM once** and the run verifies it and prints the same verdict it would have printed up front — the success
+line, or the loud `EMULATION FAILED` block if the window is not the Deck's size after all. A never-opened QAM is a
+not-yet, not a failure; a QAM that renders at the wrong size still fails loudly.
+
+That laziness has a sharper edge, and it is why the tool **holds in a polling loop rather than idling**: Steam's scale
+push reaches only the views that are **rendered when it lands**. A QuickAccess view that renders _after_ the force can
+therefore come up **unscaled — measured at dpr 1, CSS 854x720**, which is exactly the dev-loop lie this whole tool
+exists to kill. So while it holds, the tool watches that view and re-issues the same two calls the moment it finds it
+rendering at the wrong `devicePixelRatio`:
+
+```text
+QuickAccess view is at dpr 1.899999976158142  CSS 855x343 — not the forced 1.5.
+Re-applying the scale (Steam's push reaches only the views that are rendered when it lands)...
+
+Measured (real, repainted — not a CDP emulation override):
+  Big Picture  dpr 1.5  CSS 854x534
+  QuickAccess  dpr 1.5  CSS 854x454
+  => QAM is 854x454 CSS at dpr 1.5, the 854x454 a Deck renders at scale 1.5 — this is what the Deck renders.
+```
+
+This also covers Steam re-materializing the popup later in the session. It is quiet by construction: it re-applies only
+when a **rendered** view sits at the wrong dpr, and only once per distinct measurement, so a re-apply that does not take
+is reported once rather than every couple of seconds.
+
 The forcing modes **hold until Ctrl-C**. Useful factors:
 
 | Factor  | What it reproduces              | Measured QAM   |
@@ -215,8 +257,10 @@ user and ever have to use it, re-set your scale in Steam → Settings → Displa
     entry — **not** Game Mode's `…|||Fullscreen-1280x800` one, even when the window sits on the Deck's internal panel.
     A leftover forced factor therefore mis-sizes a future *windowed desktop BPM*, and `dev:ui-scale auto` clears it.
 
-The QAM is a popup view that Steam can recreate; Steam's scale is display state, so a recreated view picks it up. No
-re-apply loop is needed (and none should be added).
+The QAM is a popup view that Steam creates lazily and can re-materialize at will, and Steam's scale reaches only the
+views that are **rendered when it is pushed** — a view that renders later comes up unscaled. That is why the tool holds
+in a polling loop and re-applies the scale to a QuickAccess view it finds at the wrong `devicePixelRatio` (see
+[Open the QAM once](#open-the-qam-once)).
 
 ### What this means for our panels
 

@@ -38,6 +38,18 @@ sits on. ``frameGeometry`` includes decorations, so the frame is corrected by th
 frame-vs-client delta until the client area lands exactly. The window's prior geometry and
 fullscreen state are captured first and restored on exit, alongside the scale.
 
+The scale reaches only the views that are RENDERED when it is pushed. Steam's QuickAccess
+view is created with the Big Picture window but laid out lazily, on the first QAM open of
+that session: until then it measures 1x1 CSS. A view that renders after the push can come
+up UNSCALED — measured at dpr 1, CSS 854x720, i.e. exactly the dev-loop lie this tool
+exists to kill — and re-issuing the same two calls while it is live flips it to 1.5 /
+854x454 on the spot (also measured). Whether a given view misses the push is not something
+the tool can know up front, so the hold is a polling loop rather than a ``signal.pause()``:
+it watches the QuickAccess view and re-pushes whenever it finds one rendering at the wrong
+dpr, which also covers Steam re-materializing the popup later in the session. An unrendered
+QAM is therefore not a failure — it is a not-yet, and it is reported as one (open the QAM
+once and the tool verifies it).
+
 DANGER — the forced scale PERSISTS: Steam flushes it to
 ``~/.local/share/Steam/config/config.vdf`` (``UI -> display -> Current -> ScaleFactor``)
 within a couple of seconds. A factor left forced is a factor Steam keeps.
@@ -96,6 +108,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -138,6 +151,16 @@ _QAM_CSS_WIDTH = 854
 # Fractional-dpr rounding costs about a pixel (854 at 1.5, 855 at 1.9), so the emulation is
 # "achieved" within a hair, not bit-exactly.
 _QAM_TOLERANCE_PX = 3
+# A view Steam has created but never laid out reports 1x1 CSS (measured on a Big Picture
+# whose QAM has not been opened yet). The real QAM is ~854 wide in every configuration, so
+# anything this small is "never rendered", not "rendered wrong" — a not-yet, not a failure.
+_RENDERED_MIN_CSS_PX = 16
+# Steam reports a scale of 1.9 as 1.899999976158142 (float32 round-trip), so dpr equality is
+# a comparison within a hair, never ==.
+_DPR_EPSILON = 0.01
+# How often the hold re-checks the QuickAccess view for a late (unscaled) render. Cheap: one
+# CDP evaluate against a view that is usually already correct.
+_POLL_SEC = 2.0
 
 _QAM_TITLE_PREFIX = "quickaccess"
 _BPM_TITLE_MARKER = "bigpicture"
@@ -931,6 +954,18 @@ class ViewMetrics:
         """The view's size in real pixels — for Big Picture, the window's client area."""
         return round(self.css_w * self.dpr), round(self.css_h * self.dpr)
 
+    @property
+    def rendered(self) -> bool:
+        """Has Steam ever laid this view out? A created-but-never-shown view reports 1x1 CSS."""
+        return min(self.css_w, self.css_h) >= _RENDERED_MIN_CSS_PX
+
+    def scaled_at(self, factor: float) -> bool:
+        """Is this view rendering at *factor*? (Float-tolerant: Steam's 1.9 is 1.899999976158142.)"""
+        return abs(self.dpr - factor) <= _DPR_EPSILON
+
+    def describe(self) -> str:
+        return f"dpr {self.dpr}  CSS {self.css_w}x{self.css_h}"
+
 
 def _measure_view(match: str, *, prefix: bool) -> ViewMetrics | None:
     """Measure one CEF view's live CSS metrics; ``None`` when the view is not open."""
@@ -955,7 +990,22 @@ def _expected_qam_css(factor: float) -> tuple[int, int]:
     return _QAM_CSS_WIDTH, math.ceil(window_h / factor) - _QAM_HEADER_CSS
 
 
-def _verify_emulation(factor: float, window: BpmWindow | None) -> bool:
+class Verdict(Enum):
+    """The outcome of measuring the emulation against what a Deck renders.
+
+    ``PENDING`` is the one that is neither of the other two: the window and the scale are
+    right, but the QAM has never been opened in this Big Picture session, so Steam has not
+    laid its view out and there is nothing to measure yet. Reporting that as ``FAILED``
+    (which it was) cries wolf on the single most common way to start the tool — a fresh Big
+    Picture — and trains the reader to ignore the one block that must never be ignored.
+    """
+
+    ACHIEVED = "achieved"
+    PENDING = "pending"
+    FAILED = "failed"
+
+
+def _verify_emulation(factor: float, window: BpmWindow | None) -> Verdict:
     """Measure both views and check the emulation was actually ACHIEVED, not just requested.
 
     The whole point of the tool: a forced scale on a window that is not the Deck's size
@@ -967,26 +1017,23 @@ def _verify_emulation(factor: float, window: BpmWindow | None) -> bool:
     qam = _measure_view(_QAM_TITLE_PREFIX, prefix=True)
     for label, view in (("Big Picture", bpm), ("QuickAccess", qam)):
         if view is None:
-            print(f"  {label:<12} target not found (view not open?)")
+            print(f"  {label:<12} target not found (view not created yet)")
+        elif not view.rendered:
+            print(f"  {label:<12} {view.describe()} — created, never rendered")
         else:
-            print(f"  {label:<12} dpr {view.dpr}  CSS {view.css_w}x{view.css_h}")
+            print(f"  {label:<12} {view.describe()}")
 
     expected_w, expected_h = _expected_qam_css(factor)
-    if qam is None:
-        print(
-            f"\nFAILED to verify the emulation: the QuickAccess view is not open, so its size\n"
-            f"could not be measured (expected {expected_w}x{expected_h} CSS at scale {factor}).\n"
-            "Open the QAM in Big Picture and re-run.",
-            file=sys.stderr,
-        )
-        return False
+    if qam is None or not qam.rendered:
+        _report_pending(factor, bpm)
+        return Verdict.PENDING
 
     if abs(qam.css_w - expected_w) <= _QAM_TOLERANCE_PX and abs(qam.css_h - expected_h) <= _QAM_TOLERANCE_PX:
         print(
             f"  => QAM is {qam.css_w}x{qam.css_h} CSS at dpr {qam.dpr}, the {expected_w}x{expected_h} "
             f"a Deck renders at scale {factor} — this is what the Deck renders."
         )
-        return True
+        return Verdict.ACHIEVED
 
     window_size = _window_physical_size(window, bpm)
     deck_w, deck_h = _DECK_WINDOW
@@ -1000,7 +1047,73 @@ def _verify_emulation(factor: float, window: BpmWindow | None) -> bool:
         f"  size). Any layout judgement made on these numbers is invalid.",
         file=sys.stderr,
     )
-    return False
+    return Verdict.FAILED
+
+
+def _report_pending(factor: float, bpm: ViewMetrics | None) -> None:
+    """Say that the QAM has not been rendered yet — a not-yet, not a failure.
+
+    Everything the tool controls (window size, forced scale) has landed; the one thing it
+    cannot do is open the QAM for the user. Steam lays that view out lazily, on the first
+    open of the session, so there is nothing to measure until then.
+    """
+    expected_w, expected_h = _expected_qam_css(factor)
+    deck_w, deck_h = _DECK_WINDOW
+    applied = "at the forced scale" if bpm is None else f"at dpr {bpm.dpr}"
+    print(
+        f"\nQAM NOT VERIFIED YET — the emulation is applied, the QAM has simply never been opened.\n"
+        f"  Big Picture: {deck_w}x{deck_h} physical, scale forced to {factor} (rendering {applied}).\n"
+        f"  Steam creates the QuickAccess view with the window but lays it out only on the FIRST\n"
+        f"  QAM open of a Big Picture session — until then it is 1x1, and Steam's scale push reaches\n"
+        f"  only rendered views, so a QAM opened later can come up unscaled (dpr 1).\n"
+        f"  => OPEN THE QAM ONCE. This tool re-applies the scale to it the moment it renders, and\n"
+        f"     then verifies it against the {expected_w}x{expected_h} a Deck shows at scale {factor}."
+    )
+
+
+def _hold(factor: float, window: BpmWindow | None, *, verified: bool) -> None:
+    """Hold until Ctrl-C, re-applying the scale to any QuickAccess view that renders late.
+
+    This is the loop the tool cannot do without. Steam's scale push reaches only the views
+    that are RENDERED when it lands, and the QuickAccess view is laid out lazily on the
+    first QAM open of a Big Picture session — so a QAM opened after the force can come up at
+    dpr 1 / 854x720 (measured), which is precisely the dev-loop lie the tool exists to kill.
+    Re-issuing the same two calls while that view is live flips it to dpr 1.5 / 854x454
+    immediately (measured), and the same applies whenever Steam re-materializes the popup.
+
+    Quiet by construction: it re-applies only when a RENDERED view is at the wrong dpr, and
+    only once per distinct measurement — so a re-apply that does not take (Steam gone, say)
+    prints once instead of every two seconds.
+    """
+    acted_on: tuple[float, int, int] | None = None
+    while True:
+        time.sleep(_POLL_SEC)  # KeyboardInterrupt lands here; the caller's finally restores
+        qam = _measure_view(_QAM_TITLE_PREFIX, prefix=True)
+        if qam is None or not qam.rendered:
+            continue  # the QAM has still never been opened — nothing to scale, nothing to say
+        if qam.scaled_at(factor):
+            if not verified:  # it rendered already correct: verify once, then go quiet
+                _reverify(factor, window)
+                verified = True
+            continue
+        measurement = (qam.dpr, qam.css_w, qam.css_h)
+        if measurement == acted_on:
+            continue  # already re-applied for exactly this view state and it did not take
+        acted_on = measurement
+        print(
+            f"\nQuickAccess view is at {qam.describe()} — not the forced {factor}.\n"
+            f"Re-applying the scale (Steam's push reaches only the views that are rendered when it lands)..."
+        )
+        _set_scale(factor)
+        time.sleep(_SETTLE_SEC)
+        _reverify(factor, window)
+        verified = True
+
+
+def _reverify(factor: float, window: BpmWindow | None) -> None:
+    """Re-run the full verification and print the verdict — same numbers, same loud failure."""
+    print("\nMeasured (real, repainted — not a CDP emulation override):")
+    _verify_emulation(factor, window)
 
 
 def _window_physical_size(window: BpmWindow | None, bpm: ViewMetrics | None) -> str:
@@ -1190,23 +1303,21 @@ def main(argv: list[str]) -> int:
         window = _emulate_deck_window(prior_window)
         print(f"Forcing GamepadUI display scale {factor} (auto scaling OFF)...")
         _set_scale(factor)
-        # The QAM is a popup view Steam can recreate at will. Steam's own scale (unlike a
-        # CDP Emulation override, which is per-view and dies with the view) is display
-        # state that any recreated view picks up — so there is nothing to re-apply here.
-        # Do not "fix" this by adding a polling loop.
         time.sleep(_SETTLE_SEC)
         print(f"  scaling display: {_read_display_name() or 'unknown'}")
         print("\nMeasured (real, repainted — not a CDP emulation override):")
-        _verify_emulation(factor, window)
+        verdict = _verify_emulation(factor, window)
         print(
             f"\nHOLDING — Ctrl-C restores what you were on before this run\n"
             f"  scale:  {_describe(prior)}\n"
             f"  window: {prior_window.describe() if prior_window else 'unknown — will be left as-is'}\n"
+            "The QuickAccess view is watched while this holds: Steam's scale reaches only the views\n"
+            "that are rendered when it is pushed, so a QAM opened later is re-scaled here.\n"
             "WARNING: Steam persists this scale to config.vdf, filed under the display identity\n"
             "printed above. A hard kill (SIGKILL) skips the restore — recover with:\n"
             "  mise run dev:ui-scale auto"
         )
-        signal.pause()
+        _hold(factor, window, verified=verdict is not Verdict.PENDING)
     except KeyboardInterrupt:
         print("\nRestoring...")
     except DevUiScaleError as e:
