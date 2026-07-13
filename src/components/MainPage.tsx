@@ -190,22 +190,13 @@ function formatClockTime(iso: string): string {
   return `${hh}:${mm}`;
 }
 
-/** The "Last sync" field value. A completed run shows its relative time (plus a
- *  subtle newer cancelled/crashed attempt line); with no completed run ever, a
- *  cancelled/crashed attempt is surfaced so it never reads a bare "Never" after
- *  thousands of games synced (#1367); otherwise "Never". */
+/** The "Last sync" field VALUE (line 1, beside the label): the completed run's
+ *  relative time; with no completed run ever, the cancelled/crashed attempt is
+ *  surfaced so it never reads a bare "Never" after thousands of games synced
+ *  (#1367); otherwise "Never". */
 function lastSyncValue(stats: SyncStats): ReactNode {
   if (stats.last_sync) {
-    return (
-      <span style={{ fontSize: "12px", display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-        <span>{formatLastSync(stats.last_sync)}</span>
-        {stats.last_attempt && (
-          <span style={{ opacity: 0.6 }}>
-            last attempt: {formatClockTime(stats.last_attempt.finished_at)} ({stats.last_attempt.status})
-          </span>
-        )}
-      </span>
-    );
+    return <span style={{ fontSize: "12px" }}>{formatLastSync(stats.last_sync)}</span>;
   }
   if (stats.last_attempt) {
     return (
@@ -215,6 +206,19 @@ function lastSyncValue(stats: SyncStats): ReactNode {
     );
   }
   return <span style={{ fontSize: "12px" }}>Never</span>;
+}
+
+/** The "Last sync" description (line 2, full width, right-aligned): a newer
+ *  non-successful attempt shown under the completed run's time — squeezing it
+ *  into the narrow value column wrapped badly. Absent when there is nothing to
+ *  add (no attempt, or the attempt IS the value because no run ever completed). */
+function lastAttemptLine(stats: SyncStats): ReactNode | undefined {
+  if (!stats.last_sync || !stats.last_attempt) return undefined;
+  return (
+    <div style={{ textAlign: "right", fontSize: "12px", opacity: 0.6 }}>
+      last attempt: {formatClockTime(stats.last_attempt.finished_at)} ({stats.last_attempt.status})
+    </div>
+  );
 }
 
 /**
@@ -1119,7 +1123,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         {stats && (
           <>
             <PanelSectionRow>
-              <Field label="Last sync" focusable={true} bottomSeparator="none">
+              <Field label="Last sync" description={lastAttemptLine(stats)} focusable={true} bottomSeparator="none">
                 {lastSyncValue(stats)}
               </Field>
             </PanelSectionRow>
