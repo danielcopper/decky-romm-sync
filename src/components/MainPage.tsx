@@ -302,6 +302,17 @@ function previewApplySeconds(s: SyncPreviewSummary): number {
  *  note is noise rather than useful guidance; 10 min = 600 s. */
 const LONG_SYNC_HINT_THRESHOLD_SEC = 600;
 
+/**
+ * Thin horizontal rule dividing the panel's blocks (status | sync | menu).
+ * The panel carries no section headings — these rules are the only block
+ * boundaries.
+ */
+const BlockSeparator: FC = () => (
+  <PanelSectionRow>
+    <div data-testid="block-separator" style={{ height: "1px", backgroundColor: "rgba(255, 255, 255, 0.12)" }} />
+  </PanelSectionRow>
+);
+
 export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [stats, setStats] = useState<SyncStats | null>(null);
   const [budgetStatus, setBudgetStatus] = useState<SessionBudgetStatus | null>(null);
@@ -1022,13 +1033,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           </ButtonItem>
         </PanelSectionRow>
         <PanelSectionRow>
-          <ToggleField
-            label="Skip Preview"
-            description="Apply changes immediately without preview"
-            checked={skipPreview}
-            onChange={setSkipPreview}
-            bottomSeparator="none"
-          />
+          <ToggleField label="Skip Preview" checked={skipPreview} onChange={setSkipPreview} bottomSeparator="none" />
         </PanelSectionRow>
         {/* Visible whenever ANY terminal run is recorded — a completed run OR a
             cancelled/interrupted/errored attempt. A resume (last_attempt set,
@@ -1212,19 +1217,21 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             </PanelSectionRow>
           </>
         )}
+        <BlockSeparator />
       </PanelSection>
 
-      <PanelSection title="Sync">
+      <PanelSection>
         {syncBody}
         {status && !syncing && !preview && (
           <PanelSectionRow>
             <Field label={status} focusable={true} bottomSeparator="none" />
           </PanelSectionRow>
         )}
+        <BlockSeparator />
       </PanelSection>
 
       {hasDownloads && (
-        <PanelSection title="Downloads">
+        <PanelSection>
           {activeDownloads.slice(0, 2).map((item) => (
             <PanelSectionRow key={item.rom_id}>
               <ProgressBarWithInfo
@@ -1261,7 +1268,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         </PanelSection>
       )}
 
-      <PanelSection title="Settings">
+      <PanelSection>
         <PanelSectionRow>
           <ButtonItem layout="below" bottomSeparator="none" onClick={() => onNavigate("library")}>
             Library

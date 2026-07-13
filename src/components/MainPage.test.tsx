@@ -413,14 +413,13 @@ describe("MainPage", () => {
       expect(queryByTestId("version-error-card")).toBeNull();
     });
 
-    it("renders the full panel with the untitled status block plus Sync / Settings sections by default", async () => {
+    it("renders the panel without any section headings, blocks divided by rules", async () => {
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      const titles = Array.from(container.querySelectorAll('[data-testid="panel-title"]')).map((n) => n.textContent);
-      // The status block leads the panel untitled; the section titles provide
-      // the block breaks.
-      expect(titles).toEqual(expect.arrayContaining(["Sync", "Settings"]));
-      expect(titles).not.toContain("Status");
+      // No headings anywhere — the thin block separators are the only
+      // boundaries between the status, sync, and menu blocks.
+      expect(container.querySelectorAll('[data-testid="panel-title"]')).toHaveLength(0);
+      expect(container.querySelectorAll('[data-testid="block-separator"]')).toHaveLength(2);
     });
   });
 
@@ -3324,8 +3323,9 @@ describe("MainPage", () => {
 
     it("hidden when no downloads in the store", async () => {
       const container = await renderAndTick();
-      const titles = Array.from(container.querySelectorAll('[data-testid="panel-title"]')).map((n) => n.textContent);
-      expect(titles).not.toContain("Downloads");
+      // The downloads block is heading-less; its "View All" button is the
+      // presence anchor.
+      expect(buttonByExactText(container, "View All")).toBeNull();
     });
 
     it("rendered when at least one active download", async () => {
@@ -3343,8 +3343,8 @@ describe("MainPage", () => {
         },
       ]);
       const container = await renderAndTick();
-      const titles = Array.from(container.querySelectorAll('[data-testid="panel-title"]')).map((n) => n.textContent);
-      expect(titles).toContain("Downloads");
+      expect(buttonByExactText(container, "View All")).not.toBeNull();
+      expect(container.textContent).toContain("Active");
     });
 
     it("shows '+N more downloading' when more than 2 active downloads", async () => {
