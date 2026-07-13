@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
-"""Force Steam's GamepadUI display scale so the desktop dev loop renders Game Mode metrics.
+"""Emulate the Deck's Game Mode metrics in the desktop dev loop's Big Picture window.
 
 Part of the frontend dev loop (docs/contributing/frontend-dev-loop.md); driven by the
 ``dev:ui-scale`` mise task, usable standalone.
 
-Why this exists: the windowed Big Picture of ``mise run dev:watch`` renders at device
-pixel ratio 1, so the QAM panel gets ~720 CSS px of height where the Deck's internal
-panel (dpr 1.5) gives ~454. The dev loop shows ~59% more vertical room than the device —
-a panel that fits on the desktop can overflow in Game Mode. CSS *width* is 854 in both,
-so only height lies.
+Why this exists: the QAM panel gets ~720 CSS px of height in a stock desktop Big Picture
+where the Deck's internal panel gives ~454 — the dev loop shows vertical room the device
+does not have, so a panel that fits on the desktop can overflow in Game Mode.
 
-The 1.5 is Steam's own per-display "GamepadUI display scale" (Settings -> Display -> UI
-Scale), not gamescope and not a Chromium flag. Steam computes it from the display's
-resolution + physical size and pushes it into each CEF browser view. The same two
-undocumented calls Steam's settings UI uses drive it from here::
+The emulation has TWO halves, and forcing the scale alone is NOT enough. The QAM's CSS
+height follows::
+
+    QAM CSS height = (Big Picture window PHYSICAL height / scale) - 80
+
+so the scale is only half the equation: a fullscreen 2560x1440 Big Picture forced to 1.5
+renders an 880 px QAM — nearly double the Deck's 454 — while reporting the Deck's scale.
+This tool therefore ALSO sizes the Big Picture window to the Deck panel's 1280x800
+physical pixels, and then HARD-VERIFIES the result against the expected QAM size rather
+than claiming metrics it did not achieve.
+
+Half 1 — the scale. The 1.5 is Steam's own per-display "GamepadUI display scale"
+(Settings -> Display -> UI Scale), not gamescope and not a Chromium flag. Steam computes
+it from the display's resolution + physical size and pushes it into each CEF browser view.
+The same two undocumented calls Steam's settings UI uses drive it from here::
 
     SteamClient.Window.SetGamepadUIAutoDisplayScale(bool)
     SteamClient.Window.SetGamepadUIManualDisplayScaleFactor(float)
@@ -22,10 +31,23 @@ Unlike CDP's ``Emulation.setDeviceMetricsOverride`` (which fakes ``devicePixelRa
 leaves the rest of the window unpainted), this is Steam's real scale: the views are
 re-laid out and repainted for real.
 
+Half 2 — the window. KWin scripting over DBus (the same loadScript/run/unloadScript route
+``dev_open_bpm.sh`` uses for window placement) un-fullscreens the Big Picture window and
+sets its geometry so the CLIENT area is exactly 1280x800, on whatever output it already
+sits on. ``frameGeometry`` includes decorations, so the frame is corrected by the measured
+frame-vs-client delta until the client area lands exactly. The window's prior geometry and
+fullscreen state are captured first and restored on exit, alongside the scale.
+
 DANGER — the forced scale PERSISTS: Steam flushes it to
 ``~/.local/share/Steam/config/config.vdf`` (``UI -> display -> Current -> ScaleFactor``)
-within a couple of seconds, keyed by a display identity the Deck shares with Game Mode. A
-factor left forced is a factor Steam keeps.
+within a couple of seconds. A factor left forced is a factor Steam keeps.
+
+The setting is PER DISPLAY, keyed by Steam's display identity (``strDisplayName``, e.g.
+``External: DP-2 27"|||Fullscreen-2560x1440``), and ``config.vdf`` carries one entry per
+identity. So the blast radius depends on where the Big Picture window sits: on the Deck's
+internal panel the identity is the one Game Mode itself uses and a forced factor bleeds
+straight into Game Mode; on an external monitor it writes that monitor's entry and leaves
+Game Mode's alone. The tool prints the identity it is scaling, so this is never a guess.
 
 So the exit path CAPTURES the prior state before applying anything and puts back exactly
 that (SIGINT/SIGTERM/finally): auto stays auto, and a manual UI Scale — an accessibility
@@ -62,18 +84,24 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import os
+import shutil
 import signal
 import socket
 import struct
+import subprocess
 import sys
+import tempfile
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.error import URLError
 from urllib.request import urlopen
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from types import FrameType
 
 _DEBUGGER_URL = "http://localhost:8080/json"
@@ -92,14 +120,37 @@ _STEAM_CONFIG_VDF = os.path.expanduser("~/.local/share/Steam/config/config.vdf")
 # settles by ~0.5 s. Measure well past that or the printed numbers are a lie.
 _SETTLE_SEC = 1.5
 
-# The Deck's internal panel auto-scales to 1.5 — forcing it on the desktop reproduces
-# Game Mode's CSS metrics exactly.
+# The Deck's internal panel auto-scales to 1.5 — forcing it reproduces Game Mode's CSS
+# metrics, but only once the window is the panel's size too (see _DECK_WINDOW).
 _DECK_SCALE = 1.5
-# Game Mode reference metrics (measured on the Deck's internal panel, dpr 1.5).
-_GAME_MODE_QAM = (854, 454)
+# The Deck's internal panel in PHYSICAL pixels. The window half of the emulation: the QAM's
+# CSS height is (window physical height / scale) - 80, so the scale is meaningless until the
+# window is this size. Measured: fullscreen 2560x1440 at 1.5 renders an 880 px QAM, not 454.
+_DECK_WINDOW = (1280, 800)
+# Steam lays a view out in CEIL(physical / scale) CSS px, and the QAM sits this far below
+# Big Picture's header. Verified against three configurations: 800/1.5 - 80 = 454 (Game
+# Mode, measured 454); 1440/1.5 - 80 = 880 (fullscreen 1440p at 1.5); 1440/1.9 - 80 = 678
+# (fullscreen 1440p at Steam's automatic 1.9, measured 679).
+_QAM_HEADER_CSS = 80
+# The QAM popup is a fixed ~854 CSS px wide in every configuration measured — only its
+# height tracks the window.
+_QAM_CSS_WIDTH = 854
+# Fractional-dpr rounding costs about a pixel (854 at 1.5, 855 at 1.9), so the emulation is
+# "achieved" within a hair, not bit-exactly.
+_QAM_TOLERANCE_PX = 3
 
 _QAM_TITLE_PREFIX = "quickaccess"
 _BPM_TITLE_MARKER = "bigpicture"
+
+# KWin scripting (window half). Same DBus route dev_open_bpm.sh uses for placement.
+_KWIN_SERVICE = "org.kde.KWin"
+_KWIN_SCRIPTING_PATH = "/Scripting"
+_KWIN_SCRIPT_NAME = "decky-romm-sync-ui-scale"
+# A decorated window needs one correction pass (frame != client area); the rest is slack.
+_GEOMETRY_ATTEMPTS = 3
+# KWin resizes asynchronously and Steam repaints into the new size; measured well under
+# this, but a short window is what makes the frame-vs-client delta readable.
+_WINDOW_SETTLE_SEC = 0.6
 
 
 class DevUiScaleError(RuntimeError):
@@ -285,6 +336,334 @@ def _recv_exact(sock: socket.socket, count: int) -> bytes | None:
     return buffer
 
 
+# -------------------------------------------------------------------------- kwin
+
+# One script, three actions. KWin scripts have no return channel over DBus, so the reply
+# comes back through the user journal: print() from a KWin script lands there tagged
+# `js:`, and the per-call token makes a reply unambiguous against a stale line.
+_KWIN_JS = """
+var TOKEN = "@TOKEN@";
+var ACTION = "@ACTION@";
+var PAYLOAD = @PAYLOAD@;
+
+function emit(o) {
+  print("[decky-uiscale:" + TOKEN + "] " + JSON.stringify(o));
+}
+
+function rect(r) {
+  if (!r) {
+    return null;
+  }
+  return {
+    x: Math.round(r.x),
+    y: Math.round(r.y),
+    width: Math.round(r.width),
+    height: Math.round(r.height),
+  };
+}
+
+// Same heuristic as dev_open_bpm.sh: class "steam" covers the desktop client window and
+// Big Picture; BPM keeps the "Big Picture" brand across locales ("Big-Picture-Modus"), and
+// a fullscreen steam window is BPM as well (the client window is never fullscreen).
+function isBigPicture(win) {
+  if (!win || !win.resourceClass ||
+      String(win.resourceClass).toLowerCase() !== "steam") {
+    return false;
+  }
+  var caption = String(win.caption || "").toLowerCase();
+  return caption.indexOf("picture") !== -1 || win.fullScreen === true;
+}
+
+function find() {
+  var wins = workspace.windowList();
+  for (var i = 0; i < wins.length; i++) {
+    if (isBigPicture(wins[i])) {
+      return wins[i];
+    }
+  }
+  return null;
+}
+
+function state(win) {
+  return {
+    ok: true,
+    output: win.output ? win.output.name : null,
+    outputGeometry: win.output ? rect(win.output.geometry) : null,
+    fullScreen: win.fullScreen === true,
+    frame: rect(win.frameGeometry),
+    client: rect(win.clientGeometry),
+  };
+}
+
+try {
+  var win = find();
+  if (!win) {
+    emit({ ok: false, error: "no Big Picture window in KWin's window list" });
+  } else {
+    if (ACTION === "resize") {
+      // A fullscreen or maximized window ignores frameGeometry — clear both first.
+      win.fullScreen = false;
+      win.setMaximize(false, false);
+      win.frameGeometry = PAYLOAD.frame;
+    } else if (ACTION === "restore") {
+      // Geometry BEFORE fullscreen: a window that is already fullscreen would swallow the
+      // geometry write, and this order also leaves KWin the right un-fullscreen geometry.
+      win.frameGeometry = PAYLOAD.frame;
+      win.fullScreen = PAYLOAD.fullScreen === true;
+    }
+    emit(state(win));
+  }
+} catch (e) {
+  emit({ ok: false, error: String(e) });
+}
+"""
+
+
+@dataclass(frozen=True)
+class Rect:
+    """A window rectangle in physical pixels, as KWin reports it."""
+
+    x: int
+    y: int
+    width: int
+    height: int
+
+    @classmethod
+    def from_json(cls, raw: Any) -> Rect | None:
+        if not isinstance(raw, dict):
+            return None
+        try:
+            return cls(int(raw["x"]), int(raw["y"]), int(raw["width"]), int(raw["height"]))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def as_json(self) -> dict[str, int]:
+        return {"x": self.x, "y": self.y, "width": self.width, "height": self.height}
+
+    def size(self) -> str:
+        return f"{self.width}x{self.height}"
+
+
+@dataclass(frozen=True)
+class BpmWindow:
+    """The Big Picture window as KWin sees it — the state the exit path has to put back.
+
+    ``frame`` is the decorated rectangle (what ``frameGeometry`` writes); ``client`` is the
+    content area Steam actually renders into, and the one that has to be the Deck's
+    1280x800. The two differ by the decoration, which is why sizing is a measure-and-correct
+    loop rather than a single write.
+    """
+
+    output: str | None
+    output_geometry: Rect | None
+    fullscreen: bool
+    frame: Rect
+    client: Rect
+
+    def describe(self) -> str:
+        where = self.output or "an unknown output"
+        if self.fullscreen:
+            return f"fullscreen {self.frame.size()} on {where}"
+        return f"windowed {self.client.size()} on {where}"
+
+
+def _qdbus_binary() -> str | None:
+    """The qdbus binary to talk to KWin with; ``None`` when neither spelling exists."""
+    for name in ("qdbus6", "qdbus"):
+        found = shutil.which(name)
+        if found is not None:
+            return found
+    return None
+
+
+def _qdbus(binary: str, path: str, method: str, *args: str) -> str | None:
+    """Call a KWin DBus method; ``None`` on any failure (the caller degrades, never crashes)."""
+    try:
+        result = subprocess.run(  # dev tool: not shipped plugin code
+            [binary, _KWIN_SERVICE, path, method, *args],
+            capture_output=True,
+            text=True,
+            timeout=_TIMEOUT_SEC,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def _kwin_call(action: str, payload: dict[str, Any] | None = None) -> BpmWindow | None:
+    """Run *action* ("capture" / "resize" / "restore") against the Big Picture window.
+
+    ``None`` means KWin could not be driven or the window was not found — every caller
+    degrades to a loud warning, and the emulation check then fails rather than lying.
+    """
+    binary = _qdbus_binary()
+    if binary is None:
+        return None
+    token = os.urandom(4).hex()
+    script = (
+        _KWIN_JS.replace("@TOKEN@", token).replace("@ACTION@", action).replace("@PAYLOAD@", json.dumps(payload or {}))
+    )
+    if not _kwin_run_script(binary, script):
+        return None
+    reply = _kwin_read_reply(token)
+    if reply is None or not reply.get("ok"):
+        if isinstance(reply, dict) and reply.get("error"):
+            print(f"WARNING: KWin: {reply['error']}", file=sys.stderr)
+        return None
+
+    frame = Rect.from_json(reply.get("frame"))
+    client = Rect.from_json(reply.get("client"))
+    if frame is None or client is None:
+        return None
+    output = reply.get("output")
+    return BpmWindow(
+        output=output if isinstance(output, str) else None,
+        output_geometry=Rect.from_json(reply.get("outputGeometry")),
+        fullscreen=bool(reply.get("fullScreen")),
+        frame=frame,
+        client=client,
+    )
+
+
+def _kwin_run_script(binary: str, script: str) -> bool:
+    """Load, run and unload *script* in KWin. The script is short-lived by construction.
+
+    It connects no signals — everything happens in the body during ``run`` — so unloading
+    immediately is safe, and a re-run can never collide with a lingering copy. A fresh temp
+    file per call sidesteps KWin's caching of an already-loaded path.
+    """
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as handle:
+        handle.write(script)
+        path = handle.name
+    try:
+        _qdbus(binary, _KWIN_SCRIPTING_PATH, "org.kde.kwin.Scripting.unloadScript", _KWIN_SCRIPT_NAME)
+        raw = _qdbus(binary, _KWIN_SCRIPTING_PATH, "org.kde.kwin.Scripting.loadScript", path, _KWIN_SCRIPT_NAME)
+        script_id = (raw or "").strip()
+        if not script_id.isdigit():
+            return False
+        return _qdbus(binary, f"{_KWIN_SCRIPTING_PATH}/Script{script_id}", "org.kde.kwin.Script.run") is not None
+    finally:
+        _qdbus(binary, _KWIN_SCRIPTING_PATH, "org.kde.kwin.Scripting.unloadScript", _KWIN_SCRIPT_NAME)
+        os.unlink(path)
+
+
+def _kwin_read_reply(token: str) -> dict[str, Any] | None:
+    """Read the script's emitted line back out of the user journal; ``None`` if it never lands."""
+    marker = f"[decky-uiscale:{token}]"
+    deadline = time.monotonic() + _TIMEOUT_SEC
+    while time.monotonic() < deadline:
+        try:
+            journal = subprocess.run(  # dev tool: not shipped plugin code
+                ["journalctl", "--user", "--since=-2min", "--no-pager", "-o", "cat"],
+                capture_output=True,
+                text=True,
+                timeout=_TIMEOUT_SEC,
+                check=False,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        for line in journal.splitlines():
+            _, found, payload = line.partition(marker)
+            if found:
+                try:
+                    return json.loads(payload)
+                except ValueError:
+                    return None
+        time.sleep(0.15)
+    return None
+
+
+def _capture_window_state() -> BpmWindow | None:
+    """Capture (and print) the Big Picture window's geometry BEFORE this run touches it."""
+    window = _kwin_call("capture")
+    if window is None:
+        print(
+            "WARNING: could not drive KWin — the Big Picture window keeps its current size.\n"
+            "         Forcing the scale ALONE does not reproduce Deck metrics (the QAM's CSS height\n"
+            "         follows window physical height / scale - 80), so the check below will fail.",
+            file=sys.stderr,
+        )
+        return None
+    print(f"Captured prior window: {window.describe()}")
+    return window
+
+
+def _deck_window_origin(prior: BpmWindow, width: int, height: int) -> tuple[int, int]:
+    """Centre a *width* x *height* frame on the output the window is ALREADY on.
+
+    Moving it between screens is dev_open_bpm.sh's job, not this tool's.
+    """
+    geometry = prior.output_geometry
+    if geometry is None:
+        return prior.frame.x, prior.frame.y
+    return (
+        geometry.x + max(0, (geometry.width - width) // 2),
+        geometry.y + max(0, (geometry.height - height) // 2),
+    )
+
+
+def _size_window_to_deck(prior: BpmWindow) -> BpmWindow | None:
+    """Size Big Picture so its CLIENT area is exactly the Deck panel's 1280x800.
+
+    ``frameGeometry`` writes the DECORATED rectangle, so a single write lands the client
+    area short by whatever the decoration adds. Correct by the measured frame-vs-client
+    delta and re-assert until the client area is exact — which also means the tool never
+    has to hardcode a decoration size, on any theme or compositor config.
+    """
+    target_w, target_h = _DECK_WINDOW
+    frame_w, frame_h = target_w, target_h
+    latest: BpmWindow | None = None
+    for _ in range(_GEOMETRY_ATTEMPTS):
+        x, y = _deck_window_origin(prior, frame_w, frame_h)
+        frame = Rect(x, y, frame_w, frame_h)
+        latest = _kwin_call("resize", {"frame": frame.as_json()})
+        if latest is None:
+            return None
+        time.sleep(_WINDOW_SETTLE_SEC)
+        delta_w = target_w - latest.client.width
+        delta_h = target_h - latest.client.height
+        if delta_w == 0 and delta_h == 0:
+            return latest
+        frame_w += delta_w
+        frame_h += delta_h
+    return latest
+
+
+def _emulate_deck_window(prior: BpmWindow | None) -> BpmWindow | None:
+    """Put the Big Picture window at the Deck panel's physical size; ``None`` if it could not be."""
+    if prior is None:
+        return None
+    width, height = _DECK_WINDOW
+    print(f"Sizing the Big Picture window to a {width}x{height} client area (was {prior.describe()})...")
+    window = _size_window_to_deck(prior)
+    if window is None:
+        print("WARNING: KWin would not resize the Big Picture window — the check below will fail.", file=sys.stderr)
+        return None
+    print(f"  window now: {window.describe()} (frame {window.frame.size()})")
+    return window
+
+
+def _restore_window(prior: BpmWindow | None) -> None:
+    """Put the window back exactly as it was — same geometry, same fullscreen state."""
+    if prior is None:
+        return
+    window = _kwin_call("restore", {"frame": prior.frame.as_json(), "fullScreen": prior.fullscreen})
+    if window is None:
+        print(
+            f"\nCOULD NOT RESTORE the Big Picture window ({prior.describe()}).\n"
+            "It is still at the Deck's 1280x800 — resize or re-fullscreen it by hand.",
+            file=sys.stderr,
+        )
+        return
+    print(f"Restored: Big Picture window {window.describe()} (the state captured before this run).")
+    if window.fullscreen != prior.fullscreen or (not prior.fullscreen and window.frame != prior.frame):
+        print(
+            f"WARNING: that is NOT the window state captured before this run ({prior.describe()}).",
+            file=sys.stderr,
+        )
+
+
 # ------------------------------------------------------------------------- steam
 
 
@@ -409,6 +788,30 @@ def _read_live_scale_state() -> tuple[bool, float | None] | None:
     return bool(state["auto"]), float(factor) if isinstance(factor, (int, float)) else None
 
 
+def _read_display_name() -> str | None:
+    """Steam's identity for the display it is currently scaling; ``None`` if unreadable.
+
+    ``strDisplayName`` (e.g. ``External: DP-2 27"|||Fullscreen-2560x1440``) is the key
+    ``config.vdf`` files the UI Scale under — one entry per display. Printing it is what
+    makes the blast radius of a forced factor visible: the same string as Game Mode's means
+    the force bleeds into Game Mode, a different one means it does not.
+    """
+    expression = """
+    (() => {
+      const s = window.settingsStore && window.settingsStore.settings;
+      return s && typeof s.strDisplayName === 'string' ? s.strDisplayName : null;
+    })()
+    """
+    try:
+        ws_url = _find_ws_url(_list_targets(), _normalize_title(_SHARED_JS_CONTEXT), prefix=True)
+        if ws_url is None:
+            return None
+        name = _evaluate(ws_url, expression)
+    except DevUiScaleError:
+        return None
+    return name if isinstance(name, str) else None
+
+
 def _read_config_vdf_scale_state() -> tuple[bool, float | None] | None:
     """Fallback read of ``UI -> display -> Current`` in ``config.vdf``; ``None`` if unreadable.
 
@@ -515,42 +918,110 @@ def _set_scale(factor: float | None) -> None:
     _evaluate(ws_url, expression)
 
 
-def _measure() -> None:
-    """Print the real CSS metrics of both views, next to the Game Mode reference."""
-    targets = _list_targets()
-    views = (
-        ("Big Picture", _find_ws_url(targets, _BPM_TITLE_MARKER, prefix=False)),
-        ("QuickAccess", _find_ws_url(targets, _QAM_TITLE_PREFIX, prefix=True)),
-    )
-    expression = "JSON.stringify({dpr: window.devicePixelRatio, w: window.innerWidth, h: window.innerHeight})"
-    qam: dict[str, Any] | None = None
-    for label, ws_url in views:
-        if ws_url is None:
-            print(f"  {label:<12} target not found (view not open?)")
-            continue
-        metrics = json.loads(str(_evaluate(ws_url, expression)))
-        print(f"  {label:<12} dpr {metrics['dpr']}  CSS {metrics['w']}x{metrics['h']}")
-        if label == "QuickAccess":
-            qam = metrics
+@dataclass(frozen=True)
+class ViewMetrics:
+    """What a CEF view actually rendered — the ground truth every claim here is checked against."""
 
-    ref_w, ref_h = _GAME_MODE_QAM
+    dpr: float
+    css_w: int
+    css_h: int
+
+    @property
+    def physical(self) -> tuple[int, int]:
+        """The view's size in real pixels — for Big Picture, the window's client area."""
+        return round(self.css_w * self.dpr), round(self.css_h * self.dpr)
+
+
+def _measure_view(match: str, *, prefix: bool) -> ViewMetrics | None:
+    """Measure one CEF view's live CSS metrics; ``None`` when the view is not open."""
+    ws_url = _find_ws_url(_list_targets(), match, prefix=prefix)
+    if ws_url is None:
+        return None
+    expression = "JSON.stringify({dpr: window.devicePixelRatio, w: window.innerWidth, h: window.innerHeight})"
+    try:
+        raw = json.loads(str(_evaluate(ws_url, expression)))
+        return ViewMetrics(float(raw["dpr"]), int(raw["w"]), int(raw["h"]))
+    except (DevUiScaleError, KeyError, TypeError, ValueError):
+        return None
+
+
+def _expected_qam_css(factor: float) -> tuple[int, int]:
+    """The QAM's CSS size the Deck renders at *factor*, from the 1280x800 panel.
+
+    Steam lays a view out in CEIL(physical / factor) CSS px and insets the QAM below Big
+    Picture's header, so 1.5 gives Game Mode's 854x454.
+    """
+    _, window_h = _DECK_WINDOW
+    return _QAM_CSS_WIDTH, math.ceil(window_h / factor) - _QAM_HEADER_CSS
+
+
+def _verify_emulation(factor: float, window: BpmWindow | None) -> bool:
+    """Measure both views and check the emulation was actually ACHIEVED, not just requested.
+
+    The whole point of the tool: a forced scale on a window that is not the Deck's size
+    reports the Deck's dpr while rendering a QAM up to twice the Deck's height. So the
+    numbers are compared against what the Deck would render, and a miss is a loud failure —
+    never a quietly-wrong "measured" line the reader would take for a success.
+    """
+    bpm = _measure_view(_BPM_TITLE_MARKER, prefix=False)
+    qam = _measure_view(_QAM_TITLE_PREFIX, prefix=True)
+    for label, view in (("Big Picture", bpm), ("QuickAccess", qam)):
+        if view is None:
+            print(f"  {label:<12} target not found (view not open?)")
+        else:
+            print(f"  {label:<12} dpr {view.dpr}  CSS {view.css_w}x{view.css_h}")
+
+    expected_w, expected_h = _expected_qam_css(factor)
     if qam is None:
-        print(f"  (Game Mode reference: QAM {ref_w}x{ref_h})")
-    elif (qam["w"], qam["h"]) == (ref_w, ref_h):
-        print(f"  => QAM matches the Game Mode reference ({ref_w}x{ref_h}) — what you see is what the Deck renders.")
-    else:
-        delta = qam["h"] - ref_h
-        sign = "+" if delta >= 0 else ""
         print(
-            f"  => QAM is {qam['w']}x{qam['h']} vs the Game Mode reference {ref_w}x{ref_h} "
-            f"({sign}{delta} px of height)."
+            f"\nFAILED to verify the emulation: the QuickAccess view is not open, so its size\n"
+            f"could not be measured (expected {expected_w}x{expected_h} CSS at scale {factor}).\n"
+            "Open the QAM in Big Picture and re-run.",
+            file=sys.stderr,
         )
+        return False
+
+    if abs(qam.css_w - expected_w) <= _QAM_TOLERANCE_PX and abs(qam.css_h - expected_h) <= _QAM_TOLERANCE_PX:
+        print(
+            f"  => QAM is {qam.css_w}x{qam.css_h} CSS at dpr {qam.dpr}, the {expected_w}x{expected_h} "
+            f"a Deck renders at scale {factor} — this is what the Deck renders."
+        )
+        return True
+
+    window_size = _window_physical_size(window, bpm)
+    deck_w, deck_h = _DECK_WINDOW
+    print(
+        f"\nEMULATION FAILED — these are NOT Deck metrics.\n"
+        f"  QAM measured: {qam.css_w}x{qam.css_h} CSS (expected {expected_w}x{expected_h} at scale {factor})\n"
+        f"  Big Picture window: {window_size} physical (must be {deck_w}x{deck_h} — the Deck's panel)\n"
+        f"  The QAM's CSS height is (window physical height / scale) - {_QAM_HEADER_CSS}, so forcing the\n"
+        f"  scale on a window of the wrong size gives the Deck's dpr with the wrong layout.\n"
+        f"  Most likely: the window could not be resized (KWin unreachable, or Steam re-asserted its\n"
+        f"  size). Any layout judgement made on these numbers is invalid.",
+        file=sys.stderr,
+    )
+    return False
+
+
+def _window_physical_size(window: BpmWindow | None, bpm: ViewMetrics | None) -> str:
+    """The Big Picture window's real pixel size, for the failure block; KWin first, CEF as fallback."""
+    if window is not None:
+        return window.client.size()
+    if bpm is not None:
+        width, height = bpm.physical
+        return f"~{width}x{height}"
+    return "unknown"
 
 
 # -------------------------------------------------------------------------- main
 
 
 _USAGE = """usage: dev_ui_scale.py [deck | <factor> | steam | auto]
+
+Emulates the Deck by BOTH sizing the Big Picture window to the panel's 1280x800 physical
+pixels AND forcing Steam's GamepadUI display scale — the QAM's CSS height is
+(window physical height / scale) - 80, so neither half works alone. The result is then
+verified against what the Deck would render, and a miss is reported as a failure.
 
   deck      (default) force 1.5 — the Deck internal panel's auto scale, i.e. exact
             Game Mode metrics (QAM 854x454).
@@ -560,11 +1031,13 @@ _USAGE = """usage: dev_ui_scale.py [deck | <factor> | steam | auto]
             back to 1.5 when Steam is on automatic scaling.
   auto|off  UNCONDITIONALLY re-enable Steam's automatic scaling and exit. This is the
             rescue path for when a previous run was SIGKILLed and its captured state
-            died with it — it does NOT know what you were on, it just forces auto.
+            died with it — it does NOT know what you were on, it just forces auto (and
+            it does not touch the window; resize it by hand).
 
-The forcing modes hold until Ctrl-C, then restore the scale you were on BEFORE the run:
-auto stays auto, and a manual UI Scale (e.g. an accessibility "Larger text" value) is put
-back exactly as it was — never silently flipped to auto."""
+The forcing modes hold until Ctrl-C, then restore what you were on BEFORE the run: auto
+stays auto, a manual UI Scale (e.g. an accessibility "Larger text" value) is put back
+exactly as it was rather than silently flipped to auto, and the Big Picture window goes
+back to the geometry and fullscreen state it had."""
 
 
 def _parse_mode(argv: list[str]) -> float | None:
@@ -595,8 +1068,41 @@ def _on_signal(_signum: int, _frame: FrameType | None) -> None:
     raise KeyboardInterrupt
 
 
-def _restore(prior: SteamScaleState | None) -> None:
-    """Put *prior* back — exactly. Never raises: it runs in a ``finally``.
+def _restore(prior: SteamScaleState | None, prior_window: BpmWindow | None) -> None:
+    """Put the scale AND the window back — exactly. Never raises: it runs in a ``finally``.
+
+    Scale before window, which is the reverse of the apply order and the only safe order for
+    two independent reasons. First, the UI Scale is filed per display identity and the
+    identity depends on the window (Steam keys it ``…|||Fullscreen-2560x1440`` fullscreen but
+    ``…|||Windowed`` once resized), so un-forcing while the window is still at the Deck's size
+    is what clears the entry the force was actually written into. Second, it is the right risk
+    order: a stranded forced scale is the damaging outcome (Steam persists it), a window left
+    at 1280x800 is cosmetic.
+
+    Signals are held off for the duration. The window half is the slow half — subprocesses
+    plus a journal read — and an impatient second Ctrl-C used to truncate the restore right
+    there, leaving the window resized. SIGKILL remains the only way to skip the restore, which
+    is what the docs promise.
+    """
+    with _signals_held_off():
+        _restore_scale(prior)
+        _restore_window(prior_window)
+        _verify_restore(prior)
+
+
+@contextmanager
+def _signals_held_off() -> Iterator[None]:
+    """Ignore SIGINT/SIGTERM inside the block, then put the previous handlers back."""
+    previous = {number: signal.signal(number, signal.SIG_IGN) for number in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
+def _restore_scale(prior: SteamScaleState | None) -> None:
+    """Put *prior* back — exactly.
 
     A user who deliberately set a manual UI Scale (an accessibility "Larger text" value,
     say) must get that scale back, not Steam's automatic one — flipping them to auto on
@@ -625,8 +1131,6 @@ def _restore(prior: SteamScaleState | None) -> None:
             "  mise run dev:ui-scale auto",
             file=sys.stderr,
         )
-        return
-    _verify_restore(prior)
 
 
 def _verify_restore(prior: SteamScaleState | None) -> None:
@@ -678,22 +1182,28 @@ def main(argv: list[str]) -> int:
         return 0
 
     signal.signal(signal.SIGTERM, _on_signal)
-    # Capture BEFORE applying — this is the state the exit path has to put back.
+    # Capture BEFORE applying — this is the state the exit path has to put back. Both halves
+    # of it: the scale Steam is on, and the window KWin is about to resize.
     prior = _capture_prior_state()
-    print(f"Forcing GamepadUI display scale {factor} (auto scaling OFF)...")
+    prior_window = _capture_window_state()
     try:
+        window = _emulate_deck_window(prior_window)
+        print(f"Forcing GamepadUI display scale {factor} (auto scaling OFF)...")
         _set_scale(factor)
         # The QAM is a popup view Steam can recreate at will. Steam's own scale (unlike a
         # CDP Emulation override, which is per-view and dies with the view) is display
         # state that any recreated view picks up — so there is nothing to re-apply here.
         # Do not "fix" this by adding a polling loop.
         time.sleep(_SETTLE_SEC)
+        print(f"  scaling display: {_read_display_name() or 'unknown'}")
         print("\nMeasured (real, repainted — not a CDP emulation override):")
-        _measure()
+        _verify_emulation(factor, window)
         print(
-            f"\nHOLDING — Ctrl-C restores what you were on before this run ({_describe(prior)}).\n"
-            "WARNING: Steam persists this scale to config.vdf, under the same display identity\n"
-            "Game Mode uses. A hard kill (SIGKILL) skips the restore — recover with:\n"
+            f"\nHOLDING — Ctrl-C restores what you were on before this run\n"
+            f"  scale:  {_describe(prior)}\n"
+            f"  window: {prior_window.describe() if prior_window else 'unknown — will be left as-is'}\n"
+            "WARNING: Steam persists this scale to config.vdf, filed under the display identity\n"
+            "printed above. A hard kill (SIGKILL) skips the restore — recover with:\n"
             "  mise run dev:ui-scale auto"
         )
         signal.pause()
@@ -704,8 +1214,9 @@ def main(argv: list[str]) -> int:
         return 1
     finally:
         # Covers the apply itself: the forcing expression sets auto=false before it sets
-        # the factor, so even a half-applied scale must be undone.
-        _restore(prior)
+        # the factor, so even a half-applied scale must be undone — and a window that was
+        # resized before a later step failed must still go back.
+        _restore(prior, prior_window)
     return 0
 
 

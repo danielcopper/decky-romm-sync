@@ -84,19 +84,35 @@ With [mise shell completions](https://mise.jdx.dev/installing-mise.html#shells) 
 
 The windowed Big Picture renders the plugin's real UI, but **not at the Deck's real size**. Measured on-device:
 
-| View                            | Big Picture window   | QuickAccess (QAM) panel  |
-| ------------------------------- | -------------------- | ------------------------ |
-| Game Mode (Deck internal panel) | dpr 1.5, CSS 853x533 | dpr 1.5, CSS **854x454** |
-| Desktop windowed BPM (default)  | dpr 1, CSS 1280x800  | dpr 1, CSS **854x720**   |
+| Configuration                                     | Big Picture window               | QuickAccess (QAM) panel |
+| ------------------------------------------------- | -------------------------------- | ----------------------- |
+| Game Mode (Deck internal panel, scale 1.5)        | 1280x800 physical, CSS 853x533   | CSS **854x454**         |
+| Desktop BPM, 1280x800 window, unscaled (dpr 1)    | 1280x800 physical, CSS 1280x800  | CSS **854x720**         |
+| Desktop BPM fullscreen on 1440p, Steam's auto 1.9 | 2560x1440 physical, CSS 1348x758 | CSS **855x679**         |
+| Desktop BPM fullscreen on 1440p, **forced 1.5**   | 2560x1440 physical, CSS 1707x960 | CSS **854x880**         |
 
-The dev loop hands the QAM panel ~59% more vertical room than the device. CSS **width is 854 in both**, so layout,
+The dev loop hands the QAM panel far more vertical room than the device. CSS **width is ~854 everywhere**, so layout,
 wrapping and truncation are faithful — only **height** lies. A panel that fits comfortably in the windowed BPM can
 overflow in Game Mode.
+
+The last row is the trap, and it is why this tool does two things rather than one. Every number above obeys:
+
+```text
+QAM CSS height = (Big Picture window PHYSICAL height / scale) - 80
+```
+
+- Game Mode: 800 / 1.5 − 80 = 453 → **measured 454**
+- Fullscreen 1440p at Steam's automatic 1.9: 1440 / 1.9 − 80 = 678 → **measured 679**
+- Fullscreen 1440p forced to 1.5: 1440 / 1.5 − 80 = **880** — nearly double the Deck's 454
+
+(Steam lays a view out in `ceil(physical / scale)` CSS px, hence the ±1.) So **forcing the scale alone does not emulate
+the Deck**: on a maximized or fullscreen Big Picture it hands you the Deck's `devicePixelRatio` with the wrong layout —
+a lie that looks like a measurement. The window has to be the Deck panel's **1280x800 physical pixels** as well.
 
 The 1.5 is **Steam's own per-display "GamepadUI display scale"** — not gamescope, and not a Chromium flag (Chromium is
 pinned to `--force-device-scale-factor=1` by `steamclient.so`). Steam derives it from the display's resolution and
 physical size and pushes it into each CEF browser view; it is the same value the user sees under **Settings → Display →
-UI Scale** (range 0.5–2.5). Steam's default is **automatic**, which on the desktop's 1280x800 window comes out as 1.
+UI Scale**. Steam's default is **automatic**, which on a 1280x800 window comes out as 1.
 
 ### `mise run dev:ui-scale`
 
@@ -107,22 +123,39 @@ mise run dev:ui-scale steam    # adopt whatever UI Scale you have set in Steam
 mise run dev:ui-scale auto     # rescue: force automatic scaling back on, and exit
 ```
 
-The task drives the two undocumented calls Steam's own settings UI uses
-(`SteamClient.Window.SetGamepadUIAutoDisplayScale` / `SetGamepadUIManualDisplayScaleFactor`) through the CEF debugger on
-`localhost:8080`, so the views are **really re-laid out and repainted** — unlike CDP's
-`Emulation.setDeviceMetricsOverride`, which only fakes `devicePixelRatio` and leaves the window unpainted. It then
-measures and prints what both views actually became, next to the Game Mode reference:
+The task emulates the Deck with **both halves**:
+
+1. **The window.** KWin scripting over DBus (the same `loadScript`/`run`/`unloadScript` route
+   [`dev_open_bpm.sh`](#choosing-the-display) uses for placement) un-fullscreens the Big Picture window and sizes it so
+   its **client area is exactly 1280x800**, on whatever monitor it already sits on. `frameGeometry` includes the window
+   decoration, so the frame is corrected by the measured frame-vs-client delta until the client area lands exactly —
+   nothing about the decoration is hardcoded.
+2. **The scale.** The two undocumented calls Steam's own settings UI uses
+   (`SteamClient.Window.SetGamepadUIAutoDisplayScale` / `SetGamepadUIManualDisplayScaleFactor`), driven through the CEF
+   debugger on `localhost:8080`, so the views are **really re-laid out and repainted** — unlike CDP's
+   `Emulation.setDeviceMetricsOverride`, which only fakes `devicePixelRatio` and leaves the window unpainted.
+
+It then **verifies that the emulation actually happened** rather than claiming it, comparing the measured QAM against
+what a Deck renders at that scale:
 
 ```text
 $ mise run dev:ui-scale deck
-Captured prior state: AUTOMATIC scaling at dpr 1.0 (source: Steam's live settings store)
+Captured prior state: AUTOMATIC scaling at dpr 1.899999976158142 (source: Steam's live settings store)
+Captured prior window: fullscreen 2560x1440 on DP-2
+Sizing the Big Picture window to a 1280x800 client area (was fullscreen 2560x1440 on DP-2)...
+  window now: windowed 1280x800 on DP-2 (frame 1282x829)
 Forcing GamepadUI display scale 1.5 (auto scaling OFF)...
+  scaling display: External: DP-2 27"|||Windowed
 
 Measured (real, repainted — not a CDP emulation override):
   Big Picture  dpr 1.5  CSS 854x534
   QuickAccess  dpr 1.5  CSS 854x454
-  => QAM matches the Game Mode reference (854x454) — what you see is what the Deck renders.
+  => QAM is 854x454 CSS at dpr 1.5, the 854x454 a Deck renders at scale 1.5 — this is what the Deck renders.
 ```
+
+If the QAM does **not** come out at the expected size (KWin unreachable, or Steam re-asserted the window size), the run
+prints a loud `EMULATION FAILED` block with the measured-vs-expected numbers and the window's real pixel size, and says
+that any layout judgement made on those numbers is invalid. It never reports Deck metrics it did not achieve.
 
 The forcing modes **hold until Ctrl-C**. Useful factors:
 
@@ -135,28 +168,52 @@ The forcing modes **hold until Ctrl-C**. Useful factors:
 
 #### What it restores on exit
 
-The tool **captures the scale you were on before it ran** and puts back exactly that — on Ctrl-C, on SIGTERM, and on any
-error. If you were on automatic scaling, you get automatic scaling back. If you had deliberately set a **manual** UI
-Scale (an accessibility "Larger text" value, say), you get **that factor** back — it is never silently flipped to auto,
-which would destroy the setting. The restore is then verified against Steam's live state and the rendered
-`devicePixelRatio`, and a restore that didn't land is reported as a warning rather than assumed.
+The tool **captures both halves before it touches anything** — the scale you were on, and the Big Picture window's
+geometry and fullscreen state — and puts back exactly that, on Ctrl-C, on SIGTERM, and on any error.
+
+- **Scale.** If you were on automatic scaling, you get automatic scaling back. If you had deliberately set a **manual**
+  UI Scale (an accessibility "Larger text" value, say), you get **that factor** back — it is never silently flipped to
+  auto, which would destroy the setting. The restore is verified against Steam's live state and the rendered
+  `devicePixelRatio`, and a restore that didn't land is reported as a warning rather than assumed.
+- **Window.** It goes back to the geometry and fullscreen state it had — a fullscreen BPM is put back to fullscreen on
+  the same monitor.
+
+The scale is restored **before** the window, and the exit path **ignores further Ctrl-C/SIGTERM while it runs** so an
+impatient second interrupt cannot truncate it half-way (the window half is the slow half — subprocesses and a journal
+read). A stranded forced scale is the damaging outcome; a window left at 1280x800 is merely annoying.
 
 `mise run dev:ui-scale auto` is different on purpose: it **unconditionally** forces automatic scaling back on. It is the
 rescue path for when a previous run was hard-killed and the state it captured died with it — it has nothing to restore,
-so it cannot honour a manual scale. If you are a manual-UI-Scale user and ever have to use it, re-set your scale in
-Steam → Settings → Display afterwards.
+so it cannot honour a manual scale, and it does not touch the window (resize it by hand). If you are a manual-UI-Scale
+user and ever have to use it, re-set your scale in Steam → Settings → Display afterwards.
 
 !!! warning "A hard kill leaves the forced scale behind"
 
     Steam persists the factor to `~/.local/share/Steam/config/config.vdf` (`UI → display → Current → ScaleFactor`,
-    flushed within seconds), keyed by a display identity the Deck **shares with Game Mode**. Ctrl-C, SIGTERM and errors
-    all restore — but a **hard kill (SIGKILL) skips the restore**, and the forced scale is what Steam keeps. If that
-    happens, or if the UI ever comes up at the wrong size, run `mise run dev:ui-scale auto`.
+    flushed within seconds). Ctrl-C, SIGTERM and errors all restore — but a **hard kill (SIGKILL) skips the restore**,
+    and the forced scale is what Steam keeps. If that happens, or if the UI ever comes up at the wrong size, run
+    `mise run dev:ui-scale auto`.
 
     This is also why the prior state is read from Steam's **live settings store**
     (`window.settingsStore.settings`) rather than from `config.vdf`: the file's `AutoScaleFactor` is **not** re-flushed
     in-session (measured: it stayed `1` while a manual factor was applied and rendering), so trusting it would report a
     manual-scale user as "automatic" — and restore them to the wrong thing. `config.vdf` is only the fallback source.
+
+!!! info "The UI Scale is per display — and the window mode is part of the display's identity"
+
+    Steam files the scale under a display identity (`strDisplayName`), and `config.vdf` carries **one entry per
+    identity**. The identity includes the window mode, which the tool prints on every run:
+
+    ```text
+    "External: eDP-1 7"|||Fullscreen-1280x800"    <- Game Mode / the internal panel
+    "External: DP-2 27"|||Fullscreen-2560x1440"   <- a fullscreen BPM on an external 1440p monitor
+    "External: DP-2 27"|||Windowed"               <- any windowed BPM on that monitor
+    ```
+
+    So the blast radius of a forced factor is narrower than "it bleeds into Game Mode": it lands in **the entry the
+    window is currently under**. Because this tool always makes the window *windowed*, it writes a `…|||Windowed`
+    entry — **not** Game Mode's `…|||Fullscreen-1280x800` one, even when the window sits on the Deck's internal panel.
+    A leftover forced factor therefore mis-sizes a future *windowed desktop BPM*, and `dev:ui-scale auto` clears it.
 
 The QAM is a popup view that Steam can recreate; Steam's scale is display state, so a recreated view picks it up. No
 re-apply loop is needed (and none should be added).
@@ -225,8 +282,11 @@ journalctl -u plugin_loader -f
 - **The QAM Performance tab is non-functional in desktop BPM** (it needs gamescope). Irrelevant for this plugin's UI.
 - **Desktop-BPM injection is best-effort** on Decky's side — re-verify the loop still works after Decky or Steam
   updates.
-- **Game Mode comes up at the wrong size** — a `dev:ui-scale` run was hard-killed and left Steam on a forced scale (it
-  persists in `config.vdf` under the display identity Game Mode shares). Run `mise run dev:ui-scale auto`.
-- **Do a final Game Mode pass before a release.** `dev:ui-scale deck` reproduces Game Mode's CSS metrics exactly, so
-  layout and overflow can be judged from the desktop — but controller focus behavior and gamescope rendering are still
-  only real in Game Mode.
+- **Big Picture comes up at the wrong size** — a `dev:ui-scale` run was hard-killed and left Steam on a forced scale (it
+  persists in `config.vdf`, filed under the display identity that run printed — a `…|||Windowed` one). Run
+  `mise run dev:ui-scale auto`.
+- **Big Picture is left windowed at 1280x800** — same cause: a hard-killed `dev:ui-scale` run never restored the window.
+  Re-fullscreen it by hand; nothing else is broken.
+- **Do a final Game Mode pass before a release.** `dev:ui-scale deck` reproduces Game Mode's CSS metrics exactly (and
+  says so out loud when it fails to), so layout and overflow can be judged from the desktop — but controller focus
+  behavior and gamescope rendering are still only real in Game Mode.

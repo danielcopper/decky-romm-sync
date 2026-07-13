@@ -220,7 +220,7 @@ cp -f main.py "$DEST/main.py"
 '''
 
 [tasks."dev:ui-scale"]
-description = "Force the windowed Big Picture to Game Mode's display scale (the dev loop otherwise shows ~59% more QAM height than the Deck)"
+description = "Emulate Game Mode's metrics in Big Picture — size the window to the Deck's 1280x800 AND force its display scale (the dev loop otherwise lies about QAM height)"
 raw = true
 # The optional mode arg reaches the script as $usage_mode (mise exposes usage-spec
 # args as usage_<name> env vars).
@@ -229,10 +229,10 @@ arg "[mode]" help="'deck' (1.5, = Game Mode metrics), a bare factor (2.0-2.4 = '
 complete "mode" run="printf 'deck\\nsteam\\nauto\\n'"
 '''
 run = '''
-# Holds the forced scale until Ctrl-C, then restores the scale that was in force
-# BEFORE the run (auto stays auto; a manual UI Scale is put back as it was, never
-# flipped to auto). Steam persists the forced factor to config.vdf under the same
-# display identity Game Mode uses, so leaving it forced is not harmless.
+# Holds until Ctrl-C, then restores BOTH halves as they were BEFORE the run: the
+# scale (auto stays auto; a manual UI Scale is put back as it was, never flipped to
+# auto) and the Big Picture window's geometry + fullscreen state. Steam persists a
+# forced factor to config.vdf, so leaving it forced is not harmless.
 # `exec` so Ctrl-C / SIGTERM reach the script itself (mise is not left in the
 # signal path, which is what makes the restore reliable).
 exec python3 scripts/dev_ui_scale.py "$usage_mode"
