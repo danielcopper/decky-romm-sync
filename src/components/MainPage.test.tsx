@@ -982,7 +982,7 @@ describe("MainPage", () => {
       });
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
       // U+2212 minus for the removed segment; " / "-separated; " · " between categories.
-      expect(descs.some((d) => d.includes("Games +3 / ~1 / −2"))).toBe(true);
+      expect(descs.some((d) => d.includes("Games +3 / 1 updated / −2"))).toBe(true);
     });
 
     it("renders the Platforms category from platform_collection_diff", async () => {
@@ -1019,7 +1019,8 @@ describe("MainPage", () => {
       });
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
       // Zero segments (platform removed, collection removed) drop out entirely.
-      expect(descs).toContain("Games +1001 / ~50 / −1200 · Platforms +1 · Collections +2");
+      // "updated" is spelled out — a bare "~" read as noise on-device.
+      expect(descs).toContain("Games +1001 / 50 updated / −1200 · Platforms +1 · Collections +2");
     });
 
     it("omits zero segments within a category (0 removed → not rendered)", async () => {

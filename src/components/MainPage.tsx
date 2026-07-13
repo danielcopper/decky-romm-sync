@@ -91,13 +91,14 @@ type BackendFailed = "backend_failed";
 /** U+2212 MINUS SIGN — the removed-count prefix in the compact preview notation. */
 const MINUS_SIGN = "−";
 
-/** Compact signed segments — ``[[count, prefix], …]`` → ``"+N / ~M"``: each
- *  positive count rendered as ``<prefix><count>``, zero counts dropped, joined
- *  with `` / ``. Empty when every count is zero. */
+/** Compact signed segments — ``[[count, label], …]`` → ``"+N / M updated"``:
+ *  a one-char label (``+``/``−``, self-explanatory) renders as prefix, a word
+ *  label renders as suffix (``1758 updated`` — a bare ``~`` read as noise);
+ *  zero counts dropped, joined with `` / ``. Empty when every count is zero. */
 function signedSegments(pairs: [number, string][]): string {
   return pairs
     .filter(([n]) => n > 0)
-    .map(([n, prefix]) => `${prefix}${n}`)
+    .map(([n, label]) => (label.length > 1 ? `${n} ${label}` : `${label}${n}`))
     .join(" / ");
 }
 
@@ -218,17 +219,18 @@ function lastSyncValue(stats: SyncStats): ReactNode {
 
 /**
  * Compact signed change notation for the preview — e.g.
- * ``"Games +1001 / ~50 / −1200 · Platforms +1 · Collections +2"``. Per category
- * the segments are added (``+N``), updated (``~N``), removed (``−N``, U+2212), in
- * that order, ``/``-separated; a zero segment is omitted and a wholly-unchanged
- * category is dropped. Categories join with `` · ``. Falls back to the unchanged
- * message when nothing differs.
+ * ``"Games +1001 / 50 updated / −1200 · Platforms +1 · Collections +2"``. Per
+ * category the segments are added (``+N``), updated (``N updated``, spelled out —
+ * a bare ``~`` read as noise on-device), removed (``−N``, U+2212), in that order,
+ * ``/``-separated; a zero segment is omitted and a wholly-unchanged category is
+ * dropped. Categories join with `` · ``. Falls back to the unchanged message when
+ * nothing differs.
  */
 function formatPreviewDescription(s: SyncPreviewSummary): string {
   const categories: string[] = [];
   const games = signedSegments([
     [s.new_count, "+"],
-    [s.changed_count, "~"],
+    [s.changed_count, "updated"],
     [s.remove_count, MINUS_SIGN],
   ]);
   if (games) categories.push(`Games ${games}`);
