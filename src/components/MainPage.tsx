@@ -824,40 +824,38 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // An older backend that omits the scope counts leaves scopeText empty, so the
     // row shows the estimate alone.
     const scopeText = formatSyncScope(preview.summary);
-    const scopeLine = scopeText ? `${scopeText} · ${estimateText}` : estimateText;
+    // Coverage + duration read as one sentence, so the line needs no label of
+    // its own ("Scope" and "Preview" as competing labels read as duplicate
+    // info). An older backend that omits the scope counts leaves scopeText
+    // empty, so the line degrades to the bare estimate.
+    const scopeLine = scopeText ? `Syncing ${scopeText} — ${estimateText}` : `Estimated ${estimateText}`;
     // The sleep-pause caveat is only worth the extra line for a genuinely long run.
     const hintText =
       "Progress is saved every ~200 games — cancelling is safe." +
       (applySeconds >= LONG_SYNC_HINT_THRESHOLD_SEC ? " Long syncs pause during sleep; keep the Deck powered." : "");
     syncBody = (
       <>
+        {/* One block: WHAT changes, then what the run covers and how long — the
+            coverage/estimate and the progress-is-saved hint describe the run the
+            Apply button would start, so with an empty delta only "Everything is
+            up to date." + Dismiss stand alone. */}
         <PanelSectionRow>
           <Field
-            label="Preview"
-            description={formatPreviewDescription(preview.summary)}
+            label="Changes"
+            description={
+              <>
+                <div data-testid="sync-changes">{formatPreviewDescription(preview.summary)}</div>
+                {hasChanges && (
+                  <div data-testid="sync-scope" style={{ marginTop: "4px" }}>
+                    {scopeLine}
+                  </div>
+                )}
+              </>
+            }
             focusable={true}
             bottomSeparator="none"
           />
         </PanelSectionRow>
-        {/* Scope/estimate and the progress-is-saved hint describe the run the
-            Apply button would start — with an empty delta there is no run, so
-            "Everything is up to date." + Dismiss stand alone. */}
-        {hasChanges && (
-          <PanelSectionRow>
-            {/* Full-width description line like Preview above: the scope+estimate
-                text wraps badly when squeezed into a Field's narrow value column. */}
-            <Field
-              label="Scope"
-              description={
-                <span data-testid="sync-scope" style={{ fontSize: "12px" }}>
-                  {scopeLine}
-                </span>
-              }
-              focusable={true}
-              bottomSeparator="none"
-            />
-          </PanelSectionRow>
-        )}
         {hasChanges && (
           <PanelSectionRow>
             <Focusable>

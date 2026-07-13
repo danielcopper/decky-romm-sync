@@ -1017,10 +1017,12 @@ describe("MainPage", () => {
         platform_collection_diff: { has_changes: true, added_count: 1, removed_count: 0 },
         collection_diff: { has_changes: true, added: ["A", "B"], removed: [] },
       });
-      const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
       // Zero segments (platform removed, collection removed) drop out entirely.
-      // "updated" is spelled out — a bare "~" read as noise on-device.
-      expect(descs).toContain("Games +1001 / 50 updated / −1200 · Platforms +1 · Collections +2");
+      // "updated" is spelled out — a bare "~" read as noise on-device. The delta
+      // line has its own node since the coverage line shares the Changes block.
+      expect(c.querySelector('[data-testid="sync-changes"]')?.textContent).toBe(
+        "Games +1001 / 50 updated / −1200 · Platforms +1 · Collections +2",
+      );
     });
 
     it("omits zero segments within a category (0 removed → not rendered)", async () => {
@@ -1029,10 +1031,8 @@ describe("MainPage", () => {
         changed_count: 0,
         remove_count: 0,
       });
-      const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
-      // Should render "Games +1" — no "~" or "−" segments.
-      const gamesLine = descs.find((d) => d.startsWith("Games"));
-      expect(gamesLine).toBe("Games +1");
+      // Should render "Games +1" — no updated or "−" segments.
+      expect(c.querySelector('[data-testid="sync-changes"]')?.textContent).toBe("Games +1");
     });
   });
 
@@ -1116,27 +1116,30 @@ describe("MainPage", () => {
       return container;
     }
 
-    // The Scope row now carries the estimate too (the separate "Estimated time"
-    // preview row was merged in): "<scope> · <estimate>". These summaries have zero
-    // diffs, so the estimate is the bare fetch allowance → "~2 min".
-    it("shows 'N platforms · M collections · <estimate>' with both counts", async () => {
+    // Coverage + duration read as one label-less sentence under the "Changes"
+    // block ("Scope" and "Preview" as competing labels read as duplicate info).
+    // These summaries have one new item, so the estimate is the fetch allowance
+    // rounding to "~2 min".
+    it("reads 'Syncing N platforms · M collections — <estimate>' with both counts", async () => {
       const c = await renderPreviewScope(3, 2);
-      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("3 platforms · 2 collections · ~2 min");
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe(
+        "Syncing 3 platforms · 2 collections — ~2 min",
+      );
     });
 
     it("omits the collections part when the run syncs none, and singularizes", async () => {
       const c = await renderPreviewScope(1, 0);
-      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("1 platform · ~2 min");
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("Syncing 1 platform — ~2 min");
     });
 
     it("omits the platforms part on a collections-only run (LOW-6)", async () => {
       const c = await renderPreviewScope(0, 3);
-      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("3 collections · ~2 min");
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("Syncing 3 collections — ~2 min");
     });
 
     it("shows the estimate alone when the backend omits both scope counts (empty scope)", async () => {
       const c = await renderPreviewScope(0, 0);
-      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("~2 min");
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("Estimated ~2 min");
     });
 
     it("hides the scope line and the progress hint on an empty delta (nothing to apply)", async () => {
@@ -1854,9 +1857,9 @@ describe("MainPage", () => {
       return container.querySelector('[data-testid="estimate-time"]')?.textContent ?? undefined;
     }
 
-    // Preview-state readout — the estimate now shares the Scope row (the separate
-    // preview "Estimated time" Field was merged in). These summaries carry no scope
-    // counts, so the scope segment is empty and the row is the bare estimate.
+    // Preview-state readout — the estimate rides the label-less coverage line
+    // under the "Changes" block. These summaries carry no scope counts, so the
+    // line degrades to "Estimated ~X min".
     function scopeLine(container: HTMLElement): string | undefined {
       return container.querySelector('[data-testid="sync-scope"]')?.textContent ?? undefined;
     }
@@ -1865,19 +1868,19 @@ describe("MainPage", () => {
       // 3 new * 0.45s + 90s fetch allowance = 91.35s → ~2 min (small libraries
       // overshoot; the allowance covers the fetch/prep phase).
       const c = await renderPreviewWithCounts(3, 0);
-      expect(scopeLine(c)).toBe("~2 min");
+      expect(scopeLine(c)).toBe("Estimated ~2 min");
     });
 
     it("renders an estimate on the scope row for a large preview", async () => {
       // 1000 new * 0.45s + 90s = 540s → ~9 min.
       const c = await renderPreviewWithCounts(1000, 0);
-      expect(scopeLine(c)).toBe("~9 min");
+      expect(scopeLine(c)).toBe("Estimated ~9 min");
     });
 
     it("prices updated items into the preview estimate", async () => {
       // 100 updated * 0.20s + 90s = 110s → ~2 min.
       const c = await renderPreviewWithCounts(0, 100);
-      expect(scopeLine(c)).toBe("~2 min");
+      expect(scopeLine(c)).toBe("Estimated ~2 min");
     });
 
     it("shows the compact info copy alongside the preview estimate (short sync → no sleep caveat)", async () => {
@@ -1920,9 +1923,9 @@ describe("MainPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(scopeLine(container)).toBe("~3 min");
+      expect(scopeLine(container)).toBe("Estimated ~3 min");
       // The 3000 unchanged items must NOT be priced — the walk-model overshoot is gone.
-      expect(scopeLine(container)).not.toBe("~13 min");
+      expect(scopeLine(container)).not.toBe("Estimated ~13 min");
     });
 
     it("renders 'up to ~X min' while applying when etaSeconds is set", async () => {

@@ -32,11 +32,12 @@ collections for platforms the run did not reach.
 
 ## Time estimate and progress
 
-Before you start, the sync preview shows an estimated time for the run on the same line as its platform/collection scope
-(for example "3 platforms · 2 collections · ~3 min"). The sync only touches the games that are actually new or changed —
-games that are already correct in your library are skipped entirely, not re-processed — so a re-sync of a mostly-settled
-library is quick, and the estimate reflects only that changed work. If you sync without previewing first, the estimate
-appears once the run starts as an **Estimated time** line, shown as "up to ~X min".
+Before you start, the sync preview shows a **Changes** block: what the run will add, update, or remove, and below it one
+line with the run's coverage and estimated time (for example "Syncing 3 platforms · 2 collections — ~3 min"). The sync
+only touches the games that are actually new or changed — games that are already correct in your library are skipped
+entirely, not re-processed — so a re-sync of a mostly-settled library is quick, and the estimate reflects only that
+changed work. If you sync without previewing first, the estimate appears once the run starts as an **Estimated time**
+line, shown as "up to ~X min".
 
 Once the sync has been creating shortcuts for a few seconds, that "up to" ceiling is replaced by a **live countdown** —
 "~2 min left" — measured from the actual speed on your device and updated as the run proceeds. Both the countdown and
