@@ -130,6 +130,32 @@ export function resetEta(): void {
 }
 
 /**
+ * Correct a dispatched unit's weight to its real DELTA size (#1383 / #1382-M3).
+ *
+ * The plan seeds each unit's weight from its RAW pre-collapse ``rom_count``, but
+ * the delta-restricted apply only touches new + changed shortcuts, so a unit's
+ * ``sync_apply_unit`` frame carries the true count in ``unit_total``. Folding that
+ * in as the unit dispatches shrinks ``totalRoms`` toward the real work and stops a
+ * mostly-unchanged (small-delta) trailing unit from over-weighting the countdown
+ * into "~N min left" for work that finishes in seconds. Idempotent per unit —
+ * every chunk of a unit carries the same ``unit_total``, so re-calls no-op once the
+ * weight matches. A no-op when no run is measured or the index is out of range.
+ *
+ * Bounded by the plan: a platform SKIPPED wholesale by its completion stamp never
+ * emits a ``sync_apply_unit``, so its weight stays the raw ``rom_count`` — the plan
+ * carries no skip knowledge to correct that, matching #1382-M3's scope.
+ */
+export function observeUnitTotal(unitIndex: number, unitTotal: number): void {
+  if (_run === null) return;
+  if (unitIndex < 0 || unitIndex >= _run.unitWeights.length) return;
+  const corrected = Math.max(0, unitTotal);
+  const previous = Math.max(0, _run.unitWeights[unitIndex] ?? 0);
+  if (corrected === previous) return;
+  _run.totalRoms = Math.max(0, _run.totalRoms + (corrected - previous));
+  _run.unitWeights[unitIndex] = corrected;
+}
+
+/**
  * Record one applying-stage sample. Throttled to ``SAMPLE_MIN_INTERVAL_MS`` so
  * the rate is measured over seconds; samples older than ``WINDOW_MS`` are dropped.
  * A silence longer than ``SEGMENT_BREAK_MS`` is a unit/fetch boundary: the prior

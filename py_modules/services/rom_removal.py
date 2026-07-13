@@ -94,10 +94,20 @@ class RomRemovalService:
         ``rom_installs`` row delete is wrapped. Per ADR-0007 the ``roms`` row,
         playtime, saves, and metadata are left untouched — an uninstall drops
         only the files and the install record.
+
+        A bound ROM has its recorded ``applied_launch_options`` reset to the
+        uninstalled placeholder (``""``) in the same UoW: the frontend resets the
+        kept shortcut's launch command to ``""`` on uninstall (#1146), so recording
+        ``""`` keeps the next sync from re-touching an already-correct shortcut
+        (delta apply, #1383). Third of the five recorded-state writer sites.
         """
         self._delete_rom_files(install)
         with self._uow_factory() as uow:
             uow.rom_installs.delete(rom_id)
+            rom = uow.roms.get(rom_id)
+            if rom is not None and rom.shortcut_app_id is not None:
+                rom.record_applied_launch_options("")
+                uow.roms.set_applied_launch_options(rom_id, rom.applied_launch_options)
 
     async def remove_rom(self, rom_id: int | str) -> dict[str, Any]:
         """Remove a single installed ROM: delete files and drop the install record."""
@@ -153,6 +163,11 @@ class RomRemovalService:
                 rom = uow.roms.get(rom_id)
                 if rom is not None and rom.shortcut_app_id is not None:
                     app_ids.append(rom.shortcut_app_id)
+                    # The frontend resets each kept shortcut's launch command to ""
+                    # (#1146); record that so the next sync skips it (delta apply,
+                    # #1383). Same recorded-state writer site as remove_rom, bulk.
+                    rom.record_applied_launch_options("")
+                    uow.roms.set_applied_launch_options(rom_id, rom.applied_launch_options)
         return count, errors, app_ids
 
     async def uninstall_all_roms(self) -> dict[str, Any]:

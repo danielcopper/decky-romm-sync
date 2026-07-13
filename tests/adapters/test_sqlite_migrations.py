@@ -75,8 +75,9 @@ def _set_user_version(db_path: str, version: int) -> None:
 # + 007_add_last_played + 008_add_version_metadata
 # + 009_add_last_session_start_monotonic + 010_add_sibling_group_key_index
 # + 011_rekey_sibling_group_key + 012_add_platform_sync_state
-# + 013_add_interrupted_sync_run_status + 014_add_paused_sync_run_status).
-_SHIPPED_VERSION = 14
+# + 013_add_interrupted_sync_run_status + 014_add_paused_sync_run_status
+# + 015_add_applied_launch_options).
+_SHIPPED_VERSION = 15
 
 # Tables after every shipped migration: the v1 set plus 006's play-session outbox
 # and 012's per-platform completion stamp.
@@ -909,7 +910,7 @@ class Test014PausedSyncRunStatus:
         final_version = apply_migrations(db_path)
 
         assert final_version == _SHIPPED_VERSION
-        assert _user_version(db_path) == 14
+        assert _user_version(db_path) == _SHIPPED_VERSION
         conn = sqlite3.connect(db_path)
         try:
             rows = conn.execute("SELECT id, status, finished_at, error FROM sync_runs ORDER BY id").fetchall()
@@ -963,6 +964,49 @@ class Test014PausedSyncRunStatus:
                 _insert_sync_run(conn, run_id="run-early", status="paused", finished_at="2026-07-11T14:05:00")
         finally:
             conn.close()
+
+
+class Test015AppliedLaunchOptions:
+    """015 — adds the nullable applied_launch_options column to roms only (#1383)."""
+
+    def test_adds_applied_launch_options_to_roms_only(self, tmp_path: Path):
+        # 015 ALTERs only roms; rom_installs (and every other table) is untouched.
+        db_path = str(tmp_path / "romm_sync.db")
+
+        apply_migrations(db_path)
+
+        assert _user_version(db_path) == _SHIPPED_VERSION
+        assert "applied_launch_options" in _columns(db_path, "roms")
+        assert "applied_launch_options" not in _columns(db_path, "rom_installs")
+
+    def test_existing_row_reads_null_across_the_migration(self, tmp_path: Path):
+        # A row seeded before 015 reads NULL for the new column (unknown = never
+        # skipped), the "no data invented" contract the delta apply relies on.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 14)))
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute(
+                "INSERT INTO roms (rom_id, platform_slug, name, fs_name, last_synced_at) "
+                "VALUES (1, 'snes', 'Game', 'game.sfc', '2026-07-11T10:00:00')"
+            )
+        finally:
+            conn.close()
+
+        assert apply_migrations(db_path) == _SHIPPED_VERSION
+
+        conn = sqlite3.connect(db_path)
+        try:
+            value = conn.execute("SELECT applied_launch_options FROM roms WHERE rom_id = 1").fetchone()[0]
+        finally:
+            conn.close()
+        assert value is None
+
+    def test_applied_launch_options_absent_before_015(self, tmp_path: Path):
+        # At v14 the column does not yet exist.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 14)))
+        assert "applied_launch_options" not in _columns(db_path, "roms")
 
 
 def test_shipped_migrations_dir_resolves_to_real_schema():

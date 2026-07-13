@@ -488,6 +488,18 @@ class SyncReporter:
             rom.assign_ra_id(ra_id)
         uow.roms.save(rom)
 
+        # Record the applied launch command for a binding TARGET this cycle (the
+        # value the frontend just wrote onto the shortcut), so the next sync skips
+        # this now-correct shortcut (delta-restricted apply, #1383). A skipped or
+        # non-representative row is absent from ``binding`` and keeps its recorded
+        # value — the pin-only ``set_applied_launch_options`` write never wipes it,
+        # unlike ``save()``. This is the first of the five recorded-state writer
+        # sites (the others: download-complete, uninstall, home migration, version
+        # switch).
+        if rom_id in binding:
+            rom.record_applied_launch_options(built.get("launch_options", ""))
+            uow.roms.set_applied_launch_options(rom_id, rom.applied_launch_options)
+
         self._stamp_rom_metadata(uow, rom_id, roms_by_id.get(rom_id))
 
     def _stamp_rom_metadata(self, uow, rom_id: int, rom: dict[str, Any] | None) -> None:

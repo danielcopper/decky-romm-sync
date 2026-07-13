@@ -164,9 +164,29 @@ RomM each sync and is cached in a `kv_config` row for offline reads. Removing a 
 [ADR-0007](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0007-rom-retention-identity-anchor.md).
 The full schema and aggregate model are in [Database Design](database-design.md).
 
+**Delta-restricted apply: emit only new + changed
+([ADR-0025](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0025-delta-restricted-apply-with-recorded-applied-state.md)).**
+Between the sibling-group collapse and chunking, `_sync_one_unit` runs `domain/sync_diff.py::classify_roms` over the
+unit's collapsed entries against the bound-shortcut registry and emits only the **delta** — new + changed (plus rebind
+entries, which always move their binding). "Changed" is content, not identity-only: on top of the identity triple (name
+/ `fs_name` / `platform_slug`) the classifier compares each item's freshly built target `launch_options` against the
+`applied_launch_options` recorded on its `roms` row (the launch command last written to that shortcut). A match on both
+is content-unchanged and skipped — it never reaches the frontend, so no `Set*` walk and no ~2 s `AppDetails` confirm
+poll — while an install/uninstall or core/disc pin change that leaves identity untouched still flips the item to
+changed. A `NULL` recorded value (a pre-migration-015 row, or a freshly created row not yet recorded) is unknown and
+never skipped, so the first post-upgrade sync re-applies exactly as before, records values, and only later syncs skip.
+Skipped rows are **still committed** (chunking routes their groups to chunk 0's leftover), so no DB work is dropped and
+the per-platform completion stamp still rides the final chunk only — a platform is stamped exactly when its whole delta
+is durable, and an empty-delta platform emits one empty chunk that commits every row and writes the stamp. The recorded
+value is refreshed by five writer sites (sync ack-commit, download-complete, uninstall, RetroDECK-home migration
+re-resolve, version switch), each recording the value the frontend just wrote onto the shortcut; a missed writer only
+ever causes a harmless spurious re-touch, never a wrong skip (the benign-failure asymmetry). The per-unit
+`sync_apply_unit`'s `unit_total` is therefore the delta size, so the progress counter shows net progress and a resume
+converges quickly.
+
 **Per-unit apply is chunked, durable per chunk
-([ADR-0023](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0023-chunked-per-unit-apply.md)).** A
-unit's collapsed emit list is split into fixed-size chunks (`_APPLY_CHUNK_SIZE`, 200) by the pure
+([ADR-0023](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0023-chunked-per-unit-apply.md)).** The
+delta emit list is split into fixed-size chunks (`_APPLY_CHUNK_SIZE`, 200) by the pure
 `domain/sync_chunking.py::build_unit_chunks`, and the orchestrator processes them one at a time: emit `sync_apply_unit`
 → wait for the ack → commit that chunk's `roms` rows durably → next chunk. Each `sync_apply_unit` carries `chunk_index`
 / `chunk_count` / `chunk_offset` / `unit_total`, and `shortcuts` is the chunk slice; the reporter's per-chunk commit is
@@ -207,7 +227,12 @@ renderer GC (`RendererGcFn`, `adapters/renderer_gc.py` — an `HeapProfiler.coll
 `localhost:8080`, so the reading reflects settled heap not transient garbage that Steam's measured-unreliable natural GC
 hasn't reclaimed) and re-reads; below the floor the raw reading (which can only over-estimate) already clears every
 threshold, so the ~5 s GC is skipped and a small sync pays zero GC cost. It then runs the pure
-`domain/session_budget.py::gate_decision`: pause iff `rss + chunk_items × worst_case_rate ≥ limit`. Both modes are
+`domain/session_budget.py::gate_decision` over the chunk's **composition-priced** cost (`chunk_worst_cost_kb`): now that
+the emitted chunk is new + changed only (the delta-restricted apply above), a create is priced at the worst-case create
+rate _plus_ its transient cover term while a changed/rebind item is priced at the lighter `Set*`-walk rate — the gate no
+longer prices every item as a cover-applying create. Pause iff `rss + chunk_cost ≥ limit`; the pause log line names the
+composition ("… + N creates + M updates projects …"). The frontend decides create-vs-update itself via its
+existing-shortcut scan, so a small backend/frontend mismatch only ever overprices (worst-case safe). Both modes are
 predictive and differ only in the `limit` line: every **later** chunk projects against `cliff − margin` (≈2.2 GB,
 keeping the anti-thrash safety margin), while the run's **very first chunk** projects against `CLIFF_KB` (≈2.45 GB)
 instead. Forward progress must be guaranteed (the run has to apply at least one chunk or it loops forever on a

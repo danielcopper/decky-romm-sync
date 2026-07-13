@@ -9,7 +9,7 @@ import { DangerZone } from "./components/DangerZone";
 import { DownloadQueue } from "./components/DownloadQueue";
 import { initUnitSyncManager, resetSyncCancel } from "./utils/syncManager";
 import { setSyncProgress, getSyncProgress, updateSyncProgress } from "./utils/syncProgress";
-import { NEW_ITEM_SEC } from "./utils/syncEstimate";
+import { estimateApplySeconds } from "./utils/syncEstimate";
 import { beginEtaRun } from "./utils/syncEta";
 import { updateDownload, getDownloadState } from "./utils/downloadStore";
 import { handleGlobalDownloadFailure } from "./utils/downloadFailure";
@@ -520,13 +520,16 @@ export default definePlugin(() => {
     // skip-only run, where no unit handler ever fires (#1198). Run identity for
     // a Cancel click comes from the backend-fed sync_progress store now (#1202).
     resetSyncCancel();
-    // Seed the applying-phase estimate: an honest upper bound that prices every
-    // planned ROM as a new shortcut. Incremental runs skip unchanged units and
-    // update-path items are cheaper, so the real duration only ever undershoots.
-    // Merged (not replaced) so the running/stage the click set survives, and the
-    // sync_progress listener below preserves it across backend frames. Shown as
-    // "up to ~X min" only until the live rate estimator (below) has measured the
-    // real apply speed, which then replaces it with a "~X min left" countdown.
+    // Seed the applying-phase estimate on the walk-cost model (the same
+    // ``estimateApplySeconds`` the preview row uses): an honest upper bound that
+    // prices every planned ROM as a new shortcut plus the flat fetch allowance.
+    // The skip-preview path has no delta knowledge here (per-unit skips are only
+    // decided at fetch time), so all-as-new is the ceiling; the delta-restricted
+    // apply skips unchanged items and the live rate estimator corrects the readout
+    // downward within seconds of applying (#1382-M3). Merged (not replaced) so the
+    // running/stage the click set survives, and the sync_progress listener below
+    // preserves it across backend frames. Shown as "up to ~X min" only until the
+    // live estimator replaces it with a "~X min left" countdown.
     //
     // Only seed the bound when the store has NO etaSeconds yet: the preview path
     // (handleApply) already seeded a tighter delta-based estimate into the store,
@@ -535,7 +538,7 @@ export default definePlugin(() => {
     // seed, never a stale prior-run value. The skip-preview path never sets one,
     // so it still gets this bound.
     if (getSyncProgress().etaSeconds === undefined) {
-      updateSyncProgress({ etaSeconds: data.total_roms * NEW_ITEM_SEC });
+      updateSyncProgress({ etaSeconds: estimateApplySeconds(data.total_roms, 0) });
     }
     // Begin the run-scoped live-ETA estimator with the plan's per-unit weights
     // (rom_count in plan order) and total. MainPage samples the applying stage

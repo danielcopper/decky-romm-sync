@@ -33,16 +33,16 @@ collections for platforms the run did not reach.
 ## Time estimate and progress
 
 Before you start, the sync preview shows an estimated time for the run on the same line as its platform/collection scope
-(for example "3 platforms · 2 collections · ~12 min"). It is a deliberate upper bound — it assumes a slower pace than a
-re-sync usually runs at and counts every game the sync walks through, not just the handful that changed — so the real
-run almost always finishes sooner. If you sync without previewing first, the same upper bound appears once the run
-starts as an **Estimated time** line, shown as "up to ~X min".
+(for example "3 platforms · 2 collections · ~3 min"). The sync only touches the games that are actually new or changed —
+games that are already correct in your library are skipped entirely, not re-processed — so a re-sync of a mostly-settled
+library is quick, and the estimate reflects only that changed work. If you sync without previewing first, the estimate
+appears once the run starts as an **Estimated time** line, shown as "up to ~X min".
 
 Once the sync has been creating shortcuts for a few seconds, that "up to" ceiling is replaced by a **live countdown** —
-"~9 min left" — measured from the actual speed on your device and updated as the run proceeds. Because it reflects the
-real work (most re-sync games take the quick update path, not a full create), the countdown is far closer to reality
-than the initial ceiling, and it ticks down as the run goes. It holds steady across the short pauses where the sync
-fetches the next platform's game list, rather than jumping around.
+"~2 min left" — measured from the actual speed on your device and updated as the run proceeds. Both the countdown and
+the progress counter show **net** progress: they count the games this run actually needs to add or update (say
+"100/801"), not every game in your library. It holds steady across the short pauses where the sync fetches the next
+platform's game list, rather than jumping around.
 
 A few things worth knowing for a large library:
 
@@ -94,8 +94,10 @@ complete the job.
   "Never".
 - **The Sync button becomes "Resume Sync".** When a run was cancelled, interrupted, or paused and left games in your
   library, the **Sync Library** button changes to **Resume Sync**. Pressing it completes the library: the platforms that
-  already synced in full are skipped, and only the one that stopped is re-checked — cheaply, since the games already
-  there take the quick update path. Once a run finishes in full, the button goes back to **Sync Library**.
+  already synced in full are skipped, and even in the platform that stopped, only the games it hadn't finished are
+  processed — the ones already correct are skipped, so a resume finishes quickly and the counter shows just the
+  remaining work. This is true whether or not you restart Steam in between. Once a run finishes in full, the button goes
+  back to **Sync Library**.
 - **Force Full Sync starts over from scratch.** Under the sync buttons, **Force Full Sync** clears the plugin's record
   of what it has already synced and re-fetches every platform from RomM on the next run. Reach for it if you suspect a
   platform is out of sync or want a clean rebuild; a normal Sync (or Resume Sync) is enough for everyday updates. It

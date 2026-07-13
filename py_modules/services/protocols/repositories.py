@@ -104,6 +104,15 @@ class RomRepository(Protocol):
         """
         ...
 
+    def set_applied_launch_options(self, rom_id: int, launch_options: str | None) -> None:
+        """Record the ``launch_options`` last written to *rom_id*'s shortcut (#1383).
+
+        The only write path for ``applied_launch_options``; the sync upsert in
+        :meth:`save` never touches it, so a re-sync of an unchanged (un-re-acked)
+        row preserves the recorded value the delta apply reads back.
+        """
+        ...
+
 
 class RomInstallRepository(Protocol):
     """Persistence seam for the ``RomInstall`` aggregate (installed-ROM file records)."""

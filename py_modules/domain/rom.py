@@ -37,6 +37,7 @@ class Rom:
     ra_id: int | None = None
     emulator_override: str | None = None
     selected_disc: str | None = None
+    applied_launch_options: str | None = None
     sibling_group_key: str | None = None
     regions: tuple[str, ...] = ()
     languages: tuple[str, ...] = ()
@@ -158,3 +159,19 @@ class Rom:
     def clear_selected_disc(self) -> None:
         """Drop the disc pin so the ROM follows the default (m3u or disc 1)."""
         self.selected_disc = None
+
+    def record_applied_launch_options(self, launch_options: str) -> None:
+        """Record the ``launch_options`` last written to this ROM's Steam shortcut.
+
+        The delta-restricted apply (#1383) compares each item's freshly built
+        target ``launch_options`` against this recorded value to decide whether
+        the shortcut is already correct (skip) or must be re-applied (changed).
+        Written by the five recorded-state writer sites — sync ack-commit,
+        download-complete, uninstall (records ``""``), RetroDECK-home migration
+        re-resolve, and version switch — each recording the value it just had the
+        frontend write onto the shortcut. ``""`` is the uninstalled placeholder,
+        not a missing value; ``None`` (never set here) is "unknown" and always
+        forces a re-apply. Excluded from the sync UPSERT (persisted only via the
+        pin-only ``set_applied_launch_options`` write path) so an unrelated
+        re-save never wipes it, mirroring :meth:`pin_emulator_override`."""
+        self.applied_launch_options = launch_options

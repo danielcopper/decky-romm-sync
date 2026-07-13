@@ -16,6 +16,7 @@ import {
 } from "./steamShortcuts";
 import { updateSyncProgress } from "./syncProgress";
 import { recordSyncCreated } from "./syncDeltaStore";
+import { observeUnitTotal } from "./syncEta";
 import { registerRomMAppId } from "../patches/gameDetailPatch";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -266,6 +267,13 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
 
       _cancelRequested = false;
       const romIdToAppId: Record<string, number> = {};
+
+      // Correct this unit's live-countdown weight to its real delta size
+      // (unit_total is now the new+changed count, not the raw rom_count the plan
+      // seeded), so a mostly-unchanged trailing unit stops over-weighting the
+      // "~N min left" readout (#1383 / #1382-M3). Idempotent across the unit's
+      // chunks — every chunk carries the same unit_total.
+      observeUnitTotal(data.unit_index, data.unit_total);
 
       const total = data.shortcuts.length;
       logInfo(

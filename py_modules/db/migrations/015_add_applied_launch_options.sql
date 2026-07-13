@@ -1,0 +1,28 @@
+-- =============================================================================
+-- 015_add_applied_launch_options.sql — recorded applied launch_options on the Rom aggregate
+-- #1383 / #1382-M3 (delta-restricted apply)
+-- =============================================================================
+--
+-- Adds a nullable column recording the ``launch_options`` last written to the
+-- ROM's Steam shortcut. The delta-restricted apply compares each item's freshly
+-- built target ``launch_options`` against this recorded value: an identity or
+-- launch-options mismatch (or a NULL recorded value) marks the item "changed" so
+-- it is re-applied; a match skips it entirely (the shortcut is already correct).
+--
+-- NULL = unknown. A pre-migration row (and every freshly created row until it is
+-- recorded) reads NULL, which never matches a target string, so the first
+-- post-upgrade sync re-applies exactly as today, records the value, and only
+-- subsequent syncs skip — no data is invented from the migration.
+--
+-- Only the five recorded-state writer sites ever write it (sync ack-commit,
+-- download-complete, uninstall, RetroDECK-home migration re-resolve, version
+-- switch), each via the pin-only ``set_applied_launch_options`` write path; the
+-- sync UPSERT in ``SqliteRomRepository.save()`` deliberately excludes it, like
+-- the emulator_override / selected_disc pins, so an unrelated re-save never
+-- wipes it. Anchored on ``roms`` (the Rom aggregate table) so it survives
+-- uninstall/reinstall alongside the other per-game state (ADR-0007).
+--
+-- Transaction-safe DDL only — the runner (adapters/sqlite_migrations.py) wraps
+-- BEGIN/COMMIT and stamps PRAGMA user_version = 15.
+-- -----------------------------------------------------------------------------
+ALTER TABLE roms ADD COLUMN applied_launch_options TEXT;  -- last launch_options written to the shortcut; NULL = unknown (never skip)

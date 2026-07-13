@@ -6,6 +6,7 @@ import {
   formatEtaCountdown,
   beginEtaRun,
   observeApplyProgress,
+  observeUnitTotal,
   liveEtaSeconds,
   displayedEtaSeconds,
   resetEta,
@@ -177,6 +178,41 @@ describe("run-scoped estimator", () => {
     observeApplyProgress(1, 100, 0);
     observeApplyProgress(1, 700, 6000);
     expect(liveEtaSeconds()).toBeNull();
+  });
+
+  it("observeUnitTotal corrects a trailing unit's weight to its delta, shrinking the countdown (#1383)", () => {
+    beginEtaRun("run-1", [1000, 3000], 4000);
+    // Unit 2 dispatches with a small delta (50 of its 3000 raw rom_count) — the
+    // delta-restricted apply skipped the rest, so unit_total = 50.
+    observeUnitTotal(1, 50);
+    // Measure unit 1's rate: 100 items/s over a 6s window.
+    observeApplyProgress(1, 100, 0);
+    observeApplyProgress(1, 700, 6000);
+    // totalRoms is now 1000 + 50 = 1050 (was 4000); processed = 700 within unit 1.
+    // remaining = (1050 - 700) / 100 = 3.5s. Without the correction it would read
+    // (4000 - 700) / 100 = 33s — the trailing unit's raw weight over-weighting it.
+    expect(liveEtaSeconds()).toBe(3.5);
+  });
+
+  it("observeUnitTotal is idempotent across a unit's chunks (same unit_total re-called)", () => {
+    beginEtaRun("run-1", [1000, 3000], 4000);
+    observeUnitTotal(1, 50);
+    observeUnitTotal(1, 50); // a later chunk of the same unit carries the same total
+    observeApplyProgress(1, 100, 0);
+    observeApplyProgress(1, 700, 6000);
+    // Corrected exactly once — not shrunk twice: (1050 - 700) / 100 = 3.5s.
+    expect(liveEtaSeconds()).toBe(3.5);
+  });
+
+  it("observeUnitTotal is a no-op with no run or an out-of-range index", () => {
+    observeUnitTotal(0, 10); // no run — must not throw
+    expect(liveEtaSeconds()).toBeNull();
+    beginEtaRun("run-1", [1000], 1000);
+    observeUnitTotal(5, 10); // out-of-range index — leaves totalRoms untouched
+    observeApplyProgress(1, 100, 0);
+    observeApplyProgress(1, 700, 6000);
+    // totalRoms still 1000; (1000 - 700) / 100 = 3s.
+    expect(liveEtaSeconds()).toBe(3);
   });
 
   it("resets the segment across a >10s gap so no cross-gap slope is measured (50-min-spike regression)", () => {

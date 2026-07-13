@@ -23,6 +23,7 @@ from domain.session_budget import (
     SAFETY_MARGIN_KB,
     UPDATE_TOUCH_KB,
     WORST_CASE_CREATE_KB,
+    chunk_worst_cost_kb,
     gate_decision,
     post_run_advisory,
     predict_run_crosses,
@@ -127,6 +128,39 @@ def test_gate_cliff_limit_still_pauses_a_run_that_would_pass_the_ceiling_check()
     rss = 2_199_000
     assert gate_decision(rss_kb=rss, chunk_items=1, limit_kb=CLIFF_KB).should_pause is False
     assert gate_decision(rss_kb=rss, chunk_items=200, limit_kb=CLIFF_KB).should_pause is True
+
+
+# ── chunk_worst_cost_kb (composition pricing) ────────────────────
+
+
+def test_chunk_worst_cost_prices_creates_with_cover_and_updates_lighter() -> None:
+    # A create pays the worst-case create rate PLUS its transient cover term; an
+    # update (changed / rebind) pays only the lighter Set*-walk rate.
+    assert chunk_worst_cost_kb(creates=1, updates=0) == WORST_CASE_CREATE_KB + COVER_TRANSIENT_KB
+    assert chunk_worst_cost_kb(creates=0, updates=1) == UPDATE_TOUCH_KB
+
+
+def test_chunk_worst_cost_is_additive_across_the_composition() -> None:
+    cost = chunk_worst_cost_kb(creates=120, updates=80)
+    assert cost == 120 * (WORST_CASE_CREATE_KB + COVER_TRANSIENT_KB) + 80 * UPDATE_TOUCH_KB
+
+
+def test_chunk_worst_cost_zero_for_empty_delta_chunk() -> None:
+    # An all-unchanged unit emits an empty delta chunk — it projects to current RSS.
+    assert chunk_worst_cost_kb(creates=0, updates=0) == 0
+
+
+def test_gate_cost_kb_overrides_the_uniform_item_projection() -> None:
+    # The composition-priced path: gate_decision reasons about a precomputed chunk
+    # cost. An all-update chunk (cheaper) proceeds where the same count of creates
+    # (create + cover each) would pause, at the same RSS.
+    rss = 2_000_000
+    all_updates = chunk_worst_cost_kb(creates=0, updates=150)
+    all_creates = chunk_worst_cost_kb(creates=150, updates=0)
+    assert gate_decision(rss_kb=rss, cost_kb=all_updates).should_pause is False
+    assert gate_decision(rss_kb=rss, cost_kb=all_creates).should_pause is True
+    # cost_kb is what the projection uses, ignoring chunk_items entirely.
+    assert gate_decision(rss_kb=rss, cost_kb=all_updates).projected_kb == rss + all_updates
 
 
 # ── predict_run_crosses ──────────────────────────────────────────

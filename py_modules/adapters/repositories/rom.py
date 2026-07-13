@@ -40,8 +40,11 @@ _SYNC_COLUMNS = (
     "is_main_sibling",
 )
 
-# Read set: the synced columns plus the pin-only emulator_override and selected_disc.
-_SELECT_COLUMNS = ", ".join((*_SYNC_COLUMNS, "emulator_override", "selected_disc"))
+# Read set: the synced columns plus the pin-only emulator_override, selected_disc,
+# and applied_launch_options (the recorded applied launch command, #1383). Like the
+# two pins, applied_launch_options is read here but written only by its own set_*()
+# method, never by save(), so a re-sync never wipes the recorded value.
+_SELECT_COLUMNS = ", ".join((*_SYNC_COLUMNS, "emulator_override", "selected_disc", "applied_launch_options"))
 _INSERT_COLUMNS = ", ".join(_SYNC_COLUMNS)
 _INSERT_PLACEHOLDERS = ", ".join("?" for _ in _SYNC_COLUMNS)
 # Every sync column except the rom_id primary key is overwritten on conflict.
@@ -64,6 +67,7 @@ def _row_to_rom(row: sqlite3.Row) -> Rom:
         ra_id=row["ra_id"],
         emulator_override=row["emulator_override"],
         selected_disc=row["selected_disc"],
+        applied_launch_options=row["applied_launch_options"],
         sibling_group_key=row["sibling_group_key"],
         regions=tuple(json.loads(row["regions"])),
         languages=tuple(json.loads(row["languages"])),
@@ -174,6 +178,21 @@ class SqliteRomRepository(BaseRepository):
         self._conn.execute(
             "UPDATE roms SET selected_disc = ? WHERE rom_id = ?",
             (filename, rom_id),
+        )
+
+    def set_applied_launch_options(self, rom_id: int, launch_options: str | None) -> None:
+        """Record the ``launch_options`` last written to ``rom_id``'s shortcut (#1383).
+
+        ``launch_options`` is the full launch command that was applied (``""`` for
+        an uninstalled ROM), or ``None`` to leave it "unknown". The delta apply
+        reads this back to skip already-correct shortcuts. This is the only write
+        path for the column — the sync UPSERT in :meth:`save` never touches it, so
+        a re-sync of an unchanged row (which never re-acks it) preserves the
+        recorded value.
+        """
+        self._conn.execute(
+            "UPDATE roms SET applied_launch_options = ? WHERE rom_id = ?",
+            (launch_options, rom_id),
         )
 
     def delete(self, rom_id: int) -> None:

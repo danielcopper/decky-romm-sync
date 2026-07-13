@@ -503,6 +503,43 @@ class TestMigrateRetroDeckFiles:
             assert install.rom_dir is None
 
     @pytest.mark.asyncio
+    async def test_migration_records_applied_launch_options_for_bound_rom(self, plugin, tmp_path):
+        """After the home-move re-bake, each bound ROM's recorded applied state is
+        updated to the emitted relaunch command, so the next sync skips the
+        now-correct (relocated) shortcut instead of re-touching it (#1383)."""
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._persistence = PersistenceAdapter(str(tmp_path), str(tmp_path), decky.logger)
+
+        old_home = str(tmp_path / "old")
+        new_home = str(tmp_path / "new")
+        old_rom = os.path.join(old_home, "roms", "n64", "zelda.z64")
+        os.makedirs(os.path.dirname(old_rom))
+        with open(old_rom, "w") as f:
+            f.write("rom data")
+
+        with plugin._uow as uow:
+            uow.kv_config.set("retrodeck_home_path_previous", old_home)
+            uow.kv_config.set("retrodeck_home_path", new_home)
+        _seed_install(plugin._uow, 1, file_path=old_rom, system="n64", app_id=9001)
+
+        result = await plugin.migrate_retrodeck_files()
+        assert result["success"] is True
+
+        # The emitted migration_relaunch_options item and the recorded applied match.
+        relaunch = [
+            args[0] for event, args in plugin._migration_service._emit.calls if event == "migration_relaunch_options"
+        ]
+        assert len(relaunch) == 1
+        item = next(i for i in relaunch[0]["items"] if i["app_id"] == 9001)
+        with plugin._uow as uow:
+            rom = uow.roms.get(1)
+        assert rom is not None
+        assert rom.applied_launch_options == item["launch_options"]
+        assert rom.applied_launch_options != ""  # a real re-baked command, not the placeholder
+
+    @pytest.mark.asyncio
     async def test_migrate_multi_file_moves_whole_rom_dir_with_siblings(self, plugin, tmp_path):
         """Regression (#784 data-loss): a multi-file ROM moves its WHOLE rom_dir.
 

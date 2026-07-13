@@ -24,7 +24,7 @@ import {
 } from "./api/backend";
 import { getSettingsResetState, setSettingsResetState } from "./utils/settingsResetStore";
 import { getSyncProgress, setSyncProgress } from "./utils/syncProgress";
-import { NEW_ITEM_SEC } from "./utils/syncEstimate";
+import { estimateApplySeconds } from "./utils/syncEstimate";
 import { recordSyncCreated, resetSyncDelta } from "./utils/syncDeltaStore";
 import { resetSyncCancel } from "./utils/syncManager";
 import type { DownloadCompleteEvent, SyncPlanData, SyncProgress, SyncStaleData } from "./types";
@@ -974,15 +974,16 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
 });
 
 describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estimate)", () => {
-  it("writes etaSeconds = total_roms * NEW_ITEM_SEC into the sync progress store", async () => {
+  it("writes the walk-cost seed (estimateApplySeconds all-as-new) into the sync progress store", async () => {
     const plugin = pluginFactory();
 
     act(() => {
       emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-eta", units: [], total_units: 3, total_roms: 120 });
     });
 
-    // Honest upper bound: every planned ROM priced as a new shortcut.
-    expect(getSyncProgress().etaSeconds).toBe(120 * NEW_ITEM_SEC);
+    // Walk-cost upper bound: every planned ROM priced as a new shortcut, plus the
+    // flat fetch allowance — the same estimateApplySeconds model the preview uses.
+    expect(getSyncProgress().etaSeconds).toBe(estimateApplySeconds(120, 0));
     plugin.onDismount();
   });
 
@@ -1003,7 +1004,7 @@ describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estima
       });
     });
 
-    expect(getSyncProgress().etaSeconds).toBe(200 * NEW_ITEM_SEC);
+    expect(getSyncProgress().etaSeconds).toBe(estimateApplySeconds(200, 0));
     expect(getSyncProgress().stage).toBe("applying");
     plugin.onDismount();
   });
@@ -1021,7 +1022,7 @@ describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estima
       emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-eta", units: [], total_units: 3, total_roms: 5400 });
     });
 
-    // The crude 5400 * NEW_ITEM_SEC bound must NOT overwrite the preview seed.
+    // The crude estimateApplySeconds(5400, 0) bound must NOT overwrite the preview seed.
     expect(getSyncProgress().etaSeconds).toBe(previewSeed);
     plugin.onDismount();
   });
@@ -1037,7 +1038,7 @@ describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estima
       emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-eta", units: [], total_units: 2, total_roms: 80 });
     });
 
-    expect(getSyncProgress().etaSeconds).toBe(80 * NEW_ITEM_SEC);
+    expect(getSyncProgress().etaSeconds).toBe(estimateApplySeconds(80, 0));
     plugin.onDismount();
   });
 });

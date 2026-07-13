@@ -43,7 +43,20 @@ class FakeRomRepository:
             for other_id, other in self._roms.items():
                 if other_id != rom.rom_id and other.shortcut_app_id == rom.shortcut_app_id:
                     other.unbind_shortcut()
-        self._roms[rom.rom_id] = copy.deepcopy(rom)
+        stored = copy.deepcopy(rom)
+        # Mirror SqliteRomRepository.save(): the pin-only columns
+        # (emulator_override / selected_disc / applied_launch_options) are EXCLUDED
+        # from the sync UPSERT, so a re-save preserves the existing row's values
+        # rather than overwriting them from the (fresh, default-None) incoming Rom.
+        # Each is written only by its own set_*() path. Without this the dict store
+        # would wipe a user's pin / the recorded applied state on every re-sync and
+        # diverge from real SQLite (#945 / #1383).
+        existing = self._roms.get(rom.rom_id)
+        if existing is not None:
+            stored.emulator_override = existing.emulator_override
+            stored.selected_disc = existing.selected_disc
+            stored.applied_launch_options = existing.applied_launch_options
+        self._roms[rom.rom_id] = stored
 
     def delete(self, rom_id: int) -> None:
         self._roms.pop(rom_id, None)
@@ -76,6 +89,11 @@ class FakeRomRepository:
         rom = self._roms.get(rom_id)
         if rom is not None:
             rom.selected_disc = filename
+
+    def set_applied_launch_options(self, rom_id: int, launch_options: str | None) -> None:
+        rom = self._roms.get(rom_id)
+        if rom is not None:
+            rom.applied_launch_options = launch_options
 
     def _snapshot(self) -> dict[int, Rom]:
         return copy.deepcopy(self._roms)

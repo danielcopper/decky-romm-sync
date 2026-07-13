@@ -836,6 +836,7 @@ class DownloadService:
         app_id, emulator, bake_path = await self._loop.run_in_executor(
             None, self._resolve_bound_app_id, rom_id, final_path
         )
+        launch_options = build_launch_options(resolve_emulator_invocation(rom_detail, emulator), bake_path)
         await self._emit(
             "download_complete",
             {
@@ -844,11 +845,32 @@ class DownloadService:
                 "platform_name": platform_name,
                 "file_path": final_path,
                 "app_id": app_id,
-                "launch_options": build_launch_options(resolve_emulator_invocation(rom_detail, emulator), bake_path),
+                "launch_options": launch_options,
                 "resumable": entry.get("resumable", False),
             },
         )
+        # Record the freshly baked launch command as this ROM's applied state (the
+        # value the frontend confirm-sets onto the shortcut), so the next sync
+        # skips the now-correct shortcut instead of re-touching it (delta apply,
+        # #1383). Only when the ROM has a bound shortcut — an unbound ROM has none
+        # to record, and the next sync creates + records it. Second of the five
+        # writer sites.
+        if app_id is not None:
+            await self._loop.run_in_executor(None, self._record_applied_launch_options_io, rom_id, launch_options)
         self._logger.info(f"Download complete: {rom_name} -> {final_path}")
+
+    def _record_applied_launch_options_io(self, rom_id: int, launch_options: str) -> None:
+        """Record *launch_options* as ``rom_id``'s applied shortcut state in a short write UoW.
+
+        The delta-restricted apply reads this back to skip a shortcut that already
+        carries the correct launch command (#1383). A no-op when the row is gone.
+        """
+        with self._uow_factory() as uow:
+            rom = uow.roms.get(int(rom_id))
+            if rom is None:
+                return
+            rom.record_applied_launch_options(launch_options)
+            uow.roms.set_applied_launch_options(int(rom_id), rom.applied_launch_options)
 
     async def _reconcile_post_io(self, post_io_future):
         """After a cancel, settle an in-flight post-IO commit and report whether

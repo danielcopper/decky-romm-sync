@@ -55,8 +55,13 @@ def _make_rom(rom_id, name, platform_name, platform_slug="gba"):
     }
 
 
-def _make_registry_entry(name, platform_name, app_id, platform_slug="gba"):
-    """Build a minimal shortcut registry entry."""
+def _make_registry_entry(name, platform_name, app_id, platform_slug="gba", applied_launch_options=""):
+    """Build a minimal shortcut registry entry.
+
+    ``applied_launch_options`` defaults to ``""`` (the recorded uninstalled
+    placeholder) so an identity-matching fetch with no ``launch_options`` reads as
+    unchanged by the delta-restricted classify (#1383).
+    """
     return {
         "app_id": app_id,
         "name": name,
@@ -64,6 +69,7 @@ def _make_registry_entry(name, platform_name, app_id, platform_slug="gba"):
         "platform_name": platform_name,
         "platform_slug": platform_slug,
         "cover_path": "",
+        "applied_launch_options": applied_launch_options,
     }
 
 

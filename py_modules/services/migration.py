@@ -718,7 +718,27 @@ class MigrationService:
         relaunch_items = result.pop("_relaunch_items", None)
         if relaunch_items is not None:
             await self._emit("migration_relaunch_options", {"items": relaunch_items})
+            # Record each re-baked command as the shortcut's applied state (the
+            # value the frontend confirm-sets onto the relocated shortcut), so the
+            # next sync skips the now-correct shortcut instead of re-touching it
+            # (delta apply, #1383). Fourth of the five recorded-state writer sites.
+            await self._loop.run_in_executor(None, self._record_migration_applied_io, relaunch_items)
         return result
+
+    def _record_migration_applied_io(self, items: list[dict[str, Any]]) -> None:
+        """Record each relaunch item's ``launch_options`` as its ROM's applied state.
+
+        The relaunch items are keyed by ``app_id``; each is resolved back to its
+        bound ROM (``get_by_app_id``) and its recorded ``applied_launch_options``
+        set to the re-baked command, in one short write UoW. A missing binding
+        (shortcut removed between the re-bake and here) is skipped.
+        """
+        with self._uow_factory() as uow:
+            for item in items:
+                rom = uow.roms.get_by_app_id(int(item["app_id"]))
+                if rom is not None:
+                    rom.record_applied_launch_options(item["launch_options"])
+                    uow.roms.set_applied_launch_options(rom.rom_id, rom.applied_launch_options)
 
     def _get_migration_status_io(self, pending, new_home):
         """Sync helper for get_migration_status — FS traversal in executor.

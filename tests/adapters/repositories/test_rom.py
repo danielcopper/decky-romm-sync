@@ -516,6 +516,57 @@ class TestResyncPreservesSelectedDisc:
         assert loaded.selected_disc == "FF7 (Disc 3).cue"
 
 
+class TestAppliedLaunchOptions:
+    """The recorded applied launch command (#1383) — read-back, SQL-NULL, and the
+    sync-UPSERT-preserves contract, mirroring the two pin columns above."""
+
+    def test_round_trips_via_get(self, uow: SqliteUnitOfWork):
+        uow.roms.save(_rom(1))
+        uow.roms.set_applied_launch_options(1, "flatpak run net.retrodeck.retrodeck /game.z64")
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.applied_launch_options == "flatpak run net.retrodeck.retrodeck /game.z64"
+
+    def test_defaults_to_none_when_never_recorded(self, uow: SqliteUnitOfWork):
+        # A fresh row reads NULL (unknown) — the "never skip on unknown state" contract.
+        uow.roms.save(_rom(1))
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.applied_launch_options is None
+
+    def test_empty_string_is_distinct_from_null(self, uow: SqliteUnitOfWork):
+        # "" (recorded uninstalled placeholder) is a real value, not NULL.
+        uow.roms.save(_rom(1))
+        uow.roms.set_applied_launch_options(1, "")
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.applied_launch_options == ""
+        assert uow._conn is not None
+        stored = uow._conn.execute("SELECT applied_launch_options FROM roms WHERE rom_id = 1").fetchone()[0]
+        assert stored == ""
+
+    def test_survives_resync_and_identity_still_updates(self, uow: SqliteUnitOfWork):
+        # The sync UPSERT builds a fresh Rom with applied_launch_options=None; save()
+        # must NOT wipe the recorded value, or the delta apply would re-touch a
+        # correct shortcut every sync.
+        rom_id = 1
+        uow.roms.save(_rom(rom_id, app_id=100))
+        uow.roms.set_applied_launch_options(rom_id, "flatpak run … /game.z64")
+
+        resynced = _rom(rom_id, app_id=200)
+        resynced.name = "Renamed Game"
+        assert resynced.applied_launch_options is None
+        uow.roms.save(resynced)
+
+        loaded = uow.roms.get(rom_id)
+        assert loaded is not None
+        assert loaded.applied_launch_options == "flatpak run … /game.z64"
+        assert loaded.shortcut_app_id == 200
+        assert loaded.name == "Renamed Game"
+
+
 def _seed_children(uow: SqliteUnitOfWork, rom_id: int) -> None:
     """Seed a row in all five ``ON DELETE CASCADE`` children of ``roms``.
 

@@ -427,6 +427,53 @@ class TestCommitUnitResults:
         assert rom.sgdb_id == 999
         assert rom.ra_id == 777
 
+    def test_commit_records_applied_launch_options_for_binding_target(self, plugin):
+        """A binding target this cycle records the launch command the frontend wrote
+        onto the shortcut, so the next sync skips the now-correct shortcut (#1383)."""
+        uow = plugin._uow
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {
+                "name": "Game",
+                "fs_name": "game.z64",
+                "platform_slug": "n64",
+                "cover_path": "",
+                "launch_options": "flatpak run net.retrodeck.retrodeck /game.z64",
+            },
+        )
+
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}])
+
+        with uow:
+            rom = uow.roms.get(42)
+        assert rom is not None
+        assert rom.applied_launch_options == "flatpak run net.retrodeck.retrodeck /game.z64"
+
+    def test_commit_preserves_applied_for_unacked_row(self, plugin):
+        """A row committed this chunk but NOT acked (a skipped-unchanged item riding
+        chunk 0's leftover) keeps its binding AND its recorded applied state — save()
+        excludes applied_launch_options, so the un-re-acked value is never wiped."""
+        uow = plugin._uow
+        _seed_rom(uow, 43, app_id=100043, platform_slug="n64", name="Keep")
+        with uow:
+            uow.roms.set_applied_launch_options(43, "flatpak run … /keep.z64")
+        _stage(
+            plugin._sync_service._box,
+            43,
+            {"name": "Keep", "fs_name": "keep.z64", "platform_slug": "n64", "cover_path": "", "launch_options": ""},
+            emitted=False,
+        )
+
+        # Empty ack — rom 43 is not a binding target this cycle, but its row commits.
+        plugin._sync_service._reporter._commit_unit_results_io({}, [{"id": 43}])
+
+        with uow:
+            rom = uow.roms.get(43)
+        assert rom is not None
+        assert rom.shortcut_app_id == 100043
+        assert rom.applied_launch_options == "flatpak run … /keep.z64"
+
     def test_commit_persists_platform_stamp_atomically(self, plugin):
         """A passed ``platform_stamp`` lands in the SAME committed UoW as the rom
         upsert — the per-platform completion stamp is atomic with the chunk (ADR-0023)."""

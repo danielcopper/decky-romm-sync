@@ -184,6 +184,40 @@ class TestRemoveRom:
         assert uow.committed is True
 
     @pytest.mark.asyncio
+    async def test_records_empty_applied_launch_options_for_bound_rom(self, service, uow, rom_files):
+        # The frontend resets the kept shortcut's launch command to "" on uninstall
+        # (#1146); the backend records "" so the next sync skips it (#1383).
+        rom_path = f"{_ROMS_BASE}/n64/zelda.z64"
+        rom_files.files[rom_path] = b"\x00" * 100
+        _seed_install(uow, _make_install(42, file_path=rom_path))
+        with uow:
+            uow.roms.set_applied_launch_options(42, "flatpak run net.retrodeck.retrodeck /zelda.z64")
+
+        await service.remove_rom(42)
+
+        with uow:
+            rom = uow.roms.get(42)
+        assert rom is not None
+        assert rom.applied_launch_options == ""
+
+    @pytest.mark.asyncio
+    async def test_does_not_record_applied_for_unbound_rom(self, service, uow, rom_files):
+        # An unbound ROM has no shortcut to reset — the recording is guarded on the
+        # binding, so its applied state stays untouched (unknown).
+        rom_path = f"{_ROMS_BASE}/n64/unbound.z64"
+        rom_files.files[rom_path] = b"\x00" * 100
+        with uow:
+            uow.roms.save(_make_rom(50, bound=False))
+            uow.rom_installs.save(_make_install(50, file_path=rom_path))
+
+        await service.remove_rom(50)
+
+        with uow:
+            rom = uow.roms.get(50)
+        assert rom is not None
+        assert rom.applied_launch_options is None
+
+    @pytest.mark.asyncio
     async def test_returns_error_if_not_installed(self, service):
         result = await service.remove_rom(999)
         assert result["success"] is False
@@ -332,6 +366,30 @@ class TestUninstallAllRoms:
         result = await service.uninstall_all_roms()
         assert result["success"] is True
         assert list(uow.rom_installs.iter_all()) == []
+
+    @pytest.mark.asyncio
+    async def test_records_empty_applied_for_each_bound_deleted_rom(self, service, uow, rom_files):
+        # The frontend resets each kept shortcut's launch command to "" for the
+        # returned app_ids (#1146); the backend records "" so the next sync skips
+        # each now-correct shortcut (#1383).
+        file_a = f"{_ROMS_BASE}/n64/game_a.z64"
+        file_b = f"{_ROMS_BASE}/n64/game_b.z64"
+        rom_files.files[file_a] = b"\x00" * 100
+        rom_files.files[file_b] = b"\x00" * 100
+        with uow:
+            uow.roms.save(_make_rom(1))
+            uow.roms.save(_make_rom(2))
+            uow.rom_installs.save(_make_install(1, file_path=file_a))
+            uow.rom_installs.save(_make_install(2, file_path=file_b))
+            uow.roms.set_applied_launch_options(1, "flatpak run … /game_a.z64")
+            uow.roms.set_applied_launch_options(2, "flatpak run … /game_b.z64")
+
+        result = await service.uninstall_all_roms()
+
+        assert result["success"] is True
+        with uow:
+            assert uow.roms.get(1).applied_launch_options == ""
+            assert uow.roms.get(2).applied_launch_options == ""
 
     @pytest.mark.asyncio
     async def test_handles_empty_state(self, service, uow):

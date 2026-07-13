@@ -1157,6 +1157,97 @@ class TestDoDownloadSingleFile:
         assert len(emit_calls) == 1
         assert emit_calls[0][0][1]["app_id"] is None
 
+    @pytest.mark.asyncio
+    async def test_download_complete_records_applied_launch_options_for_bound_rom(self, plugin, tmp_path):
+        """A bound ROM's freshly baked launch command (the value the frontend
+        confirm-sets onto its shortcut) is recorded as the applied state, so the
+        next sync skips the now-correct shortcut instead of re-touching it (#1383)."""
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "zelda.z64")
+        rom_detail = {"id": 42, "name": "Zelda", "fs_name": "zelda.z64", "platform_slug": "n64", "platform_name": "N64"}
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
+            with open(dest, "wb") as f:
+                f.write(b"\x00" * 512)
+
+        _seed_rom(plugin._uow, 42)  # bound (app_id 1042)
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[42] = {"rom_id": 42, "status": "downloading", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(42, rom_detail, target_path, "n64", "zelda.z64")
+
+        payload = next(c[0][1] for c in decky.emit.call_args_list if c[0][0] == "download_complete")
+        with plugin._uow as uow:
+            rom = uow.roms.get(42)
+        assert rom is not None
+        assert rom.applied_launch_options == payload["launch_options"]
+        assert rom.applied_launch_options == f'flatpak run net.retrodeck.retrodeck "{target_path}"'
+
+    @pytest.mark.asyncio
+    async def test_download_complete_does_not_record_applied_for_unbound_rom(self, plugin, tmp_path):
+        """A ROM downloaded before it is synced (no shortcut) records nothing — there
+        is no shortcut to reflect; the next sync creates it and records the value."""
+        from unittest.mock import patch
+
+        import decky
+
+        decky.DECKY_USER_HOME = str(tmp_path)
+        plugin._download_service._retrodeck_paths = FakeRetroDeckPaths(
+            roms=str(tmp_path / "retrodeck" / "roms"),
+            bios=str(tmp_path / "retrodeck" / "bios"),
+        )
+        decky.emit.reset_mock()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "metroid.z64")
+        rom_detail = {
+            "id": 7,
+            "name": "Metroid",
+            "fs_name": "metroid.z64",
+            "platform_slug": "n64",
+            "platform_name": "N64",
+        }
+
+        def fake_download(_rom_id, _filename, dest, _progress_callback=None, *, resume=False, on_meta=None):
+            with open(dest, "wb") as f:
+                f.write(b"\x00" * 512)
+
+        with plugin._uow:
+            plugin._uow.roms.save(
+                Rom(
+                    rom_id=7,
+                    platform_slug="n64",
+                    name="Metroid",
+                    fs_name="metroid.z64",
+                    shortcut_app_id=None,
+                    last_synced_at="2025-01-01T00:00:00",
+                )
+            )
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[7] = {"rom_id": 7, "status": "downloading", "progress": 0}
+
+        with patch.object(plugin._romm_api, "download_rom_content", side_effect=fake_download):
+            await plugin._download_service._do_download(7, rom_detail, target_path, "n64", "metroid.z64")
+
+        with plugin._uow as uow:
+            rom = uow.roms.get(7)
+        assert rom is not None
+        assert rom.applied_launch_options is None
+
 
 class TestDoDownloadOverrideRebake:
     """``download_complete`` re-bakes a per-game ``emulator_override`` into launch_options.

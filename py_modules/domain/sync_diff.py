@@ -40,9 +40,22 @@ def classify_roms(
 
     Returns the ROMs split into new (not in registry), changed (registry
     entry exists but a *persisted* identity field — name, platform_slug, or
-    fs_name — differs), unchanged_ids (registry matches exactly), stale (in
-    registry but not in the current fetch), and the count of stale ROMs whose
-    stored platform no longer appears in fetched_platform_names.
+    fs_name — differs, OR the target ``launch_options`` differs from the
+    recorded ``applied_launch_options``), unchanged_ids (registry matches
+    exactly), stale (in registry but not in the current fetch), and the count of
+    stale ROMs whose stored platform no longer appears in fetched_platform_names.
+
+    ``applied_launch_options`` is the launch command last written to the ROM's
+    Steam shortcut (recorded by the five writer sites, #1383). Comparing the
+    built target ``launch_options`` against it is what lets the delta-restricted
+    apply skip a content-correct shortcut rather than re-touching it: an identity
+    match with a launch-options match is genuinely unchanged, while an
+    install/uninstall (or core/disc pin change) that leaves identity untouched
+    still flips the item to "changed". A NULL recorded value (``None`` — a
+    pre-migration-015 row, or a freshly created row not yet recorded) never
+    matches a target string, so such a row is always "changed" and re-applied
+    once; the writer sites then record the value and the next sync skips it. No
+    skip is ever taken on unknown recorded state — no data is invented.
 
     ``platform_name`` is deliberately excluded from the changed comparison:
     it is a derived display field, never persisted on the ``roms`` row. The
@@ -67,13 +80,18 @@ def classify_roms(
         reg = registry.get(str(sd["rom_id"]))
         if not reg or not reg.get("app_id"):
             new.append(sd)
-        # Compare only persisted identity fields. platform_name is a derived
-        # display field (never on the roms row) — comparing it produced a
-        # permanent phantom "changed" delta (#1292); see the docstring.
+        # Compare the persisted identity fields plus the recorded applied
+        # launch command. platform_name is a derived display field (never on the
+        # roms row) — comparing it produced a permanent phantom "changed" delta
+        # (#1292). applied_launch_options catches an install/uninstall or pin
+        # change that leaves identity untouched; a NULL recorded value never
+        # matches, so an unknown-state row is always "changed" (#1383). See the
+        # docstring.
         elif (
             reg.get("name") != sd["name"]
             or reg.get("platform_slug") != sd.get("platform_slug")
             or reg.get("fs_name") != sd.get("fs_name", "")
+            or reg.get("applied_launch_options") != sd.get("launch_options", "")
         ):
             changed.append({**sd, "existing_app_id": reg["app_id"]})
         else:

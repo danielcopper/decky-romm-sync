@@ -489,6 +489,7 @@ class VersionSwitchService:
             # Already the active version — a harmless no-op. Re-bake its launch
             # command so the shortcut heals even on this path (uniform shape).
             launch_options = await self._resolve_launch_options(ctx.bound_rom_id, ctx.bound_installed)
+            await self._record_applied_launch_options(ctx.bound_rom_id, launch_options)
             return self._switch_success(ctx.bound_rom_id, ctx.bound_installed, launch_options, app_id)
 
         if ctx.target_is_local:
@@ -585,7 +586,27 @@ class VersionSwitchService:
             return write
         target_installed = bool(write["target_installed"])
         launch_options = await self._resolve_launch_options(target_rom_id, target_installed)
+        await self._record_applied_launch_options(target_rom_id, launch_options)
         return self._switch_success(target_rom_id, target_installed, launch_options, app_id)
+
+    async def _record_applied_launch_options(self, rom_id: int, launch_options: str) -> None:
+        """Record *launch_options* as ``rom_id``'s applied shortcut state (#1383).
+
+        A version switch moves the binding and the frontend writes the resolved
+        launch command onto the (sticky) shortcut, so recording it keeps the next
+        sync from re-touching the now-correct shortcut. Fifth of the five
+        recorded-state writer sites. Runs its own short write UoW on the executor,
+        outside any open UoW.
+        """
+        await self._loop.run_in_executor(None, self._record_applied_launch_options_io, rom_id, launch_options)
+
+    def _record_applied_launch_options_io(self, rom_id: int, launch_options: str) -> None:
+        with self._uow_factory() as uow:
+            rom = uow.roms.get(int(rom_id))
+            if rom is None:
+                return
+            rom.record_applied_launch_options(launch_options)
+            uow.roms.set_applied_launch_options(int(rom_id), rom.applied_launch_options)
 
     async def _resolve_launch_options(self, rom_id: int, installed: bool) -> str:
         """Resolve the full Steam launch command for a just-bound installed ROM.
@@ -722,8 +743,14 @@ class VersionSwitchService:
             self._logger.warning(f"Version switch: could not build target row: {e}")
             return self._invalid_target(int(target_dict.get("id", 0)))
         rom.bind_shortcut(app_id)
+        # A server-only target is never installed, so its shortcut carries the
+        # empty placeholder — record that applied state so the next sync skips it
+        # (#1383). Same write UoW as the bind (this whole method runs on the
+        # executor, no UoW open on entry).
+        rom.record_applied_launch_options("")
         with self._uow_factory() as uow:
             uow.roms.save(rom)
+            uow.roms.set_applied_launch_options(rom.rom_id, rom.applied_launch_options)
         return self._switch_success(rom.rom_id, False, "", app_id)
 
     @staticmethod

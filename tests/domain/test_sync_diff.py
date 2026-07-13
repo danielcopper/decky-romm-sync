@@ -22,6 +22,7 @@ def _make_sd(
     fs_name="game.z64",
     igdb_id=None,
     sgdb_id=None,
+    launch_options="",
 ):
     """Build a shortcut_data dict matching build_shortcuts_data output."""
     return {
@@ -32,17 +33,31 @@ def _make_sd(
         "fs_name": fs_name,
         "igdb_id": igdb_id,
         "sgdb_id": sgdb_id,
+        "launch_options": launch_options,
     }
 
 
-def _reg(name="Game", platform_name="N64", platform_slug="n64", fs_name="game.z64", app_id=1001):
-    """Build a registry entry dict matching _read_preview_baseline output."""
+def _reg(
+    name="Game",
+    platform_name="N64",
+    platform_slug="n64",
+    fs_name="game.z64",
+    app_id=1001,
+    applied_launch_options: str | None = "",
+):
+    """Build a registry entry dict matching _read_preview_baseline output.
+
+    ``applied_launch_options`` defaults to ``""`` — an uninstalled ROM whose
+    empty placeholder was recorded — so a same-identity fetch with the default
+    ``_make_sd`` launch_options ("") reads as unchanged (#1383).
+    """
     return {
         "app_id": app_id,
         "name": name,
         "platform_name": platform_name,
         "platform_slug": platform_slug,
         "fs_name": fs_name,
+        "applied_launch_options": applied_launch_options,
     }
 
 
@@ -119,6 +134,42 @@ class TestClassifyRoms:
         assert len(changed) == 1
         assert changed[0]["existing_app_id"] == 1001
         assert new == []
+        assert unchanged_ids == []
+
+    def test_launch_options_change_detected_with_identical_identity(self):
+        # Identity (name/fs_name/platform) is unchanged but the built target
+        # launch_options differs from the recorded applied value — a just-installed
+        # ROM whose shortcut still carries "" — so the item is "changed" (#1383).
+        registry = {"1": _reg(name="Game A", fs_name="gamea.z64", app_id=1001, applied_launch_options="")}
+        sd = [_make_sd(1, "Game A", fs_name="gamea.z64", launch_options="flatpak run … /gamea.z64")]
+        new, changed, unchanged_ids, _, _ = classify_roms(sd, registry, {"N64"})
+        assert new == []
+        assert [c["rom_id"] for c in changed] == [1]
+        assert changed[0]["existing_app_id"] == 1001
+        assert unchanged_ids == []
+
+    def test_matching_launch_options_stays_unchanged(self):
+        # Identity AND launch_options both match the recorded applied value — the
+        # shortcut is already correct, so the item is genuinely unchanged (skipped).
+        cmd = "flatpak run … /gamea.z64"
+        registry = {"1": _reg(name="Game A", fs_name="gamea.z64", app_id=1001, applied_launch_options=cmd)}
+        sd = [_make_sd(1, "Game A", fs_name="gamea.z64", launch_options=cmd)]
+        new, changed, unchanged_ids, _, _ = classify_roms(sd, registry, {"N64"})
+        assert new == []
+        assert changed == []
+        assert unchanged_ids == [1]
+
+    def test_null_applied_launch_options_forces_changed(self):
+        # A pre-migration-015 row (or a freshly created row not yet recorded) has
+        # applied_launch_options = None (unknown). It never matches a target
+        # string, so the item is always "changed" and re-applied once — the "no
+        # skip on unknown state / no data invented" contract (#1383). Even when the
+        # target launch_options is "" (uninstalled), None != "" holds.
+        registry = {"1": _reg(name="Game A", fs_name="gamea.z64", app_id=1001, applied_launch_options=None)}
+        sd = [_make_sd(1, "Game A", fs_name="gamea.z64", launch_options="")]
+        new, changed, unchanged_ids, _, _ = classify_roms(sd, registry, {"N64"})
+        assert new == []
+        assert [c["rom_id"] for c in changed] == [1]
         assert unchanged_ids == []
 
     def test_platform_name_divergence_not_classified_as_changed(self):
@@ -465,8 +516,22 @@ def _gsd(
     }
 
 
-def _greg(rom_id, *, app_id, name="Game", group_key: str | None = "g1", fs_name="game.z64", platform_slug="n64"):
-    """A bound-registry entry as _read_apply_registry / _read_preview_baseline shape it."""
+def _greg(
+    rom_id,
+    *,
+    app_id,
+    name="Game",
+    group_key: str | None = "g1",
+    fs_name="game.z64",
+    platform_slug="n64",
+    applied_launch_options="",
+):
+    """A bound-registry entry as _read_apply_registry / _read_preview_baseline shape it.
+
+    ``applied_launch_options`` defaults to ``""`` — the recorded empty placeholder —
+    so a same-identity re-fetch with the default ``_gsd`` launch_options ("") reads
+    as unchanged (#1383).
+    """
     return {
         "app_id": app_id,
         "name": name,
@@ -474,6 +539,7 @@ def _greg(rom_id, *, app_id, name="Game", group_key: str | None = "g1", fs_name=
         "platform_slug": platform_slug,
         "platform_name": "N64",
         "sibling_group_key": group_key,
+        "applied_launch_options": applied_launch_options,
     }
 
 
@@ -583,7 +649,13 @@ class TestCollapseSiblingGroups:
         assert entry[BIND_ROM_ID_KEY] == 2
         assert entry["launch_options"] == "run /jp.z64"
         result = classify_roms(emitted, registry, {"N64"})
-        assert result.unchanged_ids == [1]
+        # The rebind carries the representative's launch bake, which differs from
+        # the vanished sibling's recorded applied state (""), so the shortcut must
+        # be re-touched to move the binding — classify reads it as changed, not
+        # unchanged (#1383). The apply path force-keeps rebinds regardless, so a
+        # rebind is never skipped even when classify would call it unchanged.
+        assert result.unchanged_ids == []
+        assert [e["rom_id"] for e in result.changed] == [1]
         assert result.stale == []
         assert result.new == []
 

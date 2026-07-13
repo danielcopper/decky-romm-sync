@@ -282,19 +282,19 @@ function formatLibraryLine(stats: SyncStats): string {
 }
 
 /**
- * Expected apply seconds for a preview — the WALK cost, not the raw delta. The
- * apply re-walks every non-skipped item: an un-stamped platform's "unchanged"
- * ROMs still get cheap update touches, not free skips, so pricing only new +
- * changed undershoots badly on a resume (on-device: "~2 min" for 153 added while
- * the apply walked ~3100 items). Pricing all non-new items (changed + unchanged)
- * at the update rate gives an honest upper bound — platforms skipped by their
- * completion stamp make it overshoot, which the "up to ~X"/"~X min" wording
- * covers, and the live countdown corrects downward within seconds of applying.
- * Used for BOTH the preview "Estimated time" row and the handleApply seed, so the
- * number the user approves is the number the run starts with.
+ * Expected apply seconds for a preview — the DELTA cost. The delta-restricted
+ * apply (#1383) touches only new + changed shortcuts; content-unchanged items are
+ * skipped entirely (no Set* walk, no confirm poll), so they cost nothing and are
+ * no longer priced. Creates run at the new-shortcut rate, changed at the lighter
+ * update rate, plus the flat fetch allowance. This is now a tight estimate rather
+ * than an inflated upper bound — the old model priced every unchanged item as an
+ * update because a resume re-walked them, which the skip has eliminated. Used for
+ * BOTH the preview "Estimated time" row and the handleApply seed, so the number
+ * the user approves is the number the run starts with; the live countdown still
+ * corrects it against the measured apply rate.
  */
 function previewApplySeconds(s: SyncPreviewSummary): number {
-  return estimateApplySeconds(s.new_count, s.changed_count + s.unchanged_count);
+  return estimateApplySeconds(s.new_count, s.changed_count);
 }
 
 /** Preview apply-time (seconds) at/above which the hint appends the sleep-pause

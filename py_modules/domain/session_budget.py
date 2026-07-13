@@ -127,19 +127,38 @@ class GateDecision:
     threshold_kb: int
 
 
+def chunk_worst_cost_kb(creates: int, updates: int) -> int:
+    """Worst-case renderer-RSS cost of applying a chunk of *creates* + *updates* items.
+
+    Composition pricing for the delta-restricted apply (#1383): now that a chunk
+    carries only new + changed items, a CREATE is priced at the worst-case create
+    rate PLUS its transient cover term (a created shortcut applies a cover through
+    Steam's artwork API), while an UPDATE — a changed/rebind item's Set* walk over
+    an existing shortcut — is priced at the lighter update rate (it reuses its
+    existing grid file, no cover applied). The gate reasons about the resulting
+    projected chunk cost instead of pricing every item as a cover-applying create.
+    """
+    return creates * (WORST_CASE_CREATE_KB + COVER_TRANSIENT_KB) + updates * UPDATE_TOUCH_KB
+
+
 def gate_decision(
     rss_kb: int,
-    chunk_items: int,
+    chunk_items: int = 0,
     per_item_kb: int = WORST_CASE_CREATE_KB,
     limit_kb: int = EFFECTIVE_CEILING_KB,
+    *,
+    cost_kb: int | None = None,
 ) -> GateDecision:
     """Decide whether applying the next chunk would cross ``limit_kb``.
 
-    Pauses iff the current renderer RSS plus the chunk's projected worst-case
-    cost (``chunk_items * per_item_kb``) reaches ``limit_kb``. The projection is
-    deliberately worst-case (every item priced as a fresh create) so the gate
-    errs toward pausing early — a false pause costs a Steam restart, a false
-    proceed costs a renderer crash mid-apply.
+    Pauses iff the current renderer RSS plus the chunk's projected worst-case cost
+    reaches ``limit_kb``. The chunk cost is either supplied directly as
+    ``cost_kb`` (the composition-priced path — see :func:`chunk_worst_cost_kb`,
+    creates and updates weighted differently) or, when ``cost_kb`` is ``None``,
+    computed as the uniform ``chunk_items * per_item_kb`` (every item priced the
+    same). Either way the projection is deliberately worst-case so the gate errs
+    toward pausing early — a false pause costs a Steam restart, a false proceed
+    costs a renderer crash mid-apply.
 
     ``limit_kb`` selects which line the projection is measured against, chosen by
     the chunk's position in the run. Every LATER chunk uses the default effective
@@ -151,7 +170,7 @@ def gate_decision(
     itself. So the first chunk trades the margin's cushion for guaranteed
     progress; it can never be projected to peak past the cliff.
     """
-    projected_kb = rss_kb + chunk_items * per_item_kb
+    projected_kb = rss_kb + (cost_kb if cost_kb is not None else chunk_items * per_item_kb)
     return GateDecision(
         should_pause=projected_kb >= limit_kb,
         projected_kb=projected_kb,

@@ -441,6 +441,33 @@ class TestSwitchVersion:
             assert u.roms.get(2).shortcut_app_id == _APP_ID
             assert u.roms.get(1).shortcut_app_id is None
 
+    def test_records_applied_launch_options_for_installed_target(self, event_loop, service, uow, relaunch_resolver):
+        # Switching onto an installed version re-bakes its launch command (the
+        # frontend writes it onto the sticky shortcut); recording it as the applied
+        # state keeps the next sync from re-touching the now-correct shortcut (#1383).
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        _seed_install(uow, 2)
+        relaunch_resolver.items = {2: {"app_id": _APP_ID, "launch_options": "flatpak run … /game_2.sfc"}}
+
+        result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
+
+        _assert_success(result, rom_id=2, installed=True, launch_options="flatpak run … /game_2.sfc")
+        with uow as u:
+            assert u.roms.get(2).applied_launch_options == "flatpak run … /game_2.sfc"
+
+    def test_records_empty_applied_for_uninstalled_target(self, event_loop, service, uow):
+        # Switching onto an uninstalled version leaves the shortcut on the empty
+        # placeholder; that placeholder is recorded so the next sync skips it (#1383).
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+
+        result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
+
+        _assert_success(result, rom_id=2, installed=False, launch_options="")
+        with uow as u:
+            assert u.roms.get(2).applied_launch_options == ""
+
     def test_t3_switch_back_to_installed_returns_launch_options(self, event_loop, service, uow, relaunch_resolver):
         # Switching onto a still-downloaded version re-bakes its full launch command.
         _seed_rom(uow, rom_id=1, app_id=_APP_ID)

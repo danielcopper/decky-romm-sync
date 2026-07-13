@@ -1865,12 +1865,12 @@ describe("MainPage", () => {
       expect(c.textContent).toContain("Long syncs pause during sleep; keep the Deck powered.");
     });
 
-    it("prices the preview row from the WALK cost (new + changed + unchanged), not the raw delta", async () => {
-      // Resume-shaped: 153 real creates but ~3000 unchanged items the apply
-      // re-walks. Delta-only priced this at "~2 min" on-device; walk cost is
-      // 153*NEW_ITEM_SEC + 3000*UPDATED_ITEM_SEC + 90s fetch allowance = 758.85s →
-      // ~13 min. The number the user approves here is the seed handleApply starts
-      // the run with.
+    it("prices the preview row from the DELTA (new + changed) — unchanged items are skipped, not walked", async () => {
+      // Resume-shaped: 153 real creates and ~3000 content-unchanged items. The
+      // delta-restricted apply (#1383) skips the unchanged entirely (no Set* walk,
+      // no confirm poll), so they cost nothing and no longer inflate the estimate:
+      // 153*NEW_ITEM_SEC + 90s fetch allowance = 158.85s → ~3 min. The 3000
+      // unchanged priced the old walk model at ~13 min; that overshoot is gone.
       vi.mocked(backend.syncPreview).mockResolvedValue({
         success: true,
         summary: {
@@ -1891,9 +1891,9 @@ describe("MainPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(scopeLine(container)).toBe("~13 min");
-      // An estimate must never promise less than reality — the delta-only value is gone.
-      expect(scopeLine(container)).not.toBe("~2 min");
+      expect(scopeLine(container)).toBe("~3 min");
+      // The 3000 unchanged items must NOT be priced — the walk-model overshoot is gone.
+      expect(scopeLine(container)).not.toBe("~13 min");
     });
 
     it("renders 'up to ~X min' while applying when etaSeconds is set", async () => {
@@ -1955,31 +1955,30 @@ describe("MainPage", () => {
       return container;
     }
 
-    it("handleApply seeds the apply ETA from the WALK cost (new + changed + unchanged), not the raw delta", async () => {
-      // The apply re-walks every non-skipped item — unchanged ROMs of an
-      // un-stamped platform still get cheap update touches — so all non-new items
-      // (changed + unchanged) are priced at the update rate. new=100, changed=200,
-      // unchanged=600 → 100*NEW_ITEM_SEC + 800*UPDATED_ITEM_SEC + 90s allowance = 295s.
+    it("handleApply seeds the apply ETA from the DELTA (new + changed), unchanged priced at zero", async () => {
+      // The delta apply touches only new + changed — creates at the new rate,
+      // changed at the update rate — and skips unchanged entirely (#1383). new=100,
+      // changed=200, unchanged=600 → 100*NEW_ITEM_SEC + 200*UPDATED_ITEM_SEC + 90s
+      // allowance = 175s; the 600 unchanged add nothing.
       const container = await applyPreviewSummary({ new_count: 100, changed_count: 200, unchanged_count: 600 });
-      expect(getSyncProgress().etaSeconds).toBe(
-        100 * NEW_ITEM_SEC + (200 + 600) * UPDATED_ITEM_SEC + 90 /* fetch allowance */,
-      );
-      // Surfaced as the "up to ~X" upper bound (295s → ~5 min) until the live
+      expect(getSyncProgress().etaSeconds).toBe(100 * NEW_ITEM_SEC + 200 * UPDATED_ITEM_SEC + 90 /* fetch allowance */);
+      // Surfaced as the "up to ~X" upper bound (175s → ~3 min) until the live
       // countdown takes over.
-      expect(container.querySelector('[data-testid="estimate-time"]')?.textContent).toBe("up to ~5 min");
+      expect(container.querySelector('[data-testid="estimate-time"]')?.textContent).toBe("up to ~3 min");
     });
 
-    it("prices a resume-shaped preview (few creates, many unchanged) as a large 'up to', not a sub-minute undershoot", async () => {
-      // The on-device regression: a resume with ~90 real creates but ~3000
-      // unchanged items re-walks all 3000. The old delta-only seed (new + changed)
-      // read "< 1 min" for a ~10 min walk. Walk cost: 90*NEW_ITEM_SEC +
-      // 3000*UPDATED_ITEM_SEC + 90s allowance = 730.5s → ~12 min.
+    it("prices a resume-shaped preview (few creates, many unchanged) by its DELTA — unchanged skipped", async () => {
+      // The #1382-M3 fix: a resume with ~90 real creates and ~3000 content-unchanged
+      // items now SKIPS the 3000 (delta-restricted apply), so the seed prices only
+      // the 90 creates: 90*NEW_ITEM_SEC + 90s allowance = 130.5s → ~2 min. The old
+      // walk model priced the 3000 unchanged at ~12 min; that overshoot is gone, and
+      // the small delta is the true, fast cost.
       const container = await applyPreviewSummary({ new_count: 90, changed_count: 0, unchanged_count: 3000 });
-      expect(getSyncProgress().etaSeconds).toBe(90 * NEW_ITEM_SEC + 3000 * UPDATED_ITEM_SEC + 90 /* fetch allowance */);
+      expect(getSyncProgress().etaSeconds).toBe(90 * NEW_ITEM_SEC + 90 /* fetch allowance */);
       const text = container.querySelector('[data-testid="estimate-time"]')?.textContent;
-      expect(text).toBe("up to ~12 min");
-      // An estimate must never promise less than reality — the delta-only undershoot is gone.
-      expect(text).not.toBe("up to < 1 min");
+      expect(text).toBe("up to ~2 min");
+      // The 3000 unchanged items must NOT be priced — the walk-model overshoot is gone.
+      expect(text).not.toBe("up to ~12 min");
     });
   });
 
@@ -2700,6 +2699,36 @@ describe("MainPage", () => {
       });
       // Reconcile must unbind dead bindings before the work queue is built.
       expect(order).toEqual(["reconcile", "startSync"]);
+    });
+
+    it("awaits reconcile to COMPLETION before startSync so the delta classify trusts a reconciled registry (#1383)", async () => {
+      const order: string[] = [];
+      // The delta-restricted apply classifies against the bound registry and skips
+      // content-unchanged shortcuts. A shortcut the user deleted in Steam leaves a
+      // dead binding that would be skipped forever unless reconcile unbinds it
+      // FIRST — so reconcile must COMPLETE before the backend fetch/classify starts.
+      // The marker is pushed after internal awaits, so a non-awaited reconcile would
+      // let startSync run first and fail this ordering (proving completion, not just
+      // start-order).
+      vi.mocked(syncManager.reconcileStaleShortcuts).mockImplementation(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        order.push("reconcile-done");
+      });
+      vi.mocked(backend.startSync).mockImplementation(async () => {
+        order.push("startSync");
+        return { success: true, message: "" };
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const toggle = container.querySelector('[data-testid="toggle-input"]') as HTMLInputElement | null;
+      fireEvent.click(toggle!);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await flushAsync();
+      });
+      expect(order).toEqual(["reconcile-done", "startSync"]);
     });
 
     it("resets the stale cancel flag BEFORE reconcile/startSync (#1198/#1202)", async () => {
