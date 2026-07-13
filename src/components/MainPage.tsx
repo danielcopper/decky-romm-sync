@@ -932,9 +932,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               ProgressBarWithInfo is a Steam Field (label column | bar column);
               with no label text the empty column shoves the bar into the right
               half and clips it (#751). The bare ProgressBar is just the bar and
-              spans the full panel width. Focusable so Steam's focus engine can
-              scroll the progress row into view under gamepad navigation. */}
-          <Focusable style={{ width: "100%" }}>
+              spans the full panel width. NOT focusable: the syncing rows sit
+              between the focusable status rows and the Cancel button, so they
+              are always in view — a focus highlight here only fakes
+              interactivity. */}
+          <div style={{ width: "100%" }}>
             <div
               style={{
                 display: "flex",
@@ -959,12 +961,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
               indeterminate={coarseFraction === undefined}
               {...(coarseFraction !== undefined ? { nProgress: coarseFraction } : {})}
             />
-          </Focusable>
+          </div>
         </PanelSectionRow>
         {hasFineDetail && (
           <PanelSectionRow>
             <Field
-              focusable={true}
               bottomSeparator="none"
               label={
                 <div style={{ display: "flex", alignItems: "flex-start", gap: "8px" }}>
@@ -993,7 +994,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         )}
         {etaText !== null && (
           <PanelSectionRow>
-            <Field label="Estimated time" focusable={true} bottomSeparator="none">
+            <Field label="Estimated time" bottomSeparator="none">
               <span data-testid="estimate-time" style={{ fontSize: "12px" }}>
                 {etaText}
               </span>
