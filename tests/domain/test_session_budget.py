@@ -19,6 +19,7 @@ from domain.session_budget import (
     FULL_CHUNK_WORST_KB,
     GC_SKIP_BELOW_KB,
     POST_RUN_ADVISORY_KB,
+    RESUME_HEADROOM_CHUNKS,
     SAFETY_MARGIN_KB,
     UPDATE_TOUCH_KB,
     WORST_CASE_CREATE_KB,
@@ -199,18 +200,31 @@ def test_full_chunk_worst_is_chunk_size_times_create_plus_cover_rate() -> None:
     assert FULL_CHUNK_WORST_KB == 200 * (WORST_CASE_CREATE_KB + COVER_TRANSIENT_KB)  # 500_000
 
 
-def test_resume_ready_just_below_the_threshold() -> None:
-    # Resumable iff rss + one full chunk stays strictly below the ceiling — the
-    # highest resumable RSS is one KB under (ceiling - full-chunk).
-    rss = EFFECTIVE_CEILING_KB - FULL_CHUNK_WORST_KB - 1
+def test_resume_ready_just_below_the_headroom_bar() -> None:
+    # Resumable iff rss + RESUME_HEADROOM_CHUNKS full chunks stays strictly below
+    # the ceiling — the highest resumable RSS is one KB under that bar (≈1.2 GB).
+    rss = EFFECTIVE_CEILING_KB - RESUME_HEADROOM_CHUNKS * FULL_CHUNK_WORST_KB - 1
     assert resume_would_proceed(rss) is True
 
 
-def test_resume_not_ready_at_the_threshold() -> None:
-    # At exactly ceiling - full-chunk the projection equals the ceiling, and the gate
-    # pauses at ``>=`` — so this is NOT resumable (mirrors the predictive gate).
-    rss = EFFECTIVE_CEILING_KB - FULL_CHUNK_WORST_KB
+def test_resume_not_ready_at_the_headroom_bar() -> None:
+    rss = EFFECTIVE_CEILING_KB - RESUME_HEADROOM_CHUNKS * FULL_CHUNK_WORST_KB
     assert resume_would_proceed(rss) is False
+
+
+def test_resume_not_ready_at_the_pause_point() -> None:
+    # The gate pauses at rss + ONE chunk >= ceiling (≈1.7 GB). A one-chunk bar
+    # would flip to "resumable" right there, where Steam's own small frees
+    # oscillate the reading (on-device 2026-07-13: the paused banner flickered
+    # to "memory is free again" at the pause level and hid the restart button).
+    # The headroom bar must stay firmly NOT-ready at and just below the pause point.
+    pause_point = EFFECTIVE_CEILING_KB - FULL_CHUNK_WORST_KB
+    assert resume_would_proceed(pause_point) is False
+    assert resume_would_proceed(pause_point - 100_000) is False
+
+
+def test_resume_headroom_requires_more_than_the_gates_single_chunk() -> None:
+    assert RESUME_HEADROOM_CHUNKS > 1
 
 
 def test_resume_ready_after_a_fresh_restart_baseline() -> None:
@@ -218,7 +232,7 @@ def test_resume_ready_after_a_fresh_restart_baseline() -> None:
 
 
 def test_resume_not_ready_at_a_still_high_rss() -> None:
-    assert resume_would_proceed(2_000_000) is False  # 2.0 + 0.5 = 2.5 ≥ 2.2 ceiling
+    assert resume_would_proceed(2_000_000) is False  # 2.0 + 1.0 = 3.0 ≥ 2.2 ceiling
 
 
 # ── GC-skip floor ────────────────────────────────────────────────

@@ -84,6 +84,17 @@ UPDATE_TOUCH_KB = 1_000
 # steady-state chunk gate does, or a resume could promise progress the gate then denies.
 FULL_CHUNK_WORST_KB = 200 * (WORST_CASE_CREATE_KB + COVER_TRANSIENT_KB)
 
+# How many full worst-case chunks of headroom ``resume_would_proceed`` demands
+# below the effective ceiling before it announces a paused run as resumable.
+# MUST be > 1: one chunk is exactly the gate's own pause point, so a one-chunk
+# bar sits on the very RSS level every pause lands on and Steam's own small
+# frees flicker the verdict (observed on-device 2026-07-13: the paused banner
+# flipped to "memory is free again" at the pause level and hid the restart
+# button). Two chunks (≈1 GB below the ceiling, ≈1.2 GB bar) is in practice
+# reachable only through a real Steam restart — the state the flip exists to
+# detect.
+RESUME_HEADROOM_CHUNKS = 2
+
 # Post-run advisory floor. A run that ends with RSS above this (≈1.8 GB) has
 # spent most of the session budget; the next large operation is likely to pause
 # or crash, so the UI recommends a Steam restart. Deliberately well below the
@@ -175,19 +186,20 @@ def post_run_advisory(rss_kb: int) -> bool:
 def resume_would_proceed(rss_kb: int) -> bool:
     """Whether a resume would make sustained progress under the steady-state predictive gate.
 
-    Deliberately stricter than the run's own first-chunk pass bar: it prices a
-    full worst-case chunk against the effective ceiling — the line every LATER
-    chunk is measured against — not the more permissive cliff the first chunk is
-    allowed to spend toward. That conservative ceiling-based bar is the honest one
-    for telling the user "press Resume now": it promises the run keeps moving with
-    the full anti-thrash margin intact, not just the single guaranteed first chunk.
-    So the run proceeds iff the current RSS plus one full chunk's worst-case cost
-    stays *below* the effective ceiling (the gate pauses at ``>=``). After a Steam
-    restart drops RSS to the fresh baseline this returns ``True`` and the UI can
-    tell the user a paused run is resumable again; at a still-high RSS it returns
-    ``False``. ``None`` handling (unreadable RSS → undecidable) stays with the caller.
+    Requires headroom for {RESUME_HEADROOM_CHUNKS} full worst-case chunks below
+    the effective ceiling — deliberately MORE than the single chunk the gate
+    itself requires to proceed. One chunk of headroom would put this bar exactly
+    on the pause point (the gate pauses at ``rss + one chunk >= ceiling``), where
+    Steam's own small frees oscillate the reading across the line: the paused
+    banner then flickers to "memory is free again" and hides the restart button
+    while the heap is still pinned at the pause level and a resume could make at
+    most one chunk of progress. Demanding room for several chunks separates the
+    only state worth announcing — a real Steam restart at the fresh baseline —
+    from hovering at the pause point, and doubles as hysteresis against the
+    flicker. ``None`` handling (unreadable RSS → undecidable) stays with the
+    caller.
     """
-    return rss_kb + FULL_CHUNK_WORST_KB < EFFECTIVE_CEILING_KB
+    return rss_kb + RESUME_HEADROOM_CHUNKS * FULL_CHUNK_WORST_KB < EFFECTIVE_CEILING_KB
 
 
 def session_memory_delta(start_kb: int | None, end_kb: int | None) -> int | None:

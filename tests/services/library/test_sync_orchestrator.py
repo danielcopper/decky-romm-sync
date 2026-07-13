@@ -4882,20 +4882,21 @@ class TestSessionBudgetGate:
         from domain.session_budget import CLIFF_KB, EFFECTIVE_CEILING_KB, POST_RUN_ADVISORY_KB
 
         plugin.loop = asyncio.get_event_loop()
-        plugin._renderer_rss.rss_kb = 1_234_000
+        plugin._renderer_rss.rss_kb = 1_100_000
 
         result = await plugin.get_session_budget_status()
 
         assert result == {
             "success": True,
-            "rss_kb": 1_234_000,
+            "rss_kb": 1_100_000,
             # All three colour thresholds ride the payload (single source of truth).
             "warn_kb": POST_RUN_ADVISORY_KB,
             "ceiling_kb": EFFECTIVE_CEILING_KB,
             "cliff_kb": CLIFF_KB,
             # No clean run has completed in this test, so the retained delta is None.
             "memory_delta_kb": None,
-            # 1.234 + 0.5 = 1.734 < 2.2 ceiling → a paused run could resume now.
+            # 1.1 + 2*0.5 = 2.1 < 2.2 ceiling → below the two-chunk headroom bar,
+            # a paused run could resume now.
             "resume_ready": True,
         }
 

@@ -231,9 +231,10 @@ row. The row's value text is traffic-light coloured against those three threshol
 (`ceiling_kb`) — so the frontend holds no threshold magic numbers, and while a sync runs (or a paused banner is showing)
 the row polls the callable (~5 s during a sync, ~10 s while paused) so the number tracks the climbing RSS and the blue
 paused banner notices once a Steam restart frees memory. That notice is driven by `resume_ready` on the callable
-(`domain.session_budget.resume_would_proceed`: `rss + FULL_CHUNK_WORST_KB < ceiling`, the gate's own full-chunk
-predictive condition; `None` when RSS is unreadable) — when it flips `true` the blue banner reads "Steam memory is free
-again — press Resume Sync" and hides the restart button. That row also shows the **last run's signed RSS growth**,
+(`domain.session_budget.resume_would_proceed`: `rss + RESUME_HEADROOM_CHUNKS × FULL_CHUNK_WORST_KB < ceiling` — room for
+TWO worst-case chunks, ≈1.2 GB bar, because a one-chunk bar sits exactly on the pause point where Steam's own small
+frees flicker the verdict; `None` when RSS is unreadable) — when it flips `true` the blue banner reads "Steam memory is
+free again — press Resume Sync" and hides the restart button. That row also shows the **last run's signed RSS growth**,
 appended inline after the value ("X.X GB · last run ±Y"), measured at EVERY terminal (completed / paused / cancelled /
 interrupted) so a paused run reads as _its own_ consumption-so-far rather than a prior clean run's: a RAW read taken
 unconditionally at run start is the baseline (`run_start_rss_kb` — captured before any chunk, so even a

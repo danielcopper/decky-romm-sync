@@ -93,8 +93,10 @@ is fail-open — a measurement failure never blocks a sync.**
   dismissed-state to persist). Both drop the number but keep their text when `rss_kb` is null. The pause toast stays for
   immediacy (with a longer duration so it isn't truncated), but the banners are the source of truth.
 - **The blue paused banner notices a restart.** The live reading decides — no flag, no persisted state. The callable
-  also returns `resume_ready` (`domain.session_budget.resume_would_proceed`: the gate's own predictive condition for a
-  full chunk, `rss + FULL_CHUNK_WORST_KB < ceiling`, i.e. `rss < ~1.7 GB`; `None` when RSS is unreadable). When it flips
+  also returns `resume_ready` (`domain.session_budget.resume_would_proceed`:
+  `rss + RESUME_HEADROOM_CHUNKS × FULL_CHUNK_WORST_KB < ceiling`, i.e. `rss < ~1.2 GB`; `None` when RSS is unreadable —
+  headroom for TWO worst-case chunks, not the gate's one: a one-chunk bar sits exactly on the pause point, where Steam's
+  own small frees flicker the verdict and mislabel a still-pinned heap as free, observed on-device). When it flips
   `true` — e.g. after a Steam restart drops RSS to the fresh baseline — the blue banner changes to "Steam memory is free
   again (X.X GB) — press Resume Sync" and hides the restart button; `false`/`null` keeps the restart guidance
   (conservative fail-open). Because the poll runs only during a sync, the QAM also polls the callable every ~10 s while
