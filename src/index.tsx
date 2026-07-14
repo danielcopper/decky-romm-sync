@@ -528,8 +528,8 @@ export default definePlugin(() => {
     // apply skips unchanged items and the live rate estimator corrects the readout
     // downward within seconds of applying (#1382-M3). Merged (not replaced) so the
     // running/stage the click set survives, and the sync_progress listener below
-    // preserves it across backend frames. Shown as "up to ~X min" only until the
-    // live estimator replaces it with a "~X min left" countdown.
+    // preserves it across backend frames. Shown as "up to X min" only until the
+    // live estimator replaces it with a "X min left" countdown.
     //
     // Only seed the bound when the store has NO etaSeconds yet: the preview path
     // (handleApply) already seeded a tighter delta-based estimate into the store,

@@ -94,16 +94,16 @@ describe("formatEtaCountdown", () => {
   });
 
   it("rounds UP to the next whole minute", () => {
-    expect(formatEtaCountdown(60)).toBe("~1 min left");
-    expect(formatEtaCountdown(61)).toBe("~2 min left");
-    expect(formatEtaCountdown(540)).toBe("~9 min left");
-    expect(formatEtaCountdown(541)).toBe("~10 min left");
+    expect(formatEtaCountdown(60)).toBe("1 min left");
+    expect(formatEtaCountdown(61)).toBe("2 min left");
+    expect(formatEtaCountdown(540)).toBe("9 min left");
+    expect(formatEtaCountdown(541)).toBe("10 min left");
   });
 
   it("rolls into hours past 60 minutes", () => {
-    expect(formatEtaCountdown(3600)).toBe("~1 h left");
-    expect(formatEtaCountdown(4200)).toBe("~1 h 10 min left");
-    expect(formatEtaCountdown(7200)).toBe("~2 h left");
+    expect(formatEtaCountdown(3600)).toBe("1 h left");
+    expect(formatEtaCountdown(4200)).toBe("1 h 10 min left");
+    expect(formatEtaCountdown(7200)).toBe("2 h left");
   });
 });
 

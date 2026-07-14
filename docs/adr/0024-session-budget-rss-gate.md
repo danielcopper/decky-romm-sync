@@ -88,20 +88,22 @@ is fail-open — a measurement failure never blocks a sync.**
 - **Persistent QAM banners with live numbers.** Toasts are missed and truncate, so the durable surfaces are two
   persistent banners in the QAM sync section, fed by a new `get_session_budget_status()` callable (a live `/proc` RSS
   read — no GC — plus the fixed ceiling/cliff lines; fail-open `rss_kb: null`). A **blue** banner shows while the last
-  run is `paused` ("restart Steam, then Resume Sync" + "Steam memory: X.X GB …"); a **yellow** banner shows whenever the
-  live RSS exceeds ~1.8 GB after a completed run (it self-clears after a restart, since the next read is low — no
-  dismissed-state to persist). Both drop the number but keep their text when `rss_kb` is null. The pause toast stays for
-  immediacy (with a longer duration so it isn't truncated), but the banners are the source of truth.
+  run is `paused` ("Steam memory is full (X.X GB). N of M games done. Restart Steam, then Resume Sync." — the progress
+  pair rides the same callable as `run_done_items` / `run_total_items`, counted in the backend because it survives the
+  Steam restart the banner asks for, and omitted when a plugin reload leaves them unknown); a **yellow** banner shows
+  whenever the live RSS exceeds ~1.8 GB after a completed run (it self-clears after a restart, since the next read is
+  low — no dismissed-state to persist). Both drop the number but keep their text when `rss_kb` is null. The pause toast
+  stays for immediacy (with a longer duration so it isn't truncated), but the banners are the source of truth.
 - **The blue paused banner notices a restart.** The live reading decides — no flag, no persisted state. The callable
   also returns `resume_ready` (`domain.session_budget.resume_would_proceed`:
   `rss + RESUME_HEADROOM_CHUNKS × FULL_CHUNK_WORST_KB < ceiling`, i.e. `rss < ~1.2 GB`; `None` when RSS is unreadable —
   headroom for TWO worst-case chunks, not the gate's one: a one-chunk bar sits exactly on the pause point, where Steam's
   own small frees flicker the verdict and mislabel a still-pinned heap as free, observed on-device). When it flips
   `true` — e.g. after a Steam restart drops RSS to the fresh baseline — the blue banner changes to "Steam memory is free
-  again (X.X GB) — press Resume Sync" and hides the restart button; `false`/`null` keeps the restart guidance
-  (conservative fail-open). Because the poll runs only during a sync, the QAM also polls the callable every ~10 s while
-  a paused banner is showing, so the flip happens on its own after the user restarts — the user isn't left staring at
-  stale "restart Steam" copy over a fresh green reading.
+  again (X.X GB). N of M games done. Press Resume Sync to continue." and hides the restart button; `false`/`null` keeps
+  the restart guidance (conservative fail-open). Because the poll runs only during a sync, the QAM also polls the
+  callable every ~10 s while a paused banner is showing, so the flip happens on its own after the user restarts — the
+  user isn't left staring at stale "restart Steam" copy over a fresh green reading.
 - **An always-on memory row with the last-run delta.** The QAM status block carries a permanent Steam memory row (the
   same live reading, omitted entirely when `rss_kb` is null) with the last run's signed RSS growth appended inline on
   the same line ("X.X GB · last run +Y", the delta's GB unit dropped as redundant next to the reading) — `end - start`,

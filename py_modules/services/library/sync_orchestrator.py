@@ -541,12 +541,21 @@ class SyncOrchestrator:
         — the banner then drops the number but keeps its guidance text;
         ``memory_delta_kb`` is ``None`` until a clean run has measured both endpoints,
         and ``resume_ready`` is ``None`` when RSS is unreadable (undecidable).
+
+        Also carries the last run's progress — ``run_done_items`` of
+        ``run_total_items`` — so the paused banner can say "X of Y games done". They
+        ride this payload rather than a new callable because the QAM already polls it
+        while a paused banner shows, and they live in the BACKEND because the plugin
+        process survives the Steam restart the banner asks for. Both are ``None`` when
+        no run has reached its plan in this process (a plugin reload wipes the
+        in-memory counters); the banner then omits the sentence.
         """
         rss_kb: int | None = None
         try:
             rss_kb = await self._loop.run_in_executor(None, self._renderer_rss)
         except Exception as e:  # fail-open: a status poll must never raise
             self._logger.debug(f"Session-budget status read failed: {e}")
+        run_total = self._sync_state.run_total_items
         return {
             "success": True,
             "rss_kb": rss_kb,
@@ -555,6 +564,10 @@ class SyncOrchestrator:
             "cliff_kb": CLIFF_KB,
             "memory_delta_kb": self._sync_state.last_run_delta_kb,
             "resume_ready": resume_would_proceed(rss_kb) if rss_kb is not None else None,
+            # A done count without its denominator is unreadable, so the pair is
+            # surfaced together: no known total ⇒ both None.
+            "run_done_items": self._sync_state.run_done_items if run_total is not None else None,
+            "run_total_items": run_total,
         }
 
     # ── Sync termination ─────────────────────────────────────────
@@ -619,6 +632,11 @@ class SyncOrchestrator:
         box.chunks_emitted_this_run = 0
         box.interrupt_reason = None
         box.budget_measure_unavailable_logged = False
+        # Run-scoped progress counters for the paused banner's "X of Y games done"
+        # (#1383). The total is stamped at plan time below; the done count grows with
+        # the skipped + committed work as the run proceeds.
+        box.run_total_items = None
+        box.run_done_items = 0
         # Run-start RSS baseline for the last-run memory delta (#1383). A RAW read
         # (no GC — the settle isn't worth it for an informational number) captured
         # UNCONDITIONALLY at run start, before any chunk is applied, so even a
@@ -659,6 +677,9 @@ class SyncOrchestrator:
             # threaded into finalize so collections key on display names and
             # the offline name cache stays current as of this sync.
             platform_names = {u.slug: u.name for u in work_queue if u.type == "platform" and u.slug}
+            # The run's denominator for the paused banner's "X of Y games done" — the
+            # same planned total the ``sync_plan`` event carries (#1383).
+            box.run_total_items = total_roms_planned
             self._logger.info(f"Per-unit pipeline: {total_units} units planned, {total_roms_planned} ROMs total")
             await self._emit(
                 "sync_plan",
@@ -1025,6 +1046,11 @@ class SyncOrchestrator:
         # upstream, so ``skipped`` is always False on forced runs.
         if skipped:
             self._logger.info(f"Per-unit apply skipped: {unit.name} ({len(unit_roms)} ROMs unchanged)")
+            # A wholesale-skipped unit's ROMs are already correct in Steam, so they
+            # count toward the run's done total — the resume of a paused run skips
+            # every platform it finished before the pause, and those games ARE done
+            # (#1383).
+            box.run_done_items += len(unit_roms)
             return len(unit_roms)
 
         # Build shortcut data for every fetched ROM. Installed ROMs carry the
@@ -1084,6 +1110,9 @@ class SyncOrchestrator:
             f"Delta apply: {unit.name} — {len(new)} new + {len(changed)} changed + "
             f"{len(rebind_ids)} rebind of {len(emitted)} collapsed ({len(skip_ids)} unchanged skipped)"
         )
+        # A skipped entry is already correct on its Steam shortcut — no Set* walk is
+        # owed — so it counts as done the moment the delta is computed (#1383).
+        box.run_done_items += len(skip_ids)
 
         # Download artwork for the shortcuts about to be applied and stamp each
         # delta entry's cover path in place (a no-op when the delta is empty).
@@ -1299,6 +1328,10 @@ class SyncOrchestrator:
             # same UoW.
             await self._reporter.get().commit_unit_results(applied, chunk_rows, platform_stamp=platform_stamp)
             applied_count += len(applied)
+            # Only a COMMITTED chunk's items count as done (#1383): an emitted chunk
+            # whose ack never landed — a cancel or a heartbeat timeout — returns above,
+            # before this line, so the paused banner never over-reports.
+            box.run_done_items += len(applied)
 
         box.clear_active_unit()
         return applied_count

@@ -328,6 +328,8 @@ describe("MainPage", () => {
       cliff_kb: 2_450_000,
       memory_delta_kb: null,
       resume_ready: null,
+      run_done_items: null,
+      run_total_items: null,
     });
     vi.mocked(backend.testConnection).mockResolvedValue({
       success: true,
@@ -1119,27 +1121,27 @@ describe("MainPage", () => {
     // Coverage + duration read as one label-less sentence under the "Changes"
     // block ("Scope" and "Preview" as competing labels read as duplicate info).
     // These summaries have one new item, so the estimate is the fetch allowance
-    // rounding to "~2 min".
+    // rounding to "2 min".
     it("reads 'Syncing N platforms · M collections — <estimate>' with both counts", async () => {
       const c = await renderPreviewScope(3, 2);
       expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe(
-        "Syncing 3 platforms · 2 collections — ~2 min",
+        "Syncing 3 platforms · 2 collections — 2 min",
       );
     });
 
     it("omits the collections part when the run syncs none, and singularizes", async () => {
       const c = await renderPreviewScope(1, 0);
-      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("Syncing 1 platform — ~2 min");
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("Syncing 1 platform — 2 min");
     });
 
     it("omits the platforms part on a collections-only run (LOW-6)", async () => {
       const c = await renderPreviewScope(0, 3);
-      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("Syncing 3 collections — ~2 min");
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("Syncing 3 collections — 2 min");
     });
 
     it("shows the estimate alone when the backend omits both scope counts (empty scope)", async () => {
       const c = await renderPreviewScope(0, 0);
-      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("Estimated ~2 min");
+      expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("Estimated 2 min");
     });
 
     it("hides the scope line and the progress hint on an empty delta (nothing to apply)", async () => {
@@ -1180,6 +1182,7 @@ describe("MainPage", () => {
       lastAttemptStatus: string | undefined,
       rssKb: number | null,
       resumeReady: boolean | null = null,
+      counts: { done: number | null; total: number | null } = { done: null, total: null },
     ): Promise<HTMLElement> {
       vi.mocked(backend.getSyncStats).mockResolvedValue({
         ...defaultStats(),
@@ -1196,6 +1199,8 @@ describe("MainPage", () => {
         cliff_kb: 2_450_000,
         memory_delta_kb: null,
         resume_ready: resumeReady,
+        run_done_items: counts.done,
+        run_total_items: counts.total,
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
@@ -1206,7 +1211,7 @@ describe("MainPage", () => {
       const c = await renderIdle("paused", 2_299_000);
       const banner = c.querySelector('[data-testid="budget-paused-banner"]');
       expect(banner).not.toBeNull();
-      expect(banner?.textContent).toContain("Steam memory: 2.3 GB");
+      expect(banner?.textContent).toContain("Steam memory is full (2.3 GB). Restart Steam, then Resume Sync.");
     });
 
     it("degrades the paused banner to text-only when the reading is unavailable", async () => {
@@ -1221,8 +1226,20 @@ describe("MainPage", () => {
       const c = await renderIdle(undefined, 1_900_000);
       const banner = c.querySelector('[data-testid="budget-high-heap-banner"]');
       expect(banner).not.toBeNull();
-      expect(banner?.textContent).toContain("Steam memory is high: 1.9 GB of ~2.4 GB");
+      expect(banner?.textContent).toContain("Steam memory is high: 1.9 GB of 2.4 GB");
       expect(c.querySelector('[data-testid="budget-paused-banner"]')).toBeNull();
+    });
+
+    it("feeds the backend's run progress into the paused banner", async () => {
+      const c = await renderIdle("paused", 2_299_000, false, { done: 1200, total: 2001 });
+      expect(c.querySelector('[data-testid="budget-paused-banner"]')?.textContent).toContain(
+        "1200 of 2001 games done.",
+      );
+    });
+
+    it("omits the progress sentence when the backend doesn't know the counts (post-reload)", async () => {
+      const c = await renderIdle("paused", 2_299_000, false, { done: null, total: null });
+      expect(c.querySelector('[data-testid="budget-paused-banner"]')?.textContent).not.toContain("games done");
     });
 
     it("shows no banner when idle with a low live heap and no paused attempt", async () => {
@@ -1235,7 +1252,7 @@ describe("MainPage", () => {
       const c = await renderIdle("paused", 500_000, true);
       const banner = c.querySelector('[data-testid="budget-paused-banner"]');
       expect(banner?.textContent).toContain("Steam memory is free again (0.5 GB)");
-      expect(banner?.textContent).not.toContain("Restart Steam when convenient");
+      expect(banner?.textContent).not.toContain("Restart Steam, then Resume Sync");
     });
 
     it("flips the last-attempt line + hides the paused banner when a newer terminal supersedes it (#39)", async () => {
@@ -1253,6 +1270,8 @@ describe("MainPage", () => {
         cliff_kb: 2_450_000,
         memory_delta_kb: null,
         resume_ready: true,
+        run_done_items: null,
+        run_total_items: null,
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
@@ -1295,6 +1314,8 @@ describe("MainPage", () => {
           cliff_kb: 2_450_000,
           memory_delta_kb: 0,
           resume_ready: true,
+          run_done_items: null,
+          run_total_items: null,
         });
         const { container } = render(<MainPage onNavigate={vi.fn()} />);
         await flushAsync();
@@ -1335,6 +1356,8 @@ describe("MainPage", () => {
             cliff_kb: 2_450_000,
             memory_delta_kb: null,
             resume_ready: false,
+            run_done_items: null,
+            run_total_items: null,
           })
           .mockResolvedValue({
             success: true,
@@ -1344,12 +1367,14 @@ describe("MainPage", () => {
             cliff_kb: 2_450_000,
             memory_delta_kb: null,
             resume_ready: true,
+            run_done_items: null,
+            run_total_items: null,
           });
 
         const { container } = render(<MainPage onNavigate={vi.fn()} />);
         await flushAsync();
         const bannerText = () => container.querySelector('[data-testid="budget-paused-banner"]')?.textContent ?? "";
-        expect(bannerText()).toContain("Restart Steam when convenient");
+        expect(bannerText()).toContain("Restart Steam, then Resume Sync");
         expect(buttonByExactText(container, "Restart Steam now")).not.toBeNull();
 
         // The paused poll runs at 10s — advance one tick → re-fetch → the banner flips.
@@ -1374,6 +1399,8 @@ describe("MainPage", () => {
         cliff_kb: 2_450_000,
         memory_delta_kb: memoryDeltaKb,
         resume_ready: null,
+        run_done_items: null,
+        run_total_items: null,
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
@@ -1446,6 +1473,8 @@ describe("MainPage", () => {
       cliff_kb: 2_450_000,
       memory_delta_kb: null,
       resume_ready: null,
+      run_done_items: null,
+      run_total_items: null,
     });
     const runningStatus = {
       running: true,
@@ -1747,7 +1776,7 @@ describe("MainPage", () => {
       expect(container.textContent).toContain("PSX: 1200/3084");
       // ETA row survives — etaSeconds is frontend-only, never in the backend
       // snapshot; a blind replace would drop it. Non-vacuous: the visible
-      // "up to ~X" row proves the merge kept it.
+      // "up to X" row proves the merge kept it.
       expect(container.querySelector('[data-testid="estimate-time"]')?.textContent).toContain("up to");
     });
 
@@ -1859,7 +1888,7 @@ describe("MainPage", () => {
 
     // Preview-state readout — the estimate rides the label-less coverage line
     // under the "Changes" block. These summaries carry no scope counts, so the
-    // line degrades to "Estimated ~X min".
+    // line degrades to "Estimated X min".
     function scopeLine(container: HTMLElement): string | undefined {
       return container.querySelector('[data-testid="sync-scope"]')?.textContent ?? undefined;
     }
@@ -1868,19 +1897,19 @@ describe("MainPage", () => {
       // 3 new * 0.45s + 90s fetch allowance = 91.35s → ~2 min (small libraries
       // overshoot; the allowance covers the fetch/prep phase).
       const c = await renderPreviewWithCounts(3, 0);
-      expect(scopeLine(c)).toBe("Estimated ~2 min");
+      expect(scopeLine(c)).toBe("Estimated 2 min");
     });
 
     it("renders an estimate on the scope row for a large preview", async () => {
       // 1000 new * 0.45s + 90s = 540s → ~9 min.
       const c = await renderPreviewWithCounts(1000, 0);
-      expect(scopeLine(c)).toBe("Estimated ~9 min");
+      expect(scopeLine(c)).toBe("Estimated 9 min");
     });
 
     it("prices updated items into the preview estimate", async () => {
       // 100 updated * 0.20s + 90s = 110s → ~2 min.
       const c = await renderPreviewWithCounts(0, 100);
-      expect(scopeLine(c)).toBe("Estimated ~2 min");
+      expect(scopeLine(c)).toBe("Estimated 2 min");
     });
 
     it("shows the compact info copy alongside the preview estimate (short sync → no sleep caveat)", async () => {
@@ -1923,12 +1952,12 @@ describe("MainPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(scopeLine(container)).toBe("Estimated ~3 min");
+      expect(scopeLine(container)).toBe("Estimated 3 min");
       // The 3000 unchanged items must NOT be priced — the walk-model overshoot is gone.
-      expect(scopeLine(container)).not.toBe("Estimated ~13 min");
+      expect(scopeLine(container)).not.toBe("Estimated 13 min");
     });
 
-    it("renders 'up to ~X min' while applying when etaSeconds is set", async () => {
+    it("renders 'up to X min' while applying when etaSeconds is set", async () => {
       vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
         stage: "applying",
@@ -1939,7 +1968,7 @@ describe("MainPage", () => {
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      expect(estimateText(container)).toBe("up to ~14 min");
+      expect(estimateText(container)).toBe("up to 14 min");
     });
 
     it("omits the applying estimate row when etaSeconds is absent (honest silence)", async () => {
@@ -1996,7 +2025,7 @@ describe("MainPage", () => {
       expect(getSyncProgress().etaSeconds).toBe(100 * NEW_ITEM_SEC + 200 * UPDATED_ITEM_SEC + 90 /* fetch allowance */);
       // Surfaced as the "up to ~X" upper bound (175s → ~3 min) until the live
       // countdown takes over.
-      expect(container.querySelector('[data-testid="estimate-time"]')?.textContent).toBe("up to ~3 min");
+      expect(container.querySelector('[data-testid="estimate-time"]')?.textContent).toBe("up to 3 min");
     });
 
     it("prices a resume-shaped preview (few creates, many unchanged) by its DELTA — unchanged skipped", async () => {
@@ -2008,9 +2037,9 @@ describe("MainPage", () => {
       const container = await applyPreviewSummary({ new_count: 90, changed_count: 0, unchanged_count: 3000 });
       expect(getSyncProgress().etaSeconds).toBe(90 * NEW_ITEM_SEC + 90 /* fetch allowance */);
       const text = container.querySelector('[data-testid="estimate-time"]')?.textContent;
-      expect(text).toBe("up to ~2 min");
+      expect(text).toBe("up to 2 min");
       // The 3000 unchanged items must NOT be priced — the walk-model overshoot is gone.
-      expect(text).not.toBe("up to ~12 min");
+      expect(text).not.toBe("up to 12 min");
     });
   });
 
@@ -2019,7 +2048,7 @@ describe("MainPage", () => {
       return container.querySelector('[data-testid="estimate-time"]')?.textContent ?? undefined;
     }
 
-    it("switches from the static 'up to' seed to a measured '~X min left' countdown, then clears on terminal", async () => {
+    it("switches from the static 'up to' seed to a measured 'X min left' countdown, then clears on terminal", async () => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
       try {
         vi.setSystemTime(0);
@@ -2074,7 +2103,7 @@ describe("MainPage", () => {
           });
         });
         // remaining = (54700 - 700) / 100 = 540s → rounded up to 9 min.
-        expect(estimateText(container)).toBe("~9 min left");
+        expect(estimateText(container)).toBe("9 min left");
 
         // Terminal stage tears the run down; the in-flight body (and its estimate
         // row) is replaced by the idle UI.
@@ -2197,7 +2226,7 @@ describe("MainPage", () => {
             etaSeconds: seed,
           });
         });
-        expect(estimateText(container)).toBe("~9 min left");
+        expect(estimateText(container)).toBe("9 min left");
 
         // A fetch gap (no sample), then two applying frames far enough apart that
         // the window ages down to just its two most recent samples spanning <5s —

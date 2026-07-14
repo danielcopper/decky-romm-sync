@@ -101,6 +101,14 @@ interface SessionBudgetBannerProps {
    * running game.
    */
   restartDisabled?: boolean | undefined;
+  /**
+   * ``run_done_items`` from ``get_session_budget_status`` — how many of the paused
+   * run's games are already done. ``null``/absent when the backend doesn't know (a
+   * plugin reload wipes the in-memory counters), which drops the progress sentence.
+   */
+  runDoneItems?: number | null | undefined;
+  /** ``run_total_items`` — the denominator of {@link runDoneItems}; the sentence needs both. */
+  runTotalItems?: number | null | undefined;
 }
 
 /**
@@ -118,6 +126,8 @@ export const SessionBudgetBanner: FC<SessionBudgetBannerProps> = ({
   rssKb,
   resumeReady,
   restartDisabled,
+  runDoneItems,
+  runTotalItems,
 }) => {
   const paused = lastAttemptStatus === "paused";
   const highHeap = rssKb != null && rssKb > HIGH_HEAP_KB;
@@ -128,13 +138,18 @@ export const SessionBudgetBanner: FC<SessionBudgetBannerProps> = ({
   const memoryFreedForResume = paused && resumeReady === true;
 
   const liveReadingSuffix = rssKb != null ? ` (${formatGb(rssKb)})` : "";
-  const memoryDetailSuffix =
-    rssKb != null
-      ? ` Steam memory: ${formatGb(rssKb)} (pauses when a chunk would cross ~2.2 GB; Steam crashes near ~2.4 GB).`
+  // How far the paused run got. The counts come from the backend — which keeps
+  // running across the Steam restart the banner asks for — but a plugin/backend
+  // reload wipes them (in-memory, by design). Then, and whenever the total is
+  // unknown or zero, the sentence is dropped entirely rather than rendered with
+  // placeholders or zeros.
+  const progressSentence =
+    runDoneItems != null && runTotalItems != null && runTotalItems > 0
+      ? ` ${runDoneItems} of ${runTotalItems} games done.`
       : "";
   const pausedBody = memoryFreedForResume
-    ? `Steam memory is free again${liveReadingSuffix} — press Resume Sync to continue.`
-    : `Restart Steam when convenient, then Resume Sync.${memoryDetailSuffix}`;
+    ? `Steam memory is free again${liveReadingSuffix}.${progressSentence} Press Resume Sync to continue.`
+    : `Steam memory is full${liveReadingSuffix}.${progressSentence} Restart Steam, then Resume Sync.`;
 
   const card = paused
     ? bannerCard("#3d9df6", "rgba(61, 157, 246, 0.15)", "budget-paused-banner", "Sync paused", pausedBody)
@@ -143,7 +158,7 @@ export const SessionBudgetBanner: FC<SessionBudgetBannerProps> = ({
         "rgba(212, 167, 44, 0.15)",
         "budget-high-heap-banner",
         "Steam memory is high",
-        `Steam memory is high: ${formatGb(rssKb!)} of ~2.4 GB — restart Steam before further large syncs.`,
+        `Steam memory is high: ${formatGb(rssKb!)} of 2.4 GB — restart Steam before further large syncs.`,
       );
 
   // A restart would close a running game, so disable (and hard-guard on click) when
@@ -158,11 +173,10 @@ export const SessionBudgetBanner: FC<SessionBudgetBannerProps> = ({
             layout="below"
             onClick={restartSteam}
             disabled={(restartDisabled ?? false) || gameRunning}
-            description={
-              gameRunning
-                ? "Close your running game first — restarting Steam would close it."
-                : "Restarts the Steam client (closes and reopens Steam) to free its memory. Do this when convenient."
-            }
+            // Description ONLY for the disabled-by-running-game case, where it explains
+            // why the button can't be pressed. The banner body already says what the
+            // restart is for, so a description on the enabled button is pure noise.
+            description={gameRunning ? "Close your running game first — restarting Steam would close it." : undefined}
           >
             Restart Steam now
           </ButtonItem>

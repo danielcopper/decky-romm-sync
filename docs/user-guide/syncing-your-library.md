@@ -33,17 +33,17 @@ collections for platforms the run did not reach.
 ## Time estimate and progress
 
 Before you start, the sync preview shows a **Changes** block: what the run will add, update, or remove, and below it one
-line with the run's coverage and estimated time (for example "Syncing 3 platforms · 2 collections — ~3 min"). The sync
+line with the run's coverage and estimated time (for example "Syncing 3 platforms · 2 collections — 3 min"). The sync
 only touches the games that are actually new or changed — games that are already correct in your library are skipped
 entirely, not re-processed — so a re-sync of a mostly-settled library is quick, and the estimate reflects only that
 changed work. If you sync without previewing first, the estimate appears once the run starts as an **Estimated time**
-line, shown as "up to ~X min".
+line, shown as "up to X min".
 
 Once the sync has been creating shortcuts for a few seconds, that "up to" ceiling is replaced by a **live countdown** —
-"~2 min left" — measured from the actual speed on your device and updated as the run proceeds. Both the countdown and
-the progress counter show **net** progress: they count the games this run actually needs to add or update (say
-"100/801"), not every game in your library. It holds steady across the short pauses where the sync fetches the next
-platform's game list, rather than jumping around.
+"2 min left" — measured from the actual speed on your device and updated as the run proceeds. Both the countdown and the
+progress counter show **net** progress: they count the games this run actually needs to add or update (say "100/801"),
+not every game in your library. It holds steady across the short pauses where the sync fetches the next platform's game
+list, rather than jumping around.
 
 A few things worth knowing for a large library:
 
@@ -65,10 +65,11 @@ A few things worth knowing for a large library:
   of the session, and that memory only frees on a Steam restart. A very large first import can approach that limit, so
   the plugin watches Steam's memory and, when it gets close, pauses cleanly at a safe point rather than risking a Steam
   crash. If the preview expects this, it shows a blue note up front ("will likely pause partway to protect Steam's
-  memory — normal for large syncs"). When a pause happens, the sync page shows a **blue banner** — "Sync paused —
-  restart Steam when convenient, then Resume Sync. Steam memory: X.X GB…" — that stays until you resume, and a toast
-  says the same. Restarting Steam frees the memory and the resume finishes the job. Once you've restarted, the banner
-  notices on its own — it changes to "Steam memory is free again — press Resume Sync to continue" and drops the restart
+  memory — normal for large syncs"). When a pause happens, the sync page shows a **blue banner** — "Steam memory is full
+  (2.3 GB). 1200 of 2001 games done. Restart Steam, then Resume Sync." — that stays until you resume, and a toast says
+  the same. The banner reports how far the run got, so you can see how much is left before you resume. Restarting Steam
+  frees the memory and the resume finishes the job. Once you've restarted, the banner notices on its own — it changes to
+  "Steam memory is free again (0.4 GB). 1200 of 2001 games done. Press Resume Sync to continue." and drops the restart
   button, so you know a resume will actually work now rather than pausing again. Nothing is lost, and you are never
   forced out of what you were doing. After a big run finishes with memory still high, a **yellow banner** recommends a
   Steam restart before your next large sync; it clears itself once you restart.

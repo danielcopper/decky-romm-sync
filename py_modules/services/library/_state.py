@@ -158,6 +158,21 @@ class LibrarySyncStateBox:
     # a raw baseline is fine for. ``None`` when the run-start reading was unavailable
     # (delta then unmeasurable). Set at the start of each run (#1383).
     run_start_rss_kb: int | None = None
+    # The run's planned ROM count — the same total the ``sync_plan`` event carries.
+    # ``None`` until a run reaches its plan (no run made yet, or the plugin reloaded
+    # and wiped the box). Set once per run, reset at the start of each run (#1383).
+    run_total_items: int | None = None
+    # Items of the run already correct in Steam: the delta-restricted apply's
+    # per-unit SKIPPED entries (unchanged — the shortcut is already right) plus each
+    # wholesale-skipped unit's ROMs, plus every COMMITTED chunk's acked items. An
+    # emitted-but-uncommitted chunk (cancelled / abandoned) never counts. Read
+    # against ``run_total_items`` by ``get_session_budget_status`` so the paused
+    # banner can say "X of Y games done" — the counters live here, in the backend,
+    # precisely because the plugin process survives the Steam restart the banner
+    # asks for (only the frontend reloads). A plugin/backend reload DOES lose them
+    # (in-memory, no migration); the banner then omits the sentence rather than
+    # showing a wrong number. Reset at the start of each run (#1383).
+    run_done_items: int = 0
     # Signed renderer-RSS growth (KB) of the last run to reach the terminal
     # finalize (end - start) — completed, paused, cancelled, and interrupted all
     # overwrite it with THEIR OWN delta (#36), so ``get_session_budget_status``

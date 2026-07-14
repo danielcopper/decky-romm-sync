@@ -314,6 +314,8 @@ async def test_get_session_budget_status_shape_rss_none(harness):
         "cliff_kb": CLIFF_KB,
         "memory_delta_kb": None,
         "resume_ready": None,
+        "run_done_items": None,
+        "run_total_items": None,
     }
 
 
@@ -333,4 +335,8 @@ async def test_get_session_budget_status_shape_rss_present(harness):
         "memory_delta_kb": None,
         # 2.1 + 0.3 = 2.4 ≥ 2.2 ceiling → resuming would re-pause.
         "resume_ready": False,
+        # No run has reached its plan in this harness → the paused banner's progress
+        # pair is unknown, so both are None rather than a placeholder zero.
+        "run_done_items": None,
+        "run_total_items": None,
     }

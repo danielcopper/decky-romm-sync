@@ -36,31 +36,31 @@ describe("formatDuration", () => {
   });
 
   it("shows '~N min' from one minute up to an hour", () => {
-    expect(formatDuration(60)).toBe("~1 min");
-    expect(formatDuration(240)).toBe("~4 min");
+    expect(formatDuration(60)).toBe("1 min");
+    expect(formatDuration(240)).toBe("4 min");
     // 3540s = 59 min, the last sub-hour bucket.
-    expect(formatDuration(3540)).toBe("~59 min");
+    expect(formatDuration(3540)).toBe("59 min");
   });
 
   it("rounds to the nearest minute in the minutes range", () => {
     // 90s = 1.5 min → rounds to 2.
-    expect(formatDuration(90)).toBe("~2 min");
+    expect(formatDuration(90)).toBe("2 min");
     // 104s ≈ 1.73 min → rounds to 2.
-    expect(formatDuration(104)).toBe("~2 min");
+    expect(formatDuration(104)).toBe("2 min");
   });
 
-  it("rolls up to '~1 h' exactly on the hour", () => {
-    expect(formatDuration(3600)).toBe("~1 h");
-    // 3570s rounds to 60 min → "~1 h", not "~60 min".
-    expect(formatDuration(3570)).toBe("~1 h");
+  it("rolls up to '1 h' exactly on the hour", () => {
+    expect(formatDuration(3600)).toBe("1 h");
+    // 3570s rounds to 60 min → "1 h", not "60 min".
+    expect(formatDuration(3570)).toBe("1 h");
   });
 
   it("shows '~H h M min' beyond an hour with a remainder", () => {
-    expect(formatDuration(4200)).toBe("~1 h 10 min");
-    expect(formatDuration(9000)).toBe("~2 h 30 min");
+    expect(formatDuration(4200)).toBe("1 h 10 min");
+    expect(formatDuration(9000)).toBe("2 h 30 min");
   });
 
   it("omits the minutes part on a whole-hour value", () => {
-    expect(formatDuration(7200)).toBe("~2 h");
+    expect(formatDuration(7200)).toBe("2 h");
   });
 });

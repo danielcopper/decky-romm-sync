@@ -91,6 +91,17 @@ export interface SessionBudgetStatus {
    * reading is unavailable (undecidable → conservative fail-open). (#1383)
    */
   resume_ready: boolean | null;
+  /**
+   * Items of the last run already done — its skipped (already-correct) entries plus
+   * every committed chunk's applied shortcuts. Counted in the backend, which
+   * survives the Steam restart the paused banner asks for. ``null`` when unknown
+   * (no run has reached its plan in the backend process — a plugin reload wipes the
+   * in-memory counters), in which case the banner omits the progress sentence
+   * rather than showing a placeholder (#1383).
+   */
+  run_done_items: number | null;
+  /** The last run's planned item total — the denominator of ``run_done_items``; ``null`` alongside it (#1383). */
+  run_total_items: number | null;
 }
 
 export interface SyncStats {

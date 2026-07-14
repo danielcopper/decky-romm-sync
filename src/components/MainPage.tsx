@@ -762,9 +762,9 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const hasFineDetail = !!(syncProgress?.total && syncProgress.message);
 
   // Estimated-time readout for the in-flight run. Prefer the live measured
-  // countdown ("~9 min left") once the estimator has a rate; before that, fall
+  // countdown ("9 min left") once the estimator has a rate; before that, fall
   // back to the static seed carried on the store as an upper bound ("up to
-  // ~X min"). Absent both, the row is omitted (honest silence).
+  // X min"). Absent both, the row is omitted (honest silence).
   const staticEtaSeconds = syncProgress?.etaSeconds;
   let etaText: string | null = null;
   if (liveEtaDisplay !== null) {
@@ -820,11 +820,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       !!(preview.summary.collection_diff?.added.length || preview.summary.collection_diff?.removed.length) ||
       preview.summary.platform_collection_diff?.has_changes;
     // Walk cost, shared with the handleApply seed (previewApplySeconds) so the
-    // approved number equals the run's seed. Delta-only pricing here read "~2 min"
+    // approved number equals the run's seed. Delta-only pricing here read "2 min"
     // for a resume whose apply walked ~3100 items.
     const applySeconds = previewApplySeconds(preview.summary);
     const estimateText = formatDuration(applySeconds);
-    // Scope and estimate share one row: "1 platform · 2 collections · ~12 min".
+    // Scope and estimate share one row: "1 platform · 2 collections · 12 min".
     // An older backend that omits the scope counts leaves scopeText empty, so the
     // row shows the estimate alone.
     const scopeText = formatSyncScope(preview.summary);
@@ -1031,6 +1031,8 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           rssKb={budgetStatus?.rss_kb ?? null}
           resumeReady={budgetStatus?.resume_ready ?? null}
           restartDisabled={loading || connectionUnavailable}
+          runDoneItems={budgetStatus?.run_done_items ?? null}
+          runTotalItems={budgetStatus?.run_total_items ?? null}
         />
         <PanelSectionRow>
           <ButtonItem

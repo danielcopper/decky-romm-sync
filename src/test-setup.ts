@@ -87,8 +87,21 @@ vi.mock("@decky/ui", () => {
         children as never,
       ),
     DialogButtonPrimary: ({ children, onClick }: AnyProps) => createElement("button", { onClick }, children as never),
-    ButtonItem: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
-      createElement("button", { onClick, disabled }, children as never),
+    // The optional `description` renders into a sibling span (mirroring Field), so a
+    // test can assert on the description a ButtonItem shows — including its ABSENCE,
+    // which a dropped prop would make vacuously true.
+    ButtonItem: ({
+      children,
+      onClick,
+      disabled,
+      description,
+    }: AnyProps & { onClick?: () => void; disabled?: boolean; description?: unknown }) =>
+      createElement(
+        "div",
+        null,
+        createElement("button", { onClick, disabled }, children as never),
+        description == null ? null : createElement("span", { "data-testid": "button-desc" }, description as never),
+      ),
     Field: (p: AnyProps & { label?: unknown; description?: unknown }) =>
       createElement(
         "div",

@@ -1,5 +1,5 @@
 /**
- * Live sync-ETA estimator — the run-scoped "~9 min left" countdown shown while a
+ * Live sync-ETA estimator — the run-scoped "9 min left" countdown shown while a
  * sync is applying shortcuts. Where ``syncEstimate.ts`` is a STATIC pre-run cost
  * model (item counts → an upper-bound duration), this module measures the REAL
  * apply rate from the progress stream and projects the time left, so the readout
@@ -42,7 +42,7 @@ const WINDOW_MS = 30_000;
 // one is a tiny item delta over a long span, an absurd rate that briefly spikes the
 // countdown before it settles.
 const SEGMENT_BREAK_MS = 10_000;
-// Readiness gate: the live countdown replaces the static "up to ~X" seed only
+// Readiness gate: the live countdown replaces the static "up to X" seed only
 // once the window spans enough real time to trust the slope. ~5s of applying
 // (≥2 throttled samples) is well inside the "measured within ~20s" target while
 // keeping the first estimate stable rather than jittery.
@@ -89,8 +89,8 @@ export function remainingSeconds(totalRoms: number, processed: number, rate: num
 
 /**
  * Render *seconds* as a live countdown: ``"< 1 min left"`` under a minute, else
- * minutes ROUNDED UP (``"~9 min left"``), rolling into hours past 60 minutes
- * (``"~1 h 10 min left"``, or ``"~2 h left"`` on the hour). Rounding up keeps the
+ * minutes ROUNDED UP (``"9 min left"``), rolling into hours past 60 minutes
+ * (``"1 h 10 min left"``, or ``"2 h left"`` on the hour). Rounding up keeps the
  * readout honest — a countdown should never promise less time than it expects.
  */
 export function formatEtaCountdown(seconds: number): string {
@@ -137,7 +137,7 @@ export function resetEta(): void {
  * ``sync_apply_unit`` frame carries the true count in ``unit_total``. Folding that
  * in as the unit dispatches shrinks ``totalRoms`` toward the real work and stops a
  * mostly-unchanged (small-delta) trailing unit from over-weighting the countdown
- * into "~N min left" for work that finishes in seconds. Idempotent per unit —
+ * into "N min left" for work that finishes in seconds. Idempotent per unit —
  * every chunk of a unit carries the same ``unit_total``, so re-calls no-op once the
  * weight matches. A no-op when no run is measured or the index is out of range.
  *
@@ -215,7 +215,7 @@ export function liveEtaSeconds(): number | null {
  * ``null``. Unlike {@link liveEtaSeconds} (which re-arms to null between
  * measurement segments), this holds the last good deadline across fetch gaps and
  * small-unit tails, so the readout counts down smoothly instead of snapping back
- * to the static "up to ~X" seed. ``null`` before the first ready measurement and
+ * to the static "up to X" seed. ``null`` before the first ready measurement and
  * after {@link resetEta} (which clears the run, and with it the deadline). Renders
  * tick as the caller passes a fresh ``nowMs`` on each progress frame.
  */

@@ -259,7 +259,14 @@ paused banner notices once a Steam restart frees memory. That notice is driven b
 (`domain.session_budget.resume_would_proceed`: `rss + RESUME_HEADROOM_CHUNKS × FULL_CHUNK_WORST_KB < ceiling` — room for
 TWO worst-case chunks, ≈1.2 GB bar, because a one-chunk bar sits exactly on the pause point where Steam's own small
 frees flicker the verdict; `None` when RSS is unreadable) — when it flips `true` the blue banner reads "Steam memory is
-free again — press Resume Sync" and hides the restart button. That row also shows the **last run's signed RSS growth**,
+free again — press Resume Sync" and hides the restart button. The callable also carries the paused run's progress
+(`run_done_items` / `run_total_items`), so that banner reads "1200 of 2001 games done": the counters are run-scoped
+fields on `LibrarySyncStateBox`, stamped with the plan's ROM total and grown by the delta-restricted apply's SKIPPED
+entries (already correct on their shortcut), each wholesale-skipped unit's ROMs, and every COMMITTED chunk's acked items
+— an emitted-but-uncommitted chunk (cancel / heartbeat timeout / the pause itself) never counts, so the number can't
+over-report. They live in the backend deliberately: the plugin process survives the Steam restart the banner asks for,
+while the frontend reloads. In-memory only — a plugin reload wipes them and both come back `None`, which the banner
+renders by dropping the sentence rather than showing a zero. That row also shows the **last run's signed RSS growth**,
 appended inline after the value ("X.X GB · last run ±Y"), measured at EVERY terminal (completed / paused / cancelled /
 interrupted) so a paused run reads as _its own_ consumption-so-far rather than a prior clean run's: a RAW read taken
 unconditionally at run start is the baseline (`run_start_rss_kb` — captured before any chunk, so even a
@@ -452,8 +459,8 @@ The QAM's time readout is a two-stage design layered on the `sync_progress` stre
 (`src/utils/syncEstimate.ts` and `src/utils/syncEta.ts`, both unit-tested); the backend only supplies the plan (per-unit
 weights + planned total, via `sync_plan`) and the applying frames.
 
-- **Static walk-cost ceiling (pre-run seed).** Before a run — in the preview, and again as the initial "up to ~X min"
-  the instant a skip-preview run starts — the estimate is a pure cost model: `new_count × NEW_ITEM_SEC` +
+- **Static walk-cost ceiling (pre-run seed).** Before a run — in the preview, and again as the initial "up to X min" the
+  instant a skip-preview run starts — the estimate is a pure cost model: `new_count × NEW_ITEM_SEC` +
   `changed_count × UPDATED_ITEM_SEC` + a flat fetch allowance. The per-item constants (currently ~0.45 s for a created
   shortcut, ~0.20 s for an updated one) sit **deliberately above** the measured on-device apply rates and the allowance
   (~90 s) covers the multi-page ROM/save fetch phases the per-item model ignores, so the seed is an honest **upper
@@ -462,14 +469,14 @@ weights + planned total, via `sync_plan`) and the applying frames.
   price would badly undershoot the real work.
 - **Measured live countdown (takes over within seconds).** Once the apply is underway, `syncEta.ts` measures the
   **real** rate from the applying frames — one throttled sample per second over a ~30 s sliding window — and projects
-  `remaining = (planned_total − processed) / rate`, rendered rounded **up** ("~9 min left") so it never promises less
+  `remaining = (planned_total − processed) / rate`, rendered rounded **up** ("9 min left") so it never promises less
   time than it expects. It replaces the static seed as soon as the window spans enough real time to trust the slope (a
   couple of samples across a few seconds). Because it reflects the actual mix of cheap-update vs. full-create work, it
   is far closer to reality than the ceiling and ticks down as the run proceeds.
 - **Estimator-owned sticky deadline.** The estimator, not the UI, owns the displayed value: each fresh measurement
   re-anchors an absolute wall-clock deadline, and the countdown renders `max(0, deadline − now)`. This is what keeps the
   readout smooth. The raw measurement re-arms to "not ready" between measurement segments, and a run's tail of small
-  units each finishes inside the readiness window — so a raw snapshot would blink back to the static "up to ~X" seed for
+  units each finishes inside the readiness window — so a raw snapshot would blink back to the static "up to X" seed for
   the whole tail; holding the last good deadline through those gaps keeps the countdown honestly ticking down instead.
 - **Segment break across fetch gaps.** Applying frames arrive roughly every second during real apply work, so a silence
   longer than ~10 s is always a unit or fetch boundary, never apply progress. Crossing it starts a **fresh measurement
