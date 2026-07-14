@@ -91,11 +91,6 @@ type BackendFailed = "backend_failed";
 /** U+2212 MINUS SIGN — the removed-count prefix in the compact preview notation. */
 const MINUS_SIGN = "−";
 
-/** Pulls a status row's vertical field padding in so the status block sits
- *  tighter than Steam's default row rhythm. Vertical only — a compact field
- *  padding would also cut the left/right inset. */
-const tightRow = { margin: "-5px 0", width: "100%" } as const;
-
 /** Compact signed segments — ``[[count, label], …]`` → ``"+N / M updated"``:
  *  a one-char label (``+``/``−``, self-explanatory) renders as prefix, a word
  *  label renders as suffix (``1758 updated`` — a bare ``~`` read as noise);
@@ -195,13 +190,26 @@ function formatClockTime(iso: string): string {
   return `${hh}:${mm}`;
 }
 
-/** The "Last sync" field VALUE (line 1, beside the label): the completed run's
- *  relative time; with no completed run ever, the cancelled/crashed attempt is
- *  surfaced so it never reads a bare "Never" after thousands of games synced
- *  (#1367); otherwise "Never". */
+/** The "Last sync" field value: the completed run's relative time on line 1,
+ *  and (when a newer attempt did not complete) the attempt on a second
+ *  right-aligned line — INSIDE the field, so the focus highlight covers both
+ *  lines like the Library row's. Needs ``childrenContainerWidth="max"`` on the
+ *  field: the default children column is too narrow and wrapped the attempt
+ *  line mid-text. With no completed run ever, the cancelled/crashed attempt is
+ *  surfaced as line 1 so it never reads a bare "Never" after thousands of
+ *  games synced (#1367); otherwise "Never". */
 function lastSyncValue(stats: SyncStats): ReactNode {
   if (stats.last_sync) {
-    return <span style={{ fontSize: "12px" }}>{formatLastSync(stats.last_sync)}</span>;
+    return (
+      <span style={{ fontSize: "12px", display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
+        <span>{formatLastSync(stats.last_sync)}</span>
+        {stats.last_attempt && (
+          <span style={{ opacity: 0.6 }}>
+            last attempt: {formatClockTime(stats.last_attempt.finished_at)} ({stats.last_attempt.status})
+          </span>
+        )}
+      </span>
+    );
   }
   if (stats.last_attempt) {
     return (
@@ -211,22 +219,6 @@ function lastSyncValue(stats: SyncStats): ReactNode {
     );
   }
   return <span style={{ fontSize: "12px" }}>Never</span>;
-}
-
-/** The "Last sync" description (line 2, full width, right-aligned): a newer
- *  non-successful attempt shown under the completed run's time — squeezing it
- *  into the narrow value column wrapped badly. Absent when there is nothing to
- *  add (no attempt, or the attempt IS the value because no run ever completed). */
-function lastAttemptLine(stats: SyncStats): ReactNode | undefined {
-  if (!stats.last_sync || !stats.last_attempt) return undefined;
-  return (
-    // Full-width right-aligned line. The negative top margin swallows the
-    // stacked PanelSectionRow padding so the gap to its field matches the
-    // in-field description gap of the Library row.
-    <div style={{ width: "100%", textAlign: "right", fontSize: "12px", opacity: 0.6, marginTop: "-8px" }}>
-      last attempt: {formatClockTime(stats.last_attempt.finished_at)} ({stats.last_attempt.status})
-    </div>
-  );
 }
 
 /**
@@ -1115,49 +1107,38 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           </PanelSectionRow>
         )}
         <PanelSectionRow>
-          <div style={tightRow}>
-            <Field
-              label="Connection"
-              focusable={true}
-              bottomSeparator="none"
-              description={
-                connected === "backend_failed" ? "Plugin backend failed to start — check Decky logs." : undefined
-              }
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <ConnectionIndicator connected={connected} />
-              </div>
-            </Field>
-          </div>
+          <Field
+            label="Connection"
+            focusable={true}
+            bottomSeparator="none"
+            description={
+              connected === "backend_failed" ? "Plugin backend failed to start — check Decky logs." : undefined
+            }
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <ConnectionIndicator connected={connected} />
+            </div>
+          </Field>
         </PanelSectionRow>
         {stats && (
           <>
             <PanelSectionRow>
-              <div style={tightRow}>
-                <Field label="Last sync" focusable={true} bottomSeparator="none">
-                  {lastSyncValue(stats)}
-                </Field>
-              </div>
+              <Field label="Last sync" focusable={true} bottomSeparator="none" childrenContainerWidth="max">
+                {lastSyncValue(stats)}
+              </Field>
             </PanelSectionRow>
-            {/* Own full-width row: inside the Field the description slot shares
-                the row with the value column and can't be stretched, so the
-                attempt line floated mid-row. Sandwiched between focusable rows,
-                so it needs no focus of its own. */}
-            {lastAttemptLine(stats) && <PanelSectionRow>{lastAttemptLine(stats)}</PanelSectionRow>}
             {stats.roms > 0 && (
               <PanelSectionRow>
-                <div style={tightRow}>
-                  <Field
-                    label="Library"
-                    description={
-                      <div style={{ width: "100%", textAlign: "right", fontSize: "12px" }}>
-                        {formatLibraryLine(stats)}
-                      </div>
-                    }
-                    focusable={true}
-                    bottomSeparator="none"
-                  />
-                </div>
+                <Field
+                  label="Library"
+                  description={
+                    <div style={{ width: "100%", textAlign: "right", fontSize: "12px" }}>
+                      {formatLibraryLine(stats)}
+                    </div>
+                  }
+                  focusable={true}
+                  bottomSeparator="none"
+                />
               </PanelSectionRow>
             )}
           </>
@@ -1167,29 +1148,27 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             reading is unavailable (rss_kb null) rather than shown as a blank. */}
         {budgetStatus?.rss_kb != null && (
           <PanelSectionRow>
-            <div style={tightRow}>
-              <Field label="Steam memory" focusable={true} bottomSeparator="none">
-                <span data-testid="steam-memory" style={{ fontSize: "12px" }}>
-                  {/* Only the value gets traffic-light colouring (green/yellow/red),
+            <Field label="Steam memory" focusable={true} bottomSeparator="none">
+              <span data-testid="steam-memory" style={{ fontSize: "12px" }}>
+                {/* Only the value gets traffic-light colouring (green/yellow/red),
                     driven by the payload thresholds; the delta stays muted. Both sit
                     on one line: "0.6 GB · last run +0.7". */}
-                  <span
-                    data-testid="steam-memory-value"
-                    style={{
-                      color: memoryLevelColor(budgetStatus.rss_kb, budgetStatus.warn_kb, budgetStatus.ceiling_kb),
-                    }}
-                  >
-                    {formatGb(budgetStatus.rss_kb)}
-                  </span>
-                  {budgetStatus.memory_delta_kb != null && (
-                    <span data-testid="steam-memory-delta" style={{ opacity: 0.6 }}>
-                      {" · last run "}
-                      {formatSignedGb(budgetStatus.memory_delta_kb)}
-                    </span>
-                  )}
+                <span
+                  data-testid="steam-memory-value"
+                  style={{
+                    color: memoryLevelColor(budgetStatus.rss_kb, budgetStatus.warn_kb, budgetStatus.ceiling_kb),
+                  }}
+                >
+                  {formatGb(budgetStatus.rss_kb)}
                 </span>
-              </Field>
-            </div>
+                {budgetStatus.memory_delta_kb != null && (
+                  <span data-testid="steam-memory-delta" style={{ opacity: 0.6 }}>
+                    {" · last run "}
+                    {formatSignedGb(budgetStatus.memory_delta_kb)}
+                  </span>
+                )}
+              </span>
+            </Field>
           </PanelSectionRow>
         )}
         {retroarchWarning?.warning && (
