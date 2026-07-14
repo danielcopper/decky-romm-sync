@@ -88,17 +88,14 @@ const CONNECTION_CALLABLE_TIMEOUT = 5000;
 /** Backend never answered after the retry budget — distinct from `false` ("not connected"). */
 type BackendFailed = "backend_failed";
 
-/** U+2212 MINUS SIGN — the removed-count prefix in the compact preview notation. */
-const MINUS_SIGN = "−";
-
-/** Compact signed segments — ``[[count, label], …]`` → ``"+N / M updated"``:
- *  a one-char label (``+``/``−``, self-explanatory) renders as prefix, a word
- *  label renders as suffix (``1758 updated`` — a bare ``~`` read as noise);
- *  zero counts dropped, joined with `` / ``. Empty when every count is zero. */
-function signedSegments(pairs: [number, string][]): string {
+/** Counted segments — ``[[count, word], …]`` → ``"353 new / 800 updated"``: every
+ *  segment spells its word out, zero counts dropped, joined with `` / ``. Empty
+ *  when every count is zero. The old ``+``/``~``/``−`` sigils were a legend the
+ *  panel never carried — on-device they read as noise, not as counts. */
+function countedSegments(pairs: [number, string][]): string {
   return pairs
     .filter(([n]) => n > 0)
-    .map(([n, label]) => (label.length > 1 ? `${n} ${label}` : `${label}${n}`))
+    .map(([n, word]) => `${n} ${word}`)
     .join(" / ");
 }
 
@@ -222,37 +219,36 @@ function lastSyncValue(stats: SyncStats): ReactNode {
 }
 
 /**
- * Compact signed change notation for the preview — e.g.
- * ``"Games +1001 / 50 updated / −1200 · Platforms +1 · Collections +2"``. Per
- * category the segments are added (``+N``), updated (``N updated``, spelled out —
- * a bare ``~`` read as noise on-device), removed (``−N``, U+2212), in that order,
- * ``/``-separated; a zero segment is omitted and a wholly-unchanged category is
- * dropped. Categories join with `` · ``. Falls back to the unchanged message when
- * nothing differs.
+ * The preview's change notation — e.g.
+ * ``"Games: 353 new / 800 updated / 1200 removed · Platforms: 2 new · Collections: 2 new"``.
+ * Every segment spells out what happens to those games ("updated" = the shortcut
+ * exists and gets rewritten, not recreated); a zero segment is omitted and a
+ * wholly-unchanged category is dropped. Categories join with `` · ``. Falls back
+ * to the unchanged message when nothing differs.
  */
 function formatPreviewDescription(s: SyncPreviewSummary): string {
   const categories: string[] = [];
-  const games = signedSegments([
-    [s.new_count, "+"],
+  const games = countedSegments([
+    [s.new_count, "new"],
     [s.changed_count, "updated"],
-    [s.remove_count, MINUS_SIGN],
+    [s.remove_count, "removed"],
   ]);
-  if (games) categories.push(`Games ${games}`);
+  if (games) categories.push(`Games: ${games}`);
   const p = s.platform_collection_diff;
   if (p?.has_changes) {
-    const platforms = signedSegments([
-      [p.added_count, "+"],
-      [p.removed_count, MINUS_SIGN],
+    const platforms = countedSegments([
+      [p.added_count, "new"],
+      [p.removed_count, "removed"],
     ]);
-    if (platforms) categories.push(`Platforms ${platforms}`);
+    if (platforms) categories.push(`Platforms: ${platforms}`);
   }
   const d = s.collection_diff;
   if (d?.has_changes) {
-    const collections = signedSegments([
-      [d.added.length, "+"],
-      [d.removed.length, MINUS_SIGN],
+    const collections = countedSegments([
+      [d.added.length, "new"],
+      [d.removed.length, "removed"],
     ]);
-    if (collections) categories.push(`Collections ${collections}`);
+    if (collections) categories.push(`Collections: ${collections}`);
   }
   return categories.length > 0 ? categories.join(" · ") : "Everything is up to date.";
 }

@@ -983,8 +983,8 @@ describe("MainPage", () => {
         remove_count: 2,
       });
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
-      // U+2212 minus for the removed segment; " / "-separated; " · " between categories.
-      expect(descs.some((d) => d.includes("Games +3 / 1 updated / −2"))).toBe(true);
+      // Every segment spells its word out; " / "-separated; " · " between categories.
+      expect(descs.some((d) => d.includes("Games: 3 new / 1 updated / 2 removed"))).toBe(true);
     });
 
     it("renders the Platforms category from platform_collection_diff", async () => {
@@ -996,7 +996,7 @@ describe("MainPage", () => {
         },
       });
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
-      expect(descs.some((d) => d.includes("Platforms +2 / −1"))).toBe(true);
+      expect(descs.some((d) => d.includes("Platforms: 2 new / 1 removed"))).toBe(true);
     });
 
     it("renders the Collections category from collection_diff", async () => {
@@ -1008,7 +1008,7 @@ describe("MainPage", () => {
         },
       });
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
-      expect(descs.some((d) => d.includes("Collections +2 / −1"))).toBe(true);
+      expect(descs.some((d) => d.includes("Collections: 2 new / 1 removed"))).toBe(true);
     });
 
     it("joins multiple categories with ' · ' and omits zero segments", async () => {
@@ -1020,10 +1020,10 @@ describe("MainPage", () => {
         collection_diff: { has_changes: true, added: ["A", "B"], removed: [] },
       });
       // Zero segments (platform removed, collection removed) drop out entirely.
-      // "updated" is spelled out — a bare "~" read as noise on-device. The delta
-      // line has its own node since the coverage line shares the Changes block.
+      // Words, not sigils — "+"/"~"/"−" were a legend the panel never carried. The
+      // delta line has its own node since the coverage line shares the Changes block.
       expect(c.querySelector('[data-testid="sync-changes"]')?.textContent).toBe(
-        "Games +1001 / 50 updated / −1200 · Platforms +1 · Collections +2",
+        "Games: 1001 new / 50 updated / 1200 removed · Platforms: 1 new · Collections: 2 new",
       );
     });
 
@@ -1033,8 +1033,8 @@ describe("MainPage", () => {
         changed_count: 0,
         remove_count: 0,
       });
-      // Should render "Games +1" — no updated or "−" segments.
-      expect(c.querySelector('[data-testid="sync-changes"]')?.textContent).toBe("Games +1");
+      // Should render "Games: 1 new" — no updated or removed segments.
+      expect(c.querySelector('[data-testid="sync-changes"]')?.textContent).toBe("Games: 1 new");
     });
   });
 
