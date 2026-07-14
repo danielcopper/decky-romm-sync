@@ -219,14 +219,13 @@ function lastSyncValue(stats: SyncStats): ReactNode {
 }
 
 /**
- * The preview's change notation — e.g.
- * ``"Games: 353 new / 800 updated / 1200 removed · Platforms: 2 new · Collections: 2 new"``.
+ * The preview's change categories — e.g.
+ * ``["Games: 353 new / 800 updated / 1200 removed", "Platforms: 2 new", "Collections: 2 new"]``.
  * Every segment spells out what happens to those games ("updated" = the shortcut
  * exists and gets rewritten, not recreated); a zero segment is omitted and a
- * wholly-unchanged category is dropped. Categories join with `` · ``. Falls back
- * to the unchanged message when nothing differs.
+ * wholly-unchanged category is dropped. Empty when nothing differs.
  */
-function formatPreviewDescription(s: SyncPreviewSummary): string {
+function previewChangeSegments(s: SyncPreviewSummary): string[] {
   const categories: string[] = [];
   const games = countedSegments([
     [s.new_count, "new"],
@@ -250,8 +249,30 @@ function formatPreviewDescription(s: SyncPreviewSummary): string {
     ]);
     if (collections) categories.push(`Collections: ${collections}`);
   }
-  return categories.length > 0 ? categories.join(" · ") : "Everything is up to date.";
+  return categories;
 }
+
+/**
+ * The change line — categories joined with `` · ``, each category unbreakable.
+ * A category is a nowrap span, so a line break can only land on a `` · ``
+ * separator: "Platforms: 2 new" never splits across two lines the way plain
+ * text wrapping split it at the narrow QAM width. Falls back to the unchanged
+ * message when nothing differs.
+ */
+const PreviewChanges: FC<{ summary: SyncPreviewSummary }> = ({ summary }) => {
+  const segments = previewChangeSegments(summary);
+  if (segments.length === 0) return <>Everything is up to date.</>;
+  return (
+    <>
+      {segments.map((segment, i) => (
+        <span key={segment}>
+          {i > 0 ? " · " : ""}
+          <span style={{ whiteSpace: "nowrap" }}>{segment}</span>
+        </span>
+      ))}
+    </>
+  );
+};
 
 /**
  * Informational scope line for the preview — "N platforms · M collections" — the
@@ -820,18 +841,14 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     // for a resume whose apply walked ~3100 items.
     const applySeconds = previewApplySeconds(preview.summary);
     const estimateText = formatDuration(applySeconds);
-    // Scope and estimate share one row: "1 platform · 2 collections · 12 min".
-    // An older backend that omits the scope counts leaves scopeText empty, so the
-    // row shows the estimate alone.
+    // Coverage and duration each own a line — at the QAM width they wrapped as
+    // one row anyway, and the break landed mid-phrase. An older backend that
+    // omits the scope counts leaves scopeText empty; the duration line then
+    // stands alone.
     const scopeText = formatSyncScope(preview.summary);
-    // Coverage + duration read as one sentence, so the line needs no label of
-    // its own ("Scope" and "Preview" as competing labels read as duplicate
-    // info). An older backend that omits the scope counts leaves scopeText
-    // empty, so the line degrades to the bare estimate.
-    const scopeLine = scopeText ? `Syncing ${scopeText} — ${estimateText}` : `Estimated ${estimateText}`;
     // The sleep-pause caveat is only worth the extra line for a genuinely long run.
     const hintText =
-      "Progress is saved every ~200 games — cancelling is safe." +
+      "Progress is saved about every 200 games — cancelling is safe." +
       (applySeconds >= LONG_SYNC_HINT_THRESHOLD_SEC ? " Long syncs pause during sleep; keep the Deck powered." : "");
     syncBody = (
       <>
@@ -844,10 +861,17 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             label="Changes"
             description={
               <>
-                <div data-testid="sync-changes">{formatPreviewDescription(preview.summary)}</div>
-                {hasChanges && (
+                <div data-testid="sync-changes">
+                  <PreviewChanges summary={preview.summary} />
+                </div>
+                {hasChanges && scopeText && (
                   <div data-testid="sync-scope" style={{ marginTop: "4px" }}>
-                    {scopeLine}
+                    Syncing {scopeText}
+                  </div>
+                )}
+                {hasChanges && (
+                  <div data-testid="sync-estimate" style={{ marginTop: scopeText ? undefined : "4px" }}>
+                    Estimated duration: {estimateText}
                   </div>
                 )}
               </>
