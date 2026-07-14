@@ -167,11 +167,13 @@ export const removePlatformShortcuts = callable<
     success: boolean;
     // The success path returns success/app_ids/rom_ids/platform_name; the
     // @migration_blocked gate short-circuits to success/message/
-    // blocked_by_migration, omitting app_ids/rom_ids. Every field below the
+    // blocked_by_migration and the @sync_active_blocked gate to success/
+    // reason/message, both omitting app_ids/rom_ids. Every field below the
     // discriminant is therefore path-dependent (mirrors removeAllShortcuts).
     app_ids?: number[];
     rom_ids?: (string | number)[];
     platform_name?: string;
+    reason?: string;
     message?: string;
     blocked_by_migration?: boolean;
   }
@@ -182,8 +184,10 @@ export const removeAllShortcuts = callable<
     success: boolean;
     // The success path returns only success/app_ids/rom_ids; the
     // @migration_blocked gate short-circuits to success/message/
-    // blocked_by_migration, omitting app_ids/rom_ids. Every field below the
+    // blocked_by_migration and the @sync_active_blocked gate to success/
+    // reason/message, both omitting app_ids/rom_ids. Every field below the
     // discriminant is therefore path-dependent.
+    reason?: string;
     message?: string;
     app_ids?: number[];
     rom_ids?: (string | number)[];
@@ -242,7 +246,20 @@ export const reconcileShortcuts = callable<
 >("reconcile_shortcuts");
 export const uninstallAllRoms = callable<
   [],
-  { success: boolean; removed_count: number; errors: { rom_id: string; error: string }[]; app_ids: number[] }
+  {
+    success: boolean;
+    // The removal path always carries removed_count/errors/app_ids — success
+    // is False on a PARTIAL failure (some deletions failed) but the payload
+    // stays. The @migration_blocked / @sync_active_blocked gates short-circuit
+    // to success/message (+reason / blocked_by_migration) with NO payload, so
+    // a missing app_ids is the gate-refusal discriminant.
+    removed_count?: number;
+    errors?: { rom_id: string; error: string }[];
+    app_ids?: number[];
+    reason?: string;
+    message?: string;
+    blocked_by_migration?: boolean;
+  }
 >("uninstall_all_roms");
 export const saveSgdbApiKey = callable<[string], { success: boolean; message: string }>("save_sgdb_api_key");
 export const verifySgdbApiKey = callable<[string], { success: boolean; message: string }>("verify_sgdb_api_key");

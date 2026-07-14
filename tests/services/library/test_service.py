@@ -781,6 +781,34 @@ def _seed_platform_names(uow, names: dict[str, str]) -> None:
         uow.kv_config.set("platform_names", json.dumps(names))
 
 
+class TestIsSyncInFlight:
+    """Tests for is_sync_in_flight() — the read the @sync_active_blocked gate uses.
+
+    State is driven ONLY through the box's lifecycle verbs
+    (``try_begin_run`` / ``request_cancel`` / ``finish_run``) — the
+    run-lifecycle fields have no other sanctioned writer (#1202).
+    """
+
+    def test_false_at_idle(self, plugin):
+        assert plugin._sync_service.is_sync_in_flight() is False
+
+    def test_true_while_running(self, plugin):
+        assert plugin._sync_service._box.try_begin_run("run-1") is True
+        assert plugin._sync_service.is_sync_in_flight() is True
+
+    def test_true_while_cancelling(self, plugin):
+        box = plugin._sync_service._box
+        assert box.try_begin_run("run-1") is True
+        assert box.request_cancel("run-1") == "cancelling"
+        assert plugin._sync_service.is_sync_in_flight() is True
+
+    def test_false_again_after_finish_run(self, plugin):
+        box = plugin._sync_service._box
+        assert box.try_begin_run("run-1") is True
+        assert box.finish_run("run-1") is True
+        assert plugin._sync_service.is_sync_in_flight() is False
+
+
 class TestRemoveAllShortcuts:
     @pytest.mark.asyncio
     async def test_returns_app_ids_and_rom_ids(self, plugin):

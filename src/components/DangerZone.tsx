@@ -28,6 +28,7 @@ import {
 } from "../api/backend";
 import { removeShortcut } from "../utils/steamShortcuts";
 import { batchConfirmLaunchOptions } from "../utils/launchOptionsReconcile";
+import { getSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { clearPlatformCollection, clearAllRomMCollections } from "../utils/collections";
 import { formatUninstallStatus } from "../utils/formatters";
@@ -68,50 +69,70 @@ interface NonSteamApp {
   name: string;
 }
 
+// Shown as the disabled-state hint on the removal controls while a library
+// sync is in flight — the backend refuses those callables with reason
+// "sync_active" (#1390), so the UI disables them up front.
+const SYNC_RUNNING_HINT = "Unavailable while a library sync is running.";
+
+// Live "is a library sync in flight?" flag off the module-level sync-progress
+// store. Each consumer subscribes itself: PlatformActionModal is rendered by
+// showModal into a detached tree that never re-renders with the panel, so a
+// prop snapshot taken at open time would go stale while the modal is open.
+const useSyncRunning = (): boolean => {
+  const [syncRunning, setSyncRunning] = useState(getSyncProgress().running);
+  useEffect(() => onSyncProgressChange(() => setSyncRunning(getSyncProgress().running)), []);
+  return syncRunning;
+};
+
 const PlatformActionModal: FC<{
   platform: RegistryPlatform;
   closeModal?: () => void;
   onRemoveShortcuts: () => void;
   onDeleteSaves: () => void;
   onDeleteBios: () => void;
-}> = ({ platform, closeModal, onRemoveShortcuts, onDeleteSaves, onDeleteBios }) => (
-  <ModalRoot closeModal={closeModal}>
-    <div style={{ padding: "16px", minWidth: "320px" }}>
-      <div style={{ fontSize: "16px", fontWeight: "bold", color: "#fff", marginBottom: "16px" }}>
-        Actions for {platform.name}
+}> = ({ platform, closeModal, onRemoveShortcuts, onDeleteSaves, onDeleteBios }) => {
+  const syncRunning = useSyncRunning();
+  return (
+    <ModalRoot closeModal={closeModal}>
+      <div style={{ padding: "16px", minWidth: "320px" }}>
+        <div style={{ fontSize: "16px", fontWeight: "bold", color: "#fff", marginBottom: "16px" }}>
+          Actions for {platform.name}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          <DialogButton
+            disabled={syncRunning}
+            onClick={() => {
+              closeModal?.();
+              onRemoveShortcuts();
+            }}
+          >
+            Remove Shortcuts ({platform.count} game{platform.count === 1 ? "" : "s"})
+          </DialogButton>
+          {syncRunning && <div style={{ fontSize: "12px", opacity: 0.6 }}>{SYNC_RUNNING_HINT}</div>}
+          <DialogButton
+            onClick={() => {
+              closeModal?.();
+              onDeleteSaves();
+            }}
+          >
+            Delete Save Files
+          </DialogButton>
+          <DialogButton
+            onClick={() => {
+              closeModal?.();
+              onDeleteBios();
+            }}
+          >
+            Delete BIOS Files
+          </DialogButton>
+          <DialogButton onClick={() => closeModal?.()} style={{ opacity: 0.5 }}>
+            Cancel
+          </DialogButton>
+        </div>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-        <DialogButton
-          onClick={() => {
-            closeModal?.();
-            onRemoveShortcuts();
-          }}
-        >
-          Remove Shortcuts ({platform.count} game{platform.count === 1 ? "" : "s"})
-        </DialogButton>
-        <DialogButton
-          onClick={() => {
-            closeModal?.();
-            onDeleteSaves();
-          }}
-        >
-          Delete Save Files
-        </DialogButton>
-        <DialogButton
-          onClick={() => {
-            closeModal?.();
-            onDeleteBios();
-          }}
-        >
-          Delete BIOS Files
-        </DialogButton>
-        <DialogButton onClick={() => closeModal?.()} style={{ opacity: 0.5 }}>
-          Cancel
-        </DialogButton>
-      </div>
-    </div>
-  </ModalRoot>
-);
+    </ModalRoot>
+  );
+};
 
 interface ShortcutRemovalSectionProps {
   platforms: RegistryPlatform[];
@@ -134,13 +155,14 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
   const [uninstallStatus, setUninstallStatus] = useState("");
   const [confirmRemoveAllRomm, setConfirmRemoveAllRomm] = useState(false);
   const [confirmUninstall, setConfirmUninstall] = useState(false);
+  const syncRunning = useSyncRunning();
 
   const handleRemoveShortcuts = async (p: RegistryPlatform) => {
     setActionStatus(`Removing ${p.name} shortcuts...`);
     try {
       const result = await removePlatformShortcuts(p.slug);
-      // The @migration_blocked gate short-circuits to { success: false,
-      // message, blocked_by_migration } with no app_ids/rom_ids — surface
+      // The @migration_blocked / @sync_active_blocked gates short-circuit to
+      // { success: false, message, ... } with no app_ids/rom_ids — surface
       // that message instead of cosmetically reporting a removal.
       if (!result.success) {
         setActionStatus(result.message ?? "Failed to remove shortcuts");
@@ -213,16 +235,22 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     setStatus("Removing all shortcuts...");
     try {
       const result = await removeAllShortcuts();
-      if (result.app_ids) {
-        for (const appId of result.app_ids) {
-          removeShortcut(appId);
+      if (!result.success) {
+        // A gate refusal (@sync_active_blocked / @migration_blocked) carries
+        // no app_ids/rom_ids — surface its message and remove nothing.
+        setStatus(result.message ?? "Failed to remove shortcuts");
+      } else {
+        if (result.app_ids) {
+          for (const appId of result.app_ids) {
+            removeShortcut(appId);
+          }
         }
+        if (result.rom_ids?.length) {
+          await reportRemovalResults(result.rom_ids);
+        }
+        await clearAllRomMCollections();
+        setStatus(result.message ?? "All shortcuts removed");
       }
-      if (result.rom_ids?.length) {
-        await reportRemovalResults(result.rom_ids);
-      }
-      await clearAllRomMCollections();
-      setStatus(result.message ?? "All shortcuts removed");
     } catch {
       setStatus("Failed to remove shortcuts");
     }
@@ -238,16 +266,24 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     try {
       setUninstallStatus("Uninstalling...");
       const result = await uninstallAllRoms();
-      // Reset every kept shortcut's now-stale launch command to the uninstalled
-      // "" placeholder so a raced-past not_installed can't exec a stale
-      // `flatpak run … "<deleted path>"` into a deleted path (#1146, mirrors the
-      // single-ROM fix in #1051). Batched to avoid serializing the per-shortcut
-      // confirm-poll timeouts; best-effort — a failed confirm is logged, not fatal.
-      await batchConfirmLaunchOptions(
-        result.app_ids.map((appId) => ({ app_id: appId, launch_options: "" })),
-        "uninstall-all",
-      );
-      setUninstallStatus(formatUninstallStatus(result.removed_count, result.errors.length));
+      if (!result.success && result.app_ids === undefined) {
+        // A gate refusal (@sync_active_blocked / @migration_blocked) carries no
+        // removal payload — surface its message before touching app_ids. A
+        // PARTIAL failure (success false WITH payload) still falls through to
+        // the launch-options reset + count display below.
+        setUninstallStatus(result.message ?? "Failed to uninstall ROMs");
+      } else {
+        // Reset every kept shortcut's now-stale launch command to the uninstalled
+        // "" placeholder so a raced-past not_installed can't exec a stale
+        // `flatpak run … "<deleted path>"` into a deleted path (#1146, mirrors the
+        // single-ROM fix in #1051). Batched to avoid serializing the per-shortcut
+        // confirm-poll timeouts; best-effort — a failed confirm is logged, not fatal.
+        await batchConfirmLaunchOptions(
+          (result.app_ids ?? []).map((appId) => ({ app_id: appId, launch_options: "" })),
+          "uninstall-all",
+        );
+        setUninstallStatus(formatUninstallStatus(result.removed_count ?? 0, (result.errors ?? []).length));
+      }
     } catch {
       setUninstallStatus("Failed to uninstall ROMs");
     }
@@ -304,6 +340,10 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
             onClick={() => {
               detach(handleRemoveAllRomm());
             }}
+            disabled={syncRunning}
+            // Description ONLY for the disabled-while-syncing case, where it
+            // explains why the button can't be pressed (mirrors SessionBudgetBanner).
+            description={syncRunning ? SYNC_RUNNING_HINT : undefined}
           >
             {confirmRemoveAllRomm ? (
               <span style={{ color: "#ff8800" }}>Confirm: remove all RomM shortcuts?</span>
@@ -335,6 +375,8 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
             onClick={() => {
               detach(handleUninstallAll());
             }}
+            disabled={syncRunning}
+            description={syncRunning ? SYNC_RUNNING_HINT : undefined}
           >
             {confirmUninstall ? (
               <span style={{ color: "#ff8800" }}>Confirm: delete all ROM files?</span>

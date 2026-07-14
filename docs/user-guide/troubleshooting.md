@@ -183,6 +183,10 @@ page.
 The **Danger Zone** page provides options for removing shortcuts, ROM files, save files, and BIOS files. All destructive
 actions require confirmation (tap once to see the prompt, tap again to confirm).
 
+While a library sync is running (or cancelling), the shortcut and ROM removal actions are unavailable — the buttons are
+disabled with a short hint, and the backend refuses the request too. Wait for the sync to finish, or cancel it, before
+removing shortcuts or ROMs. Save-file and BIOS deletions are not affected.
+
 ### Remove by Platform
 
 Removes all shortcuts for a specific platform (e.g. all Game Boy Advance games). The associated Steam collection is also

@@ -183,6 +183,14 @@ class LibraryService:
         """Current sync state (read-only)."""
         return self._box.sync_state
 
+    def is_sync_in_flight(self) -> bool:
+        """True while a sync run is in flight (RUNNING or CANCELLING; IDLE is not).
+
+        Read-only predicate consumed by the ``@sync_active_blocked`` gate on
+        the destructive removal callables.
+        """
+        return self._box.is_in_flight()
+
     @property
     def pending_sync(self) -> dict[int, dict[str, Any]]:
         """Public accessor for pending sync data (used by SteamGridService)."""

@@ -5,8 +5,8 @@
 // change, no log call) are exempt — and even then, prefer dropping the test
 // over keeping one with zero expects.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, act, waitFor } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { render, fireEvent, act, waitFor, within } from "@testing-library/react";
 import { createElement, type ReactElement } from "react";
 import { DangerZone } from "./DangerZone";
 import * as backend from "../api/backend";
@@ -14,6 +14,7 @@ import { showModal } from "@decky/ui";
 import { removeShortcut, setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { clearPlatformCollection, clearAllRomMCollections } from "../utils/collections";
 import { formatUninstallStatus } from "../utils/formatters";
+import { setSyncProgress } from "../utils/syncProgress";
 import { stubCollectionStore, stubAppStore } from "../test-utils/steamStubs";
 
 vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
@@ -1154,6 +1155,131 @@ describe("DangerZone", () => {
       // Hide whitelist — also clears confirms via resetRemoveConfirms.
       fireEvent.click(getByText("Hide Whitelist"));
       expect(container.textContent).not.toContain("Are you sure?");
+    });
+  });
+
+  describe("sync-running guard (#1390)", () => {
+    const HINT = "Unavailable while a library sync is running.";
+    const REFUSAL_MESSAGE =
+      "A library sync is in progress — wait for it to finish or cancel it before removing shortcuts or ROMs.";
+
+    // The syncProgress store is real module state (not a vi mock) — it
+    // survives vi.resetAllMocks(), so restore the idle default after each test.
+    afterEach(() => {
+      setSyncProgress({ running: false, stage: "", current: 0, total: 0, message: "", runId: "" });
+    });
+
+    it("disables the bulk removal buttons and shows the hint while a sync runs", async () => {
+      setSyncProgress({ running: true, stage: "applying", current: 1, total: 5, message: "", runId: "run-1" });
+      const { getByText, getAllByText } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(getByText("Remove All RomM Shortcuts")).toBeDisabled();
+      expect(getByText("Uninstall All Installed ROMs")).toBeDisabled();
+      // Both disabled buttons carry the hint description.
+      expect(getAllByText(HINT)).toHaveLength(2);
+      // Clicking the disabled buttons must not arm the confirm flow.
+      fireEvent.click(getByText("Remove All RomM Shortcuts"));
+      fireEvent.click(getByText("Uninstall All Installed ROMs"));
+      expect(vi.mocked(backend.removeAllShortcuts)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.uninstallAllRoms)).not.toHaveBeenCalled();
+    });
+
+    it("keeps the buttons enabled with no hint when no sync runs", async () => {
+      const { getByText, queryByText } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+
+      expect(getByText("Remove All RomM Shortcuts")).not.toBeDisabled();
+      expect(getByText("Uninstall All Installed ROMs")).not.toBeDisabled();
+      expect(queryByText(HINT)).toBeNull();
+    });
+
+    it("disables only the modal's Remove Shortcuts button while a sync runs", async () => {
+      setSyncProgress({ running: true, stage: "applying", current: 1, total: 5, message: "", runId: "run-1" });
+      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
+        platforms: [{ slug: "snes", name: "Super Nintendo", count: 1 }],
+      });
+      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Super Nintendo (1)"));
+      const modalEl = vi.mocked(showModal).mock.calls[0]?.[0];
+      // Scope queries to the modal's own container — the panel render in the
+      // same document also shows the hint on its two disabled bulk buttons.
+      const { container: modalContainer } = render(modalEl as ReactElement);
+      const modal = within(modalContainer as HTMLElement);
+
+      expect(modal.getByText("Remove Shortcuts (1 game)")).toBeDisabled();
+      expect(modal.getByText(HINT)).toBeTruthy();
+      // The save/BIOS deletions are not sync-gated — they stay pressable.
+      expect(modal.getByText("Delete Save Files")).not.toBeDisabled();
+      expect(modal.getByText("Delete BIOS Files")).not.toBeDisabled();
+    });
+
+    it("surfaces the sync_active refusal and removes nothing on Remove All (raced past the disable)", async () => {
+      // The backend gate is the authority: a sync that starts between render
+      // and click still refuses. The handler must surface the message and
+      // must not touch shortcuts or collections.
+      vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
+        success: false,
+        reason: "sync_active",
+        message: REFUSAL_MESSAGE,
+      });
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Remove All RomM Shortcuts"));
+      await act(async () => {
+        fireEvent.click(getByText("Confirm: remove all RomM shortcuts?"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain(REFUSAL_MESSAGE);
+      expect(vi.mocked(removeShortcut)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.reportRemovalResults)).not.toHaveBeenCalled();
+      expect(vi.mocked(clearAllRomMCollections)).not.toHaveBeenCalled();
+    });
+
+    it("surfaces the sync_active refusal without crashing on Uninstall All (no app_ids in the refusal)", async () => {
+      // Regression guard: the old handler dereferenced result.app_ids.map(...)
+      // unconditionally — a payload-less refusal threw instead of rendering.
+      vi.mocked(backend.uninstallAllRoms).mockResolvedValue({
+        success: false,
+        reason: "sync_active",
+        message: REFUSAL_MESSAGE,
+      });
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Uninstall All Installed ROMs"));
+      await act(async () => {
+        fireEvent.click(getByText("Confirm: delete all ROM files?"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain(REFUSAL_MESSAGE);
+      expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
+      expect(vi.mocked(formatUninstallStatus)).not.toHaveBeenCalled();
+    });
+
+    it("surfaces the sync_active refusal on a per-platform removal", async () => {
+      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
+        platforms: [{ slug: "snes", name: "Super Nintendo", count: 2 }],
+      });
+      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
+        success: false,
+        reason: "sync_active",
+        message: REFUSAL_MESSAGE,
+      });
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Super Nintendo (2)"));
+      const modalProps = lastShownModalProps<{ onRemoveShortcuts?: () => void }>();
+      await act(async () => {
+        modalProps?.onRemoveShortcuts?.();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain(REFUSAL_MESSAGE);
+      expect(vi.mocked(removeShortcut)).not.toHaveBeenCalled();
+      expect(vi.mocked(clearPlatformCollection)).not.toHaveBeenCalled();
     });
   });
 

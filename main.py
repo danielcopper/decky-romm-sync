@@ -17,6 +17,7 @@ from bootstrap import (
 )
 
 from lib.migration_gate import migration_blocked
+from lib.sync_gate import sync_active_blocked
 
 
 class Plugin:
@@ -372,10 +373,12 @@ class Plugin:
         return self._sync_service.get_registry_platforms()
 
     @migration_blocked
+    @sync_active_blocked
     async def remove_platform_shortcuts(self, platform_slug):
         return await self._shortcut_removal_service.remove_platform_shortcuts(platform_slug)
 
     @migration_blocked
+    @sync_active_blocked
     async def remove_all_shortcuts(self):
         return self._shortcut_removal_service.remove_all_shortcuts()
 
@@ -461,6 +464,7 @@ class Plugin:
         return await self._rom_removal_service.remove_rom(rom_id)
 
     @migration_blocked
+    @sync_active_blocked
     async def uninstall_all_roms(self):
         return await self._rom_removal_service.uninstall_all_roms()
 
