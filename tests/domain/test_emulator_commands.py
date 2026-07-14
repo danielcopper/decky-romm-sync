@@ -325,7 +325,9 @@ class TestClassificationInvariants:
 
     @pytest.mark.parametrize("text", CORPUS)
     def test_classification_is_deterministic(self, text):
-        assert classify_command("L", text) == classify_command("L", text)
+        first = classify_command("L", text)
+        second = classify_command("L", text)
+        assert first == second
 
     def test_select_default_returns_none_or_bakeable(self):
         options = [classify_command(f"L{i}", text) for i, text in enumerate(self.CORPUS)]

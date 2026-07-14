@@ -14,7 +14,9 @@ class TestInSaveDir:
         assert layout.sort_by_core is False
 
     def test_equality_by_flags(self):
-        assert InSaveDir(sort_by_content=True, sort_by_core=True) == InSaveDir(sort_by_content=True, sort_by_core=True)
+        left = InSaveDir(sort_by_content=True, sort_by_core=True)
+        right = InSaveDir(sort_by_content=True, sort_by_core=True)
+        assert left == right
 
     def test_inequality_on_differing_flags(self):
         assert InSaveDir(sort_by_content=True, sort_by_core=False) != InSaveDir(
@@ -30,7 +32,9 @@ class TestInSaveDir:
 class TestContentDir:
     def test_construction(self):
         # No fields — purely a tag in the union.
-        assert ContentDir() == ContentDir()
+        left = ContentDir()
+        right = ContentDir()
+        assert left == right
 
     def test_not_equal_to_in_save_dir(self):
         assert ContentDir() != InSaveDir(sort_by_content=True, sort_by_core=False)

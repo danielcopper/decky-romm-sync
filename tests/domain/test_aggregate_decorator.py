@@ -36,8 +36,10 @@ class TestDecoratorMakesDataclass:
             name: str
             count: int
 
-        assert Sample(name="a", count=1) == Sample(name="a", count=1)
-        assert Sample(name="a", count=1) != Sample(name="a", count=2)
+        left = Sample(name="a", count=1)
+        right = Sample(name="a", count=1)
+        assert left == right
+        assert left != Sample(name="a", count=2)
 
 
 class TestDecoratorAppliesSlots:

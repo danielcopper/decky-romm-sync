@@ -46,4 +46,6 @@ def test_output_is_md5_hex(entries):
 @given(entries=_ENTRY_SETS)
 def test_deterministic(entries):
     items = list(entries.items())
-    assert combine_zip_entry_hashes(items) == combine_zip_entry_hashes(items)
+    first = combine_zip_entry_hashes(items)
+    second = combine_zip_entry_hashes(items)
+    assert first == second

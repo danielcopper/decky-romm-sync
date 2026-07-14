@@ -70,13 +70,17 @@ class TestEquality:
     """Frozen dataclasses get value-based equality for free."""
 
     def test_two_ok_with_same_items_are_equal(self):
-        assert OkListResult(items=[1, 2]) == OkListResult(items=[1, 2])
+        left = OkListResult(items=[1, 2])
+        right = OkListResult(items=[1, 2])
+        assert left == right
 
     def test_two_ok_with_different_items_are_not_equal(self):
         assert OkListResult(items=[1, 2]) != OkListResult(items=[1, 3])
 
     def test_two_failed_with_same_code_are_equal(self):
-        assert FailedListResult(error=ErrorCode.UNKNOWN) == FailedListResult(error=ErrorCode.UNKNOWN)
+        left = FailedListResult(error=ErrorCode.UNKNOWN)
+        right = FailedListResult(error=ErrorCode.UNKNOWN)
+        assert left == right
 
     def test_two_failed_with_same_code_and_message_are_equal(self):
         left = FailedListResult(error=ErrorCode.AUTH_FAILED, error_message="bad password")
