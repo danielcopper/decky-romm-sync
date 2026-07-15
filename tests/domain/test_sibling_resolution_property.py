@@ -241,15 +241,34 @@ def test_canonical_name_ignores_filter_legs(group, preferred):
     del installed, bound
 
 
-@given(_group(), _preferred)
-def test_canonical_name_winner_carries_preferred_region(group, preferred):
-    members, _installed, _bound = group
-    assume(preferred != "auto")
+@st.composite
+def _group_with_preferred_retail_member(draw):
+    """A drawn group plus a non-"auto" preferred region where at least one RETAIL
+    member carries the preferred region — the exact domain of the preferred-region
+    naming theorem, built by construction: one drawn member is rewritten into the
+    witness, its regions re-drawn around a forced ``preferred`` entry (any
+    position, any companions) and its tags re-drawn from the neutral pool only
+    (retail = no prerelease marker). assume()-filtering this domain instead would
+    reject most draws — enough to degenerate generation into rejection sampling —
+    while construction accepts every draw over the same domain."""
+    members, _installed, _bound = draw(_group())
+    preferred = draw(st.sampled_from(_region_pool))
+    companions = draw(st.lists(st.sampled_from([r for r in _region_pool if r != preferred]), max_size=2, unique=True))
+    regions = list(companions)
+    regions.insert(draw(st.integers(min_value=0, max_value=len(regions))), preferred)
+    tags = draw(st.lists(st.sampled_from(_NEUTRAL_TAGS), max_size=2, unique=True))
+    idx = draw(st.integers(min_value=0, max_value=len(members) - 1))
+    members[idx] = {**members[idx], "regions": regions, "tags": tags}
+    return members, preferred
+
+
+@given(_group_with_preferred_retail_member())
+def test_canonical_name_winner_carries_preferred_region(group_and_preferred):
+    members, preferred = group_and_preferred
     # A RETAIL member carrying the preferred region is (retail, preferred-region) =
     # the global minimum of the pure order, so nothing outranks it (prerelease
     # ranks before region, so a demoted preferred-region member could otherwise
     # lose to a retail non-preferred one).
-    assume(any(preferred in m["regions"] and not _is_prerelease(m) for m in members))
     name = canonical_group_name(members, preferred)
     winner = next(m for m in members if m["name"] == name)
     assert preferred in winner["regions"]
