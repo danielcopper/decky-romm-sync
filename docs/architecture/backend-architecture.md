@@ -575,11 +575,17 @@ the unit floor until `applying`, and it never jumps backwards at a phase boundar
 `current/total` from zero (each phase's frames land in a strictly-higher band than the phase before). The phase is
 tagged on the `sync_progress` payload's additive `subStage` field (camelCase, matching the sibling `totalSteps` /
 `runId` keys — the `emit_progress` Python kwarg is `sub_stage`, the emitted key is `subStage`): the fetcher's per-page
-frames carry `subStage: "fetch"`, the artwork download **and** cover-refresh frames carry `subStage: "covers"` (both
+frames carry `subStage: "fetch"`, the artwork cover-refresh **and** download frames carry `subStage: "covers"` (both
 share the covers slice), and the frontend-driven apply frames are keyed on the `applying` stage alone — so a merged
-apply frame still carrying a stale `subStage` is unaffected. A frame with no sub-stage (the per-unit fetch anchor, or a
-pre-#1407 backend) rests at the unit floor, the old behaviour. `emit_progress` writes `subStage` into both the emitted
-event and the persisted `get_sync_status` snapshot, so it rides the QAM-remount re-seed path too.
+apply frame still carrying a stale `subStage` is unaffected. Within the covers slice the fill is _not_ strictly
+monotonic: the covers phase runs two sequential passes — the cover-cache refresh first, then the download for the apply
+set — each counting `current/total` from zero, so a mixed unit (changed covers to refresh **and** new covers to
+download) can dip backwards **within** the covers band at the refresh→download handover, bounded to the covers share of
+that unit's slice. The fetch→covers→apply phase handovers themselves stay monotonic (the common cases don't dip either:
+a first full sync refreshes nothing, and a steady incremental sync with no cover changes runs neither pass). A frame
+with no sub-stage (the per-unit fetch anchor, or a pre-#1407 backend) rests at the unit floor, the old behaviour.
+`emit_progress` writes `subStage` into both the emitted event and the persisted `get_sync_status` snapshot, so it rides
+the QAM-remount re-seed path too.
 
 The whole thing is an approximation by design — though a narrow one since the plan went skip-aware: seed weights and the
 applying frames usually both count post-collapse shortcuts now, the raw pre-collapse `rom_count` survives only as the
