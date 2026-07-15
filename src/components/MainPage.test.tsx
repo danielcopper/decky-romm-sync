@@ -40,7 +40,15 @@ import { createElement, type ReactElement } from "react";
 import { MainPage } from "./MainPage";
 import * as backend from "../api/backend";
 import { useVersionError } from "./VersionErrorCard";
-import { setSyncProgress, updateSyncProgress, onSyncProgressChange, getSyncProgress } from "../utils/syncProgress";
+import {
+  setSyncProgress,
+  updateSyncProgress,
+  onSyncProgressChange,
+  getSyncProgress,
+  FETCH_SHARE,
+  COVERS_SHARE,
+  APPLY_SHARE,
+} from "../utils/syncProgress";
 import { beginEtaRun, resetEta, liveEtaSeconds } from "../utils/syncEta";
 import * as syncEta from "../utils/syncEta";
 import { NEW_ITEM_SEC, UPDATED_ITEM_SEC } from "../utils/syncEstimate";
@@ -57,6 +65,7 @@ import type {
   SessionBudgetStatus,
   DownloadItem,
   PluginSettings,
+  SyncProgress,
 } from "../types";
 
 // -----------------------------------------------------------------------------
@@ -1603,9 +1612,12 @@ describe("MainPage", () => {
       expect(op?.textContent).toContain("Applying shortcuts");
       // The caption's step span still carries the coarse "step/totalSteps" text.
       expect(container.querySelector('[data-testid="sync-step"]')?.textContent).toContain("2/5");
-      // Interpolated: floor (step-1)=1 plus the within-unit fraction 3/10, over
-      // 5 steps → (1 + 0.3)/5 * 100 = 26 (was a frozen 40 before interpolation).
-      expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("26");
+      // Interpolated: floor (step-1)=1 plus the apply sub-slice fill — fetch and
+      // covers already filled their shares, so applying starts at (F+C) and adds
+      // A*(3/10) — over 5 steps (#1407).
+      const within = FETCH_SHARE + COVERS_SHARE + APPLY_SHARE * (3 / 10);
+      const nProgress = Number(container.querySelector('[data-testid="progress-progress"]')?.textContent);
+      expect(nProgress).toBeCloseTo(((1 + within) / 5) * 100, 5);
       expect(container.querySelector('[data-testid="progress-indeterminate"]')?.textContent).toBe("false");
     });
 
@@ -1621,9 +1633,11 @@ describe("MainPage", () => {
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      // (step-1 + current/total) / totalSteps * 100 = (1 + 450/2091)/8*100 ≈ 15.19.
+      // (step-1 + apply sub-slice fill) / totalSteps * 100, where applying fills
+      // (F+C) + A*(450/2091) of the unit's slice (#1407).
+      const within = FETCH_SHARE + COVERS_SHARE + APPLY_SHARE * (450 / 2091);
       const nProgress = Number(container.querySelector('[data-testid="progress-progress"]')?.textContent);
-      expect(nProgress).toBeCloseTo(((1 + 450 / 2091) / 8) * 100, 5);
+      expect(nProgress).toBeCloseTo(((1 + within) / 8) * 100, 5);
     });
 
     it("main bar weights units by the plan's item weights when a plan is measured (#1382)", async () => {
@@ -1642,10 +1656,12 @@ describe("MainPage", () => {
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      // Weighted: (unit 1's 10 + 450 of PSX's 2091) / 2106. The index-based math
-      // would read (1 + 450/2091)/3 ≈ 40.5 — far past the real position.
+      // Weighted: unit 1's full weight (10) plus PSX's within-unit fill of its
+      // 2091 weight. Applying fills (F+C) + A*(450/2091) of the unit (#1407), so
+      // the running unit contributes within*2091 of the 2106 total.
+      const within = FETCH_SHARE + COVERS_SHARE + APPLY_SHARE * (450 / 2091);
       const nProgress = Number(container.querySelector('[data-testid="progress-progress"]')?.textContent);
-      expect(nProgress).toBeCloseTo(((10 + 450) / 2106) * 100, 5);
+      expect(nProgress).toBeCloseTo(((10 + within * 2091) / 2106) * 100, 5);
     });
 
     it("a predicted-skip unit occupies no bar width (zero plan weight, #1382)", async () => {
@@ -1663,9 +1679,13 @@ describe("MainPage", () => {
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      // Weighted: 50/100 → 50. Index-based would read (1 + 0.5)/2 * 100 = 75,
-      // crediting the skipped unit half the bar.
-      expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("50");
+      // Weighted: the skipped unit 1 has zero weight, so the bar reflects only
+      // unit 2's own within-unit fill — applying at (F+C) + A*(50/100) of its
+      // 100 weight over the 100 total (#1407). Index-based would wrongly credit
+      // the skipped unit half the bar.
+      const within = FETCH_SHARE + COVERS_SHARE + APPLY_SHARE * (50 / 100);
+      const nProgress = Number(container.querySelector('[data-testid="progress-progress"]')?.textContent);
+      expect(nProgress).toBeCloseTo(within * 100, 5);
     });
 
     it("falls back to index weighting when the plan's unit count mismatches the run (stale plan)", async () => {
@@ -1683,14 +1703,17 @@ describe("MainPage", () => {
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
+      // Index fallback: (step-1 + apply sub-slice fill) / totalSteps (#1407).
+      const within = FETCH_SHARE + COVERS_SHARE + APPLY_SHARE * (450 / 2091);
       const nProgress = Number(container.querySelector('[data-testid="progress-progress"]')?.textContent);
-      expect(nProgress).toBeCloseTo(((1 + 450 / 2091) / 8) * 100, 5);
+      expect(nProgress).toBeCloseTo(((1 + within) / 8) * 100, 5);
     });
 
-    it("main bar rests at the unit floor during the fetch phase (no within-unit fill)", async () => {
-      // Fetch frames carry current/total (page counters) to drive the fine line,
-      // but must NOT advance the coarse bar — it rests at (step-1)/totalSteps so
-      // the bar never jumps backwards at the fetch→apply boundary of the unit.
+    it("main bar rests at the unit floor during fetch when no sub-stage is present (old backend)", async () => {
+      // A backend that predates #1407 sends fetch frames with no sub_stage: they
+      // carry current/total (page counters) to drive the fine line, but with no
+      // sub-slice to fill the coarse bar rests at (step-1)/totalSteps — the
+      // pre-#1407 behaviour, never a backwards jump at the fetch→apply boundary.
       vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
         stage: "fetching",
@@ -1704,6 +1727,106 @@ describe("MainPage", () => {
       await flushAsync();
       // Floor only: (2-1)/8 * 100 = 12.5. The page counter (30/62) does not lift it.
       expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("12.5");
+    });
+
+    it("fetch sub-stage fills within the fetch sub-slice (#1407)", async () => {
+      // A fetch-phase frame (sub_stage "fetch") lifts the bar within the fetch
+      // share only — page 30/62 → FETCH_SHARE * (30/62) above the unit floor.
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "fetching",
+        sub_stage: "fetch",
+        step: 2,
+        totalSteps: 8,
+        current: 30,
+        total: 62,
+        message: "Fetching GBA (page 30/62)",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const within = FETCH_SHARE * (30 / 62);
+      const nProgress = Number(container.querySelector('[data-testid="progress-progress"]')?.textContent);
+      expect(nProgress).toBeCloseTo(((1 + within) / 8) * 100, 5);
+    });
+
+    it("covers sub-stage continues above the fetch share (#1407)", async () => {
+      // A cover-phase frame (sub_stage "covers") starts where fetch ended
+      // (FETCH_SHARE) and fills the covers share by its own current/total.
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "fetching",
+        sub_stage: "covers",
+        step: 2,
+        totalSteps: 8,
+        current: 500,
+        total: 2000,
+        message: "Preparing covers for GBA (500/2000)",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const within = FETCH_SHARE + COVERS_SHARE * (500 / 2000);
+      expect(within).toBeGreaterThan(FETCH_SHARE);
+      const nProgress = Number(container.querySelector('[data-testid="progress-progress"]')?.textContent);
+      expect(nProgress).toBeCloseTo(((1 + within) / 8) * 100, 5);
+    });
+
+    it("advances monotonically across a fetch → covers → apply frame sequence (#1407)", async () => {
+      // Drive the running unit (step 2/8) through its three phases and assert the
+      // coarse bar never decreases at any frame — the core #1407 guarantee. The
+      // mount seed is a running fetch anchor so the in-flight bar renders.
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "fetching",
+        step: 2,
+        totalSteps: 8,
+        current: 0,
+        total: 0,
+        message: "Fetching GBA",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const barValue = () => Number(container.querySelector('[data-testid="progress-progress"]')?.textContent);
+
+      const frames: SyncProgress[] = [];
+      // Fetch anchor (no sub-stage) then paginated fetch frames.
+      frames.push({ running: true, stage: "fetching", step: 2, totalSteps: 8, current: 0, total: 0 });
+      for (let page = 1; page <= 10; page++) {
+        frames.push({
+          running: true,
+          stage: "fetching",
+          sub_stage: "fetch",
+          step: 2,
+          totalSteps: 8,
+          current: page,
+          total: 10,
+        });
+      }
+      // Cover download frames.
+      for (let c = 1; c <= 100; c++) {
+        frames.push({
+          running: true,
+          stage: "fetching",
+          sub_stage: "covers",
+          step: 2,
+          totalSteps: 8,
+          current: c,
+          total: 100,
+        });
+      }
+      // Frontend apply frames.
+      for (let a = 1; a <= 50; a++) {
+        frames.push({ running: true, stage: "applying", step: 2, totalSteps: 8, current: a, total: 50 });
+      }
+
+      let previous = -1;
+      for (const frame of frames) {
+        act(() => setSyncProgress(frame));
+        const value = barValue();
+        expect(value).toBeGreaterThanOrEqual(previous);
+        previous = value;
+      }
+      // The unit ends the apply phase at its full slice ceiling: floor + 1 slice.
+      expect(previous).toBeCloseTo((2 / 8) * 100, 5);
     });
 
     it("main bar reads 100% during finalizing (step == totalSteps, all units done)", async () => {
@@ -1891,9 +2014,11 @@ describe("MainPage", () => {
       await flushAsync();
 
       expect(container.querySelector('[data-testid="sync-stage"]')?.textContent).toContain("Applying shortcuts");
-      // Interpolation stays live: (1 + 1200/3084) / 8, not the 12.5% unit floor.
+      // Interpolation stays live in the apply sub-slice: (1 + (F+C) + A*1200/3084)
+      // / 8, not the 12.5% unit floor (#1407).
+      const within = FETCH_SHARE + COVERS_SHARE + APPLY_SHARE * (1200 / 3084);
       const nProgress = Number(container.querySelector('[data-testid="progress-progress"]')?.textContent);
-      expect(nProgress).toBeCloseTo(((1 + 1200 / 3084) / 8) * 100, 5);
+      expect(nProgress).toBeCloseTo(((1 + within) / 8) * 100, 5);
     });
 
     it("replaces (drops stale fine fields + ETA) when the backend reports a different run", async () => {

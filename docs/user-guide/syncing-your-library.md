@@ -58,10 +58,12 @@ takes no space, and a huge platform fills the bar in proportion to its real work
 
 A few things worth knowing for a large library:
 
-- **The progress line narrates each phase.** For a large platform the sync first pulls the game list from your server
-  page by page and then downloads cover art before it starts creating shortcuts; the line names what it is doing (e.g.
-  "Fetching Game Boy Advance (page 12/62)" then "Preparing covers for Game Boy Advance"), so a fetch that takes minutes
-  never looks stuck.
+- **The progress bar advances through each phase.** For a large platform the sync first pulls the game list from your
+  server page by page, then downloads cover art, then starts creating shortcuts; the line names what it is doing (e.g.
+  "Fetching Game Boy Advance (page 12/62)" then "Preparing covers for Game Boy Advance"), and the bar now edges forward
+  through the fetch and cover phases as well — not only while shortcuts are being created. A platform whose cost is
+  mostly its cover pull no longer shows a bar that sits frozen until the very end, and the bar never jumps backwards as
+  the phases hand over.
 - **Cover art fills in as the run goes.** Covers appear on your library tiles progressively while the sync creates
   shortcuts, not only at the very end, so you can watch the library fill in. A few tiles may stay gray until the first
   time you open that game's page (or the next time Steam restarts) — that is expected and does not mean the cover is

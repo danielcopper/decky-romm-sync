@@ -748,8 +748,10 @@ class LibraryFetcher:
         main bar holds its position while the fine line advances by page; a
         falsy pair (the preview loop already emits its own per-unit frame,
         standalone callers) leaves the coarse bar indeterminate, as before.
-        The displayed total is clamped to at least ``page`` so a server that
-        grew since the listing never shows ``page 63/62``.
+        The frame carries the ``fetch`` sub-stage so the frontend fills the
+        unit's fetch sub-slice of the bar (#1407). The displayed total is
+        clamped to at least ``page`` so a server that grew since the listing
+        never shows ``page 63/62``.
         """
         if page != 1 and page % _FETCH_PROGRESS_PAGE_INTERVAL != 0:
             return
@@ -761,6 +763,7 @@ class LibraryFetcher:
             message=f"Fetching {unit_name} (page {page}/{shown_total})",
             step=progress_step,
             total_steps=progress_total_steps,
+            sub_stage="fetch",
         )
 
     async def fetch_platform_unit(

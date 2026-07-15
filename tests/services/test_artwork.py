@@ -737,6 +737,8 @@ class TestRefreshChangedCovers:
         assert frames[0]["message"] == "Refreshing covers for N64 (1/1)"
         assert frames[0]["step"] == 2
         assert frames[0]["total_steps"] == 5
+        # The refresh pass shares the ``covers`` sub-slice with the download loop (#1407).
+        assert frames[0]["sub_stage"] == "covers"
 
 
 # ── TestDownloadArtworkProgress ───────────────────────────────────────────────
@@ -776,6 +778,9 @@ class TestDownloadArtworkProgress:
         assert [f["current"] for f in frames] == [1, 50, 100, 120]
         for f in frames:
             assert f["stage"] == "fetching"
+            # The cover phase carries the ``covers`` sub-stage so the bar fills the
+            # unit's covers sub-slice, above the fetch share (#1407).
+            assert f["sub_stage"] == "covers"
             assert f["total"] == 120
             assert f["step"] == 3
             assert f["total_steps"] == 9

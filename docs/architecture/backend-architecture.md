@@ -566,6 +566,20 @@ bar in proportion to its real work. It falls back to the old equal-per-unit inde
 (QAM opened mid-run before any `sync_plan`, an older backend) or the plan can't apportion (unit-count mismatch, all-zero
 weights).
 
+The **within-unit fill is itself split into three monotonic sub-slices** (#1407, `withinUnitFraction` in
+`src/utils/syncProgress.ts`): fetch (`FETCH_SHARE` 15%) → covers (`COVERS_SHARE` 25%) → apply (`APPLY_SHARE` 60%). A
+unit is worked in that order — paginate the ROM list, download/refresh cover art, then create the shortcuts — and each
+phase fills its own slice by its own `current/total`, with a later phase's floor sitting at the sum of the earlier
+phases' shares. So the bar advances continuously through a unit's fetch and cover phases instead of resting frozen at
+the unit floor until `applying`, and it never jumps backwards at a phase boundary even though each phase restarts
+`current/total` from zero (each phase's frames land in a strictly-higher band than the phase before). The phase is
+tagged on the `sync_progress` payload's additive `sub_stage` field: the fetcher's per-page frames carry
+`sub_stage: "fetch"`, the artwork download **and** cover-refresh frames carry `sub_stage: "covers"` (both share the
+covers slice), and the frontend-driven apply frames are keyed on the `applying` stage alone — so a merged apply frame
+still carrying a stale `sub_stage` is unaffected. A frame with no sub-stage (the per-unit fetch anchor, or a pre-#1407
+backend) rests at the unit floor, the old behaviour. `emit_progress` writes `sub_stage` into both the emitted event and
+the persisted `get_sync_status` snapshot, so it rides the QAM-remount re-seed path too.
+
 The whole thing is an approximation by design — though a narrow one since the plan went skip-aware: seed weights and the
 applying frames usually both count post-collapse shortcuts now, the raw pre-collapse `rom_count` survives only as the
 fallback where the backend doesn't know better, and a unit the plan mis-predicted re-corrects on its first

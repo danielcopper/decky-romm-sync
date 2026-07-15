@@ -817,9 +817,12 @@ class TestFetchProgressNarration:
 
         frames = _fetching_frames(decky)
         assert [f["current"] for f in frames] == [1, 2, 3, 4, 5, 6, 7]
-        # Every frame keeps the run's coarse position and names the platform+page.
+        # Every frame keeps the run's coarse position and names the platform+page,
+        # and carries the ``fetch`` sub-stage so the bar fills the fetch sub-slice
+        # (#1407).
         for f in frames:
             assert f["stage"] == "fetching"
+            assert f["sub_stage"] == "fetch"
             assert f["step"] == 3
             assert f["totalSteps"] == 12
             assert f["total"] == 7
@@ -881,6 +884,8 @@ class TestFetchProgressNarration:
         assert frames[0]["message"] == "Fetching Favorites (page 1/3)"
         assert frames[0]["step"] == 2
         assert frames[0]["totalSteps"] == 8
+        # A collection fetch narrates under the same ``fetch`` sub-stage (#1407).
+        assert all(f["sub_stage"] == "fetch" for f in frames)
 
     @pytest.mark.asyncio
     async def test_no_step_context_leaves_bar_indeterminate(self, plugin, fake_romm_api):

@@ -136,11 +136,12 @@ class ArtworkService:
         pending-sync ``cover_path`` that ``finalize_cover_path`` publishes onto
         the grid once the Steam app_id is known.
 
-        Progress is narrated under the ``fetching`` stage (this runs in the
-        per-unit prep phase, before the shortcuts are applied) as "Preparing
-        covers for <label>", throttled to the first/last/every-Nth cover.
-        ``label`` is the owning unit's display name; blank falls back to a
-        bare "Preparing covers".
+        Progress is narrated under the ``fetching`` stage with the ``covers``
+        sub-stage (this runs in the per-unit prep phase, before the shortcuts
+        are applied) as "Preparing covers for <label>", throttled to the
+        first/last/every-Nth cover — the sub-stage places these frames in the
+        unit's covers sub-slice of the bar (#1407). ``label`` is the owning
+        unit's display name; blank falls back to a bare "Preparing covers".
         """
         cover_paths: dict[int, str] = {}
         grid = self._steam_config.grid_dir()
@@ -165,6 +166,7 @@ class ArtworkService:
                     message=f"{cover_target} ({processed}/{total})",
                     step=progress_step,
                     total_steps=progress_total_steps,
+                    sub_stage="covers",
                 )
 
             cover_url = rom.get("path_cover_large") or rom.get("path_cover_small")
@@ -281,8 +283,9 @@ class ArtworkService:
         whose Steam tile the frontend must re-apply via
         ``SetCustomArtworkForApp`` (the grid file alone leaves the in-session
         tile stale until a client restart). One ROM's failure never aborts the
-        pass. Progress is narrated under the ``fetching`` stage, throttled like
-        the cover-download loop.
+        pass. Progress is narrated under the ``fetching`` stage with the
+        ``covers`` sub-stage (the same sub-slice as the cover-download loop,
+        #1407), throttled the same way.
         """
         adoptions, changed = await self._loop.run_in_executor(
             None, self._scan_cover_refresh_candidates, all_roms, registry
@@ -309,6 +312,7 @@ class ArtworkService:
                     message=f"{refresh_target} ({processed}/{total})",
                     step=progress_step,
                     total_steps=progress_total_steps,
+                    sub_stage="covers",
                 )
             ok = await self._loop.run_in_executor(None, self._refresh_one_cover_io, rom_id, app_id, cover_url, grid)
             if ok:

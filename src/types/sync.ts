@@ -47,6 +47,17 @@ export interface SyncProgress {
   /** Coarse: total units. ``0`` means indeterminate. */
   totalSteps?: number;
   /**
+   * Sub-phase of the ``fetching`` stage — ``"fetch"`` (paginated ROM listing)
+   * or ``"covers"`` (cover download/refresh) — so the running unit's width can
+   * fill each phase's own monotonic sub-slice instead of resting frozen until
+   * ``applying`` (#1407). Empty/absent on every other frame (including the
+   * ``fetching`` anchor and old backends), which the bar treats as "rest at the
+   * unit floor" — the pre-#1407 behaviour. Snake_case on the wire because the
+   * backend ``sync_progress`` payload lands in the store verbatim (no casing
+   * translation layer).
+   */
+  sub_stage?: string;
+  /**
    * Backend run identity for the in-flight sync, stamped from the backend's
    * ``current_sync_id``. ``""`` when no run is in flight. The authoritative
    * source a Cancel click scopes itself to — the frontend no longer mirrors a

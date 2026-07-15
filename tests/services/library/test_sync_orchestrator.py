@@ -36,6 +36,7 @@ from adapters.persistence import (
 from domain.preview_delta import PreviewDelta
 from domain.shortcut_data import EmulatorInvocation
 from domain.sync_diff import BIND_ROM_ID_KEY
+from domain.sync_stage import SyncStage
 from domain.sync_state import SyncState
 from domain.work_unit import WorkUnit
 from lib.romm_paging import LIST_PAGE_SIZE
@@ -960,6 +961,43 @@ class TestGetSyncStatus:
         assert status == snapshot
         assert status["running"] is True
         assert status["stage"] == "applying"
+
+    @pytest.mark.asyncio
+    async def test_emit_progress_sub_stage_rides_event_and_status(self, plugin):
+        """A ``sub_stage`` passed to ``emit_progress`` lands on BOTH the emitted
+        ``sync_progress`` event payload and the persisted snapshot that
+        ``get_sync_status`` re-seeds a remounted QAM from (#1407)."""
+        import decky
+
+        decky.emit.reset_mock()
+        await plugin._sync_service._orchestrator.emit_progress(
+            SyncStage.FETCHING,
+            current=2,
+            total=7,
+            message="Fetching GBA (page 2/7)",
+            step=3,
+            total_steps=8,
+            sub_stage="fetch",
+        )
+
+        event_payloads = [c.args[1] for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_progress"]
+        assert event_payloads, "emit_progress must emit a sync_progress event"
+        assert event_payloads[-1]["sub_stage"] == "fetch"
+        # Same value re-seeds a remounted QAM through get_sync_status.
+        assert plugin._sync_service.get_sync_status()["sub_stage"] == "fetch"
+
+    @pytest.mark.asyncio
+    async def test_emit_progress_defaults_sub_stage_empty(self, plugin):
+        """A frame that names no phase carries an empty ``sub_stage`` — the bar
+        reads it as "rest at the unit floor", never a stale phase (#1407)."""
+        import decky
+
+        decky.emit.reset_mock()
+        await plugin._sync_service._orchestrator.emit_progress(
+            SyncStage.FETCHING, message="Fetching GBA", step=3, total_steps=8
+        )
+
+        assert plugin._sync_service.get_sync_status()["sub_stage"] == ""
 
 
 class TestSyncPreviewErrorHandling:

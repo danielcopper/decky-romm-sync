@@ -505,7 +505,9 @@ class SyncOrchestrator:
 
     # ── Progress & safety ────────────────────────────────────────
 
-    async def emit_progress(self, stage, current=0, total=0, message="", running=True, step=0, total_steps=0):
+    async def emit_progress(
+        self, stage, current=0, total=0, message="", running=True, step=0, total_steps=0, sub_stage=""
+    ):
         """Persist the progress snapshot and emit the sync_progress event.
 
         ``stage`` is a :class:`SyncStage` (or its string value); ``step``
@@ -513,9 +515,14 @@ class SyncOrchestrator:
         drive the determinate main bar — stages without a unit index yet
         (discovering, fetching) pass ``0`` / ``0``, which the frontend
         treats as indeterminate. ``current`` / ``total`` are the fine
-        within-unit counters. The snapshot is written to the box first so
+        within-unit counters. ``sub_stage`` discriminates the ``fetching``
+        stage's phases — ``"fetch"`` (paginated ROM listing) vs ``"covers"``
+        (cover download/refresh) — so the frontend can fill each phase's own
+        monotonic sub-slice of the running unit's width (#1407); it is empty
+        for every other frame. The snapshot is written to the box first so
         :meth:`get_sync_status` always returns the latest state even if
-        the event never reaches a freshly remounted QAM.
+        the event never reaches a freshly remounted QAM — the ``sub_stage``
+        field therefore rides both the event and the remount re-seed.
         """
         self._sync_state.sync_progress = {
             "running": running,
@@ -525,6 +532,7 @@ class SyncOrchestrator:
             "message": message,
             "step": step,
             "totalSteps": total_steps,
+            "sub_stage": sub_stage,
             "runId": str(self._sync_state.current_sync_id or ""),
         }
         await self._emit("sync_progress", self._sync_state.sync_progress)
