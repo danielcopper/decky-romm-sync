@@ -11,9 +11,10 @@
  * brings a game under management for the first time. An adoption reuses an
  * existing Steam tile rather than minting one, but that is a renderer-cost
  * detail; this store feeds only the terminal toast (a library-management
- * summary), so it reports management, not AddShortcut calls. A ROM can appear in
- * multiple units (its platform unit plus a collection unit like Favorites), so
- * the counts are Sets of appIds — the same shortcut counted once.
+ * summary), so it reports management, not AddShortcut calls. The counts are Sets
+ * of appIds so an appId defensively recorded more than once in a run collapses
+ * to one — belt-and-suspenders, since the backend emits each rom_id in exactly
+ * one unit's shortcuts per run (not load-bearing dedup).
  *
  * Updated by:
  *   - syncManager create path (recordSyncCreated on a fresh addShortcut appId,

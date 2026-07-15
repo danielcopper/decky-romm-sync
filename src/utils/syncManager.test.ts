@@ -1001,14 +1001,16 @@ describe("syncManager — adopts orphan shortcuts instead of creating duplicates
   const setShortcutExe = vi.fn();
   const setShortcutStartDir = vi.fn();
   const setCustomArtwork = vi.fn().mockResolvedValue(undefined);
+  // The active appStore.GetAppOverviewByAppID spy, re-created by each stubAppStore
+  // call so a test can assert the pool build did (or did NOT) resolve any names.
+  let getAppOverview: ReturnType<typeof vi.fn>;
 
   /** Stub appStore so orphan appIds resolve to the given display names (unlisted → null overview). */
   function stubAppStore(names: Record<number, string>): void {
-    vi.stubGlobal("appStore", {
-      GetAppOverviewByAppID: (appId: number) =>
-        names[appId] !== undefined ? { appid: appId, strDisplayName: names[appId], display_name: names[appId] } : null,
-      allApps: [],
-    });
+    getAppOverview = vi.fn((appId: number) =>
+      names[appId] !== undefined ? { appid: appId, strDisplayName: names[appId], display_name: names[appId] } : null,
+    );
+    vi.stubGlobal("appStore", { GetAppOverviewByAppID: getAppOverview, allApps: [] });
   }
 
   beforeEach(() => {
@@ -1173,16 +1175,43 @@ describe("syncManager — adopts orphan shortcuts instead of creating duplicates
       1,
       0,
     );
-    // Lazy pool built once → the expensive live scan ran a single time this run.
+    // The expensive live scan ran a single time this run (once in the shared
+    // existing-shortcut scan), and the pool reused it — not a second sweep.
     expect(getLiveRomMShortcutAppIds).toHaveBeenCalledTimes(1);
     // Both are newly-managed → 2 added (one adopt + one create).
     expect(getSyncDelta()).toEqual({ added: 2, removed: 0 });
   });
 
-  it("never scans for orphans on a run with zero creates (lazy pool)", async () => {
-    // Every rom is already bound → the update path only. The orphan pool is built
-    // lazily on the first CREATE candidate, so a create-free run pays no scan cost.
+  it("skips the second scan — the orphan pool reuses the run's one live scan", async () => {
+    // A create-bearing run must run the expensive RegisterForAppDetails sweep
+    // exactly once: the existing-shortcut scan owns it, and the orphan pool reuses
+    // that cached list rather than scanning again (#1366).
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    getLiveRomMShortcutAppIds.mockResolvedValue([9000]);
+    stubAppStore({ 9000: "Test ROM" });
+    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-adopt-onescan"));
+      await flush(150);
+    });
+
+    // The orphan was adopted (single scan feeds both the bound map and the pool)…
+    expect(setShortcutName).toHaveBeenCalledWith(9000, "Test ROM");
+    // …and the sweep ran exactly once for the whole run.
+    expect(getLiveRomMShortcutAppIds).toHaveBeenCalledTimes(1);
+  });
+
+  it("builds no orphan pool on a run with zero creates (lazy — pool build skipped)", async () => {
+    // Every rom is already bound → the update path only. The once-per-run live
+    // scan still runs (it builds the bound map), but the orphan POOL — the
+    // appStore name-resolution pass — is built lazily on the first CREATE
+    // candidate, so a create-free run never touches appStore. liveAppIds carries a
+    // would-be orphan (9000) so the assertion is non-vacuous: an eager build would
+    // resolve its name.
     getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>([[42, 5000]]));
+    getLiveRomMShortcutAppIds.mockResolvedValue([9000]);
     const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
 
     initUnitSyncManager();
@@ -1191,10 +1220,86 @@ describe("syncManager — adopts orphan shortcuts instead of creating duplicates
       await flush(150);
     });
 
-    // Update path only — the orphan live-scan was never invoked.
+    // Update path only → the orphan pool (appStore name resolution) was never built.
     expect(addShortcut).not.toHaveBeenCalled();
-    expect(getLiveRomMShortcutAppIds).not.toHaveBeenCalled();
+    expect(getAppOverview).not.toHaveBeenCalled();
     expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 5000 }, "run-adopt-lazy", 1, 0);
+  });
+
+  it("skips a live appId already bound to a rom, adopting only the unbound orphan", async () => {
+    // liveAppIds holds a BOUND appId (5000, rom 42) and an orphan (9000). rom 42 is
+    // an update; rom 43 is a create that adopts 9000. The bound 5000 is skipped by
+    // the pool build (already managed) and never offered for adoption.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>([[42, 5000]]));
+    getLiveRomMShortcutAppIds.mockResolvedValue([5000, 9000]);
+    stubAppStore({ 5000: "Bound Game", 9000: "Orphan Game" });
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>(
+        "sync_apply_unit",
+        unitOf(
+          [item({ rom_id: 42, name: "Bound Game" }), item({ rom_id: 43, name: "Orphan Game" })],
+          "run-adopt-bound",
+        ),
+      );
+      await flush(200);
+    });
+
+    // rom 42 updates 5000, rom 43 adopts 9000; no fresh AddShortcut, and 5000 (the
+    // bound live appId) is never rewritten as an adoption.
+    expect(addShortcut).not.toHaveBeenCalled();
+    expect(setShortcutName).toHaveBeenCalledWith(9000, "Orphan Game");
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith(
+      { "42": 5000, "43": 9000 },
+      "run-adopt-bound",
+      1,
+      0,
+    );
+  });
+
+  it("disables adoption when appStore is unavailable", async () => {
+    // The live scan found an orphan (9000) but appStore is gone, so no name can be
+    // resolved — the pool is empty (disabled) and rom 42 is freshly created.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    getLiveRomMShortcutAppIds.mockResolvedValue([9000]);
+    vi.stubGlobal("appStore", undefined);
+    addShortcut.mockResolvedValue(6000);
+    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-adopt-noappstore"));
+      await flush(150);
+    });
+
+    // appStore gone → adoption disabled → rom 42 minted fresh (non-vacuous: a
+    // present appStore naming 9000 "Test ROM" would have adopted instead).
+    expect(addShortcut).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 6000 }, "run-adopt-noappstore", 1, 0);
+  });
+
+  it("skips an orphan whose overview resolves to no display name", async () => {
+    // The orphan's overview carries an empty display name → it can't be matched by
+    // name and is skipped, so rom 42 falls through to a fresh create.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    getLiveRomMShortcutAppIds.mockResolvedValue([9000]);
+    vi.stubGlobal("appStore", {
+      GetAppOverviewByAppID: () => ({ appid: 9000, strDisplayName: "", display_name: "" }),
+      allApps: [],
+    });
+    addShortcut.mockResolvedValue(6000);
+    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-adopt-noname"));
+      await flush(150);
+    });
+
+    // Empty name → orphan not poolable → fresh create.
+    expect(addShortcut).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 6000 }, "run-adopt-noname", 1, 0);
   });
 
   it("rebuilds the pool for a new run_id (per-run cache reset)", async () => {

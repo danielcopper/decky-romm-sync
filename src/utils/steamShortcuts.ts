@@ -154,12 +154,18 @@ export function getAllNonSteamShortcutAppIds(): number[] | null {
  * a DB reset the backend map is empty, so our shortcuts are detected by exe but
  * remain unmapped — they're treated as orphans and re-sync recreates them.
  *
+ * *preScanned* lets a caller that already ran the once-per-run
+ * `getLiveRomMShortcutAppIds()` sweep hand its result in, so the expensive
+ * per-shortcut `RegisterForAppDetails` scan runs at most once per sync run
+ * (#1366). Omit it to scan internally; a `null` *preScanned* (store unreadable)
+ * yields an empty map, exactly like a `null` internal scan.
+ *
  * Returns Map<romId, steamAppId>.
  */
-export async function getExistingRomMShortcuts(): Promise<Map<number, number>> {
+export async function getExistingRomMShortcuts(preScanned?: number[] | null): Promise<Map<number, number>> {
   const result = new Map<number, number>();
 
-  const ourAppIds = await getLiveRomMShortcutAppIds();
+  const ourAppIds = preScanned !== undefined ? preScanned : await getLiveRomMShortcutAppIds();
   if (!ourAppIds || ourAppIds.length === 0) return result;
 
   // Resolve rom_id for each of our appIds via the authoritative backend map.
