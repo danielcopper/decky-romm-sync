@@ -277,10 +277,11 @@ const PreviewChanges: FC<{ summary: SyncPreviewSummary }> = ({ summary }) => {
   if (segments.length === 0) {
     const covers = summary.cover_refresh_count ?? 0;
     if (covers > 0) return <>No shortcut changes — {pluralize(covers, "cover update")}.</>;
-    // A late-ack-recovered platform is complete but unstamped (#1416): the delta
-    // is empty, but the apply must still run once to re-stamp it and heal the
-    // lingering "interrupted" status.
-    if ((summary.restamp_platform_count ?? 0) > 0) return <>No changes — finishing an interrupted sync.</>;
+    // An unstamped platform is complete but carries no completion stamp (#1416) —
+    // a late-ack recovery, a pre-stamp-era install, or a zero-ROM platform: the
+    // delta is empty, but the apply must still run once to re-stamp it and heal
+    // the lingering "interrupted" status.
+    if ((summary.restamp_platform_count ?? 0) > 0) return <>No changes — finishing a previous sync.</>;
     return <>Everything is up to date.</>;
   }
   return (

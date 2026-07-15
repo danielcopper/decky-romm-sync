@@ -1069,7 +1069,7 @@ describe("MainPage", () => {
     it("names the re-stamp work when an unstamped platform has an empty delta (#1416)", async () => {
       const c = await renderPreview({ restamp_platform_count: 1 });
       expect(c.querySelector('[data-testid="sync-changes"]')?.textContent).toBe(
-        "No changes — finishing an interrupted sync.",
+        "No changes — finishing a previous sync.",
       );
     });
 
@@ -3039,7 +3039,7 @@ describe("MainPage", () => {
       expect(buttonByExactText(container, "Cancel")).not.toBeNull();
       expect(buttonByExactText(container, "Dismiss")).toBeNull();
       expect(container.querySelector('[data-testid="sync-changes"]')?.textContent).toBe(
-        "No changes — finishing an interrupted sync.",
+        "No changes — finishing a previous sync.",
       );
       await act(async () => {
         fireEvent.click(buttonByExactText(container, "Apply Sync")!);
