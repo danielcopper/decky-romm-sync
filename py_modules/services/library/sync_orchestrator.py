@@ -519,10 +519,13 @@ class SyncOrchestrator:
         stage's phases — ``"fetch"`` (paginated ROM listing) vs ``"covers"``
         (cover download/refresh) — so the frontend can fill each phase's own
         monotonic sub-slice of the running unit's width (#1407); it is empty
-        for every other frame. The snapshot is written to the box first so
-        :meth:`get_sync_status` always returns the latest state even if
-        the event never reaches a freshly remounted QAM — the ``sub_stage``
-        field therefore rides both the event and the remount re-seed.
+        for every other frame. It rides the payload as the camelCase
+        ``subStage`` key, matching the other multi-word snapshot keys
+        (``totalSteps`` / ``runId``); the Python parameter stays snake_case.
+        The snapshot is written to the box first so :meth:`get_sync_status`
+        always returns the latest state even if the event never reaches a
+        freshly remounted QAM — ``subStage`` therefore rides both the event
+        and the remount re-seed.
         """
         self._sync_state.sync_progress = {
             "running": running,
@@ -532,7 +535,7 @@ class SyncOrchestrator:
             "message": message,
             "step": step,
             "totalSteps": total_steps,
-            "sub_stage": sub_stage,
+            "subStage": sub_stage,
             "runId": str(self._sync_state.current_sync_id or ""),
         }
         await self._emit("sync_progress", self._sync_state.sync_progress)

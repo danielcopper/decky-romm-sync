@@ -822,7 +822,7 @@ class TestFetchProgressNarration:
         # (#1407).
         for f in frames:
             assert f["stage"] == "fetching"
-            assert f["sub_stage"] == "fetch"
+            assert f["subStage"] == "fetch"
             assert f["step"] == 3
             assert f["totalSteps"] == 12
             assert f["total"] == 7
@@ -885,7 +885,7 @@ class TestFetchProgressNarration:
         assert frames[0]["step"] == 2
         assert frames[0]["totalSteps"] == 8
         # A collection fetch narrates under the same ``fetch`` sub-stage (#1407).
-        assert all(f["sub_stage"] == "fetch" for f in frames)
+        assert all(f["subStage"] == "fetch" for f in frames)
 
     @pytest.mark.asyncio
     async def test_no_step_context_leaves_bar_indeterminate(self, plugin, fake_romm_api):

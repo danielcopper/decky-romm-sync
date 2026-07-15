@@ -84,14 +84,14 @@ describe("withinUnitFraction sub-slice model (#1407)", () => {
   });
 
   it("fetch sub-stage fills only the fetch share", () => {
-    expect(withinUnitFraction(frame({ stage: "fetching", sub_stage: "fetch", current: 3, total: 10 }))).toBeCloseTo(
+    expect(withinUnitFraction(frame({ stage: "fetching", subStage: "fetch", current: 3, total: 10 }))).toBeCloseTo(
       FETCH_SHARE * 0.3,
       10,
     );
   });
 
   it("covers sub-stage starts at the fetch ceiling and fills the covers share", () => {
-    expect(withinUnitFraction(frame({ stage: "fetching", sub_stage: "covers", current: 1, total: 4 }))).toBeCloseTo(
+    expect(withinUnitFraction(frame({ stage: "fetching", subStage: "covers", current: 1, total: 4 }))).toBeCloseTo(
       FETCH_SHARE + COVERS_SHARE * 0.25,
       10,
     );
@@ -104,10 +104,10 @@ describe("withinUnitFraction sub-slice model (#1407)", () => {
     );
   });
 
-  it("applying ignores a stale merged sub_stage (keyed on the stage alone)", () => {
+  it("applying ignores a stale merged subStage (keyed on the stage alone)", () => {
     // A frontend apply frame merges over a prior covers frame, so it can still
-    // carry sub_stage "covers"; the apply band must win regardless.
-    expect(withinUnitFraction(frame({ stage: "applying", sub_stage: "covers", current: 1, total: 1 }))).toBeCloseTo(
+    // carry subStage "covers"; the apply band must win regardless.
+    expect(withinUnitFraction(frame({ stage: "applying", subStage: "covers", current: 1, total: 1 }))).toBeCloseTo(
       1,
       10,
     );
@@ -124,7 +124,7 @@ describe("withinUnitFraction sub-slice model (#1407)", () => {
 
   it("a falsy current/total yields the phase floor, never a divide", () => {
     // covers with total 0 → the fetch ceiling (its own share contributes 0).
-    expect(withinUnitFraction(frame({ stage: "fetching", sub_stage: "covers", current: 0, total: 0 }))).toBeCloseTo(
+    expect(withinUnitFraction(frame({ stage: "fetching", subStage: "covers", current: 0, total: 0 }))).toBeCloseTo(
       FETCH_SHARE,
       10,
     );
@@ -134,7 +134,7 @@ describe("withinUnitFraction sub-slice model (#1407)", () => {
       10,
     );
     // fetch with total 0 → 0.
-    expect(withinUnitFraction(frame({ stage: "fetching", sub_stage: "fetch", current: 0, total: 0 }))).toBe(0);
+    expect(withinUnitFraction(frame({ stage: "fetching", subStage: "fetch", current: 0, total: 0 }))).toBe(0);
   });
 
   it("clamps an overshooting current/total to the phase ceiling", () => {
@@ -154,11 +154,9 @@ describe("withinUnitFraction sub-slice model (#1407)", () => {
   it("is non-decreasing across a fetch → covers → apply frame sequence", () => {
     const frames: SyncProgress[] = [
       frame({ stage: "fetching", current: 0, total: 0 }),
-      ...Array.from({ length: 7 }, (_, i) =>
-        frame({ stage: "fetching", sub_stage: "fetch", current: i + 1, total: 7 }),
-      ),
+      ...Array.from({ length: 7 }, (_, i) => frame({ stage: "fetching", subStage: "fetch", current: i + 1, total: 7 })),
       ...Array.from({ length: 100 }, (_, i) =>
-        frame({ stage: "fetching", sub_stage: "covers", current: i + 1, total: 100 }),
+        frame({ stage: "fetching", subStage: "covers", current: i + 1, total: 100 }),
       ),
       ...Array.from({ length: 50 }, (_, i) => frame({ stage: "applying", current: i + 1, total: 50 })),
     ];

@@ -1710,7 +1710,7 @@ describe("MainPage", () => {
     });
 
     it("main bar rests at the unit floor during fetch when no sub-stage is present (old backend)", async () => {
-      // A backend that predates #1407 sends fetch frames with no sub_stage: they
+      // A backend that predates #1407 sends fetch frames with no subStage: they
       // carry current/total (page counters) to drive the fine line, but with no
       // sub-slice to fill the coarse bar rests at (step-1)/totalSteps — the
       // pre-#1407 behaviour, never a backwards jump at the fetch→apply boundary.
@@ -1730,12 +1730,12 @@ describe("MainPage", () => {
     });
 
     it("fetch sub-stage fills within the fetch sub-slice (#1407)", async () => {
-      // A fetch-phase frame (sub_stage "fetch") lifts the bar within the fetch
+      // A fetch-phase frame (subStage "fetch") lifts the bar within the fetch
       // share only — page 30/62 → FETCH_SHARE * (30/62) above the unit floor.
       vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
         stage: "fetching",
-        sub_stage: "fetch",
+        subStage: "fetch",
         step: 2,
         totalSteps: 8,
         current: 30,
@@ -1750,12 +1750,12 @@ describe("MainPage", () => {
     });
 
     it("covers sub-stage continues above the fetch share (#1407)", async () => {
-      // A cover-phase frame (sub_stage "covers") starts where fetch ended
+      // A cover-phase frame (subStage "covers") starts where fetch ended
       // (FETCH_SHARE) and fills the covers share by its own current/total.
       vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
         stage: "fetching",
-        sub_stage: "covers",
+        subStage: "covers",
         step: 2,
         totalSteps: 8,
         current: 500,
@@ -1794,7 +1794,7 @@ describe("MainPage", () => {
         frames.push({
           running: true,
           stage: "fetching",
-          sub_stage: "fetch",
+          subStage: "fetch",
           step: 2,
           totalSteps: 8,
           current: page,
@@ -1806,7 +1806,7 @@ describe("MainPage", () => {
         frames.push({
           running: true,
           stage: "fetching",
-          sub_stage: "covers",
+          subStage: "covers",
           step: 2,
           totalSteps: 8,
           current: c,

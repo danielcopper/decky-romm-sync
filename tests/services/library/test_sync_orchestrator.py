@@ -964,8 +964,9 @@ class TestGetSyncStatus:
 
     @pytest.mark.asyncio
     async def test_emit_progress_sub_stage_rides_event_and_status(self, plugin):
-        """A ``sub_stage`` passed to ``emit_progress`` lands on BOTH the emitted
-        ``sync_progress`` event payload and the persisted snapshot that
+        """The ``sub_stage`` kwarg rides the payload as the camelCase ``subStage``
+        key (matching ``totalSteps`` / ``runId``) on BOTH the emitted
+        ``sync_progress`` event and the persisted snapshot that
         ``get_sync_status`` re-seeds a remounted QAM from (#1407)."""
         import decky
 
@@ -982,13 +983,13 @@ class TestGetSyncStatus:
 
         event_payloads = [c.args[1] for c in decky.emit.call_args_list if c.args and c.args[0] == "sync_progress"]
         assert event_payloads, "emit_progress must emit a sync_progress event"
-        assert event_payloads[-1]["sub_stage"] == "fetch"
+        assert event_payloads[-1]["subStage"] == "fetch"
         # Same value re-seeds a remounted QAM through get_sync_status.
-        assert plugin._sync_service.get_sync_status()["sub_stage"] == "fetch"
+        assert plugin._sync_service.get_sync_status()["subStage"] == "fetch"
 
     @pytest.mark.asyncio
     async def test_emit_progress_defaults_sub_stage_empty(self, plugin):
-        """A frame that names no phase carries an empty ``sub_stage`` — the bar
+        """A frame that names no phase carries an empty ``subStage`` — the bar
         reads it as "rest at the unit floor", never a stale phase (#1407)."""
         import decky
 
@@ -997,7 +998,7 @@ class TestGetSyncStatus:
             SyncStage.FETCHING, message="Fetching GBA", step=3, total_steps=8
         )
 
-        assert plugin._sync_service.get_sync_status()["sub_stage"] == ""
+        assert plugin._sync_service.get_sync_status()["subStage"] == ""
 
 
 class TestSyncPreviewErrorHandling:

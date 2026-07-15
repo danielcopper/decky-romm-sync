@@ -52,11 +52,11 @@ export interface SyncProgress {
    * fill each phase's own monotonic sub-slice instead of resting frozen until
    * ``applying`` (#1407). Empty/absent on every other frame (including the
    * ``fetching`` anchor and old backends), which the bar treats as "rest at the
-   * unit floor" — the pre-#1407 behaviour. Snake_case on the wire because the
-   * backend ``sync_progress`` payload lands in the store verbatim (no casing
-   * translation layer).
+   * unit floor" — the pre-#1407 behaviour. camelCase, matching the sibling
+   * ``totalSteps`` / ``runId`` keys the backend emits on the same payload (the
+   * store spreads the raw event verbatim, so the wire key IS this field name).
    */
-  sub_stage?: string;
+  subStage?: string;
   /**
    * Backend run identity for the in-flight sync, stamped from the backend's
    * ``current_sync_id``. ``""`` when no run is in flight. The authoritative

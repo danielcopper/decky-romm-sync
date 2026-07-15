@@ -46,9 +46,9 @@ export const APPLY_SHARE = 0.6;
  * Phase resolution:
  *   - ``applying`` → the whole fetch+covers width is done; fill the apply slice
  *     (keyed on the stage alone, so a merged frontend apply frame that still
- *     carries a stale ``sub_stage`` is unaffected).
- *   - ``fetching`` + ``sub_stage: "covers"`` → fetch slice done, fill covers.
- *   - ``fetching`` + ``sub_stage: "fetch"`` → fill the fetch slice.
+ *     carries a stale ``subStage`` is unaffected).
+ *   - ``fetching`` + ``subStage: "covers"`` → fetch slice done, fill covers.
+ *   - ``fetching`` + ``subStage: "fetch"`` → fill the fetch slice.
  *   - ``fetching`` with no sub-stage (the unit's coarse anchor, or an old
  *     backend) → 0: rest at the unit floor, the pre-#1407 behaviour.
  *   - any other stage (discovering, finalizing, …) → 0.
@@ -64,8 +64,8 @@ export function withinUnitFraction(progress: SyncProgress | null | undefined): n
     return FETCH_SHARE + COVERS_SHARE + APPLY_SHARE * frac;
   }
   if (progress?.stage === "fetching") {
-    if (progress.sub_stage === "covers") return FETCH_SHARE + COVERS_SHARE * frac;
-    if (progress.sub_stage === "fetch") return FETCH_SHARE * frac;
+    if (progress.subStage === "covers") return FETCH_SHARE + COVERS_SHARE * frac;
+    if (progress.subStage === "fetch") return FETCH_SHARE * frac;
   }
   return 0;
 }
