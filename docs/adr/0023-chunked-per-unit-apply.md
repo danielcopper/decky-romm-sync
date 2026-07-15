@@ -93,12 +93,18 @@ mid-unit failure forfeits only the in-flight chunk.**
   `last_sync` is deliberately **not** a fallback for the skip: a run-scoped timestamp cannot see a platform whose
   shortcuts were locally removed and only partially re-applied since, so trusting it can silently skip a platform with
   missing shortcuts — the same gap in a second coat. No stamp means a full fetch; installations from before this
-  contract carry no stamps, so their first sync re-walks once (update-path cheap) and stamps everything it completes.
-  Two rules keep the contract true. (1) The stamp is **cleared at a platform unit's apply start** (in `_sync_one_unit`,
-  once the fetch has succeeded and the apply is about to emit its first chunk) and re-written only by that unit's final
-  chunk, so an apply interrupted by a crash / cancel / heartbeat-timeout before the final chunk leaves **no** stamp —
-  never a stale one from a prior run. (2) The **local destructive flows** invalidate the stamp of every platform whose
-  shortcuts they unbind: the DangerZone remove-all and per-platform removals (both via `report_removal_results`) and the
+  contract carry no stamps, so their first sync re-walks once (update-path cheap) and stamps everything it completes. A
+  **preview-gated** sync would otherwise strand a complete-but-unstamped platform (a late-ack recovery leaves one,
+  #1416): its shortcut delta is empty, so the preview short-circuits on "no changes" before the re-walk that would
+  re-stamp it ever runs, and the run's `interrupted` status lingers because only an apply run records a fresh `SyncRun`.
+  So `sync_preview` counts enabled platforms lacking a stamp and offers Apply on that alone (`restamp_platform_count`);
+  the re-walk's empty final chunk re-writes the stamp and records a fresh `SyncRun`. The stamp is still written **only**
+  by the pipeline's final chunk — the preview counts unstamped platforms, it never stamps. Two rules keep the contract
+  true. (1) The stamp is **cleared at a platform unit's apply start** (in `_sync_one_unit`, once the fetch has succeeded
+  and the apply is about to emit its first chunk) and re-written only by that unit's final chunk, so an apply
+  interrupted by a crash / cancel / heartbeat-timeout before the final chunk leaves **no** stamp — never a stale one
+  from a prior run. (2) The **local destructive flows** invalidate the stamp of every platform whose shortcuts they
+  unbind: the DangerZone remove-all and per-platform removals (both via `report_removal_results`) and the
   Steam-UI-deletion reconcile (`reconcile_live_shortcuts`) delete the touched platforms' stamps in the same write UoW as
   the unbind. Both rules exist because unbinding keeps the `roms` row (ADR-0007), so a platform's persisted-row count is
   unchanged and a surviving stamp with a matching `rom_count` would let the skip gate skip a half-mirrored platform and

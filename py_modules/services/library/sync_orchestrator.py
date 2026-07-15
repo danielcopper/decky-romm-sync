@@ -307,6 +307,16 @@ class SyncOrchestrator:
             registry, last_synced_platforms, last_synced_collections = await self._loop.run_in_executor(
                 None, self._read_preview_baseline, slug_to_name
             )
+            # Enabled platforms lacking a completion stamp (#1416): a
+            # late-ack-recovered platform is complete but unstamped, so the
+            # wholesale-skip gate full-fetches it forever and its run status
+            # never heals. Counted here (side-effect-free read) so the preview
+            # can still offer Apply on an otherwise-empty delta — the apply's
+            # 0-delta empty final chunk re-writes the stamp and records a fresh
+            # SyncRun (the one-time re-walk ADR-0023 intends).
+            restamp_platform_count = await self._loop.run_in_executor(
+                None, self._count_unstamped_platforms, set(slug_to_name)
+            )
             # Collapse to one entry per sibling group (ADR-0021) so the preview
             # counts games, not individual dumps: a multi-version game becomes one
             # shortcut and its unbound siblings stop reading as perpetual "new".
@@ -390,6 +400,13 @@ class SyncOrchestrator:
                     # of short-circuiting on "no changes". Additive: old consumers
                     # ignore it.
                     "cover_refresh_count": cover_refresh_count,
+                    # Enabled platforms lacking a completion stamp (#1416) — a
+                    # late-ack-recovered platform is complete but unstamped. Its
+                    # apply is a 0-delta empty final chunk that re-writes the
+                    # stamp and records a fresh SyncRun, so a restamp-only preview
+                    # must still offer Apply instead of short-circuiting on "no
+                    # changes". Additive: old consumers ignore it.
+                    "restamp_platform_count": restamp_platform_count,
                     # Scope of the run (#29): how many platforms / collections this
                     # sync spans, shown as an always-on informational line
                     # independent of the change diffs.
@@ -942,6 +959,20 @@ class SyncOrchestrator:
             last_platforms = list(latest.platforms_completed or []) if latest is not None else []
             last_collections = list(latest.collections_completed or []) if latest is not None else []
         return registry, last_platforms, last_collections
+
+    def _count_unstamped_platforms(self, platform_slugs: set[str]) -> int:
+        """Count enabled platform slugs without a ``PlatformSyncState`` stamp.
+
+        A platform lacking a completion stamp has no wholesale-skip authority —
+        ``LibraryFetcher._try_unit_incremental_skip`` full-fetches it — so its
+        apply runs even at a zero shortcut delta and the empty final chunk
+        re-writes the stamp (the one-time re-walk ADR-0023 intends after a
+        late-ack recovery leaves a platform complete-but-unstamped). Surfaced as
+        the preview's ``restamp_platform_count`` so the frontend still offers
+        Apply on an otherwise-empty delta (#1416). One short read UoW.
+        """
+        with self._uow_factory() as uow:
+            return sum(1 for slug in platform_slugs if uow.platform_sync_state.get(slug) is None)
 
     def _read_apply_registry(self, unit: WorkUnit) -> dict[str, dict[str, Any]]:
         """Read the bound-row registry the per-unit group collapse diffs against.

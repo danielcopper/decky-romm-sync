@@ -167,6 +167,15 @@ export interface SyncPreviewSummary {
    * (treat as 0).
    */
   cover_refresh_count?: number;
+  /**
+   * Enabled platforms lacking a completion stamp (#1416) — a late-ack-recovered
+   * platform is complete but unstamped, so its apply is a 0-delta empty final
+   * chunk that re-writes the stamp and records a fresh run. A restamp-only
+   * preview (all other diffs zero, this > 0) must still offer Apply, or the
+   * stamp never returns and "Last sync: interrupted" lingers. Absent on older
+   * backends (treat as 0).
+   */
+  restamp_platform_count?: number;
   /** Scope of the run — how many platforms this sync spans (always shown, independent of diffs). */
   sync_platform_count?: number;
   /** Scope of the run — how many collections this sync spans. */

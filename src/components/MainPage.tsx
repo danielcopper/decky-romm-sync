@@ -277,6 +277,10 @@ const PreviewChanges: FC<{ summary: SyncPreviewSummary }> = ({ summary }) => {
   if (segments.length === 0) {
     const covers = summary.cover_refresh_count ?? 0;
     if (covers > 0) return <>No shortcut changes — {pluralize(covers, "cover update")}.</>;
+    // A late-ack-recovered platform is complete but unstamped (#1416): the delta
+    // is empty, but the apply must still run once to re-stamp it and heal the
+    // lingering "interrupted" status.
+    if ((summary.restamp_platform_count ?? 0) > 0) return <>No changes — finishing an interrupted sync.</>;
     return <>Everything is up to date.</>;
   }
   return (
@@ -889,7 +893,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       // Cover-only work (#1386): the refresh pass runs inside the apply, so an
       // empty shortcut delta with pending cover updates must still offer Apply —
       // the old "no changes" short-circuit stranded changed covers forever.
-      (preview.summary.cover_refresh_count ?? 0) > 0;
+      (preview.summary.cover_refresh_count ?? 0) > 0 ||
+      // Unstamped platforms (#1416): a late-ack-recovered platform needs a
+      // 0-delta apply run to re-stamp itself and heal the lingering
+      // "interrupted" status, so offer Apply even when every change count is zero.
+      (preview.summary.restamp_platform_count ?? 0) > 0;
     // Walk cost, shared with the handleApply seed (previewApplySeconds) so the
     // approved number equals the run's seed. Delta-only pricing here read "2 min"
     // for a resume whose apply walked ~3100 items.

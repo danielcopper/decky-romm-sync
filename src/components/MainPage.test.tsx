@@ -1065,6 +1065,19 @@ describe("MainPage", () => {
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
       expect(descs).toContain("Everything is up to date.");
     });
+
+    it("names the re-stamp work when an unstamped platform has an empty delta (#1416)", async () => {
+      const c = await renderPreview({ restamp_platform_count: 1 });
+      expect(c.querySelector('[data-testid="sync-changes"]')?.textContent).toBe(
+        "No changes — finishing an interrupted sync.",
+      );
+    });
+
+    it("keeps 'Everything is up to date.' when restamp is explicitly zero (regression pin)", async () => {
+      const c = await renderPreview({ restamp_platform_count: 0 });
+      const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
+      expect(descs).toContain("Everything is up to date.");
+    });
   });
 
   describe("session-budget advisory (#1383)", () => {
@@ -2993,6 +3006,46 @@ describe("MainPage", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(backend.syncApplyDelta)).toHaveBeenCalledWith("preview-covers");
+    });
+
+    it("unstamped-platform preview proceeds to Apply with the re-stamp wording (#1416)", async () => {
+      // Empty shortcut delta but a platform lacking a completion stamp: the
+      // apply must still run once to re-stamp it and heal the lingering
+      // "interrupted" status, so the flow offers Apply/Cancel rather than the
+      // "no changes" dead end.
+      vi.mocked(backend.syncPreview).mockResolvedValue({
+        success: true,
+        summary: {
+          new_count: 0,
+          changed_count: 0,
+          unchanged_count: 4,
+          remove_count: 0,
+          disabled_platform_remove_count: 0,
+          cover_refresh_count: 0,
+          restamp_platform_count: 1,
+        },
+        new_names: [],
+        changed_names: [],
+        preview_id: "preview-restamp",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(buttonByExactText(container, "Apply Sync")).not.toBeNull();
+      expect(buttonByExactText(container, "Cancel")).not.toBeNull();
+      expect(buttonByExactText(container, "Dismiss")).toBeNull();
+      expect(container.querySelector('[data-testid="sync-changes"]')?.textContent).toBe(
+        "No changes — finishing an interrupted sync.",
+      );
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Apply Sync")!);
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.syncApplyDelta)).toHaveBeenCalledWith("preview-restamp");
     });
 
     it("zero changes with explicit zero covers keeps the exact Dismiss-only shape (regression pin)", async () => {

@@ -640,6 +640,99 @@ class TestPreviewCoverRefreshCount:
         assert registry["10"]["cover_source"] == self._OLD
 
 
+class TestPreviewRestampPlatformCount:
+    """The preview's unstamped-platform re-run count (#1416).
+
+    A late-ack-recovered platform is complete but carries no ``PlatformSyncState``
+    stamp, so its shortcut delta is empty yet its apply must still run once to
+    re-stamp it. The preview counts enabled platforms without a completion stamp
+    (``restamp_platform_count``) so the frontend offers Apply on an otherwise-empty
+    delta instead of short-circuiting — a fully-stamped library keeps counting 0
+    and short-circuits exactly as before.
+    """
+
+    @staticmethod
+    def _preview_setup(plugin, fake_romm_api):
+        import decky
+
+        plugin.loop = asyncio.get_event_loop()
+        decky.emit.reset_mock()
+        _use_fake_romm(plugin, fake_romm_api)
+
+    @pytest.mark.asyncio
+    async def test_unstamped_platform_counted_with_empty_delta(self, plugin, fake_romm_api):
+        # A bound, content-unchanged platform ROM with NO completion stamp: the
+        # shortcut delta is empty (0 new / changed / removed) but the platform
+        # needs a re-stamp run, so restamp_platform_count is 1.
+        self._preview_setup(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "Keep", "fs_name": "keep.z64"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64")
+
+        result = await plugin.sync_preview()
+
+        assert result["success"] is True
+        summary = result["summary"]
+        assert summary["restamp_platform_count"] == 1
+        assert summary["new_count"] == 0
+        assert summary["changed_count"] == 0
+        assert summary["remove_count"] == 0
+        assert summary["cover_refresh_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_stamped_platform_not_counted(self, plugin, fake_romm_api):
+        # The same unchanged platform WITH a matching completion stamp: no
+        # re-stamp is owed, so the count stays 0 and the "up to date"
+        # short-circuit is preserved.
+        self._preview_setup(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "Keep", "fs_name": "keep.z64"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64")
+        _seed_platform_stamp(plugin, "n64", at="2025-01-01T00:00:00", rom_count=1)
+
+        result = await plugin.sync_preview()
+
+        assert result["success"] is True
+        summary = result["summary"]
+        assert summary["restamp_platform_count"] == 0
+        assert summary["new_count"] == 0
+        assert summary["changed_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_counts_only_unstamped_across_mixed_platforms(self, plugin, fake_romm_api):
+        # Two enabled platforms, one stamped and one not: only the unstamped one
+        # is counted (the count is not a whole-library boolean).
+        self._preview_setup(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api, platform_id=1, name="N64", slug="n64", roms=[{"id": 10, "name": "A", "fs_name": "a.z64"}]
+        )
+        _seed_platform(
+            fake_romm_api, platform_id=2, name="GBA", slug="gba", roms=[{"id": 20, "name": "B", "fs_name": "b.gba"}]
+        )
+        plugin.settings["enabled_platforms"] = {"1": True, "2": True}
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="A", fs_name="a.z64")
+        _seed_rom_row(plugin, 20, app_id=2020, platform_slug="gba", name="B", fs_name="b.gba")
+        # Only n64 carries a stamp; gba is the unstamped late-ack survivor.
+        _seed_platform_stamp(plugin, "n64", at="2025-01-01T00:00:00", rom_count=1)
+
+        result = await plugin.sync_preview()
+
+        assert result["success"] is True
+        assert result["summary"]["restamp_platform_count"] == 1
+
+
 class TestSyncApplyDelta:
     """Tests for sync_apply_delta().
 
@@ -1328,6 +1421,59 @@ class TestDoSyncPerUnit:
         assert "collapsed_count" not in units["GBA"]
         assert "predicted_skip" not in units["Faves"]
         assert "collapsed_count" not in units["Faves"]
+
+    @pytest.mark.asyncio
+    async def test_unstamped_zero_delta_platform_restamps_and_records_run(self, plugin, fake_romm_api):
+        """#1416: an unstamped platform with a 0 shortcut delta still runs the apply.
+
+        A late-ack recovery leaves the platform complete but unstamped. The next
+        apply must NOT wholesale-skip it (no stamp): its delta-restricted apply
+        emits a single empty final chunk whose commit re-writes the completion
+        stamp, and the run records a fresh completed ``SyncRun`` — so the platform
+        stops full-fetching forever and the "interrupted" status heals.
+        """
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "Keep", "fs_name": "keep.z64"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        # Bound + content-unchanged → empty delta. NO completion stamp: the
+        # complete-but-unstamped residue a heartbeat-timeout's late ack leaves.
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64")
+        with plugin._uow as uow:
+            assert uow.platform_sync_state.get("n64") is None
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-restamp"
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        # The apply ran despite the empty delta: a single empty final chunk fired.
+        unit_events = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+        assert len(unit_events) == 1
+        assert unit_events[0]["shortcuts"] == []
+        assert unit_events[0]["chunk_count"] == 1
+
+        # The empty chunk's commit re-wrote the platform stamp, and the run
+        # recorded a fresh completed SyncRun.
+        with plugin._uow as uow:
+            stamp = uow.platform_sync_state.get("n64")
+            assert stamp is not None
+            assert stamp.rom_count == 1
+            completed = uow.sync_runs.get_latest_completed()
+            assert completed is not None
+            assert completed.id == "run-restamp"
 
     @pytest.mark.asyncio
     async def test_processes_each_unit_in_order(self, plugin, fake_romm_api):

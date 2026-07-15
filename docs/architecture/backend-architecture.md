@@ -229,6 +229,20 @@ the apply path as before. The fingerprint is only ever advanced when the cache i
 old fingerprint and the change is retried next sync. A cover-only change never re-applies the shortcut itself (that
 apply path writes launch options under the ADR-0025 invariant — pure churn for a cover).
 
+**Unstamped-platform re-run: the `restamp_platform_count` signal (#1416).** A heartbeat-timeout run's late-ack recovery
+(ADR-0023) leaves a platform **complete but unstamped**: the timed-out apply cleared the stamp at its start and its late
+ack re-binds the chunk without re-writing it (the late-ack path never passes a `platform_stamp`). The wholesale-skip
+gate then full-fetches that platform on every future sync (no stamp = no skip authority), and — because its shortcut
+delta is otherwise empty — the QAM's preview would short-circuit on "no changes", so the re-walk that would re-stamp it
+never runs and the run's `interrupted` status lingers indefinitely (only an apply run records a fresh `SyncRun`).
+`sync_preview` therefore counts the enabled platforms lacking a `PlatformSyncState` stamp (`_count_unstamped_platforms`,
+a side-effect-free read) and rides it as the additive summary field `restamp_platform_count` (absent/0 tolerated by old
+consumers). The frontend treats a restamp-only preview (all diffs zero, count > 0) as apply-able — "No changes —
+finishing an interrupted sync." with the normal Apply/Cancel confirm — mirroring the cover-only flow. The gated apply
+then runs the unstamped platform (the skip gate never skips it), and its 0-delta empty final chunk re-writes the stamp
+and records a fresh completed `SyncRun`, healing both symptoms. The stamp write stays pipeline-owned: the preview only
+counts unstamped platforms, it never stamps (`check_sync_lifecycle_owner` / the final-chunk-only rule).
+
 **Per-unit apply is chunked, durable per chunk
 ([ADR-0023](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0023-chunked-per-unit-apply.md)).** The
 delta emit list is split into fixed-size chunks (`_APPLY_CHUNK_SIZE`, 200) by the pure

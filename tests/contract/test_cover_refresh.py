@@ -224,6 +224,9 @@ async def test_cover_only_change_flows_from_preview_to_apply_via_callables(harne
     assert summary["new_count"] == 0
     assert summary["changed_count"] == 0
     assert summary["remove_count"] == 0
+    # The seeding run stamped the platform, so a cover-only change reports no
+    # re-stamp — Apply is offered on the cover work alone (#1416 regression pin).
+    assert summary["restamp_platform_count"] == 0
     # The preview stayed read-only: no cover download, fingerprint unchanged.
     assert _download_cover_urls(harness)[downloads_before:] == []
     with harness.uow_factory() as uow:
@@ -267,3 +270,6 @@ async def test_pure_no_changes_preview_keeps_zero_cover_count(harness):
     assert summary["changed_count"] == 0
     assert summary["remove_count"] == 0
     assert summary["cover_refresh_count"] == 0
+    # Fully stamped + unchanged → no re-stamp owed either: the "Everything is up
+    # to date." short-circuit stays intact (#1416).
+    assert summary["restamp_platform_count"] == 0
