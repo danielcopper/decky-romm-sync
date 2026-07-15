@@ -963,6 +963,27 @@ class TestPlanEstimates:
         assert units[0].collapsed_count is None
 
     @pytest.mark.asyncio
+    async def test_partial_rows_without_stamp_predict_no_collapsed_count(self, plugin, fake_romm_api):
+        """#1412: a never-synced but enabled platform carrying only partial
+        collection-sibling rows (no completion stamp) must NOT price the ETA at
+        the partial local count — the estimate omits collapsed_count so the
+        frontend weights the unit at the full server rom_count instead.
+        """
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        # A big platform whose only local rows are a couple of favorited siblings
+        # (ADR-0021) — no stamp, because it was never synced as a platform.
+        fake_romm_api.platforms = [{"id": 1, "name": "SNES", "slug": "snes", "rom_count": 3344}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1", platform_slug="snes")
+        _seed_persisted_rom(uow, 11, app_id=1002, group_key="igdb:101:1", platform_slug="snes")
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert units[0].predicted_skip is False
+        assert units[0].collapsed_count is None
+
+    @pytest.mark.asyncio
     async def test_stamp_count_mismatch_predicts_no_skip_but_keeps_collapsed_count(self, plugin, fake_romm_api):
         _wire_fake(plugin, fake_romm_api)
         uow = plugin._uow
@@ -1038,13 +1059,17 @@ class TestPlanEstimates:
 
         before = await plugin._sync_service._fetcher.build_work_queue()
         assert before[0].predicted_skip is True
+        assert before[0].collapsed_count == 1
 
         plugin._sync_service.clear_sync_cache()
 
         after = await plugin._sync_service._fetcher.build_work_queue()
         assert after[0].predicted_skip is False
-        # The rows survive the cache clear, so the collapsed count still shows.
-        assert after[0].collapsed_count == 1
+        # The stamp clear also drops the collapsed count (#1412 gate): the forced
+        # re-apply recreates every shortcut, so the ETA is priced at the full
+        # server rom_count, not the (now stale) persisted collapse. The rows
+        # survive the clear, but without a stamp the count is not emitted.
+        assert after[0].collapsed_count is None
 
     @pytest.mark.asyncio
     async def test_estimate_read_failure_leaves_fields_none_and_plan_intact(self, plugin, fake_romm_api):

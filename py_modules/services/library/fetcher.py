@@ -496,11 +496,19 @@ class LibraryFetcher:
         the server count, bound rows exist, no group-key backfill pending) and
         derive the persisted post-collapse shortcut count
         (``collapsed_shortcut_count`` over the rows' sibling-group keys +
-        bound flags; ``None`` when the platform has no persisted rows). The gate's
+        bound flags). The collapsed count is emitted ONLY for slugs that carry
+        a ``PlatformSyncState`` completion stamp (#1412) — the same gate as
+        ``_read_collapsed_counts``: the stamp exists iff the local mirror is
+        complete, so without it a never-synced platform's PARTIAL rows
+        (cross-platform collection siblings, ADR-0021) would mis-weight the ETA
+        below the true work. ``None`` (no stamp, or no persisted rows) rides the
+        payload absent, so the frontend weights the unit at its raw ``rom_count``
+        (``predicted_skip ? 0 : collapsed_count ?? rom_count``). The gate's
         server-delta check (``list_roms_updated_after``) is deliberately NOT
         replayed — no network at plan time. A Force Full Sync clears every
-        stamp before the run, so its plan predicts no skips without a special
-        case. One short read UoW for the whole plan.
+        stamp before the run, so its plan predicts no skips AND drops every
+        collapsed count (the forced re-apply is priced at the full ``rom_count``)
+        without a special case. One short read UoW for the whole plan.
 
         Estimate-ONLY (ADR-0023): the result rides the ``sync_plan`` payload
         and must never feed the actual skip decision —
@@ -524,7 +532,7 @@ class LibraryFetcher:
                     collapsed_shortcut_count(
                         (rom.sibling_group_key, rom.shortcut_app_id is not None) for rom in all_rows
                     )
-                    if all_rows
+                    if stamp is not None and all_rows
                     else None
                 )
                 estimates[unit.slug] = (predicted, collapsed)
