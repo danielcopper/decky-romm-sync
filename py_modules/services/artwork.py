@@ -23,7 +23,16 @@ import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from domain.artwork_paths import TMP_SUFFIX, cache_filename, final_filename, staging_filename, with_tmp_suffix
+from domain.artwork_paths import (
+    TMP_SUFFIX,
+    cache_filename,
+    final_filename,
+    grid_image_filenames,
+    is_shortcut_app_id,
+    parse_grid_image_app_id,
+    staging_filename,
+    with_tmp_suffix,
+)
 from domain.sync_stage import SyncStage
 from lib.list_result import ErrorCode
 
@@ -429,26 +438,26 @@ class ArtworkService:
     # ── Artwork removal ────────────────────────────────────────────────────
 
     def remove_artwork_files(self, grid: str, rom_id: str | int, entry: ShortcutRegistryEntry) -> None:
-        """Remove all artwork files for a registry entry, including the cache cover."""
-        removed = False
-        # Try cover_path first (the persisted cache or grid path)
+        """Remove all artwork files for a registry entry, including the cache cover.
+
+        Sweeps the FULL grid-image set for the removed shortcut's appId —
+        portrait/wide/hero/logo/icon across png/jpg/jpeg — not just the
+        ``{app_id}p.png`` the plugin itself writes: Steam (or the user) may
+        have saved companion art beside the portrait, and a removed shortcut
+        must not leave any of it behind.
+        """
+        # The persisted cover_path (a cache path, or a legacy grid path)
         cover_path = entry.get("cover_path", "")
         if cover_path and self._cover_art_file_store.exists(cover_path):
             self._cover_art_file_store.remove_file(cover_path)
-            removed = True
-        # Try {app_id}p.png (the standard Steam grid filename)
-        if not removed and entry.get("app_id"):
-            app_path = os.path.join(grid, final_filename(entry["app_id"]))
-            if self._cover_art_file_store.exists(app_path):
-                self._cover_art_file_store.remove_file(app_path)
-                removed = True
+        # Sweep every grid-image form for the removed shortcut's appId
+        app_id = entry.get("app_id")
+        if app_id:
+            self._remove_grid_images(grid, app_id)
         # Fallback: legacy artwork_id format
-        if not removed:
-            artwork_id = entry.get("artwork_id")
-            if artwork_id:
-                art_path = os.path.join(grid, final_filename(artwork_id))
-                if self._cover_art_file_store.exists(art_path):
-                    self._cover_art_file_store.remove_file(art_path)
+        artwork_id = entry.get("artwork_id")
+        if artwork_id:
+            self._remove_grid_images(grid, artwork_id)
         # Clean up any leftover staging file
         staging = os.path.join(grid, staging_filename(rom_id))
         if self._cover_art_file_store.exists(staging):
@@ -457,6 +466,13 @@ class ArtworkService:
         cache_path = self._cache_path(rom_id)
         if self._cover_art_file_store.exists(cache_path):
             self._cover_art_file_store.remove_file(cache_path)
+
+    def _remove_grid_images(self, grid: str, app_id: int | str) -> None:
+        """Remove every grid-image form for *app_id* from the grid dir."""
+        for filename in grid_image_filenames(app_id):
+            path = os.path.join(grid, filename)
+            if self._cover_art_file_store.exists(path):
+                self._cover_art_file_store.remove_file(path)
 
     # ── Artwork base64 query ───────────────────────────────────────────────
 
@@ -729,3 +745,71 @@ class ArtworkService:
         except OSError as e:
             self._logger.warning(f"Failed to remove orphaned cover cache {filename}: {e}")
             return False
+
+    # ── Orphaned grid-image cleanup (user-triggered) ───────────────────────
+
+    async def cleanup_orphaned_grid_images(self, live_app_ids: list[int], dry_run: bool) -> dict[str, Any]:
+        """Delete grid images whose appId belongs to no live non-Steam shortcut.
+
+        *live_app_ids* is the frontend's full scan of Steam's live non-Steam
+        shortcuts (RomM-owned AND foreign) — the keep-set. Candidates are only
+        grid-image-named files whose parsed appId sits in the shortcut range
+        (:func:`is_shortcut_app_id`), so custom art for regular Steam games
+        (small store appIds) is never touched. A submitted set missing even
+        one bound ``roms.shortcut_app_id`` is provably incomplete — the whole
+        run refuses (``incomplete_scan``) and deletes nothing. ``dry_run``
+        counts the candidates without deleting (the first tap of the QAM
+        confirm flow); the real run hard-deletes and reports ``removed_count``.
+        """
+        grid = self._steam_config.grid_dir()
+        if not grid or not self._cover_art_file_store.is_dir(grid):
+            return {
+                "success": False,
+                "reason": "no_grid_dir",
+                "message": "Steam grid directory not found",
+            }
+        live = {int(app_id) for app_id in live_app_ids}
+        return await self._loop.run_in_executor(None, self._cleanup_orphaned_grid_images_io, grid, live, dry_run)
+
+    def _cleanup_orphaned_grid_images_io(self, grid: str, live: set[int], dry_run: bool) -> dict[str, Any]:
+        """Sync worker: sanity-check the live set, scan the grid dir, delete orphans.
+
+        The sanity guard runs before any deletion: every bound
+        ``roms.shortcut_app_id`` must appear in *live*, else the scan missed
+        at least one real shortcut and nothing can be trusted as orphaned.
+        """
+        with self._uow_factory() as uow:
+            bound = {rom.shortcut_app_id for rom in uow.roms.iter_all() if rom.shortcut_app_id is not None}
+        missing = bound - live
+        if missing:
+            return {
+                "success": False,
+                "reason": "incomplete_scan",
+                "message": (
+                    f"Steam's shortcut scan is missing {len(missing)} synced shortcut(s) — "
+                    "the scan is incomplete, nothing was removed."
+                ),
+            }
+
+        orphans: list[str] = []
+        for filename in self._cover_art_file_store.listdir(grid):
+            app_id = parse_grid_image_app_id(filename)
+            if app_id is None or not is_shortcut_app_id(app_id) or app_id in live:
+                continue
+            if self._cover_art_file_store.is_dir(os.path.join(grid, filename)):
+                continue
+            orphans.append(filename)
+
+        if dry_run:
+            return {"success": True, "candidate_count": len(orphans)}
+
+        removed = 0
+        for filename in orphans:
+            try:
+                self._cover_art_file_store.remove_file(os.path.join(grid, filename))
+                removed += 1
+            except OSError as e:
+                self._logger.warning(f"Failed to remove orphaned grid image {filename}: {e}")
+        if removed:
+            self._logger.info(f"Removed {removed} orphaned grid image(s)")
+        return {"success": True, "removed_count": removed}

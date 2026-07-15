@@ -20,13 +20,14 @@ import {
   uninstallAllRoms,
   deletePlatformSaves,
   deletePlatformBios,
+  cleanupOrphanedGridImages,
   logInfo,
   logWarn,
   logError,
   getWhitelistSettings,
   updateWhitelistSettings,
 } from "../api/backend";
-import { removeShortcut } from "../utils/steamShortcuts";
+import { removeShortcut, getAllNonSteamShortcutAppIds } from "../utils/steamShortcuts";
 import { batchConfirmLaunchOptions } from "../utils/launchOptionsReconcile";
 import { getSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
 import { scrollToTop } from "../utils/scrollHelpers";
@@ -406,6 +407,105 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
   );
 };
 
+// Removed or re-created shortcuts leave their grid images ({app_id}p.png and
+// the hero/logo/icon/wide companions) behind forever. This section deletes
+// grid files whose appId belongs to no live non-Steam shortcut. Safety model:
+// the keep-set is the frontend's FULL live-shortcut scan (RomM-owned AND
+// foreign); a null scan aborts before the backend is ever called ("scan
+// couldn't run → delete nothing"); the backend range-checks every candidate
+// (store-game art is never touched) and refuses outright when any bound
+// shortcut is missing from the submitted set. Two-tap confirm: the first tap
+// is a backend DRY-RUN that puts the real count into the confirm label.
+const OrphanedGridCleanupSection: FC = () => {
+  const [confirmCleanup, setConfirmCleanup] = useState(false);
+  const [candidateCount, setCandidateCount] = useState(0);
+  const [cleanupStatus, setCleanupStatus] = useState("");
+  const syncRunning = useSyncRunning();
+
+  const handleCleanup = async () => {
+    const liveAppIds = getAllNonSteamShortcutAppIds();
+    if (liveAppIds === null) {
+      // The scan could not run — without the live keep-set, nothing can be
+      // proven orphaned. Abort without calling the backend.
+      setConfirmCleanup(false);
+      setCleanupStatus("Could not read Steam's shortcut list — nothing was removed.");
+      return;
+    }
+    if (!confirmCleanup) {
+      try {
+        const result = await cleanupOrphanedGridImages(liveAppIds, true);
+        if (!result.success) {
+          setCleanupStatus(result.message ?? "Failed to scan for orphaned images");
+          return;
+        }
+        const count = result.candidate_count ?? 0;
+        if (count === 0) {
+          setCleanupStatus("No orphaned grid images found");
+          return;
+        }
+        setCandidateCount(count);
+        setConfirmCleanup(true);
+        setCleanupStatus("");
+      } catch {
+        setCleanupStatus("Failed to scan for orphaned images");
+      }
+      return;
+    }
+    setConfirmCleanup(false);
+    try {
+      const result = await cleanupOrphanedGridImages(liveAppIds, false);
+      if (!result.success) {
+        setCleanupStatus(result.message ?? "Failed to remove orphaned images");
+        return;
+      }
+      const removed = result.removed_count ?? 0;
+      setCleanupStatus(`Removed ${removed} orphaned image${removed === 1 ? "" : "s"}`);
+    } catch {
+      setCleanupStatus("Failed to remove orphaned images");
+    }
+  };
+
+  return (
+    <PanelSection title="Steam Grid Images">
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          onClick={() => {
+            detach(handleCleanup());
+          }}
+          disabled={syncRunning}
+          description={syncRunning ? SYNC_RUNNING_HINT : undefined}
+        >
+          {confirmCleanup ? (
+            <span style={{ color: "#ff8800" }}>
+              Confirm: remove {candidateCount} orphaned image{candidateCount === 1 ? "" : "s"}?
+            </span>
+          ) : (
+            "Remove Orphaned Grid Images"
+          )}
+        </ButtonItem>
+      </PanelSectionRow>
+      {confirmCleanup && (
+        <PanelSectionRow>
+          <Field
+            label={
+              <span style={{ color: "#ff8800" }}>
+                Deletes leftover Steam grid artwork whose shortcut no longer exists. Artwork of live shortcuts
+                (including non-RomM ones) is kept.
+              </span>
+            }
+          />
+        </PanelSectionRow>
+      )}
+      {cleanupStatus && (
+        <PanelSectionRow>
+          <Field label={cleanupStatus} />
+        </PanelSectionRow>
+      )}
+    </PanelSection>
+  );
+};
+
 interface WhitelistSectionProps {
   nonSteamApps: NonSteamApp[];
   whitelistedIds: Set<number>;
@@ -746,6 +846,8 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
         status={status}
         setStatus={setStatus}
       />
+
+      <OrphanedGridCleanupSection />
 
       <RetroDeckSection
         nonSteamApps={nonSteamApps}

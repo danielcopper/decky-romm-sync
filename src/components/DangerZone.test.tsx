@@ -11,7 +11,7 @@ import { createElement, type ReactElement } from "react";
 import { DangerZone } from "./DangerZone";
 import * as backend from "../api/backend";
 import { showModal } from "@decky/ui";
-import { removeShortcut, setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
+import { removeShortcut, setLaunchOptionsConfirmed, getAllNonSteamShortcutAppIds } from "../utils/steamShortcuts";
 import { clearPlatformCollection, clearAllRomMCollections } from "../utils/collections";
 import { formatUninstallStatus } from "../utils/formatters";
 import { setSyncProgress } from "../utils/syncProgress";
@@ -21,7 +21,11 @@ vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
 // setLaunchOptionsConfirmed is exercised through the real batchConfirmLaunchOptions
 // (launchOptionsReconcile stays unmocked) — mock the leaf so the bulk-uninstall
 // launch-options reset (#1146) is asserted without touching SteamClient.
-vi.mock("../utils/steamShortcuts", () => ({ removeShortcut: vi.fn(), setLaunchOptionsConfirmed: vi.fn() }));
+vi.mock("../utils/steamShortcuts", () => ({
+  removeShortcut: vi.fn(),
+  setLaunchOptionsConfirmed: vi.fn(),
+  getAllNonSteamShortcutAppIds: vi.fn(),
+}));
 vi.mock("../utils/collections", () => ({
   clearPlatformCollection: vi.fn(),
   clearAllRomMCollections: vi.fn(),
@@ -94,6 +98,11 @@ describe("DangerZone", () => {
       app_ids: [],
     });
     vi.mocked(setLaunchOptionsConfirmed).mockResolvedValue(true);
+    vi.mocked(getAllNonSteamShortcutAppIds).mockReturnValue([]);
+    vi.mocked(backend.cleanupOrphanedGridImages).mockResolvedValue({
+      success: true,
+      candidate_count: 0,
+    });
     vi.mocked(backend.deletePlatformSaves).mockResolvedValue({
       success: true,
       deleted_count: 0,
@@ -822,6 +831,155 @@ describe("DangerZone", () => {
     });
   });
 
+  describe("OrphanedGridCleanupSection", () => {
+    it("first tap dry-runs and arms the confirm with the counted label; second tap executes", async () => {
+      vi.mocked(getAllNonSteamShortcutAppIds).mockReturnValue([111, 222]);
+      vi.mocked(backend.cleanupOrphanedGridImages)
+        .mockResolvedValueOnce({ success: true, candidate_count: 3 })
+        .mockResolvedValueOnce({ success: true, removed_count: 3 });
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+
+      // First tap — DRY-RUN only: the callable runs with dry_run=true and
+      // nothing is deleted; the confirm label carries the real count.
+      await act(async () => {
+        fireEvent.click(getByText("Remove Orphaned Grid Images"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.cleanupOrphanedGridImages)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(backend.cleanupOrphanedGridImages)).toHaveBeenCalledWith([111, 222], true);
+      expect(container.textContent).toContain("Confirm: remove 3 orphaned images?");
+
+      // Second tap — the real run.
+      await act(async () => {
+        fireEvent.click(getByText("Confirm: remove 3 orphaned images?"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.cleanupOrphanedGridImages)).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(backend.cleanupOrphanedGridImages)).toHaveBeenLastCalledWith([111, 222], false);
+      expect(container.textContent).toContain("Removed 3 orphaned images");
+    });
+
+    it("uses the singular label form for a single candidate", async () => {
+      vi.mocked(getAllNonSteamShortcutAppIds).mockReturnValue([111]);
+      vi.mocked(backend.cleanupOrphanedGridImages).mockResolvedValue({ success: true, candidate_count: 1 });
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Remove Orphaned Grid Images"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("Confirm: remove 1 orphaned image?");
+      expect(container.textContent).not.toContain("Confirm: remove 1 orphaned images?");
+    });
+
+    it("aborts without calling the backend when the live-shortcut scan returns null", async () => {
+      // "Scan couldn't run → delete nothing": without the live keep-set the
+      // backend must never be asked to delete anything.
+      vi.mocked(getAllNonSteamShortcutAppIds).mockReturnValue(null);
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Remove Orphaned Grid Images"));
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.cleanupOrphanedGridImages)).not.toHaveBeenCalled();
+      expect(container.textContent).toContain("Could not read Steam's shortcut list — nothing was removed.");
+    });
+
+    it("reports zero candidates without arming the confirm", async () => {
+      vi.mocked(backend.cleanupOrphanedGridImages).mockResolvedValue({ success: true, candidate_count: 0 });
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Remove Orphaned Grid Images"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("No orphaned grid images found");
+      expect(container.textContent).not.toContain("Confirm: remove");
+    });
+
+    it("surfaces a gate refusal message on the first tap and does not arm", async () => {
+      // Mirrors the @migration_blocked / @sync_active_blocked short-circuit
+      // shape: success false + message, no counts.
+      vi.mocked(backend.cleanupOrphanedGridImages).mockResolvedValue({
+        success: false,
+        message: "Pending RetroDECK migration. Open the plugin QAM to migrate or dismiss.",
+        blocked_by_migration: true,
+      });
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Remove Orphaned Grid Images"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("Pending RetroDECK migration");
+      expect(container.textContent).not.toContain("Confirm: remove");
+    });
+
+    it("surfaces the incomplete_scan refusal on the second tap", async () => {
+      vi.mocked(getAllNonSteamShortcutAppIds).mockReturnValue([111]);
+      vi.mocked(backend.cleanupOrphanedGridImages)
+        .mockResolvedValueOnce({ success: true, candidate_count: 2 })
+        .mockResolvedValueOnce({
+          success: false,
+          reason: "incomplete_scan",
+          message:
+            "Steam's shortcut scan is missing 1 synced shortcut(s) — the scan is incomplete, nothing was removed.",
+        });
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Remove Orphaned Grid Images"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        fireEvent.click(getByText("Confirm: remove 2 orphaned images?"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("nothing was removed");
+    });
+
+    it("surfaces 'Failed to scan for orphaned images' when the dry run rejects", async () => {
+      vi.mocked(backend.cleanupOrphanedGridImages).mockRejectedValue(new Error("io"));
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Remove Orphaned Grid Images"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("Failed to scan for orphaned images");
+    });
+
+    it("surfaces 'Failed to remove orphaned images' when the real run rejects", async () => {
+      vi.mocked(getAllNonSteamShortcutAppIds).mockReturnValue([111]);
+      vi.mocked(backend.cleanupOrphanedGridImages)
+        .mockResolvedValueOnce({ success: true, candidate_count: 2 })
+        .mockRejectedValueOnce(new Error("io"));
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Remove Orphaned Grid Images"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        fireEvent.click(getByText("Confirm: remove 2 orphaned images?"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("Failed to remove orphaned images");
+    });
+  });
+
   describe("PlatformActionModal", () => {
     it("renders 'game' (singular) for count=1 and 'games' (plural) for count>1", async () => {
       vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
@@ -1176,13 +1334,16 @@ describe("DangerZone", () => {
 
       expect(getByText("Remove All RomM Shortcuts")).toBeDisabled();
       expect(getByText("Uninstall All Installed ROMs")).toBeDisabled();
-      // Both disabled buttons carry the hint description.
-      expect(getAllByText(HINT)).toHaveLength(2);
+      expect(getByText("Remove Orphaned Grid Images")).toBeDisabled();
+      // All three disabled buttons carry the hint description.
+      expect(getAllByText(HINT)).toHaveLength(3);
       // Clicking the disabled buttons must not arm the confirm flow.
       fireEvent.click(getByText("Remove All RomM Shortcuts"));
       fireEvent.click(getByText("Uninstall All Installed ROMs"));
+      fireEvent.click(getByText("Remove Orphaned Grid Images"));
       expect(vi.mocked(backend.removeAllShortcuts)).not.toHaveBeenCalled();
       expect(vi.mocked(backend.uninstallAllRoms)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.cleanupOrphanedGridImages)).not.toHaveBeenCalled();
     });
 
     it("keeps the buttons enabled with no hint when no sync runs", async () => {
@@ -1191,6 +1352,7 @@ describe("DangerZone", () => {
 
       expect(getByText("Remove All RomM Shortcuts")).not.toBeDisabled();
       expect(getByText("Uninstall All Installed ROMs")).not.toBeDisabled();
+      expect(getByText("Remove Orphaned Grid Images")).not.toBeDisabled();
       expect(queryByText(HINT)).toBeNull();
     });
 

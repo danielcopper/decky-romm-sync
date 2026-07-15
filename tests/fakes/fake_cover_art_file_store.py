@@ -8,11 +8,11 @@ class FakeCoverArtFileStore:
 
     Backed by a ``dict[str, bytes]`` so file ops are deterministic and
     free of filesystem side effects. ``remove_file`` is idempotent per
-    the Protocol contract. ``listdir`` returns entries whose path's
-    parent directory matches *directory* (no recursion). ``is_dir``
-    reports True for any path that is the parent of an entry, mirroring
-    the loose "directory exists when it contains files" semantics tests
-    need.
+    the Protocol contract. ``listdir`` returns the first-level entries
+    under *directory* — file names plus subdirectory names (inferred from
+    deeper paths), mirroring ``os.listdir``. ``is_dir`` reports True for
+    any path that is the parent of an entry, mirroring the loose
+    "directory exists when it contains files" semantics tests need.
 
     Tests can pre-populate ``files`` directly to stage fixtures, and
     inspect it after the act to assert removals/renames/copies.
@@ -66,9 +66,14 @@ class FakeCoverArtFileStore:
 
     def listdir(self, directory: str) -> list[str]:
         prefix = directory.rstrip("/") + "/"
-        return [
-            path[len(prefix) :] for path in self.files if path.startswith(prefix) and "/" not in path[len(prefix) :]
-        ]
+        entries: set[str] = set()
+        for path in list(self.files) + list(self.made_dirs):
+            if not path.startswith(prefix):
+                continue
+            rest = path[len(prefix) :]
+            if rest:
+                entries.add(rest.split("/", 1)[0])
+        return sorted(entries)
 
     def is_dir(self, path: str) -> bool:
         if self.isdir_paths is not None:

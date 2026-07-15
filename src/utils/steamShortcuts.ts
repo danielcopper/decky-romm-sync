@@ -124,6 +124,27 @@ export async function getLiveRomMShortcutAppIds(): Promise<number[] | null> {
 }
 
 /**
+ * Enumerate the appIds of ALL live non-Steam shortcuts — RomM-owned AND
+ * foreign — from Steam's collection store. This is the keep-set for the
+ * orphaned grid-image cleanup, so unlike `getLiveRomMShortcutAppIds` there is
+ * deliberately NO rom-launcher filter: every live shortcut's artwork must be
+ * protected, not just ours.
+ *
+ * Returns `null` when the scan could not run (`collectionStore` /
+ * `deckDesktopApps.apps` unreadable). The `null`-vs-`[]` distinction is
+ * load-bearing: `[]` means "scan ran, zero shortcuts exist" (a real keep-set),
+ * `null` means "could not look" — callers must abort and delete nothing.
+ */
+export function getAllNonSteamShortcutAppIds(): number[] | null {
+  if (typeof collectionStore === "undefined") return null;
+
+  const deckApps = collectionStore.deckDesktopApps?.apps;
+  if (!deckApps) return null;
+
+  return Array.from(deckApps.keys());
+}
+
+/**
  * Scan all non-Steam shortcuts and return those managed by RomM.
  *
  * A shortcut is RomM-owned when BOTH hold: its `strShortcutExe` ends with

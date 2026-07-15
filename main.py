@@ -399,6 +399,11 @@ class Plugin:
         return await self._artwork_service.refresh_cover(int(rom_id))
 
     @migration_blocked
+    @sync_active_blocked
+    async def cleanup_orphaned_grid_images(self, live_app_ids, dry_run):
+        return await self._artwork_service.cleanup_orphaned_grid_images(live_app_ids, dry_run)
+
+    @migration_blocked
     async def clear_sync_cache(self):
         return self._sync_service.clear_sync_cache()
 

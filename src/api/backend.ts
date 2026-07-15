@@ -206,6 +206,24 @@ export const refreshCoverArtwork = callable<
   [number],
   { success: boolean; reason?: string; message: string; cover_path?: string }
 >("refresh_cover_artwork");
+// Orphaned grid-image cleanup (Danger Zone). Args: the frontend's full scan of
+// live non-Steam shortcut appIds (the keep-set — RomM-owned AND foreign) and a
+// dry_run flag. A dry run returns candidate_count without deleting; the real
+// run returns removed_count. The backend guards (incomplete_scan when a bound
+// shortcut is missing from the live set, no_grid_dir) and the
+// @migration_blocked / @sync_active_blocked gates short-circuit to
+// success/reason?/message with no count.
+export const cleanupOrphanedGridImages = callable<
+  [number[], boolean],
+  {
+    success: boolean;
+    candidate_count?: number;
+    removed_count?: number;
+    reason?: string;
+    message?: string;
+    blocked_by_migration?: boolean;
+  }
+>("cleanup_orphaned_grid_images");
 export const getSgdbArtworkBase64 = callable<[number, number], { base64: string | null; no_api_key?: boolean }>(
   "get_sgdb_artwork_base64",
 );

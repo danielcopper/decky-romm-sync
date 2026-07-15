@@ -183,9 +183,9 @@ page.
 The **Danger Zone** page provides options for removing shortcuts, ROM files, save files, and BIOS files. All destructive
 actions require confirmation (tap once to see the prompt, tap again to confirm).
 
-While a library sync is running (or cancelling), the shortcut and ROM removal actions are unavailable — the buttons are
-disabled with a short hint, and the backend refuses the request too. Wait for the sync to finish, or cancel it, before
-removing shortcuts or ROMs. Save-file and BIOS deletions are not affected.
+While a library sync is running (or cancelling), the shortcut and ROM removal actions and the grid-image cleanup are
+unavailable — the buttons are disabled with a short hint, and the backend refuses the request too. Wait for the sync to
+finish, or cancel it, before removing shortcuts or ROMs. Save-file and BIOS deletions are not affected.
 
 ### Remove by Platform
 
@@ -201,6 +201,22 @@ downloaded ROM files.
 
 Deletes all downloaded ROM files from disk. Shortcuts remain in your library so you can re-download later. Use this to
 reclaim disk space.
+
+### Remove Orphaned Grid Images
+
+Deletes leftover Steam grid artwork (`grid/` cover, hero, logo, icon, and wide images) whose shortcut no longer exists.
+Removing or re-creating shortcuts leaves these image files behind, and they accumulate over time.
+
+An image counts as orphaned only when **all** of these hold:
+
+- its filename is a Steam grid-image name for a **non-Steam shortcut** appId — custom artwork you saved for regular
+  Steam games is never touched,
+- that appId belongs to **no live shortcut** — the plugin scans your full shortcut list first, so artwork of shortcuts
+  from other tools (Heroic, Lutris, manually added games, …) is protected too, not just RomM's.
+
+The first tap runs a dry scan and shows the count in the confirm label (`Confirm: remove N orphaned images?`); the
+second tap deletes. Deletion is permanent — there is no backup. If the shortcut scan can't run, or any synced RomM
+shortcut is missing from it, the cleanup refuses and deletes nothing.
 
 ### Remove Non-Steam Games
 

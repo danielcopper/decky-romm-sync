@@ -5,7 +5,7 @@ import base64
 import logging
 import os
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 # conftest.py patches decky before this import
 import decky
@@ -882,6 +882,60 @@ class TestRemoveArtworkFiles:
         assert staging not in file_store.files
         assert cache not in file_store.files
 
+    def test_sweeps_all_grid_forms_for_app_id(self, artwork_service, file_store, tmp_path):
+        """Every suffix-by-extension form for the removed appId is deleted."""
+        grid = str(tmp_path)
+        staged = [
+            os.path.join(grid, f"2200000001{suffix}.{ext}")
+            for suffix in ("p", "_hero", "_logo", "_icon", "")
+            for ext in ("png", "jpg", "jpeg")
+        ]
+        for path in staged:
+            file_store.files[path] = b"art"
+        entry = {"cover_path": "", "app_id": 2200000001}
+        artwork_service.remove_artwork_files(grid, "42", entry)
+        for path in staged:
+            assert path not in file_store.files
+
+    def test_sweep_leaves_other_app_ids_untouched(self, artwork_service, file_store, tmp_path):
+        grid = str(tmp_path)
+        other_portrait = os.path.join(grid, "2200000002p.png")
+        other_hero = os.path.join(grid, "2200000002_hero.png")
+        file_store.files[other_portrait] = b"other"
+        file_store.files[other_hero] = b"other"
+        entry = {"cover_path": "", "app_id": 2200000001}
+        artwork_service.remove_artwork_files(grid, "42", entry)
+        assert other_portrait in file_store.files
+        assert other_hero in file_store.files
+
+    def test_removes_grid_cover_even_when_cover_path_removed(
+        self, artwork_service, file_store, cover_cache_dir, tmp_path
+    ):
+        """A removed cover_path (the cache file) no longer short-circuits the grid sweep."""
+        grid = str(tmp_path)
+        cache = _cache(cover_cache_dir, 42)
+        portrait = os.path.join(grid, "2200000001p.png")
+        hero = os.path.join(grid, "2200000001_hero.png")
+        file_store.files[cache] = b"cache cover"
+        file_store.files[portrait] = b"grid cover"
+        file_store.files[hero] = b"hero"
+        entry = {"cover_path": cache, "app_id": 2200000001}
+        artwork_service.remove_artwork_files(grid, "42", entry)
+        assert cache not in file_store.files
+        assert portrait not in file_store.files
+        assert hero not in file_store.files
+
+    def test_sweeps_legacy_artwork_id_forms(self, artwork_service, file_store, tmp_path):
+        grid = str(tmp_path)
+        portrait = os.path.join(grid, "12345p.png")
+        wide = os.path.join(grid, "12345.jpg")
+        file_store.files[portrait] = b"data"
+        file_store.files[wide] = b"data"
+        entry = {"cover_path": "", "artwork_id": 12345}
+        artwork_service.remove_artwork_files(grid, "42", entry)
+        assert portrait not in file_store.files
+        assert wide not in file_store.files
+
 
 # ── TestGetArtworkBase64 ──────────────────────────────────────────────────────
 
@@ -1513,6 +1567,226 @@ class TestPruneOrphanedCoverCache:
 
         assert orphan in file_store.files
         assert any("Failed to remove orphaned cover cache" in r.message for r in caplog.records)
+
+
+# ── TestCleanupOrphanedGridImages ────────────────────────────────────────────
+
+
+class TestCleanupOrphanedGridImages:
+    """Tests for cleanup_orphaned_grid_images() — the user-triggered orphan delete."""
+
+    # In-range appIds (high bit set): orphan, live-foreign, bound.
+    ORPHAN = 2200000001
+    FOREIGN = 2200000002
+    BOUND = 2200000003
+
+    def _grid(self, steam_config, tmp_path) -> str:
+        grid = str(tmp_path / "grid")
+        steam_config.grid_dir.return_value = grid
+        return grid
+
+    @pytest.mark.asyncio
+    async def test_orphan_in_range_deleted(self, artwork_service, steam_config, file_store, tmp_path):
+        grid = self._grid(steam_config, tmp_path)
+        orphan = os.path.join(grid, f"{self.ORPHAN}p.png")
+        file_store.files[orphan] = b"orphan"
+
+        result = await artwork_service.cleanup_orphaned_grid_images([], dry_run=False)
+        assert result == {"success": True, "removed_count": 1}
+        assert orphan not in file_store.files
+
+    @pytest.mark.asyncio
+    async def test_store_game_art_never_a_candidate(self, artwork_service, steam_config, file_store, tmp_path):
+        """User custom art for a regular Steam game (small appId) survives any live set."""
+        grid = self._grid(steam_config, tmp_path)
+        store_art = os.path.join(grid, "570p.png")
+        file_store.files[store_art] = b"store art"
+
+        result = await artwork_service.cleanup_orphaned_grid_images([], dry_run=False)
+        assert result == {"success": True, "removed_count": 0}
+        assert store_art in file_store.files
+
+    @pytest.mark.asyncio
+    async def test_live_foreign_shortcut_art_kept(self, artwork_service, steam_config, file_store, tmp_path):
+        """A live (non-RomM) shortcut's art is protected by the submitted keep-set."""
+        grid = self._grid(steam_config, tmp_path)
+        foreign = os.path.join(grid, f"{self.FOREIGN}p.png")
+        orphan = os.path.join(grid, f"{self.ORPHAN}_hero.jpg")
+        file_store.files[foreign] = b"foreign"
+        file_store.files[orphan] = b"orphan"
+
+        result = await artwork_service.cleanup_orphaned_grid_images([self.FOREIGN], dry_run=False)
+        assert result == {"success": True, "removed_count": 1}
+        assert foreign in file_store.files
+        assert orphan not in file_store.files
+
+    @pytest.mark.asyncio
+    async def test_dry_run_counts_without_deleting(self, artwork_service, steam_config, file_store, tmp_path):
+        grid = self._grid(steam_config, tmp_path)
+        orphan_a = os.path.join(grid, f"{self.ORPHAN}p.png")
+        orphan_b = os.path.join(grid, f"{self.ORPHAN}.png")
+        file_store.files[orphan_a] = b"a"
+        file_store.files[orphan_b] = b"b"
+
+        result = await artwork_service.cleanup_orphaned_grid_images([], dry_run=True)
+        assert result == {"success": True, "candidate_count": 2}
+        assert orphan_a in file_store.files
+        assert orphan_b in file_store.files
+
+    @pytest.mark.asyncio
+    async def test_incomplete_scan_refused_and_nothing_deleted(
+        self, artwork_service, uow, steam_config, file_store, tmp_path
+    ):
+        """A bound shortcut missing from the live set proves the scan incomplete."""
+        grid = self._grid(steam_config, tmp_path)
+        _seed_rom(uow, 42, app_id=self.BOUND)
+        orphan = os.path.join(grid, f"{self.ORPHAN}p.png")
+        file_store.files[orphan] = b"orphan"
+
+        # Live set omits the bound appId — refuse, delete nothing.
+        result = await artwork_service.cleanup_orphaned_grid_images([self.FOREIGN], dry_run=False)
+        assert result["success"] is False
+        assert result["reason"] == "incomplete_scan"
+        assert isinstance(result["message"], str) and result["message"]
+        assert orphan in file_store.files
+
+    @pytest.mark.asyncio
+    async def test_bound_app_id_present_in_live_set_passes_guard(
+        self, artwork_service, uow, steam_config, file_store, tmp_path
+    ):
+        grid = self._grid(steam_config, tmp_path)
+        _seed_rom(uow, 42, app_id=self.BOUND)
+        bound_art = os.path.join(grid, f"{self.BOUND}p.png")
+        orphan = os.path.join(grid, f"{self.ORPHAN}p.png")
+        file_store.files[bound_art] = b"bound"
+        file_store.files[orphan] = b"orphan"
+
+        result = await artwork_service.cleanup_orphaned_grid_images([self.BOUND], dry_run=False)
+        assert result == {"success": True, "removed_count": 1}
+        assert bound_art in file_store.files
+        assert orphan not in file_store.files
+
+    @pytest.mark.asyncio
+    async def test_no_grid_dir_fails(self, artwork_service, steam_config):
+        steam_config.grid_dir.return_value = None
+        result = await artwork_service.cleanup_orphaned_grid_images([], dry_run=True)
+        assert result == {
+            "success": False,
+            "reason": "no_grid_dir",
+            "message": "Steam grid directory not found",
+        }
+
+    @pytest.mark.asyncio
+    async def test_grid_not_a_directory_fails(self, artwork_service, steam_config, file_store, tmp_path):
+        self._grid(steam_config, tmp_path)
+        file_store.isdir_paths = set()  # grid path exists as a value but is not a dir
+        result = await artwork_service.cleanup_orphaned_grid_images([], dry_run=True)
+        assert result["success"] is False
+        assert result["reason"] == "no_grid_dir"
+
+    @pytest.mark.asyncio
+    async def test_empty_live_set_with_zero_bindings_is_legal(
+        self, artwork_service, steam_config, file_store, tmp_path
+    ):
+        """No bound ROMs + no live shortcuts: every in-range grid image is orphaned."""
+        grid = self._grid(steam_config, tmp_path)
+        orphan = os.path.join(grid, f"{self.ORPHAN}_logo.jpeg")
+        store_art = os.path.join(grid, "570.png")
+        file_store.files[orphan] = b"orphan"
+        file_store.files[store_art] = b"store"
+
+        result = await artwork_service.cleanup_orphaned_grid_images([], dry_run=False)
+        assert result == {"success": True, "removed_count": 1}
+        assert orphan not in file_store.files
+        assert store_art in file_store.files
+
+    @pytest.mark.asyncio
+    async def test_all_grid_forms_of_orphan_removed(self, artwork_service, steam_config, file_store, tmp_path):
+        grid = self._grid(steam_config, tmp_path)
+        staged = [
+            os.path.join(grid, f"{self.ORPHAN}{suffix}.{ext}")
+            for suffix in ("p", "_hero", "_logo", "_icon", "")
+            for ext in ("png", "jpg", "jpeg")
+        ]
+        for path in staged:
+            file_store.files[path] = b"art"
+
+        result = await artwork_service.cleanup_orphaned_grid_images([], dry_run=False)
+        assert result == {"success": True, "removed_count": 15}
+        for path in staged:
+            assert path not in file_store.files
+
+    @pytest.mark.asyncio
+    async def test_non_grid_image_names_untouched(self, artwork_service, steam_config, file_store, tmp_path):
+        grid = self._grid(steam_config, tmp_path)
+        staging = os.path.join(grid, "romm_42_cover.png")
+        sidecar = os.path.join(grid, f"{self.ORPHAN}p.png.tmp")
+        junk = os.path.join(grid, "notes.txt")
+        for path in (staging, sidecar, junk):
+            file_store.files[path] = b"keep"
+
+        result = await artwork_service.cleanup_orphaned_grid_images([], dry_run=False)
+        assert result == {"success": True, "removed_count": 0}
+        for path in (staging, sidecar, junk):
+            assert path in file_store.files
+
+    @pytest.mark.asyncio
+    async def test_directory_entry_skipped(self, artwork_service, steam_config, file_store, tmp_path):
+        """A grid-image-named DIRECTORY is never deleted (files only)."""
+        grid = self._grid(steam_config, tmp_path)
+        nested = os.path.join(grid, f"{self.ORPHAN}p.png", "inner")
+        file_store.files[nested] = b"inside a dir"
+
+        result = await artwork_service.cleanup_orphaned_grid_images([], dry_run=False)
+        assert result == {"success": True, "removed_count": 0}
+        assert nested in file_store.files
+
+    @pytest.mark.asyncio
+    async def test_remove_failure_logged_and_run_continues(
+        self, artwork_service, steam_config, file_store, tmp_path, caplog
+    ):
+        grid = self._grid(steam_config, tmp_path)
+        failing = os.path.join(grid, f"{self.ORPHAN}p.png")
+        removable = os.path.join(grid, f"{self.ORPHAN}_hero.png")
+        file_store.files[failing] = b"stuck"
+        file_store.files[removable] = b"ok"
+
+        real_remove = file_store.remove_file
+
+        def selective_boom(path: str) -> None:
+            if path == failing:
+                raise OSError("permission denied")
+            real_remove(path)
+
+        file_store.remove_file = selective_boom  # type: ignore[method-assign]
+
+        with caplog.at_level(logging.WARNING):
+            result = await artwork_service.cleanup_orphaned_grid_images([], dry_run=False)
+
+        assert result == {"success": True, "removed_count": 1}
+        assert failing in file_store.files
+        assert removable not in file_store.files
+        assert any("Failed to remove orphaned grid image" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_scan_and_delete_offloaded_to_executor(self, artwork_service, steam_config, file_store, tmp_path):
+        """The directory scan + deletions run via run_in_executor, not on the loop."""
+        grid = self._grid(steam_config, tmp_path)
+        file_store.files[os.path.join(grid, f"{self.ORPHAN}p.png")] = b"orphan"
+
+        loop = MagicMock()
+        loop.run_in_executor = AsyncMock(return_value={"success": True, "candidate_count": 1})
+        artwork_service._loop = loop
+
+        result = await artwork_service.cleanup_orphaned_grid_images([self.FOREIGN], dry_run=True)
+        assert result == {"success": True, "candidate_count": 1}
+        loop.run_in_executor.assert_awaited_once_with(
+            None,
+            artwork_service._cleanup_orphaned_grid_images_io,
+            grid,
+            {self.FOREIGN},
+            True,
+        )
 
 
 # ── TestAtomicWrites ─────────────────────────────────────────────────────────
