@@ -320,10 +320,19 @@ def compute_platform_collection_diff(
     Returns ``{"has_changes": bool, "added_count": int, "removed_count": int}``.
     Uses ``should_include_in_platform_collection`` to decide which ROMs
     qualify under the current ``create_platform_groups`` setting.
+
+    A rebind entry (see :func:`_rebind_entry`) is keyed to the vanished bound
+    ``rom_id`` so the frontend reuses its existing shortcut, but that id is never
+    in ``platform_rom_ids`` (which carries the fetched server ids). Its platform
+    membership follows the surviving representative it rebinds ONTO — the
+    ``bind_rom_id`` target, a fetched id present in ``platform_rom_ids``. Keying
+    the predicate on the entry's own ``rom_id`` would drop a fully-rebinding
+    platform out of ``future_platforms`` and mis-count it as removed (#1417); the
+    apply path, which reads the post-commit bound rows, never had this bug.
     """
     future_platforms: set[str] = set()
     for sd in shortcuts_data:
-        rid = sd["rom_id"]
+        rid = sd.get(BIND_ROM_ID_KEY, sd["rom_id"])
         if should_include_in_platform_collection(rid, platform_rom_ids, create_platform_groups):
             pname = sd.get("platform_name", "")
             if pname:

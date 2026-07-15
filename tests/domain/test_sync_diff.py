@@ -440,6 +440,52 @@ class TestComputePlatformCollectionDiff:
         result = compute_platform_collection_diff(sd, {1, 2}, [], False)
         assert result["added_count"] == 1
 
+    def test_pure_rebind_platform_not_counted_as_removed(self):
+        """A fully-rebinding platform qualifies via bind_rom_id, so it's no change (#1417).
+
+        The rebind entry is keyed to the vanished rom_id (1), absent from the
+        fetched ``platform_rom_ids`` ({2}); only its ``bind_rom_id`` target (2)
+        is present. Keying membership on the entry's own rom_id would drop the
+        platform out of ``future_platforms`` and mis-count it as removed.
+        """
+        rebind = {**_make_sd(1, platform_name="Nintendo 64"), BIND_ROM_ID_KEY: 2}
+        result = compute_platform_collection_diff(
+            [rebind],
+            {2},
+            ["Nintendo 64"],
+            False,
+        )
+        assert result["has_changes"] is False
+        assert result["added_count"] == 0
+        assert result["removed_count"] == 0
+
+    def test_rebind_plus_genuinely_removed_platform_counts_only_the_genuine(self):
+        """A rebinding platform stays; only a truly-gone platform is removed (#1417)."""
+        rebind = {**_make_sd(1, platform_name="Nintendo 64"), BIND_ROM_ID_KEY: 2}
+        result = compute_platform_collection_diff(
+            [rebind],
+            {2},
+            ["Nintendo 64", "Game Boy Advance"],
+            False,
+        )
+        assert result["has_changes"] is True
+        assert result["added_count"] == 0
+        assert result["removed_count"] == 1
+
+    def test_rebind_plus_added_platform(self):
+        """A rebinding platform holds; a freshly-fetched new platform is added (#1417)."""
+        rebind = {**_make_sd(1, platform_name="Nintendo 64"), BIND_ROM_ID_KEY: 2}
+        added = _make_sd(3, platform_name="PlayStation")
+        result = compute_platform_collection_diff(
+            [rebind, added],
+            {2, 3},
+            ["Nintendo 64"],
+            False,
+        )
+        assert result["has_changes"] is True
+        assert result["added_count"] == 1
+        assert result["removed_count"] == 0
+
 
 class TestSelectStaleRemovals:
     """``select_stale_removals`` — drop any stale candidate whose appId this run re-bound (#1036)."""
