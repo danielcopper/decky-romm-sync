@@ -24,7 +24,7 @@ TMP_SUFFIX = ".tmp"
 # a grid image and never a cleanup candidate.
 _GRID_IMAGE_SUFFIXES = ("p", "_hero", "_logo", "_icon", "")
 _GRID_IMAGE_EXTENSIONS = ("png", "jpg", "jpeg")
-_GRID_IMAGE_RE = re.compile(r"^([0-9]+)(?:p|_hero|_logo|_icon)?\.(?:png|jpg|jpeg)$")
+_GRID_IMAGE_RE = re.compile(r"^(\d+)(?:p|_hero|_logo|_icon)?\.(?:png|jpg|jpeg)$", re.ASCII)
 
 # Steam assigns non-Steam shortcut appIds with the high bit set: on-device
 # inspection of 68 live plugin-created shortcuts found them uniformly spread
