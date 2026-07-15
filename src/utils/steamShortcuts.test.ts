@@ -243,6 +243,41 @@ describe("getExistingRomMShortcuts", () => {
     expect(vi.mocked(backend.syncHeartbeat)).toHaveBeenCalled();
     nowSpy.mockRestore();
   });
+
+  it("maps a caller-supplied pre-scanned list without re-running the live scan (#1366)", async () => {
+    // The once-per-run scan is threaded in via preScanned, so the bound map is
+    // built from that list and the expensive RegisterForAppDetails sweep is NOT
+    // invoked a second time. This is the dedup linchpin.
+    const registerSpy = vi.fn();
+    vi.stubGlobal("SteamClient", { Apps: { RegisterForAppDetails: registerSpy } });
+    // collectionStore is present but must never be read when preScanned is given.
+    vi.stubGlobal("collectionStore", { deckDesktopApps: { apps: new Map([[123, {}]]) } });
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({ "5000": 501, "9000": 901 });
+
+    const result = await getExistingRomMShortcuts([5000, 9000]);
+
+    // Built from the passed list, intersected with the backend map.
+    expect(result.get(501)).toBe(5000);
+    expect(result.get(901)).toBe(9000);
+    expect(result.size).toBe(2);
+    // Non-vacuous: the scan machinery (per-appId RegisterForAppDetails) never ran.
+    expect(registerSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty map for a null pre-scanned list (store was unreadable)", async () => {
+    const registerSpy = vi.fn();
+    vi.stubGlobal("SteamClient", { Apps: { RegisterForAppDetails: registerSpy } });
+    // Clear accumulated history from earlier tests so the not-called assert is real.
+    vi.mocked(backend.getAppIdRomIdMap).mockClear();
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({ "5000": 501 });
+
+    const result = await getExistingRomMShortcuts(null);
+
+    expect(result.size).toBe(0);
+    // A null list short-circuits before the backend map too — nothing scanned.
+    expect(registerSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.getAppIdRomIdMap)).not.toHaveBeenCalled();
+  });
 });
 
 describe("addShortcut — overview-readiness poll + empty-launch-options skip", () => {

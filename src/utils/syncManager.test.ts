@@ -1226,32 +1226,34 @@ describe("syncManager — adopts orphan shortcuts instead of creating duplicates
     expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 5000 }, "run-adopt-lazy", 1, 0);
   });
 
-  it("skips a live appId already bound to a rom, adopting only the unbound orphan", async () => {
-    // liveAppIds holds a BOUND appId (5000, rom 42) and an orphan (9000). rom 42 is
-    // an update; rom 43 is a create that adopts 9000. The bound 5000 is skipped by
-    // the pool build (already managed) and never offered for adoption.
+  it("never adopts an appId already bound to another rom, even on a name match", async () => {
+    // The real hazard: rom 42 is bound to appId 5000 ("Bound Game"), and rom 43 is
+    // an UNBOUND create with the SAME display name. If the pool build failed to
+    // skip already-bound live appIds, 5000 would sit in the pool under "Bound
+    // Game" and rom 43 would ADOPT it — double-binding one appId to two roms. The
+    // skip must exclude 5000, so rom 43 finds no match and mints a fresh shortcut.
     getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>([[42, 5000]]));
     getLiveRomMShortcutAppIds.mockResolvedValue([5000, 9000]);
+    // appStore names 5000 "Bound Game" so a BROKEN skip would make it adoptable
+    // under rom 43's name — the non-vacuous trap. 9000 is an unrelated orphan.
     stubAppStore({ 5000: "Bound Game", 9000: "Orphan Game" });
+    addShortcut.mockResolvedValue(6000);
 
     initUnitSyncManager();
     await act(async () => {
       emitDeckyEvent<[SyncApplyUnitData]>(
         "sync_apply_unit",
-        unitOf(
-          [item({ rom_id: 42, name: "Bound Game" }), item({ rom_id: 43, name: "Orphan Game" })],
-          "run-adopt-bound",
-        ),
+        unitOf([item({ rom_id: 42, name: "Bound Game" }), item({ rom_id: 43, name: "Bound Game" })], "run-adopt-bound"),
       );
       await flush(200);
     });
 
-    // rom 42 updates 5000, rom 43 adopts 9000; no fresh AddShortcut, and 5000 (the
-    // bound live appId) is never rewritten as an adoption.
-    expect(addShortcut).not.toHaveBeenCalled();
-    expect(setShortcutName).toHaveBeenCalledWith(9000, "Orphan Game");
+    // rom 43 minted a fresh shortcut (6000) rather than stealing the bound 5000 —
+    // the ack maps 43 to 6000, NOT to 5000 (which would be the double-bind bug).
+    expect(addShortcut).toHaveBeenCalledTimes(1);
+    expect(addShortcut).toHaveBeenCalledWith(expect.objectContaining({ rom_id: 43 }));
     expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith(
-      { "42": 5000, "43": 9000 },
+      { "42": 5000, "43": 6000 },
       "run-adopt-bound",
       1,
       0,
