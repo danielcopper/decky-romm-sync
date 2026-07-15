@@ -5,13 +5,19 @@
  *
  * The library applies whole platforms (not per-ROM deltas), so an "applied
  * count" is not a real delta. The only exact, meaningful deltas are the
- * shortcuts the frontend actually created (`addShortcut` calls) and removed
- * (`sync_stale` app_ids). A ROM can appear in multiple units (its platform unit
- * plus a collection unit like Favorites), so the counts are Sets of appIds —
- * the same shortcut created/removed across units is counted once.
+ * shortcuts the frontend brought under management this run — a fresh
+ * `addShortcut` OR an adopted orphan (#1366) — and the shortcuts it removed
+ * (`sync_stale` app_ids). Both a create and an adoption count as "added": each
+ * brings a game under management for the first time. An adoption reuses an
+ * existing Steam tile rather than minting one, but that is a renderer-cost
+ * detail; this store feeds only the terminal toast (a library-management
+ * summary), so it reports management, not AddShortcut calls. A ROM can appear in
+ * multiple units (its platform unit plus a collection unit like Favorites), so
+ * the counts are Sets of appIds — the same shortcut counted once.
  *
  * Updated by:
- *   - syncManager create path (recordSyncCreated on a fresh addShortcut appId)
+ *   - syncManager create path (recordSyncCreated on a fresh addShortcut appId,
+ *     or an adopted orphan's reused appId)
  *   - sync_stale listener in index.tsx (recordSyncRemoved per removed app_id)
  *   - sync_plan listener in index.tsx (resetSyncDelta at run start)
  *
@@ -28,7 +34,7 @@ export function resetSyncDelta(): void {
   removed.clear();
 }
 
-/** Record a newly created shortcut's appId (real addShortcut call). */
+/** Record a newly-managed shortcut's appId (a fresh addShortcut, or an adopted orphan #1366). */
 export function recordSyncCreated(appId: number): void {
   created.add(appId);
 }

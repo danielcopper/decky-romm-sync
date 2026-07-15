@@ -35,6 +35,20 @@ let _isUnitRunning = false;
  */
 let _scanCache: { runId: string; map: Map<number, number> } | null = null;
 
+/**
+ * Once-per-run pool of adoptable ORPHAN shortcuts, built LAZILY on the first
+ * create-path candidate of a run. An orphan is a live RomM-owned shortcut (exe
+ * ends ``/bin/rom-launcher``) that carries NO DB binding — a crashed run's
+ * uncommitted in-flight shortcut, or a zombie left after a DB reset. Without
+ * adoption the create path mints a fresh ``AddShortcut`` for a ROM the orphan
+ * already represents, leaving a visible duplicate (#1366). Keyed by Steam
+ * display name → ascending appIds, so a same-name collision adopts the lowest
+ * appId first and removes it (never twice). Keyed by ``run_id`` so a new run
+ * mints a fresh pool; built only when a run actually reaches the create path
+ * (most runs are pure updates and pay zero extra scan cost).
+ */
+let _orphanPoolCache: { runId: string; pool: Map<string, number[]> } | null = null;
+
 /** Request cancellation of the frontend shortcut processing loop. */
 export function requestSyncCancel(): void {
   _cancelRequested = true;
@@ -72,15 +86,101 @@ export function isCancelRequested(): boolean {
 }
 
 /**
- * Resolve a shortcut item to an appId and report whether it was newly created:
- * update fields on the existing shortcut when one is present (``created: false``),
- * otherwise create a new shortcut (``created: true`` iff the create produced an
- * appId). ``appId`` is ``undefined`` when creation failed. The ``created`` flag
- * lets the caller apply cover artwork to fresh shortcuts only, not updates/rebinds.
+ * Build the run's adoptable-orphan pool: every live RomM-owned appId that is NOT
+ * already bound to a rom_id this run, indexed by its Steam display name.
+ *
+ * A ``null`` live scan (Steam's shortcut store unreadable) — or an unavailable
+ * ``appStore`` — yields an EMPTY pool: adoption is disabled for the run rather
+ * than guessed against a store we couldn't read. An orphan whose overview
+ * resolves to no display name is skipped (it can't be matched by name).
+ */
+async function buildAdoptableOrphanPool(existing: Map<number, number>): Promise<Map<string, number[]>> {
+  const pool = new Map<string, number[]>();
+  let liveAppIds: number[] | null;
+  try {
+    liveAppIds = await getLiveRomMShortcutAppIds();
+  } catch (e) {
+    logError(`orphan adoption: live shortcut scan failed: ${e}`);
+    return pool;
+  }
+  // null = store unreadable (do NOT adopt); [] = scan ran, no RomM shortcuts.
+  if (liveAppIds === null) {
+    logInfo("orphan adoption: live shortcut store unreadable; adoption disabled for this run");
+    return pool;
+  }
+  if (typeof appStore === "undefined") {
+    logInfo("orphan adoption: appStore unavailable; adoption disabled for this run");
+    return pool;
+  }
+
+  const boundAppIds = new Set(existing.values());
+  let orphanCount = 0;
+  for (const appId of liveAppIds) {
+    if (boundAppIds.has(appId)) continue; // already managed via a rom_id binding
+    const overview = appStore.GetAppOverviewByAppID(appId);
+    const name = overview?.strDisplayName || overview?.display_name;
+    if (!name) continue; // no resolvable name → can't match by name, skip
+    const bucket = pool.get(name);
+    if (bucket) bucket.push(appId);
+    else pool.set(name, [appId]);
+    orphanCount++;
+  }
+  // Ascending order per name so a same-name collision adopts deterministically
+  // (lowest appId first) and each orphan is taken at most once.
+  for (const bucket of pool.values()) bucket.sort((a, b) => a - b);
+  logInfo(`orphan adoption: pool holds ${orphanCount} adoptable orphan(s) across ${pool.size} name(s)`);
+  return pool;
+}
+
+/**
+ * Return the run's adoptable-orphan pool, building it at most once per run. Only
+ * ever called from the create path, so a run that mints no shortcuts pays no
+ * scan cost. A new ``run_id`` is a cache miss → fresh pool.
+ */
+async function resolveAdoptableOrphanPool(
+  runId: string,
+  existing: Map<number, number>,
+): Promise<Map<string, number[]>> {
+  if (_orphanPoolCache?.runId === runId) return _orphanPoolCache.pool;
+  const pool = await buildAdoptableOrphanPool(existing);
+  _orphanPoolCache = { runId, pool };
+  return pool;
+}
+
+/**
+ * Remove and return the lowest adoptable orphan appId for *name*, or
+ * ``undefined`` when the pool holds none. Removing it ensures one orphan is
+ * never adopted twice within a run.
+ */
+function takeAdoptableOrphan(pool: Map<string, number[]>, name: string): number | undefined {
+  const bucket = pool.get(name);
+  if (!bucket || bucket.length === 0) return undefined;
+  return bucket.shift();
+}
+
+/**
+ * Resolve a shortcut item to an appId and report whether it is a newly-managed
+ * shortcut (``created``).
+ *
+ * - An **existing** binding (rom_id already in *existing*) → update in place,
+ *   ``created: false``.
+ * - No binding → the create path. First try to **adopt** a live RomM-owned
+ *   orphan of the same name — reuse its appId + rewrite its identity/launch
+ *   bake, instead of ``addShortcut`` minting a duplicate the user then sees
+ *   twice (#1366). Failing that, mint a fresh shortcut.
+ *
+ * ``appId`` is ``undefined`` when a create failed. ``created`` is ``true`` for
+ * both a fresh create and an adoption (each brings a game under management for
+ * the first time), and drives two caller behaviours: applying cover artwork
+ * (creates + adoptions get it, updates keep their grid file) and — via
+ * ``recordSyncCreated`` here — the user-facing "added" delta. It is deliberately
+ * NOT a proxy for an ``AddShortcut`` call: an adoption sets ``created`` without
+ * one, because the renderer-cost of minting a Steam shortcut never happens.
  */
 async function resolveShortcutAppId(
   item: SyncAddItem,
   existing: Map<number, number>,
+  runId: string,
 ): Promise<{ appId: number | undefined; created: boolean }> {
   const existingAppId = existing.get(item.rom_id);
   if (existingAppId) {
@@ -92,8 +192,28 @@ async function resolveShortcutAppId(
     await setLaunchOptionsConfirmed(existingAppId, item.launch_options);
     return { appId: existingAppId, created: false };
   }
-  // Create path: a fresh shortcut. Record its appId as a real "added" delta —
-  // the update path above is excluded (the shortcut already existed).
+  // Create path. Before minting a fresh shortcut, try to ADOPT a live RomM-owned
+  // orphan of the same name (a shortcut whose exe is ours but which carries no
+  // DB binding). Adopting reuses its appId — the shortcut, its artwork, and its
+  // collections survive — instead of leaving a visible duplicate (#1366).
+  const orphanPool = await resolveAdoptableOrphanPool(runId, existing);
+  const adoptedAppId = takeAdoptableOrphan(orphanPool, item.name);
+  if (adoptedAppId !== undefined) {
+    // Same property writes as the update path — the orphan already exists, so we
+    // rewrite its identity + launch bake rather than create.
+    SteamClient.Apps.SetShortcutName(adoptedAppId, item.name);
+    SteamClient.Apps.SetShortcutExe(adoptedAppId, item.exe);
+    SteamClient.Apps.SetShortcutStartDir(adoptedAppId, item.start_dir);
+    await setLaunchOptionsConfirmed(adoptedAppId, item.launch_options);
+    // A game came under management → count it in the user-facing "added" delta,
+    // exactly like a fresh create (no AddShortcut happened, but getSyncDelta
+    // feeds only the terminal toast, never renderer-cost accounting).
+    recordSyncCreated(adoptedAppId);
+    logInfo(`adopted orphan shortcut ${adoptedAppId} for rom ${item.rom_id} (${item.name})`);
+    return { appId: adoptedAppId, created: true };
+  }
+  // No orphan to adopt → mint a fresh shortcut. Record its appId as a real
+  // "added" delta — the update path above is excluded (the shortcut existed).
   const createdAppId = (await addShortcut(item)) ?? undefined;
   if (createdAppId) recordSyncCreated(createdAppId);
   return { appId: createdAppId, created: createdAppId !== undefined };
@@ -161,14 +281,15 @@ async function processCoverRefreshes(refreshes: { rom_id: number; app_id: number
  * a unit's chunks against ``unit_total``. Heartbeats are emitted every 10s. The
  * loop exits early on cancel.
  *
- * A NEWLY CREATED shortcut has its cover applied through Steam's artwork API in
- * the same iteration (see {@link applyCoverArtwork}) so covers appear as the
- * shortcuts are created — one per item under the 50ms pacing, safe under the
- * session-budget gate that brakes a large run before the CEF heap overflows.
- * Updates/rebinds keep their existing grid file here; an update whose SERVER
- * cover changed instead arrives on the chunk's ``cover_refreshes`` list and is
- * re-applied by {@link processCoverRefreshes} (#1386). A cover failure is
- * fail-soft and never fails the item/chunk.
+ * A newly-managed shortcut — a fresh create OR an adopted orphan (#1366) — has
+ * its cover applied through Steam's artwork API in the same iteration (see
+ * {@link applyCoverArtwork}) so covers appear as the shortcuts land — one per
+ * item under the 50ms pacing, safe under the session-budget gate that brakes a
+ * large run before the CEF heap overflows. Updates/rebinds keep their existing
+ * grid file here; an update whose SERVER cover changed instead arrives on the
+ * chunk's ``cover_refreshes`` list and is re-applied by
+ * {@link processCoverRefreshes} (#1386). A cover failure is fail-soft and never
+ * fails the item/chunk.
  */
 async function processUnitShortcuts(
   data: SyncApplyUnitData,
@@ -194,7 +315,7 @@ async function processUnitShortcuts(
         step: data.unit_index + 1,
         totalSteps: data.total_units,
       });
-      const { appId, created } = await resolveShortcutAppId(item, existing);
+      const { appId, created } = await resolveShortcutAppId(item, existing, data.run_id);
       if (appId) {
         romIdToAppId[String(item.rom_id)] = appId;
         // Register the appId as RomM-owned the moment the mapping exists — the
@@ -205,9 +326,11 @@ async function processUnitShortcuts(
         // reach platform_app_ids at all (#1205). Idempotent (Set.add); covers
         // created, updated, and rebind entries alike.
         registerRomMAppId(appId);
-        // Apply cover artwork only to NEWLY CREATED shortcuts — an updated/rebound
-        // shortcut keeps its existing grid file (cover refresh on change is #1386).
-        // Awaited so covers stay one-per-item under the 50ms pacing; fail-soft.
+        // Apply cover artwork to newly-managed shortcuts — a fresh create or an
+        // adopted orphan (#1366; ``created`` covers both). An updated/rebound
+        // shortcut keeps its existing grid file (cover refresh on change is
+        // #1386). Awaited so covers stay one-per-item under the 50ms pacing;
+        // fail-soft.
         if (created) await applyCoverArtwork(appId, item.rom_id);
       }
     } catch (e) {

@@ -659,6 +659,38 @@ class TestCollapseSiblingGroups:
         assert result.stale == []
         assert result.new == []
 
+    def test_server_reimport_fresh_rom_id_rides_rebind_lane_not_a_duplicate(self):
+        # The #1366 clean re-import: a server switch / re-import reissues the
+        # rom_id of an unchanged game (same content, same sibling_group_key), and
+        # the old rom_id is still bound to its assigned Steam appId. The group's
+        # only fetched member is the FRESH rom_id, so collapse takes the REBIND
+        # lane — one entry keyed to the vanished old rom_id (the frontend reuses
+        # its existing shortcut) carrying bind_rom_id → the fresh rom_id. There is
+        # NO new-lane entry, so no duplicate AddShortcut and no second tile.
+        members = [_gsd(2, name="Game (USA)", fs_name="game.z64", launch_options="run /game.z64")]
+        registry = {"1": _greg(1, app_id=1001, name="Game (USA)", fs_name="game.z64")}
+        emitted = collapse_sibling_groups(members, registry, installed_rom_ids=set(), complete_group_view=True)
+        assert len(emitted) == 1
+        entry = emitted[0]
+        assert entry["rom_id"] == 1  # keyed to the vanished old rom_id → shortcut reused
+        assert entry[BIND_ROM_ID_KEY] == 2  # binding moves onto the fresh rom_id
+        # The fresh rom_id is never emitted as its own NEW shortcut.
+        assert 2 not in {e["rom_id"] for e in emitted}
+
+        # classify reads the rebind as a re-touch, never stale or new — the old
+        # rom_id stays emitted, so it is not torn down.
+        result = classify_roms(emitted, registry, {"N64"})
+        assert result.new == []
+        assert result.stale == []
+        assert [e["rom_id"] for e in result.changed] == [1]
+
+        # The reused appId is committed this run (the frontend reuses rom 1 →
+        # 1001). The #1036 guard: even if the old rom_id surfaced as a stale
+        # candidate carrying that still-live appId, select_stale_removals never
+        # removes an appId bound this run — so a re-import cannot wipe the shortcut
+        # it just re-bound.
+        assert select_stale_removals([(1, 1001)], {1001}) == []
+
     def test_rebind_keeps_smallest_rom_id_binding_others_stale(self):
         # A group with TWO bound siblings (grandfathered), both vanished. One appId
         # is kept (smallest rom_id) and rebound; the other goes stale.

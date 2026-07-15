@@ -19,11 +19,12 @@ import type { SyncApplyUnitData, SyncProgress } from "../types";
 const setLaunchOptionsConfirmed = vi.fn().mockResolvedValue(true);
 const addShortcut = vi.fn();
 const getExistingRomMShortcuts = vi.fn();
+const getLiveRomMShortcutAppIds = vi.fn();
 vi.mock("./steamShortcuts", () => ({
   setLaunchOptionsConfirmed: (...args: unknown[]) => setLaunchOptionsConfirmed(...args),
   addShortcut: (...args: unknown[]) => addShortcut(...args),
   getExistingRomMShortcuts: (...args: unknown[]) => getExistingRomMShortcuts(...args),
-  getLiveRomMShortcutAppIds: vi.fn(),
+  getLiveRomMShortcutAppIds: (...args: unknown[]) => getLiveRomMShortcutAppIds(...args),
 }));
 
 // gameDetailPatch pulls in Steam-internal @decky/ui + component imports; mock it
@@ -991,5 +992,231 @@ describe("syncManager — applies cover artwork to created shortcuts via the API
     expect(vi.mocked(backend.getArtworkBase64)).toHaveBeenCalledWith(10);
     expect(setCustomArtwork).toHaveBeenCalledTimes(1);
     expect(vi.mocked(backend.reportUnitResults)).not.toHaveBeenCalled();
+  });
+});
+
+describe("syncManager — adopts orphan shortcuts instead of creating duplicates (#1366)", () => {
+  const EXE = "/home/deck/homebrew/plugins/decky-romm-sync/bin/rom-launcher";
+  const setShortcutName = vi.fn();
+  const setShortcutExe = vi.fn();
+  const setShortcutStartDir = vi.fn();
+  const setCustomArtwork = vi.fn().mockResolvedValue(undefined);
+
+  /** Stub appStore so orphan appIds resolve to the given display names (unlisted → null overview). */
+  function stubAppStore(names: Record<number, string>): void {
+    vi.stubGlobal("appStore", {
+      GetAppOverviewByAppID: (appId: number) =>
+        names[appId] !== undefined ? { appid: appId, strDisplayName: names[appId], display_name: names[appId] } : null,
+      allApps: [],
+    });
+  }
+
+  beforeEach(() => {
+    setLaunchOptionsConfirmed.mockClear();
+    setLaunchOptionsConfirmed.mockResolvedValue(true);
+    addShortcut.mockReset();
+    getExistingRomMShortcuts.mockReset();
+    getLiveRomMShortcutAppIds.mockReset();
+    registerRomMAppId.mockClear();
+    vi.mocked(backend.reportUnitResults).mockClear();
+    vi.mocked(backend.getArtworkBase64).mockReset();
+    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: null });
+    setShortcutName.mockClear();
+    setShortcutExe.mockClear();
+    setShortcutStartDir.mockClear();
+    setCustomArtwork.mockClear();
+    setCustomArtwork.mockResolvedValue(undefined);
+    resetSyncDelta();
+    resetSyncCancel();
+    // test-setup's afterEach vi.unstubAllGlobals wipes ambient globals after the
+    // file's first test — re-stub the Set* / artwork surface the adoption path uses.
+    vi.stubGlobal("SteamClient", {
+      Apps: {
+        AddShortcut: vi.fn(),
+        SetShortcutName: setShortcutName,
+        SetShortcutExe: setShortcutExe,
+        SetShortcutStartDir: setShortcutStartDir,
+        SetAppLaunchOptions: vi.fn(),
+        SetCustomArtworkForApp: setCustomArtwork,
+        RemoveShortcut: vi.fn(),
+      },
+    });
+    stubAppStore({});
+  });
+
+  function item(overrides: Partial<SyncApplyUnitData["shortcuts"][number]>): SyncApplyUnitData["shortcuts"][number] {
+    return {
+      rom_id: 0,
+      name: "Game",
+      exe: EXE,
+      start_dir: "/home/deck",
+      launch_options: "",
+      platform_name: "PSX",
+      ...overrides,
+    };
+  }
+
+  function unitOf(shortcuts: SyncApplyUnitData["shortcuts"], runId: string): SyncApplyUnitData {
+    return {
+      run_id: runId,
+      unit_type: "platform",
+      unit_id: 1,
+      unit_name: "PSX",
+      unit_index: 0,
+      total_units: 1,
+      chunk_index: 0,
+      chunk_count: 1,
+      chunk_offset: 0,
+      unit_total: shortcuts.length,
+      shortcuts,
+    };
+  }
+
+  it("adopts a live orphan matched by name — no AddShortcut, Set* on the orphan appId, cover applied", async () => {
+    // rom 42 is unbound (create path). A live RomM-owned orphan (appId 9000)
+    // carries the same display name → adopt it instead of minting a duplicate.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    getLiveRomMShortcutAppIds.mockResolvedValue([9000]);
+    stubAppStore({ 9000: "Test ROM" });
+    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "COVERPNG" });
+    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-adopt-happy"));
+      await flush(150);
+    });
+
+    // No new shortcut minted — the orphan's appId is reused and rewritten via the
+    // update-path Set* calls + the launch-options confirm-poll.
+    expect(addShortcut).not.toHaveBeenCalled();
+    expect(setShortcutName).toHaveBeenCalledWith(9000, "Test ROM");
+    expect(setShortcutExe).toHaveBeenCalledWith(9000, EXE);
+    expect(setShortcutStartDir).toHaveBeenCalledWith(9000, "/home/deck");
+    expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(9000, cmd);
+    // The reused appId is registered RomM-owned and reported back for rom 42.
+    expect(registerRomMAppId).toHaveBeenCalledWith(9000);
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 9000 }, "run-adopt-happy", 1, 0);
+    // Cover is applied like a fresh create (idempotent overwrite of the grid file).
+    expect(vi.mocked(backend.getArtworkBase64)).toHaveBeenCalledWith(42);
+    expect(setCustomArtwork).toHaveBeenCalledWith(9000, "COVERPNG", "png", 0);
+    // Delta decision (#1366): an adoption brings a game under management → counted
+    // as "added" in the user-facing toast delta, exactly like a fresh create.
+    expect(getSyncDelta()).toEqual({ added: 1, removed: 0 });
+  });
+
+  it("creates a fresh shortcut when no orphan name matches", async () => {
+    // A live orphan exists (appId 9000) but its name is different, so rom 42's
+    // create finds no adoptable match → AddShortcut mints a new shortcut.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    getLiveRomMShortcutAppIds.mockResolvedValue([9000]);
+    stubAppStore({ 9000: "Some Other Game" });
+    addShortcut.mockResolvedValue(6000);
+    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-adopt-nomatch"));
+      await flush(150);
+    });
+
+    // No orphan of this name → fresh create, and the orphan's appId is untouched.
+    expect(addShortcut).toHaveBeenCalledTimes(1);
+    expect(setShortcutName).not.toHaveBeenCalledWith(9000, expect.anything());
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 6000 }, "run-adopt-nomatch", 1, 0);
+    expect(getSyncDelta()).toEqual({ added: 1, removed: 0 });
+  });
+
+  it("disables adoption for the run when the live scan is null (store unreadable)", async () => {
+    // A null live scan means Steam's shortcut store was unreadable — never adopt
+    // against a store we couldn't read; the pool is empty and rom 42 is created.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    getLiveRomMShortcutAppIds.mockResolvedValue(null);
+    addShortcut.mockResolvedValue(6000);
+    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-adopt-null"));
+      await flush(150);
+    });
+
+    expect(addShortcut).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 6000 }, "run-adopt-null", 1, 0);
+  });
+
+  it("never adopts the same orphan twice — two same-named items, one orphan → first adopts, second creates", async () => {
+    // Two unbound ROMs share a display name; a single orphan (appId 9000) matches
+    // it. The first item adopts the orphan; the second finds the bucket drained
+    // and mints a fresh shortcut. The live scan runs exactly once for the run.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    getLiveRomMShortcutAppIds.mockResolvedValue([9000]);
+    stubAppStore({ 9000: "Dup" });
+    addShortcut.mockResolvedValue(6000);
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>(
+        "sync_apply_unit",
+        unitOf([item({ rom_id: 10, name: "Dup" }), item({ rom_id: 20, name: "Dup" })], "run-adopt-twice"),
+      );
+      await flush(250);
+    });
+
+    // Exactly one fresh create (the second item); the orphan 9000 was adopted once.
+    expect(addShortcut).toHaveBeenCalledTimes(1);
+    expect(setShortcutName).toHaveBeenCalledWith(9000, "Dup");
+    // rom 10 adopted 9000, rom 20 created 6000 — the orphan is bound to one rom only.
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith(
+      { "10": 9000, "20": 6000 },
+      "run-adopt-twice",
+      1,
+      0,
+    );
+    // Lazy pool built once → the expensive live scan ran a single time this run.
+    expect(getLiveRomMShortcutAppIds).toHaveBeenCalledTimes(1);
+    // Both are newly-managed → 2 added (one adopt + one create).
+    expect(getSyncDelta()).toEqual({ added: 2, removed: 0 });
+  });
+
+  it("never scans for orphans on a run with zero creates (lazy pool)", async () => {
+    // Every rom is already bound → the update path only. The orphan pool is built
+    // lazily on the first CREATE candidate, so a create-free run pays no scan cost.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>([[42, 5000]]));
+    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-adopt-lazy"));
+      await flush(150);
+    });
+
+    // Update path only — the orphan live-scan was never invoked.
+    expect(addShortcut).not.toHaveBeenCalled();
+    expect(getLiveRomMShortcutAppIds).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 5000 }, "run-adopt-lazy", 1, 0);
+  });
+
+  it("rebuilds the pool for a new run_id (per-run cache reset)", async () => {
+    // Run A adopts the orphan; run B (a fresh run_id) with its own create must
+    // re-scan — the pool is keyed by run_id, so a new run mints a fresh pool.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    getLiveRomMShortcutAppIds.mockResolvedValue([9000]);
+    stubAppStore({ 9000: "Test ROM" });
+    addShortcut.mockResolvedValue(6000);
+    const cmd = 'flatpak run net.retrodeck.retrodeck "/games/test.bin"';
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-adopt-cacheA"));
+      await flush(150);
+    });
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", unit(cmd, "run-adopt-cacheB"));
+      await flush(150);
+    });
+
+    // Two distinct runs → two scans (one per run), not one shared across runs.
+    expect(getLiveRomMShortcutAppIds).toHaveBeenCalledTimes(2);
   });
 });

@@ -255,11 +255,16 @@ def select_stale_removals(
     """Stale ``(rom_id, app_id)`` removals minus any app_id re-bound this run.
 
     Safety invariant: never remove a Steam shortcut whose appId was bound by a
-    ROM synced this run. A new server-issued ``rom_id`` can reuse an old appId
-    (the appId is ``CRC32(exe + name)``, unchanged across a server switch /
-    re-import — #1036). The old colliding ``rom_id`` then looks stale, but its
-    still-live appId now belongs to the freshly-synced row, so emitting it for
-    removal would wipe the shortcut the run just created/updated.
+    ROM synced this run. Steam **assigns** an appId at creation and it is stable
+    for the shortcut's lifetime (the ``CRC32(exe + name)`` derivation is
+    disproven — see ``docs/architecture/steam-non-steam-shortcuts.md`` §App IDs),
+    so reuse never comes from re-hashing. It comes from the REBIND lane
+    (:func:`collapse_sibling_groups`): on a server switch / re-import, an
+    unchanged game's ``rom_id`` is reissued, and the rebind moves the vanished
+    sibling's still-live appId onto the new representative in the SAME run. The
+    old ``rom_id`` then reads stale while its appId lives on under the new
+    binding, so emitting it for removal would wipe the shortcut the run just
+    re-bound (#1036).
     """
     return [(rid, aid) for rid, aid in candidate_stale if aid not in synced_app_ids]
 

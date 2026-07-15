@@ -79,30 +79,51 @@ it. The sync engine processes removals before additions to minimise churn.
 
 See: `src/utils/steamShortcuts.ts`
 
-### appId reuse across a server switch / re-import
+### Recovery after a server switch / re-import
 
-> **Errata (2026-07).** This section originally explained appId reuse by the appId being `CRC32(exe + name)`, with both
-> stable across syncs, so an unchanged game re-hashed to the **same** appId even after its server-issued `rom_id`
-> changed. On-device inspection disproves that derivation (see [App IDs and Artwork](#app-ids-and-artwork)): Steam
-> **assigns** the appId at creation, so reuse cannot come from re-hashing. What is verified: switching the RomM server
-> URL (or re-importing on the same server) reissues `rom_id`s while the **Steam shortcut is not deleted** — its assigned
-> appId persists — and the `roms` rows survive (ADR-0007 retention) with the binding in `roms.shortcut_app_id`,
-> reverse-lookupable via `get_app_id_rom_id_map()`. Whether an unchanged game with a **new** `rom_id` re-binds to that
-> surviving shortcut rather than creating a duplicate is a `rom_id`-keyed resolution that has **not** been re-verified
-> under the assigned-id model and needs on-device confirmation.
+Switching the RomM server URL — or re-importing on the same server — reissues `rom_id`s while the Steam shortcuts are
+**not** deleted (their assigned appIds persist) and the `roms` rows survive (ADR-0007 retention) with the binding in
+`roms.shortcut_app_id`, reverse-lookupable via `get_app_id_rom_id_map()`. Because Steam **assigns** the appId at
+creation (the `CRC32(exe + name)` derivation is disproven — see [App IDs and Artwork](#app-ids-and-artwork)), the plugin
+never re-derives an id to "find" the old shortcut. It keeps a game's shortcut alive across the `rom_id` churn through
+three lanes:
 
-Two guards keep a re-import from wiping a freshly-synced shortcut (`#1036`) — real code that holds whenever the same
-appId is presented for a new `rom_id`, though they were designed under the now-disproven CRC assumption:
+- **Stable sibling-group keys → the rebind lane.** An unchanged game whose `sibling_group_key` is the same after the
+  re-import (same IGDB/… identity) rides `collapse_sibling_groups`'s **rebind lane**: the group's only fetched member is
+  the fresh `rom_id`, the old bound `rom_id` has vanished, so collapse emits one entry keyed to the vanished sibling —
+  the frontend reuses its existing shortcut by `rom_id` — carrying `bind_rom_id` → the fresh representative. The
+  shortcut, its artwork, its collection membership, and its playtime all survive; only the DB binding moves onto the new
+  `rom_id`, and no duplicate is minted. _(The domain behavior is unit-pinned in `tests/domain/test_sync_diff.py`;
+  on-device confirmation of the end-to-end path is still pending.)_
+- **Changed / absent group keys → delete + create.** If the re-import changes or drops the `sibling_group_key` (the game
+  rematches to a different metadata entry, or its identity is lost), the group no longer resolves to the old bound
+  sibling, so the fresh `rom_id` takes the **new** lane: a fresh `AddShortcut` with a **new** appId, and the old
+  shortcut is torn down by the stale path. Artwork and collection membership are re-established for the new shortcut.
+  This is honest degradation — the identity link the rebind lane needs is gone, so the shortcut cannot be preserved.
+- **Untracked orphans → adoption at create time.** A live RomM-owned shortcut (exe ends `/bin/rom-launcher`) that
+  carries **no** DB binding — a crashed run's uncommitted in-flight shortcut, or a zombie left after a DB reset — is
+  invisible to both the rebind lane (no `roms` row) and the stale path (nothing to unbind), so a naive create would
+  leave a duplicate (`#1366`). When such a ROM reaches the create path, the frontend **adopts** the orphan instead: it
+  matches the built entry's display name against a once-per-run pool of live-but-unbound RomM appIds
+  (`getLiveRomMShortcutAppIds()` minus the run's already-bound appIds, resolved to names via
+  `appStore.GetAppOverviewByAppID`), reuses the matched appId, and rewrites its identity + launch bake (the same `Set*`
+  writes as an update). The pool is built **lazily** on the first create candidate (a pure-update run pays no scan
+  cost); each orphan is adopted at most once per run; a name collision adopts the lowest appId deterministically; a
+  `null` live scan (store unreadable) disables adoption for the run rather than guess. An adoption counts as "added" in
+  the post-sync toast (a game came under management) but skips the `AddShortcut` a duplicate would cost. See
+  `resolveShortcutAppId` in `src/utils/syncManager.ts`.
+
+Two guards keep a re-import from wiping a freshly-bound shortcut (`#1036`):
 
 - **One appId, one bound row.** `SqliteRomRepository.save()` unbinds any sibling row holding the appId before the
   per-`rom_id` UPSERT, and migration `003`'s partial unique index on `shortcut_app_id` enforces it (see
   [Database Design](database-design.md)). A re-import never leaves two bound rows sharing one appId.
 - **Stale-removal excludes appIds bound this run.** The finalize stale pass flags bound rows whose `rom_id` wasn't
-  synced this run — which includes the old colliding `rom_id`. `domain/sync_diff.py:select_stale_removals` removes any
-  candidate whose appId is in the run's `committed_app_ids` (every appId bound this run, across both the happy-path and
-  the heartbeat-timeout late-ack commit paths), so the appId the run just bound to the new `rom_id` is never emitted for
-  removal. The `get_by_app_id` reverse lookup orders `rom_id DESC LIMIT 1` so it resolves the live (newest) binding for
-  any pre-migration edge state.
+  synced this run — which includes the old `rom_id` the rebind lane just superseded.
+  `domain/sync_diff.py:select_stale_removals` removes any candidate whose appId is in the run's `committed_app_ids`
+  (every appId bound this run, across both the happy-path and the heartbeat-timeout late-ack commit paths), so the appId
+  the run just re-bound onto the new `rom_id` is never emitted for removal. The `get_by_app_id` reverse lookup orders
+  `rom_id DESC LIMIT 1` so it resolves the live (newest) binding for any pre-migration edge state.
 
 ## Sync-start reconcile of Steam-UI-deleted shortcuts
 
