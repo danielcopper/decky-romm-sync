@@ -495,8 +495,8 @@ class LibraryFetcher:
         (``predict_unit_skip`` — stamp present, stamped/persisted counts match
         the server count, bound rows exist, no group-key backfill pending) and
         derive the persisted post-collapse shortcut count
-        (``collapsed_shortcut_count`` over the rows' sibling-group keys;
-        ``None`` when the platform has no persisted rows). The gate's
+        (``collapsed_shortcut_count`` over the rows' sibling-group keys +
+        bound flags; ``None`` when the platform has no persisted rows). The gate's
         server-delta check (``list_roms_updated_after``) is deliberately NOT
         replayed — no network at plan time. A Force Full Sync clears every
         stamp before the run, so its plan predicts no skips without a special
@@ -520,7 +520,13 @@ class LibraryFetcher:
                     registry_count=sum(1 for rom in all_rows if rom.shortcut_app_id is not None),
                     needs_backfill=any(rom.sibling_group_key is None for rom in all_rows),
                 )
-                collapsed = collapsed_shortcut_count(rom.sibling_group_key for rom in all_rows) if all_rows else None
+                collapsed = (
+                    collapsed_shortcut_count(
+                        (rom.sibling_group_key, rom.shortcut_app_id is not None) for rom in all_rows
+                    )
+                    if all_rows
+                    else None
+                )
                 estimates[unit.slug] = (predicted, collapsed)
         return estimates
 
@@ -528,16 +534,18 @@ class LibraryFetcher:
         """Persisted post-collapse shortcut count per platform slug (#1382).
 
         Groups every persisted ``roms`` row by ``platform_slug`` and collapses
-        each platform's sibling-group keys (``collapsed_shortcut_count``).
-        Slugs with no persisted rows are absent, so the caller leaves the
-        field off and the frontend falls back to the raw server count. One
-        short read UoW.
+        each platform's sibling-group keys + bound flags
+        (``collapsed_shortcut_count``). Slugs with no persisted rows are
+        absent, so the caller leaves the field off and the frontend falls
+        back to the raw server count. One short read UoW.
         """
-        keys_by_slug: dict[str, list[str | None]] = {}
+        rows_by_slug: dict[str, list[tuple[str | None, bool]]] = {}
         with self._uow_factory() as uow:
             for rom in uow.roms.iter_all():
-                keys_by_slug.setdefault(rom.platform_slug, []).append(rom.sibling_group_key)
-        return {slug: collapsed_shortcut_count(keys) for slug, keys in keys_by_slug.items()}
+                rows_by_slug.setdefault(rom.platform_slug, []).append(
+                    (rom.sibling_group_key, rom.shortcut_app_id is not None)
+                )
+        return {slug: collapsed_shortcut_count(rows) for slug, rows in rows_by_slug.items()}
 
     def _read_incremental_baseline(
         self, platform_slug: str

@@ -930,6 +930,23 @@ class TestPlanEstimates:
         assert units[0].collapsed_count == 1
 
     @pytest.mark.asyncio
+    async def test_grandfathered_group_counts_each_bound_sibling(self, plugin, fake_romm_api):
+        """A pre-ADR-0021 group with two bound duplicates keeps both shortcuts
+        (§5), so the plan estimate prices 2, not one-per-group."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=3)
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=1002, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:100:1")
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert units[0].collapsed_count == 2
+
+    @pytest.mark.asyncio
     async def test_never_synced_platform_predicts_no_skip_and_no_collapsed_count(self, plugin, fake_romm_api):
         _wire_fake(plugin, fake_romm_api)
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}]
@@ -1067,6 +1084,20 @@ class TestGetPlatformsCollapsedCount:
         assert by_slug["n64"]["collapsed_count"] == 2
         assert by_slug["n64"]["rom_count"] == 4
         assert "collapsed_count" not in by_slug["snes"]
+
+    @pytest.mark.asyncio
+    async def test_grandfathered_group_counts_each_bound_sibling(self, plugin, fake_romm_api):
+        """The toggle label prices a two-bound-duplicate legacy group at 2 (ADR-0021 §5)."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}]
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=1002, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:100:1")
+
+        result = await plugin._sync_service._fetcher.get_platforms()
+
+        assert result["platforms"][0]["collapsed_count"] == 2
 
     @pytest.mark.asyncio
     async def test_collapsed_count_read_failure_falls_back_to_raw_counts(self, plugin, fake_romm_api):

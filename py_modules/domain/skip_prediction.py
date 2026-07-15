@@ -60,19 +60,25 @@ def predict_unit_skip(
     )
 
 
-def collapsed_shortcut_count(group_keys: Iterable[str | None]) -> int:
+def collapsed_shortcut_count(rows: Iterable[tuple[str | None, bool]]) -> int:
     """Post-collapse shortcut count for one platform's persisted rows.
 
-    The sibling-group collapse (ADR-0021) yields one Steam shortcut per
-    sibling group; a row without a group key is its own singleton. Given
-    every persisted row's ``sibling_group_key``, the collapsed count is the
-    number of distinct non-``None`` keys plus one per ``None`` key.
+    Mirrors the lane selection of ``collapse_sibling_groups`` (ADR-0021)
+    under the plan-time assumption that the next fetch matches the
+    persisted rows: a group with **bound** siblings is grandfathered — one
+    shortcut per bound sibling (§5, a pre-ADR-0021 library keeps its
+    duplicate shortcuts) — while a group with no binding anywhere mints
+    exactly one representative. Given every persisted row as
+    ``(sibling_group_key, is_bound)`` (bound = ``shortcut_app_id`` is set),
+    each non-``None`` group therefore counts ``max(1, bound rows in
+    group)``, and a keyless row is its own singleton (its real group is
+    unknown until the backfill fetch computes the key).
     """
-    distinct_keys: set[str] = set()
+    bound_by_key: dict[str, int] = {}
     singletons = 0
-    for key in group_keys:
+    for key, is_bound in rows:
         if key is None:
             singletons += 1
         else:
-            distinct_keys.add(key)
-    return len(distinct_keys) + singletons
+            bound_by_key[key] = bound_by_key.get(key, 0) + (1 if is_bound else 0)
+    return sum(max(1, bound) for bound in bound_by_key.values()) + singletons

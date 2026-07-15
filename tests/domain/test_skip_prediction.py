@@ -57,21 +57,53 @@ class TestPredictUnitSkip:
 
 
 class TestCollapsedShortcutCount:
-    """Distinct group keys count once; keyless rows are singletons."""
+    """Each group counts max(1, bound rows); keyless rows are singletons.
+
+    Rows are ``(sibling_group_key, is_bound)``; the count mirrors the lane
+    selection of ``collapse_sibling_groups`` (ADR-0021) — the property tier
+    (``test_skip_prediction_property.py``) pins the two functions together.
+    """
 
     def test_empty_rows_collapse_to_zero(self):
         assert collapsed_shortcut_count([]) == 0
 
-    def test_distinct_keys_count_once_each(self):
-        assert collapsed_shortcut_count(["igdb:1:1", "igdb:1:1", "igdb:2:1"]) == 2
+    def test_distinct_unbound_groups_count_once_each(self):
+        assert collapsed_shortcut_count([("igdb:1:1", False), ("igdb:1:1", False), ("igdb:2:1", False)]) == 2
 
     def test_none_keys_are_singletons(self):
-        assert collapsed_shortcut_count([None, None, None]) == 3
+        assert collapsed_shortcut_count([(None, False), (None, True), (None, False)]) == 3
 
-    def test_mixed_keys_and_singletons(self):
-        # One 3-sibling group + one 2-sibling group + two keyless singletons.
-        assert collapsed_shortcut_count(["g:a", "g:a", "g:a", "g:b", "g:b", None, None]) == 4
+    def test_mixed_groups_and_singletons(self):
+        # One 3-sibling group (1 bound) + one 2-sibling unbound group + two
+        # keyless singletons.
+        rows = [
+            ("g:a", True),
+            ("g:a", False),
+            ("g:a", False),
+            ("g:b", False),
+            ("g:b", False),
+            (None, False),
+            (None, True),
+        ]
+        assert collapsed_shortcut_count(rows) == 4
 
-    @pytest.mark.parametrize("keys", [["g:a"], [None]])
-    def test_single_row_is_one_shortcut(self, keys):
-        assert collapsed_shortcut_count(keys) == 1
+    @pytest.mark.parametrize("rows", [[("g:a", False)], [("g:a", True)], [(None, False)], [(None, True)]])
+    def test_single_row_is_one_shortcut(self, rows):
+        assert collapsed_shortcut_count(rows) == 1
+
+    def test_grandfathered_group_counts_each_bound_sibling(self):
+        # A legacy group with two independently-bound duplicates keeps BOTH
+        # shortcuts (ADR-0021 §5) — the estimate must not read one-per-group.
+        assert collapsed_shortcut_count([("g:a", True), ("g:a", True), ("g:a", False)]) == 2
+
+    def test_group_with_one_bound_sibling_is_one_shortcut(self):
+        assert collapsed_shortcut_count([("g:a", True), ("g:a", False)]) == 1
+
+    def test_all_unbound_group_mints_one_representative(self):
+        assert collapsed_shortcut_count([("g:a", False), ("g:a", False)]) == 1
+
+    def test_grandfathered_group_mixed_with_null_singletons(self):
+        # 2-bound grandfathered group (2) + all-unbound group (1) + keyless
+        # rows (1 each, bound or not).
+        rows = [("g:a", True), ("g:a", True), ("g:b", False), ("g:b", False), (None, True), (None, False)]
+        assert collapsed_shortcut_count(rows) == 5
