@@ -208,6 +208,16 @@ class ArtworkManager(Protocol):
         label: str = "",
     ) -> dict[Any, Any]: ...
 
+    async def refresh_changed_covers(
+        self,
+        all_roms: list[dict[str, Any]],
+        emit_progress: Any,
+        is_cancelling: Any,
+        progress_step: int = 4,
+        progress_total_steps: int = 6,
+        label: str = "",
+    ) -> list[dict[str, int]]: ...
+
     def finalize_cover_path(self, grid: str | None, cover_path: str, app_id: int, rom_id_str: str) -> str: ...
 
     def remove_artwork_files(self, grid: str, rom_id: str | int, entry: ShortcutRegistryEntry) -> None: ...

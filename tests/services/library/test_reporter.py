@@ -474,6 +474,70 @@ class TestCommitUnitResults:
         assert rom.shortcut_app_id == 100043
         assert rom.applied_launch_options == "flatpak run … /keep.z64"
 
+    def test_commit_stamps_confirmed_cover_source(self, plugin):
+        """A fingerprint the artwork layer confirmed for this unit (staged in
+        ``pending_cover_sources``) is persisted on the upserted row (#1386)."""
+        uow = plugin._uow
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {"name": "Game", "fs_name": "game.z64", "platform_slug": "n64", "cover_path": ""},
+        )
+        plugin._sync_service._box.pending_cover_sources = {42: "/cover/big.png?ts=2026-07-11 12:00:00"}
+
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}])
+
+        with uow:
+            rom = uow.roms.get(42)
+        assert rom is not None
+        assert rom.cover_source == "/cover/big.png?ts=2026-07-11 12:00:00"
+
+    def test_commit_preserves_existing_cover_source_when_unconfirmed(self, plugin):
+        """A row whose cover was NOT confirmed this unit (failed download, or a
+        sibling the download never touched) keeps its persisted fingerprint —
+        the fresh fetch string is never blindly stamped, so the change is
+        retried next sync (#1386)."""
+        uow = plugin._uow
+        _seed_rom(uow, 42, app_id=100001, platform_slug="n64", name="Game")
+        with uow:
+            rom = uow.roms.get(42)
+            rom.adopt_cover_source("/cover/big.png?ts=2026-01-01 00:00:00")
+            uow.roms.save(rom)
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {"name": "Game", "fs_name": "game.z64", "platform_slug": "n64", "cover_path": ""},
+        )
+        assert plugin._sync_service._box.pending_cover_sources == {}
+
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}])
+
+        with uow:
+            rom = uow.roms.get(42)
+        assert rom is not None
+        assert rom.cover_source == "/cover/big.png?ts=2026-01-01 00:00:00"
+
+    def test_commit_stamps_confirmed_source_for_unacked_row(self, plugin):
+        """The fingerprint records the CACHE state, not applied frontend state:
+        a confirmed download whose shortcut was never acked still persists
+        (the cache file was written regardless of the ack)."""
+        uow = plugin._uow
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {"name": "Game", "fs_name": "game.z64", "platform_slug": "n64", "cover_path": ""},
+        )
+        plugin._sync_service._box.pending_cover_sources = {42: "/cover/big.png?ts=2026-07-11 12:00:00"}
+
+        # Empty ack — rom 42's shortcut never landed, its row commits unbound.
+        plugin._sync_service._reporter._commit_unit_results_io({}, [{"id": 42}])
+
+        with uow:
+            rom = uow.roms.get(42)
+        assert rom is not None
+        assert rom.shortcut_app_id is None
+        assert rom.cover_source == "/cover/big.png?ts=2026-07-11 12:00:00"
+
     def test_commit_persists_platform_stamp_atomically(self, plugin):
         """A passed ``platform_stamp`` lands in the SAME committed UoW as the rom
         upsert — the per-platform completion stamp is atomic with the chunk (ADR-0023)."""

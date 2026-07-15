@@ -21,6 +21,8 @@ class FakeArtworkManager:
 
     ``download_artwork`` returns the dict configured at construction
     (``canned_download``) and records the call args.
+    ``refresh_changed_covers`` returns the list configured at construction
+    (``canned_refreshes``, default empty) and records the call args.
     ``finalize_cover_path`` passes the input ``cover_path`` through
     unchanged by default — tests that need a rewrite can override the
     callable via ``finalize_override``.
@@ -32,10 +34,13 @@ class FakeArtworkManager:
         self,
         canned_download: dict[str, Any] | None = None,
         finalize_override: Callable[[str | None, str, int, str], str] | None = None,
+        canned_refreshes: list[dict[str, int]] | None = None,
     ) -> None:
         self.canned_download: dict[str, Any] = canned_download if canned_download is not None else {}
+        self.canned_refreshes: list[dict[str, int]] = canned_refreshes if canned_refreshes is not None else []
         self.finalize_override = finalize_override
         self.download_calls: list[tuple[list[dict[str, Any]], Any, Any, int, int, str]] = []
+        self.refresh_calls: list[tuple[list[dict[str, Any]], Any, Any, int, int, str]] = []
         self.finalize_calls: list[tuple[str | None, str, int, str]] = []
         self.remove_calls: list[tuple[str, str | int, ShortcutRegistryEntry]] = []
 
@@ -52,6 +57,20 @@ class FakeArtworkManager:
             (list(all_roms), emit_progress, is_cancelling, progress_step, progress_total_steps, label)
         )
         return dict(self.canned_download)
+
+    async def refresh_changed_covers(
+        self,
+        all_roms: list[dict[str, Any]],
+        emit_progress: Awaitable[None] | Callable[..., Awaitable[None]],
+        is_cancelling: Any,
+        progress_step: int = 4,
+        progress_total_steps: int = 6,
+        label: str = "",
+    ) -> list[dict[str, int]]:
+        self.refresh_calls.append(
+            (list(all_roms), emit_progress, is_cancelling, progress_step, progress_total_steps, label)
+        )
+        return [dict(entry) for entry in self.canned_refreshes]
 
     def finalize_cover_path(self, grid: str | None, cover_path: str, app_id: int, rom_id_str: str) -> str:
         self.finalize_calls.append((grid, cover_path, app_id, rom_id_str))

@@ -836,6 +836,107 @@ describe("syncManager — applies cover artwork to created shortcuts via the API
     expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 6000 }, "run-cover-fail", 1, 0);
   });
 
+  it("re-applies covers for the chunk's cover_refreshes entries (existing shortcuts, #1386)", async () => {
+    // The backend's invalidation pass found two existing shortcuts whose server
+    // cover changed. The frontend must fetch each fresh cover (already re-downloaded
+    // into the backend cache) and push it through SetCustomArtworkForApp so the
+    // tile refreshes in-session — then still ack the chunk.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>([[42, 5000]]));
+    vi.mocked(backend.getArtworkBase64).mockImplementation(async (romId: number) => ({
+      base64: `COVER-${romId}`,
+    }));
+
+    const data = chunkOf([sc(42)], "run-cover-refresh");
+    data.cover_refreshes = [
+      { rom_id: 42, app_id: 5000 },
+      { rom_id: 77, app_id: 5077 },
+    ];
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", data);
+      await flush(300);
+    });
+
+    // Each refresh entry is fetched by rom_id and applied to its EXISTING appId
+    // ("png", flag 0) — including rom 77, which is not in the chunk's shortcuts
+    // at all (a delta-skipped item whose cover changed).
+    expect(vi.mocked(backend.getArtworkBase64)).toHaveBeenCalledWith(42);
+    expect(vi.mocked(backend.getArtworkBase64)).toHaveBeenCalledWith(77);
+    expect(setCustomArtwork).toHaveBeenCalledWith(5000, "COVER-42", "png", 0);
+    expect(setCustomArtwork).toHaveBeenCalledWith(5077, "COVER-77", "png", 0);
+    // The refreshes ran BEFORE the ack (the backend's heartbeat-fed wait covers
+    // them), and the chunk still acked its own binding.
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 5000 }, "run-cover-refresh", 1, 0);
+  });
+
+  it("fail-soft: one refresh entry's failure never blocks the rest or the ack (#1386)", async () => {
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "COVERPNG" });
+    setCustomArtwork.mockRejectedValueOnce(new Error("artwork boom"));
+
+    const data = chunkOf([], "run-cover-refresh-fail");
+    data.cover_refreshes = [
+      { rom_id: 1, app_id: 5001 },
+      { rom_id: 2, app_id: 5002 },
+    ];
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", data);
+      await flush(250);
+    });
+
+    // Entry 1 failed (logged), entry 2 still applied, and the chunk acked.
+    expect(logErrorSpy).toHaveBeenCalledWith(expect.stringContaining("failed to apply cover for rom 1"));
+    expect(setCustomArtwork).toHaveBeenCalledWith(5002, "COVERPNG", "png", 0);
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({}, "run-cover-refresh-fail", 1, 0);
+  });
+
+  it("skips remaining refresh entries once cancel is requested (#1386)", async () => {
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    vi.mocked(backend.getArtworkBase64).mockImplementation(async (romId: number) => {
+      // Cancel lands while the FIRST refresh entry is mid-fetch.
+      if (romId === 1) requestSyncCancel();
+      return { base64: `COVER-${romId}` };
+    });
+
+    const data = chunkOf([], "run-cover-refresh-cancel");
+    data.cover_refreshes = [
+      { rom_id: 1, app_id: 5001 },
+      { rom_id: 2, app_id: 5002 },
+    ];
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", data);
+      await flush(250);
+    });
+
+    // Entry 1 completes (already in flight); entry 2 is never fetched, and the
+    // cancelled chunk is not acked.
+    expect(vi.mocked(backend.getArtworkBase64)).toHaveBeenCalledTimes(1);
+    expect(setCustomArtwork).toHaveBeenCalledTimes(1);
+    expect(setCustomArtwork).toHaveBeenCalledWith(5001, "COVER-1", "png", 0);
+    expect(vi.mocked(backend.reportUnitResults)).not.toHaveBeenCalled();
+  });
+
+  it("processes no refreshes when the field is absent (older payload shape)", async () => {
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>([[42, 5000]]));
+    vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "COVERPNG" });
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", chunkOf([sc(42)], "run-no-refresh-field"));
+      await flush(120);
+    });
+
+    // Update path + no cover_refreshes → no cover work at all, ack still fires.
+    expect(vi.mocked(backend.getArtworkBase64)).not.toHaveBeenCalled();
+    expect(setCustomArtwork).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 5000 }, "run-no-refresh-field", 1, 0);
+  });
+
   it("applies no cover for items reached after the cancel check breaks the loop", async () => {
     // Cancel is requested during the once-per-run scan, before the loop. The first
     // item is processed and applies its cover, then the post-item cancel check breaks

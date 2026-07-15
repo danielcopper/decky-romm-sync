@@ -76,8 +76,8 @@ def _set_user_version(db_path: str, version: int) -> None:
 # + 009_add_last_session_start_monotonic + 010_add_sibling_group_key_index
 # + 011_rekey_sibling_group_key + 012_add_platform_sync_state
 # + 013_add_interrupted_sync_run_status + 014_add_paused_sync_run_status
-# + 015_add_applied_launch_options).
-_SHIPPED_VERSION = 15
+# + 015_add_applied_launch_options + 016_add_cover_source).
+_SHIPPED_VERSION = 16
 
 # Tables after every shipped migration: the v1 set plus 006's play-session outbox
 # and 012's per-platform completion stamp.
@@ -1007,6 +1007,50 @@ class Test015AppliedLaunchOptions:
         db_path = str(tmp_path / "romm_sync.db")
         apply_migrations(db_path, str(_only_migrations_through(tmp_path, 14)))
         assert "applied_launch_options" not in _columns(db_path, "roms")
+
+
+class Test016CoverSource:
+    """016 — adds the nullable cover_source fingerprint column to roms only (#1386)."""
+
+    def test_adds_cover_source_to_roms_only(self, tmp_path: Path):
+        # 016 ALTERs only roms; rom_installs (and every other table) is untouched.
+        db_path = str(tmp_path / "romm_sync.db")
+
+        apply_migrations(db_path)
+
+        assert _user_version(db_path) == _SHIPPED_VERSION
+        assert "cover_source" in _columns(db_path, "roms")
+        assert "cover_source" not in _columns(db_path, "rom_installs")
+
+    def test_existing_row_reads_null_across_the_migration(self, tmp_path: Path):
+        # A row seeded before 016 reads NULL for the new column (unknown → the
+        # NULL-adopt path), the "no data invented" contract the invalidation
+        # pass relies on — a fingerprint is never fabricated by the migration.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 15)))
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute(
+                "INSERT INTO roms (rom_id, platform_slug, name, fs_name, last_synced_at) "
+                "VALUES (1, 'snes', 'Game', 'game.sfc', '2026-07-11T10:00:00')"
+            )
+        finally:
+            conn.close()
+
+        assert apply_migrations(db_path) == _SHIPPED_VERSION
+
+        conn = sqlite3.connect(db_path)
+        try:
+            value = conn.execute("SELECT cover_source FROM roms WHERE rom_id = 1").fetchone()[0]
+        finally:
+            conn.close()
+        assert value is None
+
+    def test_cover_source_absent_before_016(self, tmp_path: Path):
+        # At v15 the column does not yet exist.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 15)))
+        assert "cover_source" not in _columns(db_path, "roms")
 
 
 def test_shipped_migrations_dir_resolves_to_real_schema():

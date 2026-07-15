@@ -32,6 +32,7 @@ class Rom:
     shortcut_app_id: int | None
     last_synced_at: str
     cover_path: str | None = None
+    cover_source: str | None = None
     igdb_id: int | None = None
     sgdb_id: int | None = None
     ra_id: int | None = None
@@ -92,6 +93,24 @@ class Rom:
     def update_cover_path(self, path: str) -> None:
         """Record the local cover-art path once artwork has been written."""
         self.cover_path = path
+
+    def adopt_cover_source(self, source: str) -> None:
+        """Adopt the RomM cover source now reflected by this ROM's cover cache.
+
+        *source* is the fresh server cover string (``path_cover_large`` else
+        ``path_cover_small``, ``?ts=…`` cache-buster included) — the opaque
+        fingerprint sync later compares against to detect a server-side cover
+        change (#1386). Adopted only when the cache is actually confirmed
+        against the server: a fresh download, a cache reuse/seed, or the
+        NULL-adopt of a pre-fingerprint cache file. A blank *source* is
+        meaningless and raises ``ValueError`` — "no cover" stays ``None``
+        (unknown), never an empty adopted string. Stored verbatim (never
+        normalised): the compare is an exact opaque-string equality, so any
+        rewriting here would read as a phantom change on the next sync.
+        """
+        if not source or not source.strip():
+            raise ValueError("cover_source must not be empty")
+        self.cover_source = source
 
     def unbind_shortcut(self) -> None:
         """Drop the Steam-shortcut binding, keeping the ROM row otherwise intact.

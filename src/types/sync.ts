@@ -213,6 +213,15 @@ export interface SyncApplyUnitData {
   chunk_offset: number;
   unit_total: number;
   shortcuts: SyncAddItem[];
+  /**
+   * EXISTING shortcuts whose server-side cover changed (#1386): the backend's
+   * cover-cache invalidation pass already re-downloaded the cache and grid
+   * copy; the frontend re-applies each cover via `SetCustomArtworkForApp` so
+   * the Steam tile refreshes in-session (the grid file alone shows only after
+   * a client restart). Rides the unit's first chunk, already clipped to the
+   * session-budget headroom backend-side; empty/absent on later chunks.
+   */
+  cover_refreshes?: { rom_id: number; app_id: number }[];
 }
 
 export interface SyncStaleData {

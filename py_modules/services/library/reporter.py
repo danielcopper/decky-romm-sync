@@ -471,9 +471,9 @@ class SyncReporter:
         binding target this cycle (else preserves its existing binding — a
         non-representative sibling stays unbound, a bound row not re-acked keeps
         its shortcut), read-merges the plugin-resolved ids
-        (``sgdb_id`` / ``ra_id`` / ``cover_path`` follow "non-None new wins,
-        else preserve existing, else None"), saves the Rom, then stamps its
-        cached metadata. Saving the Rom before its metadata satisfies the
+        (``sgdb_id`` / ``ra_id`` / ``cover_path`` / ``cover_source`` follow
+        "confirmed new wins, else preserve existing, else None"), saves the Rom,
+        then stamps its cached metadata. Saving the Rom before its metadata satisfies the
         ``rom_metadata.rom_id → roms(rom_id)`` FK at commit. ``Rom.synced``
         validates untrusted RomM fields; a ``ValueError`` is caught so one bad
         row is skipped while the rest of the unit still commits.
@@ -506,6 +506,16 @@ class SyncReporter:
         cover_path = finalized.get(rom_id) or (existing.cover_path if existing is not None else None)
         if cover_path:
             rom.update_cover_path(cover_path)
+        # Cover fingerprint (#1386): the value the artwork layer CONFIRMED for this
+        # unit (a fresh download / cache reuse / grid seed recorded in the box's
+        # pending_cover_sources) wins; otherwise the existing row's fingerprint is
+        # preserved — never blindly the fetch's fresh string, so a failed download
+        # keeps the old fingerprint and the change is retried next sync.
+        cover_source = self._sync_state.pending_cover_sources.get(rom_id) or (
+            existing.cover_source if existing is not None else None
+        )
+        if cover_source:
+            rom.adopt_cover_source(cover_source)
         sgdb_id = self._merge_optional_id(built.get("sgdb_id"), existing.sgdb_id if existing else None)
         if sgdb_id is not None:
             rom.assign_sgdb_id(sgdb_id)

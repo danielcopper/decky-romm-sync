@@ -17,7 +17,18 @@ from domain.rom import Rom
 from services.artwork import ArtworkService, ArtworkServiceConfig
 
 
-def _seed_rom(uow, rom_id, *, app_id, cover_path=None, platform_slug="n64", name="Game", sgdb_id=None, group_key=None):
+def _seed_rom(
+    uow,
+    rom_id,
+    *,
+    app_id,
+    cover_path=None,
+    cover_source=None,
+    platform_slug="n64",
+    name="Game",
+    sgdb_id=None,
+    group_key=None,
+):
     """Insert a bound (or unbound when app_id is None) ROM into the fake UoW."""
     rom = Rom(
         rom_id=rom_id,
@@ -27,6 +38,7 @@ def _seed_rom(uow, rom_id, *, app_id, cover_path=None, platform_slug="n64", name
         shortcut_app_id=app_id,
         last_synced_at="2025-01-01T00:00:00",
         cover_path=cover_path,
+        cover_source=cover_source,
         sgdb_id=sgdb_id,
         sibling_group_key=group_key,
     )
@@ -340,6 +352,367 @@ class TestDownloadArtwork:
             roms, emit_progress=_noop_emit_progress, is_cancelling=lambda: True
         )
         assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_changed_fingerprint_re_downloads_over_cache(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        """A stored cover_source differing from the fresh one blocks the cache
+        reuse — the server-side cover changed, so the stale bytes are replaced
+        by a fresh download (#1386)."""
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        cache = _cache(cover_cache_dir, 42)
+        file_store.files[cache] = b"stale cached"
+        _seed_rom(uow, 42, app_id=99999, cover_source="/cover.png?ts=2026-01-01 00:00:00")
+        romm_api.download_cover.side_effect = _writing_download(file_store, b"fresh cover")
+
+        roms = [{"id": 42, "name": "Test Game", "path_cover_large": "/cover.png?ts=2026-07-11 12:00:00"}]
+        result = await artwork_service.download_artwork(
+            roms, emit_progress=_noop_emit_progress, is_cancelling=_not_cancelling
+        )
+
+        assert result[42] == cache
+        romm_api.download_cover.assert_called_once()
+        assert file_store.files[cache] == b"fresh cover"
+
+    @pytest.mark.asyncio
+    async def test_unchanged_fingerprint_reuses_cache(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        """A stored cover_source equal to the fresh one keeps the cache-hit
+        short-circuit — no download."""
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        cache = _cache(cover_cache_dir, 42)
+        file_store.files[cache] = b"cached"
+        _seed_rom(uow, 42, app_id=99999, cover_source="/cover.png?ts=2026-01-01 00:00:00")
+
+        roms = [{"id": 42, "name": "Test Game", "path_cover_large": "/cover.png?ts=2026-01-01 00:00:00"}]
+        result = await artwork_service.download_artwork(
+            roms, emit_progress=_noop_emit_progress, is_cancelling=_not_cancelling
+        )
+
+        assert result[42] == cache
+        romm_api.download_cover.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_null_fingerprint_adopts_existing_cache(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        """A NULL stored cover_source (pre-#1386 row) with an existing cache file
+        adopts the local bytes — no re-download of the whole library on upgrade."""
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        cache = _cache(cover_cache_dir, 42)
+        file_store.files[cache] = b"cached"
+        _seed_rom(uow, 42, app_id=99999, cover_source=None)
+
+        roms = [{"id": 42, "name": "Test Game", "path_cover_large": "/cover.png?ts=2026-07-11 12:00:00"}]
+        result = await artwork_service.download_artwork(
+            roms, emit_progress=_noop_emit_progress, is_cancelling=_not_cancelling
+        )
+
+        assert result[42] == cache
+        romm_api.download_cover.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_changed_fingerprint_blocks_grid_seed(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        """A changed fingerprint must not seed the cache from the grid copy either
+        — the grid file predates the change, so a fresh download wins."""
+        grid_dir = str(tmp_path / "grid")
+        steam_config.grid_dir.return_value = grid_dir
+        final = os.path.join(grid_dir, "99999p.png")
+        file_store.files[final] = b"stale grid cover"
+        _seed_rom(uow, 42, app_id=99999, cover_source="/cover.png?ts=2026-01-01 00:00:00")
+        romm_api.download_cover.side_effect = _writing_download(file_store, b"fresh cover")
+
+        roms = [{"id": 42, "name": "Test Game", "path_cover_large": "/cover.png?ts=2026-07-11 12:00:00"}]
+        result = await artwork_service.download_artwork(
+            roms, emit_progress=_noop_emit_progress, is_cancelling=_not_cancelling
+        )
+
+        cache = _cache(cover_cache_dir, 42)
+        assert result[42] == cache
+        romm_api.download_cover.assert_called_once()
+        assert file_store.files[cache] == b"fresh cover"
+
+    @pytest.mark.asyncio
+    async def test_changed_fingerprint_download_failure_keeps_old_cache(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        """A failed re-download leaves the old cache bytes intact (atomic
+        tmp+rename) — never a broken/missing cover."""
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        cache = _cache(cover_cache_dir, 42)
+        file_store.files[cache] = b"old cached"
+        _seed_rom(uow, 42, app_id=99999, cover_source="/cover.png?ts=2026-01-01 00:00:00")
+        romm_api.download_cover.side_effect = Exception("network down")
+
+        roms = [{"id": 42, "name": "Test Game", "path_cover_large": "/cover.png?ts=2026-07-11 12:00:00"}]
+        result = await artwork_service.download_artwork(
+            roms, emit_progress=_noop_emit_progress, is_cancelling=_not_cancelling
+        )
+
+        assert 42 not in result
+        assert file_store.files[cache] == b"old cached"
+        assert _tmp(cache) not in file_store.files
+
+
+# ── TestRefreshChangedCovers ──────────────────────────────────────────────────
+
+
+class TestRefreshChangedCovers:
+    """The #1386 cover-cache invalidation pass over a unit's fetched ROMs."""
+
+    _OLD = "/cover/big.png?ts=2026-01-01 00:00:00"
+    _NEW = "/cover/big.png?ts=2026-07-11 12:00:00"
+
+    @pytest.mark.asyncio
+    async def test_changed_bound_rom_re_downloads_publishes_and_persists(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        grid_dir = str(tmp_path / "grid")
+        steam_config.grid_dir.return_value = grid_dir
+        cache = _cache(cover_cache_dir, 42)
+        file_store.files[cache] = b"stale"
+        _seed_rom(uow, 42, app_id=99999, cover_source=self._OLD)
+        romm_api.download_cover.side_effect = _writing_download(file_store, b"fresh cover")
+
+        refreshed = await artwork_service.refresh_changed_covers(
+            [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            emit_progress=_noop_emit_progress,
+            is_cancelling=_not_cancelling,
+        )
+
+        assert refreshed == [{"rom_id": 42, "app_id": 99999}]
+        # Downloaded via the tmp sidecar into the cache; grid copy republished.
+        romm_api.download_cover.assert_called_once()
+        assert romm_api.download_cover.call_args[0] == (self._NEW, _tmp(cache))
+        assert file_store.files[cache] == b"fresh cover"
+        assert file_store.files[os.path.join(grid_dir, "99999p.png")] == b"fresh cover"
+        # The fresh fingerprint is persisted — the exact opaque string.
+        with uow:
+            assert uow.roms.get(42).cover_source == self._NEW
+
+    @pytest.mark.asyncio
+    async def test_null_fingerprint_with_cache_adopts_without_download(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        """The NULL-adopt: a pre-#1386 row with a cache file persists the fresh
+        fingerprint WITHOUT re-downloading — no thundering herd on upgrade."""
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        cache = _cache(cover_cache_dir, 42)
+        file_store.files[cache] = b"cached"
+        _seed_rom(uow, 42, app_id=99999, cover_source=None)
+
+        refreshed = await artwork_service.refresh_changed_covers(
+            [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            emit_progress=_noop_emit_progress,
+            is_cancelling=_not_cancelling,
+        )
+
+        assert refreshed == []
+        romm_api.download_cover.assert_not_called()
+        assert file_store.files[cache] == b"cached"
+        with uow:
+            assert uow.roms.get(42).cover_source == self._NEW
+
+    @pytest.mark.asyncio
+    async def test_null_fingerprint_without_cache_left_for_apply_path(
+        self, artwork_service, uow, steam_config, romm_api, tmp_path
+    ):
+        """NULL fingerprint + no cache file = today's behaviour: nothing here,
+        the cover downloads when the ROM rides the apply path."""
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        _seed_rom(uow, 42, app_id=99999, cover_source=None)
+
+        refreshed = await artwork_service.refresh_changed_covers(
+            [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            emit_progress=_noop_emit_progress,
+            is_cancelling=_not_cancelling,
+        )
+
+        assert refreshed == []
+        romm_api.download_cover.assert_not_called()
+        with uow:
+            assert uow.roms.get(42).cover_source is None
+
+    @pytest.mark.asyncio
+    async def test_unchanged_fingerprint_is_a_noop(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        file_store.files[_cache(cover_cache_dir, 42)] = b"cached"
+        _seed_rom(uow, 42, app_id=99999, cover_source=self._NEW)
+
+        refreshed = await artwork_service.refresh_changed_covers(
+            [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            emit_progress=_noop_emit_progress,
+            is_cancelling=_not_cancelling,
+        )
+
+        assert refreshed == []
+        romm_api.download_cover.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unbound_rom_is_ignored(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        """An unbound sibling has no Steam tile to refresh — the apply path owns
+        its cover; the pass never touches it."""
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        file_store.files[_cache(cover_cache_dir, 42)] = b"stale"
+        _seed_rom(uow, 42, app_id=None, cover_source=self._OLD)
+
+        refreshed = await artwork_service.refresh_changed_covers(
+            [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            emit_progress=_noop_emit_progress,
+            is_cancelling=_not_cancelling,
+        )
+
+        assert refreshed == []
+        romm_api.download_cover.assert_not_called()
+        with uow:
+            assert uow.roms.get(42).cover_source == self._OLD
+
+    @pytest.mark.asyncio
+    async def test_rom_without_row_or_cover_url_is_skipped(
+        self, artwork_service, uow, steam_config, romm_api, tmp_path
+    ):
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        _seed_rom(uow, 7, app_id=1000, cover_source=self._OLD)
+
+        refreshed = await artwork_service.refresh_changed_covers(
+            [
+                {"id": 999, "name": "No Row", "path_cover_large": self._NEW},
+                {"id": 7, "name": "No Cover"},
+            ],
+            emit_progress=_noop_emit_progress,
+            is_cancelling=_not_cancelling,
+        )
+
+        assert refreshed == []
+        romm_api.download_cover.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_download_failure_keeps_old_cache_and_fingerprint_and_continues(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        """One ROM's failed download leaves its old cache + fingerprint intact
+        (the change is retried next sync) and never aborts the rest of the pass."""
+        grid_dir = str(tmp_path / "grid")
+        steam_config.grid_dir.return_value = grid_dir
+        cache_1 = _cache(cover_cache_dir, 1)
+        cache_2 = _cache(cover_cache_dir, 2)
+        file_store.files[cache_1] = b"old one"
+        file_store.files[cache_2] = b"old two"
+        _seed_rom(uow, 1, app_id=1001, name="One", cover_source=self._OLD)
+        _seed_rom(uow, 2, app_id=1002, name="Two", cover_source=self._OLD)
+
+        def fail_first(url, dest):
+            if "/1.png" in url:
+                raise Exception("network blip")
+            file_store.files[dest] = b"fresh two"
+
+        romm_api.download_cover.side_effect = fail_first
+
+        refreshed = await artwork_service.refresh_changed_covers(
+            [
+                {"id": 1, "name": "One", "path_cover_large": "/1.png?ts=2026-07-11 12:00:00"},
+                {"id": 2, "name": "Two", "path_cover_large": "/2.png?ts=2026-07-11 12:00:00"},
+            ],
+            emit_progress=_noop_emit_progress,
+            is_cancelling=_not_cancelling,
+        )
+
+        # ROM 1 failed: old cache bytes and old fingerprint survive; no entry.
+        assert file_store.files[cache_1] == b"old one"
+        assert _tmp(cache_1) not in file_store.files
+        with uow:
+            assert uow.roms.get(1).cover_source == self._OLD
+            assert uow.roms.get(2).cover_source == "/2.png?ts=2026-07-11 12:00:00"
+        # ROM 2 still refreshed.
+        assert refreshed == [{"rom_id": 2, "app_id": 1002}]
+        assert file_store.files[cache_2] == b"fresh two"
+
+    @pytest.mark.asyncio
+    async def test_missing_grid_dir_still_refreshes_cache_and_fingerprint(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir
+    ):
+        """No grid dir: the cache (the source of truth) is refreshed and the
+        fingerprint persisted; only the grid publish is skipped."""
+        steam_config.grid_dir.return_value = None
+        cache = _cache(cover_cache_dir, 42)
+        file_store.files[cache] = b"stale"
+        _seed_rom(uow, 42, app_id=99999, cover_source=self._OLD)
+        romm_api.download_cover.side_effect = _writing_download(file_store, b"fresh cover")
+
+        refreshed = await artwork_service.refresh_changed_covers(
+            [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            emit_progress=_noop_emit_progress,
+            is_cancelling=_not_cancelling,
+        )
+
+        assert refreshed == [{"rom_id": 42, "app_id": 99999}]
+        assert file_store.files[cache] == b"fresh cover"
+        with uow:
+            assert uow.roms.get(42).cover_source == self._NEW
+
+    @pytest.mark.asyncio
+    async def test_cancel_stops_the_download_loop(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        """A cancel observed between downloads stops the pass; already-refreshed
+        entries are still returned."""
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        _seed_rom(uow, 1, app_id=1001, name="One", cover_source=self._OLD)
+        _seed_rom(uow, 2, app_id=1002, name="Two", cover_source=self._OLD)
+        romm_api.download_cover.side_effect = _writing_download(file_store, b"fresh")
+        cancelled = False
+
+        def cancel_after_first():
+            nonlocal cancelled
+            was = cancelled
+            cancelled = True
+            return was
+
+        refreshed = await artwork_service.refresh_changed_covers(
+            [
+                {"id": 1, "name": "One", "path_cover_large": "/1.png?ts=x"},
+                {"id": 2, "name": "Two", "path_cover_large": "/2.png?ts=x"},
+            ],
+            emit_progress=_noop_emit_progress,
+            is_cancelling=cancel_after_first,
+        )
+
+        assert refreshed == [{"rom_id": 1, "app_id": 1001}]
+        romm_api.download_cover.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_progress_frames_are_labelled(
+        self, artwork_service, uow, steam_config, file_store, romm_api, tmp_path
+    ):
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        _seed_rom(uow, 1, app_id=1001, name="One", cover_source=self._OLD)
+        romm_api.download_cover.side_effect = _writing_download(file_store, b"fresh")
+        frames: list[dict[str, Any]] = []
+
+        async def record(stage, **kwargs):
+            frames.append({"stage": stage, **kwargs})
+
+        await artwork_service.refresh_changed_covers(
+            [{"id": 1, "name": "One", "path_cover_large": self._NEW}],
+            emit_progress=record,
+            is_cancelling=_not_cancelling,
+            progress_step=2,
+            progress_total_steps=5,
+            label="N64",
+        )
+
+        assert frames, "a changed cover must narrate progress"
+        assert frames[0]["message"] == "Refreshing covers for N64 (1/1)"
+        assert frames[0]["step"] == 2
+        assert frames[0]["total_steps"] == 5
 
 
 # ── TestDownloadArtworkProgress ───────────────────────────────────────────────
@@ -789,10 +1162,12 @@ class TestRefreshCover:
 
         cache = _cache(cover_cache_dir, 42)
         expected_final = os.path.join(grid, "999p.png")
-        # The persisted cover_path is the CACHE path; the grid gets a copy.
+        # The persisted cover_path is the CACHE path; the grid gets a copy. The
+        # repair also stamps the confirmed cover fingerprint (#1386).
         assert result == {"success": True, "message": "Cover refreshed", "cover_path": cache}
         with uow:
             assert uow.roms.get(42).cover_path == cache
+            assert uow.roms.get(42).cover_source == "/c.png"
         assert uow.committed is True
         assert file_store.files[cache] == b"new cover bytes"
         assert file_store.files[expected_final] == b"new cover bytes"

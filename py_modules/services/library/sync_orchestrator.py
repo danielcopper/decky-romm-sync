@@ -1114,9 +1114,27 @@ class SyncOrchestrator:
         # owed — so it counts as done the moment the delta is computed (#1383).
         box.run_done_items += len(skip_ids)
 
+        # Cover-cache invalidation pass (#1386): before any cover is reused, refresh
+        # the cache + grid copy of every BOUND fetched ROM whose server cover source
+        # changed (delta-skipped ROMs included — covers otherwise ride only the
+        # delta) and persist the fresh fingerprint. Runs BEFORE the cover download
+        # below so a changed apply-emitted ROM downloads once here and the apply
+        # path then reuses the refreshed cache. The returned {rom_id, app_id} list
+        # rides the unit's first apply chunk so the frontend re-applies each cover
+        # to the EXISTING shortcut via SetCustomArtworkForApp — without that push
+        # the Steam tile stays stale in-session until a client restart.
+        cover_refreshes = await self._refresh_changed_covers(
+            unit_roms, progress_step=unit_index + 1, progress_total_steps=total_units, label=unit.name
+        )
+
+        if box.is_cancelling():
+            return 0
+
         # Download artwork for the shortcuts about to be applied and stamp each
         # delta entry's cover path in place (a no-op when the delta is empty).
-        await self._attach_unit_cover_paths(
+        # Returns the confirmed cover fingerprints (rom_id → fresh source) the
+        # per-unit commit persists onto the upserted rows (#1386).
+        confirmed_cover_sources = await self._attach_unit_cover_paths(
             unit, unit_roms, apply_emitted, unit_index=unit_index, total_units=total_units
         )
 
@@ -1151,6 +1169,7 @@ class SyncOrchestrator:
         # in-flight chunk, not every prior chunk.
         box.pending_sync = {e["rom_id"]: e for e in apply_emitted}
         box.pending_all_roms = {sd["rom_id"]: sd for sd in shortcuts_data}
+        box.pending_cover_sources = confirmed_cover_sources
 
         return await self._apply_unit_in_chunks(
             unit,
@@ -1160,6 +1179,7 @@ class SyncOrchestrator:
             shortcuts_data=shortcuts_data,
             unit_roms=unit_roms,
             new_ids=new_ids,
+            cover_refreshes=cover_refreshes,
         )
 
     async def _attach_unit_cover_paths(
@@ -1170,7 +1190,7 @@ class SyncOrchestrator:
         *,
         unit_index: int,
         total_units: int,
-    ) -> None:
+    ) -> dict[int, str]:
         """Download artwork for the shortcuts about to be emitted and stamp each
         emitted entry's ``cover_path`` in place.
 
@@ -1179,9 +1199,14 @@ class SyncOrchestrator:
         rebind entry pulls its cover from the representative it binds
         (``BIND_ROM_ID_KEY``), whose raw dict is the one present in *unit_roms*.
         A no-op when nothing is emitted.
+
+        Returns the confirmed cover fingerprints — ``rom_id → fresh cover
+        source`` for every ROM whose cache the download resolved (fresh
+        download, reuse, or grid seed all confirm; a failed download does not) —
+        which the per-unit commit persists as ``roms.cover_source`` (#1386).
         """
         if not emitted:
-            return
+            return {}
         artwork_ids = {int(e.get(BIND_ROM_ID_KEY, e["rom_id"])) for e in emitted}
         artwork_roms = [rom for rom in unit_roms if rom["id"] in artwork_ids]
         cover_paths = await self._download_artwork(
@@ -1192,6 +1217,11 @@ class SyncOrchestrator:
         )
         for e in emitted:
             e["cover_path"] = cover_paths.get(int(e.get(BIND_ROM_ID_KEY, e["rom_id"])), "")
+        return {
+            int(rom["id"]): source
+            for rom in artwork_roms
+            if int(rom["id"]) in cover_paths and (source := rom.get("path_cover_large") or rom.get("path_cover_small"))
+        }
 
     async def _apply_unit_in_chunks(
         self,
@@ -1203,6 +1233,7 @@ class SyncOrchestrator:
         shortcuts_data: list[dict[str, Any]],
         unit_roms: list[dict[str, Any]],
         new_ids: set[int],
+        cover_refreshes: list[dict[str, int]] | None = None,
     ) -> int:
         """Emit → wait → commit the unit's DELTA shortcuts one durable chunk at a time.
 
@@ -1215,7 +1246,12 @@ class SyncOrchestrator:
         chunk's fetched ROMs (its sibling groups' rows, plus chunk 0's skipped
         leftover); a keyed lookup into the whole unit's live fetch yields the
         chunk's commit subset. ``new_ids`` (the classified creates) prices each
-        chunk create-vs-update for the session-budget gate. Returns the running
+        chunk create-vs-update for the session-budget gate. ``cover_refreshes``
+        (the #1386 invalidation pass's ``{rom_id, app_id}`` list) rides the
+        unit's FIRST chunk payload, clipped to the budget headroom left after
+        that chunk's own projected cost — a big refresh list degrades to fewer
+        in-session tile refreshes (the grid files are already updated; a Steam
+        restart shows the rest), never to a run pause. Returns the running
         count of shortcuts applied — a cancel or heartbeat timeout returns early
         with the chunks committed so far.
         """
@@ -1266,10 +1302,20 @@ class SyncOrchestrator:
             creates = sum(1 for e in chunk.emitted if e["rom_id"] in new_ids)
             updates = len(chunk.emitted) - creates
             budget_limit_kb = CLIFF_KB if box.chunks_emitted_this_run == 0 else EFFECTIVE_CEILING_KB
-            await self._maybe_pause_for_budget(box, creates=creates, updates=updates, limit_kb=budget_limit_kb)
+            rss_kb = await self._maybe_pause_for_budget(box, creates=creates, updates=updates, limit_kb=budget_limit_kb)
             if box.is_cancelling():
                 box.clear_active_unit()
                 return applied_count
+
+            # The #1386 cover-refresh list rides the unit's FIRST chunk, clipped to
+            # the budget headroom left after this chunk's own projected cost — the
+            # refreshes must never be the reason a run pauses, so they degrade to
+            # fewer in-session tile refreshes instead (grid files already updated).
+            chunk_cover_refreshes: list[dict[str, int]] = []
+            if chunk_index == 0 and cover_refreshes:
+                chunk_cover_refreshes = self._clip_cover_refreshes(
+                    cover_refreshes, rss_kb=rss_kb, creates=creates, updates=updates, limit_kb=budget_limit_kb
+                )
 
             chunk_rows = [roms_by_id[rid] for rid in chunk.rom_ids if rid in roms_by_id]
 
@@ -1301,6 +1347,10 @@ class SyncOrchestrator:
                     # via get_artwork_base64(rom_id); the commit reads them from
                     # pending_sync, which keeps the full entries.
                     "shortcuts": wire_shortcuts(chunk.emitted),
+                    # Existing shortcuts whose server-side cover changed (#1386):
+                    # the frontend re-applies each via SetCustomArtworkForApp so
+                    # the tile refreshes in-session. Non-empty only on chunk 0.
+                    "cover_refreshes": chunk_cover_refreshes,
                 },
             )
             # Count this emit so the session-budget gate exempts only the very
@@ -1397,7 +1447,7 @@ class SyncOrchestrator:
 
     async def _maybe_pause_for_budget(
         self, box: LibrarySyncStateBox, *, creates: int, updates: int, limit_kb: int = EFFECTIVE_CEILING_KB
-    ) -> None:
+    ) -> int | None:
         """GC, measure renderer RSS, and pause the run if this chunk would cross ``limit_kb``.
 
         Fired at a chunk boundary before emitting the next chunk's *creates* +
@@ -1414,13 +1464,17 @@ class SyncOrchestrator:
         ``is_cancelling`` check returns cleanly with the prior chunks committed, and
         the terminal finalize records the resumable ``paused`` state.
 
+        Returns the settled RSS reading (KB) so the caller can budget additive
+        chunk work (the #1386 cover-refresh clip) against the same measurement,
+        or ``None`` when measurement was unavailable / the gate errored.
+
         Fail-open throughout: an unavailable reading or any seam error skips the gate
         entirely — measurement must never block a sync.
         """
         try:
             rss_kb = await self._gc_then_measure_rss(box)
             if rss_kb is None:
-                return
+                return None
             cost_kb = chunk_worst_cost_kb(creates, updates)
             decision = gate_decision(rss_kb, cost_kb=cost_kb, limit_kb=limit_kb)
             if decision.should_pause:
@@ -1432,8 +1486,44 @@ class SyncOrchestrator:
                 box.run_paused = True
                 box.interrupt_reason = _SYNC_PAUSED_BUDGET
                 box.request_cancel()
+            return rss_kb
         except Exception as e:  # fail-open: the gate must never fail the run
             self._logger.debug(f"Session-budget gate skipped: {e}")
+            return None
+
+    def _clip_cover_refreshes(
+        self,
+        cover_refreshes: list[dict[str, int]],
+        *,
+        rss_kb: int | None,
+        creates: int,
+        updates: int,
+        limit_kb: int,
+    ) -> list[dict[str, int]]:
+        """Clip the #1386 cover-refresh list to the chunk's remaining budget headroom.
+
+        Each refresh is a ``SetCustomArtworkForApp`` push costing one transient
+        cover (:data:`domain.session_budget.COVER_TRANSIENT_KB`) of renderer heap
+        at the chunk's peak, on top of the chunk's own projected cost. The clip
+        keeps only as many refreshes as fit under ``limit_kb`` so the refreshes
+        can never push a chunk the gate just approved over the line; the
+        remainder is skipped gracefully — their grid files are already updated,
+        so a Steam restart shows them (the same degradation the budget gate uses
+        elsewhere). ``rss_kb`` ``None`` (measurement unavailable) fails open and
+        keeps the whole list, mirroring the gate itself.
+        """
+        if rss_kb is None:
+            return cover_refreshes
+        headroom_kb = limit_kb - rss_kb - chunk_worst_cost_kb(creates, updates)
+        allowance = max(0, headroom_kb // COVER_TRANSIENT_KB)
+        if allowance >= len(cover_refreshes):
+            return cover_refreshes
+        self._logger.info(
+            f"Session-budget headroom clips cover refreshes: applying {allowance} of "
+            f"{len(cover_refreshes)}; the remaining grid files are already updated and "
+            f"show after a Steam restart"
+        )
+        return cover_refreshes[:allowance]
 
     def _build_final_platform_stamp(
         self, unit: WorkUnit, chunk_index: int, chunk_count: int
@@ -1713,6 +1803,23 @@ class SyncOrchestrator:
         box = self._sync_state
         return await self._artwork.download_artwork(
             all_roms,
+            emit_progress=self.emit_progress,
+            is_cancelling=box.is_cancelling,
+            progress_step=progress_step,
+            progress_total_steps=progress_total_steps,
+            label=label,
+        )
+
+    async def _refresh_changed_covers(self, unit_roms, progress_step=4, progress_total_steps=6, label=""):
+        """Delegate the #1386 cover-cache invalidation pass to the ArtworkManager.
+
+        ``label`` is the unit's display name, threaded into the throttled
+        "Refreshing covers for <label>" progress frames. Returns the refreshed
+        ``{rom_id, app_id}`` list the first apply chunk carries to the frontend.
+        """
+        box = self._sync_state
+        return await self._artwork.refresh_changed_covers(
+            unit_roms,
             emit_progress=self.emit_progress,
             is_cancelling=box.is_cancelling,
             progress_step=progress_step,

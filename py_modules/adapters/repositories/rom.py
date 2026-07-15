@@ -20,7 +20,10 @@ if TYPE_CHECKING:
 # save(), so a re-sync (which builds a fresh Rom with both = None) cannot wipe a
 # user's pin. The version-metadata columns (sibling_group_key + the version
 # dimensions) ARE here — they are server-derived facts that must refresh on
-# every sync (ADR-0021), the opposite of the user pins.
+# every sync (ADR-0021), the opposite of the user pins. cover_source (the
+# cover-cache fingerprint, #1386) rides the UPSERT like cover_path: the commit
+# writes the value the artwork layer confirmed this run, else the preserved
+# existing one — the merge happens on the Rom before save(), not here.
 _SYNC_COLUMNS = (
     "rom_id",
     "platform_slug",
@@ -29,6 +32,7 @@ _SYNC_COLUMNS = (
     "shortcut_app_id",
     "last_synced_at",
     "cover_path",
+    "cover_source",
     "igdb_id",
     "sgdb_id",
     "ra_id",
@@ -62,6 +66,7 @@ def _row_to_rom(row: sqlite3.Row) -> Rom:
         shortcut_app_id=row["shortcut_app_id"],
         last_synced_at=row["last_synced_at"],
         cover_path=row["cover_path"],
+        cover_source=row["cover_source"],
         igdb_id=row["igdb_id"],
         sgdb_id=row["sgdb_id"],
         ra_id=row["ra_id"],
@@ -134,6 +139,7 @@ class SqliteRomRepository(BaseRepository):
                 rom.shortcut_app_id,
                 rom.last_synced_at,
                 rom.cover_path,
+                rom.cover_source,
                 rom.igdb_id,
                 rom.sgdb_id,
                 rom.ra_id,

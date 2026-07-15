@@ -100,17 +100,19 @@ async function resolveShortcutAppId(
 }
 
 /**
- * Fetch a newly created shortcut's cover and push it through Steam's native
- * artwork API so the tile shows the real cover in-session, with no client
- * restart. ``SetCustomArtworkForApp`` writes ``{app_id}p.png`` — the same grid
- * file the backend also writes at commit, which stays as the durability net if
- * this call fails. ``rom_id`` is the emitted entry's own id, which the backend
- * always resolves to the representative's cover through the in-flight
- * pending-sync path, so no separate bind key is needed. Fail-soft: a cover that
- * can't be fetched (``base64: null``) or applied never fails the shortcut — the
- * item is already created, and the backend grid copy still lands. One cover per
- * item, awaited inside the 50ms-paced loop: batching covers resident is exactly
- * the #797 CEF-heap overflow the session-budget gate protects against.
+ * Fetch a shortcut's cover and push it through Steam's native artwork API so
+ * the tile shows the real cover in-session, with no client restart.
+ * ``SetCustomArtworkForApp`` writes ``{app_id}p.png`` — the same grid file the
+ * backend also writes, which stays as the durability net if this call fails.
+ * ``rom_id`` is the emitted entry's own id, which the backend always resolves
+ * to the representative's cover through the in-flight pending-sync path (or the
+ * persisted cache for a #1386 refresh entry), so no separate bind key is
+ * needed. Fail-soft: a cover that can't be fetched (``base64: null``) or
+ * applied never fails the shortcut — the backend grid copy still lands. One
+ * cover per item, awaited inside the 50ms-paced loop: batching covers resident
+ * is exactly the #797 CEF-heap overflow the session-budget gate protects
+ * against. Two callers: newly created shortcuts, and the backend's #1386
+ * cover-refresh list for existing shortcuts whose server cover changed.
  */
 async function applyCoverArtwork(appId: number, romId: number): Promise<void> {
   try {
@@ -120,6 +122,35 @@ async function applyCoverArtwork(appId: number, romId: number): Promise<void> {
     }
   } catch (e) {
     logError(`Per-unit: failed to apply cover for rom ${romId} (appId ${appId}): ${e}`);
+  }
+}
+
+/**
+ * Re-apply the covers of EXISTING shortcuts whose server-side cover changed
+ * (#1386). The backend's cover-cache invalidation pass already re-downloaded
+ * the per-ROM cache file and republished the grid copy — this loop pushes each
+ * fresh cover through Steam's artwork API so the tile refreshes in-session
+ * (``rt_custom_image_mtime`` only bumps through ``SetCustomArtworkForApp`` or a
+ * client restart). The list rides the unit's first chunk and is already
+ * budget-clipped backend-side (a cover ≈ 1 MB of transient renderer heap);
+ * processed at the same CEF-safe 50ms cadence as created-shortcut covers, with
+ * heartbeats so a long refresh tail never trips the backend's per-unit
+ * timeout. Runs BEFORE the chunk ack so the backend's wait covers this work.
+ * Fail-soft per item; exits early on cancel.
+ */
+async function processCoverRefreshes(refreshes: { rom_id: number; app_id: number }[]): Promise<void> {
+  let lastHeartbeat = Date.now();
+  for (const entry of refreshes) {
+    if (isCancelRequested()) {
+      logInfo("Per-unit cancel observed during cover refresh");
+      break;
+    }
+    await applyCoverArtwork(entry.app_id, entry.rom_id);
+    await delay(50);
+    if (Date.now() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
+      syncHeartbeat().catch(() => {});
+      lastHeartbeat = Date.now();
+    }
   }
 }
 
@@ -134,8 +165,10 @@ async function applyCoverArtwork(appId: number, romId: number): Promise<void> {
  * the same iteration (see {@link applyCoverArtwork}) so covers appear as the
  * shortcuts are created — one per item under the 50ms pacing, safe under the
  * session-budget gate that brakes a large run before the CEF heap overflows.
- * Updates/rebinds keep their existing grid file (cover refresh on change is #1386,
- * out of scope). A cover failure is fail-soft and never fails the item/chunk.
+ * Updates/rebinds keep their existing grid file here; an update whose SERVER
+ * cover changed instead arrives on the chunk's ``cover_refreshes`` list and is
+ * re-applied by {@link processCoverRefreshes} (#1386). A cover failure is
+ * fail-soft and never fails the item/chunk.
  */
 async function processUnitShortcuts(
   data: SyncApplyUnitData,
@@ -249,7 +282,9 @@ export async function reconcileStaleShortcuts(): Promise<void> {
  * Initialize the per-unit pipeline handler. Listens for ``sync_apply_unit``
  * events, processes each unit's shortcuts at the CEF-safe 50ms cadence — applying
  * each newly created shortcut's cover through Steam's artwork API as it goes (see
- * {@link processUnitShortcuts}) — and reports back via ``reportUnitResults`` so
+ * {@link processUnitShortcuts}), then re-applying the chunk's ``cover_refreshes``
+ * for existing shortcuts whose server cover changed (#1386, see
+ * {@link processCoverRefreshes}) — and reports back via ``reportUnitResults`` so
  * the backend can advance the work queue and durably commit the chunk.
  */
 export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
@@ -296,6 +331,14 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
 
       const existing = await resolveExistingShortcuts(data.run_id);
       await processUnitShortcuts(data, existing, romIdToAppId);
+
+      // Cover refreshes for EXISTING shortcuts whose server cover changed
+      // (#1386) — budget-clipped backend-side, non-empty only on chunk 0.
+      // Processed before the ack so the backend's per-unit wait (heartbeat-fed)
+      // covers this work; a cancel observed above skips it entirely.
+      if (!isCancelRequested() && data.cover_refreshes?.length) {
+        await processCoverRefreshes(data.cover_refreshes);
+      }
 
       // Do NOT ack a cancelled unit: the backend has already discarded this
       // run's in-flight state, so a post-cancel ack only risks being credited

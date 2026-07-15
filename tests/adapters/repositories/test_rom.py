@@ -35,6 +35,7 @@ class TestRoundTrip:
             shortcut_app_id=98765,
             last_synced_at="2026-05-01T12:00:00Z",
             cover_path="/covers/42.png",
+            cover_source="/assets/romm/resources/roms/42/cover/big.png?ts=2025-07-28 00:05:03",
             igdb_id=111,
             sgdb_id=222,
             ra_id=333,
@@ -51,6 +52,7 @@ class TestRoundTrip:
         loaded = uow.roms.get(7)
         assert loaded is not None
         assert loaded.cover_path is None
+        assert loaded.cover_source is None
         assert loaded.igdb_id is None
         assert loaded.sgdb_id is None
         assert loaded.ra_id is None
@@ -268,6 +270,39 @@ class TestUpsert:
         assert loaded is not None
         assert loaded.shortcut_app_id == 200
         assert uow.roms.count() == 1
+
+
+class TestCoverSource:
+    """``cover_source`` is a sync column (#1386): save() writes the aggregate's
+    value on every UPSERT — the confirmed-else-preserved merge happens on the Rom
+    upstream, not here — so it is NOT pin-preserved like emulator_override."""
+
+    def test_rides_the_upsert(self, uow: SqliteUnitOfWork):
+        first = _rom(1)
+        first.adopt_cover_source("/cover/big.png?ts=2026-01-01 00:00:00")
+        uow.roms.save(first)
+
+        resaved = _rom(1)
+        resaved.adopt_cover_source("/cover/big.png?ts=2026-07-11 12:00:00")
+        uow.roms.save(resaved)
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.cover_source == "/cover/big.png?ts=2026-07-11 12:00:00"
+
+    def test_resave_without_source_writes_null(self, uow: SqliteUnitOfWork):
+        # A fresh Rom (cover_source None) re-saved over a fingerprinted row NULLs
+        # the column — the merge protecting against this lives in the reporter's
+        # commit, which is why every write path must construct via that merge.
+        first = _rom(1)
+        first.adopt_cover_source("/cover/big.png?ts=2026-01-01 00:00:00")
+        uow.roms.save(first)
+
+        uow.roms.save(_rom(1))
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.cover_source is None
 
 
 class TestVersionMetadata:

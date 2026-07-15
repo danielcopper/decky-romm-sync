@@ -1,11 +1,19 @@
 """ArtworkService — cover art download, per-ROM cache, grid publish, cleanup.
 
-Cover art is downloaded once per RomM ID into the plugin-owned per-ROM cover
-cache (``{rom_id}.png``), the single source of truth for a ROM's cover. The
-active version of a sibling group is *published* onto the shared Steam grid as
+Cover art is downloaded per RomM ID into the plugin-owned per-ROM cover cache
+(``{rom_id}.png``), the single source of truth for a ROM's cover. The active
+version of a sibling group is *published* onto the shared Steam grid as
 ``{app_id}p.png`` (a copy, so every sibling keeps its own cache file, ADR-0021).
 The persisted ``roms.cover_path`` records the cache path; the frontend reads a
 ROM's cover by RomM ID through the base64 query callables.
+
+A cache entry is valid only while the server's cover is unchanged: the
+persisted ``roms.cover_source`` fingerprint (the full RomM cover source string,
+``?ts=…`` cache-buster included) records which server cover the cached bytes
+came from, and every sync compares it against the fresh fetch (#1386). A
+mismatch re-downloads the cache and republishes the grid copy; a NULL
+fingerprint with an existing cache file is adopted without a download, so the
+fingerprint's introduction never mass re-downloads an existing library.
 """
 
 from __future__ import annotations
@@ -155,7 +163,7 @@ class ArtworkService:
 
             rom_id = rom["id"]
             cache_path = self._cache_path(rom_id)
-            existing = self._resolve_cached_cover(rom_id, cache_path, grid)
+            existing = self._resolve_cached_cover(rom_id, cache_path, grid, cover_url)
             if existing:
                 cover_paths[rom_id] = existing
                 continue
@@ -168,23 +176,34 @@ class ArtworkService:
 
         return cover_paths
 
-    def _resolve_cached_cover(self, rom_id: int, cache_path: str, grid: str) -> str | None:
+    def _resolve_cached_cover(self, rom_id: int, cache_path: str, grid: str, cover_url: str) -> str | None:
         """Return a ready cache cover for *rom_id*, or ``None`` when a download is needed.
 
-        A cache hit reuses the file. On a miss, a **single-version** bound ROM
-        whose grid ``{app_id}p.png`` already exists seeds the cache from it
-        (grid → cache copy) so the released single-version install is not
-        re-downloaded. A multi-version group is *never* seeded: its members share
-        one grid file that holds whatever version was last published, so seeding
-        would copy a different version's art into this ROM's cache — those
-        members download their own cover fresh instead (ADR-0021 / #1346).
+        The reuse gate is fingerprint-aware (#1386): a persisted
+        ``roms.cover_source`` that differs from the fresh *cover_url* means the
+        server-side cover changed since the cache was written, so neither the
+        cache file nor the grid seed may be reused — the caller downloads
+        fresh. A ``None`` fingerprint (pre-migration row, or no row yet) adopts
+        whatever local bytes exist, matching the pre-fingerprint behaviour.
+
+        With the fingerprint unchanged/unknown: a cache hit reuses the file. On
+        a miss, a **single-version** bound ROM whose grid ``{app_id}p.png``
+        already exists seeds the cache from it (grid → cache copy) so the
+        released single-version install is not re-downloaded. A multi-version
+        group is *never* seeded: its members share one grid file that holds
+        whatever version was last published, so seeding would copy a different
+        version's art into this ROM's cache — those members download their own
+        cover fresh instead (ADR-0021 / #1346).
         """
-        if self._cover_art_file_store.exists(cache_path):
-            return cache_path
         with self._uow_factory() as uow:
             rom = uow.roms.get(rom_id)
+            stored_source = rom.cover_source if rom is not None else None
             seedable = rom is not None and rom.shortcut_app_id is not None and not self._is_multi_version(uow, rom)
             app_id = rom.shortcut_app_id if rom is not None else None
+        if stored_source is not None and stored_source != cover_url:
+            return None
+        if self._cover_art_file_store.exists(cache_path):
+            return cache_path
         if seedable and app_id is not None:
             final = os.path.join(grid, final_filename(app_id))
             if self._cover_art_file_store.exists(final) and self._seed_cache(final, cache_path):
@@ -215,6 +234,142 @@ class ArtworkService:
         except OSError as e:
             self._logger.warning(f"Failed to seed cover cache from {src}: {e}")
             return False
+
+    # ── Cover-cache invalidation pass (#1386) ──────────────────────────────
+
+    async def refresh_changed_covers(
+        self,
+        all_roms: list[dict[str, Any]],
+        emit_progress: Callable[..., Awaitable[None]],
+        is_cancelling: Callable[[], bool],
+        progress_step: int = 4,
+        progress_total_steps: int = 6,
+        label: str = "",
+    ) -> list[dict[str, int]]:
+        """Refresh the cover cache of every BOUND fetched ROM whose server cover changed.
+
+        The delta-restricted apply never re-downloads a skipped ROM's cover, so a
+        server-side cover change would otherwise stay invisible forever. This
+        pass runs over a unit's live fetch (*all_roms*) before the apply: for
+        each bound ROM whose persisted ``cover_source`` differs from the fresh
+        cover string, the cache file is re-downloaded (atomic tmp+rename — a
+        failed download leaves the old bytes AND the old fingerprint intact, so
+        the change is retried next sync), the grid ``{app_id}p.png`` copy is
+        republished, and the new fingerprint is persisted. A ``None`` stored
+        fingerprint with an existing cache file is ADOPTED without a download
+        (the pre-fingerprint upgrade path — no thundering herd); with no cache
+        file it is left for the apply path, as before. Unbound ROMs are the
+        apply path's job and are never touched here.
+
+        Returns the refreshed ``[{"rom_id", "app_id"}]`` list — the shortcuts
+        whose Steam tile the frontend must re-apply via
+        ``SetCustomArtworkForApp`` (the grid file alone leaves the in-session
+        tile stale until a client restart). One ROM's failure never aborts the
+        pass. Progress is narrated under the ``fetching`` stage, throttled like
+        the cover-download loop.
+        """
+        adoptions, changed = await self._loop.run_in_executor(None, self._scan_cover_refresh_candidates, all_roms)
+        if adoptions:
+            await self._loop.run_in_executor(None, self._adopt_cover_sources_io, adoptions)
+        if not changed:
+            return []
+
+        self._cover_art_file_store.make_dirs(self._cover_cache_dir)
+        grid = self._steam_config.grid_dir()
+        refresh_target = f"Refreshing covers for {label}" if label else "Refreshing covers"
+        refreshed: list[dict[str, int]] = []
+        total = len(changed)
+        for i, (rom_id, app_id, cover_url) in enumerate(changed):
+            if is_cancelling():
+                break
+            processed = i + 1
+            if processed == 1 or processed == total or processed % _COVER_PROGRESS_INTERVAL == 0:
+                await emit_progress(
+                    SyncStage.FETCHING,
+                    current=processed,
+                    total=total,
+                    message=f"{refresh_target} ({processed}/{total})",
+                    step=progress_step,
+                    total_steps=progress_total_steps,
+                )
+            ok = await self._loop.run_in_executor(None, self._refresh_one_cover_io, rom_id, app_id, cover_url, grid)
+            if ok:
+                refreshed.append({"rom_id": rom_id, "app_id": app_id})
+        if refreshed:
+            self._logger.info(f"Cover refresh: {len(refreshed)} of {total} changed cover(s) re-downloaded")
+        return refreshed
+
+    def _scan_cover_refresh_candidates(
+        self, all_roms: list[dict[str, Any]]
+    ) -> tuple[list[tuple[int, str]], list[tuple[int, int, str]]]:
+        """Split a unit's fetched ROMs into fingerprint adoptions and changed covers.
+
+        Returns ``(adoptions, changed)``: ``adoptions`` are ``(rom_id, fresh_source)``
+        pairs whose stored fingerprint is ``None`` but whose cache file exists (adopt
+        without download); ``changed`` are ``(rom_id, app_id, fresh_source)`` triples
+        whose stored fingerprint differs from the fresh one (re-download + republish).
+        Only BOUND rows qualify; a ROM with no fresh cover, no row, or an unchanged
+        fingerprint is skipped. One short read UoW for the whole scan.
+        """
+        adoptions: list[tuple[int, str]] = []
+        changed: list[tuple[int, int, str]] = []
+        with self._uow_factory() as uow:
+            for rom in all_roms:
+                fresh = rom.get("path_cover_large") or rom.get("path_cover_small")
+                if not fresh or "id" not in rom:
+                    continue
+                rom_id = int(rom["id"])
+                row = uow.roms.get(rom_id)
+                if row is None or row.shortcut_app_id is None:
+                    continue
+                if row.cover_source == fresh:
+                    continue
+                if row.cover_source is None:
+                    if self._cover_art_file_store.exists(self._cache_path(rom_id)):
+                        adoptions.append((rom_id, fresh))
+                    continue
+                changed.append((rom_id, row.shortcut_app_id, fresh))
+        return adoptions, changed
+
+    def _adopt_cover_sources_io(self, adoptions: list[tuple[int, str]]) -> None:
+        """Persist adopted fingerprints (no download) in one short write UoW."""
+        with self._uow_factory() as uow:
+            for rom_id, source in adoptions:
+                rom = uow.roms.get(rom_id)
+                if rom is None:
+                    continue
+                rom.adopt_cover_source(source)
+                uow.roms.save(rom)
+
+    def _refresh_one_cover_io(self, rom_id: int, app_id: int, cover_url: str, grid: str | None) -> bool:
+        """Re-download one changed cover, republish its grid copy, persist the fingerprint.
+
+        Ordered so nothing advances on failure: the atomic download either
+        replaces the cache in full or leaves the old bytes; only a successful
+        download republishes the grid ``{app_id}p.png`` and persists the new
+        ``cover_source`` (a missing grid dir skips the publish but still
+        persists — the cache is the source of truth). Returns whether the
+        cover was refreshed.
+        """
+        cache_path = self._cache_path(rom_id)
+        try:
+            self._download_cover_atomic(cover_url, cache_path)
+        except Exception as e:
+            self._logger.warning(f"Cover refresh: failed to download cover for rom {rom_id}: {e}")
+            return False
+        if grid:
+            self.finalize_cover_path(grid, cache_path, app_id, str(rom_id))
+        self._persist_cover_source(rom_id, cover_url)
+        return True
+
+    def _persist_cover_source(self, rom_id: int, source: str) -> None:
+        """Record the confirmed cover fingerprint on the ROM row in a short write UoW."""
+        with self._uow_factory() as uow:
+            rom = uow.roms.get(rom_id)
+            if rom is None:
+                return
+            rom.adopt_cover_source(source)
+            uow.roms.save(rom)
 
     # ── Atomic write helpers ───────────────────────────────────────────────
 
@@ -403,7 +558,8 @@ class ArtworkService:
         cache (overwriting any stale cache file — this is an explicit repair, so
         it never short-circuits on a cache hit), publishes the cache cover onto
         the grid as ``{app_id}p.png``, and records the cache path via
-        ``Rom.update_cover_path``. ADR-0006: the read and write each own a short
+        ``Rom.update_cover_path`` plus the confirmed ``cover_source``
+        fingerprint (#1386). ADR-0006: the read and write each own a short
         UoW with the RomM/file I/O in between, outside any transaction. Returns
         the canonical ``{success, reason, message}`` failure shape on every
         failure branch — see ``lib/list_result.py``.
@@ -461,7 +617,7 @@ class ArtworkService:
             }
 
         self.finalize_cover_path(grid, cache_path, app_id, str(rom_id))
-        await self._loop.run_in_executor(None, self._persist_cover_path, rom_id, cache_path)
+        await self._loop.run_in_executor(None, self._persist_cover_path, rom_id, cache_path, cover_url)
 
         return {
             "success": True,
@@ -475,13 +631,14 @@ class ArtworkService:
             rom = uow.roms.get(rom_id)
         return rom.shortcut_app_id if rom is not None else None
 
-    def _persist_cover_path(self, rom_id: int, cover_path: str) -> None:
-        """Record *cover_path* on the ROM row in a short write UoW."""
+    def _persist_cover_path(self, rom_id: int, cover_path: str, cover_source: str) -> None:
+        """Record *cover_path* + the confirmed *cover_source* fingerprint in one write UoW."""
         with self._uow_factory() as uow:
             rom = uow.roms.get(rom_id)
             if rom is None:
                 return
             rom.update_cover_path(cover_path)
+            rom.adopt_cover_source(cover_source)
             uow.roms.save(rom)
 
     # ── Staging file housekeeping ──────────────────────────────────────────

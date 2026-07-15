@@ -1,0 +1,30 @@
+-- =============================================================================
+-- 016_add_cover_source.sql — per-ROM cover-source fingerprint on the Rom aggregate
+-- #1386 (cover-cache invalidation)
+-- =============================================================================
+--
+-- Adds a nullable column recording the RomM cover source string
+-- (``path_cover_large`` else ``path_cover_small``, including the server's
+-- embedded ``?ts=…`` cache-buster) whose bytes currently sit in the per-ROM
+-- cover cache (``covers/{rom_id}.png``). Sync compares each fetched ROM's fresh
+-- source against this fingerprint as an opaque string: a mismatch means the
+-- server-side cover changed, so the cache file is re-downloaded, the grid copy
+-- republished, and the shortcut's tile re-applied in-session.
+--
+-- NULL = unknown. A pre-migration row (and any row whose cover was never
+-- confirmed) reads NULL. NULL with an existing cache file is ADOPTED — the
+-- fresh fingerprint is persisted without re-downloading — so upgrading never
+-- triggers a thundering-herd re-download of every cover; only a later change
+-- does. NULL with no cache file behaves as before the migration (the cover
+-- downloads when the ROM next rides the apply path).
+--
+-- The value is written only when the cover cache is actually confirmed against
+-- the server (a fresh download, a cache reuse/seed, or the NULL-adopt): the
+-- artwork layer persists it via ``Rom.adopt_cover_source``, and the sync
+-- commit's UPSERT carries the confirmed-else-preserved value — a failed
+-- download never advances the fingerprint, so the change is retried next sync.
+--
+-- Transaction-safe DDL only — the runner (adapters/sqlite_migrations.py) wraps
+-- BEGIN/COMMIT and stamps PRAGMA user_version = 16.
+-- -----------------------------------------------------------------------------
+ALTER TABLE roms ADD COLUMN cover_source TEXT;  -- RomM cover source of the cached cover bytes; NULL = unknown

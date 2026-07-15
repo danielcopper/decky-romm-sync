@@ -124,6 +124,7 @@ def _seed_rom_row(
     fs_name=None,
     sibling_group_key: str | None = "romm:seed:1",
     applied_launch_options: str | None = "",
+    cover_source: str | None = None,
 ):
     """Insert a bound (or unbound when app_id is None) ROM into the shared fake UoW.
 
@@ -135,6 +136,9 @@ def _seed_rom_row(
     placeholder — so an uninstalled bound baseline (built launch_options "")
     reads as unchanged by the delta-restricted classify (#1383); pass ``None`` to
     seed a pre-migration-015 row (unknown → always "changed").
+
+    ``cover_source`` is the persisted cover-cache fingerprint (#1386); defaults
+    to ``None`` (a pre-migration-016 row — the NULL-adopt path).
     """
     from domain.rom import Rom
 
@@ -146,6 +150,7 @@ def _seed_rom_row(
         shortcut_app_id=app_id,
         last_synced_at="2025-01-01T00:00:00",
         sibling_group_key=sibling_group_key,
+        cover_source=cover_source,
     )
     with plugin._uow:
         plugin._uow.roms.save(rom)
@@ -4470,6 +4475,258 @@ class TestDeltaRestrictedApply:
         events = self._apply_unit_events()
         assert len(events) == 1
         assert [s["rom_id"] for s in events[0]["shortcuts"]] == [10], "NULL recorded state forces a re-apply"
+
+
+class TestCoverRefreshPass:
+    """The #1386 cover-cache invalidation pass wired through the per-unit apply.
+
+    Drives the real ArtworkService (real cover-cache file I/O under tmp_path)
+    against the seeded FakeRommApi, and asserts the refresh list rides the
+    unit's first ``sync_apply_unit`` chunk while the fingerprints persist.
+    """
+
+    _OLD = "/cover/big.png?ts=2026-01-01 00:00:00"
+    _NEW = "/cover/big.png?ts=2026-07-11 12:00:00"
+
+    @staticmethod
+    def _apply_setup(plugin, fake_romm_api):
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-cover"
+
+    @staticmethod
+    def _apply_unit_events():
+        import decky
+
+        return [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_apply_unit"]
+
+    @staticmethod
+    def _cache_file(plugin, rom_id):
+        from pathlib import Path
+
+        return Path(plugin._artwork_service._cover_cache_dir) / f"{rom_id}.png"
+
+    @pytest.mark.asyncio
+    async def test_changed_cover_on_delta_skipped_rom_rides_first_chunk(self, plugin, fake_romm_api):
+        # rom 10 is content-unchanged (delta-skipped: no shortcut emitted) but its
+        # server cover source changed. The pass re-downloads the cache, persists
+        # the fresh fingerprint, and the {rom_id, app_id} entry rides chunk 0 so
+        # the frontend re-applies the tile.
+        self._apply_setup(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "Keep", "fs_name": "keep.z64", "path_cover_large": self._NEW}],
+        )
+        fake_romm_api.download_payloads[f"cover:{self._NEW}"] = b"fresh cover bytes"
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_rom_row(
+            plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64", cover_source=self._OLD
+        )
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        events = self._apply_unit_events()
+        assert len(events) == 1
+        assert events[0]["shortcuts"] == [], "the item stays delta-skipped — a cover change never re-applies it"
+        assert events[0]["cover_refreshes"] == [{"rom_id": 10, "app_id": 1010}]
+        # The cache file holds the fresh bytes and the fingerprint advanced.
+        assert self._cache_file(plugin, 10).read_bytes() == b"fresh cover bytes"
+        with plugin._uow as uow:
+            assert uow.roms.get(10).cover_source == self._NEW
+
+    @pytest.mark.asyncio
+    async def test_null_fingerprint_adopts_without_refresh_entry(self, plugin, fake_romm_api):
+        # A pre-#1386 row (fingerprint NULL) with an existing cache file adopts
+        # the fresh fingerprint silently: no download, no refresh entry.
+        self._apply_setup(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "Keep", "fs_name": "keep.z64", "path_cover_large": self._NEW}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64", cover_source=None)
+        cache = self._cache_file(plugin, 10)
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(b"pre-existing cache")
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        events = self._apply_unit_events()
+        assert len(events) == 1
+        assert events[0]["cover_refreshes"] == []
+        assert cache.read_bytes() == b"pre-existing cache", "NULL-adopt never re-downloads"
+        assert all(name != "download_cover" for name, _a, _k in fake_romm_api.call_log)
+        with plugin._uow as uow:
+            assert uow.roms.get(10).cover_source == self._NEW
+
+    @pytest.mark.asyncio
+    async def test_refreshes_ride_only_the_first_chunk(self, plugin, fake_romm_api, monkeypatch):
+        # Four changed items at chunk size 2 → two chunks; rom 1's cover also
+        # changed. The refresh entry rides chunk 0 only; chunk 1 carries [].
+        from services.library import sync_orchestrator
+
+        self._apply_setup(plugin, fake_romm_api)
+        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[
+                {
+                    "id": i,
+                    "name": f"New {i}",
+                    "fs_name": f"g{i}.z64",
+                    **({"path_cover_large": self._NEW} if i == 1 else {}),
+                }
+                for i in range(1, 5)
+            ],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        for i in range(1, 5):
+            # Old names → every item classifies "changed" and is emitted.
+            _seed_rom_row(
+                plugin,
+                i,
+                app_id=1000 + i,
+                platform_slug="n64",
+                name=f"Old {i}",
+                fs_name=f"g{i}.z64",
+                cover_source=self._OLD if i == 1 else None,
+            )
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        events = self._apply_unit_events()
+        assert len(events) == 2
+        assert events[0]["cover_refreshes"] == [{"rom_id": 1, "app_id": 1001}]
+        assert events[1]["cover_refreshes"] == []
+
+    @pytest.mark.asyncio
+    async def test_headroom_clips_refresh_list_before_emit(self, plugin, fake_romm_api):
+        # A live RSS reading leaves headroom for exactly ONE transient cover after
+        # the (empty) chunk's own cost: two refreshes clip to one — never a pause.
+        from domain.session_budget import CLIFF_KB, COVER_TRANSIENT_KB
+
+        self._apply_setup(plugin, fake_romm_api)
+        # The run's FIRST chunk projects against the cliff; leave headroom for one
+        # cover plus half of another so the allowance floor-divides to exactly 1.
+        plugin._renderer_rss.rss_kb = CLIFF_KB - COVER_TRANSIENT_KB - COVER_TRANSIENT_KB // 2
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[
+                {"id": 1, "name": "A", "fs_name": "a.z64", "path_cover_large": "/a.png?ts=2026-07-11 12:00:00"},
+                {"id": 2, "name": "B", "fs_name": "b.z64", "path_cover_large": "/b.png?ts=2026-07-11 12:00:00"},
+            ],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_rom_row(
+            plugin, 1, app_id=1001, platform_slug="n64", name="A", fs_name="a.z64", cover_source="/a.png?ts=old"
+        )
+        _seed_rom_row(
+            plugin, 2, app_id=1002, platform_slug="n64", name="B", fs_name="b.z64", cover_source="/b.png?ts=old"
+        )
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        events = self._apply_unit_events()
+        assert len(events) == 1, "the refreshes must never pause the run"
+        assert events[0]["cover_refreshes"] == [{"rom_id": 1, "app_id": 1001}], "clipped to the headroom allowance"
+        # Both grid-side caches were still refreshed backend-side; only the
+        # in-session tile push was clipped.
+        with plugin._uow as uow:
+            assert uow.roms.get(1).cover_source == "/a.png?ts=2026-07-11 12:00:00"
+            assert uow.roms.get(2).cover_source == "/b.png?ts=2026-07-11 12:00:00"
+
+    # ── _clip_cover_refreshes (the clip primitive) ───────────────
+
+    def test_clip_fails_open_when_rss_unavailable(self, plugin):
+        orch = plugin._sync_service._orchestrator
+        refreshes = [{"rom_id": 1, "app_id": 10}, {"rom_id": 2, "app_id": 20}]
+        assert orch._clip_cover_refreshes(refreshes, rss_kb=None, creates=0, updates=0, limit_kb=1_000_000) == refreshes
+
+    def test_clip_keeps_all_with_headroom(self, plugin):
+        from domain.session_budget import COVER_TRANSIENT_KB, EFFECTIVE_CEILING_KB
+
+        orch = plugin._sync_service._orchestrator
+        refreshes = [{"rom_id": 1, "app_id": 10}, {"rom_id": 2, "app_id": 20}]
+        rss = EFFECTIVE_CEILING_KB - 10 * COVER_TRANSIENT_KB
+        assert (
+            orch._clip_cover_refreshes(refreshes, rss_kb=rss, creates=0, updates=0, limit_kb=EFFECTIVE_CEILING_KB)
+            == refreshes
+        )
+
+    def test_clip_accounts_for_the_chunks_own_cost(self, plugin):
+        from domain.session_budget import EFFECTIVE_CEILING_KB, chunk_worst_cost_kb
+
+        orch = plugin._sync_service._orchestrator
+        refreshes = [{"rom_id": i, "app_id": i * 10} for i in range(1, 6)]
+        # Headroom of exactly the chunk's own cost → zero left for refreshes.
+        rss = EFFECTIVE_CEILING_KB - chunk_worst_cost_kb(3, 2)
+        assert (
+            orch._clip_cover_refreshes(refreshes, rss_kb=rss, creates=3, updates=2, limit_kb=EFFECTIVE_CEILING_KB) == []
+        )
+
+    def test_clip_negative_headroom_yields_empty(self, plugin):
+        from domain.session_budget import EFFECTIVE_CEILING_KB
+
+        orch = plugin._sync_service._orchestrator
+        refreshes = [{"rom_id": 1, "app_id": 10}]
+        assert (
+            orch._clip_cover_refreshes(
+                refreshes, rss_kb=EFFECTIVE_CEILING_KB + 1, creates=0, updates=0, limit_kb=EFFECTIVE_CEILING_KB
+            )
+            == []
+        )
+
+    def test_clip_keeps_list_order(self, plugin):
+        from domain.session_budget import COVER_TRANSIENT_KB, EFFECTIVE_CEILING_KB
+
+        orch = plugin._sync_service._orchestrator
+        refreshes = [{"rom_id": i, "app_id": i * 10} for i in range(1, 6)]
+        rss = EFFECTIVE_CEILING_KB - 2 * COVER_TRANSIENT_KB
+        assert orch._clip_cover_refreshes(
+            refreshes, rss_kb=rss, creates=0, updates=0, limit_kb=EFFECTIVE_CEILING_KB
+        ) == [{"rom_id": 1, "app_id": 10}, {"rom_id": 2, "app_id": 20}]
+
+    # ── delegation ───────────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_refresh_delegates_to_artwork_manager(self, plugin):
+        fake_refresh = AsyncMock(return_value=[{"rom_id": 1, "app_id": 10}])
+        plugin._sync_service._orchestrator._artwork = MagicMock()
+        plugin._sync_service._orchestrator._artwork.refresh_changed_covers = fake_refresh
+
+        result = await plugin._sync_service._orchestrator._refresh_changed_covers(
+            [{"id": 1, "name": "A"}], progress_step=3, progress_total_steps=7, label="N64"
+        )
+
+        assert result == [{"rom_id": 1, "app_id": 10}]
+        call_kwargs = fake_refresh.call_args.kwargs
+        assert call_kwargs["progress_step"] == 3
+        assert call_kwargs["progress_total_steps"] == 7
+        assert call_kwargs["label"] == "N64"
+        # is_cancelling closure reflects the live sync_state.
+        is_cancelling = call_kwargs["is_cancelling"]
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        assert is_cancelling() is False
+        plugin._sync_service._box.sync_state = SyncState.CANCELLING
+        assert is_cancelling() is True
 
 
 class TestSessionBudgetGate:

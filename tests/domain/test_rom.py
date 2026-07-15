@@ -81,6 +81,30 @@ class TestUpdateCoverPath:
         assert rom.cover_path == "/covers/1.png"
 
 
+class TestAdoptCoverSource:
+    def test_sets_cover_source_verbatim(self):
+        # The RomM ?ts= cache-buster carries an unencoded space — stored as-is,
+        # never normalised, so the opaque equality compare stays exact (#1386).
+        rom = _make_rom()
+        rom.adopt_cover_source("/assets/romm/resources/roms/1/cover/big.png?ts=2025-07-28 00:05:03")
+        assert rom.cover_source == "/assets/romm/resources/roms/1/cover/big.png?ts=2025-07-28 00:05:03"
+
+    def test_defaults_to_none(self):
+        assert _make_rom().cover_source is None
+
+    def test_empty_source_raises(self):
+        rom = _make_rom()
+        with pytest.raises(ValueError, match="cover_source"):
+            rom.adopt_cover_source("")
+        assert rom.cover_source is None
+
+    def test_whitespace_only_source_raises(self):
+        rom = _make_rom()
+        with pytest.raises(ValueError, match="cover_source"):
+            rom.adopt_cover_source("   ")
+        assert rom.cover_source is None
+
+
 class TestUnbindShortcut:
     def test_clears_app_id_and_keeps_row(self):
         rom = Rom.synced(

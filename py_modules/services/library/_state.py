@@ -67,6 +67,15 @@ class LibrarySyncStateBox:
     # it; kept across the heartbeat-timeout abandon window so a late ack can
     # still drive the full persist.
     pending_all_roms: dict[int, dict[str, Any]] = field(default_factory=dict)
+    # Confirmed cover fingerprints for the active unit: rom_id → the fresh RomM
+    # cover source whose bytes the artwork layer just put (or confirmed) in the
+    # per-ROM cover cache during this unit's cover download. The per-unit commit
+    # merges these onto the upserted Rom rows (``Rom.adopt_cover_source``);
+    # a rom absent here keeps its persisted fingerprint — a failed download
+    # never advances it (#1386). Populated alongside ``pending_sync`` in
+    # ``_sync_one_unit`` and reset with it; kept across the heartbeat-timeout
+    # abandon window so a late ack still stamps the confirmed values.
+    pending_cover_sources: dict[int, str] = field(default_factory=dict)
     pending_delta: PreviewDelta | None = None
     pending_collection_memberships: dict[str, list[int]] = field(default_factory=dict)
     pending_platform_rom_ids: set[int] | None = None
@@ -245,17 +254,18 @@ class LibrarySyncStateBox:
     def clear_active_unit(self) -> None:
         """Tear down the active unit's in-flight dispatch state.
 
-        Resets the chunk-coordination quintet: the emitted + all-ROM staging
-        (``pending_sync`` / ``pending_all_roms``), the ack event
-        (``unit_complete_event``), and the unit + chunk identity
-        (``active_unit_id`` / ``active_chunk_index``). The single teardown for a
-        unit that finished, was cancelled, or whose inter-chunk window closed.
-        NOT called on the heartbeat-timeout branch, which deliberately KEEPS this
-        staging so a late ``report_unit_results`` can still commit the delivered
-        bindings (#1052).
+        Resets the chunk-coordination state: the emitted + all-ROM + cover-
+        fingerprint staging (``pending_sync`` / ``pending_all_roms`` /
+        ``pending_cover_sources``), the ack event (``unit_complete_event``), and
+        the unit + chunk identity (``active_unit_id`` / ``active_chunk_index``).
+        The single teardown for a unit that finished, was cancelled, or whose
+        inter-chunk window closed. NOT called on the heartbeat-timeout branch,
+        which deliberately KEEPS this staging so a late ``report_unit_results``
+        can still commit the delivered bindings (#1052).
         """
         self.pending_sync = {}
         self.pending_all_roms = {}
+        self.pending_cover_sources = {}
         self.unit_complete_event = None
         self.active_unit_id = None
         self.active_chunk_index = None
