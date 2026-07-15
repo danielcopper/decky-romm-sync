@@ -531,13 +531,22 @@ class LibraryFetcher:
         return estimates
 
     def _read_collapsed_counts(self) -> dict[str, int]:
-        """Persisted post-collapse shortcut count per platform slug (#1382).
+        """Persisted post-collapse shortcut count per platform slug, gated on the
+        platform's completion stamp (#1382 / #1412).
 
         Groups every persisted ``roms`` row by ``platform_slug`` and collapses
         each platform's sibling-group keys + bound flags
-        (``collapsed_shortcut_count``). Slugs with no persisted rows are
-        absent, so the caller leaves the field off and the frontend falls
-        back to the raw server count. One short read UoW.
+        (``collapsed_shortcut_count``), but emits a count ONLY for slugs that
+        currently carry a ``PlatformSyncState`` completion stamp (ADR-0023). The
+        stamp exists iff the platform's local mirror is complete, which is
+        exactly the condition under which a post-collapse count is meaningful:
+        a never-synced platform legitimately holds PARTIAL rows — cross-platform
+        collection siblings persist per ADR-0021 (e.g. favorited games leave
+        their platform's rows behind without the platform ever being fetched) —
+        so an ungated count would shadow the true server total (#1412). A slug
+        with no stamp (or no persisted rows) is absent, so the caller leaves the
+        field off and the frontend falls back to the raw server count. The stamp
+        lookup shares the one short read UoW.
         """
         rows_by_slug: dict[str, list[tuple[str | None, bool]]] = {}
         with self._uow_factory() as uow:
@@ -545,7 +554,8 @@ class LibraryFetcher:
                 rows_by_slug.setdefault(rom.platform_slug, []).append(
                     (rom.sibling_group_key, rom.shortcut_app_id is not None)
                 )
-        return {slug: collapsed_shortcut_count(rows) for slug, rows in rows_by_slug.items()}
+            stamped = {slug for slug in rows_by_slug if uow.platform_sync_state.get(slug) is not None}
+        return {slug: collapsed_shortcut_count(rows) for slug, rows in rows_by_slug.items() if slug in stamped}
 
     def _read_incremental_baseline(
         self, platform_slug: str

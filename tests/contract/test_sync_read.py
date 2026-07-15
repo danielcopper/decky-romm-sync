@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from lib.errors import RommConnectionError
 
-from ._seed import seed_rom
+from ._seed import seed_platform_stamp, seed_rom
 
 # ── get_sync_status ──────────────────────────────────────────────────────
 
@@ -126,13 +126,26 @@ async def test_get_platforms_happy_shape(harness):
 
 
 async def test_get_platforms_collapsed_count_after_sync(harness):
-    """A platform with persisted rows carries the optional collapsed_count (#1382)."""
+    """A synced platform (completion stamp + persisted rows) carries the optional
+    collapsed_count (#1382); the count is gated on the stamp (#1412)."""
     harness.romm.platforms = [{"id": 1, "name": "Super Nintendo", "slug": "snes", "rom_count": 3}]
     seed_rom(harness, 11, platform_slug="snes")
+    seed_platform_stamp(harness, "snes", rom_count=3)
     result = await harness.plugin.get_platforms()
     p = result["platforms"][0]
     assert p["collapsed_count"] == 1
     assert p["rom_count"] == 3
+
+
+async def test_get_platforms_collapsed_count_omitted_without_stamp(harness):
+    """#1412: a never-synced platform carrying only partial local rows (no
+    completion stamp) omits collapsed_count so the label shows the server total."""
+    harness.romm.platforms = [{"id": 1, "name": "Super Nintendo", "slug": "snes", "rom_count": 3344}]
+    seed_rom(harness, 11, platform_slug="snes")
+    result = await harness.plugin.get_platforms()
+    p = result["platforms"][0]
+    assert "collapsed_count" not in p
+    assert p["rom_count"] == 3344
 
 
 async def test_get_platforms_server_failure_shape(harness):

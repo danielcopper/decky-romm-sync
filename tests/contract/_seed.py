@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any
 
+from domain.platform_sync_state import PlatformSyncState
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.rom_save_state import RomSaveState
@@ -54,6 +55,26 @@ def seed_rom(
                 shortcut_app_id=shortcut_app_id or rom_id,
                 synced_at="2026-01-01T00:00:00",
             )
+        )
+
+
+def seed_platform_stamp(
+    harness: ContractHarness,
+    platform_slug: str,
+    *,
+    rom_count: int,
+    completed_at: str = "2026-01-01T00:00:00",
+) -> None:
+    """Seed a ``PlatformSyncState`` completion stamp (ADR-0023).
+
+    The stamp exists iff the platform's local mirror is complete — it gates the
+    incremental-skip reconstruct and the ``get_platforms`` collapsed-count
+    garnish (#1412), so a contract test that means "this platform was synced"
+    must seed it.
+    """
+    with harness.uow_factory() as uow:
+        uow.platform_sync_state.save(
+            PlatformSyncState.stamp(platform_slug=platform_slug, at=completed_at, rom_count=rom_count)
         )
 
 

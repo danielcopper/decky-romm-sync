@@ -532,6 +532,12 @@ weights + planned totals, via `sync_plan`) and the applying frames.
   Full Sync needs no special case: `clear_sync_cache` deletes every stamp before the run, so a forced plan predicts no
   skips. The same collapsed counts also garnish `get_platforms` (an optional per-platform `collapsed_count`), so the
   platform toggles show the number of games a synced platform actually produces rather than the raw server file count.
+  That garnish is **gated on the platform's completion stamp** (`_read_collapsed_counts`, #1412): the count is emitted
+  only for slugs that currently carry a `PlatformSyncState` stamp — the stamp exists iff the local mirror is complete,
+  which is exactly when a post-collapse count is meaningful. A never-synced platform legitimately holds only PARTIAL
+  rows (cross-platform collection siblings persist per ADR-0021), so an ungated count would shadow the true server
+  total; with no stamp the field is absent and the toggle label falls back to the raw `rom_count`. Clearing the stamp
+  (local removal / Force Full Sync) reverts the label to the server total until the next completed sync re-stamps.
 - **Static walk-cost ceiling (pre-run seed).** Before a run — in the preview, and again as the initial "up to X min" the
   instant a skip-preview run starts — the estimate is a pure cost model: `new_count × NEW_ITEM_SEC` +
   `changed_count × UPDATED_ITEM_SEC` + a flat fetch allowance. The per-item constants (currently ~0.45 s for a created

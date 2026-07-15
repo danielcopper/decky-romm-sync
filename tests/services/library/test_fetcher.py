@@ -1066,7 +1066,15 @@ class TestPlanEstimates:
 
 
 class TestGetPlatformsCollapsedCount:
-    """get_platforms attaches the persisted post-collapse count per platform (#1382)."""
+    """get_platforms attaches the persisted post-collapse count per platform,
+    gated on the platform's completion stamp (#1382 / #1412).
+
+    The stamp exists iff the platform's local mirror is complete, so it is the
+    only condition under which a post-collapse count is meaningful. A
+    never-synced platform holds only PARTIAL cross-platform collection siblings
+    (ADR-0021), whose count would shadow the true server total (#1412) — so
+    without a stamp the field is omitted and the frontend shows ``rom_count``.
+    """
 
     @pytest.mark.asyncio
     async def test_synced_platform_carries_collapsed_count(self, plugin, fake_romm_api):
@@ -1076,7 +1084,9 @@ class TestGetPlatformsCollapsedCount:
             {"id": 1, "name": "N64", "slug": "n64", "rom_count": 4},
             {"id": 2, "name": "SNES", "slug": "snes", "rom_count": 5},
         ]
-        # n64: a 3-sibling group + a keyless singleton → 2 shortcuts. snes: never synced.
+        # n64: a synced platform (stamp present) with a 3-sibling group + a keyless
+        # singleton → 2 shortcuts. snes: never synced (no rows, no stamp).
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=4)
         _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
         _seed_persisted_rom(uow, 11, app_id=None, group_key="igdb:100:1")
         _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:100:1")
@@ -1091,11 +1101,55 @@ class TestGetPlatformsCollapsedCount:
         assert "collapsed_count" not in by_slug["snes"]
 
     @pytest.mark.asyncio
+    async def test_partial_rows_without_stamp_omit_collapsed_count(self, plugin, fake_romm_api):
+        """#1412: a never-synced platform carrying only partial collection-sibling
+        rows (no completion stamp) must NOT surface a collapsed_count — the label
+        falls back to the true server total instead of the partial local count.
+        """
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        # SNES has a large server total but only a few favorited siblings persisted
+        # locally (ADR-0021) — and no completion stamp, because it was never synced.
+        fake_romm_api.platforms = [{"id": 2, "name": "SNES", "slug": "snes", "rom_count": 3344}]
+        _seed_persisted_rom(uow, 20, app_id=2001, group_key="igdb:200:1", platform_slug="snes")
+        _seed_persisted_rom(uow, 21, app_id=2002, group_key="igdb:201:1", platform_slug="snes")
+
+        result = await plugin._sync_service._fetcher.get_platforms()
+
+        assert result["success"] is True
+        entry = result["platforms"][0]
+        assert "collapsed_count" not in entry
+        assert entry["rom_count"] == 3344
+
+    @pytest.mark.asyncio
+    async def test_stamp_deleted_reverts_to_server_count(self, plugin, fake_romm_api):
+        """Clearing the stamp (local removal / force sync) drops the collapsed_count
+        on the next get_platforms, even while the persisted rows survive."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}]
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=3)
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=None, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:100:1")
+
+        before = await plugin._sync_service._fetcher.get_platforms()
+        assert before["platforms"][0]["collapsed_count"] == 1
+
+        with uow:
+            uow.platform_sync_state.delete("n64")
+
+        after = await plugin._sync_service._fetcher.get_platforms()
+        assert "collapsed_count" not in after["platforms"][0]
+        assert after["platforms"][0]["rom_count"] == 3
+
+    @pytest.mark.asyncio
     async def test_grandfathered_group_counts_each_bound_sibling(self, plugin, fake_romm_api):
         """The toggle label prices a two-bound-duplicate legacy group at 2 (ADR-0021 §5)."""
         _wire_fake(plugin, fake_romm_api)
         uow = plugin._uow
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}]
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=3)
         _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
         _seed_persisted_rom(uow, 11, app_id=1002, group_key="igdb:100:1")
         _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:100:1")
