@@ -27,7 +27,7 @@ import {
   getWhitelistSettings,
   updateWhitelistSettings,
 } from "../api/backend";
-import { removeShortcut, getAllNonSteamShortcutAppIds } from "../utils/steamShortcuts";
+import { removeShortcut, getAllNonSteamShortcutAppIds, getLiveRomMShortcutAppIds } from "../utils/steamShortcuts";
 import { batchConfirmLaunchOptions } from "../utils/launchOptionsReconcile";
 import { getSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
 import { scrollToTop } from "../utils/scrollHelpers";
@@ -84,6 +84,36 @@ const useSyncRunning = (): boolean => {
   useEffect(() => onSyncProgressChange(() => setSyncRunning(getSyncProgress().running)), []);
   return syncRunning;
 };
+
+const SETTLE_POLL_MS = 250;
+const SETTLE_TIMEOUT_MS = 3000;
+
+const readShortcutStoreSize = (): number | null => {
+  if (typeof collectionStore === "undefined") return null;
+  const apps = collectionStore.deckDesktopApps?.apps;
+  return apps ? apps.size : null;
+};
+
+// Steam drops a removed shortcut from `deckDesktopApps.apps` a beat after
+// `RemoveShortcut` fires — the store settles asynchronously. Poll until the
+// store size has fallen by `removedCount` (or a short timeout elapses), THEN
+// re-count via `loadNonSteamApps`, so the "Remove N Non-Steam Games" label
+// isn't left showing the pre-removal count (#1381). Deliberately dumb: fixed
+// cadence, single timeout, no retries. If the store is unreadable or nothing
+// was removed, re-count immediately.
+async function recountAfterStoreSettles(removedCount: number, loadNonSteamApps: () => void): Promise<void> {
+  const baseline = readShortcutStoreSize();
+  if (baseline !== null && removedCount > 0) {
+    const target = Math.max(0, baseline - removedCount);
+    const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+    for (;;) {
+      const size = readShortcutStoreSize();
+      if (size === null || size <= target || Date.now() >= deadline) break;
+      await new Promise<void>((resolve) => setTimeout(resolve, SETTLE_POLL_MS));
+    }
+  }
+  loadNonSteamApps();
+}
 
 const PlatformActionModal: FC<{
   platform: RegistryPlatform;
@@ -234,6 +264,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     }
     setConfirmRemoveAllRomm(false);
     setStatus("Removing all shortcuts...");
+    let removedCount = 0;
     try {
       const result = await removeAllShortcuts();
       if (!result.success) {
@@ -241,11 +272,32 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
         // no app_ids/rom_ids — surface its message and remove nothing.
         setStatus(result.message ?? "Failed to remove shortcuts");
       } else {
-        if (result.app_ids) {
-          for (const appId of result.app_ids) {
+        // The backend list is the DB binding map (roms.shortcut_app_id). A
+        // crashed sync run's in-flight chunk can leave RomM-owned shortcuts in
+        // Steam (exe = bin/rom-launcher) that were never committed — no binding,
+        // so the backend never returns them. The live exe-ownership scan sees
+        // them; remove the UNION so no orphan is left behind (#1381).
+        const removed = new Set<number>();
+        for (const appId of result.app_ids ?? []) {
+          removeShortcut(appId);
+          removed.add(appId);
+        }
+        const liveAppIds = await getLiveRomMShortcutAppIds();
+        if (liveAppIds === null) {
+          // The scan could not run (Steam's shortcut store was unreadable) —
+          // fall back to the backend-bound list alone rather than skip removal.
+          logWarn("Live RomM shortcut scan unavailable — removed backend-bound shortcuts only.");
+        } else {
+          const orphans = liveAppIds.filter((appId) => !removed.has(appId));
+          logInfo(`Remove-all: ${orphans.length} live-scanned RomM shortcut(s) were not in the backend list.`);
+          for (const appId of orphans) {
             removeShortcut(appId);
+            removed.add(appId);
           }
         }
+        removedCount = removed.size;
+        // rom_ids are backend DB rows — orphans have none, so report only the
+        // backend set exactly as before.
         if (result.rom_ids?.length) {
           await reportRemovalResults(result.rom_ids);
         }
@@ -256,7 +308,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
       setStatus("Failed to remove shortcuts");
     }
     await refreshPlatforms();
-    loadNonSteamApps();
+    await recountAfterStoreSettles(removedCount, loadNonSteamApps);
   };
 
   const handleUninstallAll = async () => {
@@ -661,8 +713,8 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
     setStatus(`Removed ${toRemove.length} non-steam game${toRemove.length === 1 ? "" : "s"}`);
     setConfirmRemoveAll(false);
     setConfirmRetrodeck(false);
-    loadNonSteamApps();
     refreshPlatforms().catch((e) => logError(`Failed to refresh platforms: ${e}`));
+    await recountAfterStoreSettles(toRemove.length, loadNonSteamApps);
   };
 
   const removeButtonLabel = () => {

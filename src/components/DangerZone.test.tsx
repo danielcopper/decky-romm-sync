@@ -11,7 +11,12 @@ import { createElement, type ReactElement } from "react";
 import { DangerZone } from "./DangerZone";
 import * as backend from "../api/backend";
 import { showModal } from "@decky/ui";
-import { removeShortcut, setLaunchOptionsConfirmed, getAllNonSteamShortcutAppIds } from "../utils/steamShortcuts";
+import {
+  removeShortcut,
+  setLaunchOptionsConfirmed,
+  getAllNonSteamShortcutAppIds,
+  getLiveRomMShortcutAppIds,
+} from "../utils/steamShortcuts";
 import { clearPlatformCollection, clearAllRomMCollections } from "../utils/collections";
 import { formatUninstallStatus } from "../utils/formatters";
 import { setSyncProgress } from "../utils/syncProgress";
@@ -25,6 +30,7 @@ vi.mock("../utils/steamShortcuts", () => ({
   removeShortcut: vi.fn(),
   setLaunchOptionsConfirmed: vi.fn(),
   getAllNonSteamShortcutAppIds: vi.fn(),
+  getLiveRomMShortcutAppIds: vi.fn(),
 }));
 vi.mock("../utils/collections", () => ({
   clearPlatformCollection: vi.fn(),
@@ -99,6 +105,9 @@ describe("DangerZone", () => {
     });
     vi.mocked(setLaunchOptionsConfirmed).mockResolvedValue(true);
     vi.mocked(getAllNonSteamShortcutAppIds).mockReturnValue([]);
+    // Default: the live exe-ownership scan finds nothing beyond the backend
+    // list, so the union removal is a no-op unless a test overrides it.
+    vi.mocked(getLiveRomMShortcutAppIds).mockResolvedValue([]);
     vi.mocked(backend.cleanupOrphanedGridImages).mockResolvedValue({
       success: true,
       candidate_count: 0,
@@ -121,8 +130,18 @@ describe("DangerZone", () => {
     // test-setup's vi.stubGlobal calls run once at module-load; afterEach's
     // vi.unstubAllGlobals() strips them. Re-stub SteamClient.Apps.RemoveShortcut
     // here so RetroDeckSection.handleRemoveAll can fire without ReferenceError.
+    // The mock drops the app from the collection store, mirroring Steam's real
+    // behavior, so the post-removal settle-poll (recountAfterStoreSettles) sees
+    // the store shrink and re-counts immediately instead of waiting out its
+    // timeout on a real timer (#1381).
     vi.stubGlobal("SteamClient", {
-      Apps: { RemoveShortcut: vi.fn() },
+      Apps: {
+        RemoveShortcut: vi.fn((appId: number) => {
+          if (typeof collectionStore !== "undefined") {
+            collectionStore.deckDesktopApps?.apps.delete(appId);
+          }
+        }),
+      },
     });
   });
 
@@ -697,6 +716,156 @@ describe("DangerZone", () => {
         await Promise.resolve();
       });
       expect(vi.mocked(backend.reportRemovalResults)).not.toHaveBeenCalled();
+    });
+
+    it("removes the UNION of backend app_ids and live-scanned orphans, deduped (#1381)", async () => {
+      // Backend binding map returns [1, 2]; the live exe-ownership scan also
+      // finds 3 — an orphan a crashed sync left in Steam with no DB binding.
+      // All three are removed; 2 (present in both lists) is removed once.
+      vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
+        success: true,
+        message: "Removed all",
+        app_ids: [1, 2],
+        rom_ids: [50, 51],
+      });
+      vi.mocked(getLiveRomMShortcutAppIds).mockResolvedValue([2, 3]);
+      const logSpy = vi.spyOn(backend, "logInfo").mockImplementation(() => {});
+      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Remove All RomM Shortcuts"));
+      await act(async () => {
+        fireEvent.click(getByText("Confirm: remove all RomM shortcuts?"));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // The orphan (3) is removed only after the scan resolves — wait for it.
+      await waitFor(() => {
+        expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(3);
+      });
+      expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(1);
+      expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(2);
+      // 2 is in both lists → removed once, not twice: three calls total.
+      expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(3);
+      // rom_ids stay the backend set exactly — orphans have no DB row.
+      expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([50, 51]);
+      // Non-vacuous: the one orphan not in the backend list is logged.
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("1 live-scanned RomM shortcut"));
+      logSpy.mockRestore();
+    });
+
+    it("falls back to backend app_ids and warns when the live scan is unavailable (#1381)", async () => {
+      // A null scan means Steam's shortcut store was unreadable — remove the
+      // backend-bound set alone rather than skip removal entirely.
+      vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
+        success: true,
+        message: "Removed all",
+        app_ids: [1, 2],
+        rom_ids: [50],
+      });
+      vi.mocked(getLiveRomMShortcutAppIds).mockResolvedValue(null);
+      const warnSpy = vi.spyOn(backend, "logWarn").mockImplementation(() => {});
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Remove All RomM Shortcuts"));
+      await act(async () => {
+        fireEvent.click(getByText("Confirm: remove all RomM shortcuts?"));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // The flow completes: the success message is surfaced.
+      await waitFor(() => {
+        expect(container.textContent).toContain("Removed all");
+      });
+      // Backend-bound shortcuts still removed; no orphan sweep ran.
+      expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(1);
+      expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(2);
+      expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(2);
+      // Non-vacuous null-branch assertion: the warning text is surfaced.
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Live RomM shortcut scan unavailable"));
+      warnSpy.mockRestore();
+    });
+  });
+
+  describe("post-removal re-count settles the store (#1381)", () => {
+    it("waits for the shortcut store to shrink before re-counting the non-steam games", async () => {
+      // Two RomM-owned shortcuts live in Steam. Removing them via the backend
+      // path leaves the store momentarily unchanged (Steam settles async), so
+      // the "Remove N" label must not re-count until the store actually shrinks.
+      stubCollectionStore([10, 20]);
+      stubAppStore({ 10: { strDisplayName: "Game Ten" }, 20: { strDisplayName: "Game Twenty" } });
+      vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
+        success: true,
+        message: "Removed all",
+        app_ids: [10, 20],
+        rom_ids: [1, 2],
+      });
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      // Mount re-counted the store: two non-steam games.
+      expect(container.textContent).toContain("Remove 2 Non-Steam Games");
+      // Arm the confirm under real timers, then drive the settle poll under fake
+      // timers so the 250ms cadence fires without a real wait.
+      fireEvent.click(getByText("Remove All RomM Shortcuts"));
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          fireEvent.click(getByText("Confirm: remove all RomM shortcuts?"));
+          // Drain the removal chain (mock promise awaits), then run one poll
+          // cadence. removeShortcut is the mocked util (no-op) so the store is
+          // still full — the label must stay at 2.
+          for (let i = 0; i < 8; i++) await Promise.resolve();
+          await vi.advanceTimersByTimeAsync(300);
+        });
+        expect(container.textContent).toContain("Remove 2 Non-Steam Games");
+        // Steam settles: the two shortcuts leave the collection store.
+        collectionStore.deckDesktopApps!.apps.delete(10);
+        collectionStore.deckDesktopApps!.apps.delete(20);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(300);
+        });
+        // The settle poll saw the drop → re-count ran → the list is now empty.
+        expect(container.textContent).toContain("No non-steam games found");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("re-counts after the timeout even if the store never shrinks", async () => {
+      stubCollectionStore([10, 20]);
+      stubAppStore({ 10: { strDisplayName: "Game Ten" }, 20: { strDisplayName: "Game Twenty" } });
+      vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
+        success: true,
+        message: "Removed all",
+        app_ids: [10, 20],
+        rom_ids: [1, 2],
+      });
+      const logSpy = vi.spyOn(backend, "logInfo").mockImplementation(() => {});
+      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      // loadNonSteamApps logs the store size on every re-count; count the
+      // size-2 logs emitted by the mount re-count.
+      const isSizeTwoLog = (c: unknown[]) => String(c[0]).includes("deckDesktopApps.apps size: 2");
+      const countsAtMount = logSpy.mock.calls.filter(isSizeTwoLog).length;
+      fireEvent.click(getByText("Remove All RomM Shortcuts"));
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          fireEvent.click(getByText("Confirm: remove all RomM shortcuts?"));
+          // The store never shrinks (removeShortcut util is a no-op). Advance
+          // past the 3s deadline — the poll gives up and re-counts anyway.
+          for (let i = 0; i < 8; i++) await Promise.resolve();
+          await vi.advanceTimersByTimeAsync(3500);
+        });
+        // loadNonSteamApps re-ran after the timeout, re-reading the (unchanged)
+        // store — its size-2 log fired at least once more than at mount.
+        const countsAfter = logSpy.mock.calls.filter(isSizeTwoLog).length;
+        expect(countsAfter).toBeGreaterThan(countsAtMount);
+      } finally {
+        vi.useRealTimers();
+        logSpy.mockRestore();
+      }
     });
   });
 
