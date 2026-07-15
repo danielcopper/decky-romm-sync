@@ -867,6 +867,43 @@ describe("DangerZone", () => {
         logSpy.mockRestore();
       }
     });
+
+    it("re-counts immediately when the collection store is unreadable during removal (#1381)", async () => {
+      // Readable at mount, then unreadable before the removal completes:
+      // recountAfterStoreSettles must read null and re-count right away rather
+      // than poll a store it can't read (exercises the null store-size branch).
+      stubCollectionStore([10, 20]);
+      stubAppStore({ 10: { strDisplayName: "Game Ten" }, 20: { strDisplayName: "Game Twenty" } });
+      vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
+        success: true,
+        message: "Removed all",
+        app_ids: [10, 20],
+        rom_ids: [1, 2],
+      });
+      const warnSpy = vi.spyOn(backend, "logWarn").mockImplementation(() => {});
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      // Mount re-counted against the readable store — no warning yet.
+      expect(container.textContent).toContain("Remove 2 Non-Steam Games");
+      expect(warnSpy).not.toHaveBeenCalled();
+      // The store goes unreadable between arming and confirming.
+      fireEvent.click(getByText("Remove All RomM Shortcuts"));
+      vi.stubGlobal("collectionStore", undefined);
+      await act(async () => {
+        fireEvent.click(getByText("Confirm: remove all RomM shortcuts?"));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // The settle poll was skipped (null baseline) and loadNonSteamApps still
+      // ran immediately: it warned about the unreadable store and cleared the
+      // list — a non-vacuous observable of the immediate re-count.
+      await waitFor(() => {
+        expect(container.textContent).toContain("No non-steam games found");
+      });
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("collectionStore not available"));
+      warnSpy.mockRestore();
+    });
   });
 
   describe("ShortcutRemovalSection — handleUninstallAll", () => {
