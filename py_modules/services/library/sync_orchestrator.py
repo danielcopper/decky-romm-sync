@@ -1363,14 +1363,11 @@ class SyncOrchestrator:
             chunk_rows = [roms_by_id[rid] for rid in chunk.rom_ids if rid in roms_by_id]
 
             # Fresh per-chunk coordination: a new event + identity (run + unit +
-            # chunk index) so the reporter validates each chunk's ack, and the
-            # abandoned-chunk stash from a prior chunk can't leak into this one.
+            # chunk index) so the reporter validates each chunk's ack.
             box.unit_complete_event = asyncio.Event()
             box.last_unit_results = None
             box.active_unit_id = unit.id
             box.active_chunk_index = chunk_index
-            box.unit_abandoned = False
-            box.pending_unit_roms = []
             box.sync_last_heartbeat = self._clock.monotonic()
             await self._emit(
                 "sync_apply_unit",
@@ -1435,19 +1432,19 @@ class SyncOrchestrator:
         A user cancel (box already CANCELLING) intentionally discards the chunk:
         drop the whole-unit staging, null the event, and clear the unit + chunk
         identity so a stray late ack can't commit it. A heartbeat timeout (box
-        still RUNNING) instead KEEPS the staging + ``unit_complete_event`` and
-        stashes THIS chunk's rows so a late ``report_unit_results`` still commits
-        the delivered bindings instead of leaving orphan shortcuts (#1052); it
-        flags the chunk abandoned so the reporter drives that commit, marks the run
-        ``interrupted`` (the frontend went dark, not the user's Cancel — so the
-        terminal SyncRun write records ``interrupted``), and requests the cancel
-        that stops the chunk loop.
+        still RUNNING) instead stashes THIS chunk (its run/unit/chunk identity +
+        rows) into ``abandoned_chunk`` via ``stash_abandoned_chunk`` — inert data
+        that survives the run's teardown — while leaving the whole-unit staging
+        live, so a late ``report_unit_results`` still commits the delivered
+        bindings instead of leaving orphan shortcuts (#1052 / #1367). It then
+        marks the run ``interrupted`` (the frontend went dark, not the user's
+        Cancel — so the terminal SyncRun write records ``interrupted``) and
+        requests the cancel that stops the chunk loop.
         """
         if box.is_cancelling():
             box.clear_active_unit()
         else:
-            box.unit_abandoned = True
-            box.pending_unit_roms = chunk_rows
+            box.stash_abandoned_chunk(chunk_rows)
             box.run_interrupted = True
             box.request_cancel()
 

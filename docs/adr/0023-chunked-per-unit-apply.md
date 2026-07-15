@@ -54,14 +54,21 @@ mid-unit failure forfeits only the in-flight chunk.**
   gates).
 - **Ack identity is chunk-scoped.** The #1041 identity check (`run_id` == `current_sync_id`, `unit_id` ==
   `active_unit_id`) gains `chunk_index` == `active_chunk_index`. The orchestrator stamps `active_chunk_index` before
-  each chunk's emit and clears it at commit or cancel, so a late ack for a superseded chunk can never commit against a
-  newer one — the same defense the run/unit identity already gave, at chunk granularity.
-- **Late-ack recovery is per chunk (#1052) — currently best effort.** A heartbeat timeout keeps the coordination state
-  and stashes only the **abandoned chunk's** rows (`pending_unit_roms`), not the whole unit's fetch — every chunk
-  committed before the timeout stays committed. The recovery commit itself is not reachable in production today
-  (run-teardown clears the ack's identity before a late ack can arrive,
-  [#1367](https://github.com/danielcopper/decky-romm-sync/issues/1367)); until that lands, a timed-out chunk's shortcuts
-  stay unbound and self-heal on the next sync via the existing-shortcut scan.
+  each chunk's emit and clears it at commit, cancel, or timeout (moved into the abandoned-chunk stash below), so a late
+  ack for a superseded chunk can never commit against a newer one — the same defense the run/unit identity already gave,
+  at chunk granularity.
+- **Late-ack recovery is per chunk, via an abandoned-chunk stash (#1052 / #1367).** A heartbeat timeout moves the
+  **abandoned chunk** — its run/unit/chunk identity plus its fetched rows (the `metadatum` source), only that chunk,
+  never the whole unit — into an `AbandonedChunk` stash held on `LibrarySyncStateBox` **outside** the run-lifecycle
+  state; every chunk committed before the timeout stays committed. The stash deliberately **survives the run's
+  teardown** (`finish_run` nulls `current_sync_id` but leaves the stash), because in production the frontend's late
+  `report_unit_results` arrives **after** the run has already wound down — the exact window an earlier design missed,
+  where the active-unit ack check could no longer match and the recovery was unreachable (#1367). The late ack matches
+  the stash **by identity** (`take_abandoned_chunk`) and drives `commit_unit_results` itself over the stashed rows,
+  binding the delivered shortcuts instead of leaving orphans; it **never** passes a `platform_stamp`, since a timed-out
+  platform is incomplete and must not be stamped complete. The stash has a **bounded lifetime**: it is cleared at the
+  next run's `try_begin_run`, so a frontend that crashes and never acks just leaves inert data that the next sync drops
+  (the orphan self-heals via the existing-shortcut scan either way).
 - **Cancel is chunk-atomic.** A user cancel or a timeout mid-unit forfeits only the in-flight chunk; every chunk
   committed before it survives. The `SyncRun` still completes **only at run end**, so a partial unit is never recorded
   as complete and the incremental-skip gate re-fetches it on the next run; the stale-removal scan is already skipped on
@@ -132,7 +139,9 @@ mid-unit failure forfeits only the in-flight chunk.**
 - [#797](https://github.com/danielcopper/decky-romm-sync/issues/797) (the field crash),
   [#1025](https://github.com/danielcopper/decky-romm-sync/issues/1025) (chunked apply),
   [#1041](https://github.com/danielcopper/decky-romm-sync/issues/1041) (run/unit ack identity),
-  [#1052](https://github.com/danielcopper/decky-romm-sync/issues/1052) (heartbeat-timeout late-ack recovery)
+  [#1052](https://github.com/danielcopper/decky-romm-sync/issues/1052) (heartbeat-timeout late-ack recovery),
+  [#1367](https://github.com/danielcopper/decky-romm-sync/issues/1367) (abandoned-chunk stash — makes the recovery
+  reachable in production)
 - [ADR-0006](0006-narrow-unit-of-work-scope.md) (the narrow write UoW each chunk commits under)
 - [ADR-0021](0021-sibling-group-one-shortcut-binding-active-version.md) (sibling-group collapse — the boundary chunks
   cut at)

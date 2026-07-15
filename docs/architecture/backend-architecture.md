@@ -253,13 +253,21 @@ teardown branches on the cause (#1052) — and either way, **every chunk committ
   the staging, null `unit_complete_event`, and clear `active_unit_id` + `active_chunk_index`. A stray late ack then
   no-ops.
 - **Heartbeat timeout** (still RUNNING) — the frontend has already created this chunk's Steam shortcuts and will fire a
-  late `report_unit_results`. The orchestrator **keeps** the staging + `unit_complete_event`, flags `unit_abandoned`,
-  and stashes **this chunk's** ROMs in `pending_unit_roms` (only the abandoned chunk, never the whole unit), then flips
-  CANCELLING so the loop stops. `SyncReporter.report_unit_results` observes `unit_abandoned` and drives
-  `commit_unit_results` **itself** (rebuilding `acked_roms` from the stash so metadata is stamped too), persisting the
-  delivered bindings instead of leaving orphan shortcuts that the next sync re-creates as duplicates. The committed
-  binding is mapped by the next sync's existing-shortcut scan, so no active orphan deletion is needed (a Steam shortcut
-  is the sole record of its tile).
+  late `report_unit_results`, but in production **after** the run has already wound down. The orchestrator moves the
+  abandoned chunk into an `abandoned_chunk` stash on the box (`stash_abandoned_chunk`): its run/unit/chunk identity plus
+  **this chunk's** ROMs (only the abandoned chunk, never the whole unit, the `metadatum` source), while it **keeps** the
+  whole-unit staging (`pending_sync` / `pending_all_roms` / `pending_cover_sources`) live for the recovery commit to
+  read and **clears** the dispatch identity (`unit_complete_event` + `active_unit_id` + `active_chunk_index`). It then
+  marks the run `interrupted` and flips CANCELLING so the loop stops. The stash lives **outside** the run-lifecycle
+  state and deliberately survives `finish_run` (which nulls `current_sync_id`), so a late ack arriving after teardown
+  can still recover it (#1367 — an earlier design kept `active_unit_id` live and lost the ack once the run wound down).
+  `SyncReporter.report_unit_results` then matches the stash **by identity** (`take_abandoned_chunk`) and drives
+  `commit_unit_results` **itself** over the stashed rows — every fetched sibling upserted (identity + metadata), only
+  the acked representatives bound, and **never** a `platform_stamp` (a timed-out platform is incomplete) — persisting
+  the delivered bindings instead of leaving orphan shortcuts that the next sync re-creates as duplicates. The stash has
+  a bounded lifetime: the next run's `try_begin_run` clears it, so a frontend that crashes and never acks just leaves
+  inert data. The committed binding is mapped by the next sync's existing-shortcut scan, so no active orphan deletion is
+  needed (a Steam shortcut is the sole record of its tile).
 
 **Session-budget gate: GC-before-measure at each chunk boundary
 ([ADR-0024](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0024-session-budget-rss-gate.md)).**
@@ -335,13 +343,17 @@ the `report_unit_results` ack. The orchestrator stamps the dispatched unit's id 
 chunk into `active_chunk_index` just before it emits, and `report_unit_results` validates the ack against them: the
 `run_id` must match `current_sync_id`, the `unit_id` must match `active_unit_id` (both compared by string value, since a
 platform's id is numeric and a collection's is a string), **and** the `chunk_index` must match `active_chunk_index` (as
-an int). An ack that fails the check — a **late ack from a cancelled run** arriving while a fresh run is in flight, a
-stray ack for a different unit, or an ack for a **superseded chunk** — is ignored (logged at debug, returns
+an int). An ack that fails the active-unit check falls through to the **abandoned-chunk stash**
+(`take_abandoned_chunk`): a heartbeat-timed-out chunk's late ack — which in production arrives after the run wound down,
+so `active_unit_id` / `active_chunk_index` are already cleared and `current_sync_id` is null — matches the stash by
+identity and drives the recovery commit (the per-chunk timeout branch above, #1367). Only an ack matching **neither**
+the active chunk nor a stash — a **late ack from a cancelled run** arriving while a fresh run is in flight, a stray ack
+for a different unit, or a **superseded chunk** — is ignored (logged at debug, returns
 `{success: True, count: 0, ignored: True}`): it is neither recorded, signalled, nor committed, so it can never be
-credited to the wrong run/unit/chunk. `active_unit_id` + `active_chunk_index` survive the heartbeat-timeout abandon
-window (the same chunk's late ack must still validate) and are cleared once the chunk commits or is cancelled. On the
-frontend side, the unit handler **does not send the ack at all once cancel has been requested** — the first line of
-defence against a cancelled run's bindings landing in whatever run started next.
+credited to the wrong run/unit/chunk. `active_unit_id` + `active_chunk_index` are cleared once the chunk commits, is
+cancelled, or times out (its identity moves into the stash). On the frontend side, the unit handler **does not send the
+ack at all once cancel has been requested** — the first line of defence against a cancelled run's bindings landing in
+whatever run started next.
 
 **Run identity on the cancel (#1198).** `cancel_sync(run_id)` is run-scoped, mirroring the ack-path
 `_ack_matches_active_unit` check above. A Cancel click meant for run N can land after run N finalized to IDLE

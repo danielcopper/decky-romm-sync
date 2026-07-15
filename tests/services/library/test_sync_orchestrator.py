@@ -215,6 +215,42 @@ async def _fake_wait_set_event(_unit, event):
     return {}
 
 
+class _ClockAdvancingSleeper:
+    """A ``Sleeper`` that advances a ``FakeClock`` on each sleep, so the real
+    heartbeat-clocked ``_wait_for_unit_complete`` times out deterministically
+    without any wall-clock wait (#1367)."""
+
+    def __init__(self, clock, step: float) -> None:
+        self._clock = clock
+        self._step = step
+        self.calls: list[float] = []
+
+    async def sleep(self, seconds: float) -> None:
+        self.calls.append(seconds)
+        self._clock.advance(self._step)
+
+
+def _stash_abandoned_and_wind_down(plugin, *, run_id, unit_id, chunk_index, pending, chunk_rows):
+    """Drive the box into the production post-heartbeat-timeout state via the
+    real box verbs, then wind the run down — no hand-forced internals (#1367).
+
+    Mirrors exactly what ``_abandon_active_chunk`` (stash the chunk: null the
+    event, clear the dispatch identity) followed by the run's terminal
+    ``finally: finish_run(run_id)`` (null ``current_sync_id``) leave behind, so a
+    late ``report_unit_results`` arriving now must recover the binding through
+    the ``abandoned_chunk`` stash rather than the (dead) active-unit path.
+    """
+    box = plugin._sync_service._box
+    box.try_begin_run(run_id)
+    box.active_unit_id = unit_id
+    box.active_chunk_index = chunk_index
+    box.pending_sync = dict(pending)
+    box.pending_all_roms = dict(pending)
+    box.stash_abandoned_chunk(list(chunk_rows))
+    box.finish_run(run_id)
+    return box
+
+
 class TestShortcutDataFormat:
     """Validate the shortcut data format produced by the backend.
 
@@ -2600,27 +2636,27 @@ class TestReportUnitResults:
 
     @pytest.mark.asyncio
     async def test_late_ack_after_abandon_commits_binding(self, plugin):
-        """A late ack on an abandoned unit (heartbeat timeout) commits the
-        delivered bindings itself instead of discarding them (#1052).
+        """A late ack for a heartbeat-timed-out chunk commits the delivered
+        bindings itself instead of discarding them (#1052 / #1367).
 
-        The orchestrator already nulled no state on a timeout — it kept
-        ``pending_sync`` and flagged ``unit_abandoned`` with the unit's ROMs
-        stashed. The ack drives ``commit_unit_results`` directly, persists the
-        ``roms`` binding + metadata, and clears the abandoned-unit stash."""
-        box = plugin._sync_service._box
-        # Timeout state the orchestrator leaves behind: pending_sync staged,
-        # event already None (the wait returned), unit flagged abandoned with
-        # its live RomM fetch stashed. The run + unit identity stays set across
-        # the abandon window so the late ack for the SAME unit validates.
-        box.current_sync_id = "run-1"
-        box.active_unit_id = 1
-        box.active_chunk_index = 0
+        The box is driven into the real production post-timeout state (chunk
+        stashed via ``stash_abandoned_chunk``, run wound down via ``finish_run``
+        so ``current_sync_id`` is None). The late ack — whose active-unit check
+        can no longer match — recovers the ``abandoned_chunk`` stash, drives
+        ``commit_unit_results`` directly, persists the ``roms`` binding +
+        metadata, and clears the stash."""
         _entry = {"name": "Game", "fs_name": "game.z64", "platform_slug": "gb", "cover_path": ""}
-        box.pending_sync = {42: _entry}
-        box.pending_all_roms = {42: _entry}
-        box.unit_complete_event = None
-        box.unit_abandoned = True
-        box.pending_unit_roms = [{"id": 42, "metadatum": {"genres": ["RPG"]}}]
+        box = _stash_abandoned_and_wind_down(
+            plugin,
+            run_id="run-1",
+            unit_id=1,
+            chunk_index=0,
+            pending={42: _entry},
+            chunk_rows=[{"id": 42, "metadatum": {"genres": ["RPG"]}}],
+        )
+        # The run has wound down: the active-unit identity is gone.
+        assert box.current_sync_id is None
+        assert box.active_unit_id is None
 
         result = await plugin.report_unit_results({"42": 100001}, "run-1", 1, 0)
 
@@ -2631,35 +2667,73 @@ class TestReportUnitResults:
             meta = uow.rom_metadata.get(42)
         assert rom is not None
         assert rom.shortcut_app_id == 100001
-        # Metadata stamped from the stashed unit ROMs.
+        # Metadata stamped from the stashed chunk rows.
         assert meta is not None
         assert meta.genres == ("RPG",)
-        # The abandoned-unit stash is cleared so a duplicate ack no-ops.
-        assert box.unit_abandoned is False
-        assert box.pending_unit_roms == []
-        assert box.pending_sync == {}
-        assert box.last_unit_results is None
-        # The unit + chunk identity is cleared once the late ack commits, so a
-        # duplicate ack for the same chunk no longer validates.
-        assert box.active_unit_id is None
-        assert box.active_chunk_index is None
+        # The stash is cleared so a duplicate late ack no longer recovers it.
+        assert box.abandoned_chunk is None
+
+    @pytest.mark.asyncio
+    async def test_duplicate_late_ack_after_recovery_is_ignored(self, plugin):
+        """The first late ack pops the stash and commits; a second identical late
+        ack finds no stash and is ignored, so nothing is double-committed
+        (#1367)."""
+        _entry = {"name": "Game", "fs_name": "game.z64", "platform_slug": "gb", "cover_path": ""}
+        box = _stash_abandoned_and_wind_down(
+            plugin,
+            run_id="run-1",
+            unit_id=1,
+            chunk_index=0,
+            pending={42: _entry},
+            chunk_rows=[{"id": 42}],
+        )
+
+        first = await plugin.report_unit_results({"42": 100001}, "run-1", 1, 0)
+        second = await plugin.report_unit_results({"42": 100001}, "run-1", 1, 0)
+
+        assert first == {"success": True, "count": 1}
+        assert second == {"success": True, "count": 0, "ignored": True}
+        assert box.abandoned_chunk is None
+
+    @pytest.mark.asyncio
+    async def test_late_ack_with_wrong_identity_is_ignored_and_stash_intact(self, plugin):
+        """A late ack whose chunk index does not match the stash is ignored and
+        leaves the stash untouched, so the genuine late ack can still recover it
+        (#1367)."""
+        _entry = {"name": "Game", "fs_name": "game.z64", "platform_slug": "gb", "cover_path": ""}
+        box = _stash_abandoned_and_wind_down(
+            plugin,
+            run_id="run-1",
+            unit_id=1,
+            chunk_index=0,
+            pending={42: _entry},
+            chunk_rows=[{"id": 42}],
+        )
+
+        # Wrong chunk index → no stash match.
+        result = await plugin.report_unit_results({"42": 100001}, "run-1", 1, 9)
+
+        assert result == {"success": True, "count": 0, "ignored": True}
+        # Nothing committed and the stash survives for the real late ack.
+        with plugin._uow as uow:
+            assert uow.roms.get(42) is None
+        assert box.abandoned_chunk is not None
 
     @pytest.mark.asyncio
     async def test_late_ack_binds_stashed_rom_without_metadatum_stamps_no_metadata(self, plugin):
         """A stashed ROM carrying no ``metadatum`` still binds via the late ack,
         but stamps no metadata — the binding is load-bearing, metadata is
         best-effort (#1052)."""
-        box = plugin._sync_service._box
-        box.current_sync_id = "run-1"
-        box.active_unit_id = 1
-        box.active_chunk_index = 0
         _entry = {"name": "A", "fs_name": "a.z64", "platform_slug": "gb", "cover_path": ""}
-        box.pending_sync = {42: _entry}
-        box.pending_all_roms = {42: _entry}
-        box.unit_complete_event = None
-        box.unit_abandoned = True
-        # The stash (the chunk fetch) carries rom 42 without a metadatum.
-        box.pending_unit_roms = [{"id": 42}]
+        _stash_abandoned_and_wind_down(
+            plugin,
+            run_id="run-1",
+            unit_id=1,
+            chunk_index=0,
+            pending={42: _entry},
+            # The stash (the chunk fetch) carries rom 42 without a metadatum.
+            chunk_rows=[{"id": 42}],
+        )
 
         result = await plugin.report_unit_results({"42": 100001}, "run-1", 1, 0)
 
@@ -2674,17 +2748,15 @@ class TestReportUnitResults:
         assert meta is None
 
     @pytest.mark.asyncio
-    async def test_stray_ack_when_not_abandoned_is_noop(self, plugin):
-        """An ack for the ACTIVE unit with no live wait and no abandoned flag
-        (a stray duplicate) records nothing on disk — it must not double-commit
-        (#1052). The run/unit identity matches, so it passes validation and
-        falls through to the no-op 'neither' branch."""
+    async def test_stray_ack_on_active_chunk_without_live_wait_is_noop(self, plugin):
+        """An ack for the ACTIVE chunk whose event was already consumed (a stray
+        duplicate) records the mapping but commits nothing — the active-unit
+        branch signals no event and never double-commits (#1052)."""
         box = plugin._sync_service._box
-        box.current_sync_id = "run-1"
+        box.try_begin_run("run-1")
         box.active_unit_id = 1
         box.active_chunk_index = 0
         box.unit_complete_event = None
-        box.unit_abandoned = False
         box.pending_sync = {}
 
         result = await plugin.report_unit_results({"42": 100001}, "run-1", 1, 0)
@@ -2702,22 +2774,21 @@ class TestReportUnitResults:
         (the chunk subset), validated by run + unit + chunk index (#1025/#1052).
 
         Models the state a chunk-1 heartbeat timeout leaves behind: the chunk's
-        two rows stashed, the abandoned flag set, and ``active_chunk_index`` still
-        1 so the ack for chunk 1 validates while an ack for any other chunk would
-        be rejected."""
-        box = plugin._sync_service._box
-        box.current_sync_id = "run-1"
-        box.active_unit_id = 1
-        box.active_chunk_index = 1
+        two rows stashed under identity (run-1, unit 1, chunk 1). The ack for
+        chunk 1 recovers them while an ack for any other chunk would be
+        ignored."""
         entries = {
             3: {"name": "C", "fs_name": "c.z64", "platform_slug": "n64", "cover_path": ""},
             4: {"name": "D", "fs_name": "d.z64", "platform_slug": "n64", "cover_path": ""},
         }
-        box.pending_sync = entries
-        box.pending_all_roms = entries
-        box.unit_complete_event = None
-        box.unit_abandoned = True
-        box.pending_unit_roms = [{"id": 3}, {"id": 4}]
+        box = _stash_abandoned_and_wind_down(
+            plugin,
+            run_id="run-1",
+            unit_id=1,
+            chunk_index=1,
+            pending=entries,
+            chunk_rows=[{"id": 3}, {"id": 4}],
+        )
 
         result = await plugin.report_unit_results({"3": 7003, "4": 7004}, "run-1", 1, 1)
 
@@ -2725,9 +2796,7 @@ class TestReportUnitResults:
         with plugin._uow as uow:
             assert uow.roms.get(3).shortcut_app_id == 7003
             assert uow.roms.get(4).shortcut_app_id == 7004
-        assert box.unit_abandoned is False
-        assert box.pending_unit_roms == []
-        assert box.active_chunk_index is None
+        assert box.abandoned_chunk is None
 
 
 class TestLateAckReconciliationWithStaleScan:
@@ -2748,25 +2817,22 @@ class TestLateAckReconciliationWithStaleScan:
         committed_app_ids; the stale scan then excludes app 5000 even though the
         old colliding row (rom 1) looks stale (#1036 collision via the #1052
         late-ack path)."""
-        box = plugin._sync_service._box
         # Old colliding bound row (a prior server's rom_id for the same game).
         _seed_rom_row(plugin, 1, app_id=5000, platform_slug="n64", name="A", fs_name="a.z64")
 
-        # Reset the per-run committed-appId accumulator (the orchestrator does
-        # this at the start of _do_sync_per_unit; mirror it for this unit-level test).
-        box.committed_app_ids = set()
-
-        # The heartbeat-timeout state the orchestrator leaves behind for the NEW
-        # rom_id (2), which the frontend acks with the SAME reused appId.
-        box.current_sync_id = "run-1"
-        box.active_unit_id = 1
-        box.active_chunk_index = 0
+        # The production post-timeout state for the NEW rom_id (2), which the
+        # frontend acks with the SAME reused appId, run wound down. The fresh box
+        # starts with an empty committed_app_ids (the real reset lives in
+        # _do_sync_per_unit); the late-ack commit accumulates app 5000 into it.
         _entry = {"name": "A", "fs_name": "a.z64", "platform_slug": "n64", "cover_path": ""}
-        box.pending_sync = {2: _entry}
-        box.pending_all_roms = {2: _entry}
-        box.unit_complete_event = None
-        box.unit_abandoned = True
-        box.pending_unit_roms = [{"id": 2}]
+        box = _stash_abandoned_and_wind_down(
+            plugin,
+            run_id="run-1",
+            unit_id=1,
+            chunk_index=0,
+            pending={2: _entry},
+            chunk_rows=[{"id": 2}],
+        )
 
         # Late ack: commits the binding AND records app 5000 in committed_app_ids.
         await plugin.report_unit_results({"2": 5000}, "run-1", 1, 0)
@@ -2789,6 +2855,119 @@ class TestLateAckReconciliationWithStaleScan:
         # if it were, app 5000 is in committed_app_ids (Layer 1) → excluded.
         assert all(app_id != 5000 for _rid, app_id in stale)
         assert stale == []
+
+
+class TestRealOrchestratorLateAckRecovery:
+    """The #1367 acceptance path end-to-end through the REAL orchestrator.
+
+    Drives a real ``_do_sync_per_unit`` whose only frontend ack never arrives, so
+    the real heartbeat-clocked wait times out, the real ``_abandon_active_chunk``
+    stashes the chunk, and the run's terminal ``finally`` winds the run down
+    (``finish_run`` nulls ``current_sync_id``). Then the real
+    ``report_unit_results`` — carrying the identity captured from the emitted
+    ``sync_apply_unit`` event — recovers the stash and commits the binding. No box
+    state is hand-set; the commit is observed through the shared UoW."""
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_timeout_then_late_ack_commits_binding(self, plugin, fake_romm_api):
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "A", "fs_name": "a.z64"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        # The frontend never acks, so the REAL _wait_for_unit_complete runs; the
+        # clock-advancing sleeper pushes it past the heartbeat timeout on the
+        # second poll — a genuine timeout, no cancel, no stubbed wait.
+        orch = plugin._sync_service._orchestrator
+        orch._sleeper = _ClockAdvancingSleeper(orch._clock, 999.0)
+
+        # Real run start (claims the slot + stamps current_sync_id).
+        assert plugin._sync_service._box.try_begin_run("run-headline") is True
+        plugin._sync_service._box.sync_last_heartbeat = orch._clock.monotonic()
+
+        await orch._do_sync_per_unit()
+
+        box = plugin._sync_service._box
+        # The run wound down: the slot is free and a chunk is stashed for recovery.
+        assert box.current_sync_id is None
+        assert box.abandoned_chunk is not None
+        assert box.run_interrupted is True
+        # The chunk timed out before its commit, so rom 1 has no row yet.
+        with plugin._uow as uow:
+            assert uow.roms.get(1) is None
+        # The run was persisted as interrupted (not cancelled) by the real teardown.
+        with plugin._uow as uow:
+            terminal = uow.sync_runs.get_latest_terminal()
+        assert terminal is not None
+        assert terminal.status == "interrupted"
+
+        # Capture the identity the frontend echoes back from the emitted event.
+        apply_events = [c.args[1] for c in decky.emit.call_args_list if c.args[0] == "sync_apply_unit"]
+        assert len(apply_events) == 1
+        ev = apply_events[0]
+
+        # The late ack arrives AFTER the run wound down — the exact production
+        # timing #1367 fixes. It recovers the stash and commits the binding.
+        result = await plugin.report_unit_results({"1": 90001}, ev["run_id"], ev["unit_id"], ev["chunk_index"])
+
+        assert result == {"success": True, "count": 1}
+        with plugin._uow as uow:
+            rom = uow.roms.get(1)
+        assert rom is not None
+        assert rom.shortcut_app_id == 90001
+        # The stash is consumed so a duplicate late ack can't double-commit.
+        assert box.abandoned_chunk is None
+
+    @pytest.mark.asyncio
+    async def test_next_run_start_drops_an_unacked_stash(self, plugin, fake_romm_api):
+        """If the frontend crash never acks, the abandoned chunk is inert until the
+        next run's ``try_begin_run`` drops it — bounded lifetime (#1367)."""
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "A", "fs_name": "a.z64"}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        orch = plugin._sync_service._orchestrator
+        orch._sleeper = _ClockAdvancingSleeper(orch._clock, 999.0)
+
+        assert plugin._sync_service._box.try_begin_run("run-1") is True
+        plugin._sync_service._box.sync_last_heartbeat = orch._clock.monotonic()
+        await orch._do_sync_per_unit()
+
+        box = plugin._sync_service._box
+        assert box.abandoned_chunk is not None
+
+        # A fresh run starts before any late ack — the stale stash is dropped.
+        assert box.try_begin_run("run-2") is True
+        assert box.abandoned_chunk is None
+
+        # A late ack for the old run now finds nothing and is ignored.
+        result = await plugin.report_unit_results({"1": 90001}, "run-1", 1, 0)
+        assert result == {"success": True, "count": 0, "ignored": True}
+        with plugin._uow as uow:
+            assert uow.roms.get(1) is None
 
 
 class TestCommitUnitResults:
@@ -3391,7 +3570,7 @@ class TestSyncOneUnitCollectionAndCancel:
     @pytest.mark.asyncio
     async def test_user_cancel_clears_pending_and_drops_event(self, plugin, fake_romm_api):
         """A user cancel during the wait discards in-flight work: pending_sync
-        cleared, unit event nulled, no abandoned-unit stash.
+        cleared, unit event nulled, no abandoned-chunk stash.
 
         ``_wait_for_unit_complete`` returns None while the box is already
         CANCELLING (the cancel branch), so the unit's in-flight state is
@@ -3433,19 +3612,20 @@ class TestSyncOneUnitCollectionAndCancel:
         assert plugin._sync_service._pending_sync == {}
         assert plugin._sync_service._box.unit_complete_event is None
         assert plugin._sync_service._sync_state == SyncState.CANCELLING
-        # No abandoned-unit stash — a cancel intentionally discards the work.
-        assert plugin._sync_service._box.unit_abandoned is False
-        assert plugin._sync_service._box.pending_unit_roms == []
+        # No abandoned-chunk stash — a cancel intentionally discards the work.
+        assert plugin._sync_service._box.abandoned_chunk is None
 
     @pytest.mark.asyncio
     async def test_heartbeat_timeout_retains_pending_and_stashes_roms(self, plugin, fake_romm_api):
-        """A heartbeat timeout (not a cancel) RETAINS the unit's in-flight state so
-        a late ``report_unit_results`` can still commit the delivered bindings.
+        """A heartbeat timeout (not a cancel) stashes the abandoned chunk so a
+        late ``report_unit_results`` can still commit the delivered bindings.
 
         The wait returns None while the box is still RUNNING (the timeout
-        branch): ``pending_sync`` + ``unit_complete_event`` survive, the unit
-        is flagged abandoned, and its ROMs are stashed for the late-ack commit
-        (#1052). The box flips CANCELLING so the outer loop stops."""
+        branch): the chunk is moved into ``abandoned_chunk`` (its rows captured),
+        the whole-unit ``pending_sync`` staging stays live for the late-ack
+        commit to read, and the dispatch identity (``unit_complete_event`` +
+        ``active_unit_id`` + ``active_chunk_index``) is cleared. The box flips
+        CANCELLING so the outer loop stops (#1052 / #1367)."""
         plugin.loop = asyncio.get_event_loop()
         _use_fake_romm(plugin, fake_romm_api)
 
@@ -3476,13 +3656,19 @@ class TestSyncOneUnitCollectionAndCancel:
             platform_rom_ids=set(),
         )
         assert applied == 0
-        # Timeout: pending_sync + unit event RETAINED so a late ack can commit.
+        box = plugin._sync_service._box
+        # Timeout: whole-unit staging RETAINED so the late-ack commit can read it,
+        # but the dispatch identity is cleared (moved into the stash).
         assert plugin._sync_service._pending_sync != {}
-        assert plugin._sync_service._box.unit_complete_event is not None
+        assert box.unit_complete_event is None
+        assert box.active_unit_id is None
+        assert box.active_chunk_index is None
         assert plugin._sync_service._sync_state == SyncState.CANCELLING
-        # Unit flagged abandoned with its ROMs stashed for the late-ack commit.
-        assert plugin._sync_service._box.unit_abandoned is True
-        assert [r["id"] for r in plugin._sync_service._box.pending_unit_roms] == [1]
+        assert box.run_interrupted is True
+        # The chunk is stashed (identity + rows) for the late-ack commit.
+        assert box.abandoned_chunk is not None
+        assert (box.abandoned_chunk.unit_id, box.abandoned_chunk.chunk_index) == (1, 0)
+        assert [r["id"] for r in box.abandoned_chunk.chunk_rows] == [1]
 
 
 class TestApplyChunking:
@@ -3645,7 +3831,7 @@ class TestApplyChunking:
         assert box.pending_sync == {}
         assert box.unit_complete_event is None
         assert box.active_chunk_index is None
-        assert box.unit_abandoned is False
+        assert box.abandoned_chunk is None
 
     @pytest.mark.asyncio
     async def test_cancel_in_inter_chunk_window_never_emits_next_chunk(self, plugin, fake_romm_api, monkeypatch):
@@ -3712,12 +3898,12 @@ class TestApplyChunking:
         assert box.unit_complete_event is None
         assert box.active_unit_id is None
         assert box.active_chunk_index is None
-        assert box.unit_abandoned is False
+        assert box.abandoned_chunk is None
 
     @pytest.mark.asyncio
     async def test_heartbeat_timeout_on_chunk_stashes_only_that_chunk(self, plugin, fake_romm_api, monkeypatch):
         """A heartbeat timeout on chunk 1 stashes ONLY chunk 1's rows (not the whole
-        unit) and retains chunk 1's index, so a late ack commits just that chunk."""
+        unit) under chunk 1's identity, so a late ack commits just that chunk."""
         from services.library import sync_orchestrator
 
         plugin.loop = asyncio.get_event_loop()
@@ -3756,10 +3942,12 @@ class TestApplyChunking:
             platform_rom_ids=set(),
         )
 
-        assert box.unit_abandoned is True
-        assert box.active_chunk_index == 1
+        assert box.abandoned_chunk is not None
+        # The dispatch identity is cleared; the chunk index lives on the stash.
+        assert box.active_chunk_index is None
+        assert box.abandoned_chunk.chunk_index == 1
         # Only chunk 1's rows are stashed for the late ack, not the whole unit.
-        assert [r["id"] for r in box.pending_unit_roms] == [3, 4]
+        assert [r["id"] for r in box.abandoned_chunk.chunk_rows] == [3, 4]
         # The timeout requested cancel so the outer loop stops.
         assert box.sync_state == SyncState.CANCELLING
 

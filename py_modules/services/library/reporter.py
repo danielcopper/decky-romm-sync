@@ -578,53 +578,53 @@ class SyncReporter:
     async def report_unit_results(self, rom_id_to_app_id, run_id, unit_id, chunk_index):
         """Frontend-Callable: ack that this apply chunk's shortcuts are applied.
 
-        First validates the ack's identity against the active run/unit/chunk: the
-        ``run_id`` must match ``current_sync_id``, ``unit_id`` must match the
-        dispatched ``active_unit_id`` (#1041), and ``chunk_index`` must match the
-        dispatched ``active_chunk_index``. A late ack from a **cancelled** run
-        that arrives while a **new** run is in flight, a stray ack for a different
-        unit, or an ack for a stale chunk is ignored — neither recorded,
-        signalled, nor committed — so it can never be credited to the wrong
-        unit/run/chunk. Logged at debug, returns ``ignored: True`` with
-        ``count: 0``.
+        Routes the ack in three cases, by run/unit/chunk identity:
 
-        For a matching ack, records the rom_id→app_id mapping into the state
-        box, then routes by the chunk's coordination state:
-
-        * The orchestrator is still waiting (``unit_complete_event`` live):
-          signal the event and let the orchestrator drive the per-chunk
-          commit. The happy path — unchanged.
-        * The orchestrator abandoned the chunk on a heartbeat timeout
-          (``unit_abandoned``): the frontend already created the Steam
-          shortcuts, so commit the delivered bindings here rather than
-          discard them (#1052). Passes the stashed chunk fetch
-          (``box.pending_unit_roms``) to ``commit_unit_results`` — every
-          fetched sibling of the chunk is upserted (identity + metadata, the
-          ``metadatum`` source) and only the acked representatives bind — then
-          clears the abandoned-chunk stash.
-        * Neither (a stray duplicate ack for the active chunk): no-op, so
-          nothing is double-committed.
+        * **Active chunk** — the ack matches the dispatched
+          ``current_sync_id`` / ``active_unit_id`` / ``active_chunk_index``
+          (#1041). Record the rom_id→app_id mapping and, if the orchestrator is
+          still waiting (``unit_complete_event`` live), signal the event so it
+          drives the per-chunk commit. The happy path. A duplicate ack whose
+          event was already consumed (identity still matches, event ``None``)
+          simply records the mapping and no-ops — nothing is double-committed.
+        * **Abandoned chunk** — the active identity no longer matches (the run
+          wound down and ``finish_run`` nulled ``current_sync_id``), but the ack
+          matches an ``abandoned_chunk`` stash left by a heartbeat timeout. The
+          frontend already created the Steam shortcuts, so commit the delivered
+          bindings here rather than discard them (#1052 / #1367). Popping the
+          stash (``take_abandoned_chunk``) hands back the timed-out chunk's
+          fetched rows; ``commit_unit_results`` upserts every fetched sibling
+          (identity + metadata, the ``metadatum`` source) and binds only the
+          acked representatives, reading the whole-unit staging still live on the
+          box. Never passes a ``platform_stamp`` — a timed-out platform is
+          incomplete and must not be stamped. A duplicate late ack finds the
+          stash already cleared and falls through to *ignored*.
+        * **Neither** — a stray/superseded ack (a late ack from a cancelled run,
+          a different unit, or a stale chunk with no stash match). Ignored:
+          neither recorded, signalled, nor committed, so it can never be
+          credited to the wrong unit/run/chunk. Logged at debug, returns
+          ``ignored: True`` with ``count: 0``.
         """
         box = self._sync_state
-        if not self._ack_matches_active_unit(run_id, unit_id, chunk_index):
-            self._logger.debug(
-                f"Ignoring unit ack for run={run_id!r} unit={unit_id!r} chunk={chunk_index!r}: "
-                f"active run={box.current_sync_id!r} unit={box.active_unit_id!r} chunk={box.active_chunk_index!r}"
-            )
-            return {"success": True, "count": 0, "ignored": True}
+        if self._ack_matches_active_unit(run_id, unit_id, chunk_index):
+            box.last_unit_results = dict(rom_id_to_app_id)
+            if box.unit_complete_event is not None:
+                box.unit_complete_event.set()
+            self._logger.info(f"Unit results acknowledged: {len(rom_id_to_app_id)} shortcuts")
+            return {"success": True, "count": len(rom_id_to_app_id)}
 
-        box.last_unit_results = dict(rom_id_to_app_id)
-        if box.unit_complete_event is not None:
-            box.unit_complete_event.set()
-        elif box.unit_abandoned:
-            await self.commit_unit_results(dict(rom_id_to_app_id), box.pending_unit_roms)
-            box.unit_abandoned = False
-            box.pending_unit_roms = []
-            box.last_unit_results = None
-            box.clear_active_unit()
+        stash = box.take_abandoned_chunk(run_id, unit_id, chunk_index)
+        if stash is not None:
+            await self.commit_unit_results(dict(rom_id_to_app_id), stash.chunk_rows)
+            self._logger.info(f"Late ack recovered abandoned chunk: {len(rom_id_to_app_id)} shortcuts committed")
+            return {"success": True, "count": len(rom_id_to_app_id)}
 
-        self._logger.info(f"Unit results acknowledged: {len(rom_id_to_app_id)} shortcuts")
-        return {"success": True, "count": len(rom_id_to_app_id)}
+        self._logger.debug(
+            f"Ignoring unit ack for run={run_id!r} unit={unit_id!r} chunk={chunk_index!r}: "
+            f"active run={box.current_sync_id!r} unit={box.active_unit_id!r} chunk={box.active_chunk_index!r}, "
+            f"no abandoned-chunk stash match"
+        )
+        return {"success": True, "count": 0, "ignored": True}
 
     def _ack_matches_active_unit(self, run_id, unit_id, chunk_index) -> bool:
         """True when the ack's run/unit/chunk identity matches the dispatched chunk.

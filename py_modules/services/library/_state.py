@@ -42,6 +42,27 @@ def _default_progress() -> dict[str, Any]:
     }
 
 
+@dataclass(frozen=True)
+class AbandonedChunk:
+    """A heartbeat-timed-out apply chunk, stashed for a late-ack commit.
+
+    An inert snapshot that outlives the run that produced it: the
+    run/unit/chunk identity a late ``report_unit_results`` must match, plus the
+    chunk's fetched RomM rows (the ``metadatum`` source the recovery commit
+    upserts). The whole-unit staging the commit also reads
+    (``pending_sync`` / ``pending_all_roms`` / ``pending_cover_sources``) is
+    kept live on the box, not copied here — this chunk's identity is what the
+    late ack keys on. Held on :class:`LibrarySyncStateBox` **outside** the
+    run-lifecycle state and cleared at the next run's start, so a frontend that
+    crashes and never acks just leaves inert data until the next run (#1367).
+    """
+
+    run_id: str | None
+    unit_id: int | str | None
+    chunk_index: int | None
+    chunk_rows: list[dict[str, Any]]
+
+
 @dataclass
 class LibrarySyncStateBox:
     """In-memory state for one library sync run, plus held preview data.
@@ -80,25 +101,26 @@ class LibrarySyncStateBox:
     pending_collection_memberships: dict[str, list[int]] = field(default_factory=dict)
     pending_platform_rom_ids: set[int] | None = None
     # Per-unit pipeline coordination. ``unit_complete_event`` is set by
-    # :meth:`SyncReporter.report_unit_results` when the frontend reports
-    # back for the active unit; the orchestrator awaits it (with a
-    # heartbeat-based timeout) before dispatching the next unit. Cleared
-    # back to None between units. On a heartbeat **timeout** (not a user
-    # cancel) the orchestrator does NOT clear ``pending_sync`` or null
-    # ``unit_complete_event`` — it flags ``unit_abandoned`` instead, so a
-    # late ``report_unit_results`` can still commit the delivered bindings
-    # that the frontend already created Steam shortcuts for (#1052).
+    # :meth:`SyncReporter.report_unit_results` when the frontend acks the
+    # active chunk; the orchestrator awaits it (with a heartbeat-based
+    # timeout) before dispatching the next chunk. Cleared back to None
+    # between chunks and on either wait-give-up branch (user cancel and
+    # heartbeat timeout). On a heartbeat timeout the abandoned chunk is moved
+    # into ``abandoned_chunk`` (``stash_abandoned_chunk``), so its late
+    # ``report_unit_results`` still commits the bindings the frontend already
+    # created Steam shortcuts for (#1052 / #1367).
     unit_complete_event: asyncio.Event | None = None
     # Identity of the unit currently dispatched to the frontend: the
     # ``WorkUnit.id`` (a platform's numeric id or a collection's string id).
     # Set by the orchestrator just before it emits ``sync_apply_unit`` and
-    # cleared once the unit's ack is committed (or the unit is cancelled).
-    # ``SyncReporter.report_unit_results`` validates the ack against this and
-    # ``current_sync_id`` (the run id) so a late ack from a cancelled run —
-    # or a stray ack for a different unit — is ignored rather than credited
-    # to the wrong unit/run (#1041). Kept (not cleared) across the
-    # heartbeat-timeout abandon window so the late ack for the SAME unit still
-    # validates; the cleared cross-run/cross-unit case is what it rejects.
+    # cleared once the unit's ack is committed, the unit is cancelled, or the
+    # chunk times out (its identity is moved into ``abandoned_chunk``).
+    # ``SyncReporter.report_unit_results`` validates a live ack against this and
+    # ``current_sync_id`` (the run id) so a stray ack for a different unit — or a
+    # late ack from a cancelled run — is ignored rather than credited to the
+    # wrong unit/run (#1041); a timed-out chunk's late ack instead matches the
+    # ``abandoned_chunk`` stash by identity, after this field has been cleared
+    # (#1367).
     active_unit_id: int | str | None = None
     # 0-based index of the unit's apply chunk currently dispatched to the
     # frontend. A unit's emitted shortcuts are split into chunks emitted +
@@ -106,23 +128,29 @@ class LibrarySyncStateBox:
     # which chunk is in flight so ``SyncReporter.report_unit_results`` can reject
     # an ack for a stale chunk alongside the run/unit identity check. Set by the
     # orchestrator before each chunk's ``sync_apply_unit`` emit and cleared to
-    # ``None`` once the unit's last chunk is committed (or the unit is cancelled).
+    # ``None`` once the unit's last chunk is committed, the unit is cancelled, or
+    # the chunk times out (its identity is moved into ``abandoned_chunk``).
     active_chunk_index: int | None = None
     # Holds the frontend-supplied ``rom_id_to_app_id`` mapping reported
     # for the active unit. Surfaces the result so the orchestrator can
     # accumulate the per-unit registry into the cross-run accumulators.
     last_unit_results: dict[str, int] | None = None
-    # Set True when a per-unit wait times out on a stale heartbeat (not a
-    # user cancel): the orchestrator abandoned the unit but the frontend
-    # may still ack it. A late :meth:`SyncReporter.report_unit_results`
-    # observes this flag and drives the per-unit commit itself so the
-    # delivered bindings are persisted rather than discarded (#1052).
-    unit_abandoned: bool = False
-    # Set True (alongside ``unit_abandoned``) when a heartbeat timeout ends the
-    # run, so the terminal ``SyncRun`` write records ``interrupted`` — an
-    # external death (frontend crash/reload) — instead of ``cancelled``, which
-    # is reserved for the user's own Cancel. Reset at the start of each run;
-    # never reset by the per-chunk loop, so a timeout anywhere in the run wins.
+    # A heartbeat-timed-out apply chunk, stashed for its late
+    # :meth:`SyncReporter.report_unit_results` to commit **after** the run has
+    # already wound down (``finish_run`` nulled ``current_sync_id``, so the
+    # active-unit ack check can no longer match). ``None`` outside the window
+    # between a chunk's heartbeat timeout and its late ack (or the next run
+    # start, whichever comes first). Written only through the box verbs
+    # ``stash_abandoned_chunk`` (on timeout) / ``take_abandoned_chunk`` (on the
+    # matching late ack) / ``try_begin_run`` (cleared at the next run start).
+    # The recovery commit it enables is what makes #1052 reachable in
+    # production (#1367).
+    abandoned_chunk: AbandonedChunk | None = None
+    # Set True when a heartbeat timeout ends the run, so the terminal
+    # ``SyncRun`` write records ``interrupted`` — an external death (frontend
+    # crash/reload) — instead of ``cancelled``, which is reserved for the user's
+    # own Cancel. Reset at the start of each run; never reset by the per-chunk
+    # loop, so a timeout anywhere in the run wins.
     run_interrupted: bool = False
     # Set True when the session-budget gate stops the run deliberately at a chunk
     # boundary (Steam's renderer is near its heap budget). The terminal ``SyncRun``
@@ -131,12 +159,6 @@ class LibrarySyncStateBox:
     # death). Takes precedence over ``run_interrupted`` in the terminal branch.
     # Reset at the start of each run (#1383).
     run_paused: bool = False
-    # The abandoned CHUNK's rows (the fetched ROMs of the in-flight chunk's
-    # sibling groups, each the source of its ``metadatum``), stashed so a late
-    # ack can rebuild ``acked_roms`` for the commit it drives. Only the chunk
-    # that timed out is stashed — already-committed chunks stay committed. Reset
-    # between chunks alongside ``last_unit_results``.
-    pending_unit_roms: list[dict[str, Any]] = field(default_factory=list)
     # Every Steam appId bound by a ``commit_unit_results`` this run, across
     # BOTH the happy path and the heartbeat-timeout late-ack path (#1052).
     # The stale-removal scan excludes these so a new server-issued rom_id that
@@ -203,13 +225,17 @@ class LibrarySyncStateBox:
 
         Returns ``False`` with no state change when a run is already in flight
         (the admission guard a rapid second Sync/Apply hits); otherwise
-        transitions IDLE → RUNNING, stamps ``current_sync_id``, and returns
-        ``True``.
+        transitions IDLE → RUNNING, stamps ``current_sync_id``, drops any
+        abandoned-chunk stash left by a prior run, and returns ``True``.
         """
         if self.sync_state is not SyncState.IDLE:
             return False
         self.sync_state = SyncState.RUNNING
         self.current_sync_id = run_id
+        # Bounded stash lifetime: a heartbeat-timed-out chunk whose late ack
+        # never arrived is dropped when the next run starts, so stale abandoned
+        # data can never outlive one run (#1367).
+        self.abandoned_chunk = None
         return True
 
     def request_cancel(self, run_id: str | None = None) -> str:
@@ -251,6 +277,58 @@ class LibrarySyncStateBox:
         """True while a cancel has been requested for the in-flight run."""
         return self.sync_state is SyncState.CANCELLING
 
+    # ── Abandoned-chunk stash — the heartbeat-timeout recovery seam ──
+
+    def stash_abandoned_chunk(self, chunk_rows: list[dict[str, Any]]) -> None:
+        """Move the timed-out chunk's identity + rows into the abandoned-chunk stash.
+
+        Snapshots the active run/unit/chunk identity and the chunk's fetched
+        rows into :attr:`abandoned_chunk` — inert data that survives the run's
+        teardown — then clears the active-unit dispatch identity (the ack event
+        and the unit/chunk id) so a late ``report_unit_results`` routes through
+        the stash (:meth:`take_abandoned_chunk`) rather than the now-dead
+        active-unit path. The whole-unit staging (``pending_sync`` /
+        ``pending_all_roms`` / ``pending_cover_sources``) is deliberately left
+        live so the reporter's late-ack commit can still read it; it is
+        overwritten by the next run's first chunk. Only the heartbeat-timeout
+        branch stashes; a user cancel discards the chunk via
+        :meth:`clear_active_unit`.
+        """
+        self.abandoned_chunk = AbandonedChunk(
+            run_id=self.current_sync_id,
+            unit_id=self.active_unit_id,
+            chunk_index=self.active_chunk_index,
+            chunk_rows=chunk_rows,
+        )
+        self.unit_complete_event = None
+        self.active_unit_id = None
+        self.active_chunk_index = None
+
+    def take_abandoned_chunk(
+        self, run_id: str | None, unit_id: int | str | None, chunk_index: int
+    ) -> AbandonedChunk | None:
+        """Pop the abandoned-chunk stash iff the late ack's identity matches it.
+
+        A late ``report_unit_results`` whose ``run_id`` / ``unit_id`` /
+        ``chunk_index`` equals the stashed chunk's identity clears the stash (so
+        a duplicate late ack finds nothing) and returns it for the recovery
+        commit. Any other identity — or no stash — returns ``None`` and leaves
+        the stash intact. ``run_id`` / ``unit_id`` compare by string value (a
+        platform id is numeric, a collection id is a string) and ``chunk_index``
+        as an int — the same coercion the active-unit ack check uses (#1041).
+        """
+        stash = self.abandoned_chunk
+        if stash is None:
+            return None
+        if (
+            str(run_id) == str(stash.run_id)
+            and str(unit_id) == str(stash.unit_id)
+            and int(chunk_index) == stash.chunk_index
+        ):
+            self.abandoned_chunk = None
+            return stash
+        return None
+
     def clear_active_unit(self) -> None:
         """Tear down the active unit's in-flight dispatch state.
 
@@ -259,9 +337,11 @@ class LibrarySyncStateBox:
         ``pending_cover_sources``), the ack event (``unit_complete_event``), and
         the unit + chunk identity (``active_unit_id`` / ``active_chunk_index``).
         The single teardown for a unit that finished, was cancelled, or whose
-        inter-chunk window closed. NOT called on the heartbeat-timeout branch,
-        which deliberately KEEPS this staging so a late ``report_unit_results``
-        can still commit the delivered bindings (#1052).
+        inter-chunk window closed. NOT called on the heartbeat-timeout branch —
+        that path moves the chunk into ``abandoned_chunk`` via
+        :meth:`stash_abandoned_chunk` (which clears only the dispatch identity,
+        not the staging), so a late ``report_unit_results`` can still read the
+        whole-unit staging and commit the delivered bindings (#1052 / #1367).
         """
         self.pending_sync = {}
         self.pending_all_roms = {}

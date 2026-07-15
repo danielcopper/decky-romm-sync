@@ -265,21 +265,16 @@ async def test_report_unit_results_stale_chunk_ignored(harness):
 
 
 async def test_report_unit_results_late_ack_binds_orphan(harness):
-    """A late ack on an abandoned unit (heartbeat timeout) commits the binding,
-    so the frontend-created shortcut becomes a bound row instead of an orphan
-    that the next sync re-creates as a duplicate (#1052).
+    """A late ack for a heartbeat-timed-out chunk commits the binding, so the
+    frontend-created shortcut becomes a bound row instead of an orphan that the
+    next sync re-creates as a duplicate (#1052 / #1367).
 
-    End-to-end over the real Plugin/bootstrap: set the timeout state the
-    orchestrator leaves behind, call the callable frontend-shaped, then assert
-    ``get_app_id_rom_id_map`` resolves the appId to the rom_id."""
+    End-to-end over the real Plugin/bootstrap: drive the box into the real
+    production post-timeout state (chunk stashed via ``stash_abandoned_chunk``,
+    run wound down via ``finish_run`` so ``current_sync_id`` is None), call the
+    callable frontend-shaped, then assert ``get_app_id_rom_id_map`` resolves the
+    appId to the rom_id."""
     box = harness.plugin._sync_service._box
-    # The state a heartbeat timeout leaves: pending_sync staged, event already
-    # None (the wait returned), chunk flagged abandoned with its rows stashed.
-    # Run + unit + chunk identity survives the abandon window so the late ack
-    # validates.
-    box.current_sync_id = "run-1"
-    box.active_unit_id = 1
-    box.active_chunk_index = 0
     _entry = {
         "name": "Orphan Game",
         "fs_name": "orphan.gba",
@@ -287,13 +282,18 @@ async def test_report_unit_results_late_ack_binds_orphan(harness):
         "cover_path": "",
     }
     # ``pending_all_roms`` is the identity source for the group-aware persist;
-    # ``pending_sync`` holds the emitted representative. Both survive the abandon
-    # window so the late ack can drive the chunk's commit (ADR-0021).
+    # ``pending_sync`` holds the emitted representative. Both stay live on the
+    # box across the abandon window so the late ack can drive the chunk's commit
+    # (ADR-0021). The stash carries the chunk's rows + identity.
+    box.try_begin_run("run-1")
+    box.active_unit_id = 1
+    box.active_chunk_index = 0
     box.pending_sync = {42: _entry}
     box.pending_all_roms = {42: _entry}
-    box.unit_complete_event = None
-    box.unit_abandoned = True
-    box.pending_unit_roms = [{"id": 42}]
+    box.stash_abandoned_chunk([{"id": 42}])
+    box.finish_run("run-1")
+    # The run wound down: the active-unit ack check can no longer match.
+    assert box.current_sync_id is None
 
     # Before the ack: the appId is NOT in the map (would be an orphan).
     assert await harness.plugin.get_app_id_rom_id_map() == {}
@@ -304,9 +304,8 @@ async def test_report_unit_results_late_ack_binds_orphan(harness):
     # The orphan is now a bound row — the next sync's getExistingRomMShortcuts
     # maps it and takes the update branch (no duplicate).
     assert await harness.plugin.get_app_id_rom_id_map() == {"100001": 42}
-    # The abandoned-unit stash is cleared so a duplicate ack no-ops.
-    assert box.unit_abandoned is False
-    assert box.pending_unit_roms == []
+    # The abandoned-chunk stash is cleared so a duplicate late ack no-ops.
+    assert box.abandoned_chunk is None
 
 
 # ── get_session_budget_status ────────────────────────────────────────────
