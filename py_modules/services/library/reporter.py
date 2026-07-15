@@ -353,36 +353,7 @@ class SyncReporter:
         await self._emit("sync_complete", complete_payload)
 
         if cancelled:
-            # A budget pause carries its own full-sentence guidance — use it as the
-            # terminal message verbatim so the QAM status reads the resume-friendly
-            # reason. Otherwise a heartbeat-timeout run routes through this same
-            # cancelled finalize, so key the leading word on the box's
-            # run_interrupted flag — the frame then reads "interrupted" instead of
-            # blaming the user's Cancel button (stage stays CANCELLED; last_attempt
-            # already reads "interrupted"). The frame's denominator is the run's
-            # PLANNED total (the sync_plan count stamped in the box) so "N of M
-            # games processed" compares against the plan, not the bound-ROM
-            # registry count (which equals N on a first sync, #1384); the registry
-            # count is only the fallback when the box was wiped before plan time
-            # (plugin reload).
-            planned_total = self._sync_state.run_total_items
-            total = (
-                planned_total
-                if planned_total is not None
-                else await self._loop.run_in_executor(None, self._count_bound_roms)
-            )
-            if interrupt_reason:
-                message = interrupt_reason
-            else:
-                lead = "Sync interrupted" if self._sync_state.run_interrupted else "Sync cancelled"
-                message = f"{lead}: {total_games} of {total} games processed"
-            await self._emit_progress(
-                SyncStage.CANCELLED,
-                current=total_games,
-                total=total,
-                message=message,
-                running=False,
-            )
+            await self._emit_cancelled_frame(total_games=total_games, interrupt_reason=interrupt_reason)
         else:
             total = await self._loop.run_in_executor(None, self._count_bound_roms)
             await self._emit_progress(
@@ -392,6 +363,40 @@ class SyncReporter:
                 message=f"Sync complete: {total} games from {len(platform_app_ids)} platforms",
                 running=False,
             )
+
+    async def _emit_cancelled_frame(self, *, total_games: int, interrupt_reason: str | None) -> None:
+        """Emit the terminal progress frame for a cancelled/interrupted run.
+
+        A budget pause carries its own full-sentence guidance — used as the
+        terminal message verbatim so the QAM status reads the resume-friendly
+        reason. Otherwise a heartbeat-timeout run routes through this same
+        cancelled finalize, so the leading word keys on the box's
+        ``run_interrupted`` flag — the frame then reads "interrupted" instead of
+        blaming the user's Cancel button (stage stays CANCELLED; last_attempt
+        already reads "interrupted"). The frame's denominator is the run's
+        PLANNED total (the sync_plan count stamped in the box) so "N of M games
+        processed" compares against the plan, not the bound-ROM registry count
+        (which equals N on a first sync); the registry count is only the
+        fallback when the box was wiped before plan time (plugin reload).
+        """
+        planned_total = self._sync_state.run_total_items
+        total = (
+            planned_total
+            if planned_total is not None
+            else await self._loop.run_in_executor(None, self._count_bound_roms)
+        )
+        if interrupt_reason:
+            message = interrupt_reason
+        else:
+            lead = "Sync interrupted" if self._sync_state.run_interrupted else "Sync cancelled"
+            message = f"{lead}: {total_games} of {total} games processed"
+        await self._emit_progress(
+            SyncStage.CANCELLED,
+            current=total_games,
+            total=total,
+            message=message,
+            running=False,
+        )
 
     def _count_bound_roms(self) -> int:
         """Count ROMs that still carry a Steam-shortcut binding."""
