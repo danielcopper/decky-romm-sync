@@ -614,7 +614,10 @@ class SyncOrchestrator:
         # final phase. ``synced_rom_ids`` is shared with collection units
         # for dedup. ``collection_memberships`` and ``platform_rom_ids``
         # feed the reporter's ``_build_collection_app_ids`` once every
-        # unit has been applied.
+        # unit has been applied. ``total_games_applied`` is the run's
+        # processed-ROM count — wholesale skips, delta-skips, and committed
+        # applies alike — surfaced as ``total_games`` (the terminal frame's
+        # "N of M games processed" numerator).
         synced_rom_ids: set[int] = set()
         collection_memberships: dict[str, list[int]] = {}
         platform_rom_ids: set[int] = set()
@@ -993,7 +996,7 @@ class SyncOrchestrator:
         collection_memberships: dict[str, list[int]],
         platform_rom_ids: set[int],
     ) -> int:
-        """Process one work unit start-to-finish; return shortcuts applied.
+        """Process one work unit start-to-finish; return its processed-ROM count.
 
         The ROMs for the unit come from a live per-unit fetch. After the
         frontend acks the unit's shortcuts (via ``report_unit_results``),
@@ -1006,7 +1009,11 @@ class SyncOrchestrator:
         matches the server-side platform state), the entire apply +
         commit branch is short-circuited: no frontend roundtrip, no
         registry write. The unit's ROMs still count toward the
-        ``total_games_applied`` total returned to the user.
+        ``total_games_applied`` total returned to the user. Delta-skipped
+        entries (content-unchanged ROMs the delta-restricted apply never
+        re-emits) count the same way: the return value is the unit's
+        processed ROMs — skips plus acked applies — not just the
+        shortcuts written.
         """
         box = self._sync_state
         # Coarse anchor for the unit: FETCHING (not APPLYING) so the whole
@@ -1118,7 +1125,11 @@ class SyncOrchestrator:
             f"{len(rebind_ids)} rebind of {len(emitted)} collapsed ({len(skip_ids)} unchanged skipped)"
         )
         # A skipped entry is already correct on its Steam shortcut — no Set* walk is
-        # owed — so it counts as done the moment the delta is computed (#1383).
+        # owed — so it counts as done the moment the delta is computed (#1383). It is
+        # just as processed as a wholesale-skipped unit's ROMs, so every return below
+        # also adds ``len(skip_ids)`` to the unit's processed count — keeping the
+        # terminal frame's "N of M games processed" numerator (``total_games``)
+        # consistent with this counter on a resumed run.
         box.run_done_items += len(skip_ids)
 
         # Cover-cache invalidation pass (#1386): before any cover is reused, refresh
@@ -1135,7 +1146,7 @@ class SyncOrchestrator:
         )
 
         if box.is_cancelling():
-            return 0
+            return len(skip_ids)
 
         # Download artwork for the shortcuts about to be applied and stamp each
         # delta entry's cover path in place (a no-op when the delta is empty).
@@ -1146,7 +1157,7 @@ class SyncOrchestrator:
         )
 
         if box.is_cancelling():
-            return 0
+            return len(skip_ids)
 
         # Clear this platform's completion stamp now that its apply is actually
         # beginning — the fetch succeeded, artwork is done, and the cancel guard
@@ -1178,7 +1189,7 @@ class SyncOrchestrator:
         box.pending_all_roms = {sd["rom_id"]: sd for sd in shortcuts_data}
         box.pending_cover_sources = confirmed_cover_sources
 
-        return await self._apply_unit_in_chunks(
+        applied_count = await self._apply_unit_in_chunks(
             unit,
             unit_index=unit_index,
             total_units=total_units,
@@ -1188,6 +1199,7 @@ class SyncOrchestrator:
             new_ids=new_ids,
             cover_refreshes=cover_refreshes,
         )
+        return len(skip_ids) + applied_count
 
     async def _attach_unit_cover_paths(
         self,

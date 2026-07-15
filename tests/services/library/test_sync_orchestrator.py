@@ -3176,6 +3176,84 @@ class TestSyncOneUnitCollectionAndCancel:
         assert applied == 0
 
     @pytest.mark.asyncio
+    async def test_cancel_after_artwork_still_counts_delta_skips(self, plugin, fake_romm_api):
+        """A mid-unit cancel AFTER the delta is computed returns the delta-skip
+        count: those ROMs were verified already-correct in Steam, so they are
+        processed — same as a wholesale-skipped unit's ROMs — and the terminal
+        frame's "N of M games processed" numerator must not drop them."""
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        # rom 10 is content-unchanged (delta-skipped); rom 11 is brand-new, so
+        # the unit reaches the artwork step where the cancel lands.
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[
+                {"id": 10, "name": "Keep", "fs_name": "keep.z64"},
+                {"id": 11, "name": "Fresh", "fs_name": "fresh.z64"},
+            ],
+        )
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64")
+
+        async def cancel_during_artwork(*_a, **_kw):
+            plugin._sync_service._box.sync_state = SyncState.CANCELLING
+            return {}
+
+        plugin._sync_service._orchestrator._download_artwork = cancel_during_artwork
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
+        processed = await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+        assert processed == 1, "the delta-skipped ROM is processed; the cancelled apply is not"
+
+    @pytest.mark.asyncio
+    async def test_cancel_after_cover_refresh_still_counts_delta_skips(self, plugin, fake_romm_api):
+        """Same invariant at the sibling guard: a cancel landing during the
+        cover-refresh pass — after the delta is computed, before the artwork
+        download — still returns the delta-skip count."""
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        # rom 10 is content-unchanged (delta-skipped); the cancel lands inside
+        # the cover-refresh pass, so the guard right after it fires.
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "Keep", "fs_name": "keep.z64"}],
+        )
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64")
+
+        async def cancel_during_cover_refresh(*_a, **_kw):
+            plugin._sync_service._box.sync_state = SyncState.CANCELLING
+            return []
+
+        plugin._sync_service._orchestrator._refresh_changed_covers = cancel_during_cover_refresh
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+        processed = await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+        assert processed == 1, "the delta-skipped ROM is processed even on a pre-apply cancel"
+
+    @pytest.mark.asyncio
     async def test_user_cancel_clears_pending_and_drops_event(self, plugin, fake_romm_api):
         """A user cancel during the wait discards in-flight work: pending_sync
         cleared, unit event nulled, no abandoned-unit stash.
@@ -5621,3 +5699,121 @@ class TestRunProgressCounters:
 
         assert result["run_done_items"] is None
         assert result["run_total_items"] is None
+
+
+class TestProcessedGamesNumerator:
+    """``total_games`` — the terminal frame's "N of M games processed" numerator.
+
+    It counts every PROCESSED ROM the same way ``run_done_items`` does: a
+    wholesale-skipped unit's ROMs, a partial unit's delta-skipped entries, and
+    the committed applies. A resumed run that is interrupted again must not
+    understate the one platform it resumed into — a delta-skipped ROM is just
+    as processed as a wholesale-skipped one.
+    """
+
+    @staticmethod
+    def _arm(plugin, fake_romm_api, *, run_id):
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = run_id
+
+    @pytest.mark.asyncio
+    async def test_clean_run_payload_counts_delta_skips(self, plugin, fake_romm_api):
+        import decky
+
+        # rom 10 is content-unchanged (delta-skipped), rom 11 changed and is
+        # acked — both are processed, so the sync_complete payload reports 2.
+        self._arm(plugin, fake_romm_api, run_id="run-numerator-clean")
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[
+                {"id": 10, "name": "Keep", "fs_name": "keep.z64"},
+                {"id": 11, "name": "New Name", "fs_name": "changed.z64"},
+            ],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64")
+        _seed_rom_row(plugin, 11, app_id=1011, platform_slug="n64", name="Old Name", fs_name="changed.z64")
+
+        async def fake_wait(_unit, event):
+            event.set()
+            return {"11": 1011}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        complete = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
+        assert complete[-1]["total_games"] == 2, "1 delta-skipped + 1 applied are both processed"
+
+    @pytest.mark.asyncio
+    async def test_resumed_run_interrupt_frame_counts_delta_skips(self, plugin, fake_romm_api, monkeypatch):
+        """The resume-then-interrupt shape: a platform the prior run finished
+        wholesale-skips, the partial platform delta-skips its already-applied
+        ROM and commits one more chunk, then the heartbeat times out. The
+        terminal frame's numerator counts all three kinds of processed ROM
+        (and agrees with the paused banner's ``run_done_items``)."""
+        import decky
+
+        from services.library import sync_orchestrator
+
+        self._arm(plugin, fake_romm_api, run_id="run-resume-interrupt")
+
+        # Unit 1 (N64): wholesale-skipped — its completion stamp matches the
+        # server and its one bound row reconstructs.
+        _seed_platform_stamp(plugin, "n64", at="2025-01-01T00:00:00Z", rom_count=1)
+        _seed_rom_row(plugin, 10, app_id=1010, platform_slug="n64", name="A", fs_name="a.z64")
+        fake_romm_api.platforms.append({"id": 1, "name": "N64", "slug": "n64", "rom_count": 1})
+
+        # Unit 2 (GBA): the partial platform — rom 20 is content-unchanged
+        # (delta-skipped), roms 21/22 changed. One item per chunk: chunk 0
+        # acks and commits, chunk 1's wait gives up while the box is still
+        # RUNNING (heartbeat timeout) → the run ends interrupted.
+        _seed_platform(
+            fake_romm_api,
+            platform_id=2,
+            name="GBA",
+            slug="gba",
+            roms=[
+                {"id": 20, "name": "Keep", "fs_name": "keep.gba"},
+                {"id": 21, "name": "New Name", "fs_name": "changed.gba"},
+                {"id": 22, "name": "Other New", "fs_name": "other.gba"},
+            ],
+        )
+        _seed_rom_row(plugin, 20, app_id=1020, platform_slug="gba", name="Keep", fs_name="keep.gba")
+        _seed_rom_row(plugin, 21, app_id=1021, platform_slug="gba", name="Old Name", fs_name="changed.gba")
+        _seed_rom_row(plugin, 22, app_id=1022, platform_slug="gba", name="Old Other", fs_name="other.gba")
+        plugin.settings["enabled_platforms"] = {"1": True, "2": True}
+        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 1)
+
+        acks: list[dict[str, int] | None] = [{"21": 1021}, None]
+
+        async def wait_ack_then_timeout(_unit, event):
+            ack = acks.pop(0)
+            if ack is not None:
+                event.set()
+                return ack
+            return None  # heartbeat timeout — the box is still RUNNING
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = wait_ack_then_timeout
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        complete = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
+        assert complete[-1]["total_games"] == 3, "1 wholesale-skipped + 1 delta-skipped + 1 committed"
+        assert complete[-1]["interrupted"] is True
+        progress = plugin._sync_service._sync_progress
+        assert progress["stage"] == "cancelled"
+        assert progress["message"] == "Sync interrupted: 3 of 4 games processed"
+        assert progress["current"] == 3
+        assert progress["total"] == 4
+        # The frame's numerator and the paused banner's done counter agree.
+        assert plugin._sync_service._box.run_done_items == 3
