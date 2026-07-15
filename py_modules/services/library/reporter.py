@@ -503,25 +503,7 @@ class SyncReporter:
         except ValueError as e:
             self._logger.warning(f"Skipping invalid ROM {rom_id} during commit: {e}")
             return
-        cover_path = finalized.get(rom_id) or (existing.cover_path if existing is not None else None)
-        if cover_path:
-            rom.update_cover_path(cover_path)
-        # Cover fingerprint (#1386): the value the artwork layer CONFIRMED for this
-        # unit (a fresh download / cache reuse / grid seed recorded in the box's
-        # pending_cover_sources) wins; otherwise the existing row's fingerprint is
-        # preserved — never blindly the fetch's fresh string, so a failed download
-        # keeps the old fingerprint and the change is retried next sync.
-        cover_source = self._sync_state.pending_cover_sources.get(rom_id) or (
-            existing.cover_source if existing is not None else None
-        )
-        if cover_source:
-            rom.adopt_cover_source(cover_source)
-        sgdb_id = self._merge_optional_id(built.get("sgdb_id"), existing.sgdb_id if existing else None)
-        if sgdb_id is not None:
-            rom.assign_sgdb_id(sgdb_id)
-        ra_id = self._merge_optional_id(built.get("ra_id"), existing.ra_id if existing else None)
-        if ra_id is not None:
-            rom.assign_ra_id(ra_id)
+        self._merge_plugin_resolved_fields(rom, rom_id, built, finalized, existing)
         uow.roms.save(rom)
 
         # Record the applied launch command for a binding TARGET this cycle (the
@@ -537,6 +519,31 @@ class SyncReporter:
             uow.roms.set_applied_launch_options(rom_id, rom.applied_launch_options)
 
         self._stamp_rom_metadata(uow, rom_id, roms_by_id.get(rom_id))
+
+    def _merge_plugin_resolved_fields(self, rom: Rom, rom_id: int, built, finalized, existing) -> None:
+        """Read-merge the plugin-resolved fields onto the freshly built Rom.
+
+        Each field follows "confirmed new wins, else preserve existing, else
+        None": ``cover_path`` from this unit's finalized grid copies,
+        ``cover_source`` from the box's confirmed ``pending_cover_sources``
+        (never blindly the fetch's fresh string — a failed download keeps the
+        old fingerprint so the change is retried next sync), and the
+        ``sgdb_id`` / ``ra_id`` resolver results.
+        """
+        cover_path = finalized.get(rom_id) or (existing.cover_path if existing is not None else None)
+        if cover_path:
+            rom.update_cover_path(cover_path)
+        cover_source = self._sync_state.pending_cover_sources.get(rom_id) or (
+            existing.cover_source if existing is not None else None
+        )
+        if cover_source:
+            rom.adopt_cover_source(cover_source)
+        sgdb_id = self._merge_optional_id(built.get("sgdb_id"), existing.sgdb_id if existing else None)
+        if sgdb_id is not None:
+            rom.assign_sgdb_id(sgdb_id)
+        ra_id = self._merge_optional_id(built.get("ra_id"), existing.ra_id if existing else None)
+        if ra_id is not None:
+            rom.assign_ra_id(ra_id)
 
     def _stamp_rom_metadata(self, uow, rom_id: int, rom: dict[str, Any] | None) -> None:
         """Stamp the ROM's cached metadata into ``uow.rom_metadata`` for this commit.
