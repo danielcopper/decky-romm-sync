@@ -362,14 +362,19 @@ chunk's Steam shortcuts** and will still fire its late `report_unit_results`. Dr
 bindings are never written to `roms`, so `get_app_id_rom_id_map` doesn't know about the shortcuts, and the next sync
 re-creates them as **duplicates** (an unmapped exe-detected shortcut takes the `addShortcut` branch).
 
-So a heartbeat **timeout** is handled differently from a **user cancel** (#1052):
+So a heartbeat **timeout** is handled differently from a **user cancel** (#1052 / #1367):
 
 - **User cancel** — the in-flight chunk is intentionally discarded. The orchestrator clears the staging and nulls
   `unit_complete_event`, so a stray late ack can't commit a cancelled chunk.
-- **Heartbeat timeout** — the orchestrator keeps the staging, flags `unit_abandoned`, and stashes **this chunk's** ROMs
-  in `pending_unit_roms`. The late `report_unit_results` observes the flag and drives `commit_unit_results` itself,
-  persisting the delivered bindings (and metadata from the stash). Do **not** re-clear the staging on timeout — that
-  re-opens the orphan/duplicate loop.
+- **Heartbeat timeout** — the orchestrator moves the abandoned chunk into an `abandoned_chunk` stash on
+  `LibrarySyncStateBox` (`stash_abandoned_chunk`): its run/unit/chunk identity plus **this chunk's** ROMs (only the
+  abandoned chunk), while keeping the whole-unit staging live for the commit to read and clearing the dispatch identity.
+  The stash lives **outside** the run-lifecycle state and deliberately survives the run's teardown (`finish_run` nulls
+  `current_sync_id`), because in production the late `report_unit_results` arrives **after** the run has wound down —
+  the window an earlier design missed, where the active-unit ack check could no longer match and the recovery was
+  unreachable (#1367). The late ack matches the stash **by identity** (`take_abandoned_chunk`) and drives
+  `commit_unit_results` itself over the stashed rows (binding + metadata), never stamping a timed-out platform complete.
+  Bounded lifetime: the next run's `try_begin_run` clears an unacked stash.
 
 The committed binding self-heals the duplicate hazard: a bound `roms` row is mapped by `getExistingRomMShortcuts` next
 sync, so `resolveShortcutAppId` takes the update branch. The orchestrator does **not** add active orphan deletion — a
