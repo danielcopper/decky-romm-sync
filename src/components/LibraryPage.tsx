@@ -1,14 +1,5 @@
 import { useState, useEffect, useMemo, useRef, FC } from "react";
-import {
-  PanelSection,
-  PanelSectionRow,
-  ButtonItem,
-  ToggleField,
-  Spinner,
-  DialogButton,
-  Field,
-  Focusable,
-} from "@decky/ui";
+import { PanelSection, PanelSectionRow, ButtonItem, ToggleField, DialogButton, Field, Focusable } from "@decky/ui";
 import {
   getPlatforms,
   savePlatformSync,
@@ -22,6 +13,7 @@ import {
 import type { PlatformSyncSetting, CollectionSyncSetting, CollectionKind, CollectionScope } from "../types";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
+import { LoadingRow } from "./LoadingRow";
 
 type CollectionSubTab = "my" | "smart" | "franchise";
 
@@ -190,11 +182,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   // --- Platforms tab content ---
   const renderPlatformsContent = () => {
     if (syncLoading) {
-      return (
-        <PanelSectionRow>
-          <Spinner />
-        </PanelSectionRow>
-      );
+      return <LoadingRow />;
     }
     if (syncError) {
       return (
@@ -251,9 +239,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     if (collectionsLoading) {
       return (
         <PanelSection title="Collections">
-          <PanelSectionRow>
-            <Spinner />
-          </PanelSectionRow>
+          <LoadingRow />
         </PanelSection>
       );
     }

@@ -7,7 +7,6 @@ import {
   Field,
   TextField,
   ToggleField,
-  Spinner,
   ModalRoot,
   DialogButton,
   showModal,
@@ -28,6 +27,7 @@ import {
   updateWhitelistSettings,
 } from "../api/backend";
 import { removeShortcut, getAllNonSteamShortcutAppIds, getLiveRomMShortcutAppIds } from "../utils/steamShortcuts";
+import { LoadingRow } from "./LoadingRow";
 import { batchConfirmLaunchOptions } from "../utils/launchOptionsReconcile";
 import { getSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
 import { scrollToTop } from "../utils/scrollHelpers";
@@ -347,11 +347,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
 
   let platformsBody: ReactNode;
   if (loading) {
-    platformsBody = (
-      <PanelSectionRow>
-        <Spinner />
-      </PanelSectionRow>
-    );
+    platformsBody = <LoadingRow />;
   } else if (platforms.length === 0) {
     platformsBody = (
       <PanelSectionRow>
@@ -625,11 +621,7 @@ const WhitelistSection: FC<WhitelistSectionProps> = ({
         </ButtonItem>
       </PanelSectionRow>
 
-      {showWhitelist && !settingsLoaded && (
-        <PanelSectionRow>
-          <Spinner />
-        </PanelSectionRow>
-      )}
+      {showWhitelist && !settingsLoaded && <LoadingRow />}
       {showWhitelist && settingsLoaded && (
         <>
           <PanelSectionRow>
