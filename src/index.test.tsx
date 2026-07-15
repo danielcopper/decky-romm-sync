@@ -688,6 +688,7 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
     romm_collection_app_ids?: Record<string, number[]>;
     total_games: number;
     cancelled?: boolean;
+    interrupted?: boolean;
     interrupt_reason?: string;
     restart_recommended?: boolean;
   };
@@ -878,6 +879,52 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
     await flush();
 
     expect(lastToastBody()).toBe("Sync cancelled.");
+    plugin.onDismount();
+  });
+
+  it("on a heartbeat-timeout interrupt with partial work → 'Sync interrupted — … so far.' (#1384)", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-1", units: [], total_units: 3, total_roms: 10 });
+    });
+    recordSyncCreated(100);
+    recordSyncCreated(200);
+    recordSyncCreated(300);
+    // An interrupted run rides the cancelled finalize — the backend sets BOTH
+    // flags. The additive `interrupted` must win the wording: the run died
+    // externally (frontend crash/reload), the user never pressed Cancel.
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
+        platform_app_ids: {},
+        total_games: 53,
+        cancelled: true,
+        interrupted: true,
+      });
+    });
+    await flush();
+
+    expect(lastToastBody()).toBe("Sync interrupted — 3 added so far.");
+    plugin.onDismount();
+  });
+
+  it("on a heartbeat-timeout interrupt before any work → 'Sync interrupted.' (no delta, #1384)", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-1", units: [], total_units: 3, total_roms: 10 });
+    });
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
+        platform_app_ids: {},
+        total_games: 53,
+        cancelled: true,
+        interrupted: true,
+      });
+    });
+    await flush();
+
+    expect(lastToastBody()).toBe("Sync interrupted.");
     plugin.onDismount();
   });
 

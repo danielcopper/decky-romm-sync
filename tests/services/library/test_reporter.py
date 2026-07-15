@@ -1186,6 +1186,7 @@ class TestFinalizePerUnitRun:
         complete_events = [c for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
         assert len(complete_events) == 1
         assert "cancelled" not in complete_events[0][0][1]
+        assert "interrupted" not in complete_events[0][0][1]
         # The last-run memory delta is retained in the box and read via
         # get_session_budget_status, NOT ridden on the sync_complete wire (#1383 LOW-3).
         assert "memory_delta_kb" not in complete_events[0][0][1]
@@ -1211,7 +1212,7 @@ class TestFinalizePerUnitRun:
     @pytest.mark.asyncio
     async def test_emit_sync_complete_cancelled_frame_says_cancelled_when_not_interrupted(self, plugin):
         """A user cancel (box.run_interrupted False) → the terminal CANCELLED frame
-        leads with 'Sync cancelled:'."""
+        leads with 'Sync cancelled:' and the payload carries no ``interrupted``."""
         import decky
 
         decky.emit.reset_mock()
@@ -1226,6 +1227,8 @@ class TestFinalizePerUnitRun:
             restart_recommended=False,
         )
 
+        complete = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
+        assert "interrupted" not in complete[-1]
         progress = plugin._sync_service._sync_progress
         assert progress["stage"] == "cancelled"
         assert progress["message"].startswith("Sync cancelled: ")
@@ -1233,12 +1236,15 @@ class TestFinalizePerUnitRun:
     @pytest.mark.asyncio
     async def test_emit_sync_complete_frame_says_interrupted_when_run_interrupted(self, plugin):
         """A heartbeat-timeout run routes through the same cancelled emit; with
-        box.run_interrupted set the terminal frame leads with 'Sync interrupted:'
-        (stage stays CANCELLED — no new SyncStage)."""
+        box.run_interrupted set the payload carries ``interrupted: True`` and the
+        terminal frame leads with 'Sync interrupted:' (stage stays CANCELLED — no
+        new SyncStage). The frame's denominator is the PLANNED total from the
+        box, not the bound-ROM count (#1384)."""
         import decky
 
         decky.emit.reset_mock()
         plugin._sync_service._box.run_interrupted = True
+        plugin._sync_service._box.run_total_items = 10
 
         await plugin._sync_service._reporter.emit_sync_complete(
             platform_app_ids={},
@@ -1249,9 +1255,12 @@ class TestFinalizePerUnitRun:
             restart_recommended=False,
         )
 
+        complete = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
+        assert complete[-1]["interrupted"] is True
         progress = plugin._sync_service._sync_progress
         assert progress["stage"] == "cancelled"
-        assert progress["message"].startswith("Sync interrupted: ")
+        assert progress["message"] == "Sync interrupted: 3 of 10 games processed"
+        assert progress["total"] == 10
 
     @pytest.mark.asyncio
     async def test_emit_sync_complete_uses_interrupt_reason_verbatim(self, plugin):
@@ -1272,7 +1281,38 @@ class TestFinalizePerUnitRun:
 
         complete = [c[0][1] for c in decky.emit.call_args_list if c[0][0] == "sync_complete"]
         assert complete[-1]["interrupt_reason"] == "Sync paused: restart Steam, then Resume Sync."
+        # A budget pause sets run_paused + interrupt_reason, never run_interrupted —
+        # the payload must not read as a heartbeat interrupt (#1384).
+        assert "interrupted" not in complete[-1]
         assert plugin._sync_service._sync_progress["message"] == "Sync paused: restart Steam, then Resume Sync."
+
+    @pytest.mark.asyncio
+    async def test_emit_sync_complete_frame_total_falls_back_to_bound_count(self, plugin):
+        """With no planned total in the box (``run_total_items`` None — pre-plan or
+        the box wiped by a plugin reload), the terminal frame's denominator falls
+        back to the bound-ROM registry count (#1384)."""
+        import decky
+
+        decky.emit.reset_mock()
+        uow = plugin._uow
+        _seed_rom(uow, 1, app_id=1001, platform_slug="n64", name="Game A")
+        _seed_rom(uow, 2, app_id=1002, platform_slug="n64", name="Game B")
+        box = plugin._sync_service._box
+        box.run_interrupted = True
+        assert box.run_total_items is None
+
+        await plugin._sync_service._reporter.emit_sync_complete(
+            platform_app_ids={},
+            romm_collection_app_ids={},
+            total_games=1,
+            cancelled=True,
+            interrupt_reason=None,
+            restart_recommended=False,
+        )
+
+        progress = plugin._sync_service._sync_progress
+        assert progress["message"] == "Sync interrupted: 1 of 2 games processed"
+        assert progress["total"] == 2
 
     @pytest.mark.asyncio
     async def test_finalize_does_not_reset_run_lifecycle(self, plugin):

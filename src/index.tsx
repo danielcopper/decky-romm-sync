@@ -132,7 +132,7 @@ const QAMPanel: FC = () => {
  * finished sync run from the run outcome and the true created/removed delta.
  */
 function buildSyncCompleteToast(
-  data: { interrupt_reason?: string; cancelled?: boolean; restart_recommended?: boolean },
+  data: { interrupt_reason?: string; interrupted?: boolean; cancelled?: boolean; restart_recommended?: boolean },
   delta: { added: number; removed: number },
 ): { body: string; duration?: number } {
   // Report the TRUE delta, not the total processed set. The library applies
@@ -155,6 +155,12 @@ function buildSyncCompleteToast(
     // longer on-screen duration than the default so the guidance isn't truncated
     // away before it is read (#1383).
     return { body, duration: 15000 };
+  }
+  if (data.interrupted) {
+    // A heartbeat-timeout run (an external death — frontend crash/reload) rides
+    // the cancelled finalize with this additive flag; word the toast honestly
+    // instead of blaming a Cancel the user never pressed (#1384).
+    return { body: summary ? `Sync interrupted — ${summary} so far.` : "Sync interrupted." };
   }
   if (data.cancelled) {
     return { body: summary ? `Sync cancelled — ${summary} so far.` : "Sync cancelled." };
@@ -358,6 +364,12 @@ export default definePlugin(() => {
     romm_collection_app_ids?: Record<string, number[]>;
     total_games: number;
     cancelled?: boolean;
+    /**
+     * Set alongside `cancelled` when the run ended on a heartbeat timeout — an
+     * external death (frontend crash/reload), not the user's Cancel — so the
+     * completion toast says "interrupted" instead of "cancelled" (#1384).
+     */
+    interrupted?: boolean;
     /**
      * Present only when the run paused itself at a chunk boundary because
      * Steam's renderer is near its per-session heap budget (#1383). A

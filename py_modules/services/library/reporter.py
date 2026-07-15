@@ -328,6 +328,14 @@ class SyncReporter:
         pause guidance distinctly instead of the generic cancelled/interrupted
         wording. ``restart_recommended`` (only on a clean run whose post-run RSS is
         high) sets an additive payload flag the UI turns into a "restart Steam" nudge.
+
+        Heartbeat-timeout surfacing (#1384): an interrupted run (an external death —
+        frontend crash/reload — flagged by the box's ``run_interrupted``) routes
+        through the same cancelled finalize, so the payload carries an additive
+        ``interrupted: True`` alongside ``cancelled`` and the completion toast can
+        say "interrupted" instead of blaming a Cancel the user never pressed. A
+        budget pause sets ``interrupt_reason`` (not ``run_interrupted``) and never
+        carries the flag.
         """
         complete_payload: dict[str, Any] = {
             "platform_app_ids": platform_app_ids,
@@ -336,13 +344,14 @@ class SyncReporter:
         }
         if cancelled:
             complete_payload["cancelled"] = True
+            if self._sync_state.run_interrupted:
+                complete_payload["interrupted"] = True
             if interrupt_reason:
                 complete_payload["interrupt_reason"] = interrupt_reason
         elif restart_recommended:
             complete_payload["restart_recommended"] = True
         await self._emit("sync_complete", complete_payload)
 
-        total = await self._loop.run_in_executor(None, self._count_bound_roms)
         if cancelled:
             # A budget pause carries its own full-sentence guidance — use it as the
             # terminal message verbatim so the QAM status reads the resume-friendly
@@ -350,7 +359,18 @@ class SyncReporter:
             # cancelled finalize, so key the leading word on the box's
             # run_interrupted flag — the frame then reads "interrupted" instead of
             # blaming the user's Cancel button (stage stays CANCELLED; last_attempt
-            # already reads "interrupted").
+            # already reads "interrupted"). The frame's denominator is the run's
+            # PLANNED total (the sync_plan count stamped in the box) so "N of M
+            # games processed" compares against the plan, not the bound-ROM
+            # registry count (which equals N on a first sync, #1384); the registry
+            # count is only the fallback when the box was wiped before plan time
+            # (plugin reload).
+            planned_total = self._sync_state.run_total_items
+            total = (
+                planned_total
+                if planned_total is not None
+                else await self._loop.run_in_executor(None, self._count_bound_roms)
+            )
             if interrupt_reason:
                 message = interrupt_reason
             else:
@@ -364,6 +384,7 @@ class SyncReporter:
                 running=False,
             )
         else:
+            total = await self._loop.run_in_executor(None, self._count_bound_roms)
             await self._emit_progress(
                 SyncStage.DONE,
                 current=total,

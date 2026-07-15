@@ -93,6 +93,7 @@ async def test_cancel_sync_stale_run_does_not_abort_fresh_run(harness):
     completes = _sync_complete_payloads(harness)
     assert completes, "run B must emit a terminal sync_complete"
     assert "cancelled" not in completes[-1]
+    assert "interrupted" not in completes[-1]
     assert harness.plugin._sync_service._sync_state == SyncState.IDLE
 
 

@@ -93,7 +93,9 @@ complete the job.
   sync completed. If your most recent run ended early, a second line reports that attempt and how it ended — "last
   attempt: 17:48 (interrupted)" if a crash or a Steam reload stopped it, "(paused)" if the memory guard paused it, or
   "(cancelled)" if you tapped Cancel Sync — so a partial run that still added hundreds of games never reads a misleading
-  "Never".
+  "Never". The end-of-run toast and the sync status line make the same distinction: a run stopped by a crash or Steam
+  reload reads "Sync interrupted — … so far." rather than blaming a Cancel you never pressed, and the status line
+  compares progress against the run's planned total (e.g. "3 of 10 games processed").
 - **The Sync button becomes "Resume Sync".** When a run was cancelled, interrupted, or paused and left games in your
   library, the **Sync Library** button changes to **Resume Sync**. Pressing it completes the library: the platforms that
   already synced in full are skipped, and even in the platform that stopped, only the games it hadn't finished are

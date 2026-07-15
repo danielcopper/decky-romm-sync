@@ -140,12 +140,12 @@ class LibrarySyncStateBox:
     # immediate no-progress pause loop. Incremented after each ``sync_apply_unit``
     # emit; reset at the start of each run (#1383).
     chunks_emitted_this_run: int = 0
-    # Distinct terminal reason for an ``interrupted`` run, when the interrupt was
-    # a deliberate session-budget pause rather than a heartbeat timeout. Set by
-    # the gate alongside ``run_interrupted``; ``None`` leaves the interrupted
-    # write on its default heartbeat-timeout reason. Surfaced in the
-    # ``sync_complete`` payload so the UI shows the pause guidance distinctly.
-    # Reset at the start of each run (#1383).
+    # Distinct terminal reason for a run stopped early on purpose, when the stop
+    # was a deliberate session-budget pause rather than a heartbeat timeout. Set
+    # by the gate alongside ``run_paused`` (never ``run_interrupted``); ``None``
+    # leaves an interrupted write on its default heartbeat-timeout reason.
+    # Surfaced in the ``sync_complete`` payload so the UI shows the pause
+    # guidance distinctly. Reset at the start of each run (#1383).
     interrupt_reason: str | None = None
     # One-shot guard so the session-budget gate logs "RSS unavailable" at most
     # once per run instead of on every chunk boundary (the reading is fail-open —
