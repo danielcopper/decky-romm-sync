@@ -870,6 +870,35 @@ describe("syncManager — applies cover artwork to created shortcuts via the API
     expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({ "42": 5000 }, "run-cover-refresh", 1, 0);
   });
 
+  it("cover-only chunk: empty shortcuts with cover_refreshes applies every cover and acks (#1386 flow gap)", async () => {
+    // The empty-delta apply vehicle: a cover-only sync emits ONE chunk with
+    // `shortcuts: []` whose only payload is the refresh list. No shortcut work
+    // happens, every refresh entry is pushed to its existing tile, and the
+    // empty ack still fires so the backend commits the unit.
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    vi.mocked(backend.getArtworkBase64).mockImplementation(async (romId: number) => ({
+      base64: `COVER-${romId}`,
+    }));
+
+    const data = chunkOf([], "run-cover-only");
+    data.cover_refreshes = [
+      { rom_id: 10, app_id: 7010 },
+      { rom_id: 11, app_id: 7011 },
+    ];
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", data);
+      await flush(300);
+    });
+
+    expect(addShortcut).not.toHaveBeenCalled();
+    expect(setCustomArtwork).toHaveBeenCalledWith(7010, "COVER-10", "png", 0);
+    expect(setCustomArtwork).toHaveBeenCalledWith(7011, "COVER-11", "png", 0);
+    expect(logErrorSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({}, "run-cover-only", 1, 0);
+  });
+
   it("fail-soft: one refresh entry's failure never blocks the rest or the ack (#1386)", async () => {
     getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
     vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "COVERPNG" });

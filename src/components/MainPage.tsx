@@ -262,12 +262,18 @@ function previewChangeSegments(s: SyncPreviewSummary): string[] {
  * The change line — categories joined with `` · ``, each category unbreakable.
  * A category is a nowrap span, so a line break can only land on a `` · ``
  * separator: "Platforms: 2 new" never splits across two lines the way plain
- * text wrapping split it at the narrow QAM width. Falls back to the unchanged
- * message when nothing differs.
+ * text wrapping split it at the narrow QAM width. An empty shortcut delta with
+ * pending cover work (#1386) names that work — the preview still proceeds to
+ * Apply so the cover refreshes actually run; only a fully-empty preview falls
+ * back to the unchanged message.
  */
 const PreviewChanges: FC<{ summary: SyncPreviewSummary }> = ({ summary }) => {
   const segments = previewChangeSegments(summary);
-  if (segments.length === 0) return <>Everything is up to date.</>;
+  if (segments.length === 0) {
+    const covers = summary.cover_refresh_count ?? 0;
+    if (covers > 0) return <>No shortcut changes — {pluralize(covers, "cover update")}.</>;
+    return <>Everything is up to date.</>;
+  }
   return (
     <>
       {segments.map((segment, i) => (
@@ -855,7 +861,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     const hasChanges =
       preview.summary.new_count + preview.summary.changed_count + preview.summary.remove_count > 0 ||
       !!(preview.summary.collection_diff?.added.length || preview.summary.collection_diff?.removed.length) ||
-      preview.summary.platform_collection_diff?.has_changes;
+      preview.summary.platform_collection_diff?.has_changes ||
+      // Cover-only work (#1386): the refresh pass runs inside the apply, so an
+      // empty shortcut delta with pending cover updates must still offer Apply —
+      // the old "no changes" short-circuit stranded changed covers forever.
+      (preview.summary.cover_refresh_count ?? 0) > 0;
     // Walk cost, shared with the handleApply seed (previewApplySeconds) so the
     // approved number equals the run's seed. Delta-only pricing here read "2 min"
     // for a resume whose apply walked ~3100 items.

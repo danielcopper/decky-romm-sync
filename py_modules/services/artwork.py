@@ -33,6 +33,7 @@ from domain.artwork_paths import (
     staging_filename,
     with_tmp_suffix,
 )
+from domain.cover_refresh import scan_cover_refresh_candidates
 from domain.sync_stage import SyncStage
 from lib.list_result import ErrorCode
 
@@ -249,6 +250,7 @@ class ArtworkService:
     async def refresh_changed_covers(
         self,
         all_roms: list[dict[str, Any]],
+        registry: dict[str, dict[str, Any]],
         emit_progress: Callable[..., Awaitable[None]],
         is_cancelling: Callable[[], bool],
         progress_step: int = 4,
@@ -270,6 +272,11 @@ class ArtworkService:
         file it is left for the apply path, as before. Unbound ROMs are the
         apply path's job and are never touched here.
 
+        *registry* is the caller's bound-row projection keyed by ``str(rom_id)``
+        (each entry carrying ``app_id`` and ``cover_source``) — the same read
+        the apply's group collapse diffs against, so the pass opens no extra
+        per-ROM DB lookups of its own.
+
         Returns the refreshed ``[{"rom_id", "app_id"}]`` list — the shortcuts
         whose Steam tile the frontend must re-apply via
         ``SetCustomArtworkForApp`` (the grid file alone leaves the in-session
@@ -277,7 +284,9 @@ class ArtworkService:
         pass. Progress is narrated under the ``fetching`` stage, throttled like
         the cover-download loop.
         """
-        adoptions, changed = await self._loop.run_in_executor(None, self._scan_cover_refresh_candidates, all_roms)
+        adoptions, changed = await self._loop.run_in_executor(
+            None, self._scan_cover_refresh_candidates, all_roms, registry
+        )
         if adoptions:
             await self._loop.run_in_executor(None, self._adopt_cover_sources_io, adoptions)
         if not changed:
@@ -309,7 +318,7 @@ class ArtworkService:
         return refreshed
 
     def _scan_cover_refresh_candidates(
-        self, all_roms: list[dict[str, Any]]
+        self, all_roms: list[dict[str, Any]], registry: dict[str, dict[str, Any]]
     ) -> tuple[list[tuple[int, str]], list[tuple[int, int, str]]]:
         """Split a unit's fetched ROMs into fingerprint adoptions and changed covers.
 
@@ -317,28 +326,19 @@ class ArtworkService:
         pairs whose stored fingerprint is ``None`` but whose cache file exists (adopt
         without download); ``changed`` are ``(rom_id, app_id, fresh_source)`` triples
         whose stored fingerprint differs from the fresh one (re-download + republish).
-        Only BOUND rows qualify; a ROM with no fresh cover, no row, or an unchanged
-        fingerprint is skipped. One short read UoW for the whole scan.
+        Only BOUND rows qualify — *registry* projects them, so a ROM with no fresh
+        cover, no registry entry, or an unchanged fingerprint is skipped without any
+        DB access; the compare itself is :func:`domain.cover_refresh.scan_cover_refresh_candidates`
+        (the kernel the preview count shares). Only the cache-existence check on
+        NULL-fingerprint rows touches I/O here.
         """
-        adoptions: list[tuple[int, str]] = []
-        changed: list[tuple[int, int, str]] = []
-        with self._uow_factory() as uow:
-            for rom in all_roms:
-                fresh = rom.get("path_cover_large") or rom.get("path_cover_small")
-                if not fresh or "id" not in rom:
-                    continue
-                rom_id = int(rom["id"])
-                row = uow.roms.get(rom_id)
-                if row is None or row.shortcut_app_id is None:
-                    continue
-                if row.cover_source == fresh:
-                    continue
-                if row.cover_source is None:
-                    if self._cover_art_file_store.exists(self._cache_path(rom_id)):
-                        adoptions.append((rom_id, fresh))
-                    continue
-                changed.append((rom_id, row.shortcut_app_id, fresh))
-        return adoptions, changed
+        scan = scan_cover_refresh_candidates(all_roms, registry)
+        adoptions = [
+            (rom_id, fresh)
+            for rom_id, fresh in scan.null_fingerprint
+            if self._cover_art_file_store.exists(self._cache_path(rom_id))
+        ]
+        return adoptions, scan.changed
 
     def _adopt_cover_sources_io(self, adoptions: list[tuple[int, str]]) -> None:
         """Persist adopted fingerprints (no download) in one short write UoW."""

@@ -65,6 +65,20 @@ def _writing_download(file_store, payload: bytes = b"downloaded"):
     return _dl
 
 
+def _registry(uow):
+    """The bound-row registry projection the orchestrator hands the refresh pass (#1386).
+
+    Mirrors ``_read_apply_registry``'s contract slice: bound rows only, keyed by
+    ``str(rom_id)``, each entry carrying ``app_id`` + ``cover_source``.
+    """
+    with uow:
+        return {
+            str(rom.rom_id): {"app_id": rom.shortcut_app_id, "cover_source": rom.cover_source}
+            for rom in uow.roms.iter_all()
+            if rom.shortcut_app_id is not None
+        }
+
+
 @pytest.fixture
 def cover_cache_dir(tmp_path) -> str:
     """The plugin-owned per-ROM cover cache directory (distinct from the grid)."""
@@ -480,6 +494,7 @@ class TestRefreshChangedCovers:
 
         refreshed = await artwork_service.refresh_changed_covers(
             [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            _registry(uow),
             emit_progress=_noop_emit_progress,
             is_cancelling=_not_cancelling,
         )
@@ -507,6 +522,7 @@ class TestRefreshChangedCovers:
 
         refreshed = await artwork_service.refresh_changed_covers(
             [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            _registry(uow),
             emit_progress=_noop_emit_progress,
             is_cancelling=_not_cancelling,
         )
@@ -528,6 +544,7 @@ class TestRefreshChangedCovers:
 
         refreshed = await artwork_service.refresh_changed_covers(
             [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            _registry(uow),
             emit_progress=_noop_emit_progress,
             is_cancelling=_not_cancelling,
         )
@@ -547,6 +564,7 @@ class TestRefreshChangedCovers:
 
         refreshed = await artwork_service.refresh_changed_covers(
             [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            _registry(uow),
             emit_progress=_noop_emit_progress,
             is_cancelling=_not_cancelling,
         )
@@ -566,6 +584,7 @@ class TestRefreshChangedCovers:
 
         refreshed = await artwork_service.refresh_changed_covers(
             [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            _registry(uow),
             emit_progress=_noop_emit_progress,
             is_cancelling=_not_cancelling,
         )
@@ -587,6 +606,7 @@ class TestRefreshChangedCovers:
                 {"id": 999, "name": "No Row", "path_cover_large": self._NEW},
                 {"id": 7, "name": "No Cover"},
             ],
+            _registry(uow),
             emit_progress=_noop_emit_progress,
             is_cancelling=_not_cancelling,
         )
@@ -621,6 +641,7 @@ class TestRefreshChangedCovers:
                 {"id": 1, "name": "One", "path_cover_large": "/1.png?ts=2026-07-11 12:00:00"},
                 {"id": 2, "name": "Two", "path_cover_large": "/2.png?ts=2026-07-11 12:00:00"},
             ],
+            _registry(uow),
             emit_progress=_noop_emit_progress,
             is_cancelling=_not_cancelling,
         )
@@ -649,6 +670,7 @@ class TestRefreshChangedCovers:
 
         refreshed = await artwork_service.refresh_changed_covers(
             [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            _registry(uow),
             emit_progress=_noop_emit_progress,
             is_cancelling=_not_cancelling,
         )
@@ -681,6 +703,7 @@ class TestRefreshChangedCovers:
                 {"id": 1, "name": "One", "path_cover_large": "/1.png?ts=x"},
                 {"id": 2, "name": "Two", "path_cover_large": "/2.png?ts=x"},
             ],
+            _registry(uow),
             emit_progress=_noop_emit_progress,
             is_cancelling=cancel_after_first,
         )
@@ -702,6 +725,7 @@ class TestRefreshChangedCovers:
 
         await artwork_service.refresh_changed_covers(
             [{"id": 1, "name": "One", "path_cover_large": self._NEW}],
+            _registry(uow),
             emit_progress=record,
             is_cancelling=_not_cancelling,
             progress_step=2,

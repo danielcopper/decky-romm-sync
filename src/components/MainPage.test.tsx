@@ -1036,6 +1036,26 @@ describe("MainPage", () => {
       // Should render "Games: 1 new" — no updated or removed segments.
       expect(c.querySelector('[data-testid="sync-changes"]')?.textContent).toBe("Games: 1 new");
     });
+
+    it("names cover-only work when the shortcut delta is empty (#1386 flow gap)", async () => {
+      const c = await renderPreview({ cover_refresh_count: 3 });
+      expect(c.querySelector('[data-testid="sync-changes"]')?.textContent).toBe(
+        "No shortcut changes — 3 cover updates.",
+      );
+    });
+
+    it("singularizes a single cover update", async () => {
+      const c = await renderPreview({ cover_refresh_count: 1 });
+      expect(c.querySelector('[data-testid="sync-changes"]')?.textContent).toBe(
+        "No shortcut changes — 1 cover update.",
+      );
+    });
+
+    it("keeps 'Everything is up to date.' when covers are explicitly zero (regression pin)", async () => {
+      const c = await renderPreview({ cover_refresh_count: 0 });
+      const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
+      expect(descs).toContain("Everything is up to date.");
+    });
   });
 
   describe("session-budget advisory (#1383)", () => {
@@ -2678,6 +2698,83 @@ describe("MainPage", () => {
       expect(buttonByExactText(container, "Apply Sync")).toBeNull();
       const descs = Array.from(container.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
       expect(descs).toContain("Everything is up to date.");
+    });
+
+    it("cover-only preview proceeds to Apply with the cover wording (#1386 flow gap)", async () => {
+      // Empty shortcut delta but pending cover refreshes: the flow must offer
+      // the same Apply/Cancel confirm as a non-empty preview — the cover
+      // refresh pass only runs inside the apply, so a "no changes" dead end
+      // strands the stale tiles forever (hardware-reproduced).
+      vi.mocked(backend.syncPreview).mockResolvedValue({
+        success: true,
+        summary: {
+          new_count: 0,
+          changed_count: 0,
+          unchanged_count: 4,
+          remove_count: 0,
+          disabled_platform_remove_count: 0,
+          cover_refresh_count: 2,
+        },
+        new_names: [],
+        changed_names: [],
+        preview_id: "preview-covers",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(buttonByExactText(container, "Apply Sync")).not.toBeNull();
+      expect(buttonByExactText(container, "Cancel")).not.toBeNull();
+      expect(buttonByExactText(container, "Dismiss")).toBeNull();
+      expect(container.querySelector('[data-testid="sync-changes"]')?.textContent).toBe(
+        "No shortcut changes — 2 cover updates.",
+      );
+      // Same interaction shape as a non-empty preview: the run description rows render.
+      expect(container.querySelector('[data-testid="sync-estimate"]')).not.toBeNull();
+      expect(container.textContent).toContain("Progress is saved");
+      // Apply drives the same delta callable the shortcut path uses.
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Apply Sync")!);
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.syncApplyDelta)).toHaveBeenCalledWith("preview-covers");
+    });
+
+    it("zero changes with explicit zero covers keeps the exact Dismiss-only shape (regression pin)", async () => {
+      vi.mocked(backend.syncPreview).mockResolvedValue({
+        success: true,
+        summary: {
+          new_count: 0,
+          changed_count: 0,
+          unchanged_count: 4,
+          remove_count: 0,
+          disabled_platform_remove_count: 0,
+          cover_refresh_count: 0,
+          sync_platform_count: 5,
+        },
+        new_names: [],
+        changed_names: [],
+        preview_id: "preview-zero-covers",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Byte-identical to today's empty-delta preview: unchanged message,
+      // Dismiss only, and none of the run-description rows.
+      const descs = Array.from(container.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
+      expect(descs).toContain("Everything is up to date.");
+      expect(buttonByExactText(container, "Dismiss")).not.toBeNull();
+      expect(buttonByExactText(container, "Apply Sync")).toBeNull();
+      expect(container.querySelector('[data-testid="sync-scope"]')).toBeNull();
+      expect(container.querySelector('[data-testid="sync-estimate"]')).toBeNull();
+      expect(container.textContent).not.toContain("Progress is saved");
     });
 
     it("syncPreview success=false surfaces result.message into status field", async () => {

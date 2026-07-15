@@ -148,6 +148,14 @@ export interface SyncPreviewSummary {
   unchanged_count: number;
   remove_count: number;
   disabled_platform_remove_count: number;
+  /**
+   * Bound ROMs whose server-side cover changed (#1386) — cover-cache refreshes
+   * the apply run performs even when the shortcut delta is empty. A cover-only
+   * preview (all other diffs zero, this > 0) must still offer Apply, or the
+   * refresh pass never runs and the tiles stay stale. Absent on older backends
+   * (treat as 0).
+   */
+  cover_refresh_count?: number;
   /** Scope of the run — how many platforms this sync spans (always shown, independent of diffs). */
   sync_platform_count?: number;
   /** Scope of the run — how many collections this sync spans. */

@@ -468,6 +468,141 @@ class TestSyncPreview:
         assert plugin._sync_service._sync_state == SyncState.IDLE
 
 
+class TestPreviewCoverRefreshCount:
+    """The preview's cover-only work count (#1386 flow gap).
+
+    A cover-only server change yields an empty shortcut delta, so the frontend
+    would short-circuit on "no changes" and the apply-time invalidation pass
+    would never run. The preview therefore counts fingerprint mismatches with
+    the SAME kernel the apply pass refreshes by, over the registry projection
+    it already reads — side-effect-free: no downloads, no DB writes.
+    """
+
+    _OLD = "/cover/big.png?ts=2026-01-01 00:00:00"
+    _NEW = "/cover/big.png?ts=2026-07-11 12:00:00"
+
+    @staticmethod
+    def _preview_setup(plugin, fake_romm_api):
+        import decky
+
+        plugin.loop = asyncio.get_event_loop()
+        decky.emit.reset_mock()
+        _use_fake_romm(plugin, fake_romm_api)
+
+    @pytest.mark.asyncio
+    async def test_platform_unit_mismatch_counted_without_downloads_or_writes(self, plugin, fake_romm_api):
+        # A bound, content-unchanged platform ROM whose server cover changed:
+        # the shortcut delta is empty but the cover count is 1 — and the
+        # preview stays read-only (no cover download, fingerprint untouched).
+        self._preview_setup(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 10, "name": "Keep", "fs_name": "keep.z64", "path_cover_large": self._NEW}],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_rom_row(
+            plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64", cover_source=self._OLD
+        )
+
+        result = await plugin.sync_preview()
+
+        assert result["success"] is True
+        summary = result["summary"]
+        assert summary["cover_refresh_count"] == 1
+        assert summary["new_count"] == 0
+        assert summary["changed_count"] == 0
+        assert summary["remove_count"] == 0
+        # Side-effect-free: the fake saw no cover download and the persisted
+        # fingerprint did not advance (the APPLY run owns both).
+        assert all(name != "download_cover" for name, _a, _k in fake_romm_api.call_log)
+        with plugin._uow as uow:
+            assert uow.roms.get(10).cover_source == self._OLD
+
+    @pytest.mark.asyncio
+    async def test_collection_unit_mismatch_is_counted(self, plugin, fake_romm_api):
+        # The hardware repro was a collection-unit ROM: its platform is NOT
+        # enabled, so the ROM only enters the preview union via the enabled
+        # collection — the count must still see it.
+        self._preview_setup(plugin, fake_romm_api)
+        fake_romm_api.roms[20] = {
+            "id": 20,
+            "name": "CGame",
+            "fs_name": "cgame.gba",
+            "platform_id": 2,
+            "platform_name": "GBA",
+            "platform_slug": "gba",
+            "path_cover_large": self._NEW,
+        }
+        _seed_collection(fake_romm_api, collection_id=7, name="Favorites", rom_ids=[20], is_favorite=True)
+        plugin.settings["enabled_platforms"] = {}
+        plugin.settings["enabled_collections"] = {"user": {"7": True}}
+        _seed_rom_row(
+            plugin, 20, app_id=2020, platform_slug="gba", name="CGame", fs_name="cgame.gba", cover_source=self._OLD
+        )
+
+        result = await plugin.sync_preview()
+
+        assert result["success"] is True
+        assert result["summary"]["cover_refresh_count"] == 1
+        assert result["summary"]["new_count"] == 0
+        assert result["summary"]["changed_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_unchanged_and_null_fingerprints_count_zero(self, plugin, fake_romm_api):
+        # An unchanged fingerprint is no work; a NULL fingerprint is the silent
+        # adopt path (or the apply path's own download) — neither is user-visible
+        # cover work, so the pure no-changes preview keeps its shape.
+        self._preview_setup(plugin, fake_romm_api)
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[
+                {"id": 1, "name": "Same", "fs_name": "same.z64", "path_cover_large": self._NEW},
+                {"id": 2, "name": "Null", "fs_name": "null.z64", "path_cover_large": self._NEW},
+            ],
+        )
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_rom_row(
+            plugin, 1, app_id=1001, platform_slug="n64", name="Same", fs_name="same.z64", cover_source=self._NEW
+        )
+        _seed_rom_row(plugin, 2, app_id=1002, platform_slug="n64", name="Null", fs_name="null.z64", cover_source=None)
+
+        result = await plugin.sync_preview()
+
+        assert result["success"] is True
+        assert result["summary"]["cover_refresh_count"] == 0
+        assert result["summary"]["new_count"] == 0
+        assert result["summary"]["changed_count"] == 0
+
+    def test_apply_registry_projection_carries_cover_source(self, plugin):
+        # Round-trip: the bound-row projection the apply scan (and its group
+        # collapse) reads must surface the persisted fingerprint.
+        _seed_rom_row(
+            plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64", cover_source=self._OLD
+        )
+        _seed_rom_row(plugin, 11, app_id=1011, platform_slug="n64", name="Null", fs_name="null.z64", cover_source=None)
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
+        registry = plugin._sync_service._orchestrator._read_apply_registry(unit)
+
+        assert registry["10"]["cover_source"] == self._OLD
+        assert registry["11"]["cover_source"] is None
+
+    def test_preview_baseline_projection_carries_cover_source(self, plugin):
+        _seed_rom_row(
+            plugin, 10, app_id=1010, platform_slug="n64", name="Keep", fs_name="keep.z64", cover_source=self._OLD
+        )
+
+        registry, _platforms, _collections = plugin._sync_service._orchestrator._read_preview_baseline({"n64": "N64"})
+
+        assert registry["10"]["cover_source"] == self._OLD
+
+
 class TestSyncApplyDelta:
     """Tests for sync_apply_delta().
 
@@ -4840,11 +4975,13 @@ class TestCoverRefreshPass:
         plugin._sync_service._orchestrator._artwork = MagicMock()
         plugin._sync_service._orchestrator._artwork.refresh_changed_covers = fake_refresh
 
+        registry = {"1": {"app_id": 10, "cover_source": "/old.png?ts=1"}}
         result = await plugin._sync_service._orchestrator._refresh_changed_covers(
-            [{"id": 1, "name": "A"}], progress_step=3, progress_total_steps=7, label="N64"
+            [{"id": 1, "name": "A"}], registry, progress_step=3, progress_total_steps=7, label="N64"
         )
 
         assert result == [{"rom_id": 1, "app_id": 10}]
+        assert fake_refresh.call_args.args == ([{"id": 1, "name": "A"}], registry)
         call_kwargs = fake_refresh.call_args.kwargs
         assert call_kwargs["progress_step"] == 3
         assert call_kwargs["progress_total_steps"] == 7

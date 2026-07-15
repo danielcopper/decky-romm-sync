@@ -21,6 +21,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from domain.cover_refresh import count_cover_refreshes
 from domain.platform_sync_state import PlatformSyncState
 from domain.preview_delta import PreviewDelta
 from domain.session_budget import (
@@ -327,6 +328,16 @@ class SyncOrchestrator:
                 registry,
                 platform_name_set,
             )
+            # Cover-only work (#1386): count the bound fetched ROMs whose server
+            # cover fingerprint changed, with the SAME kernel the apply-path
+            # invalidation pass refreshes by — an in-memory compare of the fetch
+            # against the registry projection already read above (no extra DB
+            # pass, no downloads; the preview stays side-effect-free). Runs over
+            # the raw union (platform + collection units alike), not the collapsed
+            # delta: covers are per-ROM, cover-blind classify_roms (ADR-0025)
+            # stays untouched, and without this an empty shortcut delta would
+            # short-circuit the apply and strand a changed cover forever.
+            cover_refresh_count = count_cover_refreshes(all_roms, registry)
 
             # Final cancel checkpoint: a cancel can land after the unit loop's
             # last per-unit check but before the preview is staged. Re-check
@@ -373,6 +384,12 @@ class SyncOrchestrator:
                     "unchanged_count": len(unchanged_ids),
                     "remove_count": len(stale),
                     "disabled_platform_remove_count": disabled_count,
+                    # Bound ROMs whose server-side cover changed (#1386) — work the
+                    # apply run performs even when the shortcut delta is empty, so
+                    # the frontend must offer Apply on a cover-only preview instead
+                    # of short-circuiting on "no changes". Additive: old consumers
+                    # ignore it.
+                    "cover_refresh_count": cover_refresh_count,
                     # Scope of the run (#29): how many platforms / collections this
                     # sync spans, shown as an always-on informational line
                     # independent of the change diffs.
@@ -889,9 +906,11 @@ class SyncOrchestrator:
         where ``registry`` is the ``classify_roms``-shaped dict (keyed by
         ``str(rom_id)``) reconstructed from the bound ``roms`` rows, with
         the platform display name resolved from *slug_to_name* (the live
-        work-queue) and falling back to the slug. The last-synced
-        platform/collection lists come from the newest completed
-        ``SyncRun``.
+        work-queue) and falling back to the slug. Each entry also carries the
+        persisted ``cover_source`` fingerprint so the preview's cover-work
+        count (#1386) compares in memory against the same projection — no
+        second DB pass. The last-synced platform/collection lists come from
+        the newest completed ``SyncRun``.
         """
         with self._uow_factory() as uow:
             registry: dict[str, dict[str, Any]] = {}
@@ -906,6 +925,7 @@ class SyncOrchestrator:
                     "platform_slug": rom.platform_slug,
                     "sibling_group_key": rom.sibling_group_key,
                     "applied_launch_options": rom.applied_launch_options,
+                    "cover_source": rom.cover_source,
                 }
             latest = uow.sync_runs.get_latest_completed()
             last_platforms = list(latest.platforms_completed or []) if latest is not None else []
@@ -924,8 +944,11 @@ class SyncOrchestrator:
         so the collapse must not treat those as vanished (it passes
         ``complete_group_view=False`` and only grandfathers). Only bound rows (a
         live ``shortcut_app_id``) are returned — an unbound sibling is not a
-        shortcut the collapse can grandfather or rebind. The apply path did not
-        read the registry before group-aware sync (ADR-0021).
+        shortcut the collapse can grandfather or rebind. Each entry also carries
+        the persisted ``cover_source`` fingerprint, so the cover-cache
+        invalidation pass (#1386) scans against this same projection instead of
+        per-ROM DB lookups. The apply path did not read the registry before
+        group-aware sync (ADR-0021).
         """
         with self._uow_factory() as uow:
             rows = (
@@ -939,6 +962,7 @@ class SyncOrchestrator:
                     "platform_slug": rom.platform_slug,
                     "sibling_group_key": rom.sibling_group_key,
                     "applied_launch_options": rom.applied_launch_options,
+                    "cover_source": rom.cover_source,
                 }
                 for rom in rows
                 if rom.shortcut_app_id is not None
@@ -1142,7 +1166,7 @@ class SyncOrchestrator:
         # to the EXISTING shortcut via SetCustomArtworkForApp — without that push
         # the Steam tile stays stale in-session until a client restart.
         cover_refreshes = await self._refresh_changed_covers(
-            unit_roms, progress_step=unit_index + 1, progress_total_steps=total_units, label=unit.name
+            unit_roms, registry, progress_step=unit_index + 1, progress_total_steps=total_units, label=unit.name
         )
 
         if box.is_cancelling():
@@ -1829,16 +1853,20 @@ class SyncOrchestrator:
             label=label,
         )
 
-    async def _refresh_changed_covers(self, unit_roms, progress_step=4, progress_total_steps=6, label=""):
+    async def _refresh_changed_covers(self, unit_roms, registry, progress_step=4, progress_total_steps=6, label=""):
         """Delegate the #1386 cover-cache invalidation pass to the ArtworkManager.
 
-        ``label`` is the unit's display name, threaded into the throttled
-        "Refreshing covers for <label>" progress frames. Returns the refreshed
-        ``{rom_id, app_id}`` list the first apply chunk carries to the frontend.
+        ``registry`` is the unit's bound-row projection (``_read_apply_registry``)
+        the pass compares fingerprints against — the same read the group collapse
+        already made. ``label`` is the unit's display name, threaded into the
+        throttled "Refreshing covers for <label>" progress frames. Returns the
+        refreshed ``{rom_id, app_id}`` list the first apply chunk carries to the
+        frontend.
         """
         box = self._sync_state
         return await self._artwork.refresh_changed_covers(
             unit_roms,
+            registry,
             emit_progress=self.emit_progress,
             is_cancelling=box.is_cancelling,
             progress_step=progress_step,

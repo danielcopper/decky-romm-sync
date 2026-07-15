@@ -211,6 +211,7 @@ class ArtworkManager(Protocol):
     async def refresh_changed_covers(
         self,
         all_roms: list[dict[str, Any]],
+        registry: dict[str, dict[str, Any]],
         emit_progress: Any,
         is_cancelling: Any,
         progress_step: int = 4,

@@ -39,6 +39,10 @@ entirely, not re-processed — so a re-sync of a mostly-settled library is quick
 changed work. If you sync without previewing first, the estimate appears once the run starts as an **Estimated time**
 line, shown as "up to X min".
 
+Cover changes count too: if you replaced a game's cover on the server but nothing else changed, the preview reads "No
+shortcut changes — N cover updates" and still offers **Apply Sync** — applying refreshes those tiles without touching
+the shortcuts. Only when there is truly nothing to do does the preview read "Everything is up to date."
+
 That starting estimate is **skip-aware**: when the run is planned, the plugin already knows which platforms haven't
 changed since their last sync and expects to skip them wholesale, so they don't inflate the number — an incremental
 re-sync of an unchanged library reads seconds, not the minutes a full first import would take. The prediction is only an

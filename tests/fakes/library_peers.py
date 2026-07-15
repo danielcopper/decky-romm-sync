@@ -40,7 +40,7 @@ class FakeArtworkManager:
         self.canned_refreshes: list[dict[str, int]] = canned_refreshes if canned_refreshes is not None else []
         self.finalize_override = finalize_override
         self.download_calls: list[tuple[list[dict[str, Any]], Any, Any, int, int, str]] = []
-        self.refresh_calls: list[tuple[list[dict[str, Any]], Any, Any, int, int, str]] = []
+        self.refresh_calls: list[tuple[list[dict[str, Any]], dict[str, dict[str, Any]], Any, Any, int, int, str]] = []
         self.finalize_calls: list[tuple[str | None, str, int, str]] = []
         self.remove_calls: list[tuple[str, str | int, ShortcutRegistryEntry]] = []
 
@@ -61,6 +61,7 @@ class FakeArtworkManager:
     async def refresh_changed_covers(
         self,
         all_roms: list[dict[str, Any]],
+        registry: dict[str, dict[str, Any]],
         emit_progress: Awaitable[None] | Callable[..., Awaitable[None]],
         is_cancelling: Any,
         progress_step: int = 4,
@@ -68,7 +69,7 @@ class FakeArtworkManager:
         label: str = "",
     ) -> list[dict[str, int]]:
         self.refresh_calls.append(
-            (list(all_roms), emit_progress, is_cancelling, progress_step, progress_total_steps, label)
+            (list(all_roms), dict(registry), emit_progress, is_cancelling, progress_step, progress_total_steps, label)
         )
         return [dict(entry) for entry in self.canned_refreshes]
 
