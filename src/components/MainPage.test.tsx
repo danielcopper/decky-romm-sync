@@ -1943,6 +1943,133 @@ describe("MainPage", () => {
     });
   });
 
+  describe("fine-detail row stays mounted across unit boundaries (#1415)", () => {
+    const fineRow = (c: HTMLElement) => c.querySelector('[data-testid="sync-fine"]');
+
+    it("keeps the fine row mounted (with the carried content) across a boundary anchor frame", async () => {
+      // Unit N applying with real fine detail — the row is mounted and narrates.
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 2,
+        totalSteps: 8,
+        current: 50,
+        total: 50,
+        message: "GBA: 50/50",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(fineRow(container)).not.toBeNull();
+      expect(fineRow(container)!.textContent).toContain("GBA: 50/50");
+
+      // Unit boundary: the next unit's FETCHING anchor frame resets current/total
+      // to 0 (worst case: also an empty message). Pre-#1415 this flipped
+      // hasFineDetail false and unmounted the row for a frame; now the row stays
+      // mounted, carrying unit N's last line.
+      act(() =>
+        setSyncProgress({
+          running: true,
+          stage: "fetching",
+          step: 3,
+          totalSteps: 8,
+          current: 0,
+          total: 0,
+          message: "",
+        }),
+      );
+      expect(fineRow(container)).not.toBeNull();
+      expect(fineRow(container)!.textContent).toContain("GBA: 50/50");
+
+      // The next unit's first real fetch frame arrives — the row updates to its
+      // content, still without ever unmounting.
+      act(() =>
+        setSyncProgress({
+          running: true,
+          stage: "fetching",
+          subStage: "fetch",
+          step: 3,
+          totalSteps: 8,
+          current: 1,
+          total: 5,
+          message: "Fetching SNES (page 1/5)",
+        }),
+      );
+      expect(fineRow(container)).not.toBeNull();
+      expect(fineRow(container)!.textContent).toContain("Fetching SNES (page 1/5)");
+    });
+
+    it("does not flash the stage-label spinner at a boundary — the fine line keeps the only spinner", async () => {
+      // The inline stage-label spinner appears only when hasFineDetail is false;
+      // a boundary that unmounted the fine row would flash it on for that frame.
+      // With the carry, hasFineDetail stays true, so no stage-label spinner ever
+      // appears and the count stays at one (the fine line's).
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 2,
+        totalSteps: 8,
+        current: 50,
+        total: 50,
+        message: "GBA: 50/50",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(container.querySelectorAll('[data-testid="spinner"]')).toHaveLength(1);
+
+      act(() =>
+        setSyncProgress({
+          running: true,
+          stage: "fetching",
+          step: 3,
+          totalSteps: 8,
+          current: 0,
+          total: 0,
+          message: "",
+        }),
+      );
+      const stage = container.querySelector('[data-testid="sync-stage"]');
+      expect(stage!.parentElement?.querySelector('[data-testid="spinner"]')).toBeNull();
+      expect(container.querySelectorAll('[data-testid="spinner"]')).toHaveLength(1);
+    });
+
+    it("clears the carry when the run ends — no stale line on the done state nor the next run's start", async () => {
+      // Run A applies with fine detail (row mounted).
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 8,
+        totalSteps: 8,
+        current: 50,
+        total: 50,
+        message: "GBA: 50/50",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(fineRow(container)!.textContent).toContain("GBA: 50/50");
+
+      // Run A terminates (running:false) — the carried line is dropped and the
+      // in-flight UI tears down, so the done/summary state shows no fine row.
+      act(() => setSyncProgress({ running: false, stage: "done", message: "Sync complete: 50 games" }));
+      await flushAsync();
+      expect(fineRow(container)).toBeNull();
+
+      // Run B starts via Skip Preview → the optimistic coarse fetch anchor carries
+      // no fine detail. Because the prior run's carry was cleared, the fine row is
+      // absent — no stale "GBA: 50/50" leaks into the new run's start. (Without the
+      // reset, hasFineDetail would fall back to the carried line and show it here.)
+      const toggle = container.querySelector('[data-testid="toggle-input"]') as HTMLInputElement | null;
+      expect(toggle).not.toBeNull();
+      fireEvent.click(toggle!);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Sync Library")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(fineRow(container)).toBeNull();
+    });
+  });
+
   describe("QAM remount mid-run preserves fine progress + ETA", () => {
     it("merges the store's fine fields + etaSeconds over the backend's coarse running snapshot", async () => {
       // Module store holds the in-flight run's FINE state — what a live QAM had

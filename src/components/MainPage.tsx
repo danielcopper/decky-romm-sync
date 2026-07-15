@@ -365,6 +365,13 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // sync_in_progress reject and look like an instant finish (#1202, RC-B).
   const [cancelling, setCancelling] = useState(false);
   const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
+  // Last non-empty fine-detail line, carried across unit-boundary anchor frames
+  // so the fine-detail row (and its inline spinner) stay MOUNTED when the next
+  // unit's FETCHING anchor frame resets current/total to 0 (#1415) — otherwise
+  // the row unmounts for a frame and the panel flickers. Populated by the store
+  // subscriber from any frame with real fine detail; reset to null when the run
+  // ends, so a terminal/idle state never surfaces a stale line.
+  const [carriedFineDetail, setCarriedFineDetail] = useState<string | null>(null);
   // A dumb mirror of syncEta's live countdown (seconds), or null when not measured
   // yet / between runs. syncEta owns the sticky deadline; the impure now-read that
   // resolves it to seconds lives in the store subscriber (an event handler), NOT
@@ -537,6 +544,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       // the re-render chain (on-device freeze, cause not yet reproduced in tests).
       const progress = getSyncProgress();
       setSyncProgress(progress);
+      // Carry the last non-empty fine detail so the fine-detail row survives a
+      // unit boundary's anchor frame (which resets current/total, #1415); drop
+      // it the moment the run ends so the next run starts clean. Kept outside
+      // the try below so the reset can never be skipped by a subscriber throw.
+      if (!progress.running) {
+        setCarriedFineDetail(null);
+      } else if (progress.total && progress.message) {
+        setCarriedFineDetail(progress.message);
+      }
       try {
         if (isTerminalStage(progress.stage)) {
           // Tear down the run's live-ETA state (deadline included) so the next run
@@ -802,7 +818,15 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const coarseFraction = syncProgress?.totalSteps
     ? Math.max(0, Math.min(100, (weightedFraction ?? (completedSteps + withinUnit) / syncProgress.totalSteps) * 100))
     : undefined;
-  const hasFineDetail = !!(syncProgress?.total && syncProgress.message);
+  const currentHasFineDetail = !!(syncProgress?.total && syncProgress.message);
+  // Keep the fine-detail row mounted across unit boundaries: the next unit's
+  // FETCHING anchor frame resets current/total (#1415), so fall back to the last
+  // non-empty fine detail carried by the store subscriber. Cleared when the run
+  // ends, so terminal/idle states never surface a stale line. The bar's own
+  // within-unit fill still reads the live current/total (never the carry), so
+  // this affects only which rows mount, not the bar (#1407).
+  const hasFineDetail = currentHasFineDetail || carriedFineDetail !== null;
+  const fineDetailText = currentHasFineDetail ? formatProgressText(syncProgress) : (carriedFineDetail ?? "");
 
   // Estimated-time readout for the in-flight run. Prefer the live measured
   // countdown ("9 min left") once the estimator has a rate; before that, fall
@@ -1039,7 +1063,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                       overflow: "hidden",
                     }}
                   >
-                    {formatProgressText(syncProgress)}
+                    {fineDetailText}
                   </span>
                 </div>
               }
