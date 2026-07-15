@@ -39,11 +39,18 @@ entirely, not re-processed — so a re-sync of a mostly-settled library is quick
 changed work. If you sync without previewing first, the estimate appears once the run starts as an **Estimated time**
 line, shown as "up to X min".
 
+That starting estimate is **skip-aware**: when the run is planned, the plugin already knows which platforms haven't
+changed since their last sync and expects to skip them wholesale, so they don't inflate the number — an incremental
+re-sync of an unchanged library reads seconds, not the minutes a full first import would take. The prediction is only an
+estimate (the actual skip is decided per platform as the run reaches it), so a wrong guess can make the readout run long
+or short for a moment, but it never changes what the sync actually does.
+
 Once the sync has been creating shortcuts for a few seconds, that "up to" ceiling is replaced by a **live countdown** —
 "2 min left" — measured from the actual speed on your device and updated as the run proceeds. Both the countdown and the
 progress counter show **net** progress: they count the games this run actually needs to add or update (say "100/801"),
 not every game in your library. It holds steady across the short pauses where the sync fetches the next platform's game
-list, rather than jumping around.
+list, rather than jumping around. The main progress bar apportions its width the same way — a platform expected to skip
+takes no space, and a huge platform fills the bar in proportion to its real work instead of an equal slice per platform.
 
 A few things worth knowing for a large library:
 
@@ -152,6 +159,10 @@ individual platforms.
 3. Toggle platforms on or off
 4. Use **Enable All** / **Disable All** for bulk changes
 5. Only enabled platforms are included in the next sync
+
+For a platform you have already synced, the count shows the number of **games** it syncs into Steam — multiple versions
+of the same game (regional dumps, revisions) collapse into one shortcut, so this can be lower than the raw file count on
+your server. A platform you have never synced shows the server's raw ROM count until its first sync.
 
 All platforms are enabled by default until you change a toggle. Turning one platform off affects only that platform —
 every other platform stays enabled and keeps syncing.

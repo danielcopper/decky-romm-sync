@@ -118,9 +118,21 @@ async def test_get_platforms_happy_shape(harness):
     # rom_count==0 platform is filtered out
     assert [p["slug"] for p in result["platforms"]] == ["snes"]
     p = result["platforms"][0]
+    # collapsed_count is conditionally-present (#1382): a never-synced platform
+    # (no persisted rows) omits it — absent, not null.
     assert set(p.keys()) == {"id", "name", "slug", "rom_count", "sync_enabled"}
     assert p["id"] == 1
     assert isinstance(p["sync_enabled"], bool)
+
+
+async def test_get_platforms_collapsed_count_after_sync(harness):
+    """A platform with persisted rows carries the optional collapsed_count (#1382)."""
+    harness.romm.platforms = [{"id": 1, "name": "Super Nintendo", "slug": "snes", "rom_count": 3}]
+    seed_rom(harness, 11, platform_slug="snes")
+    result = await harness.plugin.get_platforms()
+    p = result["platforms"][0]
+    assert p["collapsed_count"] == 1
+    assert p["rom_count"] == 3
 
 
 async def test_get_platforms_server_failure_shape(harness):

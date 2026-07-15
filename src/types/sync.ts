@@ -9,6 +9,13 @@ export interface PlatformSyncSetting {
   name: string;
   slug: string;
   rom_count: number;
+  /**
+   * Persisted post-collapse shortcut count — how many Steam shortcuts this
+   * platform's ROMs collapse into (one per sibling group, ADR-0021). Absent
+   * when the platform was never synced (no persisted rows); the toggle label
+   * then falls back to the raw `rom_count`.
+   */
+  collapsed_count?: number;
   sync_enabled: boolean;
 }
 
@@ -183,6 +190,20 @@ interface SyncPlanUnit {
   rom_count: number;
   /** Only present when ``type === "collection"``. Discriminates user/smart/franchise. */
   collection_kind?: CollectionKind;
+  /**
+   * Plan-time prediction of the wholesale incremental skip (#1382) —
+   * estimate-only, the fetch-time gate stays the sole skip authority
+   * (ADR-0023). Present on platform units from current backends; absent on
+   * collections and older backends (treat absent as "will not skip").
+   */
+  predicted_skip?: boolean;
+  /**
+   * Persisted post-collapse shortcut count for this platform (one shortcut
+   * per sibling group, ADR-0021). Absent on collections, never-synced
+   * platforms, and older backends; the estimate then weighs the unit by its
+   * raw `rom_count`.
+   */
+  collapsed_count?: number;
 }
 
 export interface SyncPlanData {
@@ -190,7 +211,14 @@ export interface SyncPlanData {
   run_id: string;
   units: SyncPlanUnit[];
   total_units: number;
+  /** Raw planned ROM total (pre-collapse, skip-blind) — kept for backward compatibility. */
   total_roms: number;
+  /**
+   * Skip-aware estimate total (#1382): sum over units of `0` for a
+   * predicted-skip unit, else `collapsed_count ?? rom_count`. Absent on older
+   * backends; the seeds then fall back to `total_roms`.
+   */
+  total_estimated_items?: number;
 }
 
 export interface SyncApplyUnitData {

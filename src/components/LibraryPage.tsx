@@ -231,7 +231,10 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
           <PanelSectionRow key={platform.id}>
             <ToggleField
               label={platform.name}
-              description={`${platform.rom_count} ROMs`}
+              // Prefer the persisted post-collapse shortcut count (#1382) — the
+              // number of games the platform actually syncs into Steam — over
+              // the raw server file count; raw is the never-synced fallback.
+              description={`${platform.collapsed_count ?? platform.rom_count} ROMs`}
               checked={platform.sync_enabled}
               onChange={(value: boolean) => {
                 detach(handleToggle(platform.id, value));

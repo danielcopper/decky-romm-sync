@@ -483,9 +483,24 @@ reliable reset.
 #### Sync time estimate and live ETA (frontend)
 
 The QAM's time readout is a two-stage design layered on the `sync_progress` stream. It is pure frontend logic
-(`src/utils/syncEstimate.ts` and `src/utils/syncEta.ts`, both unit-tested); the backend only supplies the plan (per-unit
-weights + planned total, via `sync_plan`) and the applying frames.
+(`src/utils/syncEstimate.ts` and `src/utils/syncEta.ts`, both unit-tested); the backend supplies the plan (per-unit
+weights + planned totals, via `sync_plan`) and the applying frames.
 
+- **The plan is skip-aware (#1382).** At plan time the fetcher stamps every platform `WorkUnit` with two estimate-only
+  riders read in one short UoW (`_read_plan_estimates` + the pure `domain/skip_prediction.py`): `predicted_skip` —
+  whether the wholesale incremental-skip gate is expected to skip the platform, replaying the gate's **local**
+  conditions only (completion stamp present, stamped/persisted row counts match the server's `rom_count`, bound rows
+  exist, no sibling-group-key backfill pending; the gate's `list_roms_updated_after` server check is deliberately not
+  replayed — no network at plan time) — and `collapsed_count`, the persisted post-collapse shortcut count (distinct
+  sibling-group keys + keyless singletons, ADR-0021). Both ride the `sync_plan` payload conditionally-present (absent on
+  collections, never-synced platforms, and failed reads). The payload's `total_roms` stays the raw pre-collapse total
+  (backward compat); an additive `total_estimated_items` sums `0` for predicted skips, else
+  `collapsed_count ?? rom_count`. **Hard constraint (ADR-0023): the prediction never feeds the actual skip decision** —
+  `_try_unit_incremental_skip` at fetch time remains the sole skip authority, so a mis-prediction can only make the
+  estimate read long or short, never mis-apply. A Force Full Sync needs no special case: `clear_sync_cache` deletes
+  every stamp before the run, so a forced plan predicts no skips. The same collapsed counts also garnish `get_platforms`
+  (an optional per-platform `collapsed_count`), so the platform toggles show the number of games a synced platform
+  actually produces rather than the raw server file count.
 - **Static walk-cost ceiling (pre-run seed).** Before a run — in the preview, and again as the initial "up to X min" the
   instant a skip-preview run starts — the estimate is a pure cost model: `new_count × NEW_ITEM_SEC` +
   `changed_count × UPDATED_ITEM_SEC` + a flat fetch allowance. The per-item constants (currently ~0.45 s for a created
@@ -493,7 +508,9 @@ weights + planned total, via `sync_plan`) and the applying frames.
   (~90 s) covers the multi-page ROM/save fetch phases the per-item model ignores, so the seed is an honest **upper
   bound** that reads long, never short. It is priced at **walk cost** (every unit the run will actually touch), not at
   the delta only — a resume walks thousands of already-applied games through the cheap update path, so a delta-only
-  price would badly undershoot the real work.
+  price would badly undershoot the real work. The skip-preview seed prices `total_estimated_items ?? total_roms`, so an
+  incremental re-sync whose platforms are all predicted skips seeds near the flat allowance instead of a whole-library
+  ceiling; the live-countdown weights are seeded per unit as `predicted_skip ? 0 : (collapsed_count ?? rom_count)`.
 - **Measured live countdown (takes over within seconds).** Once the apply is underway, `syncEta.ts` measures the
   **real** rate from the applying frames — one throttled sample per second over a ~30 s sliding window — and projects
   `remaining = (planned_total − processed) / rate`, rendered rounded **up** ("9 min left") so it never promises less
@@ -511,9 +528,19 @@ weights + planned total, via `sync_plan`) and the applying frames.
   with a post-gap one would be a tiny item delta over a long span, an absurd rate that would briefly spike the
   countdown.
 
-The whole thing is an approximation by design (the plan's per-unit weight is the raw pre-collapse file count while the
-applying frame's counter is the post-collapse emitted-shortcut count; the measured rate absorbs most of the skew), and
-the readout always carries a leading `~` — it is an estimate, never a guarantee.
+The coarse QAM progress bar reuses the same run weights (`weightedCoarseFraction`, `syncEta.ts`): each unit's bar width
+is its item-weight share — skip-aware at plan time, corrected to the real delta as units dispatch — with the within-unit
+fill scaled by the running unit's share, so a predicted-skip platform occupies no width and a huge platform fills the
+bar in proportion to its real work. It falls back to the old equal-per-unit index weighting when no plan is measured
+(QAM opened mid-run before any `sync_plan`, an older backend) or the plan can't apportion (unit-count mismatch, all-zero
+weights).
+
+The whole thing is an approximation by design — though a narrow one since the plan went skip-aware: seed weights and the
+applying frames usually both count post-collapse shortcuts now, the raw pre-collapse `rom_count` survives only as the
+fallback where the backend doesn't know better, and a unit the plan mis-predicted re-corrects on its first
+`sync_apply_unit` (`observeUnitTotal`). Estimate degradation is strictly one-directional: a wrong prediction or a stale
+collapsed count makes the readout run long or short, never changes what the sync applies. The readout wording ("up to",
+rounded-up countdown) keeps it an estimate, never a guarantee.
 
 #### Save-sync serialization (device gate)
 

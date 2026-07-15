@@ -12,10 +12,11 @@ elsewhere (per applied unit) so a fetch never mutates the cache.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from domain.platform_prefs import materialize_enabled_platforms, resolve_sync_enabled
+from domain.skip_prediction import collapsed_shortcut_count, predict_unit_skip
 from domain.sync_stage import SyncStage
 from domain.sync_state import SyncCancelled, SyncState
 from domain.work_unit import CollectionKind, WorkUnit
@@ -148,21 +149,32 @@ class LibraryFetcher:
             self._settings_persister.save_settings()
             enabled = materialized
 
+        # Persisted post-collapse shortcut counts for the toggle labels
+        # (#1382). Display garnish only, so a failed read degrades to the raw
+        # server counts instead of failing the platform list.
+        try:
+            collapsed_counts = await self._loop.run_in_executor(None, self._read_collapsed_counts)
+        except Exception as e:
+            self._logger.warning(f"Collapsed-count read failed, falling back to raw ROM counts: {e}")
+            collapsed_counts = {}
+
         result = []
         for p in platforms:
             rom_count = p.get("rom_count", 0)
             if rom_count == 0:
                 continue
             pid = str(p["id"])
-            result.append(
-                {
-                    "id": p["id"],
-                    "name": p.get("name", ""),
-                    "slug": p.get("slug", ""),
-                    "rom_count": rom_count,
-                    "sync_enabled": resolve_sync_enabled(enabled, pid),
-                }
-            )
+            entry = {
+                "id": p["id"],
+                "name": p.get("name", ""),
+                "slug": p.get("slug", ""),
+                "rom_count": rom_count,
+                "sync_enabled": resolve_sync_enabled(enabled, pid),
+            }
+            collapsed = collapsed_counts.get(entry["slug"])
+            if collapsed is not None:
+                entry["collapsed_count"] = collapsed
+            result.append(entry)
         return {"success": True, "platforms": result}
 
     def save_platform_sync(self, platform_id, enabled):
@@ -389,12 +401,15 @@ class LibraryFetcher:
         first, then user collections, then smart collections, then
         franchise collections) with ROM counts pulled from the listing
         endpoints. No ROMs are fetched here — the queue is a dispatch
-        plan, not a payload.
+        plan, not a payload. Platform units additionally carry the
+        plan-time estimate riders (``predicted_skip`` / ``collapsed_count``,
+        #1382) — estimate-only fields for the ``sync_plan`` payload that
+        never feed the actual skip decision (ADR-0023).
         """
         units: list[WorkUnit] = []
 
         platforms = await self._fetch_enabled_platforms()
-        units.extend(
+        platform_units = [
             WorkUnit(
                 type="platform",
                 id=int(platform["id"]),
@@ -403,7 +418,8 @@ class LibraryFetcher:
                 rom_count=int(platform.get("rom_count", 0)),
             )
             for platform in platforms
-        )
+        ]
+        units.extend(await self._attach_plan_estimates(platform_units))
 
         buckets = self._get_enabled_collections_buckets()
         enabled_user_ids = {k for k, v in buckets["user"].items() if v}
@@ -450,6 +466,78 @@ class LibraryFetcher:
             self._logger.warning(f"Failed to fetch franchise collections for work queue: {e}")
             collections = []
         return _collection_units(collections, enabled_ids, "franchise")
+
+    async def _attach_plan_estimates(self, platform_units: list[WorkUnit]) -> list[WorkUnit]:
+        """Stamp each platform unit with its plan-time estimate riders (#1382).
+
+        Fail-open: the riders only price the ``sync_plan`` estimate, so a
+        failed read leaves every unit's fields ``None`` (the frontend falls
+        back to raw ``rom_count`` weights) rather than failing the plan.
+        """
+        if not platform_units:
+            return platform_units
+        try:
+            estimates = await self._loop.run_in_executor(None, self._read_plan_estimates, platform_units)
+        except Exception as e:
+            self._logger.warning(f"Plan-time skip-estimate read failed, using raw ROM counts: {e}")
+            return platform_units
+        return [
+            replace(unit, predicted_skip=estimates[unit.slug][0], collapsed_count=estimates[unit.slug][1])
+            if unit.slug in estimates
+            else unit
+            for unit in platform_units
+        ]
+
+    def _read_plan_estimates(self, units: list[WorkUnit]) -> dict[str, tuple[bool, int | None]]:
+        """Read the plan-time estimate baseline for platform units (#1382).
+
+        Per unit slug: replay the wholesale-skip gate's LOCAL conditions
+        (``predict_unit_skip`` — stamp present, stamped/persisted counts match
+        the server count, bound rows exist, no group-key backfill pending) and
+        derive the persisted post-collapse shortcut count
+        (``collapsed_shortcut_count`` over the rows' sibling-group keys;
+        ``None`` when the platform has no persisted rows). The gate's
+        server-delta check (``list_roms_updated_after``) is deliberately NOT
+        replayed — no network at plan time. A Force Full Sync clears every
+        stamp before the run, so its plan predicts no skips without a special
+        case. One short read UoW for the whole plan.
+
+        Estimate-ONLY (ADR-0023): the result rides the ``sync_plan`` payload
+        and must never feed the actual skip decision —
+        ``_try_unit_incremental_skip`` at fetch time remains the sole skip
+        authority.
+        """
+        estimates: dict[str, tuple[bool, int | None]] = {}
+        with self._uow_factory() as uow:
+            for unit in units:
+                stamp = uow.platform_sync_state.get(unit.slug)
+                all_rows = list(uow.roms.iter_by_platform(unit.slug))
+                predicted = predict_unit_skip(
+                    stamp_completed_at=stamp.completed_at if stamp is not None else None,
+                    stamp_rom_count=stamp.rom_count if stamp is not None else None,
+                    unit_rom_count=unit.rom_count,
+                    persisted_count=len(all_rows),
+                    registry_count=sum(1 for rom in all_rows if rom.shortcut_app_id is not None),
+                    needs_backfill=any(rom.sibling_group_key is None for rom in all_rows),
+                )
+                collapsed = collapsed_shortcut_count(rom.sibling_group_key for rom in all_rows) if all_rows else None
+                estimates[unit.slug] = (predicted, collapsed)
+        return estimates
+
+    def _read_collapsed_counts(self) -> dict[str, int]:
+        """Persisted post-collapse shortcut count per platform slug (#1382).
+
+        Groups every persisted ``roms`` row by ``platform_slug`` and collapses
+        each platform's sibling-group keys (``collapsed_shortcut_count``).
+        Slugs with no persisted rows are absent, so the caller leaves the
+        field off and the frontend falls back to the raw server count. One
+        short read UoW.
+        """
+        keys_by_slug: dict[str, list[str | None]] = {}
+        with self._uow_factory() as uow:
+            for rom in uow.roms.iter_all():
+                keys_by_slug.setdefault(rom.platform_slug, []).append(rom.sibling_group_key)
+        return {slug: collapsed_shortcut_count(keys) for slug, keys in keys_by_slug.items()}
 
     def _read_incremental_baseline(
         self, platform_slug: str
@@ -542,6 +630,12 @@ class LibraryFetcher:
         no persisted rows, an un-backfilled row, a stamped ROM count that no
         longer matches the server, the delta check raised, or the server reports
         changes.
+
+        This gate is the SOLE skip authority (ADR-0023). The plan-time
+        ``predicted_skip`` rider (``_read_plan_estimates`` /
+        ``domain/skip_prediction.py``) replays this gate's local conditions
+        for the ``sync_plan`` estimate only and must never feed — and is
+        never read by — this decision.
         """
         platform_name = unit.name
         platform_slug = unit.slug

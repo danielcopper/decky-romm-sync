@@ -25,6 +25,7 @@ import {
 import { getSettingsResetState, setSettingsResetState } from "./utils/settingsResetStore";
 import { getSyncProgress, setSyncProgress } from "./utils/syncProgress";
 import { estimateApplySeconds } from "./utils/syncEstimate";
+import { resetEta, weightedCoarseFraction } from "./utils/syncEta";
 import { recordSyncCreated, resetSyncDelta } from "./utils/syncDeltaStore";
 import { resetSyncCancel } from "./utils/syncManager";
 import type { DownloadCompleteEvent, SyncPlanData, SyncProgress, SyncStaleData } from "./types";
@@ -1086,6 +1087,90 @@ describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estima
     });
 
     expect(getSyncProgress().etaSeconds).toBe(estimateApplySeconds(80, 0));
+    plugin.onDismount();
+  });
+
+  it("prefers total_estimated_items over total_roms for the seed (#1382 skip-aware)", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", {
+        run_id: "run-eta",
+        units: [],
+        total_units: 3,
+        total_roms: 120,
+        total_estimated_items: 5,
+      });
+    });
+
+    // An incremental re-sync prices only the predicted work, not the library.
+    expect(getSyncProgress().etaSeconds).toBe(estimateApplySeconds(5, 0));
+    resetEta();
+    plugin.onDismount();
+  });
+
+  it("seeds the live estimator with skip-aware unit weights (predicted_skip → 0, collapsed over raw)", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", {
+        run_id: "run-eta",
+        units: [
+          // Predicted skip: weight 0 even though counts are known.
+          {
+            type: "platform",
+            id: 1,
+            name: "N64",
+            slug: "n64",
+            rom_count: 100,
+            predicted_skip: true,
+            collapsed_count: 60,
+          },
+          // Known collapsed count wins over the raw rom_count.
+          {
+            type: "platform",
+            id: 2,
+            name: "GBA",
+            slug: "gba",
+            rom_count: 100,
+            predicted_skip: false,
+            collapsed_count: 40,
+          },
+          // Never synced: raw rom_count fallback.
+          { type: "platform", id: 3, name: "SNES", slug: "snes", rom_count: 30, predicted_skip: false },
+        ],
+        total_units: 3,
+        total_roms: 230,
+        total_estimated_items: 70,
+      });
+    });
+
+    // Observable through the weighted coarse fraction over the seeded weights
+    // [0, 40, 30]: units 1+2 done (0 + 40) plus half of SNES (15) → 55/70.
+    expect(weightedCoarseFraction(2, 0.5, 3)).toBeCloseTo(55 / 70, 10);
+    resetEta();
+    plugin.onDismount();
+  });
+
+  it("falls back to raw weights and total_roms when the estimate fields are absent (old backend)", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", {
+        run_id: "run-eta",
+        units: [
+          { type: "platform", id: 1, name: "N64", slug: "n64", rom_count: 60 },
+          { type: "platform", id: 2, name: "GBA", slug: "gba", rom_count: 20 },
+        ],
+        total_units: 2,
+        total_roms: 80,
+      });
+    });
+
+    expect(getSyncProgress().etaSeconds).toBe(estimateApplySeconds(80, 0));
+    // Raw rom_count weights: unit 1 done (60) plus half of unit 2 (10) → 70/80.
+    expect(weightedCoarseFraction(1, 0.5, 2)).toBeCloseTo(70 / 80, 10);
+    resetEta();
     plugin.onDismount();
   });
 });

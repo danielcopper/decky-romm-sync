@@ -1070,6 +1070,56 @@ class TestDoSyncPerUnit:
         assert payload["run_id"] == "run-plan"
 
     @pytest.mark.asyncio
+    async def test_sync_plan_carries_skip_aware_estimate_fields(self, plugin, fake_romm_api):
+        """#1382: platform units ride predicted_skip / collapsed_count, the raw
+        ``total_roms`` stays untouched (backward compat), and the additive
+        ``total_estimated_items`` zero-weights predicted skips and prices the
+        rest at their collapsed count (raw fallback)."""
+        import decky
+
+        decky.emit.reset_mock()
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        # N64: skip-eligible — stamp matches the server count, 2 persisted rows
+        # in one sibling group with a bound representative → predicted skip,
+        # collapsed count 1. GBA: never synced → no skip, raw-count fallback.
+        fake_romm_api.platforms = [
+            {"id": 1, "name": "N64", "slug": "n64", "rom_count": 2},
+            {"id": 2, "name": "GBA", "slug": "gba", "rom_count": 5},
+        ]
+        plugin.settings["enabled_platforms"] = {"1": True, "2": True}
+        _seed_platform_stamp(plugin, "n64", at="2025-01-01T00:00:00", rom_count=2)
+        _seed_rom_row(plugin, 10, app_id=1001, platform_slug="n64", sibling_group_key="igdb:100:1")
+        _seed_rom_row(plugin, 11, app_id=None, platform_slug="n64", sibling_group_key="igdb:100:1")
+        # A collection unit: membership isn't locally derivable, so it carries
+        # neither estimate field and weighs its raw rom_count.
+        _seed_collection(fake_romm_api, collection_id=7, name="Faves", rom_ids=[20, 21, 22])
+        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "franchise": {}}
+
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-est"
+
+        await plugin._sync_service._orchestrator._do_sync_per_unit()
+
+        plan_events = [c for c in decky.emit.call_args_list if c[0][0] == "sync_plan"]
+        assert len(plan_events) == 1
+        payload = plan_events[0][0][1]
+        # Raw planned total is untouched: 2 + 5 + 3.
+        assert payload["total_roms"] == 10
+        # Skip-aware: N64 predicted-skip → 0, GBA raw 5, collection raw 3.
+        assert payload["total_estimated_items"] == 8
+        units = {u["name"]: u for u in payload["units"]}
+        assert units["N64"]["predicted_skip"] is True
+        assert units["N64"]["collapsed_count"] == 1
+        assert units["GBA"]["predicted_skip"] is False
+        assert "collapsed_count" not in units["GBA"]
+        assert "predicted_skip" not in units["Faves"]
+        assert "collapsed_count" not in units["Faves"]
+
+    @pytest.mark.asyncio
     async def test_processes_each_unit_in_order(self, plugin, fake_romm_api):
         import decky
 

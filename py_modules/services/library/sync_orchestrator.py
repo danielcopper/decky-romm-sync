@@ -672,6 +672,12 @@ class SyncOrchestrator:
 
             total_units = len(work_queue)
             total_roms_planned = sum(u.rom_count for u in work_queue)
+            # Skip-aware estimate total (#1382): predicted-skip units weigh 0,
+            # the rest their persisted collapsed count (raw ``rom_count``
+            # fallback). Estimate-only — it prices the frontend's seeds and
+            # never feeds the actual skip decision (ADR-0023); ``total_roms``
+            # below stays the raw planned total for backward compatibility.
+            total_estimated_items = sum(u.estimated_items() for u in work_queue)
             platforms_planned = sum(1 for u in work_queue if u.type == "platform")
             # Live ``platform_slug → display_name`` map from the work-queue;
             # threaded into finalize so collections key on display names and
@@ -688,6 +694,7 @@ class SyncOrchestrator:
                     "units": [u.to_event_payload() for u in work_queue],
                     "total_units": total_units,
                     "total_roms": total_roms_planned,
+                    "total_estimated_items": total_estimated_items,
                 },
             )
 

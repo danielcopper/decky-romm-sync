@@ -31,6 +31,28 @@ class WorkUnit:
     # Collection-only: dispatches the correct list-roms endpoint at fetch time.
     # ``None`` is only valid when ``type == "platform"``.
     collection_kind: CollectionKind | None = None
+    # Plan-time estimate riders (#1382), platform-only. ``predicted_skip`` is
+    # the plan's local-conditions guess at the fetch-time wholesale-skip gate's
+    # outcome; ``collapsed_count`` the persisted post-collapse shortcut count.
+    # Estimate-ONLY: they price the ``sync_plan`` payload and must never feed
+    # the actual skip decision — ``_try_unit_incremental_skip`` remains the
+    # sole skip authority (ADR-0023). ``None`` means unknown (collections,
+    # never-synced platforms, failed estimate read) and is omitted from the
+    # event payload.
+    predicted_skip: bool | None = None
+    collapsed_count: int | None = None
+
+    def estimated_items(self) -> int:
+        """This unit's weight in the plan's skip-aware estimate total.
+
+        ``0`` when the plan predicts the wholesale skip, else the persisted
+        post-collapse shortcut count, falling back to the raw ``rom_count``
+        when no collapsed count is known. Estimate-only — prices the
+        ``sync_plan`` payload, never the actual skip decision (ADR-0023).
+        """
+        if self.predicted_skip:
+            return 0
+        return self.collapsed_count if self.collapsed_count is not None else self.rom_count
 
     def to_event_payload(self) -> dict[str, Any]:
         """Serialise to the shape emitted in ``sync_plan`` / ``sync_apply_unit``."""
@@ -43,4 +65,8 @@ class WorkUnit:
         }
         if self.type == "collection":
             payload["collection_kind"] = self.collection_kind
+        if self.predicted_skip is not None:
+            payload["predicted_skip"] = self.predicted_skip
+        if self.collapsed_count is not None:
+            payload["collapsed_count"] = self.collapsed_count
         return payload

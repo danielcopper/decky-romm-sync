@@ -34,7 +34,13 @@ import {
 import { formatBytes } from "../utils/formatters";
 import { pluralize } from "../utils/pluralize";
 import { estimateApplySeconds, formatDuration } from "../utils/syncEstimate";
-import { observeApplyProgress, displayedEtaSeconds, resetEta, formatEtaCountdown } from "../utils/syncEta";
+import {
+  observeApplyProgress,
+  displayedEtaSeconds,
+  resetEta,
+  formatEtaCountdown,
+  weightedCoarseFraction,
+} from "../utils/syncEta";
 import { getSyncProgress, setSyncProgress as setStoredSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
 import { getDownloadState } from "../utils/downloadStore";
 import { getMigrationState, onMigrationChange, setMigrationStatus } from "../utils/migrationStore";
@@ -752,10 +758,12 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
 
   // Two-level progress. The main determinate bar tracks COARSE unit progress
   // but INTERPOLATES within the running unit so a large unit (e.g. 2091 items at
-  // step 2/8) doesn't sit frozen: the bar fills from the step's floor
-  // ((step-1)/totalSteps) toward the next notch as the unit's items are applied.
-  // 0/0 totalSteps means the run hasn't reached a unit yet → indeterminate.
-  // ``nProgress`` is a percentage (0-100), not a fraction.
+  // step 2/8) doesn't sit frozen: the bar fills from the step's floor toward the
+  // next notch as the unit's items are applied. Notch positions come from the
+  // plan's per-unit item weights when measured (#1382), else each unit is an
+  // equal 1/totalSteps slice. 0/0 totalSteps means the run hasn't reached a
+  // unit yet → indeterminate. ``nProgress`` is a percentage (0-100), not a
+  // fraction.
   //
   // While actively working a unit (``fetching``/``applying``) the current unit
   // is not yet done, so the completed count is ``step - 1``; the terminal-ish
@@ -773,8 +781,20 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     syncProgress?.stage === "applying" && syncProgress.current && syncProgress.total
       ? syncProgress.current / syncProgress.total
       : 0;
+  // Weight the bar by the plan's per-unit item weights (#1382) — the same
+  // skip-aware, delta-corrected weights the countdown uses — so a
+  // predicted-skip unit takes no width and a huge platform takes its real
+  // share. Falls back to equal-per-unit index weighting when no plan is
+  // measured (QAM opened mid-run before any sync_plan, old backend) or the
+  // plan can't apportion (unit-count mismatch, all-zero weights).
+  const weightedFraction = syncProgress?.totalSteps
+    ? weightedCoarseFraction(completedSteps, withinUnitFraction, syncProgress.totalSteps)
+    : null;
   const coarseFraction = syncProgress?.totalSteps
-    ? Math.max(0, Math.min(100, ((completedSteps + withinUnitFraction) / syncProgress.totalSteps) * 100))
+    ? Math.max(
+        0,
+        Math.min(100, (weightedFraction ?? (completedSteps + withinUnitFraction) / syncProgress.totalSteps) * 100),
+      )
     : undefined;
   const hasFineDetail = !!(syncProgress?.total && syncProgress.message);
 

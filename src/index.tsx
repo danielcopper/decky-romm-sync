@@ -534,14 +534,18 @@ export default definePlugin(() => {
     resetSyncCancel();
     // Seed the applying-phase estimate on the walk-cost model (the same
     // ``estimateApplySeconds`` the preview row uses): an honest upper bound that
-    // prices every planned ROM as a new shortcut plus the flat fetch allowance.
-    // The skip-preview path has no delta knowledge here (per-unit skips are only
-    // decided at fetch time), so all-as-new is the ceiling; the delta-restricted
-    // apply skips unchanged items and the live rate estimator corrects the readout
-    // downward within seconds of applying (#1382-M3). Merged (not replaced) so the
-    // running/stage the click set survives, and the sync_progress listener below
-    // preserves it across backend frames. Shown as "up to X min" only until the
-    // live estimator replaces it with a "X min left" countdown.
+    // prices every planned item as a new shortcut plus the flat fetch allowance.
+    // The plan is skip-aware (#1382): ``total_estimated_items`` zero-weights the
+    // platforms the backend predicts its wholesale-skip gate will skip and prices
+    // the rest at their persisted collapsed (post-sibling-group) shortcut count,
+    // so an incremental re-sync no longer seeds a whole-library ceiling. The raw
+    // ``total_roms`` stays the fallback for an older backend that doesn't send
+    // the field. The delta-restricted apply skips unchanged items and the live
+    // rate estimator corrects the readout within seconds of applying (#1382-M3).
+    // Merged (not replaced) so the running/stage the click set survives, and the
+    // sync_progress listener below preserves it across backend frames. Shown as
+    // "up to X min" only until the live estimator replaces it with a "X min
+    // left" countdown.
     //
     // Only seed the bound when the store has NO etaSeconds yet: the preview path
     // (handleApply) already seeded a tighter delta-based estimate into the store,
@@ -550,17 +554,25 @@ export default definePlugin(() => {
     // seed, never a stale prior-run value. The skip-preview path never sets one,
     // so it still gets this bound.
     if (getSyncProgress().etaSeconds === undefined) {
-      updateSyncProgress({ etaSeconds: estimateApplySeconds(data.total_roms, 0) });
+      updateSyncProgress({ etaSeconds: estimateApplySeconds(data.total_estimated_items ?? data.total_roms, 0) });
     }
     // Begin the run-scoped live-ETA estimator with the plan's per-unit weights
-    // (rom_count in plan order) and total. MainPage samples the applying stage
-    // against this to derive the countdown; a fresh plan resets any prior slope.
+    // and total. Weights are skip-aware (#1382): 0 for a predicted-skip unit,
+    // else the persisted collapsed count, falling back to the raw rom_count
+    // when the backend doesn't know it (never-synced platform, collections,
+    // old backend). A mis-predicted skip that actually dispatches re-corrects
+    // via observeUnitTotal on its first chunk. MainPage samples the applying
+    // stage against this to derive the countdown; a fresh plan resets any
+    // prior slope.
     beginEtaRun(
       data.run_id,
-      data.units.map((u) => u.rom_count),
-      data.total_roms,
+      data.units.map((u) => (u.predicted_skip ? 0 : (u.collapsed_count ?? u.rom_count))),
+      data.total_estimated_items ?? data.total_roms,
     );
-    logInfo(`sync_plan received: ${data.total_units} units, ${data.total_roms} ROMs total`);
+    logInfo(
+      `sync_plan received: ${data.total_units} units, ${data.total_roms} ROMs total` +
+        (data.total_estimated_items !== undefined ? ` (${data.total_estimated_items} estimated items)` : ""),
+    );
   });
 
   // ``sync_stale`` arrives after every unit finishes — remove each stale

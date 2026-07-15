@@ -1606,6 +1606,67 @@ describe("MainPage", () => {
       expect(nProgress).toBeCloseTo(((1 + 450 / 2091) / 8) * 100, 5);
     });
 
+    it("main bar weights units by the plan's item weights when a plan is measured (#1382)", async () => {
+      // Plan weights [10, 2091, 5] — the huge PSX unit owns most of the bar, not
+      // an equal 1/3 slice. The run state comes from the real syncEta module,
+      // exactly as the sync_plan listener seeds it.
+      beginEtaRun("run-1", [10, 2091, 5], 2106);
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 2,
+        totalSteps: 3,
+        current: 450,
+        total: 2091,
+        message: "PSX: 450/2091",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      // Weighted: (unit 1's 10 + 450 of PSX's 2091) / 2106. The index-based math
+      // would read (1 + 450/2091)/3 ≈ 40.5 — far past the real position.
+      const nProgress = Number(container.querySelector('[data-testid="progress-progress"]')?.textContent);
+      expect(nProgress).toBeCloseTo(((10 + 450) / 2106) * 100, 5);
+    });
+
+    it("a predicted-skip unit occupies no bar width (zero plan weight, #1382)", async () => {
+      // Unit 1 was zero-weighted as a predicted wholesale skip; while unit 2
+      // applies, the bar reflects only unit 2's own items.
+      beginEtaRun("run-1", [0, 100], 100);
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 2,
+        totalSteps: 2,
+        current: 50,
+        total: 100,
+        message: "GBA: 50/100",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      // Weighted: 50/100 → 50. Index-based would read (1 + 0.5)/2 * 100 = 75,
+      // crediting the skipped unit half the bar.
+      expect(container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("50");
+    });
+
+    it("falls back to index weighting when the plan's unit count mismatches the run (stale plan)", async () => {
+      // A leftover plan from another run (2 units) cannot apportion an 8-unit
+      // run — the bar falls back to the equal-slice interpolation.
+      beginEtaRun("run-other", [5, 5], 10);
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 2,
+        totalSteps: 8,
+        current: 450,
+        total: 2091,
+        message: "PSX: 450/2091",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const nProgress = Number(container.querySelector('[data-testid="progress-progress"]')?.textContent);
+      expect(nProgress).toBeCloseTo(((1 + 450 / 2091) / 8) * 100, 5);
+    });
+
     it("main bar rests at the unit floor during the fetch phase (no within-unit fill)", async () => {
       // Fetch frames carry current/total (page counters) to drive the fine line,
       // but must NOT advance the coarse bar — it rests at (step-1)/totalSteps so

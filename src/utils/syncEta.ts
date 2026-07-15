@@ -14,12 +14,16 @@
  * countdown via ``displayedEtaSeconds`` — the module owns the deadline, so the UI
  * holds no ETA state of its own.
  *
- * Approximation, by design: the plan's per-unit ``rom_count`` is the RAW
- * pre-collapse file count, while the applying stage's ``current`` is the
- * post-collapse EMITTED shortcut count (sibling groups collapse to one shortcut).
- * Mixing the two slightly overstates a grouped unit's completed weight, but the
- * measured rate absorbs most of the skew and the countdown stays close enough to
- * be useful. It is an estimate, never a guarantee.
+ * Approximation, by design — though a narrow one since the plan went skip-aware
+ * (#1382): a unit's seeded weight is 0 when the backend predicts its wholesale
+ * incremental skip, else the persisted post-collapse (sibling-group) shortcut
+ * count, so seed weights and the applying stage's post-collapse ``current``
+ * usually count the same thing. The raw pre-collapse ``rom_count`` remains the
+ * fallback only where the backend doesn't know better (never-synced platforms,
+ * collections, old backends), and a mis-predicted skip re-corrects the moment
+ * the unit dispatches (``observeUnitTotal``). Residual skew is absorbed by the
+ * measured rate. It is an estimate, never a guarantee — a mis-prediction can
+ * only make the readout long or short, never change what the sync applies.
  */
 
 import { formatApproxDuration } from "./syncEstimate";
@@ -117,8 +121,9 @@ let _run: EtaRunState | null = null;
 /**
  * Begin measuring a fresh run, discarding any prior samples — a new run's rate
  * must never inherit the previous run's slope. Called once by the ``sync_plan``
- * listener with the plan's per-unit weights (``rom_count`` in plan order) and the
- * planned ROM total.
+ * listener with the plan's per-unit weights in plan order (skip-aware since
+ * #1382: 0 for predicted skips, else ``collapsed_count ?? rom_count``) and the
+ * planned item total.
  */
 export function beginEtaRun(runId: string, unitWeights: number[], totalRoms: number): void {
   _run = { runId, unitWeights: [...unitWeights], totalRoms, samples: [], lastSampleMs: 0, deadlineMs: null };
@@ -141,9 +146,11 @@ export function resetEta(): void {
  * every chunk of a unit carries the same ``unit_total``, so re-calls no-op once the
  * weight matches. A no-op when no run is measured or the index is out of range.
  *
- * Bounded by the plan: a platform SKIPPED wholesale by its completion stamp never
- * emits a ``sync_apply_unit``, so its weight stays the raw ``rom_count`` — the plan
- * carries no skip knowledge to correct that, matching #1382-M3's scope.
+ * This is also the safety net for the plan's skip prediction (#1382): a unit the
+ * plan zero-weighted as a predicted skip but that actually dispatches re-corrects
+ * here to its real delta size on its first chunk. A unit skipped wholesale never
+ * emits a ``sync_apply_unit`` — its plan weight (0 when predicted, or the stale
+ * seeded weight on a mis-prediction in the other direction) simply stands.
  */
 export function observeUnitTotal(unitIndex: number, unitTotal: number): void {
   if (_run === null) return;
@@ -222,4 +229,41 @@ export function liveEtaSeconds(): number | null {
 export function displayedEtaSeconds(nowMs: number): number | null {
   if (_run?.deadlineMs == null) return null;
   return Math.max(0, (_run.deadlineMs - nowMs) / 1000);
+}
+
+/**
+ * Weighted coarse-bar fraction (0..1) over the run's per-unit plan weights —
+ * the size-aware replacement for MainPage's equal-per-unit index weighting
+ * (#1382). ``completedUnits`` units are done in full; the running unit (index
+ * ``completedUnits``) contributes ``withinUnitFraction`` (clamped to 0..1) of
+ * its own weight share. Uses the SAME weights the countdown uses (skip-aware
+ * seeds, delta-corrected by {@link observeUnitTotal} as units dispatch), so a
+ * predicted-skip unit occupies no bar width and a huge platform occupies its
+ * real share instead of ``1/totalUnits``.
+ *
+ * Returns ``null`` — the caller falls back to index weighting — when no run is
+ * measured (QAM opened mid-run before any plan, old backend), when the plan's
+ * unit count doesn't match ``totalUnits`` (a stale plan from another run), or
+ * when the total weight is zero (an all-predicted-skip plan has no widths to
+ * apportion).
+ */
+export function weightedCoarseFraction(
+  completedUnits: number,
+  withinUnitFraction: number,
+  totalUnits: number,
+): number | null {
+  if (_run === null) return null;
+  const weights = _run.unitWeights;
+  if (weights.length !== totalUnits) return null;
+  let totalWeight = 0;
+  for (const w of weights) totalWeight += Math.max(0, w);
+  if (totalWeight <= 0) return null;
+  let completedWeight = 0;
+  for (let i = 0; i < completedUnits && i < weights.length; i++) {
+    completedWeight += Math.max(0, weights[i] ?? 0);
+  }
+  const runningWeight =
+    completedUnits >= 0 && completedUnits < weights.length ? Math.max(0, weights[completedUnits] ?? 0) : 0;
+  const within = Math.max(0, Math.min(1, withinUnitFraction));
+  return Math.min(1, (completedWeight + within * runningWeight) / totalWeight);
 }

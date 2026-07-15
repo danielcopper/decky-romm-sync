@@ -40,10 +40,15 @@ class TestGetPlatforms:
         from unittest.mock import AsyncMock, MagicMock
 
         mock_loop = MagicMock()
+        # get_platforms makes two executor calls: list_platforms, then the
+        # collapsed-count read (#1382) — stage both in call order.
         mock_loop.run_in_executor = AsyncMock(
-            return_value=[
-                {"id": 1, "name": "N64", "slug": "n64", "rom_count": 10},
-                {"id": 2, "name": "SNES", "slug": "snes", "rom_count": 5},
+            side_effect=[
+                [
+                    {"id": 1, "name": "N64", "slug": "n64", "rom_count": 10},
+                    {"id": 2, "name": "SNES", "slug": "snes", "rom_count": 5},
+                ],
+                {},
             ]
         )
         rebind_loop(plugin._sync_service, mock_loop)
@@ -61,9 +66,12 @@ class TestGetPlatforms:
 
         mock_loop = MagicMock()
         mock_loop.run_in_executor = AsyncMock(
-            return_value=[
-                {"id": 1, "name": "N64", "slug": "n64", "rom_count": 10},
-                {"id": 2, "name": "Empty", "slug": "empty", "rom_count": 0},
+            side_effect=[
+                [
+                    {"id": 1, "name": "N64", "slug": "n64", "rom_count": 10},
+                    {"id": 2, "name": "Empty", "slug": "empty", "rom_count": 0},
+                ],
+                {},
             ]
         )
         rebind_loop(plugin._sync_service, mock_loop)
@@ -79,9 +87,12 @@ class TestGetPlatforms:
 
         mock_loop = MagicMock()
         mock_loop.run_in_executor = AsyncMock(
-            return_value=[
-                {"id": 1, "name": "N64", "slug": "n64", "rom_count": 10},
-                {"id": 2, "name": "SNES", "slug": "snes", "rom_count": 5},
+            side_effect=[
+                [
+                    {"id": 1, "name": "N64", "slug": "n64", "rom_count": 10},
+                    {"id": 2, "name": "SNES", "slug": "snes", "rom_count": 5},
+                ],
+                {},
             ]
         )
         rebind_loop(plugin._sync_service, mock_loop)
@@ -96,7 +107,9 @@ class TestGetPlatforms:
         from unittest.mock import AsyncMock, MagicMock
 
         mock_loop = MagicMock()
-        mock_loop.run_in_executor = AsyncMock(return_value=[{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}])
+        mock_loop.run_in_executor = AsyncMock(
+            side_effect=[[{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}], {}]
+        )
         rebind_loop(plugin._sync_service, mock_loop)
         plugin.settings["enabled_platforms"] = {}
 

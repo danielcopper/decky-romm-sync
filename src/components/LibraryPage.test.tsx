@@ -257,6 +257,28 @@ describe("LibraryPage", () => {
       await flushAsync();
       expect(queryByTestId("spinner")).toBeNull();
     });
+
+    it("shows the collapsed shortcut count in the toggle description when present (#1382)", async () => {
+      vi.mocked(backend.getPlatforms).mockResolvedValue({
+        success: true,
+        platforms: [makePlatform({ id: 1, name: "Genesis", rom_count: 10, collapsed_count: 7 })],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      const toggle = container.querySelector('[data-label="Genesis"]');
+      expect(toggle?.getAttribute("data-description")).toBe("7 ROMs");
+    });
+
+    it("falls back to the raw rom_count when no collapsed count is present (never synced / old backend)", async () => {
+      vi.mocked(backend.getPlatforms).mockResolvedValue({
+        success: true,
+        platforms: [makePlatform({ id: 1, name: "Genesis", rom_count: 10 })],
+      });
+      const { container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      const toggle = container.querySelector('[data-label="Genesis"]');
+      expect(toggle?.getAttribute("data-description")).toBe("10 ROMs");
+    });
   });
 
   // ------------------------------------------------------------------

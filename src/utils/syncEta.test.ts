@@ -10,6 +10,7 @@ import {
   liveEtaSeconds,
   displayedEtaSeconds,
   resetEta,
+  weightedCoarseFraction,
   type EtaSample,
 } from "./syncEta";
 
@@ -255,6 +256,79 @@ describe("run-scoped estimator", () => {
     // the pre-gap sample and a rate is measured.
     observeApplyProgress(1, 700, 16000);
     expect(liveEtaSeconds()).not.toBeNull();
+  });
+
+  it("a zero-weight (predicted-skip) unit contributes nothing to the remaining total (#1382)", () => {
+    // Unit 0 is a predicted wholesale skip (weight 0); unit 1 carries the run.
+    beginEtaRun("run-1", [0, 2000], 2000);
+    observeApplyProgress(2, 100, 0);
+    observeApplyProgress(2, 700, 6000);
+    // processed = 0 (skipped unit) + 700; rate 100/s;
+    // remaining = (2000 - 700) / 100 = 13s — the skipped unit adds no phantom time.
+    expect(liveEtaSeconds()).toBe(13);
+  });
+
+  it("a mis-predicted skip that actually dispatches re-corrects via observeUnitTotal (#1382)", () => {
+    // The plan zero-weighted unit 0 as a predicted skip, but the fetch-time gate
+    // (the sole skip authority) refused and the unit dispatched a 300-item delta.
+    beginEtaRun("run-1", [0, 1000], 1000);
+    observeUnitTotal(0, 300);
+    observeApplyProgress(1, 100, 0);
+    observeApplyProgress(1, 700, 6000);
+    // totalRoms grew 1000 → 1300; remaining = (1300 - 700) / 100 = 6s.
+    expect(liveEtaSeconds()).toBe(6);
+  });
+});
+
+describe("weightedCoarseFraction", () => {
+  beforeEach(() => resetEta());
+
+  it("apportions the bar by per-unit weight, scaling the within-unit fill by the unit's share", () => {
+    beginEtaRun("run-1", [100, 300, 0, 600], 1000);
+    // Unit 0 done (100) + half of unit 1 (150) over total 1000.
+    expect(weightedCoarseFraction(1, 0.5, 4)).toBeCloseTo(0.25, 10);
+  });
+
+  it("a zero-weight (predicted-skip) running unit adds no width while it runs", () => {
+    beginEtaRun("run-1", [100, 300, 0, 600], 1000);
+    // Units 0+1 done (400); the running unit 2 weighs 0 → bar rests at 0.4.
+    expect(weightedCoarseFraction(2, 0.7, 4)).toBeCloseTo(0.4, 10);
+  });
+
+  it("uses the delta-corrected weights once a unit dispatches (observeUnitTotal)", () => {
+    beginEtaRun("run-1", [100, 900], 1000);
+    // Unit 1 dispatches with a 100-item delta → weights become [100, 100].
+    observeUnitTotal(1, 100);
+    expect(weightedCoarseFraction(1, 0.5, 2)).toBeCloseTo(150 / 200, 10);
+  });
+
+  it("returns null when no run is measured (caller falls back to index weighting)", () => {
+    expect(weightedCoarseFraction(1, 0.5, 4)).toBeNull();
+  });
+
+  it("returns null when the plan's unit count mismatches totalUnits (stale plan)", () => {
+    beginEtaRun("run-1", [100, 300], 400);
+    expect(weightedCoarseFraction(1, 0.5, 4)).toBeNull();
+  });
+
+  it("returns null when the total weight is zero (all-predicted-skip plan)", () => {
+    beginEtaRun("run-1", [0, 0], 0);
+    expect(weightedCoarseFraction(1, 0.5, 2)).toBeNull();
+  });
+
+  it("clamps the within-unit fraction to 0..1 and the result to ≤ 1", () => {
+    beginEtaRun("run-1", [100, 300], 400);
+    // within > 1 clamps to the unit's full weight: (100 + 300) / 400 = 1.
+    expect(weightedCoarseFraction(1, 5, 2)).toBe(1);
+    // within < 0 clamps to the completed floor: 100 / 400 = 0.25.
+    expect(weightedCoarseFraction(1, -3, 2)).toBeCloseTo(0.25, 10);
+    // completedUnits beyond the plan sums everything and caps at 1.
+    expect(weightedCoarseFraction(9, 0.5, 2)).toBe(1);
+  });
+
+  it("reads full (1) at the finalizing/done position (completedUnits === totalUnits)", () => {
+    beginEtaRun("run-1", [100, 300], 400);
+    expect(weightedCoarseFraction(2, 0, 2)).toBe(1);
   });
 });
 

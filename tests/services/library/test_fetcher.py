@@ -8,6 +8,8 @@ per-method ``*_side_effect`` attributes (persistent) — no
 ``run_in_executor`` patching, no ``MagicMock(romm_api)``.
 """
 
+from dataclasses import replace
+
 import pytest
 
 from domain.sync_state import SyncCancelled, SyncState
@@ -897,3 +899,225 @@ class TestFetchProgressNarration:
         assert len(frames) == 1
         assert frames[0]["step"] == 0
         assert frames[0]["totalSteps"] == 0
+
+
+class TestPlanEstimates:
+    """build_work_queue's plan-time estimate riders (#1382).
+
+    ``predicted_skip`` / ``collapsed_count`` are estimate-only fields that
+    price the ``sync_plan`` payload — the fetch-time gate
+    (``_try_unit_incremental_skip``) stays the sole skip authority
+    (ADR-0023); see :class:`TestPredictionNeverFeedsSkipGate` for the guard.
+    """
+
+    @pytest.mark.asyncio
+    async def test_predicts_skip_and_collapsed_count_when_local_conditions_hold(self, plugin, fake_romm_api):
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=3)
+        # A 3-sibling group: one bound representative + two unbound siblings —
+        # collapses to ONE shortcut.
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=None, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:100:1")
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert len(units) == 1
+        assert units[0].predicted_skip is True
+        assert units[0].collapsed_count == 1
+
+    @pytest.mark.asyncio
+    async def test_never_synced_platform_predicts_no_skip_and_no_collapsed_count(self, plugin, fake_romm_api):
+        _wire_fake(plugin, fake_romm_api)
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert units[0].predicted_skip is False
+        assert units[0].collapsed_count is None
+
+    @pytest.mark.asyncio
+    async def test_stamp_count_mismatch_predicts_no_skip_but_keeps_collapsed_count(self, plugin, fake_romm_api):
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        # Server grew to 4 ROMs since the 3-ROM stamp → the gate will re-fetch,
+        # but the persisted rows still collapse to a displayable count.
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 4}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=3)
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=None, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 12, app_id=1002, group_key="igdb:200:1")
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert units[0].predicted_skip is False
+        assert units[0].collapsed_count == 2
+
+    @pytest.mark.asyncio
+    async def test_backfill_pending_predicts_no_skip(self, plugin, fake_romm_api):
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=1)
+        # A legacy row with no group key forces the gate's backfill full fetch;
+        # the keyless row is a singleton for the collapsed count.
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key=None)
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert units[0].predicted_skip is False
+        assert units[0].collapsed_count == 1
+
+    @pytest.mark.asyncio
+    async def test_zero_bound_rows_predicts_no_skip(self, plugin, fake_romm_api):
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 2}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=2)
+        # Mass delete left unbind-only rows (ADR-0007) — the gate re-fetches.
+        _seed_persisted_rom(uow, 10, app_id=None, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=None, group_key="igdb:100:1")
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert units[0].predicted_skip is False
+
+    @pytest.mark.asyncio
+    async def test_collection_units_carry_no_estimate_fields(self, plugin, fake_romm_api):
+        """Collection membership isn't locally derivable — the scope guard leaves both fields None."""
+        _wire_fake(plugin, fake_romm_api)
+        fake_romm_api.platforms = []
+        fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 4}]
+        plugin.settings["enabled_platforms"] = {}
+        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "franchise": {}}
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert [u.type for u in units] == ["collection"]
+        assert units[0].predicted_skip is None
+        assert units[0].collapsed_count is None
+
+    @pytest.mark.asyncio
+    async def test_force_full_sync_clears_stamps_so_plan_predicts_no_skips(self, plugin, fake_romm_api):
+        """clear_sync_cache runs BEFORE the run, so a forced plan reads no stamps."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=1)
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+
+        before = await plugin._sync_service._fetcher.build_work_queue()
+        assert before[0].predicted_skip is True
+
+        plugin._sync_service.clear_sync_cache()
+
+        after = await plugin._sync_service._fetcher.build_work_queue()
+        assert after[0].predicted_skip is False
+        # The rows survive the cache clear, so the collapsed count still shows.
+        assert after[0].collapsed_count == 1
+
+    @pytest.mark.asyncio
+    async def test_estimate_read_failure_leaves_fields_none_and_plan_intact(self, plugin, fake_romm_api):
+        """Fail-open: a DB failure degrades the estimate, never the plan."""
+        _wire_fake(plugin, fake_romm_api)
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        def _boom():
+            raise RuntimeError("db down")
+
+        plugin._sync_service._fetcher._uow_factory = _boom
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert len(units) == 1
+        assert units[0].predicted_skip is None
+        assert units[0].collapsed_count is None
+
+
+class TestGetPlatformsCollapsedCount:
+    """get_platforms attaches the persisted post-collapse count per platform (#1382)."""
+
+    @pytest.mark.asyncio
+    async def test_synced_platform_carries_collapsed_count(self, plugin, fake_romm_api):
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = [
+            {"id": 1, "name": "N64", "slug": "n64", "rom_count": 4},
+            {"id": 2, "name": "SNES", "slug": "snes", "rom_count": 5},
+        ]
+        # n64: a 3-sibling group + a keyless singleton → 2 shortcuts. snes: never synced.
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=None, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 13, app_id=1002, group_key=None)
+
+        result = await plugin._sync_service._fetcher.get_platforms()
+
+        assert result["success"] is True
+        by_slug = {p["slug"]: p for p in result["platforms"]}
+        assert by_slug["n64"]["collapsed_count"] == 2
+        assert by_slug["n64"]["rom_count"] == 4
+        assert "collapsed_count" not in by_slug["snes"]
+
+    @pytest.mark.asyncio
+    async def test_collapsed_count_read_failure_falls_back_to_raw_counts(self, plugin, fake_romm_api):
+        """Fail-open: a DB failure drops the garnish, never the platform list."""
+        _wire_fake(plugin, fake_romm_api)
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 4}]
+
+        def _boom():
+            raise RuntimeError("db down")
+
+        plugin._sync_service._fetcher._uow_factory = _boom
+
+        result = await plugin._sync_service._fetcher.get_platforms()
+
+        assert result["success"] is True
+        assert "collapsed_count" not in result["platforms"][0]
+        assert result["platforms"][0]["rom_count"] == 4
+
+
+class TestPredictionNeverFeedsSkipGate:
+    """ADR-0023 guard: the plan-time prediction rides the payload only — the
+    fetch-time gate's decision is IDENTICAL whatever the unit's estimate
+    fields say."""
+
+    @pytest.mark.asyncio
+    async def test_skip_eligible_platform_skips_regardless_of_prediction_fields(self, plugin, fake_romm_api):
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=1)
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        base = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+
+        results = [
+            await plugin._sync_service._fetcher._try_unit_incremental_skip(unit)
+            for unit in (
+                base,
+                replace(base, predicted_skip=False, collapsed_count=None),
+                replace(base, predicted_skip=True, collapsed_count=1),
+            )
+        ]
+
+        assert all(r is not None for r in results)
+        assert [{rom["id"] for rom in r} for r in results] == [{10}] * 3
+
+    @pytest.mark.asyncio
+    async def test_ineligible_platform_full_fetches_even_when_prediction_says_skip(self, plugin, fake_romm_api):
+        """A (wrong) predicted_skip=True can only mis-estimate, never mis-skip."""
+        _wire_fake(plugin, fake_romm_api)
+        # No stamp, no rows — the gate must full-fetch.
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1, predicted_skip=True)
+
+        result = await plugin._sync_service._fetcher._try_unit_incremental_skip(unit)
+
+        assert result is None
