@@ -32,7 +32,14 @@ export function hideNativePlaySection(playSectionClass: string) {
     const focusStyle = sp.window.document.createElement("style");
     focusStyle.id = ROMM_FOCUS_STYLES_ID;
     focusStyle.textContent = `
-.romm-btn-download:hover, .romm-btn-download.gpfocus {
+/* Blue hover/focus highlight is scoped to the IDLE Download button
+   (romm-btn-download-idle): its base is already blue, so brightening to blue is
+   correct. The active download button (downloading/paused/extracting) shares
+   romm-btn-download for position/overflow but has a dark base under a green
+   progress fill — this !important blue must NOT reach it, or a focused/hovered
+   active button (e.g. the rehydrated paused one that the initial-focus grab
+   gpfocus-marks) repaints its dark remainder bright blue. */
+.romm-btn-download-idle:hover, .romm-btn-download-idle.gpfocus {
   background: linear-gradient(to right, #47b3ff, #1a9fff) !important;
   filter: brightness(1.3);
 }

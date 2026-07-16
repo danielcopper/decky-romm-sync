@@ -2147,3 +2147,148 @@ describe("CustomPlayButton — version switch (#1298)", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Rehydrated / active download button keeps its DARK remainder (fix/rehydrated-
+// download-button-colors).
+//
+// ROOT CAUSE: the injected `.romm-btn-download:hover, .romm-btn-download.gpfocus`
+// rule (styleInjector.ts) forces a bright-blue `!important` background. That blue
+// is only correct for the IDLE Download button (whose baseBg is already blue). The
+// SAME `.romm-btn-download` class is on the ACTIVE download button (downloading /
+// paused / extracting), whose baseBg is a dark shade under a green progress fill —
+// so a focused/hovered active button gets its dark unfilled remainder repainted
+// bright Steam-blue, erasing the dark base (the pulse and fill are untouched). On
+// remount the initial-focus grab (the 400ms `useEffect`) programmatically adds
+// `.gpfocus` to the first button in the container — the active main button — so a
+// REHYDRATED paused download reliably shows the blue remainder; the live path
+// hides it only because Steam's gamepad focus has already moved to the pause /
+// cancel action by the time the transfer is paused.
+//
+// FIX: scope the blue focus/hover highlight to an idle-only `romm-btn-download-idle`
+// class, added to the button only when it is NOT in an active-download render. The
+// active button keeps `romm-btn-download` (position/overflow for the fill) but is
+// no longer a target of the blue rule, so its dark inline baseBg stands.
+//
+// Harness note: the @decky/ui mock drops the DialogButton inline `style` and
+// `findSP` returns undefined (styleInjector injects nothing), so neither the
+// dropped inline baseBg nor the injected blue is observable via computed style.
+// The faithful mechanical proxy for "the blue rule can't reach this button" is the
+// className it keys off: the idle button carries `romm-btn-download-idle`, the
+// active button never does. The green fill and amber pulse ARE observable (a plain
+// div and the Focusable's forwarded style) and are pinned alongside.
+// ---------------------------------------------------------------------------
+describe("CustomPlayButton — active-download button never takes the idle blue focus highlight", () => {
+  beforeEach(() => {
+    vi.mocked(getCachedGameDetail).mockReset();
+    vi.mocked(backend.startDownload).mockResolvedValue({ success: true, message: "" });
+    vi.mocked(backend.getDownloadQueue).mockResolvedValue({ downloads: [] });
+  });
+
+  // Rehydrate the button straight into an active-download render from the queue
+  // (the #1124 path a page re-entry takes), then wait for it to settle. `status`
+  // picks the paused vs still-running shape; the label proves the settle.
+  async function renderRehydrated(status: "paused" | "downloading"): Promise<ReturnType<typeof render>> {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.getDownloadQueue).mockResolvedValue({
+      downloads: [
+        {
+          rom_id: 42,
+          rom_name: "Test ROM",
+          platform_name: "PSP",
+          file_name: "game.iso",
+          status,
+          progress: 0.3,
+          bytes_downloaded: 300,
+          total_bytes: 1000,
+          resumable: true,
+        },
+      ],
+    });
+    const utils = render(<CustomPlayButton appId={100} />);
+    await utils.findByText(status === "paused" ? "Paused" : "300 / 1000 B");
+    return utils;
+  }
+
+  it("the idle Download button carries romm-btn-download-idle so it keeps the blue hover/focus highlight", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    const { findByText, container } = render(<CustomPlayButton appId={100} />);
+    await findByText("Download");
+
+    // The idle button is the only intended target of the bright-blue focus/hover
+    // rule (its baseBg is already blue). This assertion is what flips red→green
+    // with the fix: the idle-only marker class did not exist before.
+    const btn = container.querySelector(".romm-btn-download");
+    expect(btn).not.toBeNull();
+    expect(btn).toHaveClass("romm-btn-download-idle");
+  });
+
+  it("a rehydrated paused download keeps the dark-remainder shape with a green fill and amber pulse", async () => {
+    const { container } = await renderRehydrated("paused");
+
+    // Active button: structural class only, never the idle blue-focus target — so
+    // a focus/hover cannot repaint its dark remainder bright blue (the device bug).
+    const btn = container.querySelector(".romm-btn-download")!;
+    expect(btn).toHaveClass("romm-btn-download");
+    expect(btn).not.toHaveClass("romm-btn-download-idle");
+
+    // Green progress fill at the frozen width (300/1000 = 30%), never the idle blue.
+    const fill = container.querySelector(".romm-dl-fill") as HTMLElement;
+    expect(fill.style.width).toBe("30%");
+    expect(fill.getAttribute("style")).toContain("linear-gradient");
+    expect(fill.getAttribute("style")).not.toContain("1a9fff");
+
+    // Amber paused pulse on the active-group container (unaffected by the bug/fix).
+    // The Focusable mock forwards `style` but drops `className`, so the container is
+    // located by its data-testid rather than the romm-dl-active-group class.
+    const group = container.querySelector('[data-testid="focusable"]') as HTMLElement;
+    expect(group.style.getPropertyValue("--romm-pulse-color")).toContain("212,167,44");
+  });
+
+  it("a rehydrated running download keeps the dark-remainder shape with a green fill", async () => {
+    const { container } = await renderRehydrated("downloading");
+
+    const btn = container.querySelector(".romm-btn-download")!;
+    expect(btn).toHaveClass("romm-btn-download");
+    expect(btn).not.toHaveClass("romm-btn-download-idle");
+
+    const fill = container.querySelector(".romm-dl-fill") as HTMLElement;
+    expect(fill.style.width).toBe("30%");
+    expect(fill.getAttribute("style")).toContain("linear-gradient");
+    expect(fill.getAttribute("style")).not.toContain("1a9fff");
+  });
+
+  it("the live paused button renders the identical class/fill/pulse shape as the rehydrated one", async () => {
+    mockCachedDetail({ rom_id: 42, installed: false });
+    const utils = render(<CustomPlayButton appId={100} />);
+    const downloadBtn = await utils.findByText("Download");
+
+    await act(async () => {
+      downloadBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    act(() => {
+      emitDeckyEvent<[DownloadProgressEvent]>("download_progress", {
+        rom_id: 42,
+        rom_name: "Test ROM",
+        platform_name: "PSP",
+        file_name: "game.iso",
+        status: "paused",
+        progress: 0.3,
+        bytes_downloaded: 300,
+        total_bytes: 1000,
+        resumable: true,
+      });
+    });
+    await utils.findByText("Paused");
+
+    const btn = utils.container.querySelector(".romm-btn-download")!;
+    expect(btn).toHaveClass("romm-btn-download");
+    expect(btn).not.toHaveClass("romm-btn-download-idle");
+    const fill = utils.container.querySelector(".romm-dl-fill") as HTMLElement;
+    expect(fill.style.width).toBe("30%");
+    const group = utils.container.querySelector('[data-testid="focusable"]') as HTMLElement;
+    expect(group.style.getPropertyValue("--romm-pulse-color")).toContain("212,167,44");
+  });
+});

@@ -1034,7 +1034,13 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     // control — button + action — as one cohesive pulsing group.
     const downloadBtn = (
       <DialogButton
-        className={[appActionButtonClasses?.PlayButton, "romm-btn-download"].filter(Boolean).join(" ")}
+        // romm-btn-download-idle carries the blue hover/focus highlight, which is
+        // only correct for the idle/starting button (blue base). The active button
+        // (downloading/paused/extracting) omits it so its dark baseBg + green fill
+        // aren't repainted blue when focused — the rehydrated-paused device bug.
+        className={[appActionButtonClasses?.PlayButton, "romm-btn-download", !downloading && "romm-btn-download-idle"]
+          .filter(Boolean)
+          .join(" ")}
         style={{
           ...mainBtnStyle,
           borderRadius: downloading ? "2px 0 0 2px" : "2px",
