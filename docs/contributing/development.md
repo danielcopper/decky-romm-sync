@@ -114,6 +114,7 @@ Every backend feature or callable where testing makes sense should have unit tes
 
 ```bash
 mise run dev          # build frontend, deploy to the plugin dir, restart plugin_loader
+mise run dev dp2      # ...and also open windowed Big Picture on that display after deploying
 ```
 
 This builds the frontend, copies the plugin files into `~/homebrew/plugins/decky-romm-sync`, and restarts
@@ -122,6 +123,11 @@ root and continuously re-owns the plugin dir back to root within ~1–2s as a ta
 against that re-own and fails with `permission denied`. With the loader stopped, the copy is uncontested; it restarts
 automatically when the task finishes — even if the build or copy fails, so a failure never leaves the plugin dead. For
 backend-only changes, restarting the plugin loader is sufficient without rebuilding.
+
+Passing a display target (`internal`, or an output name like `dp2` / `DP-3` — the same argument
+[`dev:watch`](frontend-dev-loop.md#choosing-the-display) takes) also opens a windowed Big Picture on that display once
+the deploy succeeds, so you can deploy and eyeball the result in one command. With no argument, `dev` stays deploy-only
+and never opens a window. A bad display name is rejected up front, before the loader is stopped.
 
 For frontend iteration there is a much faster loop: after a one-time `mise run dev:setup`,
 `mise run dev:watch [display]` hot-reloads the **frontend** into a windowed Big Picture on the desktop as you save, with

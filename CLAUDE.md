@@ -135,7 +135,8 @@ Latest release and shipped features: see `git tag --sort=-v:refname` and GitHub 
 - **Gate**: `mise run gate` (the full CI battery in one command — mirrors every PR check in `.github/workflows/ci.yml`;
   slow: full pytest + frontend build. Run before pushing.)
 - **Setup**: `mise run setup` (installs JS + Python dependencies)
-- **Dev reload**: `mise run dev` (build + restart plugin_loader)
+- **Dev reload**: `mise run dev [display]` (build + restart plugin_loader; no arg = deploy only, a display like `dp4` /
+  `internal` also opens windowed BPM on it after the deploy)
 - **Frontend live dev**: `mise run dev:watch [display]` (one-time `mise run dev:setup`) — hot-reloads the **frontend**
   into a windowed Big Picture in Desktop Mode on every save, no loader restart. Optional display target picks the
   monitor (`internal` default, or a name like `dp2` / `DP-3`). **Backend** changes don't auto-trigger — push them with

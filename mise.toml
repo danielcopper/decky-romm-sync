@@ -143,9 +143,23 @@ description = "Build the documentation site (strict mode fails on broken links)"
 run = "mkdocs build --strict"
 
 [tasks.dev]
-description = "Build, deploy, and restart plugin loader"
+description = "Build, deploy, and restart plugin loader; with a display arg also open windowed Big Picture on it"
 raw = true
+# The optional display arg reaches the script as $usage_display (mise exposes
+# usage-spec args as usage_<name> env vars); the complete directive feeds mise's
+# shell tab completion from the real outputs of this machine. Unlike dev:watch there
+# is NO default: omitted → $usage_display empty → dev stays deploy-only, no BPM.
+usage = '''
+arg "[display]" help="Monitor for the Big Picture window: 'internal' or an output name (dp2, DP-3, ...). Omit to deploy only, no BPM."
+complete "display" run="bash scripts/dev_open_bpm.sh --list"
+'''
 run = """
+# A display target given? Fail fast on a typo before sudo / stopping the loader —
+# a bad name shouldn't prompt for sudo or kill the loader for nothing. Omitted →
+# $usage_display empty → this and the BPM open below are skipped (deploy-only).
+if [ -n "${usage_display:-}" ]; then
+  bash scripts/dev_open_bpm.sh --resolve "$usage_display" >/dev/null
+fi
 sudo -v
 DEST="$HOME/homebrew/plugins/decky-romm-sync"
 # plugin_loader runs as root and continuously re-owns the plugin dir + plugin.json
@@ -159,6 +173,12 @@ sudo systemctl stop plugin_loader
 trap 'sudo systemctl start plugin_loader' EXIT
 [ -d "$DEST" ] && sudo chown -R "$(id -un):$(id -gn)" "$DEST"
 mise run deploy
+# With a display target, open windowed Big Picture on it after the deploy — plain
+# bash (not exec) so the EXIT trap still fires and restarts plugin_loader. The
+# helper is non-blocking and places the window on the chosen display.
+if [ -n "${usage_display:-}" ]; then
+  bash scripts/dev_open_bpm.sh "$usage_display"
+fi
 """
 
 [tasks."dev:setup"]
