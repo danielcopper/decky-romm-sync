@@ -58,7 +58,11 @@ _ZIP_TMP_EXT = ".zip.tmp"
 _TMP_EXT = ".tmp"
 # A download in one of these statuses has run to a terminal end — it is no
 # longer active/queued/paused/extracting. The queue prune trims the oldest of
-# these over the cap, and "Clear Completed" evicts all of them (#149).
+# these over the cap, and "Clear Completed" evicts all of them (#149). In normal
+# flow only completed/failed actually LINGER: a cancel is an explicit discard and
+# evicts its entry on the spot (#149 downloads-round), so "cancelled" stays in
+# this classification defensively (a stray cancelled row is still prune/clearable)
+# and as the transient status the terminal cancel FRAME still carries.
 _TERMINAL_DOWNLOAD_STATUSES = ("completed", "failed", "cancelled")
 
 
@@ -166,11 +170,13 @@ class DownloadService:
         self._download_tasks.clear()
 
     def _prune_download_queue(self):
-        """Remove oldest completed/failed/cancelled items when over the limit.
+        """Remove oldest terminal items when over the limit.
 
-        Keeps all active (downloading) items. Retains up to
-        _DOWNLOAD_QUEUE_MAX_TERMINAL terminal items, removing the oldest
-        (by insertion order) when the count exceeds the limit.
+        Keeps all non-terminal (queued/downloading/paused/extracting) items.
+        Retains up to _DOWNLOAD_QUEUE_MAX_TERMINAL terminal items, removing the
+        oldest (by insertion order) when the count exceeds the limit. In practice
+        the retained terminals are completed/failed — a cancel evicts its own
+        entry immediately (#149 downloads-round), so it rarely reaches the cap.
         """
         terminal_ids = [
             rid for rid, item in self._download_queue.items() if item.get("status") in _TERMINAL_DOWNLOAD_STATUSES
@@ -1064,9 +1070,13 @@ class DownloadService:
                 # PAUSE: keep the partial ``.tmp`` so the transfer can resume from
                 # where it stopped. NOTHING is cleaned up. The entry stays "paused"
                 # in the queue (``_prune_download_queue`` only prunes terminal
-                # completed/failed/cancelled, so "paused" is retained).
+                # completed/failed/cancelled, so "paused" is retained). Record the
+                # target path (internal ``_``-prefixed key, stripped from the wire
+                # by ``get_download_queue``) so a later cancel of this now-task-less
+                # download can delete the partial without re-fetching rom detail.
                 entry = self._download_queue[rom_id]
                 entry["status"] = "paused"
+                entry["_target_path"] = target_path
                 await self._emit(
                     "download_progress",
                     {
@@ -1102,6 +1112,12 @@ class DownloadService:
                         "resumable": entry.get("resumable", False),
                     },
                 )
+                # A cancel is an explicit discard — drop the entry so no
+                # "cancelled" row lingers in the queue view or QAM summary (#149
+                # downloads-round). The terminal frame above already told the
+                # frontend; the store listener drops it there. Emitted BEFORE the
+                # evict so the frame carries the entry's final progress values.
+                self.evict(rom_id)
                 self._logger.info(f"Download cancelled: {rom_name}")
             raise
 
@@ -1233,15 +1249,7 @@ class DownloadService:
         cleanup targets exactly that dir rather than re-deriving it from a stale
         source (unused for single-file ROMs, which own no dir).
         """
-        paths_to_remove = [
-            target_path + _ZIP_TMP_EXT,
-            target_path + _TMP_EXT,
-        ]
-        for path in paths_to_remove:
-            try:
-                self._download_file_store.remove_file(path)
-            except Exception as e:
-                self._logger.warning(f"Cleanup failed for {path}: {e}")
+        self._remove_partial_tmp_files(target_path)
         if has_multiple:
             staging_dir = os.path.join(os.path.dirname(target_path), extract_dir_name)
             dirs_to_remove = {staging_dir}
@@ -1253,16 +1261,87 @@ class DownloadService:
                 except Exception as e:
                     self._logger.warning(f"Cleanup failed for directory {extract_dir}: {e}")
 
+    def _remove_partial_tmp_files(self, target_path: str) -> None:
+        """Remove the ``.zip.tmp`` and ``.tmp`` partials for *target_path*.
+
+        Each removal is independent so one failure doesn't block the other, and a
+        missing partial is not an error. The bare ``target_path`` is NEVER touched
+        — only the transient transfer artifacts. Shared by
+        ``_cleanup_partial_download`` (running-cancel / failure) and the
+        paused-cancel path, which has no live task in scope to name the extension.
+        """
+        for path in (target_path + _ZIP_TMP_EXT, target_path + _TMP_EXT):
+            try:
+                self._download_file_store.remove_file(path)
+            except Exception as e:
+                self._logger.warning(f"Cleanup failed for {path}: {e}")
+
     def cancel_download(self, rom_id):
+        """Cancel a download, whether it is running or paused.
+
+        A running download has a live task: flip its cooperative-cancel token
+        (stops the executor transfer thread, not just the asyncio wrapper — #144)
+        and cancel the task; ``_do_download``'s terminal handler deletes the
+        partial, emits the terminal ``cancelled`` frame, and evicts the entry.
+
+        A **paused** download has NO task — the pause already cancelled it,
+        leaving the entry "paused" and the partial ``.tmp`` kept for resume. A
+        plain task lookup then found nothing and silently no-op'd (the
+        downloads-round finding). Handle it directly here:
+        ``_cancel_paused_download`` deletes the partial, emits the same terminal
+        ``cancelled`` frame, and evicts the entry.
+
+        A cancel that can act on neither (no task AND no paused entry) keeps the
+        canonical failure shape so the frontend can surface it.
+        """
         rom_id = int(rom_id)
         task = self._download_tasks.get(rom_id)
-        if not task:
-            return {"success": False, "reason": "no_active_download", "message": "No active download for this ROM"}
-        token = self._control_tokens.get(rom_id)
-        if token is not None:
-            token.cancelled = True  # stop the executor transfer thread, not just the asyncio wrapper (#144)
-        task.cancel()
-        return {"success": True, "message": "Download cancelled"}
+        if task:
+            token = self._control_tokens.get(rom_id)
+            if token is not None:
+                token.cancelled = True  # stop the executor transfer thread, not just the asyncio wrapper (#144)
+            task.cancel()
+            return {"success": True, "message": "Download cancelled"}
+        entry = self._download_queue.get(rom_id)
+        if entry is not None and entry.get("status") == "paused":
+            self._cancel_paused_download(rom_id, entry)
+            return {"success": True, "message": "Download cancelled"}
+        return {"success": False, "reason": "no_active_download", "message": "No active download for this ROM"}
+
+    def _cancel_paused_download(self, rom_id: int, entry: dict[str, Any]) -> None:
+        """Cancel a paused (task-less) download: delete its partial, notify, evict.
+
+        Does the cleanup the running-cancel terminal branch would have, minus the
+        task: removes the partial ``.tmp``/``.zip.tmp`` (via the ``_target_path``
+        recorded when the entry paused — skipped if absent, the startup sweep
+        still reaps it; a paused transfer is mid-download so it owns no extract
+        dir), emits the same terminal ``download_progress`` ``cancelled`` frame
+        the running-cancel emits (so the button resets and the store drops the
+        row), then evicts the entry — a cancel is an explicit discard that leaves
+        no residue (#149 downloads-round).
+        """
+        target_path = entry.get("_target_path")
+        if target_path:
+            self._remove_partial_tmp_files(target_path)
+        # cancel_download runs on the loop thread; schedule the terminal frame the
+        # same way the progress callbacks do (fire-and-forget on the loop).
+        self._loop.create_task(self._emit("download_progress", self._cancelled_frame(rom_id, entry)))
+        self.evict(rom_id)
+
+    @staticmethod
+    def _cancelled_frame(rom_id: int, entry: dict[str, Any]) -> dict[str, Any]:
+        """Build the terminal ``cancelled`` ``download_progress`` payload from a queue entry."""
+        return {
+            "rom_id": rom_id,
+            "rom_name": entry.get("rom_name", ""),
+            "platform_name": entry.get("platform_name", ""),
+            "file_name": entry.get("file_name", ""),
+            "status": "cancelled",
+            "progress": entry.get("progress", 0),
+            "bytes_downloaded": entry.get("bytes_downloaded", 0),
+            "total_bytes": entry.get("total_bytes", 0),
+            "resumable": entry.get("resumable", False),
+        }
 
     def pause_download(self, rom_id):
         """Pause an in-flight download, keeping the partial ``.tmp`` for resume.
@@ -1339,7 +1418,14 @@ class DownloadService:
             )
 
     def get_download_queue(self):
-        return {"downloads": list(self._download_queue.values())}
+        # Drop internal ``_``-prefixed keys (e.g. ``_target_path``, kept on a
+        # paused entry only for the paused-cancel cleanup) so they never cross
+        # the wire to the frontend ``DownloadItem`` shape.
+        return {
+            "downloads": [
+                {k: v for k, v in entry.items() if not k.startswith("_")} for entry in self._download_queue.values()
+            ]
+        }
 
     def clear_completed_downloads(self) -> dict[str, Any]:
         """Evict every terminal (completed/failed/cancelled) entry from the queue.
@@ -1349,9 +1435,11 @@ class DownloadService:
         is the source ``get_download_queue`` re-seeds the frontend from on every
         mount, so a purely-local hide reappeared on the next reopen. Active,
         queued, paused, and extracting entries are left untouched — only terminal
-        ones are removed. Idempotent: an empty queue or one with no terminal
-        entries clears nothing and reports ``cleared: 0``. A ROM re-downloaded
-        after being cleared re-enters the queue naturally via ``start_download``.
+        ones are removed. In normal flow those are completed/failed only, since a
+        cancel already evicted its own entry (#149 downloads-round); a stray
+        cancelled row would still clear here. Idempotent: an empty queue or one
+        with no terminal entries clears nothing and reports ``cleared: 0``. A ROM
+        re-downloaded after being cleared re-enters the queue via ``start_download``.
         """
         terminal_ids = [
             rid for rid, item in self._download_queue.items() if item.get("status") in _TERMINAL_DOWNLOAD_STATUSES

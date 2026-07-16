@@ -4,12 +4,10 @@
 //     setLocalDownloads([...getDownloadState()]). Observable side effect:
 //     pre-seeded store items render. Asserted in "mount: rejection falls back
 //     to store".
-//   - handleCancel inline `.catch(() => {})`. This is the documented
-//     truly-ignored boundary catch — the source comment is "// ignore" and
-//     there is no observable post-catch side effect. Per CLAUDE.md, such
-//     catches stay assertion-free; we still exercise the call site by
-//     rejecting cancelDownload and asserting the click did NOT crash + the
-//     component continued to render normally.
+//   - handleCancel `try/catch`. Both the failure RESULT (success: false) and a
+//     rejection now surface a toast — a cancel is never a silent no-op (#149
+//     downloads-round). Asserted in "a failing cancel result surfaces a toast"
+//     and "a cancelDownload rejection surfaces a toast".
 //   - handleClearCompleted's `try/catch { return }`. This catch HAS an
 //     observable side effect: on a failed clear it returns BEFORE
 //     removeTerminalDownloads(), so the finished rows stay visible and the
@@ -26,9 +24,10 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
+import { toaster } from "@decky/api";
 import { DownloadQueue } from "./DownloadQueue";
 import * as backend from "../api/backend";
-import { setDownloads, getDownloadState } from "../utils/downloadStore";
+import { setDownloads, getDownloadState, removeDownload } from "../utils/downloadStore";
 import type { DownloadItem } from "../types";
 
 // Local @decky/ui mock adds ProgressBar (not in the global stub) and exposes
@@ -114,6 +113,7 @@ describe("DownloadQueue", () => {
     vi.mocked(backend.pauseDownload).mockResolvedValue({ success: true, message: "" });
     vi.mocked(backend.resumeDownload).mockResolvedValue({ success: true, message: "" });
     vi.mocked(backend.clearCompletedDownloads).mockResolvedValue({ success: true, cleared: 0 });
+    vi.mocked(toaster.toast).mockClear();
   });
 
   afterEach(() => {
@@ -336,17 +336,36 @@ describe("DownloadQueue", () => {
       expect(cancel).not.toBeNull();
       await act(async () => {
         fireEvent.click(cancel!);
-        // Let the inline .catch chain settle.
         await Promise.resolve();
       });
       expect(backend.cancelDownload).toHaveBeenCalledWith(77);
+      // A successful cancel is silent — no toast.
+      expect(toaster.toast).not.toHaveBeenCalled();
     });
 
-    it("cancelDownload rejection is silently swallowed (truly-ignored boundary catch)", async () => {
-      // Per CLAUDE.md: the inline `.catch(() => {})` is a truly-ignored
-      // boundary catch — no observable side effect. We still exercise the
-      // call site to keep coverage on the catch arm and ensure the click
-      // does not crash the component.
+    it("a failing cancel result surfaces a toast (never a silent no-op)", async () => {
+      // #149 downloads-round: a cancel that could not act (the entry vanished
+      // between render and click) returns the failure shape; the click must be
+      // surfaced, not swallowed.
+      vi.mocked(backend.cancelDownload).mockResolvedValue({
+        success: false,
+        message: "No active download for this ROM",
+      });
+      vi.mocked(backend.getDownloadQueue).mockResolvedValue({
+        downloads: [makeItem({ rom_id: 5, rom_name: "Cancellable" })],
+      });
+      const { container } = render(<DownloadQueue onBack={() => {}} />);
+      await flushMount();
+
+      await act(async () => {
+        fireEvent.click(buttonByText(container, "Cancel Cancellable")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(toaster.toast).toHaveBeenCalledWith(expect.objectContaining({ body: "No active download for this ROM" }));
+    });
+
+    it("a cancelDownload rejection surfaces a toast", async () => {
       vi.mocked(backend.cancelDownload).mockRejectedValue(new Error("nope"));
       vi.mocked(backend.getDownloadQueue).mockResolvedValue({
         downloads: [makeItem({ rom_id: 5, rom_name: "Cancellable" })],
@@ -354,14 +373,39 @@ describe("DownloadQueue", () => {
       const { container } = render(<DownloadQueue onBack={() => {}} />);
       await flushMount();
 
-      const cancel = buttonByText(container, "Cancel Cancellable");
       await act(async () => {
-        fireEvent.click(cancel!);
+        fireEvent.click(buttonByText(container, "Cancel Cancellable")!);
         await Promise.resolve();
         await Promise.resolve();
       });
-      // Component still rendered normally — the catch swallowed cleanly.
+      // The rejection is surfaced (fallback copy), and the component didn't crash.
+      expect(toaster.toast).toHaveBeenCalledWith(expect.objectContaining({ body: "Could not cancel the download" }));
       expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("Cancellable (Genesis)");
+    });
+
+    it("a paused download cancelled + removed from the store disappears on the next poll (#149 downloads-round)", async () => {
+      // The row drops via the backend's terminal cancelled frame → the index.tsx
+      // store listener's removeDownload (stood in for here) → DownloadQueue's
+      // poll. No client-side 'cancelled' row lingers.
+      const paused = makeItem({ rom_id: 42, rom_name: "Paused", status: "paused", resumable: true });
+      vi.mocked(backend.getDownloadQueue).mockResolvedValue({ downloads: [paused] });
+      const { container } = render(<DownloadQueue onBack={() => {}} />);
+      await flushMount();
+
+      const cancel = buttonByText(container, "Cancel Paused");
+      expect(cancel).not.toBeNull();
+      await act(async () => {
+        fireEvent.click(cancel!);
+        await Promise.resolve();
+      });
+      expect(backend.cancelDownload).toHaveBeenCalledWith(42);
+
+      // Backend evicted + emitted the cancelled frame; the store loses the entry.
+      removeDownload(42);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(container.textContent).toContain("No downloads");
     });
   });
 

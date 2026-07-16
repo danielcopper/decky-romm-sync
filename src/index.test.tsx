@@ -23,12 +23,13 @@ import {
   getMetadataCachePage,
 } from "./api/backend";
 import { getSettingsResetState, setSettingsResetState } from "./utils/settingsResetStore";
+import { getDownloadState, setDownloads } from "./utils/downloadStore";
 import { getSyncProgress, setSyncProgress } from "./utils/syncProgress";
 import { estimateApplySeconds } from "./utils/syncEstimate";
 import { resetEta, weightedCoarseFraction } from "./utils/syncEta";
 import { recordSyncCreated, resetSyncDelta } from "./utils/syncDeltaStore";
 import { resetSyncCancel } from "./utils/syncManager";
-import type { DownloadCompleteEvent, SyncPlanData, SyncProgress, SyncStaleData } from "./types";
+import type { DownloadCompleteEvent, DownloadProgressEvent, SyncPlanData, SyncProgress, SyncStaleData } from "./types";
 
 vi.mock("./patches/gameDetailPatch", () => ({
   registerGameDetailPatch: vi.fn(),
@@ -183,6 +184,66 @@ describe("index.tsx — download_complete launch-options sync", () => {
     expect(logError).toHaveBeenCalledWith(
       expect.stringContaining("download_complete: failed to set launch options for rom 42"),
     );
+    plugin.onDismount();
+  });
+});
+
+describe("index.tsx — download_progress cancelled eviction (#149 downloads-round)", () => {
+  it("drops the entry from the store when a cancelled frame arrives", async () => {
+    const plugin = pluginFactory();
+    setDownloads([
+      {
+        rom_id: 42,
+        rom_name: "Paused",
+        platform_name: "N64",
+        file_name: "game.z64",
+        status: "paused",
+        progress: 0.5,
+        bytes_downloaded: 500,
+        total_bytes: 1000,
+        resumable: true,
+      },
+    ]);
+
+    act(() => {
+      emitDeckyEvent<[DownloadProgressEvent]>("download_progress", {
+        rom_id: 42,
+        rom_name: "Paused",
+        platform_name: "N64",
+        file_name: "game.z64",
+        status: "cancelled",
+        progress: 0.5,
+        bytes_downloaded: 500,
+        total_bytes: 1000,
+        resumable: true,
+      });
+    });
+
+    // Explicit discard → no residue in the store (which MainPage's count + the
+    // DownloadQueue view both read).
+    expect(getDownloadState().some((d) => d.rom_id === 42)).toBe(false);
+    plugin.onDismount();
+  });
+
+  it("updates in place (does not drop) for a non-cancelled frame", async () => {
+    const plugin = pluginFactory();
+    setDownloads([]);
+
+    act(() => {
+      emitDeckyEvent<[DownloadProgressEvent]>("download_progress", {
+        rom_id: 7,
+        rom_name: "Live",
+        platform_name: "N64",
+        file_name: "g.z64",
+        status: "downloading",
+        progress: 0.2,
+        bytes_downloaded: 200,
+        total_bytes: 1000,
+        resumable: false,
+      });
+    });
+
+    expect(getDownloadState().find((d) => d.rom_id === 7)?.status).toBe("downloading");
     plugin.onDismount();
   });
 });

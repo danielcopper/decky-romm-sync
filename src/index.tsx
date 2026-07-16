@@ -11,7 +11,7 @@ import { initUnitSyncManager, resetSyncCancel } from "./utils/syncManager";
 import { setSyncProgress, getSyncProgress, updateSyncProgress } from "./utils/syncProgress";
 import { estimateApplySeconds } from "./utils/syncEstimate";
 import { beginEtaRun } from "./utils/syncEta";
-import { updateDownload, getDownloadState } from "./utils/downloadStore";
+import { updateDownload, getDownloadState, removeDownload } from "./utils/downloadStore";
 import { handleGlobalDownloadFailure } from "./utils/downloadFailure";
 import { registerGameDetailPatch, unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
 import {
@@ -616,6 +616,15 @@ export default definePlugin(() => {
   const downloadProgressListener = addEventListener<[DownloadProgressEvent]>(
     "download_progress",
     (data: DownloadProgressEvent) => {
+      // A cancel is an explicit discard — drop the entry entirely so no
+      // "Cancelled" row lingers in the queue view or the QAM summary count
+      // (#149 downloads-round). Both the running-cancel and the paused-cancel
+      // backend paths emit this terminal frame, so this is the single place the
+      // store drops a cancelled download. Every other status updates in place.
+      if (data.status === "cancelled") {
+        removeDownload(data.rom_id);
+        return;
+      }
       // Carry the server's resumability verdict from the frame; a frame that
       // omits it (older shape) keeps the prior value instead of clobbering it.
       const prev = getDownloadState().find((d) => d.rom_id === data.rom_id);

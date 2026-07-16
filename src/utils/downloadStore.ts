@@ -24,6 +24,13 @@ export function updateDownload(item: DownloadItem): void {
   else _downloads.push(item);
 }
 
+// Drop a single entry by rom_id. The download_progress cancelled listener calls
+// this so a cancelled download — an explicit user discard — leaves no residue in
+// the queue view or QAM summary (#149 downloads-round). Idempotent.
+export function removeDownload(romId: number): void {
+  _downloads = _downloads.filter((d) => d.rom_id !== romId);
+}
+
 export function getDownloadState(): DownloadItem[] {
   return _downloads;
 }

@@ -334,6 +334,86 @@ class TestCancelDownload:
         assert result["success"] is False
         assert "No active download" in result["message"]
 
+    @pytest.mark.asyncio
+    async def test_cancels_paused_download_deletes_tmp_evicts_and_emits(self, plugin, tmp_path):
+        """A paused download has no live task: cancel deletes the partial .tmp,
+        emits the terminal cancelled frame, and evicts the entry (#149
+        downloads-round finding A/B). Previously this was a silent no-op."""
+        import decky
+
+        decky.emit.reset_mock()
+        plugin._download_service._loop = asyncio.get_event_loop()
+
+        roms_dir = tmp_path / "retrodeck" / "roms" / "n64"
+        roms_dir.mkdir(parents=True)
+        target_path = str(roms_dir / "zelda.z64")
+        tmp_file = target_path + ".tmp"
+        with open(tmp_file, "wb") as f:
+            f.write(b"\x00" * 256)  # the partial the pause kept for resume
+
+        plugin._download_service._download_queue[42] = {
+            "rom_id": 42,
+            "rom_name": "Zelda",
+            "platform_name": "Nintendo 64",
+            "file_name": "zelda.z64",
+            "status": "paused",
+            "progress": 0.3,
+            "bytes_downloaded": 300,
+            "total_bytes": 1000,
+            "resumable": True,
+            "_target_path": target_path,
+        }
+
+        result = await plugin.cancel_download(42)
+        await asyncio.sleep(0)  # let the scheduled cancelled-frame emit run + drain
+
+        assert result == {"success": True, "message": "Download cancelled"}
+        assert 42 not in plugin._download_service._download_queue  # evicted, no residue
+        assert not os.path.exists(tmp_file)  # partial deleted (no resume)
+        cancelled = [
+            c
+            for c in decky.emit.call_args_list
+            if c[0][0] == "download_progress" and c[0][1].get("status") == "cancelled"
+        ]
+        assert len(cancelled) == 1
+        assert cancelled[0][0][1]["rom_id"] == 42
+
+    @pytest.mark.asyncio
+    async def test_cancels_paused_download_without_recorded_target_still_evicts(self, plugin):
+        """A paused entry lacking ``_target_path`` (defensive) still cancels: no
+        tmp removal attempted, entry evicted, success returned. The startup sweep
+        reaps any orphaned .tmp."""
+        import decky
+
+        decky.emit.reset_mock()
+        plugin._download_service._loop = asyncio.get_event_loop()
+        plugin._download_service._download_queue[42] = {
+            "rom_id": 42,
+            "rom_name": "Zelda",
+            "platform_name": "Nintendo 64",
+            "file_name": "zelda.z64",
+            "status": "paused",
+        }
+
+        result = await plugin.cancel_download(42)
+        await asyncio.sleep(0)
+
+        assert result == {"success": True, "message": "Download cancelled"}
+        assert 42 not in plugin._download_service._download_queue
+
+    @pytest.mark.asyncio
+    async def test_cancel_no_task_and_not_paused_returns_failure(self, plugin):
+        """No live task AND the entry isn't paused → canonical failure shape, and
+        the non-paused entry is left untouched (not evicted)."""
+        plugin._download_service._download_queue[42] = {"rom_id": 42, "status": "downloading"}
+        result = await plugin.cancel_download(42)
+        assert result == {
+            "success": False,
+            "reason": "no_active_download",
+            "message": "No active download for this ROM",
+        }
+        assert 42 in plugin._download_service._download_queue
+
 
 class TestGetDownloadQueue:
     @pytest.mark.asyncio
@@ -372,6 +452,21 @@ class TestGetDownloadQueue:
         assert len(result["downloads"]) == 2
         statuses = {d["status"] for d in result["downloads"]}
         assert statuses == {"downloading", "completed"}
+
+    @pytest.mark.asyncio
+    async def test_strips_internal_underscore_keys_from_wire_shape(self, plugin):
+        """Internal ``_``-prefixed keys (e.g. ``_target_path`` on a paused entry,
+        kept only for the paused-cancel cleanup) never cross the wire."""
+        plugin._download_service._download_queue[1] = {
+            "rom_id": 1,
+            "rom_name": "Game A",
+            "status": "paused",
+            "_target_path": "/games/n64/game.z64",
+        }
+        result = await plugin.get_download_queue()
+        assert len(result["downloads"]) == 1
+        assert "_target_path" not in result["downloads"][0]
+        assert result["downloads"][0] == {"rom_id": 1, "rom_name": "Game A", "status": "paused"}
 
 
 class TestClearCompletedDownloads:
@@ -2912,7 +3007,9 @@ class TestDoDownloadCancelled:
         ):
             await plugin._download_service._do_download(42, rom_detail, target_path, "n64", "zelda.z64")
 
-        assert plugin._download_service._download_queue[42]["status"] == "cancelled"
+        # A cancel is an explicit discard: the entry is evicted, not left as a
+        # lingering "cancelled" row (#149 downloads-round).
+        assert 42 not in plugin._download_service._download_queue
         assert not os.path.exists(target_path)
         assert plugin._uow.rom_installs.get(42) is None
 
@@ -4546,7 +4643,9 @@ class TestDoDownloadCancelEmitsEvent:
         assert payload["progress"] == pytest.approx(0.3)
         assert payload["bytes_downloaded"] == 300
         assert payload["total_bytes"] == 1000
-        assert plugin._download_service._download_queue[42]["status"] == "cancelled"
+        # The terminal frame carries the final progress values from the entry,
+        # which is then evicted (#149 downloads-round) — the emit happens first.
+        assert 42 not in plugin._download_service._download_queue
 
 
 class TestConcurrencyReservation:
@@ -4821,7 +4920,9 @@ class TestCooperativeCancel:
         # The loop stopped near tick 3/4 — nowhere near 500. The transfer
         # really halted instead of running to completion.
         assert len(captured) <= 5
-        assert plugin._download_service._download_queue[42]["status"] == "cancelled"
+        # Cancel evicts its entry rather than leaving a "cancelled" row (#149
+        # downloads-round).
+        assert 42 not in plugin._download_service._download_queue
 
     @pytest.mark.asyncio
     async def test_cancel_download_sets_token_and_cancels_task(self, plugin):
@@ -5004,7 +5105,9 @@ class TestPauseResume:
         ):
             await plugin._download_service._do_download(42, rom_detail, target_path, "n64", "zelda.z64", control)
 
-        assert plugin._download_service._download_queue[42]["status"] == "cancelled"
+        # Cancel evicts its entry (#149 downloads-round) and deletes the partial
+        # .tmp — the contrast with pause, which keeps both for resume.
+        assert 42 not in plugin._download_service._download_queue
         assert not os.path.exists(target_path + _TMP_EXT_LITERAL)
 
     @pytest.mark.asyncio

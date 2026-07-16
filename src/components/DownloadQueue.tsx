@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, FC, Fragment } from "react";
 import { PanelSection, PanelSectionRow, ButtonItem, Field, ProgressBar } from "@decky/ui";
+import { toaster } from "@decky/api";
 import {
   getDownloadQueue,
   cancelDownload,
@@ -66,10 +67,17 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
   }, []);
 
   const handleCancel = async (romId: number) => {
+    // A successful cancel (running OR paused) drops the row via the backend's
+    // terminal cancelled frame → store listener. A cancel that could not act
+    // (the entry vanished between render and click) returns the failure shape —
+    // surface it so the click is never a silent no-op (#149 downloads-round).
     try {
-      await cancelDownload(romId);
+      const result = await cancelDownload(romId);
+      if (!result.success) {
+        toaster.toast({ title: "RomM Sync", body: result.message || "Could not cancel the download" });
+      }
     } catch {
-      // ignore
+      toaster.toast({ title: "RomM Sync", body: "Could not cancel the download" });
     }
   };
 

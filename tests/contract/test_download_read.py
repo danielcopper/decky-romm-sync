@@ -15,6 +15,8 @@ with that fix.
 
 from __future__ import annotations
 
+import asyncio
+
 from ._seed import seed_install
 
 # ── get_download_queue ───────────────────────────────────────────────────
@@ -84,6 +86,44 @@ async def test_resume_download_not_paused_failure_shape(harness):
         "reason": "not_paused",
         "message": "No paused download for this ROM",
     }
+
+
+async def test_cancel_no_active_download_failure_shape(harness):
+    """Cancelling a ROM with no active or paused download → canonical failure shape."""
+    result = await harness.plugin.cancel_download(999)
+    assert result == {
+        "success": False,
+        "reason": "no_active_download",
+        "message": "No active download for this ROM",
+    }
+
+
+async def test_cancel_paused_download_evicts_and_get_queue_omits_it(harness):
+    """Cancelling a paused download (no live task) evicts its entry, and a
+    following ``get_download_queue`` no longer lists it (#149 downloads-round).
+
+    The pre-fix bug: ``cancel_download`` required a live task, so a paused
+    download's cancel silently no-op'd and its row lingered.
+    """
+    queue = harness.plugin._download_service._download_queue
+    queue[7] = {
+        "rom_id": 7,
+        "rom_name": "Paused",
+        "platform_name": "N64",
+        "file_name": "game.z64",
+        "status": "paused",
+        "progress": 0.5,
+        "bytes_downloaded": 500,
+        "total_bytes": 1000,
+        "resumable": True,
+    }
+
+    result = await harness.plugin.cancel_download(7)
+    await asyncio.sleep(0)  # let the scheduled cancelled-frame emit run + drain
+
+    assert result == {"success": True, "message": "Download cancelled"}
+    after = await harness.plugin.get_download_queue()
+    assert all(d["rom_id"] != 7 for d in after["downloads"])
 
 
 # ── clear_completed_downloads (#149) ─────────────────────────────────────
