@@ -95,12 +95,21 @@ def _first_error_reason(errors: list[str]) -> str:
     Per-file dispatch records each failure as ``"<source>: <reason>"`` where
     ``<source>`` is the save filename (or a fixed label like ``"Failed to fetch
     saves"``) and ``<reason>`` is the :func:`lib.errors.classify_error` message.
-    Neither the filename nor the labels ever contain ``": "``, so splitting on the
-    first occurrence isolates the reason — a 403 yields "Access denied — ...",
-    never the filename. Falls back to the whole entry when it carries no ``": "``
-    separator. *errors* must be non-empty.
+    Split on the LAST ``": "`` (``rpartition``): the source can itself contain a
+    colon — a save filename derives from the ROM name, which may include one
+    (e.g. ``"Grand Theft Auto: San Andreas.srm"``) — so splitting on the last
+    separator keeps that colon on the source side and isolates the reason.
+
+    Tradeoff, stated honestly: a ``<reason>`` that itself contained ``": "``
+    would be truncated to its final segment. Every classified ``classify_error``
+    message (auth, forbidden, SSL, timeout, connection, server, not-found,
+    unsupported) uses an em-dash separator and never contains ``": "``, and the
+    fixed dispatch labels don't either — so the common cases are exact; only the
+    rare ``str(exc)`` fallback (UNKNOWN / generic ``RommApiError``) carrying an
+    internal ``": "`` loses its head. Falls back to the whole entry when there is
+    no ``": "`` separator. *errors* must be non-empty.
     """
-    _source, sep, reason = errors[0].partition(": ")
+    _source, sep, reason = errors[0].rpartition(": ")
     return reason if sep and reason else errors[0]
 
 

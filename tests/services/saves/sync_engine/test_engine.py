@@ -1024,6 +1024,25 @@ class TestSummarizeSyncResult:
     def test_first_error_reason_falls_back_without_a_separator(self):
         assert _first_error_reason(["bare message"]) == "bare message"
 
+    def test_first_error_reason_handles_a_colon_in_the_filename(self):
+        # A ROM name may contain a colon ("Grand Theft Auto: San Andreas"), so its
+        # save filename does too; splitting on the LAST ": " keeps that colon on
+        # the source side and the reason must not leak a filename fragment.
+        errors = ["Grand Theft Auto: San Andreas.srm: Access denied — your account lacks permissions for this action"]
+        assert _first_error_reason(errors) == "Access denied — your account lacks permissions for this action"
+
+    def test_first_error_reason_truncates_a_reason_that_contains_a_colon(self):
+        # Documented tradeoff of the last-separator split: a reason carrying an
+        # internal ": " (only the rare str(exc) fallback) loses its head.
+        assert _first_error_reason(["game.srm: weird: colon reason"]) == "colon reason"
+
+    def test_summarize_uses_the_bare_reason_for_a_colon_filename(self):
+        # End-to-end copy: a total failure on a colon-named ROM's save shows the
+        # bare classified reason, never a filename fragment (#1334).
+        errors = ["Game: Subtitle.srm: Access denied — your account lacks permissions for this action"]
+        msg = _summarize_sync_result("Uploaded 0 save(s)", synced=0, errors=errors, conflicts=0)
+        assert msg == "Access denied — your account lacks permissions for this action"
+
 
 class TestSyncEngineDelegates:
     """Cover the thin delegate methods on SyncEngine that forward to MatrixExecutor
