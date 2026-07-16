@@ -6,7 +6,6 @@ import {
   Field,
   Focusable,
   ProgressBar,
-  ProgressBarWithInfo,
   ToggleField,
   Spinner,
   DialogButton,
@@ -1427,16 +1426,39 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         <PanelSection>
           {activeDownloads.slice(0, 2).map((item) => (
             <PanelSectionRow key={item.rom_id}>
-              <ProgressBarWithInfo
-                {...(item.total_bytes > 0 ? { nProgress: (item.bytes_downloaded / item.total_bytes) * 100 } : {})}
-                indeterminate={item.total_bytes === 0}
-                sOperationText={item.rom_name}
-                sTimeRemaining={
-                  item.total_bytes > 0
-                    ? `${formatBytes(item.bytes_downloaded)} / ${formatBytes(item.total_bytes)}`
-                    : formatBytes(item.bytes_downloaded)
-                }
-              />
+              {/* Own the caption in a full-width row and use the bare ProgressBar.
+                  ProgressBarWithInfo is a Steam Field (label column | bar column);
+                  with the rom name in sOperationText the empty bar column gets
+                  squeezed into the right half and clips (#751). The bare
+                  ProgressBar spans the full panel width (mirrors the sync-progress
+                  fix above and the DownloadQueue rows). */}
+              <div style={{ width: "100%" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                    fontSize: "12px",
+                    marginBottom: "4px",
+                  }}
+                >
+                  {/* Wrap a long ROM caption to as many lines as needed instead
+                      of clipping it (shared wrap rule) — the bytes column stays
+                      pinned top-right. */}
+                  <span data-testid="dl-caption" style={wrapText}>
+                    {item.rom_name}
+                  </span>
+                  <span data-testid="dl-bytes" style={{ flexShrink: 0 }}>
+                    {item.total_bytes > 0
+                      ? `${formatBytes(item.bytes_downloaded)} / ${formatBytes(item.total_bytes)}`
+                      : formatBytes(item.bytes_downloaded)}
+                  </span>
+                </div>
+                <ProgressBar
+                  indeterminate={item.total_bytes === 0}
+                  {...(item.total_bytes > 0 ? { nProgress: (item.bytes_downloaded / item.total_bytes) * 100 } : {})}
+                />
+              </div>
             </PanelSectionRow>
           ))}
           {activeDownloads.length > 2 && (

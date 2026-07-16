@@ -129,9 +129,9 @@ vi.mock("../utils/syncManager", () => ({
   resetSyncCancel: vi.fn(),
 }));
 
-// Local @decky/ui re-mock — global stub lacks ProgressBarWithInfo (used to
-// render sync + download progress). Mirror the rest with thin pass-throughs
-// + a vi.fn showModal so we can capture ConfirmModal calls.
+// Local @decky/ui re-mock — global stub lacks ProgressBar (used to render sync
+// + download progress). Mirror the rest with thin pass-throughs + a vi.fn
+// showModal so we can capture ConfirmModal calls.
 vi.mock("@decky/ui", async () => {
   type AnyProps = Record<string, unknown> & { children?: unknown };
   const { createElement: ce } = await import("react");
@@ -189,22 +189,6 @@ vi.mock("@decky/ui", async () => {
         onCancel?: () => void;
       },
     ) => ce("div", { "data-testid": "confirm-modal" }, p.children as never),
-    ProgressBarWithInfo: (
-      p: AnyProps & {
-        nProgress?: number;
-        indeterminate?: boolean;
-        sOperationText?: string;
-        sTimeRemaining?: string;
-      },
-    ) =>
-      ce(
-        "div",
-        { "data-testid": "progress" },
-        ce("span", { "data-testid": "progress-op" }, p.sOperationText as never),
-        ce("span", { "data-testid": "progress-remaining" }, p.sTimeRemaining as never),
-        ce("span", { "data-testid": "progress-progress" }, String(p.nProgress)),
-        ce("span", { "data-testid": "progress-indeterminate" }, String(p.indeterminate)),
-      ),
     ProgressBar: (p: AnyProps & { nProgress?: number; indeterminate?: boolean }) =>
       ce(
         "div",
@@ -764,7 +748,7 @@ describe("MainPage", () => {
   // ===========================================================================
   // E. Module helpers — exercised via rendered output
   // ===========================================================================
-  describe("formatBytes (via active download progress remaining text)", () => {
+  describe("formatBytes (via active download bytes caption)", () => {
     async function renderWithActiveDownload(bytes: number, total: number): Promise<HTMLElement> {
       const item: DownloadItem = {
         rom_id: 1,
@@ -803,29 +787,29 @@ describe("MainPage", () => {
 
     it("renders bytes < 1024 as '<n> B'", async () => {
       const c = await renderWithActiveDownload(512, 1024);
-      const remaining = c.querySelector('[data-testid="progress-remaining"]');
-      expect(remaining?.textContent).toContain("512 B");
-      expect(remaining?.textContent).toContain("1.0 KB");
+      const bytes = c.querySelector('[data-testid="dl-bytes"]');
+      expect(bytes?.textContent).toContain("512 B");
+      expect(bytes?.textContent).toContain("1.0 KB");
     });
 
     it("renders bytes in MB range with 1 decimal", async () => {
       const c = await renderWithActiveDownload(2 * 1024 * 1024, 4 * 1024 * 1024);
-      const remaining = c.querySelector('[data-testid="progress-remaining"]');
-      expect(remaining?.textContent).toContain("2.0 MB");
-      expect(remaining?.textContent).toContain("4.0 MB");
+      const bytes = c.querySelector('[data-testid="dl-bytes"]');
+      expect(bytes?.textContent).toContain("2.0 MB");
+      expect(bytes?.textContent).toContain("4.0 MB");
     });
 
     it("renders bytes in GB range with 2 decimals", async () => {
       const c = await renderWithActiveDownload(Math.round(1.5 * 1024 * 1024 * 1024), 2 * 1024 * 1024 * 1024);
-      const remaining = c.querySelector('[data-testid="progress-remaining"]');
-      expect(remaining?.textContent).toContain("1.50 GB");
-      expect(remaining?.textContent).toContain("2.00 GB");
+      const bytes = c.querySelector('[data-testid="dl-bytes"]');
+      expect(bytes?.textContent).toContain("1.50 GB");
+      expect(bytes?.textContent).toContain("2.00 GB");
     });
 
     it("renders only the bytes_downloaded value when total_bytes is 0", async () => {
       const c = await renderWithActiveDownload(700, 0);
-      const remaining = c.querySelector('[data-testid="progress-remaining"]');
-      expect(remaining?.textContent).toBe("700 B");
+      const bytes = c.querySelector('[data-testid="dl-bytes"]');
+      expect(bytes?.textContent).toBe("700 B");
     });
   });
 
@@ -4093,7 +4077,9 @@ describe("MainPage", () => {
       ]);
       const container = await renderAndTick();
       expect(buttonByExactText(container, "View All")).not.toBeNull();
-      expect(container.textContent).toContain("Active");
+      // The rom name lands in the full-width caption (not clipped in a Field
+      // label column) — see the #751 ProgressBarWithInfo fix.
+      expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("Active");
     });
 
     it("shows '+N more downloading' when more than 2 active downloads", async () => {
@@ -4188,6 +4174,8 @@ describe("MainPage", () => {
       expect(progress?.textContent).toBe("25");
       const indet = container.querySelector('[data-testid="progress-indeterminate"]');
       expect(indet?.textContent).toBe("false");
+      expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("P");
+      expect(container.querySelector('[data-testid="dl-bytes"]')?.textContent).toBe("256 B / 1.0 KB");
     });
 
     it("active item with total_bytes === 0 renders indeterminate=true", async () => {
@@ -4207,6 +4195,8 @@ describe("MainPage", () => {
       const container = await renderAndTick();
       const indet = container.querySelector('[data-testid="progress-indeterminate"]');
       expect(indet?.textContent).toBe("true");
+      expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("P");
+      expect(container.querySelector('[data-testid="dl-bytes"]')?.textContent).toBe("0 B");
     });
   });
 
