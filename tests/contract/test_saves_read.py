@@ -22,10 +22,22 @@ Explicitly OUT of Phase 1 (NOT tested here, named as deferred):
 
 from __future__ import annotations
 
+import os
+
+from domain.rom_save_state import RomSaveState
 from lib.errors import RommConnectionError
 from lib.list_result import ErrorCode
 
-from ._seed import enable_save_sync, seed_confirmed_slot, seed_install, seed_rom, seed_server_save
+from ._seed import enable_save_sync, seed_confirmed_slot, seed_install, seed_rom, seed_save_state, seed_server_save
+
+
+def _write_local_save(harness, *, system: str, filename: str, content: bytes) -> None:
+    """Materialize a local save file under the harness saves tree."""
+    saves_dir = os.path.join(harness.plugin._retrodeck_paths.saves_path(), system)
+    os.makedirs(saves_dir, exist_ok=True)
+    with open(os.path.join(saves_dir, filename), "wb") as fh:
+        fh.write(content)
+
 
 # ── get_save_status ──────────────────────────────────────────────────────
 
@@ -69,6 +81,26 @@ async def test_get_save_status_server_failure_keeps_full_payload(harness):
     assert result["rom_id"] == 42
     assert "files" in result
     assert "save_sync_display" in result
+
+
+async def test_get_save_status_pending_upload_display(harness):
+    """A local file with no server save is pending upload → save_sync_display reports
+    the new pending/'Local changes' value, never a green 'synced' (#1334). The nested
+    shape (status/label/last_sync_check_at) is unchanged; only a new value appears."""
+    enable_save_sync(harness)
+    seed_install(harness, 42, system="gba", file_name="game.gba")
+    _write_local_save(harness, system="gba", filename="game.srm", content=b"local progress")
+    seed_save_state(harness, 42, RomSaveState(active_slot="default", slot_confirmed=True, system="gba"))
+
+    result = await harness.plugin.get_save_status(42)
+
+    files = {f["filename"]: f for f in result["files"]}
+    assert files["game.srm"]["status"] == "upload"
+    assert result["save_sync_display"] == {
+        "status": "pending",
+        "label": "Local changes",
+        "last_sync_check_at": None,
+    }
 
 
 # ── get_save_slots ───────────────────────────────────────────────────────

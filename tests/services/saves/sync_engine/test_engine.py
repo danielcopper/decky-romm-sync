@@ -15,8 +15,16 @@ import pytest
 
 from domain.rom_save_state import RomSaveState
 from domain.save_layout import ContentDir, InSaveDir
-from lib.errors import RommApiError, RommAuthError, RommConnectionError, RommSSLError, RommTimeoutError
+from lib.errors import (
+    RommApiError,
+    RommAuthError,
+    RommConnectionError,
+    RommForbiddenError,
+    RommSSLError,
+    RommTimeoutError,
+)
 from lib.list_result import ErrorCode
+from services.saves.sync_engine.engine import _first_error_reason, _summarize_sync_result
 from tests.services.saves._helpers import (
     _create_save,
     _do_sync,
@@ -843,12 +851,17 @@ class TestSyncRomSavesDisabledGuard:
 
 
 class TestSyncCallableErrorMessages:
-    """The error-count clause in each public callable's success message
-    (engine.py lines 318 / 380 / 414). Driven by stubbing do_sync_rom_saves
-    to return a non-empty errors list."""
+    """The failure ``message`` each public sync callable builds from the matrix
+    result (``_summarize_sync_result``). A total failure leads with the first
+    error's classified reason (never buried behind "Uploaded 0 save(s)"); a
+    partial run keeps the count summary and appends the reason; pre-launch
+    (download) keeps the plain count clause (#1334). Driven by stubbing
+    do_sync_rom_saves to return a non-empty errors list."""
 
     @pytest.mark.asyncio
     async def test_pre_launch_sync_message_includes_error_count(self, tmp_path):
+        # pre_launch keeps the plain count clause — the reason promotion is
+        # scoped to the upload-side callables (#1334).
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
@@ -866,7 +879,7 @@ class TestSyncCallableErrorMessages:
         assert "Downloaded" in result["message"]
 
     @pytest.mark.asyncio
-    async def test_post_exit_sync_message_includes_error_count(self, tmp_path):
+    async def test_post_exit_sync_promotes_reason_when_nothing_uploaded(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
@@ -880,11 +893,44 @@ class TestSyncCallableErrorMessages:
         result = await svc.post_exit_sync(42)
 
         assert result["success"] is False
-        assert "1 error(s)" in result["message"]
-        assert "Uploaded" in result["message"]
+        # A total failure leads with the bare reason, not "Uploaded 0 save(s)".
+        assert result["message"] == "timeout"
 
     @pytest.mark.asyncio
-    async def test_sync_rom_saves_message_includes_error_count(self, tmp_path):
+    async def test_post_exit_sync_partial_keeps_count_and_appends_reason(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+
+        def stub_sync(rom_id, *args):
+            return (2, ["pokemon.srm: timeout"], [])
+
+        svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
+
+        result = await svc.post_exit_sync(42)
+
+        assert result["success"] is False
+        assert result["message"] == "Uploaded 2 save(s), 1 error(s) — timeout"
+
+    @pytest.mark.asyncio
+    async def test_post_exit_sync_multiple_errors_count_the_extras(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+
+        def stub_sync(rom_id, *args):
+            return (0, ["a.srm: timeout", "b.srm: timeout", "c.srm: timeout"], [])
+
+        svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
+
+        result = await svc.post_exit_sync(42)
+
+        assert result["message"] == "timeout (+2 more)"
+
+    @pytest.mark.asyncio
+    async def test_sync_rom_saves_promotes_reason_when_nothing_synced(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
@@ -898,7 +944,85 @@ class TestSyncCallableErrorMessages:
         result = await svc.sync_rom_saves(42)
 
         assert result["success"] is False
-        assert "1 error(s)" in result["message"]
+        assert result["message"] == "502 bad gateway"
+
+
+class TestSyncCallablePromotesRealDispatchReason:
+    """The promoted message comes from a REAL classified failure dispatched
+    through the matrix executor — not a fabricated ``message`` — so a 403 on the
+    upload surfaces "Access denied …" in both the post-exit toast and the manual
+    sync result (#1334)."""
+
+    @pytest.mark.asyncio
+    async def test_post_exit_sync_surfaces_dispatched_403(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        svc._config.settings["sync_after_exit"] = True
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"user progress")
+
+        def forbidden_upload(*_a, **_k):
+            raise RommForbiddenError("403")
+
+        fake.upload_save = forbidden_upload  # type: ignore[method-assign]
+
+        result = await svc.post_exit_sync(42)
+
+        assert result["success"] is False
+        assert result["synced"] == 0
+        assert result["message"] == "Access denied — your account lacks permissions for this action"
+        # The raw per-file error still carries the filename for the log surface.
+        assert result["errors"][0].startswith("pokemon.srm:")
+
+    @pytest.mark.asyncio
+    async def test_sync_rom_saves_surfaces_dispatched_403(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"user progress")
+
+        def forbidden_upload(*_a, **_k):
+            raise RommForbiddenError("403")
+
+        fake.upload_save = forbidden_upload  # type: ignore[method-assign]
+
+        result = await svc.sync_rom_saves(42)
+
+        assert result["success"] is False
+        assert result["message"] == "Access denied — your account lacks permissions for this action"
+
+
+class TestSummarizeSyncResult:
+    """Value-exact copy for the pure message composer + reason extractor (engine.py)."""
+
+    def test_clean_run_returns_base_unchanged(self):
+        assert _summarize_sync_result("Uploaded 3 save(s)", synced=3, errors=[], conflicts=0) == "Uploaded 3 save(s)"
+
+    def test_total_failure_leads_with_bare_reason(self):
+        msg = _summarize_sync_result("Uploaded 0 save(s)", synced=0, errors=["a.srm: Access denied"], conflicts=0)
+        assert msg == "Access denied"
+
+    def test_total_failure_counts_the_extra_failures(self):
+        msg = _summarize_sync_result("Uploaded 0 save(s)", synced=0, errors=["a: x", "b: y", "c: z"], conflicts=0)
+        assert msg == "x (+2 more)"
+
+    def test_partial_run_keeps_count_then_appends_reason(self):
+        msg = _summarize_sync_result("Uploaded 2 save(s)", synced=2, errors=["a.srm: timeout"], conflicts=0)
+        assert msg == "Uploaded 2 save(s), 1 error(s) — timeout"
+
+    def test_conflicts_suffix_on_clean_run(self):
+        msg = _summarize_sync_result("Synced 1 save(s)", synced=1, errors=[], conflicts=2)
+        assert msg == "Synced 1 save(s), 2 conflict(s)"
+
+    def test_conflicts_suffix_after_promoted_reason(self):
+        msg = _summarize_sync_result("Uploaded 0 save(s)", synced=0, errors=["a: boom"], conflicts=1)
+        assert msg == "boom, 1 conflict(s)"
+
+    def test_first_error_reason_strips_the_filename_prefix(self):
+        assert _first_error_reason(["pokemon.srm: Access denied — nope"]) == "Access denied — nope"
+
+    def test_first_error_reason_falls_back_without_a_separator(self):
+        assert _first_error_reason(["bare message"]) == "bare message"
 
 
 class TestSyncEngineDelegates:

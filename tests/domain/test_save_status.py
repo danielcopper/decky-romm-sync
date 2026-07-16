@@ -49,10 +49,53 @@ class TestComputeSaveSyncDisplay:
         result = compute_save_sync_display(files, None)
         assert result == SaveSyncDisplay(status="none", label="No local saves", last_sync_check_at=None)
 
-    def test_upload_status_counts_as_local(self):
+    def test_upload_status_is_pending_local_changes(self):
+        """An upload-pending file counts as local but is NOT synced — it reports
+        pending/'Local changes' so a failed post-exit upload can't read as synced (#1334)."""
         files = [{"status": "upload", "local_path": None}]
         result = compute_save_sync_display(files, None)
-        assert result == SaveSyncDisplay(status="synced", label="Not synced", last_sync_check_at=None)
+        assert result == SaveSyncDisplay(status="pending", label="Local changes", last_sync_check_at=None)
+
+    def test_upload_does_not_collapse_to_synced_even_with_recent_check(self):
+        """The pre-#1334 bug: a local file pending upload + a recent sync check
+        collapsed to a green 'synced'. It must now report pending/'Local changes'."""
+        files = [{"status": "upload", "local_path": "/saves/test.srm"}]
+        result = compute_save_sync_display(files, "2026-02-17T10:31:00+00:00")
+        assert result == SaveSyncDisplay(status="pending", label="Local changes", last_sync_check_at=None)
+
+    def test_download_with_local_is_pending_server_newer(self):
+        """A slot with local saves where the server is newer reports pending/'Server newer',
+        not a green 'synced' (#1334)."""
+        files = [
+            {"status": "synced", "local_path": "/saves/a.srm"},
+            {"status": "download", "local_path": "/saves/b.srm"},
+        ]
+        result = compute_save_sync_display(files, "2026-02-17T10:31:00+00:00")
+        assert result == SaveSyncDisplay(status="pending", label="Server newer", last_sync_check_at=None)
+
+    def test_upload_wins_over_download_in_mixed_slot(self):
+        """When both an upload and a download are pending, 'Local changes' takes precedence."""
+        files = [
+            {"status": "upload", "local_path": "/saves/a.srm"},
+            {"status": "download", "local_path": "/saves/b.srm"},
+        ]
+        result = compute_save_sync_display(files, "2026-02-17T10:31:00+00:00")
+        assert result == SaveSyncDisplay(status="pending", label="Local changes", last_sync_check_at=None)
+
+    def test_display_statuses_enumerated(self):
+        """Every display status the frontend must handle, driven from representative inputs."""
+        cases = {
+            "none": compute_save_sync_display([], None),
+            "conflict": compute_save_sync_display([{"status": "conflict", "local_path": "/s/a.srm"}], None),
+            "pending": compute_save_sync_display([{"status": "upload", "local_path": "/s/a.srm"}], None),
+            "synced": compute_save_sync_display([{"status": "synced", "local_path": "/s/a.srm"}], None),
+        }
+        assert {expected: got.status for expected, got in cases.items()} == {
+            "none": "none",
+            "conflict": "conflict",
+            "pending": "pending",
+            "synced": "synced",
+        }
 
     def test_local_path_present_counts_as_local(self):
         files = [{"status": "skip", "local_path": "/saves/test.srm"}]

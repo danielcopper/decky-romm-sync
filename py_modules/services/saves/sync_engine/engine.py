@@ -89,6 +89,46 @@ if TYPE_CHECKING:
 __all__ = ["MatrixOutcome", "SyncEngine", "SyncEngineConfig"]
 
 
+def _first_error_reason(errors: list[str]) -> str:
+    """Return the classified reason of the first sync error, stripped of its source.
+
+    Per-file dispatch records each failure as ``"<source>: <reason>"`` where
+    ``<source>`` is the save filename (or a fixed label like ``"Failed to fetch
+    saves"``) and ``<reason>`` is the :func:`lib.errors.classify_error` message.
+    Neither the filename nor the labels ever contain ``": "``, so splitting on the
+    first occurrence isolates the reason — a 403 yields "Access denied — ...",
+    never the filename. Falls back to the whole entry when it carries no ``": "``
+    separator. *errors* must be non-empty.
+    """
+    _source, sep, reason = errors[0].partition(": ")
+    return reason if sep and reason else errors[0]
+
+
+def _summarize_sync_result(base: str, *, synced: int, errors: list[str], conflicts: int) -> str:
+    """Compose a sync callable's result ``message``, surfacing the failure reason (#1334).
+
+    A total failure (``synced == 0`` with errors) leads with the first error's
+    classified reason — never the "Uploaded 0 save(s), 1 error(s)" count summary
+    that buries it in ``errors[0]`` — and appends ``"(+N more)"`` when other files
+    also failed. A partial run (some transferred, some failed) keeps the ``base``
+    count summary and appends the first reason after an em-dash. A clean run
+    returns ``base`` unchanged. A surfaced-conflict count is appended after the
+    error clause in every case, preserving the pre-#1334 conflict suffix.
+    """
+    if errors:
+        reason = _first_error_reason(errors)
+        if synced == 0:
+            extra = len(errors) - 1
+            msg = f"{reason} (+{extra} more)" if extra else reason
+        else:
+            msg = f"{base}, {len(errors)} error(s) — {reason}"
+    else:
+        msg = base
+    if conflicts:
+        msg += f", {conflicts} conflict(s)"
+    return msg
+
+
 @dataclass(frozen=True)
 class SyncEngineConfig:
     """Frozen wiring bundle handed to ``SyncEngine.__init__``.
@@ -745,11 +785,9 @@ class SyncEngine:
                     len(conflicts),
                 )
 
-                msg = f"Uploaded {synced} save(s)"
-                if errors:
-                    msg += f", {len(errors)} error(s)"
-                if conflicts:
-                    msg += f", {len(conflicts)} conflict(s)"
+                msg = _summarize_sync_result(
+                    f"Uploaded {synced} save(s)", synced=synced, errors=errors, conflicts=len(conflicts)
+                )
                 return {
                     "success": len(errors) == 0,
                     "message": msg,
@@ -805,11 +843,9 @@ class SyncEngine:
 
                 synced, errors, conflicts = await self._run_rom_sync(rom_id)
 
-                msg = f"Synced {synced} save(s)"
-                if errors:
-                    msg += f", {len(errors)} error(s)"
-                if conflicts:
-                    msg += f", {len(conflicts)} conflict(s)"
+                msg = _summarize_sync_result(
+                    f"Synced {synced} save(s)", synced=synced, errors=errors, conflicts=len(conflicts)
+                )
                 return {
                     "success": len(errors) == 0,
                     "message": msg,
@@ -933,11 +969,12 @@ class SyncEngine:
                         await self._close_negotiate_session(session_id, session_counts[0], session_counts[1])
 
                 conflicts_count = len(all_conflicts)
-                msg = f"Synced {total_synced} save(s) across {rom_count} ROM(s)"
-                if total_errors:
-                    msg += f", {len(total_errors)} error(s)"
-                if conflicts_count:
-                    msg += f", {conflicts_count} conflict(s)"
+                msg = _summarize_sync_result(
+                    f"Synced {total_synced} save(s) across {rom_count} ROM(s)",
+                    synced=total_synced,
+                    errors=total_errors,
+                    conflicts=conflicts_count,
+                )
                 return {
                     "success": len(total_errors) == 0,
                     "message": msg,

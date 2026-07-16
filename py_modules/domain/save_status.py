@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-SaveSyncStatus = Literal["synced", "conflict", "none"]
+SaveSyncStatus = Literal["synced", "pending", "conflict", "none"]
 
 
 @dataclass(frozen=True)
@@ -71,10 +71,17 @@ def compute_save_sync_display(
 ) -> SaveSyncDisplay:
     """Compute save sync display status and label.
 
-    Returns ``SaveSyncDisplay`` with ``status`` ('synced' | 'conflict' |
-    'none'), ``label`` (static text or ``None`` when the frontend formats
-    a time-ago label), and ``last_sync_check_at`` (passthrough for the
-    time-ago case).
+    Returns ``SaveSyncDisplay`` with ``status`` ('synced' | 'pending' |
+    'conflict' | 'none'), ``label`` (static text or ``None`` when the
+    frontend formats a time-ago label), and ``last_sync_check_at``
+    (passthrough for the time-ago case).
+
+    A file the matrix marks ``"upload"`` (local changes to push) or
+    ``"download"`` (server is newer) is NOT synced: the display reports
+    ``status="pending"`` — "Local changes" or "Server newer" — so a failed
+    post-exit upload can no longer masquerade as a green "synced" state
+    (#1334). Only when every local file is at rest ('synced' / 'skip') does
+    the display report ``status="synced"``.
 
     When *server_query_failed* is True the server's save list could not
     be fetched, so the matrix verdict on each file is unreliable. The
@@ -93,6 +100,10 @@ def compute_save_sync_display(
 
     has_local = any(f.get("local_path") or f.get("status") in ("synced", "upload") for f in files)
     if has_local:
+        if any(f.get("status") == "upload" for f in files):
+            return SaveSyncDisplay(status="pending", label="Local changes", last_sync_check_at=None)
+        if any(f.get("status") == "download" for f in files):
+            return SaveSyncDisplay(status="pending", label="Server newer", last_sync_check_at=None)
         if last_sync_check_at:
             return SaveSyncDisplay(status="synced", label=None, last_sync_check_at=last_sync_check_at)
         return SaveSyncDisplay(status="synced", label="Not synced", last_sync_check_at=None)
