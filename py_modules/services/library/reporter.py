@@ -713,26 +713,27 @@ class SyncReporter:
     def clear_sync_cache(self):
         """Force a full re-fetch AND a full re-apply on the next sync.
 
-        The incremental-skip gate (fetcher) keys off two checkpoints: the newest
-        completed ``SyncRun`` (the library-wide ``last_sync``, also read by
-        ``get_sync_stats``) and the per-platform ``PlatformSyncState`` completion
-        stamps (ADR-0023). "Force Full Sync" must reset BOTH — clearing only the
-        runs would leave the per-platform stamps in place, and each stamp is its
-        own ``effective_last_sync`` that would still skip an unchanged platform.
-        Deleting the run history (every terminal run, not only completed ones, so
-        no stale cancelled/interrupted/paused/errored run lingers as the last-attempt "Last
-        sync" hint) and clearing every stamp in one short write UoW resets both reads so
-        every platform full-fetches next time (and "Last sync" honestly reads
-        "Never" until a fresh run completes).
+        The incremental-skip gate (fetcher) is stamp-based: its sole skip
+        authority is the per-platform ``PlatformSyncState`` completion stamp
+        (ADR-0023), each of which is its own ``effective_last_sync``. So the
+        full re-fetch is armed by clearing every stamp — no platform then holds
+        skip authority and each full-fetches next time. The recorded
+        ``applied_launch_options`` are reset to NULL in the same write UoW, so
+        the delta apply (ADR-0025) skips nothing on that run: "force" also means
+        force past the per-item skip — the one repair path for Steam-side drift
+        the recorded value cannot see (a manually edited or corrupted shortcut).
+        The re-apply re-records every value.
 
-        The recorded ``applied_launch_options`` are reset to NULL in the same
-        UoW, so the delta apply (ADR-0025) skips nothing on that run: "force"
-        also means force past the per-item skip — the one repair path for
-        Steam-side drift the recorded value cannot see (a manually edited or
-        corrupted shortcut). The re-apply re-records every value.
+        The ``SyncRun`` history is deliberately **preserved**: it feeds no skip
+        gate (the fetcher never reads it), and it is the source of the "Last
+        sync" display — the newest completed run's ``last_sync`` plus the newest
+        terminal run's last-attempt hint, both read by ``get_sync_stats``.
+        Deleting it forced nothing and only blanked the display to "Never" right
+        after a reset (#1318). Keeping it means a post-force preview shows
+        collections/platforms as "unchanged" (they exist in Steam; membership
+        did not change), which is correct.
         """
         with self._uow_factory() as uow:
-            uow.sync_runs.delete_history()
             uow.platform_sync_state.clear()
             uow.roms.clear_all_applied_launch_options()
         self._logger.info("Sync cache cleared — next sync will fully re-fetch and re-apply")

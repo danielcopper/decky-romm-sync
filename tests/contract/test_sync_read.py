@@ -104,6 +104,31 @@ async def test_get_sync_stats_counts_bound_roms(harness):
     assert result["total_shortcuts"] == 1
 
 
+async def test_clear_sync_cache_preserves_last_sync(harness):
+    """Force Full Sync preserves the run history, so get_sync_stats still reads
+    the completed run's last_sync + a newer failed attempt afterwards (#1318).
+
+    The reset clears the fetcher's skip authority (per-platform stamps) but must
+    NOT blank the Last-sync display — the on-wire contract the QAM renders.
+    """
+    from domain.sync_run import SyncRun
+
+    completed = SyncRun.start(id="run-ok", at="2025-06-01T17:00:00", platforms_planned=1, roms_planned=1)
+    completed.complete("2025-06-01T17:10:00", ["snes"], [])
+    cancelled = SyncRun.start(id="run-x", at="2025-06-01T18:00:00", platforms_planned=1, roms_planned=1)
+    cancelled.mark_cancelled("2025-06-01T18:05:00", "Sync cancelled")
+    with harness.uow_factory() as uow:
+        uow.sync_runs.save(completed)
+        uow.sync_runs.save(cancelled)
+
+    result = await harness.plugin.clear_sync_cache()
+    assert result == {"success": True, "message": "Next sync will fully re-fetch and re-apply"}
+
+    stats = await harness.plugin.get_sync_stats()
+    assert stats["last_sync"] == "2025-06-01T17:10:00"
+    assert stats["last_attempt"] == {"finished_at": "2025-06-01T18:05:00", "status": "cancelled"}
+
+
 # ── get_platforms ────────────────────────────────────────────────────────
 
 

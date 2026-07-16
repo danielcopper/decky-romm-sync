@@ -1036,15 +1036,17 @@ class TestAckMatchesActiveUnit:
 
 
 class TestClearSyncCache:
-    """Tests for clear_sync_cache() — Force Full Sync resets the completed-run history."""
+    """Tests for clear_sync_cache() — Force Full Sync clears the per-platform stamps
+    and the recorded launch options but PRESERVES the run history, so the Last-sync
+    display stays truthful (#1318)."""
 
-    def test_deletes_completed_runs_so_last_sync_resets(self, plugin):
-        """After clear, no completed run remains → get_latest_completed is None and last_sync resets."""
+    def test_preserves_completed_run_so_last_sync_survives(self, plugin):
+        """After clear, the completed run remains → get_latest_completed is set and last_sync still reads its time."""
         from domain.sync_run import SyncRun
 
         uow = plugin._uow
         run = SyncRun.start(id="run-1", at="2025-01-01T00:00:00", platforms_planned=1, roms_planned=1)
-        run.complete("2025-01-01T00:00:00", ["N64"], [])
+        run.complete("2025-01-01T00:10:00", ["N64"], [])
         with uow:
             uow.sync_runs.save(run)
 
@@ -1052,23 +1054,28 @@ class TestClearSyncCache:
 
         assert result["success"] is True
         with uow:
-            assert uow.sync_runs.get_latest_completed() is None
-        # The derived last_sync read now resets to None.
+            assert uow.sync_runs.get_latest_completed() is not None
+        # The derived last_sync read still surfaces the completed run — no reset to "Never".
         stats = plugin._sync_service.get_sync_stats()
-        assert stats["last_sync"] is None
+        assert stats["last_sync"] == "2025-01-01T00:10:00"
 
-    def test_keeps_running_run(self, plugin):
-        """A running run is untouched — only terminal history is cleared."""
+    def test_leaves_run_history_untouched(self, plugin):
+        """Force Full Sync deletes no runs — a completed run AND a running run both
+        survive the reset (it clears stamps + recorded launch options only)."""
         from domain.sync_run import SyncRun
 
         uow = plugin._uow
+        completed = SyncRun.start(id="run-done", at="2025-01-01T00:00:00", platforms_planned=1, roms_planned=1)
+        completed.complete("2025-01-01T00:10:00", ["N64"], [])
         running = SyncRun.start(id="run-live", at="2025-02-01T00:00:00", platforms_planned=1, roms_planned=1)
         with uow:
+            uow.sync_runs.save(completed)
             uow.sync_runs.save(running)
 
         plugin._sync_service.clear_sync_cache()
 
         with uow:
+            assert uow.sync_runs.get("run-done") is not None
             assert uow.sync_runs.get_running() is not None
 
     def test_resets_recorded_launch_options_so_the_next_apply_skips_nothing(self, plugin):
@@ -1088,13 +1095,14 @@ class TestClearSyncCache:
         with uow:
             assert uow.roms.get(7).applied_launch_options is None
 
-    def test_reset_leaves_last_sync_never_not_a_stale_cancelled_attempt(self, plugin):
-        """After Force Full Sync, "Last sync" reads Never — not a stale cancelled run.
+    def test_preserves_last_sync_and_a_newer_cancelled_attempt(self, plugin):
+        """After Force Full Sync, BOTH a completed run's last_sync AND a newer
+        cancelled run's last-attempt hint survive (#1318).
 
-        clear_sync_cache deletes the completed run; if it left older cancelled
-        runs behind, the last-attempt hint would surface one as the "Last sync"
-        state right after a reset (the on-device #1025 regression). Clearing all
-        terminal history keeps last_sync + last_attempt both None.
+        The old behaviour deleted every terminal run so the display blanked to
+        "Never" right after a reset. Preserving history keeps the honest
+        "17:48 (cancelled)"-style display; the force still re-fetches (stamps
+        cleared) without touching what the panel shows.
         """
         from domain.sync_run import SyncRun
 
@@ -1110,8 +1118,27 @@ class TestClearSyncCache:
         plugin._sync_service.clear_sync_cache()
 
         stats = plugin._sync_service.get_sync_stats()
+        assert stats["last_sync"] == "2025-01-01T00:10:00"
+        assert stats["last_attempt"] == {"finished_at": "2025-01-01T01:05:00", "status": "cancelled"}
+
+    def test_preserves_a_lone_failed_attempt_across_the_reset(self, plugin):
+        """The #1318 core case: with only a non-completed run (a resume situation),
+        Force Full Sync no longer blanks the display to "Never" — the interrupted
+        attempt survives so last_attempt still surfaces it.
+        """
+        from domain.sync_run import SyncRun
+
+        uow = plugin._uow
+        interrupted = SyncRun.start(id="run-i", at="2025-01-01T00:00:00", platforms_planned=1, roms_planned=1)
+        interrupted.mark_interrupted("2025-01-01T00:05:00", reason="external death")
+        with uow:
+            uow.sync_runs.save(interrupted)
+
+        plugin._sync_service.clear_sync_cache()
+
+        stats = plugin._sync_service.get_sync_stats()
         assert stats["last_sync"] is None
-        assert stats["last_attempt"] is None
+        assert stats["last_attempt"] == {"finished_at": "2025-01-01T00:05:00", "status": "interrupted"}
 
     def test_clears_platform_completion_stamps(self, plugin):
         """Force Full Sync also drops the per-platform completion stamps (ADR-0023).

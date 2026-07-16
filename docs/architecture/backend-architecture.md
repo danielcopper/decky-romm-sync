@@ -485,8 +485,10 @@ final chunk leaves none; and the **local destructive flows** — DangerZone remo
 `report_removal_results`) plus the Steam-UI-deletion reconcile (`reconcile_live_shortcuts`) — delete the touched
 platforms' stamps in the same write UoW as the unbind. The reporter's server-side stale removal is the deliberate
 exception (it leaves the stamp, since a server-dropped ROM lowers RomM's `rom_count` and the count guard catches it).
-"Force Full Sync" (`clear_sync_cache`) clears every stamp alongside the completed-run history, so both skip references
-reset together.
+"Force Full Sync" (`clear_sync_cache`) clears every stamp (and resets the recorded `applied_launch_options` to NULL),
+which is the entire full-re-fetch + full-re-apply arm — the stamps are the fetcher's sole skip authority. The
+`sync_runs` history is deliberately **preserved** (#1318): it feeds no skip gate and is the source of the "Last sync"
+display, so deleting it forced nothing and only blanked the panel to "Never" right after a reset.
 
 **Single-owner run lifecycle (#1202).** The run-lifecycle pair — `sync_state` (idle/running/cancelling) and
 `current_sync_id` — is mutated **only** through four verb methods on `LibrarySyncStateBox`, never by direct field

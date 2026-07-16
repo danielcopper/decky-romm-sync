@@ -326,19 +326,6 @@ class SyncRunRepository(Protocol):
         """Return any run with status ``running``, or ``None`` (is-a-sync-running check)."""
         ...
 
-    def delete_history(self) -> None:
-        """Delete every terminal run (keeping any ``running`` one) so both the
-        ``last_sync`` and last-attempt reads return ``None``.
-
-        Backs the "Force Full Sync" reset: clearing the run history resets the
-        ``last_sync`` the incremental-skip gate keys off (forcing a full re-fetch)
-        AND drops the accumulated cancelled/paused/interrupted/errored runs the last-attempt
-        hint reads — otherwise a stale cancelled run would surface as the "Last sync"
-        state right after a reset. A ``running`` row is preserved so a reset can
-        never orphan an in-flight run. (library/reporter.py)
-        """
-        ...
-
 
 class PlatformSyncStateRepository(Protocol):
     """Persistence seam for the ``PlatformSyncState`` aggregate (per-platform completion stamp).
@@ -369,8 +356,10 @@ class PlatformSyncStateRepository(Protocol):
     def clear(self) -> None:
         """Drop every stamp so no platform skips next run.
 
-        Backs the "Force Full Sync" reset alongside the completed-run history:
-        clearing the stamps forces every platform to full-fetch. (library/reporter.py)
+        Backs the "Force Full Sync" reset: the stamps are the fetcher's sole skip
+        authority, so clearing them forces every platform to full-fetch. The
+        ``SyncRun`` history is left intact (it feeds no skip gate and is the
+        "Last sync" display source, #1318). (library/reporter.py)
         """
         ...
 
