@@ -61,6 +61,9 @@ Concretely: after a save, leave the plugin's QAM panel and re-enter it (back out
 re-navigate to a patched game-detail page — to see the change. Keyboard shortcuts in the BPM window: **Ctrl+2** opens
 the Quick Access Menu, **Ctrl+1** the main menu.
 
+Just want the window, not the loop? `mise run dev:bpm [display]` opens and places the same windowed Big Picture without
+deploying or watching anything — useful for eyeballing a one-off `mise run dev` test build.
+
 ### Choosing the display
 
 The optional argument is matched against the **real outputs** of the machine — output naming varies between Decks and

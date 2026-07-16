@@ -238,6 +238,21 @@ run = '''
 exec python3 scripts/dev_ui_scale.py "$usage_mode"
 '''
 
+[tasks."dev:bpm"]
+description = "Open windowed Big Picture on a chosen monitor (no deploy, no watch loop)"
+raw = true
+usage = '''
+arg "[display]" help="Monitor for the Big Picture window: 'internal' or an output name (dp2, DP-3, ...)" default="internal"
+complete "display" run="bash scripts/dev_open_bpm.sh --list"
+'''
+run = '''
+# Opens BPM non-blocking (starting Steam straight into it if it isn't running)
+# and places the window on the chosen display via a short-lived KWin script —
+# the same helper dev:watch and dev:bpm-reset use, without their deploy /
+# restart halves. Pairs with a one-off `mise run dev` test build.
+exec bash scripts/dev_open_bpm.sh "$usage_display"
+'''
+
 [tasks."dev:bpm-reset"]
 description = "Restart Steam into windowed Big Picture (recovers the Decky UI after leaving and re-entering BPM)"
 raw = true
