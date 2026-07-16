@@ -264,13 +264,34 @@ function previewChangeSegments(s: SyncPreviewSummary): string[] {
 }
 
 /**
+ * True when every platform this run spans is being re-fetched AND re-applied —
+ * the derived "Force Full Sync" signal (#1318). After Force Full Sync every
+ * platform loses its completion stamp, so ``restamp_platform_count`` (unstamped
+ * enabled platforms) equals ``sync_platform_count`` (platforms in the work
+ * queue); and the recorded launch options are cleared, so the whole library
+ * counts as ``changed`` (``changed_count > 0``). Both ride the preview summary,
+ * so no new backend flag is needed. The ``changed_count`` leg is what separates
+ * a force from a first-ever sync — a fresh install is all-unstamped too, but its
+ * delta is pure ``new_count`` (nothing to "re-fetch"), so the odd wording is
+ * suppressed there. A partial resume (only some platforms unstamped) reads
+ * unequal; an absent count (older backend) is 0; both return false.
+ */
+function isFullResync(s: SyncPreviewSummary): boolean {
+  const platforms = s.sync_platform_count ?? 0;
+  return platforms > 0 && (s.restamp_platform_count ?? 0) === platforms && s.changed_count > 0;
+}
+
+/**
  * The change line — categories joined with `` · ``, each category unbreakable.
  * A category is a nowrap span, so a line break can only land on a `` · ``
  * separator: "Platforms: 2 new" never splits across two lines the way plain
  * text wrapping split it at the narrow QAM width. An empty shortcut delta with
  * pending cover work (#1386) names that work — the preview still proceeds to
  * Apply so the cover refreshes actually run; only a fully-empty preview falls
- * back to the unchanged message.
+ * back to the unchanged message. When the delta is non-empty AND every platform
+ * is being re-fetched (Force Full Sync, #1318), a context line above the
+ * segments names the full re-sync so "Games: N updated" isn't read as a normal
+ * incremental delta.
  */
 const PreviewChanges: FC<{ summary: SyncPreviewSummary }> = ({ summary }) => {
   const segments = previewChangeSegments(summary);
@@ -286,6 +307,11 @@ const PreviewChanges: FC<{ summary: SyncPreviewSummary }> = ({ summary }) => {
   }
   return (
     <>
+      {isFullResync(summary) && (
+        <div data-testid="sync-full-resync" style={{ marginBottom: "2px", opacity: 0.8 }}>
+          Full re-sync — all platforms re-fetched.
+        </div>
+      )}
       {segments.map((segment, i) => (
         <span key={segment}>
           {i > 0 ? " · " : ""}
@@ -1158,11 +1184,14 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
         {/* Visible whenever ANY terminal run is recorded — a completed run OR a
             cancelled/interrupted/errored attempt. A resume (last_attempt set,
             last_sync null) is exactly when the user may want a forced fresh
-            start, so gating on last_sync alone hid the button after a
-            history-clear left only interrupted runs. Still hidden on a pristine
-            install (neither recorded). Pressing it clears the history, which
-            drops last_attempt on the stats refresh below — the main button flips
-            back to "Sync Library" and this button hides itself. */}
+            start, so gating on last_sync alone would hide the button in a
+            resume situation. Still hidden on a pristine install (neither
+            recorded). Pressing it clears the per-platform stamps + recorded
+            launch options (arming a full re-fetch + re-apply) but PRESERVES the
+            run history (#1318), so the Last-sync line and this button both stay
+            put; the button is idempotent — pressing it again just re-clears the
+            already-cleared stamps. The stats refresh below keeps the display
+            truthful rather than blanking it to "Never". */}
         {(stats?.last_sync || stats?.last_attempt) && (
           <PanelSectionRow>
             <ButtonItem

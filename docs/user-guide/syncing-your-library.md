@@ -120,6 +120,11 @@ complete the job.
   every shortcut instead of skipping the ones that look correct, so it repairs anything that drifted on the Steam side
   (a manually edited or broken shortcut). Reach for it if you suspect a platform is out of sync or want a clean rebuild;
   a normal Sync (or Resume Sync) is enough for everyday updates. It appears once you have run at least one sync.
+  - **Your "Last sync" line is left alone.** Force Full Sync only re-arms the next run — it does **not** wipe your sync
+    history, so the **Last sync** line keeps showing when your library last synced (or the last attempt) instead of
+    dropping back to "Never". The next preview names the full re-sync explicitly: above the change line it reads **"Full
+    re-sync — all platforms re-fetched."**, so a big "Games: … updated" count reads as the intended rebuild rather than
+    a surprise. The button stays put after you press it — pressing it again simply re-arms the same fresh start.
 
 ## Multiple versions of a game
 

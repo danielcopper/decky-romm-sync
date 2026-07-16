@@ -1078,6 +1078,70 @@ describe("MainPage", () => {
       const descs = Array.from(c.querySelectorAll('[data-testid="field-desc"]')).map((n) => n.textContent);
       expect(descs).toContain("Everything is up to date.");
     });
+
+    it("shows the Full re-sync line when every platform is re-fetched with changed games (#1318)", async () => {
+      // Force Full Sync: all platforms unstamped AND the whole library counts as
+      // changed (recorded launch options cleared) — changed_count > 0 admits the line.
+      const c = await renderPreview({
+        changed_count: 2843,
+        restamp_platform_count: 5,
+        sync_platform_count: 5,
+      });
+      expect(c.querySelector('[data-testid="sync-full-resync"]')?.textContent).toBe(
+        "Full re-sync — all platforms re-fetched.",
+      );
+      // The normal change line still renders below the context line.
+      expect(c.querySelector('[data-testid="sync-changes"]')?.textContent).toContain("Games: 2843 updated");
+    });
+
+    it("hides the Full re-sync line on a first-ever sync (all-unstamped but pure new games, #1318)", async () => {
+      // A fresh install is all-unstamped too (restamp === sync), but its delta is
+      // pure new_count — nothing to "re-fetch". The changed_count > 0 leg keeps
+      // the Force-only wording off so the odd copy never shows on a first sync.
+      const c = await renderPreview({
+        new_count: 3000,
+        changed_count: 0,
+        restamp_platform_count: 5,
+        sync_platform_count: 5,
+      });
+      expect(c.querySelector('[data-testid="sync-full-resync"]')).toBeNull();
+      expect(c.querySelector('[data-testid="sync-changes"]')?.textContent).toBe("Games: 3000 new");
+    });
+
+    it("hides the Full re-sync line when only some platforms are unstamped (partial resume)", async () => {
+      const c = await renderPreview({
+        changed_count: 10,
+        restamp_platform_count: 2,
+        sync_platform_count: 5,
+      });
+      expect(c.querySelector('[data-testid="sync-full-resync"]')).toBeNull();
+      expect(c.querySelector('[data-testid="sync-changes"]')?.textContent).toBe("Games: 10 updated");
+    });
+
+    it("hides the Full re-sync line when sync_platform_count is 0 (0 === 0 must not trigger)", async () => {
+      // An all-collections run, or an older backend that omits the counts: the
+      // equality holds at 0 but the `> 0` guard keeps the line off.
+      const c = await renderPreview({
+        new_count: 3,
+        restamp_platform_count: 0,
+        sync_platform_count: 0,
+      });
+      expect(c.querySelector('[data-testid="sync-full-resync"]')).toBeNull();
+    });
+
+    it("keeps the restamp-only empty-delta message with no Full re-sync line (#1318 / #1416)", async () => {
+      // Empty segments + every platform unstamped: the empty-delta branch owns
+      // the copy, and the Full re-sync line (a NON-empty-delta context line)
+      // stays off — the two never collide.
+      const c = await renderPreview({
+        restamp_platform_count: 3,
+        sync_platform_count: 3,
+      });
+      expect(c.querySelector('[data-testid="sync-full-resync"]')).toBeNull();
+      expect(c.querySelector('[data-testid="sync-changes"]')?.textContent).toBe(
+        "No changes — finishing a previous sync.",
+      );
+    });
   });
 
   describe("session-budget advisory (#1383)", () => {
@@ -2853,17 +2917,16 @@ describe("MainPage", () => {
       expect(buttonByExactText(container, "Force Full Sync")).toBeNull();
     });
 
-    it("flips the sync button back to 'Sync Library' and hides Force after a force-clear wipes the history", async () => {
-      // First stats (mount): a resume situation. Second stats (post-clear): the
-      // history is gone, so no last_attempt.
-      vi.mocked(backend.getSyncStats)
-        .mockResolvedValueOnce({
-          ...defaultStats(),
-          roms: 42,
-          last_sync: null,
-          last_attempt: { finished_at: "2026-06-01T17:48:00", status: "interrupted" },
-        })
-        .mockResolvedValue({ ...defaultStats(), last_sync: null });
+    it("keeps 'Resume Sync' and the Force button after a force-clear (history preserved, #1318)", async () => {
+      // Force Full Sync no longer deletes the run history — the backend preserves
+      // it so the Last-sync display stays truthful. Both stats reads (mount +
+      // post-clear) therefore return the SAME resume situation.
+      vi.mocked(backend.getSyncStats).mockResolvedValue({
+        ...defaultStats(),
+        roms: 42,
+        last_sync: null,
+        last_attempt: { finished_at: "2026-06-01T17:48:00", status: "interrupted" },
+      });
       vi.mocked(backend.clearSyncCache).mockResolvedValue({ success: true, message: "Cleared" });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
@@ -2871,8 +2934,8 @@ describe("MainPage", () => {
       expect(buttonByExactText(container, "Resume Sync")).not.toBeNull();
       expect(buttonByExactText(container, "Force Full Sync")).not.toBeNull();
 
-      // Press Force Full Sync → clearSyncCache succeeds → stats refresh drops
-      // last_attempt.
+      // Press Force Full Sync → clearSyncCache succeeds → the stats refresh reads
+      // the SAME preserved history.
       await act(async () => {
         fireEvent.click(buttonByExactText(container, "Force Full Sync")!);
         await Promise.resolve();
@@ -2880,11 +2943,11 @@ describe("MainPage", () => {
       });
       await flushAsync();
 
-      // History cleared: the main button is a fresh start again and Force hides
-      // itself (nothing left to clear).
-      expect(buttonByExactText(container, "Sync Library")).not.toBeNull();
-      expect(buttonByExactText(container, "Resume Sync")).toBeNull();
-      expect(buttonByExactText(container, "Force Full Sync")).toBeNull();
+      // History preserved: the label stays "Resume Sync" and the Force button
+      // stays visible (idempotent — the stamps are already cleared).
+      expect(buttonByExactText(container, "Resume Sync")).not.toBeNull();
+      expect(buttonByExactText(container, "Sync Library")).toBeNull();
+      expect(buttonByExactText(container, "Force Full Sync")).not.toBeNull();
     });
   });
 

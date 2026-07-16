@@ -126,10 +126,12 @@ export interface SyncStats {
   last_sync: string | null;
   /**
    * The latest run that ended in a terminal state OTHER than completed
-   * (cancelled / errored), surfaced only when it is newer than ``last_sync`` —
-   * so a cancelled or crash-resumed run reads as "17:48 (cancelled)" instead of
-   * "Never" after thousands of shortcuts were applied. ``null`` (or absent) when
-   * the most recent terminal run completed cleanly.
+   * (cancelled / errored / interrupted / paused), surfaced only when it is newer
+   * than ``last_sync`` — so a cancelled or crash-resumed run reads as "17:48
+   * (cancelled)" instead of "Never" after thousands of shortcuts were applied.
+   * ``null`` (or absent) when the most recent terminal run completed cleanly.
+   * Force Full Sync preserves the run history, so this display survives a reset
+   * (#1318).
    */
   last_attempt?: { finished_at: string; status: "cancelled" | "errored" | "interrupted" | "paused" } | null;
   platforms: number;
