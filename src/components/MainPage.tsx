@@ -1356,7 +1356,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                 <span
                   data-testid="sync-status"
                   style={{
-                    fontSize: "12px",
+                    ...wrapText,
                     ...(status.tone === "success" ? { color: STATUS_SUCCESS_COLOR } : {}),
                   }}
                 >

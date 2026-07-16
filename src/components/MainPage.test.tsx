@@ -3683,6 +3683,27 @@ describe("MainPage", () => {
       expect(vi.mocked(backend.clearSyncCache)).toHaveBeenCalled();
       expect(fieldLabels(container)).toContain("Cache cleared");
     });
+
+    it("clearSyncCache rejection surfaces 'Failed to clear sync cache' (neutral, not green)", async () => {
+      // Non-vacuous catch coverage: the rejection routes through the catch's
+      // showTransientStatus, so both the message AND its neutral tone (no green
+      // override — the clear failed) must be observable on the status element.
+      vi.mocked(backend.getSyncStats).mockResolvedValue({
+        ...defaultStats(),
+        last_sync: new Date(Date.now() - 30_000).toISOString(),
+      });
+      vi.mocked(backend.clearSyncCache).mockRejectedValue(new Error("io"));
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Force Full Sync")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const el = container.querySelector('[data-testid="sync-status"]') as HTMLElement | null;
+      expect(el?.textContent).toBe("Failed to clear sync cache");
+      expect(el?.style.color).toBe(""); // neutral tone — no success green
+    });
   });
 
   // ===========================================================================
