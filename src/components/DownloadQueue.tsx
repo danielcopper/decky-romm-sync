@@ -26,40 +26,46 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
   const [cleared, setCleared] = useState<Set<number>>(new Set());
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const stopPolling = () => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-  };
-
-  // Un-clear rom_ids that have new active downloads (re-download case)
-  const unclearRestarted =
-    (current: DownloadItem[]) =>
-    (prev: Set<number>): Set<number> => {
-      const restarted = current.filter(
-        (d) =>
-          (d.status === "downloading" || d.status === "queued" || d.status === "paused" || d.status === "extracting") &&
-          prev.has(d.rom_id),
-      );
-      if (restarted.length === 0) return prev;
-      const next = new Set(prev);
-      for (const d of restarted) next.delete(d.rom_id);
-      return next;
+  useEffect(() => {
+    // The poll machinery is scoped to the effect: nothing outside it drives the
+    // interval, and keeping the helpers here means the mount-only effect has no
+    // reactive dependencies to track.
+    const stopPolling = () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
     };
 
-  const pollTick = () => {
-    const current = getDownloadState();
-    setCleared(unclearRestarted(current));
-    setLocalDownloads([...current]);
-  };
+    // Un-clear rom_ids that have new active downloads (re-download case)
+    const unclearRestarted =
+      (current: DownloadItem[]) =>
+      (prev: Set<number>): Set<number> => {
+        const restarted = current.filter(
+          (d) =>
+            (d.status === "downloading" ||
+              d.status === "queued" ||
+              d.status === "paused" ||
+              d.status === "extracting") &&
+            prev.has(d.rom_id),
+        );
+        if (restarted.length === 0) return prev;
+        const next = new Set(prev);
+        for (const d of restarted) next.delete(d.rom_id);
+        return next;
+      };
 
-  const startPolling = () => {
-    stopPolling();
-    pollRef.current = setInterval(pollTick, 500);
-  };
+    const pollTick = () => {
+      const current = getDownloadState();
+      setCleared(unclearRestarted(current));
+      setLocalDownloads([...current]);
+    };
 
-  useEffect(() => {
+    const startPolling = () => {
+      stopPolling();
+      pollRef.current = setInterval(pollTick, 500);
+    };
+
     // Seed from backend on mount, then poll the store
     getDownloadQueue()
       .then((result) => {
