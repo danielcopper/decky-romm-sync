@@ -4,7 +4,7 @@ basedpyright==1.39.9
     # via -r requirements-dev.txt
 click==8.4.2
     # via import-linter
-coverage==7.15.0
+coverage==7.15.2
     # via pytest-cov
 grimp==3.15
     # via import-linter
