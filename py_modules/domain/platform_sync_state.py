@@ -18,7 +18,9 @@ apply attempt ran to completion*: it is deleted at a platform unit's apply start
 (``sync_orchestrator``) so an interrupted re-apply leaves none and the final
 chunk re-writes it, deleted per touched platform by the local destructive flows
 (``shortcut_removal``) that unbind shortcuts outside a sync, and cleared wholesale
-by Force Full Sync (the repository's ``clear``) alongside the completed-run history.
+by Force Full Sync (the repository's ``clear``) — the stamps are the fetcher's sole
+skip authority, so clearing them arms the full re-fetch; the ``SyncRun`` history is
+preserved (it feeds no skip gate).
 """
 
 from __future__ import annotations

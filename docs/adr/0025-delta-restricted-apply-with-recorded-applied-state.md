@@ -91,9 +91,9 @@ to its shortcut and comparing the freshly built target against it.**
 - **Force Full Sync is the escape hatch for drift the recorded value cannot see.** The one blind spot of
   recording-the-intended-value is Steam-side drift that leaves the recorded value **matching** the fresh target while
   the real shortcut differs (a manually edited or corrupted shortcut) — the delta skip would then skip it forever.
-  `clear_sync_cache` (Force Full Sync) therefore resets every `applied_launch_options` to NULL alongside the run history
-  and platform stamps: NULL never matches a target, so the forced run re-applies and re-records everything. "Force"
-  forces past the per-item skip, keeping the pre-delta repair semantics of the button.
+  `clear_sync_cache` (Force Full Sync) therefore resets every `applied_launch_options` to NULL alongside the platform
+  stamps: NULL never matches a target, so the forced run re-applies and re-records everything. "Force" forces past the
+  per-item skip, keeping the pre-delta repair semantics of the button.
 
 ## Alternatives considered
 
