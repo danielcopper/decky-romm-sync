@@ -148,6 +148,26 @@ describe("formatAttributionSegment", () => {
     expect(formatAttributionSegment(null, null)).toBe("✓");
     expect(formatAttributionSegment(undefined, undefined)).toBe("✓");
   });
+
+  describe("showCheck=false (a not-yet-synced file must render no ✓, #1334)", () => {
+    it("drops the ✓ from the '(this device)' branch", () => {
+      expect(formatAttributionSegment(true, "deck", false)).toBe("deck (this device)");
+      expect(formatAttributionSegment(true, null, false)).toBe("(this device)");
+    });
+
+    it("drops the ✓ from the '(not this device)' branch", () => {
+      expect(formatAttributionSegment(false, "deck", false)).toBe("(not this device)");
+    });
+
+    it("drops the ✓ from the device-only branch", () => {
+      expect(formatAttributionSegment(null, "deck", false)).toBe("deck");
+    });
+
+    it("returns null when there is nothing but a suppressed ✓", () => {
+      expect(formatAttributionSegment(null, null, false)).toBeNull();
+      expect(formatAttributionSegment(undefined, undefined, false)).toBeNull();
+    });
+  });
 });
 
 describe("statusLabel", () => {
@@ -240,6 +260,21 @@ describe("computeSyncSummary", () => {
     device_id: "dev",
     last_sync_check_at: null,
     ...overrides,
+  });
+
+  const mkFile = (status: SaveStatus["files"][number]["status"]): SaveStatus["files"][number] => ({
+    filename: "save.srm",
+    local_path: "/local/save.srm",
+    local_hash: "abc",
+    local_mtime: "2025-06-15T10:00:00Z",
+    local_size: 100,
+    server_save_id: null,
+    server_file_name: null,
+    server_emulator: null,
+    server_updated_at: null,
+    server_size: null,
+    last_sync_at: null,
+    status,
   });
 
   it("returns null text for inactive slot", () => {
@@ -335,28 +370,41 @@ describe("computeSyncSummary", () => {
     });
   });
 
-  it("returns 'Not synced' when files exist but last_sync_check_at is null", () => {
-    const status = makeStatus({
-      files: [
-        {
-          filename: "save.srm",
-          local_path: "/local/save.srm",
-          local_hash: "abc",
-          local_mtime: "2025-06-15T10:00:00Z",
-          local_size: 100,
-          server_save_id: null,
-          server_file_name: null,
-          server_emulator: null,
-          server_updated_at: null,
-          server_size: null,
-          last_sync_at: null,
-          status: "upload",
-        },
-      ],
-    });
+  it("returns 'Not synced' when files are all synced but last_sync_check_at is null", () => {
+    const status = makeStatus({ files: [mkFile("synced")] });
     expect(computeSyncSummary(true, status, [])).toEqual({
       syncSummaryText: "Not synced",
       syncSummaryColor: "#8f98a0",
+    });
+  });
+
+  it("returns yellow 'Local changes' when any file is pending upload (never a green ✓, #1334)", () => {
+    const status = makeStatus({ last_sync_check_at: new Date().toISOString(), files: [mkFile("upload")] });
+    expect(computeSyncSummary(true, status, [])).toEqual({
+      syncSummaryText: "Local changes",
+      syncSummaryColor: "#d4a72c",
+    });
+  });
+
+  it("'Local changes' wins over an otherwise-synced sibling and a recent check", () => {
+    const status = makeStatus({
+      last_sync_check_at: new Date().toISOString(),
+      files: [mkFile("synced"), mkFile("upload")],
+    });
+    expect(computeSyncSummary(true, status, [])).toEqual({
+      syncSummaryText: "Local changes",
+      syncSummaryColor: "#d4a72c",
+    });
+  });
+
+  it("returns blue 'Server newer' when a file is pending download and none pending upload", () => {
+    const status = makeStatus({
+      last_sync_check_at: new Date().toISOString(),
+      files: [mkFile("synced"), mkFile("download")],
+    });
+    expect(computeSyncSummary(true, status, [])).toEqual({
+      syncSummaryText: "Server newer",
+      syncSummaryColor: "#1a9fff",
     });
   });
 

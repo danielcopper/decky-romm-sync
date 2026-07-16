@@ -195,11 +195,11 @@ async function handleGameStop(): Promise<void> {
       toaster.toast({ title: result.sync.toast_title, body: result.sync.toast_body });
     }
 
-    // Save-sync event dispatch — fires for offline OR success (pre-PR parity:
-    // offline branch dispatched, success branch dispatched, failure did not).
-    if (result.sync.offline || result.sync.success) {
-      globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
-    }
+    // Save-sync event dispatch — fires unconditionally so open surfaces refresh
+    // to the honest post-sync state. A failed post-exit sync must refresh too
+    // (#1334): the panel would otherwise keep showing a stale green "synced" for
+    // a file that is now pending upload.
+    globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
 
     // Additive conflicts toast — backend renders the count string.
     if (result.sync.conflicts_toast) {

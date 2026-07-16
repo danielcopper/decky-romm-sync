@@ -45,9 +45,19 @@ export function renderSaveFileRow(
   lastSyncCheckAt: string | null,
 ): ReturnType<typeof createElement> {
   const { color, label } = statusLabel(f.status, f.last_sync_at);
-  const syncTime = lastSyncCheckAt || f.last_sync_at;
+  // "synced"/"skip" are the at-rest states; anything else (upload/download/
+  // conflict/unknown) has work pending, so the row must not claim a successful
+  // sync. "Last synced" binds to the last SUCCESS (f.last_sync_at), never the
+  // attempt time — a failed post-exit sync leaves last_sync_at at its old value
+  // and shows no ✓ (#1334).
+  const isSynced = f.status === "synced" || f.status === "skip";
+  const syncTime = f.last_sync_at;
   const lastSyncer = pickLastSyncer(f.device_syncs);
   const conflictActive = f.status === "conflict" || !!conflict;
+  // The slot's most recent sync ATTEMPT — surfaced as a separate "Checked" hint
+  // only when this file isn't at rest, so a pending/failed file shows both the
+  // last success and the recent check without duplicating the synced ✓ line.
+  const checkedHint = !isSynced && lastSyncCheckAt ? formatRelativeTime(lastSyncCheckAt) : null;
 
   // Header value pieces (right-aligned meta: size + status)
   const headerMeta: (ReturnType<typeof createElement> | null)[] = [];
@@ -77,7 +87,7 @@ export function renderSaveFileRow(
 
   // Last synced value: "just now · <attribution> ✓" — see formatAttributionSegment
   const lastSyncedPieces: string[] = [syncTime ? formatRelativeTime(syncTime) || "Never" : "Never"];
-  const attrSegment = formatAttributionSegment(f.uploaded_by_us, lastSyncer?.device_name);
+  const attrSegment = formatAttributionSegment(f.uploaded_by_us, lastSyncer?.device_name, isSynced);
   if (attrSegment !== null) lastSyncedPieces.push(attrSegment);
   if (f.is_current === false) {
     lastSyncedPieces.push("Newer version available on server");
@@ -179,6 +189,7 @@ export function renderSaveFileRow(
 
     // Info rows
     infoRow("last-synced", "Last synced:", lastSyncedValue),
+    checkedHint ? infoRow("checked", "Checked:", checkedHint, "#8f98a0") : null,
     infoRow(
       "last-updated",
       "Last updated:",

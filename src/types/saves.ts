@@ -66,10 +66,10 @@ interface PlaytimeEntry {
 }
 
 export interface SaveSyncDisplay {
-  status: "synced" | "conflict" | "none";
-  /** Static label, e.g. "No saves" / "Conflict" / "Not synced". `null` for the
-   *  synced+recent-check case, where the frontend formats a time-ago label
-   *  from `last_sync_check_at`. */
+  status: "synced" | "pending" | "conflict" | "none";
+  /** Static label, e.g. "No saves" / "Conflict" / "Not synced" / "Local changes"
+   *  / "Server newer". `null` for the synced+recent-check case, where the
+   *  frontend formats a time-ago label from `last_sync_check_at`. */
   label: string | null;
   /** Raw ISO-8601 timestamp passed through from the backend for time-ago
    *  formatting. `null` whenever `label` carries a fully-formed string. */

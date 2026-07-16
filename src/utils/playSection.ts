@@ -32,7 +32,7 @@ export interface CoreInfoFields {
 }
 
 export interface SaveSyncResolution {
-  status: "synced" | "conflict" | "none";
+  status: "synced" | "pending" | "conflict" | "none";
   label: string;
 }
 

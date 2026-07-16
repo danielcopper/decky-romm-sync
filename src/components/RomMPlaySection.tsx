@@ -108,7 +108,7 @@ interface InfoState {
   restoredLastPlayed: string | null;
   playtime: string;
   saveSyncEnabled: boolean;
-  saveSyncStatus: "synced" | "conflict" | "none" | null;
+  saveSyncStatus: "synced" | "pending" | "conflict" | "none" | null;
   saveSyncLabel: string;
   /** RetroArch `savefiles_in_content_dir=true` — saves go next to the ROM and
    *  can't be synced (#239). Derived from a LOCAL retroarch.cfg read, so it is
@@ -154,7 +154,7 @@ async function loadCached(
     romIdRef.current = romId;
 
     // Process save sync from backend-computed display fields
-    let saveSyncStatus: "synced" | "conflict" | "none" | null = null;
+    let saveSyncStatus: "synced" | "pending" | "conflict" | "none" | null = null;
     let saveSyncLabel = "";
     if (cached.save_sync_enabled && cached.save_sync_display) {
       saveSyncStatus = cached.save_sync_display.status;

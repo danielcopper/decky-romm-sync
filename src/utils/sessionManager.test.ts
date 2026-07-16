@@ -136,6 +136,38 @@ describe("sessionManager lifecycle forwarding", () => {
     expect(backend.recordSessionStart).not.toHaveBeenCalled();
     expect(backend.finalizeGameSession).not.toHaveBeenCalled();
   });
+
+  it("dispatches romm_data_changed on stop even when the post-exit sync failed (#1334)", async () => {
+    // A failed post-exit sync must still refresh open surfaces so the panel
+    // drops any stale green "synced" for a file now pending upload.
+    vi.mocked(backend.finalizeGameSession).mockResolvedValue({
+      total_seconds: null,
+      sync: {
+        offline: false,
+        success: false,
+        synced: 0,
+        conflicts: [],
+        toast_title: "RomM Save Sync",
+        toast_body: "Access denied — your account lacks permissions for this action",
+        conflicts_toast: null,
+      },
+      migration: null,
+    });
+    const dataChanged: unknown[] = [];
+    const listener = (e: Event) => dataChanged.push((e as CustomEvent).detail);
+    globalThis.addEventListener("romm_data_changed", listener);
+    try {
+      await initDrainingAdoptionPoll();
+      const lifetime = captureLifetimeCb();
+
+      await startGame(lifetime);
+      await stopGame(lifetime);
+
+      expect(dataChanged).toContainEqual({ type: "save_sync", rom_id: ROM_ID });
+    } finally {
+      globalThis.removeEventListener("romm_data_changed", listener);
+    }
+  });
 });
 
 describe("sessionManager reload adoption", () => {

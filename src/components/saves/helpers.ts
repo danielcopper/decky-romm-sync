@@ -54,24 +54,31 @@ export function attributionLabel(uploadedByUs: boolean | null | undefined): stri
 /**
  * Format the per-save attribution+checkmark segment for the sync-time line.
  *
- * Combines device name, attribution label, and the trailing checkmark into
- * one ready-to-render string, or null when nothing meaningful can be shown.
- * Reused between `renderSaveFileRow` and `renderVersionRow`.
+ * Combines device name, attribution label, and an optional trailing checkmark
+ * into one ready-to-render string, or null when nothing meaningful can be shown.
+ * Reused between `renderSaveFileRow` and `renderVersionRow`. The checkmark marks
+ * an actually-synced file, so `renderSaveFileRow` passes `showCheck=false` for a
+ * file with pending upload/download work — a failed post-exit sync must not
+ * render a ✓ (#1334). Version rows keep the default (`showCheck=true`): the ✓
+ * there is the per-version attribution marker, not a live sync verdict.
  */
 export function formatAttributionSegment(
   uploadedByUs: boolean | null | undefined,
   deviceName: string | null | undefined,
+  showCheck = true,
 ): string | null {
+  const check = showCheck ? " ✓" : "";
   const label = attributionLabel(uploadedByUs);
   if (uploadedByUs === true) {
-    return deviceName ? `${deviceName} ${label} ✓` : `${label} ✓`;
+    return deviceName ? `${deviceName} ${label}${check}` : `${label}${check}`;
   }
   if (uploadedByUs === false) {
     // Intentionally no device name — lastSyncer is our own sync record, not the actual uploader
-    return `${label} ✓`;
+    return `${label}${check}`;
   }
   if (label === null) {
-    return deviceName ? `${deviceName} ✓` : `✓`;
+    if (deviceName) return `${deviceName}${check}`;
+    return showCheck ? "✓" : null;
   }
   return null;
 }
@@ -119,6 +126,13 @@ export function statusLabel(status: string, lastSyncAt: string | null): { color:
  * the backend signals `server_query_failed`, short-circuits with a neutral
  * "Server unreachable" instead of running the matrix-derived classification
  * (which would otherwise read an empty server list as "ready to upload").
+ *
+ * The summary is derived from the per-file matrix statuses so it can never
+ * disagree with the per-file badges (`statusLabel`): any file pending upload
+ * shows yellow "Local changes", any file the server has newer shows blue
+ * "Server newer", and only an all-synced slot shows a green "Synced …". A
+ * failed post-exit upload therefore reads as "Local changes", not a false
+ * green ✓ (#1334).
  */
 export function computeSyncSummary(
   isActive: boolean,
@@ -132,13 +146,19 @@ export function computeSyncSummary(
   }
 
   const hasConflict = conflicts.length > 0;
-  const fileCount = saveStatus.files.length;
+  const files = saveStatus.files;
 
   if (hasConflict) return { syncSummaryText: "Conflict detected", syncSummaryColor: "#d94126" };
-  if (fileCount > 0 && saveStatus.last_sync_check_at) {
+  if (files.length === 0) return { syncSummaryText: "No saves found", syncSummaryColor: MUTED_COLOR };
+  if (files.some((f) => f.status === "upload")) {
+    return { syncSummaryText: "Local changes", syncSummaryColor: "#d4a72c" };
+  }
+  if (files.some((f) => f.status === "download")) {
+    return { syncSummaryText: "Server newer", syncSummaryColor: "#1a9fff" };
+  }
+  if (saveStatus.last_sync_check_at) {
     const rel = formatRelativeTime(saveStatus.last_sync_check_at);
     return { syncSummaryText: rel === "just now" ? "Synced just now" : `Synced ${rel}`, syncSummaryColor: "#5ba32b" };
   }
-  if (fileCount > 0) return { syncSummaryText: "Not synced", syncSummaryColor: MUTED_COLOR };
-  return { syncSummaryText: "No saves found", syncSummaryColor: MUTED_COLOR };
+  return { syncSummaryText: "Not synced", syncSummaryColor: MUTED_COLOR };
 }

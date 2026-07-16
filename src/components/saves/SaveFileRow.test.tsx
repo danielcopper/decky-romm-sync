@@ -135,13 +135,49 @@ describe("renderSaveFileRow", () => {
     expect(container.textContent).toContain("Never");
   });
 
-  it("renders relative time in the last-synced row when last_sync_check_at is set", () => {
+  it("binds 'Last synced' to the success time (last_sync_at), not the attempt time (#1334)", () => {
+    // last_sync_at is 30m ago; the sync CHECK ran 5m ago. "Last synced" must
+    // show the success time, so a later attempt never inflates the displayed
+    // sync recency.
     const { container } = render(
       <div>
-        {renderSaveFileRow(makeFile({ status: "synced", last_sync_at: null }), undefined, "2025-06-15T11:30:00Z")}
+        {renderSaveFileRow(
+          makeFile({ status: "synced", last_sync_at: "2025-06-15T11:30:00Z" }),
+          undefined,
+          "2025-06-15T11:55:00Z",
+        )}
       </div>,
     );
+    expect(container.textContent).toContain("Last synced:");
     expect(container.textContent).toContain("30m ago");
+  });
+
+  it("shows 'Never' with no ✓ for an un-synced file, and surfaces the attempt as 'Checked' (#1334)", () => {
+    // A pending upload with no prior successful sync: no green ✓, "Last synced:
+    // Never", and the recent check shown separately as a "Checked" hint.
+    const { container } = render(
+      <div>
+        {renderSaveFileRow(makeFile({ status: "upload", last_sync_at: null }), undefined, "2025-06-15T11:30:00Z")}
+      </div>,
+    );
+    expect(container.textContent).toContain("Last synced:");
+    expect(container.textContent).toContain("Never");
+    expect(container.textContent).not.toContain("✓");
+    expect(container.textContent).toContain("Checked:");
+    expect(container.textContent).toContain("30m ago");
+  });
+
+  it("omits the 'Checked' hint for a synced file — the ✓ line already conveys currency", () => {
+    const { container } = render(
+      <div>
+        {renderSaveFileRow(
+          makeFile({ status: "synced", last_sync_at: "2025-06-15T11:30:00Z" }),
+          undefined,
+          "2025-06-15T11:55:00Z",
+        )}
+      </div>,
+    );
+    expect(container.textContent).not.toContain("Checked:");
   });
 
   it("renders the last-updated info row when server_updated_at is set", () => {
