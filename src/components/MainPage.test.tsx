@@ -2147,6 +2147,112 @@ describe("MainPage", () => {
     });
   });
 
+  describe("sync boundary: the anchor names the next unit and the row height is reserved", () => {
+    const fineRow = (c: HTMLElement) => c.querySelector('[data-testid="sync-fine"]') as HTMLElement | null;
+
+    it("replaces the carried line with the boundary anchor's own message (names the new unit)", async () => {
+      // Unit A applying with real fine detail — the row narrates unit A.
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 2,
+        totalSteps: 8,
+        current: 50,
+        total: 50,
+        message: "GBA: 50/50",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(fineRow(container)!.textContent).toContain("GBA: 50/50");
+
+      // Unit boundary: the next unit's FETCHING anchor carries no fine detail
+      // (total 0) but a coarse position (totalSteps 8) and names the new unit in
+      // its message. The fine line must snap to the NEW unit immediately, not
+      // keep unit A's stale text during the anchor dwell before the first real
+      // frame lands.
+      act(() =>
+        setSyncProgress({
+          running: true,
+          stage: "fetching",
+          step: 3,
+          totalSteps: 8,
+          current: 0,
+          total: 0,
+          message: "Fetching SNES... (3/8)",
+        }),
+      );
+      expect(fineRow(container)!.textContent).toContain("Fetching SNES... (3/8)");
+      expect(fineRow(container)!.textContent).not.toContain("GBA: 50/50");
+
+      // The new unit's first real fetch frame lands — normal formatted text.
+      act(() =>
+        setSyncProgress({
+          running: true,
+          stage: "fetching",
+          subStage: "fetch",
+          step: 3,
+          totalSteps: 8,
+          current: 1,
+          total: 5,
+          message: "Fetching SNES (page 1/5)",
+        }),
+      );
+      expect(fineRow(container)!.textContent).toContain("Fetching SNES (page 1/5)");
+    });
+
+    it("reserves the two-line clamp box height on the fine-detail element", async () => {
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 2,
+        totalSteps: 8,
+        current: 3,
+        total: 10,
+        message: "N64: 3/10",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      const fine = fineRow(container);
+      expect(fine).not.toBeNull();
+      // Two 1.4 line-heights reserved as 2.8em — a 1↔2-line wrap change never
+      // reflows the ETA row / Cancel button below it (the residual jolt).
+      expect(fine!.style.minHeight).toBe("2.8em");
+      expect(fine!.style.lineHeight).toBe("1.4");
+    });
+
+    it("keeps the prior line when a boundary anchor carries an empty message (never blank)", async () => {
+      // The defensive branch: both real apply/preview anchors carry a message,
+      // but an empty-message running frame must never clear the carry — the row
+      // would blank mid-run. Carry replacement, never carry removal.
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 2,
+        totalSteps: 8,
+        current: 50,
+        total: 50,
+        message: "GBA: 50/50",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(fineRow(container)!.textContent).toContain("GBA: 50/50");
+
+      act(() =>
+        setSyncProgress({
+          running: true,
+          stage: "fetching",
+          step: 3,
+          totalSteps: 8,
+          current: 0,
+          total: 0,
+          message: "",
+        }),
+      );
+      expect(fineRow(container)).not.toBeNull();
+      expect(fineRow(container)!.textContent).toContain("GBA: 50/50");
+    });
+  });
+
   describe("QAM remount mid-run preserves fine progress + ETA", () => {
     it("merges the store's fine fields + etaSeconds over the backend's coarse running snapshot", async () => {
       // Module store holds the in-flight run's FINE state — what a live QAM had

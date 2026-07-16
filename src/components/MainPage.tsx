@@ -171,6 +171,15 @@ function formatProgressText(progress: SyncProgress | null): string {
   return progress.message || "Syncing...";
 }
 
+// The fine-detail line is clamped to two lines (``WebkitLineClamp``) and its box
+// is reserved at exactly that height up front. Without the reservation a message
+// that wraps 1→2 lines (or shrinks 2→1 at a unit boundary) reflows the ETA row
+// and Cancel button below it — the visible jolt of the residual boundary flicker.
+// ``minHeight`` in ``em`` ties to the element's own 12px font (``wrapText``), so
+// two 1.4-line-height lines reserve 2.8em with no magic pixel value.
+const FINE_DETAIL_LINE_HEIGHT = 1.4;
+const FINE_DETAIL_CLAMP_LINES = 2;
+
 function formatLastSync(iso: string | null): string {
   if (!iso) return "Never";
   try {
@@ -598,13 +607,23 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
       // the re-render chain (on-device freeze, cause not yet reproduced in tests).
       const progress = getSyncProgress();
       setSyncProgress(progress);
-      // Carry the last non-empty fine detail so the fine-detail row survives a
-      // unit boundary's anchor frame (which resets current/total, #1415); drop
-      // it the moment the run ends so the next run starts clean. Kept outside
-      // the try below so the reset can never be skipped by a subscriber throw.
+      // Carry the fine-detail line so the row survives a unit boundary's anchor
+      // frame (which resets current/total, #1415); drop it the moment the run
+      // ends so the next run starts clean. Kept outside the try below so the
+      // reset can never be skipped by a subscriber throw.
+      //
+      // The carry is refreshed by any running frame that has a message AND a
+      // position: a real fine-detail frame (``total`` > 0) OR a unit-boundary
+      // FETCHING anchor (``total`` 0 but ``totalSteps`` > 0). At the boundary the
+      // anchor's own message ("Fetching <next unit>") REPLACES the previous
+      // unit's carried text, so the fine line names the new unit immediately
+      // instead of lagging on the old one until the next real frame lands a
+      // network RTT later. The initial optimistic "Fetching library…" start (no
+      // total, no totalSteps) is excluded, so it keeps the stage-label spinner;
+      // an empty-message frame never clears the carry (replace, never remove).
       if (!progress.running) {
         setCarriedFineDetail(null);
-      } else if (progress.total && progress.message) {
+      } else if (progress.message && (progress.total || progress.totalSteps)) {
         setCarriedFineDetail(progress.message);
       }
       try {
@@ -1116,9 +1135,13 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                     style={{
                       ...wrapText,
                       display: "-webkit-box",
-                      WebkitLineClamp: 2,
+                      WebkitLineClamp: FINE_DETAIL_CLAMP_LINES,
                       WebkitBoxOrient: "vertical",
                       overflow: "hidden",
+                      lineHeight: FINE_DETAIL_LINE_HEIGHT,
+                      // Reserve the full two-line clamp box so a 1↔2-line wrap
+                      // change never reflows the ETA row / Cancel button below.
+                      minHeight: `${FINE_DETAIL_CLAMP_LINES * FINE_DETAIL_LINE_HEIGHT}em`,
                     }}
                   >
                     {fineDetailText}
