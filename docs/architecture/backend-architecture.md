@@ -848,17 +848,24 @@ copied raw value stops working) is host-bound in memory and run through the shar
 tail, so it is persisted with `"user"` provenance and `id = None` exactly like a pasted token — no mint, no server-side
 DELETE. The pairing code and the returned token are never logged.
 
-**The registered device id is forgotten on an origin change.** A device registered with RomM (`POST /api/devices`, its
-id stored in `kv_config["device_id"]`) is bound to the server it was registered against — RomM's `negotiate` save-sync
-transport hard-404s a foreign device id. So a successful sign-in whose origin differs from the previous token's origin
-forgets the stored device id (`SaveService.forget_device` → `DeviceRegistry.forget_device`, wired as the
-`DeviceForgetFn` injected into `ConnectionService`), so the next save-sync run re-registers against the new server. It
-reuses the same origin comparison as the old-token DELETE, but in the opposite sense — forget when the origins differ or
-the old origin is unknown. The forget is **local-only** (the row on the old server is left for RomM's machine-id dedup
-to reconcile on a later re-registration) and **best-effort on the success path** — a failed local clear never turns a
-good sign-in into a failure, and a failed sign-in (in-memory snapshot restored) keeps the still-current server's id.
-This is Phase 0a of the RomM Device Sync negotiate adoption
-([ADR-0016](../adr/0016-save-sync-hands-detection-to-romm-negotiate.md)).
+**The registered device id is forgotten only on a genuine origin change.** A device registered with RomM
+(`POST /api/devices`, its id stored in `kv_config["device_id"]`) is bound to the server it was registered against —
+RomM's `negotiate` save-sync transport hard-404s a foreign device id. So a successful sign-in that **genuinely changes
+origin** forgets the stored device id (`SaveService.forget_device` → `DeviceRegistry.forget_device`, wired as the
+`DeviceForgetFn` injected into `ConnectionService`), so the next save-sync run re-registers against the new server. The
+decision is `is_origin_change(old_token_origin, new_url)` in `lib/url_host` — both origins are normalized and the id is
+forgotten **only** when both are known (parseable) and differ. This is deliberately the _opposite_ failure posture to
+the old-token DELETE guard (`same_origin`, which fails closed): a **same-server re-sign-in keeps the device identity**,
+including a token swap on the unchanged URL, URL-formatting variants, and a `None`/unstamped old origin (an unknown old
+origin is treated as unknown, not different — never a change). Without this, a same-server token swap dropped the
+identity and the next post-exit sync flagged a spurious conflict for a save this device itself synced (#1437). The
+`old_token_origin` comparison input is captured from the pre-clear auth-state snapshot, so the leak-safety in-memory
+token clear (which zeroes the origin) never poisons the comparison. The forget is **local-only** (the row on the old
+server is left for RomM's machine-id dedup to reconcile on a later re-registration) and **best-effort on the success
+path** — a failed local clear never turns a good sign-in into a failure, and a failed sign-in (in-memory snapshot
+restored) keeps the still-current server's id. `ensure_device_registered` never deletes the id on any failure, so a
+permission-degraded (403/timeout) session leaves the identity intact. This is Phase 0a of the RomM Device Sync negotiate
+adoption ([ADR-0016](../adr/0016-save-sync-hands-detection-to-romm-negotiate.md)).
 
 The no-sign-in URL change path (`SettingsService.save_server_url`) deliberately does not touch the token, so pointing
 the URL at a different origin leaves the stored token's origin mismatched and the auth-header guard makes subsequent

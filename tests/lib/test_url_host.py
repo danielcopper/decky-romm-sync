@@ -2,7 +2,7 @@
 
 import pytest
 
-from lib.url_host import is_valid_server_url, normalize_origin, same_origin
+from lib.url_host import is_origin_change, is_valid_server_url, normalize_origin, same_origin
 
 
 class TestNormalizeOrigin:
@@ -160,6 +160,49 @@ class TestSameOrigin:
 
     def test_trailing_dot_vs_dotless_true(self):
         assert same_origin("https://host.com.", "https://host.com") is True
+
+
+class TestIsOriginChange:
+    """`is_origin_change` — the "real server switch?" question that gates the
+    device-forget hook (#1437). Unlike `same_origin`, an unknown (`None` /
+    unparseable) origin is treated as unknown, NOT different: it never counts as
+    a change, so a legacy/unstamped token origin never drops the device id."""
+
+    def test_different_host_true(self):
+        assert is_origin_change("https://a.local", "https://b.local") is True
+
+    def test_different_scheme_true(self):
+        assert is_origin_change("https://romm.local", "http://romm.local") is True
+
+    def test_different_port_true(self):
+        assert is_origin_change("http://192.168.178.83:8085", "http://192.168.178.83:9090") is True
+
+    def test_same_origin_false(self):
+        assert is_origin_change("http://romm.local", "http://romm.local") is False
+
+    def test_same_origin_trailing_slash_and_default_port_false(self):
+        """URL formatting variants normalize to the same origin — not a change."""
+        assert is_origin_change("https://romm.local", "https://romm.local:443/romm/") is False
+
+    def test_same_origin_explicit_nondefault_port_false(self):
+        """The unchanged-URL token swap from #1437 (host:port stamped) is not a change."""
+        assert is_origin_change("http://192.168.178.83:8085", "http://192.168.178.83:8085") is False
+
+    def test_none_old_against_valid_new_false(self):
+        """The #1437 fix: an unstamped (`None`) old origin is unknown, not different."""
+        assert is_origin_change(None, "http://192.168.178.83:8085") is False
+
+    def test_none_new_false(self):
+        assert is_origin_change("https://romm.local", None) is False
+
+    def test_both_none_false(self):
+        assert is_origin_change(None, None) is False
+
+    def test_unparseable_old_against_valid_new_false(self):
+        assert is_origin_change("not-a-url", "https://romm.local") is False
+
+    def test_unparseable_new_false(self):
+        assert is_origin_change("https://romm.local", "also-not-a-url") is False
 
 
 class TestIsValidServerUrl:

@@ -14,12 +14,13 @@ from fakes.fake_machine_id_reader import FakeMachineIdReader
 from fakes.fake_save_api import FakeSaveApi
 from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 
-from lib.errors import RommApiError, RommAuthError, RommConnectionError, RommSSLError
+from lib.errors import RommApiError, RommAuthError, RommConnectionError, RommForbiddenError, RommSSLError
 from lib.list_result import ErrorCode
 from services.saves.sync_engine.devices import DeviceRegistry
 from tests.services.saves._helpers import (
     _create_save,
     _enable_sync_with_device,
+    _get_device_id,
     _install_rom,
     make_service,
 )
@@ -300,6 +301,50 @@ class TestEnsureDeviceRegisteredUpdateSwallowLogs:
         assert result["success"] is True
         assert result["device_id"] == "server-uuid"
         assert any("update_device failed" in m and "boom" in m for m in debug_log)
+
+
+class TestPermissionDegradedNeverDropsDeviceId:
+    """#1437 regression guard: a permission-degraded (403) registration must NEVER
+    delete ``kv_config["device_id"]``. The only in-process deleter is
+    ``DeviceRegistry.forget_device`` (reached solely from a sign-in origin
+    change); registration/verification failures leave the id intact so the next
+    sync attributes uploads as before instead of re-registering into a spurious
+    conflict."""
+
+    @pytest.mark.asyncio
+    async def test_forbidden_update_touch_leaves_the_id_intact(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, "server-uuid")
+        # Stamp a version so the pre-register heartbeat probe is skipped — the 403
+        # lands on the best-effort update_device touch on the already-registered id.
+        fake.set_version("4.9.0")
+        fake.fail_on_next(RommForbiddenError("403 Forbidden"))
+
+        result = await svc.ensure_device_registered()
+
+        # The touch failed (non-fatal) but registration still reports the existing id.
+        assert result["success"] is True
+        assert result["device_id"] == "server-uuid"
+        # The persisted row is untouched — no forget/delete on a permission failure.
+        assert _get_device_id(svc) == "server-uuid"
+        # The id was NOT dropped-then-re-registered: no register_device call happened.
+        assert _register_call(fake) is None
+
+    @pytest.mark.asyncio
+    async def test_forbidden_registration_creates_no_id_and_deletes_none(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        # No device_id yet → registration branch; stamp a version to skip the probe
+        # so the 403 lands on register_device itself.
+        fake.set_version("4.9.0")
+        fake.fail_on_next(RommForbiddenError("403 Forbidden"))
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is False
+        # No id was minted, and nothing was deleted — kv_config stays absent.
+        assert result["device_id"] == ""
+        assert _get_device_id(svc) is None
 
 
 class TestRegistrationDeviceNameWriteIsBestEffort:

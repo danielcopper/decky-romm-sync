@@ -485,8 +485,11 @@ class TestEstablishTokenOldTokenDeletion:
 
 class TestEstablishTokenDeviceForget:
     """0a (#1234): a registered device id is bound to its minting origin, so a
-    sign-in that changes origin must forget it (negotiate hard-404s a foreign
-    device id). The forget is local-only and best-effort on the success path."""
+    sign-in that GENUINELY changes origin must forget it (negotiate hard-404s a
+    foreign device id). A same-server re-sign-in — including an unstamped
+    (`None`) old origin against the unchanged URL — must KEEP the id (#1437), or
+    the next post-exit sync flags a spurious conflict. The forget is local-only
+    and best-effort on the success path."""
 
     def test_forgets_device_when_origin_differs(self, event_loop, romm_api, logger):
         settings = {"romm_api_token_id": 99, "romm_api_token_origin": "https://old.server"}
@@ -518,25 +521,31 @@ class TestEstablishTokenDeviceForget:
         event_loop.run_until_complete(service.establish_token("https://romm.local:443/romm/", "u", "p"))
         forget_device.assert_not_called()
 
-    def test_forgets_device_when_old_origin_unknown(self, event_loop, romm_api, logger):
-        """A legacy token with no stored origin fails closed — forget conservatively."""
+    def test_keeps_device_when_old_origin_unknown(self, event_loop, romm_api, logger):
+        """#1437: a legacy token with no stored origin is unknown, not different — keep the id.
+
+        An unstamped (`None`) old origin against the unchanged URL must not
+        forget; the sign-in then stamps the origin so the next comparison is
+        precise.
+        """
         settings = {"romm_api_token_id": 99}  # no romm_api_token_origin
         forget_device = MagicMock()
         service = _make_service(
             settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
         )
         event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
-        forget_device.assert_called_once_with()
+        forget_device.assert_not_called()
+        assert settings["romm_api_token_origin"] == "http://romm.local"
 
-    def test_forgets_device_on_first_sign_in(self, event_loop, romm_api, logger):
-        """First-ever sign-in (no prior token) forgets — a harmless no-op (no device yet)."""
+    def test_keeps_device_on_first_sign_in(self, event_loop, romm_api, logger):
+        """#1437: first-ever sign-in (no prior origin) is not an origin change — never forget."""
         settings: dict[str, Any] = {}
         forget_device = MagicMock()
         service = _make_service(
             settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
         )
         event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
-        forget_device.assert_called_once_with()
+        forget_device.assert_not_called()
 
     def test_does_not_forget_on_failed_mint(self, event_loop, romm_api, logger):
         """A failed mint restores the snapshot — the still-current device id stays."""
@@ -758,13 +767,46 @@ class TestEstablishUserTokenHappyPath:
             event_loop.run_until_complete(service.establish_user_token("http://romm.local", "rmm_supersecret"))
         assert all("rmm_supersecret" not in r.getMessage() for r in caplog.records)
 
-    def test_forgets_device_on_first_sign_in(self, event_loop, romm_api, logger):
+    def test_keeps_device_on_first_sign_in(self, event_loop, romm_api, logger):
+        """#1437: first-ever paste sign-in (no prior origin) is not a change — never forget."""
         settings: dict[str, Any] = {}
         forget_device = MagicMock()
         service = _make_service(
             settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
         )
         event_loop.run_until_complete(service.establish_user_token("http://romm.local", "rmm_pasted"))
+        forget_device.assert_not_called()
+
+    def test_keeps_device_on_same_server_token_swap(self, event_loop, romm_api, logger):
+        """#1437: pasting a new token for the SAME server keeps the device id."""
+        settings = {"romm_api_token_origin": "http://romm.local"}
+        forget_device = MagicMock()
+        service = _make_service(
+            settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
+        )
+        event_loop.run_until_complete(service.establish_user_token("http://romm.local", "rmm_pasted"))
+        forget_device.assert_not_called()
+
+    def test_keeps_device_when_old_origin_unknown(self, event_loop, romm_api, logger):
+        """#1437: an unstamped (`None`) old origin against the unchanged URL keeps the id."""
+        settings = {"romm_api_token_id": None}  # no romm_api_token_origin
+        forget_device = MagicMock()
+        service = _make_service(
+            settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
+        )
+        event_loop.run_until_complete(service.establish_user_token("http://romm.local", "rmm_pasted"))
+        forget_device.assert_not_called()
+        assert settings["romm_api_token_origin"] == "http://romm.local"
+
+    def test_forgets_device_when_origin_differs(self, event_loop, romm_api, logger):
+        """A genuine server switch on the paste path still forgets the id (ADR-0016 0a)."""
+        settings = {"romm_api_token_origin": "https://old.server"}
+        forget_device = MagicMock()
+        service = _make_service(
+            settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
+        )
+        result = event_loop.run_until_complete(service.establish_user_token("https://new.server", "rmm_pasted"))
+        assert result["success"] is True
         forget_device.assert_called_once_with()
 
     def test_clears_playtime_scope_notice(self, event_loop, romm_api, logger):
@@ -1231,13 +1273,35 @@ class TestEstablishPairedTokenHappyPath:
         assert "rmm_supersecret" not in messages
         assert "SECRETCODE23" not in messages
 
-    def test_forgets_device_on_first_sign_in(self, event_loop, romm_api, logger):
+    def test_keeps_device_on_first_sign_in(self, event_loop, romm_api, logger):
+        """#1437: first-ever paired sign-in (no prior origin) is not a change — never forget."""
         settings: dict[str, Any] = {}
         forget_device = MagicMock()
         service = _make_service(
             settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
         )
         event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ABCD2345"))
+        forget_device.assert_not_called()
+
+    def test_keeps_device_on_same_server_re_pair(self, event_loop, romm_api, logger):
+        """#1437: re-pairing against the SAME server keeps the device id."""
+        settings = {"romm_api_token_origin": "http://romm.local"}
+        forget_device = MagicMock()
+        service = _make_service(
+            settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
+        )
+        event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ABCD2345"))
+        forget_device.assert_not_called()
+
+    def test_forgets_device_when_origin_differs(self, event_loop, romm_api, logger):
+        """A genuine server switch on the pairing path still forgets the id (ADR-0016 0a)."""
+        settings = {"romm_api_token_origin": "https://old.server"}
+        forget_device = MagicMock()
+        service = _make_service(
+            settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
+        )
+        result = event_loop.run_until_complete(service.establish_paired_token("https://new.server", "ABCD2345"))
+        assert result["success"] is True
         forget_device.assert_called_once_with()
 
     def test_clears_playtime_scope_notice(self, event_loop, romm_api, logger):

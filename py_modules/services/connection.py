@@ -32,7 +32,7 @@ from lib.errors import (
     error_response,
 )
 from lib.list_result import ErrorCode
-from lib.url_host import is_valid_server_url, normalize_origin, same_origin
+from lib.url_host import is_origin_change, is_valid_server_url, normalize_origin, same_origin
 
 if TYPE_CHECKING:
     import asyncio
@@ -511,16 +511,25 @@ class ConnectionService:
             self._logger.warning(f"Could not clear playtime scope notice after sign-in: {e}")
 
     async def _forget_device_on_origin_change(self, old_token_origin: str | None, new_url: str) -> None:
-        """Forget the registered device id when the sign-in origin changed.
+        """Forget the registered device id only when the sign-in origin genuinely changed.
 
-        A device id is bound to the origin it was minted against, so a server
-        switch must drop it (RomM's negotiate hard-404s a foreign id) and let
-        the next sync re-register. Called on the success path only — a failed
-        sign-in keeps the still-current server's id. Best-effort: the new token
-        is already valid, so a failed local clear must not turn a successful
-        sign-in into a failure.
+        A device id is bound to the origin it was minted against, so a real
+        server switch must drop it (RomM's negotiate hard-404s a foreign id) and
+        let the next sync re-register. A same-server re-sign-in — including a
+        token swap on the unchanged URL — must KEEP the id, or the next post-exit
+        sync flags a spurious conflict for a save this device itself synced
+        (#1437). An *unknown* old origin (``None`` — a legacy/unstamped token, or
+        the origin cleared by a prior sign-out) is treated as unknown, not
+        different, and never forgets; only two known, differing normalized
+        origins are a real change (:func:`is_origin_change`). *old_token_origin*
+        is captured from the pre-clear snapshot by the caller, so the
+        leak-safety in-memory token clear never destroys the comparison input.
+        Called on the success path only — a failed sign-in keeps the
+        still-current server's id. Best-effort: the new token is already valid,
+        so a failed local clear must not turn a successful sign-in into a
+        failure.
         """
-        if same_origin(old_token_origin, new_url):
+        if not is_origin_change(old_token_origin, new_url):
             return
         try:
             await self._loop.run_in_executor(None, self._forget_device)

@@ -66,6 +66,25 @@ def same_origin(a: str | None, b: str | None) -> bool:
     return origin_a is not None and origin_a == origin_b
 
 
+def is_origin_change(old: str | None, new: str | None) -> bool:
+    """Return True iff *old* and *new* are both known origins that name different servers.
+
+    The "did the server genuinely change?" question — the complement of
+    :func:`same_origin` but with the opposite posture on an *unknown* origin. A
+    ``None`` (or otherwise unparseable) origin on either side is treated as
+    unknown, **not** different: a legacy/unstamped token origin (``None``)
+    against any URL is not a change, and nothing bound to a server origin (the
+    registered device id) is dropped just because the old binding was never
+    recorded. Both sides are normalized before comparing; only two parseable
+    origins that normalize to different values count as a real change.
+    """
+    old_origin = normalize_origin(old) if old is not None else None
+    new_origin = normalize_origin(new) if new is not None else None
+    if old_origin is None or new_origin is None:
+        return False
+    return old_origin != new_origin
+
+
 def is_valid_server_url(url: str) -> bool:
     """Return True iff *url* (after stripping surrounding whitespace) names an http(s) origin.
 

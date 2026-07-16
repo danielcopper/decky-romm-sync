@@ -93,10 +93,15 @@ silent omission. The CI check enforces this.
   persists URL+SSL+token+id+origin in a single atomic save only on success — a failed sign-in restores the previous
   working state, never clobbering disk. The old-token DELETE on re-auth is fired only when the old origin matches the
   new one (#1038). A legacy token with origin `None` is un-bound: attached, never blocked, until the next sign-in stamps
-  it. A successful sign-in whose origin _differs_ from the old token's origin **forgets the registered device id**
+  it. A successful sign-in that **genuinely changes origin** (old and new origins both known and normalizing to
+  different values — `is_origin_change` in `lib/url_host`) **forgets the registered device id**
   (`kv_config["device_id"]`, via the `DeviceForgetFn` injected into `ConnectionService` → `SaveService.forget_device` →
   `DeviceRegistry.forget_device`) — the id is bound to its minting origin and would 404 against the new server's
-  `negotiate`; local-only + best-effort, the next save-sync re-registers (#1234 Phase 0a, ADR-0016). See
+  `negotiate`; local-only + best-effort, the next save-sync re-registers (#1234 Phase 0a, ADR-0016). A **same-server
+  re-sign-in keeps the device identity**: a token swap on the unchanged URL, URL-formatting variants (trailing slash,
+  default vs explicit port), and a `None`/unstamped old origin are all treated as _not a change_ (an unknown old origin
+  is unknown, not different) — the id survives, so the next post-exit sync attributes uploads as before instead of
+  hitting a spurious conflict (#1437). See
   [ConnectionService notes](docs/architecture/backend-architecture.md#connectionservice-notes).
 - **Decky callables must be async**: Even if the method body is synchronous, Decky's callable framework requires
   `async def`. Do not remove `async` from callable methods in main.py.
