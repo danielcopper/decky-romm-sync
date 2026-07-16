@@ -127,6 +127,8 @@ Latest release and shipped features: see `git tag --sort=-v:refname` and GitHub 
 - **Build**: `pnpm build` (Rollup -> dist/index.js)
 - **Tests**: `python -m pytest tests/ -q` or `mise run test`
 - **Coverage**: `python -m pytest tests/ -q --cov=py_modules --cov=main --cov-report=term --cov-branch`
+- **Gate**: `mise run gate` (the full CI battery in one command — mirrors every PR check in `.github/workflows/ci.yml`;
+  slow: full pytest + frontend build. Run before pushing.)
 - **Setup**: `mise run setup` (installs JS + Python dependencies)
 - **Dev reload**: `mise run dev` (build + restart plugin_loader)
 - **Frontend live dev**: `mise run dev:watch [display]` (one-time `mise run dev:setup`) — hot-reloads the **frontend**

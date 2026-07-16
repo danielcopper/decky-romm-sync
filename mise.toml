@@ -62,6 +62,30 @@ run = [
     "python scripts/check_lock_sync.py",
 ]
 
+[tasks.gate]
+description = "Run the full CI battery locally — every PR check in ci.yml, in one command (slow: full pytest + frontend build)"
+# depends: `test` (pytest) + `lint` (import-linter, the check_* scripts, markdownlint)
+# cover the Python-test and architecture-gate CI jobs. The run list below adds the
+# rest of ci.yml: the ruff/basedpyright half of the `lint` job, the whole `build`
+# job (eslint/prettier/build/typecheck/size), the `frontend-test` job (`pnpm test`
+# stands in for CI's `pnpm test:coverage` — pass/fail parity), and `markdown-format`
+# (`deno fmt --check`). `pnpm build` precedes `pnpm size` because size-limit measures
+# the built bundle. Not reproducible locally, so omitted: the SonarCloud scan +
+# sonar-gate (need SONAR_TOKEN and CI coverage artifacts).
+depends = ["test", "lint"]
+run = [
+    "ruff check .",
+    "ruff format --check .",
+    "basedpyright",
+    "pnpm lint",
+    "pnpm format:check",
+    "pnpm build",
+    "pnpm typecheck",
+    "pnpm size",
+    "pnpm test",
+    "deno fmt --check",
+]
+
 [tasks.deploy]
 description = "Deploy plugin files to Decky plugin directory"
 depends = ["build"]

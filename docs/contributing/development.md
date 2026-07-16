@@ -192,6 +192,19 @@ keeps all settings writes in the single crash-safe owner.
 
 See [Backend Architecture](../architecture/backend-architecture.md) for details.
 
+## Full CI gate
+
+```bash
+mise run gate         # run every PR check from .github/workflows/ci.yml, locally
+```
+
+`mise run gate` is the single local battery that mirrors CI. It runs the backend tests (`mise run test`) and the
+architecture/lint gates (`mise run lint`), then adds the rest of what CI enforces: `ruff check` + `ruff format --check`,
+`basedpyright`, the frontend `eslint` / `prettier --check` / build / `tsc` typecheck / bundle-size budget, the frontend
+tests (`pnpm test`), and `deno fmt --check` for Markdown. It is slow — a full pytest run plus a production frontend
+build — so it is a pre-push check, not something to run on every save. The only CI jobs it can't reproduce are the
+SonarCloud scan and its `sonar-gate` (they need `SONAR_TOKEN` and the CI coverage artifacts).
+
 ## Code Quality
 
 - **SonarCloud** — CI-based analysis on every human PR and push to main. Quality Gate enforces 80% coverage on new code,
