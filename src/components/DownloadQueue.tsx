@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, FC, Fragment } from "react";
-import { PanelSection, PanelSectionRow, ButtonItem, Field, ProgressBar } from "@decky/ui";
+import { PanelSection, PanelSectionRow, ButtonItem, Field } from "@decky/ui";
 import { toaster } from "@decky/api";
 import {
   getDownloadQueue,
@@ -12,7 +12,7 @@ import { getDownloadState, setDownloads, removeTerminalDownloads } from "../util
 import { formatBytes } from "../utils/formatters";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
-import { wrapText } from "../utils/textStyles";
+import { DownloadProgressRow } from "./DownloadProgressRow";
 import type { DownloadItem } from "../types";
 
 interface DownloadQueueProps {
@@ -145,42 +145,17 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
         ) : (
           <>
             {active.map((item) => (
-              <PanelSectionRow key={item.rom_id}>
-                {/* Own the caption in a full-width row and use the bare ProgressBar.
-                    ProgressBarWithInfo is a Steam Field (label column | bar column);
-                    with the rom name in sOperationText the empty bar column gets
-                    squeezed into the right half and clips (#751). The bare
-                    ProgressBar is just the bar and spans the full panel width
-                    (mirrors the sync-progress fix in MainPage). */}
-                <div style={{ width: "100%" }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "flex-start",
-                      fontSize: "12px",
-                      marginBottom: "4px",
-                    }}
-                  >
-                    {/* Wrap a long ROM/platform caption to as many lines as
-                        needed instead of clipping it with an ellipsis (shared
-                        wrap rule) — the bytes column stays pinned top-right. */}
-                    <span data-testid="dl-caption" style={wrapText}>
-                      {item.rom_name} ({item.platform_name}){item.status === "paused" ? " — Paused" : ""}
-                      {item.status === "extracting" ? " — Extracting…" : ""}
-                    </span>
-                    <span data-testid="dl-bytes" style={{ flexShrink: 0 }}>
-                      {item.total_bytes > 0
-                        ? `${formatBytes(item.bytes_downloaded)} / ${formatBytes(item.total_bytes)}`
-                        : formatBytes(item.bytes_downloaded)}
-                    </span>
-                  </div>
-                  <ProgressBar
-                    indeterminate={item.total_bytes === 0}
-                    {...(item.total_bytes > 0 ? { nProgress: (item.bytes_downloaded / item.total_bytes) * 100 } : {})}
-                  />
-                </div>
-              </PanelSectionRow>
+              <DownloadProgressRow
+                key={item.rom_id}
+                caption={
+                  <>
+                    {item.rom_name} ({item.platform_name}){item.status === "paused" ? " — Paused" : ""}
+                    {item.status === "extracting" ? " — Extracting…" : ""}
+                  </>
+                }
+                bytesDownloaded={item.bytes_downloaded}
+                totalBytes={item.total_bytes}
+              />
             ))}
             {active.map((item) =>
               // Extraction is not cancellable and can't pause/resume — the
