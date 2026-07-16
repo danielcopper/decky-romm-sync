@@ -358,6 +358,29 @@ const BlockSeparator: FC = () => (
   </PanelSectionRow>
 );
 
+/** The affirmative green — matches the connection checkmark and the healthy
+ *  memory level — used only for a cleanly-finished sync's status line. */
+const STATUS_SUCCESS_COLOR = "#59bf40";
+
+/** How long the transient status line lingers before auto-clearing. Kept long
+ *  enough to still be readable after a glance away from a just-finished sync. */
+const STATUS_CLEAR_MS = 15000;
+
+/** Tone of the transient status line. Only a clean sync finish is affirmative
+ *  (green); a cancel/error/other keeps the neutral panel-text look. */
+type StatusTone = "success" | "neutral";
+
+interface TransientStatus {
+  text: string;
+  tone: StatusTone;
+}
+
+/** A terminal sync stage's status tone — green only on a clean finish; a
+ *  cancel or error stays neutral so green never reads as "all good". */
+function terminalStatusTone(stage: SyncProgress["stage"]): StatusTone {
+  return stage === "done" ? "success" : "neutral";
+}
+
 export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [stats, setStats] = useState<SyncStats | null>(null);
   const [budgetStatus, setBudgetStatus] = useState<SessionBudgetStatus | null>(null);
@@ -383,7 +406,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // the render — the render must stay pure. Progress frames drive the subscriber,
   // so the countdown ticks per frame exactly as before.
   const [liveEtaDisplay, setLiveEtaDisplay] = useState<number | null>(null);
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState<TransientStatus | null>(null);
   const [preview, setPreview] = useState<SyncPreview | null>(null);
   const [skipPreview, setSkipPreview] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -397,10 +420,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const statusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const downloadPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const showTransientStatus = (msg: string) => {
+  const showTransientStatus = (text: string, tone: StatusTone = "neutral") => {
     if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-    setStatus(msg);
-    statusTimeoutRef.current = setTimeout(() => setStatus(""), 8000);
+    setStatus({ text, tone });
+    statusTimeoutRef.current = setTimeout(() => setStatus(null), STATUS_CLEAR_MS);
   };
 
   useEffect(() => {
@@ -569,7 +592,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           // True terminal reached — re-arm the button out of any "Cancelling…"
           // drain state (#1202, RC-B).
           setCancelling(false);
-          showTransientStatus(progress.message || "Sync finished");
+          showTransientStatus(progress.message || "Sync finished", terminalStatusTone(progress.stage));
           getSyncStats()
             .then(setStats)
             .catch((e) => logError(`Failed to refresh sync stats: ${e}`));
@@ -650,7 +673,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // front or threw). Reset both the local UI and the MODULE store so the
   // store mirrors reality — the optimistic running:true must not linger.
   const abortOptimisticSync = (msg: string) => {
-    setStatus(msg);
+    setStatus({ text: msg, tone: "neutral" });
     setSyncing(false);
     setLoading(false);
     setCancelling(false);
@@ -669,7 +692,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
     setLoading(true);
     setSyncing(true);
     setCancelling(false);
-    setStatus("");
+    setStatus(null);
     setPreview(null);
     setStoredSyncProgress({ running: true, stage: "fetching", message: "Fetching library..." });
     try {
@@ -745,7 +768,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
 
   const handleDismiss = async () => {
     setPreview(null);
-    setStatus("");
+    setStatus(null);
     try {
       await syncCancelPreview();
     } catch {
@@ -1151,12 +1174,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
                   (async () => {
                     try {
                       const result = await clearSyncCache();
-                      setStatus(result.message);
+                      showTransientStatus(result.message);
                     } catch {
-                      setStatus("Failed to clear sync cache");
+                      showTransientStatus("Failed to clear sync cache");
                     }
-                    if (statusTimeoutRef.current) clearTimeout(statusTimeoutRef.current);
-                    statusTimeoutRef.current = setTimeout(() => setStatus(""), 8000);
                     getSyncStats()
                       .then(setStats)
                       .catch((e) => logError(`Failed to refresh sync stats: ${e}`));
@@ -1328,9 +1349,23 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
 
       <PanelSection>
         {syncBody}
-        {status && !syncing && !preview && (
+        {status?.text && !syncing && !preview && (
           <PanelSectionRow>
-            <Field label={status} focusable={true} bottomSeparator="none" />
+            <Field
+              label={
+                <span
+                  data-testid="sync-status"
+                  style={{
+                    fontSize: "12px",
+                    ...(status.tone === "success" ? { color: STATUS_SUCCESS_COLOR } : {}),
+                  }}
+                >
+                  {status.text}
+                </span>
+              }
+              focusable={true}
+              bottomSeparator="none"
+            />
           </PanelSectionRow>
         )}
         <BlockSeparator />

@@ -3541,7 +3541,7 @@ describe("MainPage", () => {
       expect(fieldLabels(container)).toContain("Sync cancelled");
     });
 
-    it("the terminal cancel message auto-clears after 8s", async () => {
+    it("the terminal cancel message stays past 8s and auto-clears after 15s", async () => {
       vi.useFakeTimers({
         toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"],
       });
@@ -3566,14 +3566,20 @@ describe("MainPage", () => {
           await Promise.resolve();
           await Promise.resolve();
         });
-        // Terminal stage surfaces the message + arms the 8s auto-clear.
+        // Terminal stage surfaces the message + arms the 15s auto-clear.
         await act(async () => {
           setSyncProgress({ running: false, stage: "cancelled", message: "Sync cancelled" });
           await Promise.resolve();
         });
         expect(fieldLabels(container)).toContain("Sync cancelled");
+        // Past the OLD 8s threshold: still visible (the "stays longer" change).
         await act(async () => {
           await vi.advanceTimersByTimeAsync(8000);
+        });
+        expect(fieldLabels(container)).toContain("Sync cancelled");
+        // Crossing 15s total: now cleared.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(7001);
         });
         expect(fieldLabels(container)).not.toContain("Sync cancelled");
       } finally {
@@ -4151,6 +4157,97 @@ describe("MainPage", () => {
       });
       // Still in-flight after the resolve — store subscription owns teardown.
       expect(buttonByExactText(container, "Cancel Sync")).not.toBeNull();
+    });
+  });
+
+  // ===========================================================================
+  // N3. Sync-complete status styling — green + smaller + longer visibility
+  // ===========================================================================
+  describe("sync-complete status styling", () => {
+    const syncStatus = (c: HTMLElement) => c.querySelector('[data-testid="sync-status"]') as HTMLElement | null;
+
+    // Mount into a live run so a terminal sync_progress has an in-flight UI to
+    // tear down, then land the terminal frame through the module store exactly
+    // as a backend event would.
+    async function mountThenTerminal(stage: "done" | "cancelled" | "error", message: string): Promise<HTMLElement> {
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 1,
+        totalSteps: 1,
+        message: "Working",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        setSyncProgress({ running: false, stage, message });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      return container;
+    }
+
+    it("renders a clean sync finish smaller and green", async () => {
+      const c = await mountThenTerminal("done", "Sync complete: 7 games");
+      const el = syncStatus(c);
+      expect(el?.textContent).toBe("Sync complete: 7 games");
+      // Non-vacuous: both the affirmative green AND the small caption size sit on
+      // the element — dropping the success tone (or the size) fails this.
+      expect(el?.style.color).toBe("#59bf40");
+      expect(el?.style.fontSize).toBe("12px");
+    });
+
+    it("renders a cancelled finish smaller but NOT green", async () => {
+      const c = await mountThenTerminal("cancelled", "Sync cancelled");
+      const el = syncStatus(c);
+      expect(el?.textContent).toBe("Sync cancelled");
+      // Neutral tone: no colour override, so the panel's default text colour wins.
+      expect(el?.style.color).toBe("");
+      expect(el?.style.fontSize).toBe("12px");
+    });
+
+    it("renders an errored finish smaller but NOT green", async () => {
+      const c = await mountThenTerminal("error", "Sync failed: server unreachable");
+      const el = syncStatus(c);
+      expect(el?.textContent).toBe("Sync failed: server unreachable");
+      expect(el?.style.color).toBe("");
+      expect(el?.style.fontSize).toBe("12px");
+    });
+
+    it("keeps the finish status visible past 8s and clears it only after 15s", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+      try {
+        vi.mocked(backend.getSyncStatus).mockResolvedValue({
+          running: true,
+          stage: "applying",
+          step: 1,
+          totalSteps: 1,
+          message: "Working",
+        });
+        const { container } = render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
+        await act(async () => {
+          setSyncProgress({ running: false, stage: "done", message: "Sync complete: 7 games" });
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        expect(syncStatus(container)?.textContent).toBe("Sync complete: 7 games");
+
+        // Past the OLD 8s auto-clear: still on screen — this guards the "stays
+        // visible a bit longer" ask (the pre-change 8000ms would have cleared it).
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(9000);
+        });
+        expect(syncStatus(container)).not.toBeNull();
+
+        // Crossing 15s total: the auto-clear fires and the line disappears.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6001);
+        });
+        expect(syncStatus(container)).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
