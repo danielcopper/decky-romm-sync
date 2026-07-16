@@ -11,16 +11,7 @@ export default tseslint.config(
   // gitignored build artifacts that don't exist in a clean CI checkout; ignoring
   // them keeps local `pnpm lint` from choking on their minified vendored JS.
   {
-    ignores: [
-      "dist",
-      "node_modules",
-      "defaults",
-      "bin",
-      "coverage",
-      ".worktrees",
-      ".venv",
-      "site",
-    ],
+    ignores: ["dist", "node_modules", "defaults", "bin", "coverage", ".worktrees", ".venv", "site"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -28,6 +19,11 @@ export default tseslint.config(
   react.configs.flat["jsx-runtime"],
   reactHooks.configs.flat["recommended-latest"],
   jsxA11y.flatConfigs.recommended,
+  // Global so eslint-plugin-react resolves the version for every linted file —
+  // including root config files (eslint.config.js, vitest.config.ts, …) that the
+  // react flat configs apply to but that the src-scoped block below never matches.
+  // Without it the plugin prints a "React version not specified" warning.
+  { settings: { react: { version: "detect" } } },
   {
     files: ["src/**/*.{ts,tsx}"],
     languageOptions: {
@@ -41,7 +37,6 @@ export default tseslint.config(
         collectionStore: "readonly",
       },
     },
-    settings: { react: { version: "detect" } },
     rules: {
       "react/prop-types": "off", // TS handles this
       "@typescript-eslint/no-unused-vars": [
