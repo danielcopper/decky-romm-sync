@@ -70,7 +70,8 @@ Open **Save Sync** from the main QAM page to configure sync behavior.
 
 - **Sync before launch** (default: on) — runs sync when a game starts, whether via the Play button or the launch gate.
   If the server is unreachable, the game launches with whatever local save exists.
-- **Sync after exit** (default: on) — runs sync after closing a game. Shows a toast notification on success.
+- **Sync after exit** (default: on) — runs sync after closing a game. A toast confirms a successful upload; if the sync
+  fails, the toast names the actual cause (see [Offline Behavior](#offline-behavior)) instead of a generic message.
 
 ### When saves conflict
 
@@ -163,8 +164,14 @@ If the RomM server is unreachable when a sync is attempted:
 sync that fails for another reason — for example an expired or revoked login token, or an SSL certificate problem —
 shows that specific reason instead (such as "Authentication failed — check your username and password"), so a working
 server is never mislabelled as offline. This applies to both surfaces: the warning shown before launch and the "after
-exit" toast both name the actual cause rather than a generic "failed to sync" message. If you see an authentication
-message, re-enter your server URL and sign in again in the plugin settings.
+exit" toast both name the actual cause rather than a generic "failed to sync" message. When more than one save file
+fails in the same sync, the toast shows the first file's reason followed by a "(+N more)" count so the message stays
+short. If you see an authentication message, re-enter your server URL and sign in again in the plugin settings.
+
+After a failed sync the game-detail save panel reflects the honest state right away: a file whose upload failed shows a
+yellow **Local changes** badge (not a green "synced"), and its "Last synced" line keeps the time of the last
+_successful_ sync — a green checkmark appears only once a sync actually succeeds. A separate "Checked" line shows when
+the plugin last attempted a sync, so a recent failed attempt and the last good sync are both visible.
 
 ## Playtime Tracking
 
