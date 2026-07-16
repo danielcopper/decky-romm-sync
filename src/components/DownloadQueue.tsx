@@ -21,14 +21,32 @@ function formatFinishedDescription(item: DownloadItem): string {
   return "Cancelled";
 }
 
+// Un-clear rom_ids that have new active downloads (re-download case). Pure
+// transform over (current, prev), so it lives at module scope rather than
+// inside the poll effect — module functions don't count toward the component's
+// function-nesting depth and are exempt from the effect's dependency array.
+const unclearRestarted =
+  (current: DownloadItem[]) =>
+  (prev: Set<number>): Set<number> => {
+    const restarted = current.filter(
+      (d) =>
+        (d.status === "downloading" || d.status === "queued" || d.status === "paused" || d.status === "extracting") &&
+        prev.has(d.rom_id),
+    );
+    if (restarted.length === 0) return prev;
+    const next = new Set(prev);
+    for (const d of restarted) next.delete(d.rom_id);
+    return next;
+  };
+
 export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
   const [downloads, setLocalDownloads] = useState<DownloadItem[]>([]); // NOSONAR(typescript:S6754) — setter intentionally renamed (local wrapper around global download state).
   const [cleared, setCleared] = useState<Set<number>>(new Set());
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    // The poll machinery is scoped to the effect: nothing outside it drives the
-    // interval, and keeping the helpers here means the mount-only effect has no
+    // The interval machinery is scoped to the effect: nothing outside it drives
+    // the poll, and keeping these helpers here means the mount-only effect has no
     // reactive dependencies to track.
     const stopPolling = () => {
       if (pollRef.current) {
@@ -36,24 +54,6 @@ export const DownloadQueue: FC<DownloadQueueProps> = ({ onBack }) => {
         pollRef.current = null;
       }
     };
-
-    // Un-clear rom_ids that have new active downloads (re-download case)
-    const unclearRestarted =
-      (current: DownloadItem[]) =>
-      (prev: Set<number>): Set<number> => {
-        const restarted = current.filter(
-          (d) =>
-            (d.status === "downloading" ||
-              d.status === "queued" ||
-              d.status === "paused" ||
-              d.status === "extracting") &&
-            prev.has(d.rom_id),
-        );
-        if (restarted.length === 0) return prev;
-        const next = new Set(prev);
-        for (const d of restarted) next.delete(d.rom_id);
-        return next;
-      };
 
     const pollTick = () => {
       const current = getDownloadState();
