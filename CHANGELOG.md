@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.27.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.26.1...decky-romm-sync-v0.27.0) (2026-07-16)
+
+
+### Features
+
+* **artwork:** apply sync covers via SetCustomArtworkForApp under the budget gate ([#1394](https://github.com/danielcopper/decky-romm-sync/issues/1394)) ([39361fb](https://github.com/danielcopper/decky-romm-sync/commit/39361fb2298626357b5216f62517bd121082072e))
+* **artwork:** user-triggered cleanup of orphaned grid images ([#1403](https://github.com/danielcopper/decky-romm-sync/issues/1403)) ([5e84f60](https://github.com/danielcopper/decky-romm-sync/commit/5e84f604c9e865d9b76903676514e1471ec995e6))
+* **scale:** chunked durable sync apply and large-library hardening ([#1380](https://github.com/danielcopper/decky-romm-sync/issues/1380)) ([470506f](https://github.com/danielcopper/decky-romm-sync/commit/470506f2aed2d7de07c0c26447cdc46aed498578))
+* **sync:** delta-restricted apply — resumes skip applied items for real ([#1396](https://github.com/danielcopper/decky-romm-sync/issues/1396)) ([c0527e4](https://github.com/danielcopper/decky-romm-sync/commit/c0527e47be28d7adb38feee970e634f01c6bfc9f))
+* **sync:** make time estimates skip-aware and finish the estimate surfaces ([#1402](https://github.com/danielcopper/decky-romm-sync/issues/1402)) ([e354226](https://github.com/danielcopper/decky-romm-sync/commit/e3542268946b3bfe0affae86319aedee36cb0f18))
+* **sync:** session memory budget — measure, warn, pause and resume before Steam's renderer cliff ([#1392](https://github.com/danielcopper/decky-romm-sync/issues/1392)) ([1ba03ee](https://github.com/danielcopper/decky-romm-sync/commit/1ba03ee649a07177caa5aa740667777ffa861fd8))
+* **ui:** advance the sync bar through fetch and cover sub-phases without backwards jumps ([#1410](https://github.com/danielcopper/decky-romm-sync/issues/1410)) ([acf7917](https://github.com/danielcopper/decky-romm-sync/commit/acf79178d8f21a98c2a6d350fe3c9203b4a312b3))
+
+
+### Bug Fixes
+
+* **artwork:** invalidate the per-rom cover cache on server-side cover changes ([#1401](https://github.com/danielcopper/decky-romm-sync/issues/1401)) ([be6ed13](https://github.com/danielcopper/decky-romm-sync/commit/be6ed1371f000f5f66d309f84cf7b2643e159902))
+* **danger-zone:** remove live-scanned orphan shortcuts in remove-all and re-count after settle ([#1408](https://github.com/danielcopper/decky-romm-sync/issues/1408)) ([d336fc8](https://github.com/danielcopper/decky-romm-sync/commit/d336fc8036dbd06dc6e394c1349e838925ffb768))
+* **sync:** adopt orphan shortcuts by exe ownership and name instead of creating duplicates ([#1411](https://github.com/danielcopper/decky-romm-sync/issues/1411)) ([c399334](https://github.com/danielcopper/decky-romm-sync/commit/c39933444d183ec0e9ea2064630577878754f8fa))
+* **sync:** count delta-skipped roms in the processed-games numerator ([#1405](https://github.com/danielcopper/decky-romm-sync/issues/1405)) ([6106a5c](https://github.com/danielcopper/decky-romm-sync/commit/6106a5c78be9ffa0b3b89dd0c3f0cfb6f51986b4))
+* **sync:** count rebinding platforms correctly in the preview platform diff ([#1418](https://github.com/danielcopper/decky-romm-sync/issues/1418)) ([024c904](https://github.com/danielcopper/decky-romm-sync/commit/024c904d8da9c307c84602e657d3247266bf3a9e))
+* **sync:** make late-ack recovery reachable via an abandoned-chunk stash ([#1409](https://github.com/danielcopper/decky-romm-sync/issues/1409)) ([88abb37](https://github.com/danielcopper/decky-romm-sync/commit/88abb376b57f81b6bad66c2712619ca0d5fb8b33))
+* **sync:** price grandfathered sibling groups per bound duplicate in estimates ([#1404](https://github.com/danielcopper/decky-romm-sync/issues/1404)) ([c2acb3b](https://github.com/danielcopper/decky-romm-sync/commit/c2acb3ba6167a563f9b891bff8a8f8746c887b73))
+* **sync:** refuse danger-zone removals while a sync run is in flight ([#1398](https://github.com/danielcopper/decky-romm-sync/issues/1398)) ([0520634](https://github.com/danielcopper/decky-romm-sync/commit/0520634bf5e176e3200b198b9b14a069b3601387))
+* **sync:** run the apply pipeline for unstamped platforms so recovery re-stamps and the run status heals ([#1421](https://github.com/danielcopper/decky-romm-sync/issues/1421)) ([092fcf1](https://github.com/danielcopper/decky-romm-sync/commit/092fcf187a0bbf8a2b3763feadab864c7b211f9f))
+* **sync:** surface cover-only changes in the preview and apply them ([#1406](https://github.com/danielcopper/decky-romm-sync/issues/1406)) ([0b01726](https://github.com/danielcopper/decky-romm-sync/commit/0b017266dd5abc36e957eccd16c939cc00c5126b))
+* **ui:** constrain qam loading spinners to a shared small inline pattern ([#1419](https://github.com/danielcopper/decky-romm-sync/issues/1419)) ([3f737fe](https://github.com/danielcopper/decky-romm-sync/commit/3f737feac6c70330824246d76c20ca0d4476903d))
+* **ui:** gate collapsed platform counts on the completion stamp ([#1413](https://github.com/danielcopper/decky-romm-sync/issues/1413)) ([0372fe8](https://github.com/danielcopper/decky-romm-sync/commit/0372fe8a862a105f1455d99c7034e83b3a7635ae))
+* **ui:** keep sync fine-detail rows mounted across unit boundaries ([#1420](https://github.com/danielcopper/decky-romm-sync/issues/1420)) ([eea8196](https://github.com/danielcopper/decky-romm-sync/commit/eea81966fdfd3f9f2fffb457a0b509901dd1cbe0))
+* **ui:** make the qam sync panel gamepad-navigable and compact its layout ([#1393](https://github.com/danielcopper/decky-romm-sync/issues/1393)) ([47f052b](https://github.com/danielcopper/decky-romm-sync/commit/47f052b004833793d52b74fc507201ecfa6c8c5c))
+* **ui:** say interrupted in the sync summary and use the planned total ([#1399](https://github.com/danielcopper/decky-romm-sync/issues/1399)) ([0b38ed9](https://github.com/danielcopper/decky-romm-sync/commit/0b38ed92bb467140ad56b397e3d916e2820aba5e))
+* **ui:** show the qam sync status smaller and green on success and keep it visible longer ([#1422](https://github.com/danielcopper/decky-romm-sync/issues/1422)) ([0dee17c](https://github.com/danielcopper/decky-romm-sync/commit/0dee17c1de8609b121dbf6d2bf78ea62eb9b355f))
+
 ## [0.26.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.26.0...decky-romm-sync-v0.26.1) (2026-07-10)
 
 
