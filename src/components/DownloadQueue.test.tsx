@@ -1,5 +1,5 @@
 // CATCH-REJECTION ASSERTION RULE:
-// DownloadQueue has 2 catch sites:
+// DownloadQueue has 3 catch sites:
 //   - useEffect mount: getDownloadQueue().catch → falls back to
 //     setLocalDownloads([...getDownloadState()]). Observable side effect:
 //     pre-seeded store items render. Asserted in "mount: rejection falls back
@@ -10,14 +10,19 @@
 //     catches stay assertion-free; we still exercise the call site by
 //     rejecting cancelDownload and asserting the click did NOT crash + the
 //     component continued to render normally.
+//   - handleClearCompleted's `try/catch { return }`. This catch HAS an
+//     observable side effect: on a failed clear it returns BEFORE
+//     removeTerminalDownloads(), so the finished rows stay visible and the
+//     store is untouched. Asserted in "a failed clear leaves the finished
+//     rows in place".
 //
 // MUTATION CHECKS (by inspection):
 //   1. If clearInterval(pollRef.current) is removed from stopPolling, the
 //      "interval is cleared on unmount" test fails — clearIntervalSpy would
 //      not be called with the captured pollRef id after unmount.
-//   2. If setCleared(unclearRestarted(current)) is removed from pollTick,
-//      the "previously cleared rom restarting un-clears" test fails — a
-//      cleared rom_id that returns to "downloading" would stay hidden.
+//   2. If removeTerminalDownloads() is removed from handleClearCompleted, the
+//      "cleared downloads do not reappear on remount" test fails — the store
+//      keeps the terminal entries, so the poll re-shows them.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
@@ -108,6 +113,7 @@ describe("DownloadQueue", () => {
     vi.mocked(backend.cancelDownload).mockResolvedValue({ success: true, message: "" });
     vi.mocked(backend.pauseDownload).mockResolvedValue({ success: true, message: "" });
     vi.mocked(backend.resumeDownload).mockResolvedValue({ success: true, message: "" });
+    vi.mocked(backend.clearCompletedDownloads).mockResolvedValue({ success: true, cleared: 0 });
   });
 
   afterEach(() => {
@@ -239,10 +245,15 @@ describe("DownloadQueue", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // unclearRestarted — cleared rom returns to active list
+  // clear + re-download — a cleared rom that re-enters the queue shows again
   // ---------------------------------------------------------------------------
-  describe("unclearRestarted", () => {
-    it("a cleared rom_id whose download restarts (downloading) becomes visible again", async () => {
+  // With backend eviction (#149) there is no client-side "cleared" set: a clear
+  // removes the entries from both the backend queue and the store. A restarted
+  // download re-enters the queue naturally (start_download re-adds it and its
+  // download_progress frame refreshes the store), so it reappears without any
+  // per-component un-clear bookkeeping.
+  describe("clear + re-download", () => {
+    it("a cleared rom whose download restarts (downloading) becomes visible again", async () => {
       const finished = makeItem({
         rom_id: 42,
         rom_name: "Restart",
@@ -259,11 +270,13 @@ describe("DownloadQueue", () => {
 
       // The completed Field is visible.
       expect(container.textContent).toContain("Restart");
-      // Click "Clear Completed" → rom_id 42 enters cleared set.
+      // Click "Clear Completed" → backend evicts, store filtered.
       const clearBtn = buttonByExactText(container, "Clear Completed");
       expect(clearBtn).not.toBeNull();
       await act(async () => {
         fireEvent.click(clearBtn!);
+        await Promise.resolve();
+        await Promise.resolve();
       });
       // After clearing the only item, the empty state shows.
       expect(container.textContent).toContain("No downloads");
@@ -274,13 +287,12 @@ describe("DownloadQueue", () => {
         await vi.advanceTimersByTimeAsync(500);
       });
 
-      // unclearRestarted removed rom_id 42 from `cleared`, so the active
-      // download caption is rendered again.
+      // The re-entered download renders again — nothing keeps it hidden.
       const caption = container.querySelector('[data-testid="dl-caption"]');
       expect(caption?.textContent).toBe("Restart (Genesis)");
     });
 
-    it("a cleared rom_id whose download restarts as 'queued' also becomes visible", async () => {
+    it("a cleared rom whose download restarts as 'queued' also becomes visible", async () => {
       const finished = makeItem({
         rom_id: 13,
         rom_name: "Queued",
@@ -296,6 +308,8 @@ describe("DownloadQueue", () => {
 
       await act(async () => {
         fireEvent.click(buttonByExactText(container, "Clear Completed")!);
+        await Promise.resolve();
+        await Promise.resolve();
       });
       expect(container.textContent).toContain("No downloads");
 
@@ -304,28 +318,6 @@ describe("DownloadQueue", () => {
         await vi.advanceTimersByTimeAsync(500);
       });
       expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("Queued (Genesis)");
-    });
-
-    it("if no cleared rom_id matches, cleared Set stays the same instance (no needless re-set)", async () => {
-      // Two finished items; clear them; then a tick where NONE of the cleared
-      // ids restart. unclearRestarted's early-return path is exercised.
-      const a = makeItem({ rom_id: 1, status: "completed", bytes_downloaded: 100, total_bytes: 100 });
-      const b = makeItem({ rom_id: 2, rom_name: "Bee", status: "cancelled", bytes_downloaded: 0, total_bytes: 0 });
-      vi.mocked(backend.getDownloadQueue).mockResolvedValue({
-        downloads: [a, b],
-      });
-      const { container } = render(<DownloadQueue onBack={() => {}} />);
-      await flushMount();
-      await act(async () => {
-        fireEvent.click(buttonByExactText(container, "Clear Completed")!);
-      });
-      expect(container.textContent).toContain("No downloads");
-
-      // Tick with the same store contents — no restart → still hidden.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(500);
-      });
-      expect(container.textContent).toContain("No downloads");
     });
   });
 
@@ -477,7 +469,7 @@ describe("DownloadQueue", () => {
   // handleClearCompleted
   // ---------------------------------------------------------------------------
   describe("handleClearCompleted", () => {
-    it("hides all completed/failed/cancelled items; keeps active items visible", async () => {
+    it("calls clearCompletedDownloads, hides finished items, keeps active items visible", async () => {
       const active = makeItem({ rom_id: 1, rom_name: "Active" });
       const completed = makeItem({
         rom_id: 2,
@@ -500,6 +492,7 @@ describe("DownloadQueue", () => {
       vi.mocked(backend.getDownloadQueue).mockResolvedValue({
         downloads: [active, completed, failed, cancelled],
       });
+      vi.mocked(backend.clearCompletedDownloads).mockResolvedValue({ success: true, cleared: 3 });
       const { container } = render(<DownloadQueue onBack={() => {}} />);
       await flushMount();
 
@@ -511,8 +504,12 @@ describe("DownloadQueue", () => {
 
       await act(async () => {
         fireEvent.click(buttonByExactText(container, "Clear Completed")!);
+        await Promise.resolve();
+        await Promise.resolve();
       });
 
+      // The backend eviction callable was invoked (no args).
+      expect(backend.clearCompletedDownloads).toHaveBeenCalledWith();
       // After clearing: finished Fields are gone; active progress bar remains.
       const labelsAfter = Array.from(container.querySelectorAll('[data-testid="field-label"]')).map(
         (n) => n.textContent,
@@ -523,6 +520,73 @@ describe("DownloadQueue", () => {
       expect(container.querySelector('[data-testid="dl-caption"]')?.textContent).toBe("Active (Genesis)");
       // Clear Completed button is gone (no finished items remain).
       expect(buttonByExactText(container, "Clear Completed")).toBeNull();
+      // The finished entries left the shared store too, so the poll won't re-show
+      // them and a remount fetch (from the evicted backend queue) stays clean.
+      expect(getDownloadState().map((d) => d.rom_id)).toEqual([1]);
+    });
+
+    it("cleared downloads do not reappear on remount (#149)", async () => {
+      // The pre-fix bug: a purely-local hide reset on unmount, and the backend
+      // still returned the terminal entry, so reopening the page re-showed it.
+      // With backend eviction the reopen's getDownloadQueue returns the evicted
+      // queue, so the cleared item stays gone.
+      const completed = makeItem({
+        rom_id: 7,
+        rom_name: "Gone",
+        status: "completed",
+        bytes_downloaded: 100,
+        total_bytes: 100,
+      });
+      vi.mocked(backend.getDownloadQueue).mockResolvedValue({ downloads: [completed] });
+      vi.mocked(backend.clearCompletedDownloads).mockResolvedValue({ success: true, cleared: 1 });
+
+      const first = render(<DownloadQueue onBack={() => {}} />);
+      await flushMount();
+      expect(first.container.textContent).toContain("Gone");
+
+      await act(async () => {
+        fireEvent.click(buttonByExactText(first.container, "Clear Completed")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(first.container.textContent).toContain("No downloads");
+      first.unmount();
+
+      // Reopen: the backend now reports the evicted (empty) queue.
+      vi.mocked(backend.getDownloadQueue).mockResolvedValue({ downloads: [] });
+      const second = render(<DownloadQueue onBack={() => {}} />);
+      await flushMount();
+      expect(second.container.textContent).toContain("No downloads");
+      expect(second.container.textContent).not.toContain("Gone");
+    });
+
+    it("a failed clear leaves the finished rows in place (catch returns early)", async () => {
+      // clearCompletedDownloads rejects (bridge/backend error) → the handler
+      // returns before removeTerminalDownloads, so the finished Field stays and
+      // the store is untouched. This is the observable side effect of the catch.
+      const completed = makeItem({
+        rom_id: 9,
+        rom_name: "Keep",
+        status: "completed",
+        bytes_downloaded: 100,
+        total_bytes: 100,
+      });
+      vi.mocked(backend.getDownloadQueue).mockResolvedValue({ downloads: [completed] });
+      vi.mocked(backend.clearCompletedDownloads).mockRejectedValue(new Error("bridge down"));
+
+      const { container } = render(<DownloadQueue onBack={() => {}} />);
+      await flushMount();
+
+      await act(async () => {
+        fireEvent.click(buttonByExactText(container, "Clear Completed")!);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // The finished row is still there and the store kept the terminal entry.
+      const labels = Array.from(container.querySelectorAll('[data-testid="field-label"]')).map((n) => n.textContent);
+      expect(labels).toContain("Keep");
+      expect(getDownloadState().map((d) => d.rom_id)).toEqual([9]);
     });
   });
 

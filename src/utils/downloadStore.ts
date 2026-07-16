@@ -27,3 +27,12 @@ export function updateDownload(item: DownloadItem): void {
 export function getDownloadState(): DownloadItem[] {
   return _downloads;
 }
+
+// Drop every terminal (completed/failed/cancelled) entry from the store,
+// mirroring the backend's "Clear Completed" eviction (#149). Active, queued,
+// paused, and extracting entries stay. Called after clear_completed_downloads
+// succeeds so the store matches the freshly-evicted backend queue immediately,
+// rather than waiting for the next mount fetch.
+export function removeTerminalDownloads(): void {
+  _downloads = _downloads.filter((d) => d.status !== "completed" && d.status !== "failed" && d.status !== "cancelled");
+}

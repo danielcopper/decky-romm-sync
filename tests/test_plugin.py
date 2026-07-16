@@ -745,6 +745,10 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "sync_cancel_preview",
     "cancel_download",
     "pause_download",
+    # In-memory download-queue cleanup (#149) — evicts terminal entries from the
+    # queue dict only, never touching SQLite or RetroDECK, so a pending migration
+    # doesn't gate it.
+    "clear_completed_downloads",
     # Frontend logging / diagnostic helpers.
     "frontend_log",
     "debug_log",

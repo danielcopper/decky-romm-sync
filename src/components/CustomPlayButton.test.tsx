@@ -484,6 +484,46 @@ describe("CustomPlayButton — pause/resume on active download (#1124)", () => {
 
     expect(backend.resumeDownload).toHaveBeenCalledWith(42);
   });
+
+  it("rehydrates a plain downloading (non-paused) download on mount from the queue (#145 / #1126)", async () => {
+    // Sibling of the paused-rehydration case above: a plain "downloading" entry
+    // in the queue at mount must rehydrate the button straight into its active
+    // shape — NOT a fresh "Download" button whose click would restart from byte
+    // 0 (the #145 regression, closed by #1126). No Download click and no live
+    // progress frame — the active state is recovered purely from getDownloadQueue.
+    mockCachedDetail({ rom_id: 42, installed: false });
+    vi.mocked(backend.getDownloadQueue).mockResolvedValue({
+      downloads: [
+        {
+          rom_id: 42,
+          rom_name: "Test ROM",
+          platform_name: "PSX",
+          file_name: "test.chd",
+          status: "downloading",
+          progress: 0.3,
+          bytes_downloaded: 300,
+          total_bytes: 1000,
+          resumable: true,
+        },
+      ],
+    });
+
+    const { findByLabelText, queryByText } = render(<CustomPlayButton appId={100} />);
+
+    // Rehydrated into the active-download shape (the resumable actions dropdown),
+    // reachable without ever falling back to a fresh "Download" button.
+    const dropdownBtn = await findByLabelText("Download actions");
+    expect(queryByText("Download")).toBeNull();
+
+    // The rehydrated state drives the real controls — Pause hits the exact rom_id.
+    const menu = openMenu(dropdownBtn);
+    const pauseItem = await menu.findByText("Pause");
+    await act(async () => {
+      pauseItem.click();
+      await Promise.resolve();
+    });
+    expect(backend.pauseDownload).toHaveBeenCalledWith(42);
+  });
 });
 
 describe("CustomPlayButton — extraction phase on a multi-file download", () => {

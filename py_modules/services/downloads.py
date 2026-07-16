@@ -56,6 +56,10 @@ if TYPE_CHECKING:
 _DOWNLOAD_QUEUE_MAX_TERMINAL = 50
 _ZIP_TMP_EXT = ".zip.tmp"
 _TMP_EXT = ".tmp"
+# A download in one of these statuses has run to a terminal end — it is no
+# longer active/queued/paused/extracting. The queue prune trims the oldest of
+# these over the cap, and "Clear Completed" evicts all of them (#149).
+_TERMINAL_DOWNLOAD_STATUSES = ("completed", "failed", "cancelled")
 
 
 class _DownloadControl:
@@ -169,9 +173,7 @@ class DownloadService:
         (by insertion order) when the count exceeds the limit.
         """
         terminal_ids = [
-            rid
-            for rid, item in self._download_queue.items()
-            if item.get("status") in ("completed", "failed", "cancelled")
+            rid for rid, item in self._download_queue.items() if item.get("status") in _TERMINAL_DOWNLOAD_STATUSES
         ]
         excess = len(terminal_ids) - _DOWNLOAD_QUEUE_MAX_TERMINAL
         if excess <= 0:
@@ -1338,6 +1340,25 @@ class DownloadService:
 
     def get_download_queue(self):
         return {"downloads": list(self._download_queue.values())}
+
+    def clear_completed_downloads(self) -> dict[str, Any]:
+        """Evict every terminal (completed/failed/cancelled) entry from the queue.
+
+        The frontend "Clear Completed" action calls this so a dismissed download
+        stays cleared across a QAM reopen or menu switch (#149): the backend queue
+        is the source ``get_download_queue`` re-seeds the frontend from on every
+        mount, so a purely-local hide reappeared on the next reopen. Active,
+        queued, paused, and extracting entries are left untouched — only terminal
+        ones are removed. Idempotent: an empty queue or one with no terminal
+        entries clears nothing and reports ``cleared: 0``. A ROM re-downloaded
+        after being cleared re-enters the queue naturally via ``start_download``.
+        """
+        terminal_ids = [
+            rid for rid, item in self._download_queue.items() if item.get("status") in _TERMINAL_DOWNLOAD_STATUSES
+        ]
+        for rid in terminal_ids:
+            del self._download_queue[rid]
+        return {"success": True, "cleared": len(terminal_ids)}
 
     def active_download_rom_ids(self) -> set[int]:
         """Snapshot the rom ids with an in-flight or queued download (#1298 F1).

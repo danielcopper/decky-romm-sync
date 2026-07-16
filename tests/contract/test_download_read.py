@@ -84,3 +84,38 @@ async def test_resume_download_not_paused_failure_shape(harness):
         "reason": "not_paused",
         "message": "No paused download for this ROM",
     }
+
+
+# ── clear_completed_downloads (#149) ─────────────────────────────────────
+
+
+async def test_clear_completed_downloads_empty_queue_shape(harness):
+    """Clearing an empty queue → ``{success: True, cleared: 0}``.
+
+    ``clearCompletedDownloads = callable<[], {success, cleared}>`` — the success
+    payload carries the eviction count.
+    """
+    result = await harness.plugin.clear_completed_downloads()
+    assert result == {"success": True, "cleared": 0}
+
+
+async def test_clear_completed_downloads_evicts_terminal_and_get_queue_omits_them(harness):
+    """Terminal entries evict; a following ``get_download_queue`` no longer lists them.
+
+    This is the #149 contract: the backend queue is what ``get_download_queue``
+    re-seeds the frontend from on every mount, so a cleared entry must be gone
+    from the queue — not merely hidden client-side. Active/queued/paused/
+    extracting entries survive.
+    """
+    queue = harness.plugin._download_service._download_queue
+    queue[1] = {"rom_id": 1, "rom_name": "Done", "status": "completed"}
+    queue[2] = {"rom_id": 2, "rom_name": "Broke", "status": "failed", "error": "boom"}
+    queue[3] = {"rom_id": 3, "rom_name": "Stopped", "status": "cancelled"}
+    queue[4] = {"rom_id": 4, "rom_name": "Live", "status": "downloading"}
+
+    result = await harness.plugin.clear_completed_downloads()
+    assert result == {"success": True, "cleared": 3}
+
+    after = await harness.plugin.get_download_queue()
+    assert [d["rom_id"] for d in after["downloads"]] == [4]
+    assert after["downloads"][0]["status"] == "downloading"

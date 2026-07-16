@@ -374,6 +374,44 @@ class TestGetDownloadQueue:
         assert statuses == {"downloading", "completed"}
 
 
+class TestClearCompletedDownloads:
+    @pytest.mark.asyncio
+    async def test_evicts_terminal_keeps_active_and_returns_count(self, plugin):
+        # One entry per status: the three terminal ones evict, the four
+        # non-terminal ones (active/queued/paused/extracting) stay.
+        queue = plugin._download_service._download_queue
+        queue[1] = {"rom_id": 1, "status": "completed"}
+        queue[2] = {"rom_id": 2, "status": "failed", "error": "boom"}
+        queue[3] = {"rom_id": 3, "status": "cancelled"}
+        queue[4] = {"rom_id": 4, "status": "downloading"}
+        queue[5] = {"rom_id": 5, "status": "queued"}
+        queue[6] = {"rom_id": 6, "status": "paused"}
+        queue[7] = {"rom_id": 7, "status": "extracting"}
+
+        result = await plugin.clear_completed_downloads()
+
+        assert result == {"success": True, "cleared": 3}
+        assert set(queue.keys()) == {4, 5, 6, 7}
+        assert {item["status"] for item in queue.values()} == {"downloading", "queued", "paused", "extracting"}
+
+    @pytest.mark.asyncio
+    async def test_idempotent_on_empty_queue(self, plugin):
+        result = await plugin.clear_completed_downloads()
+        assert result == {"success": True, "cleared": 0}
+        assert plugin._download_service._download_queue == {}
+
+    @pytest.mark.asyncio
+    async def test_no_terminal_entries_clears_nothing(self, plugin):
+        queue = plugin._download_service._download_queue
+        queue[1] = {"rom_id": 1, "status": "downloading"}
+        queue[2] = {"rom_id": 2, "status": "paused"}
+
+        result = await plugin.clear_completed_downloads()
+
+        assert result == {"success": True, "cleared": 0}
+        assert set(queue.keys()) == {1, 2}
+
+
 class TestGetInstalledRom:
     @pytest.mark.asyncio
     async def test_returns_installed_rom(self, plugin):

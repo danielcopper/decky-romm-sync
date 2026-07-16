@@ -461,6 +461,9 @@ class Plugin:
     async def get_download_queue(self):
         return self._download_service.get_download_queue()
 
+    async def clear_completed_downloads(self):
+        return self._download_service.clear_completed_downloads()
+
     async def get_installed_rom(self, rom_id):
         return self._download_service.get_installed_rom(rom_id)
 
