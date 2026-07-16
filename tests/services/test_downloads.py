@@ -724,7 +724,15 @@ class TestDiskSpaceMultiFile:
 
         plugin._download_service._loop = MagicMock()
         plugin._download_service._loop.run_in_executor = AsyncMock(return_value=rom_detail)
-        plugin._download_service._loop.create_task = MagicMock()
+
+        def _close_coro_task(coro):
+            # Consume the fire-and-forget _do_download coroutine so it isn't left
+            # un-awaited (RuntimeWarning); this unit only exercises the disk-space
+            # gate, not the download itself.
+            coro.close()
+            return MagicMock()
+
+        plugin._download_service._loop.create_task = _close_coro_task
 
         # 700MB free: enough for single-file (600MB)
         plugin._download_service._download_file_store.disk_free = lambda _path: 700 * 1024 * 1024
@@ -3750,7 +3758,15 @@ class TestStartDownloadCreateTaskFailure:
 
         plugin._download_service._loop = MagicMock()
         plugin._download_service._loop.run_in_executor = AsyncMock(return_value=rom_detail)
-        plugin._download_service._loop.create_task = MagicMock(side_effect=RuntimeError("loop closed"))
+
+        def _raise_after_closing(coro):
+            # Close the fire-and-forget _do_download coroutine before raising so it
+            # isn't left un-awaited (RuntimeWarning); the raise still drives the
+            # create_task-failure branch under test.
+            coro.close()
+            raise RuntimeError("loop closed")
+
+        plugin._download_service._loop.create_task = _raise_after_closing
 
         plugin._download_service._download_file_store.disk_free = lambda _path: 500 * 1024 * 1024
         result = await plugin.start_download(42)
