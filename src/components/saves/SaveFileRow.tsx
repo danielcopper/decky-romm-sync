@@ -39,6 +39,25 @@ export function infoRow(
   );
 }
 
+/**
+ * Compose the "Last synced" info-row value: "<time> · <attribution> ✓ · <stale hint>".
+ *
+ * The time binds to the last SUCCESS (`f.last_sync_at`), never the attempt time,
+ * and the ✓ renders only for an at-rest file — a failed post-exit sync shows its
+ * old success time with no ✓ (#1334). Appends the server-attribution segment and,
+ * when the server has moved past us, the "newer version" hint.
+ */
+function buildLastSyncedValue(f: SaveFileStatus, isSynced: boolean): string {
+  const lastSyncer = pickLastSyncer(f.device_syncs);
+  const pieces: string[] = [f.last_sync_at ? formatRelativeTime(f.last_sync_at) || "Never" : "Never"];
+  const attrSegment = formatAttributionSegment(f.uploaded_by_us, lastSyncer?.device_name, isSynced);
+  if (attrSegment !== null) pieces.push(attrSegment);
+  if (f.is_current === false) {
+    pieces.push("Newer version available on server");
+  }
+  return pieces.join(" · ");
+}
+
 export function renderSaveFileRow(
   f: SaveFileStatus,
   conflict: SyncConflict | undefined,
@@ -47,12 +66,8 @@ export function renderSaveFileRow(
   const { color, label } = statusLabel(f.status, f.last_sync_at);
   // "synced"/"skip" are the at-rest states; anything else (upload/download/
   // conflict/unknown) has work pending, so the row must not claim a successful
-  // sync. "Last synced" binds to the last SUCCESS (f.last_sync_at), never the
-  // attempt time — a failed post-exit sync leaves last_sync_at at its old value
-  // and shows no ✓ (#1334).
+  // sync — no ✓, and the "Checked" hint surfaces the attempt time instead (#1334).
   const isSynced = f.status === "synced" || f.status === "skip";
-  const syncTime = f.last_sync_at;
-  const lastSyncer = pickLastSyncer(f.device_syncs);
   const conflictActive = f.status === "conflict" || !!conflict;
   // The slot's most recent sync ATTEMPT — surfaced as a separate "Checked" hint
   // only when this file isn't at rest, so a pending/failed file shows both the
@@ -85,14 +100,8 @@ export function renderSaveFileRow(
     ),
   );
 
-  // Last synced value: "just now · <attribution> ✓" — see formatAttributionSegment
-  const lastSyncedPieces: string[] = [syncTime ? formatRelativeTime(syncTime) || "Never" : "Never"];
-  const attrSegment = formatAttributionSegment(f.uploaded_by_us, lastSyncer?.device_name, isSynced);
-  if (attrSegment !== null) lastSyncedPieces.push(attrSegment);
-  if (f.is_current === false) {
-    lastSyncedPieces.push("Newer version available on server");
-  }
-  const lastSyncedValue = lastSyncedPieces.join(" · ");
+  // Last synced value: "just now · <attribution> ✓" — see buildLastSyncedValue
+  const lastSyncedValue = buildLastSyncedValue(f, isSynced);
 
   // Server save value — two lines: "#18 · retroarch-mgba" / "<server_file_name>"
   const serverValueLines: ReturnType<typeof createElement>[] = [];
