@@ -241,6 +241,116 @@ class TestContentHash:
             save_files.content_hash(str(tmp_path / "missing.srm"))
 
 
+class TestHashMemoScope:
+    """``hash_memo_scope`` bounds a per-run ``content_hash`` memo to one sync run.
+
+    Keyed ``(path, mtime_ns, size)``: a repeat hash of an unchanged file inside a
+    scope is served from the memo (no re-read), an mtime or size change misses,
+    and the memo is discarded on scope exit so it never grows across runs.
+    """
+
+    @staticmethod
+    def _rewrite_same_stat(path, data: bytes) -> None:
+        """Overwrite *path* with *data*, restoring the original mtime_ns.
+
+        Lets a test change a file's *content* while keeping ``(mtime_ns, size)``
+        identical, so a memo hit returns the pre-change (stale) digest — the only
+        observable proof the file was not re-read.
+        """
+        before = os.stat(path)
+        path.write_bytes(data)
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    def test_memo_hit_serves_stale_digest_without_reread(self, save_files, tmp_path):
+        f = tmp_path / "game.srm"
+        f.write_bytes(b"A" * 16)
+        first = hashlib.md5(b"A" * 16).hexdigest()
+
+        with save_files.hash_memo_scope():
+            assert save_files.content_hash(str(f)) == first
+            # Change the bytes but keep (mtime_ns, size) → same memo key.
+            self._rewrite_same_stat(f, b"B" * 16)
+            # Memo hit: returns the pre-change digest, proving no re-read.
+            assert save_files.content_hash(str(f)) == first
+            assert save_files.content_hash(str(f)) != hashlib.md5(b"B" * 16).hexdigest()
+
+    def test_memo_misses_on_mtime_change(self, save_files, tmp_path):
+        f = tmp_path / "game.srm"
+        f.write_bytes(b"A" * 16)
+        with save_files.hash_memo_scope():
+            assert save_files.content_hash(str(f)) == hashlib.md5(b"A" * 16).hexdigest()
+            # Same content + size, but bump mtime_ns → new key → recompute.
+            f.write_bytes(b"C" * 16)
+            os.utime(f, ns=(os.stat(f).st_atime_ns, os.stat(f).st_mtime_ns + 1000))
+            assert save_files.content_hash(str(f)) == hashlib.md5(b"C" * 16).hexdigest()
+
+    def test_memo_misses_on_size_change(self, save_files, tmp_path):
+        f = tmp_path / "game.srm"
+        f.write_bytes(b"A" * 16)
+        with save_files.hash_memo_scope():
+            first = save_files.content_hash(str(f))
+            # Different size (even if mtime were reused) → new key → recompute.
+            self._rewrite_same_stat(f, b"A" * 32)
+            assert save_files.content_hash(str(f)) == hashlib.md5(b"A" * 32).hexdigest()
+            assert save_files.content_hash(str(f)) != first
+
+    def test_memo_reset_between_scopes(self, save_files, tmp_path):
+        f = tmp_path / "game.srm"
+        f.write_bytes(b"A" * 16)
+        with save_files.hash_memo_scope():
+            assert save_files.content_hash(str(f)) == hashlib.md5(b"A" * 16).hexdigest()
+        # New content, identical (mtime_ns, size): a leaked memo would return the
+        # stale digest. A fresh scope must recompute — the memo was discarded.
+        self._rewrite_same_stat(f, b"B" * 16)
+        with save_files.hash_memo_scope():
+            assert save_files.content_hash(str(f)) == hashlib.md5(b"B" * 16).hexdigest()
+
+    def test_no_memo_outside_scope(self, save_files, tmp_path):
+        f = tmp_path / "game.srm"
+        f.write_bytes(b"A" * 16)
+        assert save_files.content_hash(str(f)) == hashlib.md5(b"A" * 16).hexdigest()
+        # No scope open → every call reads the file, so a same-stat rewrite is
+        # observed (no process-lifetime cache).
+        self._rewrite_same_stat(f, b"B" * 16)
+        assert save_files.content_hash(str(f)) == hashlib.md5(b"B" * 16).hexdigest()
+
+    def test_nested_scopes_share_one_memo(self, save_files, tmp_path):
+        f = tmp_path / "game.srm"
+        f.write_bytes(b"A" * 16)
+        first = hashlib.md5(b"A" * 16).hexdigest()
+        with save_files.hash_memo_scope():
+            assert save_files.content_hash(str(f)) == first
+            with save_files.hash_memo_scope():
+                # Inner scope shares the outer memo → still a hit on stale bytes.
+                self._rewrite_same_stat(f, b"B" * 16)
+                assert save_files.content_hash(str(f)) == first
+            # Inner exit must NOT clear the memo the outer scope still owns.
+            assert save_files.content_hash(str(f)) == first
+        # Only the outermost exit clears it: a fresh scope recomputes.
+        with save_files.hash_memo_scope():
+            assert save_files.content_hash(str(f)) == hashlib.md5(b"B" * 16).hexdigest()
+
+    def test_zip_content_hash_is_memoized(self, save_files, tmp_path):
+        """The zip path is memoized too — the dedup covers multi-file saves."""
+        z = tmp_path / "multi.zip"
+        _write_zip(z, [("a.srm", b"alpha"), ("b.srm", b"beta")])
+        with save_files.hash_memo_scope():
+            first = save_files.content_hash(str(z))
+            assert first == _GOLDEN_TWO_ENTRY_ZIP_HASH
+            # Repack a different entry payload of identical length, restoring
+            # (mtime_ns, size). ZIP_STORED keeps the archive byte-size stable, so
+            # the memo key is unchanged and a hit serves the pre-change digest —
+            # not the digest of the new bytes.
+            before = os.stat(z)
+            _write_zip(z, [("a.srm", b"AAAAA"), ("b.srm", b"beta")])
+            os.utime(z, ns=(before.st_atime_ns, before.st_mtime_ns))
+            assert os.stat(z).st_size == before.st_size  # guards against a vacuous pass
+            assert save_files.content_hash(str(z)) == first
+        # Scope closed → memo discarded → recompute now reflects the new bytes,
+        # confirming the in-scope value was served from the memo, not recomputed.
+        assert save_files.content_hash(str(z)) != first
+
+
 class TestMakeTempPath:
     def test_returns_existing_empty_file(self, save_files):
         path = save_files.make_temp_path()

@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import zipfile
+from typing import TYPE_CHECKING
 
 from domain.save_hash import combine_zip_entry_hashes
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 class FakeSaveFileStore:
@@ -42,6 +47,10 @@ class FakeSaveFileStore:
         self.rename_calls: list[tuple[str, str]] = []
         self.temp_counter: int = 0
         self._next_mtime: float = 1_000_000.0
+        # Per-run content_hash memo, live only inside ``hash_memo_scope`` —
+        # mirrors ``SaveFileAdapter`` so fakes and the real adapter behave alike.
+        self._hash_memo: dict[tuple[str, float, int], str] | None = None
+        self._hash_memo_depth = 0
 
     def _ensure_mtime(self, path: str) -> None:
         if path not in self.mtimes:
@@ -114,6 +123,19 @@ class FakeSaveFileStore:
     def content_hash(self, path: str) -> str:
         if path not in self.files:
             raise FileNotFoundError(path)
+        memo = self._hash_memo
+        if memo is None:
+            return self._compute_content_hash(path)
+        self._ensure_mtime(path)
+        key = (path, self.mtimes[path], len(self.files[path]))
+        cached = memo.get(key)
+        if cached is not None:
+            return cached
+        digest = self._compute_content_hash(path)
+        memo[key] = digest
+        return digest
+
+    def _compute_content_hash(self, path: str) -> str:
         data = self.files[path]
         if not zipfile.is_zipfile(io.BytesIO(data)):
             return hashlib.md5(data).hexdigest()
@@ -122,6 +144,18 @@ class FakeSaveFileStore:
                 (name, hashlib.md5(zf.read(name)).hexdigest()) for name in zf.namelist() if not name.endswith("/")
             ]
         return combine_zip_entry_hashes(entries)
+
+    @contextlib.contextmanager
+    def hash_memo_scope(self) -> Iterator[None]:
+        self._hash_memo_depth += 1
+        if self._hash_memo is None:
+            self._hash_memo = {}
+        try:
+            yield
+        finally:
+            self._hash_memo_depth -= 1
+            if self._hash_memo_depth == 0:
+                self._hash_memo = None
 
     def make_temp_path(self, suffix: str = "") -> str:
         self.temp_counter += 1

@@ -16,8 +16,12 @@ import hashlib
 import os
 import tempfile
 import zipfile
+from typing import TYPE_CHECKING
 
 from domain.save_hash import combine_zip_entry_hashes
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 _MD5_CHUNK_SIZE = 8192
 
@@ -29,6 +33,16 @@ class SaveFileAdapter:
     synchronous — services that call from an async context offload via
     ``loop.run_in_executor``.
     """
+
+    def __init__(self) -> None:
+        # Per-run content-hash memo, live only inside ``hash_memo_scope``.
+        # ``None`` outside a scope so non-sync callers never populate a
+        # process-lifetime cache; a fresh dict per outermost scope bounds it to
+        # one sync run. Keyed ``(path, mtime_ns, size)`` so a save overwritten
+        # mid-run (a download) re-hashes on its new stat instead of returning a
+        # stale digest. ``_hash_memo_depth`` makes nested scopes share one memo.
+        self._hash_memo: dict[tuple[str, int, int], str] | None = None
+        self._hash_memo_depth = 0
 
     def exists(self, path: str) -> bool:
         """Return True when *path* refers to an existing file or directory."""
@@ -96,7 +110,26 @@ class SaveFileAdapter:
         :func:`domain.save_hash.combine_zip_entry_hashes`; any other file is the
         plain streamed MD5 of :meth:`checksum_md5`. Directory entries inside the
         archive are skipped. Non-security use, like ``checksum_md5``.
+
+        Inside a :meth:`hash_memo_scope` the digest is memoized by the file's
+        ``(path, mtime_ns, size)`` so one sync run's repeated hashings of the
+        same save (negotiate inventory, the newest-wins matrix, the post-op
+        baseline write) read it once. Outside a scope every call reads the file.
         """
+        memo = self._hash_memo
+        if memo is None:
+            return self._compute_content_hash(path)
+        st = os.stat(path)
+        key = (path, st.st_mtime_ns, st.st_size)
+        cached = memo.get(key)
+        if cached is not None:
+            return cached
+        digest = self._compute_content_hash(path)
+        memo[key] = digest
+        return digest
+
+    def _compute_content_hash(self, path: str) -> str:
+        """Read *path* and compute its zip-aware RomM content hash (no memo)."""
         if not zipfile.is_zipfile(path):
             return self.checksum_md5(path)
         with zipfile.ZipFile(path, "r") as zf:
@@ -106,6 +139,31 @@ class SaveFileAdapter:
                 if not name.endswith("/")
             ]
         return combine_zip_entry_hashes(entries)
+
+    @contextlib.contextmanager
+    def hash_memo_scope(self) -> Iterator[None]:
+        """Bound a :meth:`content_hash` memo to a single sync run.
+
+        Within the scope, ``content_hash`` caches each save's digest keyed by
+        ``(path, mtime_ns, size)`` so the several passes of one run that hash the
+        same file read it once. The memo is discarded when the outermost scope
+        exits, so it is never a process-lifetime cache; a file overwritten
+        mid-run gets a new stat key and re-hashes. Reentrant — nested scopes
+        share one memo and only the outermost clears it — so the engine can open
+        it at both the sweep and per-ROM levels. The engine opens exactly one
+        (outermost) scope per device-gated save-sync run, so within-scope hashing
+        is single-threaded; callers outside a scope hash directly and never touch
+        the memo.
+        """
+        self._hash_memo_depth += 1
+        if self._hash_memo is None:
+            self._hash_memo = {}
+        try:
+            yield
+        finally:
+            self._hash_memo_depth -= 1
+            if self._hash_memo_depth == 0:
+                self._hash_memo = None
 
     def make_temp_path(self, suffix: str = "") -> str:
         """Return a fresh, unique path safe to write to.

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from contextlib import AbstractContextManager
 
 
 class DirectoryFileListerFn(Protocol):
@@ -431,6 +432,22 @@ class SaveFileStore(Protocol):
         (a multi-file save) the per-entry combined hash RomM computes, so a
         zipped save converges on its content rather than mismatching on the
         archive container's framing. Non-security use, like ``checksum_md5``.
+
+        Inside a :meth:`hash_memo_scope` the result is memoized per file; see
+        that method.
+        """
+        ...
+
+    def hash_memo_scope(self) -> AbstractContextManager[None]:
+        """Bound a per-run :meth:`content_hash` memo to a single sync run.
+
+        Within the returned scope, ``content_hash`` caches each save's digest
+        keyed by ``(path, mtime_ns, size)`` so one sync run's repeated hashings
+        of the same file (negotiate inventory, the newest-wins matrix, the
+        post-op baseline write) read it once. The memo is discarded on scope exit
+        — never a process-lifetime cache — and a file overwritten mid-run
+        re-hashes on its new stat. Reentrant: nested scopes share one memo. The
+        engine opens exactly one outermost scope per device-gated save-sync run.
         """
         ...
 

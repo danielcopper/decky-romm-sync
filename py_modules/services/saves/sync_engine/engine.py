@@ -585,24 +585,28 @@ class SyncEngine:
         # Confirmed non-legacy ROM with no caller-supplied session → open a
         # transport-only session of our own (operations ignored, ADR-0017).
         own_session_id: int | None = None
-        if session_id is None and save_state.slot_confirmed and save_state.active_slot:
-            own_session_id = await self._open_negotiate_session(rom_id, device_id)
+        # Share one content_hash per save across this ROM's passes — the negotiate
+        # inventory, the newest-wins matrix, and the post-op baseline write all
+        # hash the same files (#1457). Reentrant with the bulk-sweep scope.
+        with self._save_file_store.hash_memo_scope():
+            if session_id is None and save_state.slot_confirmed and save_state.active_slot:
+                own_session_id = await self._open_negotiate_session(rom_id, device_id)
 
-        synced = 0
-        errors: list[str] = []
-        conflicts: list[dict[str, Any]] = []
-        try:
-            synced, errors, conflicts = await self._loop.run_in_executor(
-                None, self.do_sync_rom_saves, rom_id, save_state, device_id, core_so, default_slot, cleanup_limit
-            )
-            await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
-        finally:
-            if own_session_id is not None:
-                await self._close_negotiate_session(own_session_id, synced, len(errors))
-            elif session_counts is not None:
-                session_counts[0] += synced
-                session_counts[1] += len(errors)
-        return synced, errors, conflicts
+            synced = 0
+            errors: list[str] = []
+            conflicts: list[dict[str, Any]] = []
+            try:
+                synced, errors, conflicts = await self._loop.run_in_executor(
+                    None, self.do_sync_rom_saves, rom_id, save_state, device_id, core_so, default_slot, cleanup_limit
+                )
+                await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
+            finally:
+                if own_session_id is not None:
+                    await self._close_negotiate_session(own_session_id, synced, len(errors))
+                elif session_counts is not None:
+                    session_counts[0] += synced
+                    session_counts[1] += len(errors)
+            return synced, errors, conflicts
 
     async def _open_negotiate_session(self, rom_id: int, device_id: str | None) -> int | None:
         """Open a transport-only negotiate session for a confirmed ROM; ``None`` on failure.
@@ -948,34 +952,39 @@ class SyncEngine:
                 # ROM opens its own session inside _run_rom_sync. Detection is the
                 # local matrix for every ROM regardless.
                 device_id = self.get_device_id()
-                session_id = await self._bulk_pre_negotiate(device_id)
-                session_counts = [0, 0]
+                # Share one content_hash per save across the whole sweep: the bulk
+                # pre-negotiate inventory and every per-ROM matrix hash the same
+                # files (#1457). The per-ROM scope inside _run_rom_sync nests under
+                # this one (reentrant), so the memo spans the entire run.
+                with self._save_file_store.hash_memo_scope():
+                    session_id = await self._bulk_pre_negotiate(device_id)
+                    session_counts = [0, 0]
 
-                total_synced = 0
-                total_errors: list[str] = []
-                all_conflicts: list[dict[str, Any]] = []
-                rom_count = 0
+                    total_synced = 0
+                    total_errors: list[str] = []
+                    all_conflicts: list[dict[str, Any]] = []
+                    rom_count = 0
 
-                # Only iterate installed ROMs — non-installed ROMs have no save files
-                rom_ids = await self._loop.run_in_executor(None, self._installed_rom_ids)
-                self._log_debug(f"sync_all_saves: {len(rom_ids)} ROMs to check")
+                    # Only iterate installed ROMs — non-installed ROMs have no save files
+                    rom_ids = await self._loop.run_in_executor(None, self._installed_rom_ids)
+                    self._log_debug(f"sync_all_saves: {len(rom_ids)} ROMs to check")
 
-                try:
-                    for rom_id_int in rom_ids:
-                        rom_count += 1
-                        async with self.rom_lock(rom_id_int):
-                            synced, errors, conflicts = await self._run_rom_sync(
-                                rom_id_int,
-                                require_confirmed=True,
-                                session_id=session_id,
-                                session_counts=session_counts if session_id is not None else None,
-                            )
-                        total_synced += synced
-                        total_errors.extend(errors)
-                        all_conflicts.extend(conflicts)
-                finally:
-                    if session_id is not None:
-                        await self._close_negotiate_session(session_id, session_counts[0], session_counts[1])
+                    try:
+                        for rom_id_int in rom_ids:
+                            rom_count += 1
+                            async with self.rom_lock(rom_id_int):
+                                synced, errors, conflicts = await self._run_rom_sync(
+                                    rom_id_int,
+                                    require_confirmed=True,
+                                    session_id=session_id,
+                                    session_counts=session_counts if session_id is not None else None,
+                                )
+                            total_synced += synced
+                            total_errors.extend(errors)
+                            all_conflicts.extend(conflicts)
+                    finally:
+                        if session_id is not None:
+                            await self._close_negotiate_session(session_id, session_counts[0], session_counts[1])
 
                 conflicts_count = len(all_conflicts)
                 msg = _summarize_sync_result(
