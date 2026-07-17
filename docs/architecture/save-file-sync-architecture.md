@@ -140,9 +140,9 @@ into the response's `device_syncs`, so `is_current` is true for us the moment th
 `confirm_download` ack is redundant and is **skipped** when the response proves us current (`_confirm_upload_sync`,
 #1458). The one path that still needs the ack is `add_save`'s content-dedup early-return: a byte-identical
 `overwrite=false` POST returns the matching save **before** the upsert with `is_current=false`, so the ack is the only
-writer of our sync row there. The version-switch flow (`versions.py`) runs the same `_confirm_upload_sync` after its PUT
-(a redundant idempotent re-ack, since the PUT upserts too) and is out of scope here — see
-[Version Switch Flow](#version-switch-flow-rollback).
+writer of our sync row there. The version-switch flow (`versions.py`) routes through the same `_confirm_upload_sync`
+after its PUT — the PUT upserts too, so the ack is at most an idempotent re-ack (and is skipped if the PUT response
+already proves us current) — and is out of scope here — see [Version Switch Flow](#version-switch-flow-rollback).
 
 ## Save Slots
 
@@ -1106,8 +1106,10 @@ backstop for its automatic-upload conflict path (see
 
 Re-verified against RomM 4.9.0 / 4.9.1 / 4.9.2 / 5.0.0: both `POST /api/saves` (`add_save`) and `PUT /api/saves/{id}`
 (`update_save`) bump `save.updated_at` to the server's NOW **and** upsert the calling device's
-`device_save_sync.last_synced_at = updated_at`, serializing that row into the response's `device_syncs`. So after our
-own write we read back `is_current = true` (equality counts), without any follow-up call.
+`device_save_sync.last_synced_at = updated_at`. The POST additionally builds its response **after** that upsert, so the
+body's `device_syncs` shows us `is_current = true` (equality counts) the moment it returns. Whether the PUT response
+body carries `device_syncs` the same way is **unverified** — the skip logic is fail-open either way: a response that
+proves us current skips the ack, anything else (including a bare PUT body) still sends the idempotent ack.
 
 This makes the dedicated `POST /api/saves/{id}/downloaded` ack **redundant on the normal upload path** — the sync engine
 skips it when the upload response already shows this device `is_current` (`_confirm_upload_sync`, #1458), saving one
