@@ -505,6 +505,13 @@ export default definePlugin(() => {
     // units still have fresh metadata and applyAllMetadata is idempotent.
     // Detached with its own try/catch so a re-fetch failure never breaks the
     // toast, collections, or playtime paths.
+    //
+    // Known last-writer-wins (deliberately no generation guard): if init is still
+    // on its #1206 retry ladder when a sync completes, a late init registration
+    // can land after this one and overwrite the fresher sync-time cache — a ROM
+    // synced this session then falls back to pre-fix behavior until the next
+    // sync_complete or mount. Self-healing and never below the old baseline, so
+    // it isn't worth the guard.
     detach(
       (async () => {
         try {
