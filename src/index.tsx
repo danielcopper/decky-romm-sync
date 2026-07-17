@@ -61,7 +61,8 @@ import type {
   ServerRetryProgressEvent,
   RomMetadata,
 } from "./types";
-import { removeShortcut, setLaunchOptionsConfirmed } from "./utils/steamShortcuts";
+import { setLaunchOptionsConfirmed } from "./utils/steamShortcuts";
+import { removeShortcutsPaced } from "./utils/shortcutRemoval";
 import { batchConfirmLaunchOptions } from "./utils/launchOptionsReconcile";
 import { withTimeout } from "./utils/withTimeout";
 
@@ -579,16 +580,26 @@ export default definePlugin(() => {
   // shortcut by the ``app_id`` the backend captured BEFORE unbinding the
   // row. Resolving rom_id→app_id here (via getExistingRomMShortcuts) would
   // race the backend unbind and find nothing, orphaning the shortcut.
-  const syncStaleListener = addEventListener<[SyncStaleData]>("sync_stale", (data: SyncStaleData) => {
+  const syncStaleListener = addEventListener<[SyncStaleData]>("sync_stale", async (data: SyncStaleData) => {
     if (!Array.isArray(data.remove) || data.remove.length === 0) return;
+    // Collect the valid app_ids and record the "removed" delta for each UP FRONT —
+    // synchronously, before the first paced breather. recordSyncRemoved is a cheap,
+    // deduped in-memory write; keeping it here rather than paired inside the paced
+    // loop keeps the terminal sync_complete toast accurate. sync_complete reads
+    // getSyncDelta(), and now that the removal yields between chunks it can
+    // interleave during a breather — recording the delta progressively would let it
+    // read a partial "removed" count. Only the Steam removal (the renderer-blocking
+    // part) needs pacing (#977); chunk-paced (25 items / 50ms breather) so a large
+    // platform-deletion / full re-sync teardown never blocks the CEF renderer or
+    // corrupts Steam's in-memory shortcut store via removal churn.
+    const appIds: number[] = [];
     for (const { app_id } of data.remove) {
       if (app_id) {
-        removeShortcut(app_id);
-        // Record the removal as a real "removed" delta. The store dedups across
-        // the per-unit sync_stale emits so a shortcut removed once is counted once.
+        appIds.push(app_id);
         recordSyncRemoved(app_id);
       }
     }
+    await removeShortcutsPaced(appIds);
     logInfo(`sync_stale: removed ${data.remove.length} stale shortcuts`);
   });
 

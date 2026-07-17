@@ -27,7 +27,7 @@ import { getDownloadState, setDownloads } from "./utils/downloadStore";
 import { getSyncProgress, setSyncProgress } from "./utils/syncProgress";
 import { estimateApplySeconds } from "./utils/syncEstimate";
 import { resetEta, weightedCoarseFraction } from "./utils/syncEta";
-import { recordSyncCreated, resetSyncDelta } from "./utils/syncDeltaStore";
+import { recordSyncCreated, resetSyncDelta, getSyncDelta } from "./utils/syncDeltaStore";
 import { resetSyncCancel } from "./utils/syncManager";
 import type { DownloadCompleteEvent, DownloadProgressEvent, SyncPlanData, SyncProgress, SyncStaleData } from "./types";
 
@@ -285,6 +285,40 @@ describe("index.tsx — sync_stale listener", () => {
     await flush();
 
     expect(removeShortcut).not.toHaveBeenCalled();
+    plugin.onDismount();
+  });
+
+  it("chunk-paces a large stale removal (25 back-to-back, 50ms breather) and records the delta up front (#977)", async () => {
+    const plugin = pluginFactory();
+    await flush();
+    removeShortcut.mockClear();
+    resetSyncDelta();
+
+    // 26 stale shortcuts = one full 25-item chunk + a remainder, so exactly one
+    // 50ms breather must fall between the two chunks.
+    const remove = Array.from({ length: 26 }, (_, i) => ({ rom_id: i + 1, app_id: 1000 + i }));
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        emitDeckyEvent<[SyncStaleData]>("sync_stale", { remove });
+      });
+      await act(async () => {
+        for (let i = 0; i < 40; i++) await Promise.resolve();
+      });
+      // First 25-item chunk removed back-to-back; the 26th is gated behind the breather.
+      expect(removeShortcut).toHaveBeenCalledTimes(25);
+      // The removed-delta for ALL 26 is recorded up front, so a sync_complete that
+      // interleaves during the paced breather reads the true count, not a partial one.
+      expect(getSyncDelta().removed).toBe(26);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      expect(removeShortcut).toHaveBeenCalledTimes(26);
+    } finally {
+      vi.useRealTimers();
+    }
     plugin.onDismount();
   });
 });
