@@ -36,7 +36,12 @@ from typing import TYPE_CHECKING, Any
 from models.cover import CoverRevalidation
 
 from domain.cover_refresh import _strip_cover_ts
-from fakes._romm_save_semantics import check_add_save_conflict, compute_is_current, tag_filename
+from fakes._romm_save_semantics import (
+    check_add_save_conflict,
+    compute_is_current,
+    tag_filename,
+    with_absent_device_placeholder,
+)
 from lib.errors import RommUnprocessableEntityError
 from lib.romm_paging import LIST_PAGE_SIZE
 
@@ -102,6 +107,9 @@ class FakeRommApi:
         # each save's ``device_syncs`` (and is_current) from it, and the
         # add_save 409 gate reads it. Seed directly via ``stage_device_sync``.
         self._device_sync_ledger: dict[tuple[str, int], str] = {}
+        # One-shot: arm the next slot POST to model add_save's content-dedup
+        # early-return against this save_id (see ``arm_add_save_dedup``).
+        self._dedup_next_upload_save_id: int | None = None
 
         # Pagination configurable per ROM listing endpoint. Tests can
         # tweak ``items_per_platform`` keyed by ``(platform_id,)``,
@@ -576,11 +584,26 @@ class FakeRommApi:
         filename = file_path[last_sep + 1 :] if last_sep >= 0 else file_path
 
         # PUT path: update the tracked save in place (no new version, no gate).
+        # The bare SaveSchema response carries no ``device_syncs``, so the
+        # post-upload confirm ack fails open and still fires here (#1458).
         if save_id is not None and save_id in self.saves:
             entry = self.saves[save_id]
             entry["updated_at"] = now
             entry["emulator"] = emulator
             return dict(entry)
+
+        # add_save content-dedup early-return (saves.py:253-267): a named-slot
+        # ``overwrite=false`` POST whose content matches an existing slot save
+        # returns that save BEFORE the DeviceSaveSync upsert, so the uploading
+        # device reads is_current=false and the confirm ack stays load-bearing.
+        if self._dedup_next_upload_save_id is not None and slot is not None and not overwrite:
+            dedup_id = self._dedup_next_upload_save_id
+            self._dedup_next_upload_save_id = None
+            existing = self.saves.get(dedup_id)
+            if existing is not None:
+                response = dict(existing)
+                response["device_syncs"] = with_absent_device_placeholder(self._device_syncs_for(existing), device_id)
+                return response
 
         # POST path. On a slot POST the real server refuses (409) to stack onto
         # a slot this device hasn't synced, and tags the stored filename so
@@ -610,7 +633,14 @@ class FakeRommApi:
             "download_path": f"/saves/{stored_filename}",
         }
         self.saves[new_save_id] = entry
-        return dict(entry)
+        # add_save upserts the uploading device's DeviceSaveSync row
+        # (synced_at = updated_at) and serializes device_syncs into the
+        # response — is_current=true for us, so the confirm ack is redundant
+        # here and the sync engine skips it (#1458).
+        self._record_device_sync(new_save_id, device_id)
+        response = dict(entry)
+        response["device_syncs"] = self._device_syncs_for(entry)
+        return response
 
     def download_save(self, save_id: int, dest_path: str) -> None:
         self._log("download_save", (save_id, dest_path))
@@ -751,6 +781,17 @@ class FakeRommApi:
         ``updated_at``; model a *never-synced* device by omitting the call.
         """
         self._device_sync_ledger[(device_id, save_id)] = last_synced_at
+
+    def arm_add_save_dedup(self, save_id: int) -> None:
+        """One-shot: model add_save's content-dedup early-return on the next slot POST.
+
+        The next named-slot ``overwrite=false`` POST returns *save_id* (as if the
+        uploaded content matched it) BEFORE any DeviceSaveSync upsert — no new save
+        row, no ledger write — with the uploading device reported ``is_current=false``.
+        Mirrors saves.py:253-267 so a test can exercise the dedup path where the
+        post-upload confirm ack is the only writer of our sync row (#1458).
+        """
+        self._dedup_next_upload_save_id = save_id
 
     def seed_foreign_save(
         self,

@@ -42,6 +42,20 @@ def compute_is_current(last_synced_at: str | None, save_updated_at: str) -> bool
     return last_synced_at >= save_updated_at
 
 
+def with_absent_device_placeholder(device_syncs: list[dict[str, Any]], device_id: str | None) -> list[dict[str, Any]]:
+    """Ensure *device_id* appears in *device_syncs* as ``is_current=false``.
+
+    Models ``add_save``'s content-dedup early-return response (saves.py:67-76):
+    when the uploading device has no DeviceSaveSync row on the matched save, RomM
+    synthesizes an ``is_current=false`` placeholder for it. Existing rows (a stale
+    prior sync) pass through untouched — either way the uploading device reads as
+    not current, which is the discriminator the post-upload confirm keys on (#1458).
+    """
+    if device_id and not any(ds.get("device_id") == device_id for ds in device_syncs):
+        return [*device_syncs, {"device_id": device_id, "is_current": False, "last_synced_at": None}]
+    return device_syncs
+
+
 def tag_filename(filename: str, ts: str) -> str:
     """Insert a ``[ts]`` marker before the extension (slot POST filename tagging).
 

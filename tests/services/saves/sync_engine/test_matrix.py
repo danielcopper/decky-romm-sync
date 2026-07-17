@@ -364,19 +364,27 @@ class TestV47SyncFlow:
 
 
 class TestConfirmDownloadAfterSync:
-    """Verify the device's last_synced_at is registered with RomM after each
+    """Verify the device's last_synced_at ends up registered with RomM after each
     upload (PUT/POST) and download.
 
     is_current is computed server-side as
-    ``device_save_sync.last_synced_at >= save.updated_at``. PUT/POST bump
-    ``save.updated_at`` to NOW but do NOT touch the calling device's
-    ``last_synced_at`` in every code path; we explicitly close that gap by
-    calling ``confirm_download``. For downloads, the optimistic query-param on
-    ``download_save_content`` upserts the row server-side before streaming.
+    ``device_save_sync.last_synced_at >= save.updated_at``. ``add_save`` (POST)
+    and ``update_save`` (PUT) both upsert the calling device's
+    ``last_synced_at = updated_at`` on every supported RomM version, so a normal
+    upload leaves us current without a follow-up ack — the POST response proves
+    it and ``_confirm_upload_sync`` skips the redundant round-trip (#1458). The
+    ack stays load-bearing only on ``add_save``'s content-dedup early-return
+    (returns before the upsert, ``is_current=false``). For downloads, the
+    optimistic query-param on ``download_save_content`` upserts the row
+    server-side before streaming.
     """
 
-    def test_do_upload_save_post_calls_confirm_download(self, tmp_path):
-        """POST (no save_id) → confirm_download fires for the new save_id."""
+    def test_do_upload_save_post_skips_confirm_when_response_current(self, tmp_path):
+        """POST whose response proves us current → confirm_download is skipped (#1458).
+
+        The add_save upsert already made us ``is_current`` on the new save, so the
+        redundant ack is elided — but we still end up current on the next read.
+        """
         svc, fake = make_service(tmp_path)
         _set_device_id(svc, "dev-1")
         _install_rom(svc, tmp_path)
@@ -389,9 +397,15 @@ class TestConfirmDownloadAfterSync:
         # FakeSaveApi mints a new save_id starting from 1000 on POST
         new_save_id = next(iter(fake.saves.values()))["id"]
 
+        # The confirm round-trip is skipped — the upload response proved current.
         confirm_calls = [c for c in fake.call_log if c[0] == "confirm_download"]
-        assert len(confirm_calls) == 1
-        assert confirm_calls[0][1] == (new_save_id, "dev-1")
+        assert confirm_calls == []
+        # ...yet the device is genuinely current on the new save (the upload
+        # recorded the DeviceSaveSync row itself, so nothing is lost by skipping).
+        listed = fake.list_saves(42, device_id="dev-1")
+        our_sync = next(ds for ds in listed[0]["device_syncs"] if ds["device_id"] == "dev-1")
+        assert our_sync["is_current"] is True
+        assert new_save_id == listed[0]["id"]
 
     def test_do_upload_save_put_calls_confirm_download(self, tmp_path):
         """PUT (existing save_id) → confirm_download fires for that save_id."""
@@ -428,11 +442,20 @@ class TestConfirmDownloadAfterSync:
         assert confirm_calls == []
 
     def test_do_upload_save_swallows_confirm_download_error(self, tmp_path):
-        """confirm_download failure must NOT bubble — upload is reported successful."""
+        """confirm_download failure must NOT bubble — upload is reported successful.
+
+        Driven down the dedup early-return path (``is_current=false``), where the
+        ack still fires, so the swallow-the-error contract stays exercised (#1458).
+        """
         svc, fake = make_service(tmp_path)
         _set_device_id(svc, "dev-1")
         _install_rom(svc, tmp_path)
         save_path = _create_save(tmp_path)
+
+        # An existing "default"-slot save the POST content dedups against; the
+        # dedup response reports us is_current=false, so the ack still fires.
+        fake.saves[100] = _server_save(save_id=100, rom_id=42, slot="default")
+        fake.arm_add_save_dedup(100)
 
         # Patch confirm_download to raise; the upload itself must still complete.
         original_confirm = fake.confirm_download
@@ -474,6 +497,97 @@ class TestConfirmDownloadAfterSync:
         kwargs = dl_calls[0][2]
         assert kwargs["device_id"] == "dev-1"
         assert kwargs["optimistic"] is True
+
+
+class TestConfirmUploadSyncDiscriminator:
+    """``_confirm_upload_sync`` skips the ack only on a provably-current response.
+
+    The upload response's ``device_syncs`` is the discriminator: skip the
+    confirm round-trip only when THIS device is present with ``is_current=true``.
+    Every other shape — dedup ``is_current=false``, a different device, a missing
+    entry, no ``device_syncs`` at all, or a garbage shape — fails open and
+    confirms (#1458). Each case asserts the presence/absence of the
+    ``confirm_download`` call on the fake, never just that the call returned.
+    """
+
+    @staticmethod
+    def _matrix_and_fake(tmp_path):
+        svc, fake = make_service(tmp_path)
+        return svc._sync_engine._matrix, fake
+
+    @staticmethod
+    def _confirmed(fake) -> bool:
+        return any(c[0] == "confirm_download" for c in fake.call_log)
+
+    def test_skips_confirm_when_this_device_is_current(self, tmp_path):
+        matrix, fake = self._matrix_and_fake(tmp_path)
+        response = {"id": 500, "device_syncs": [{"device_id": "dev-1", "is_current": True}]}
+
+        matrix._confirm_upload_sync(response, "dev-1")
+
+        assert self._confirmed(fake) is False
+
+    def test_confirms_when_this_device_not_current(self, tmp_path):
+        matrix, fake = self._matrix_and_fake(tmp_path)
+        response = {"id": 500, "device_syncs": [{"device_id": "dev-1", "is_current": False}]}
+
+        matrix._confirm_upload_sync(response, "dev-1")
+
+        assert fake.call_log[-1] == ("confirm_download", (500, "dev-1"), {})
+
+    def test_confirms_when_only_a_different_device_is_current(self, tmp_path):
+        matrix, fake = self._matrix_and_fake(tmp_path)
+        response = {"id": 500, "device_syncs": [{"device_id": "other", "is_current": True}]}
+
+        matrix._confirm_upload_sync(response, "dev-1")
+
+        assert self._confirmed(fake) is True
+
+    def test_confirms_when_device_syncs_missing(self, tmp_path):
+        matrix, fake = self._matrix_and_fake(tmp_path)
+
+        matrix._confirm_upload_sync({"id": 500}, "dev-1")
+
+        assert self._confirmed(fake) is True
+
+    def test_confirms_when_device_syncs_empty(self, tmp_path):
+        matrix, fake = self._matrix_and_fake(tmp_path)
+
+        matrix._confirm_upload_sync({"id": 500, "device_syncs": []}, "dev-1")
+
+        assert self._confirmed(fake) is True
+
+    def test_confirms_when_device_syncs_not_a_list(self, tmp_path):
+        matrix, fake = self._matrix_and_fake(tmp_path)
+
+        matrix._confirm_upload_sync({"id": 500, "device_syncs": "garbage"}, "dev-1")
+
+        assert self._confirmed(fake) is True
+
+    def test_confirms_when_is_current_not_strictly_true(self, tmp_path):
+        matrix, fake = self._matrix_and_fake(tmp_path)
+        # A truthy-but-not-True value is "unexpected shape" → fail open, confirm.
+        response = {"id": 500, "device_syncs": [{"device_id": "dev-1", "is_current": "yes"}]}
+
+        matrix._confirm_upload_sync(response, "dev-1")
+
+        assert self._confirmed(fake) is True
+
+    def test_noop_when_no_device_id(self, tmp_path):
+        matrix, fake = self._matrix_and_fake(tmp_path)
+        response = {"id": 500, "device_syncs": [{"device_id": "dev-1", "is_current": False}]}
+
+        matrix._confirm_upload_sync(response, None)
+
+        assert self._confirmed(fake) is False
+
+    def test_noop_when_no_upload_id(self, tmp_path):
+        matrix, fake = self._matrix_and_fake(tmp_path)
+        response = {"device_syncs": [{"device_id": "dev-1", "is_current": False}]}
+
+        matrix._confirm_upload_sync(response, "dev-1")
+
+        assert self._confirmed(fake) is False
 
 
 class TestTrackedSaveIdMatching:

@@ -341,11 +341,26 @@ class MatrixExecutor:
             return None
         return default_slot or "default"
 
-    def _confirm_upload_sync(self, upload_id: int | None, device_id: str | None) -> None:
-        """Ack the uploaded save on the server's DeviceSaveSync row (non-fatal)."""
-        # RomM's upload endpoint updates updated_at but NOT last_synced_at,
-        # so is_current would be False on the next list_saves without this.
+    def _confirm_upload_sync(self, response: dict[str, Any], device_id: str | None) -> None:
+        """Ack the uploaded save on the server's DeviceSaveSync row, unless redundant.
+
+        ``add_save`` (POST) and ``update_save`` (PUT) both upsert this device's
+        DeviceSaveSync row (``synced_at = updated_at``) on every supported RomM
+        version and serialize it into the response's ``device_syncs`` — so the
+        ack is redundant on the normal upload path and is skipped when *response*
+        already shows this device ``is_current`` (one fewer round-trip per
+        uploaded file, #1458). The one path that still needs it is ``add_save``'s
+        content-dedup early-return: a named-slot ``overwrite=false`` POST whose
+        content matches an existing save returns *before* the upsert, reporting
+        ``is_current=false``, so the ack is the only writer of our sync row there.
+        Fail-open — any non-current / missing / unexpected response confirms.
+        Non-fatal: a failed ack is debug-logged and swallowed.
+        """
+        upload_id = response.get("id")
         if not device_id or not upload_id:
+            return
+        if _upload_response_proves_current(response, device_id):
+            self._log_debug(f"confirm_download after upload skipped for save {upload_id} (already current)")
             return
         try:
             self._romm_api.confirm_download(upload_id, device_id)
@@ -417,7 +432,7 @@ class MatrixExecutor:
         if slot:
             save_state.promote_slot_to_server(slot)
 
-        self._confirm_upload_sync(result.get("id"), device_id)
+        self._confirm_upload_sync(result, device_id)
 
         self._log_debug(f"Uploaded save: {filename} (emulator={emulator})")
         return result
@@ -868,6 +883,28 @@ class MatrixExecutor:
             f" synced={synced} errors={len(errors)}"
         )
         return synced, errors, conflicts
+
+
+def _upload_response_proves_current(response: dict[str, Any], device_id: str) -> bool:
+    """Whether *response* proves *device_id* already holds the current save.
+
+    RomM's ``add_save`` / ``update_save`` upsert the uploading device's
+    DeviceSaveSync row (``synced_at = updated_at``) and serialize it into the
+    response's ``device_syncs`` with ``is_current=true`` — except ``add_save``'s
+    content-dedup early-return, which returns the pre-existing save (its stale
+    row, or a synthesized ``is_current=false`` placeholder) *before* the upsert.
+    Reads the same ``device_syncs`` shape ``domain.sync_action`` reads. Fail-open:
+    only an entry for *device_id* whose ``is_current`` is exactly ``True`` counts;
+    any missing / non-list / otherwise-unexpected shape returns ``False`` so the
+    caller still confirms.
+    """
+    device_syncs = response.get("device_syncs")
+    if not isinstance(device_syncs, list):
+        return False
+    return any(
+        isinstance(ds, dict) and ds.get("device_id") == device_id and ds.get("is_current") is True
+        for ds in device_syncs
+    )
 
 
 def _file_state_to_dict(file_state: FileSyncState) -> dict[str, Any]:
