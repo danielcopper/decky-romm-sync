@@ -906,6 +906,126 @@ describe("DangerZone", () => {
     });
   });
 
+  describe("removal paths are chunk-paced (#977)", () => {
+    // 26 shortcuts = one full 25-item chunk + a remainder, so exactly one 50ms
+    // breather must fall between the two chunks.
+    const manyAppIds = Array.from({ length: 26 }, (_, i) => i + 1);
+
+    it("per-platform removal: 25 removals back-to-back, one 50ms breather, then the post-removal steps", async () => {
+      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
+        platforms: [{ slug: "snes", name: "Super Nintendo", count: 26 }],
+      });
+      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
+        success: true,
+        app_ids: manyAppIds,
+        rom_ids: [1, 2],
+        platform_name: "Super Nintendo",
+      });
+      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Super Nintendo (26)"));
+      const modalProps = lastShownModalProps<{ onRemoveShortcuts?: () => void }>();
+
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          modalProps?.onRemoveShortcuts?.();
+          // Drain: removePlatformShortcuts resolves, then the paced loop runs the
+          // first 25-item chunk back-to-back and blocks on the breather.
+          for (let i = 0; i < 40; i++) await Promise.resolve();
+        });
+        // First chunk done; the 26th removal + the post-removal steps are gated
+        // behind the not-yet-elapsed breather.
+        expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(25);
+        expect(vi.mocked(backend.reportRemovalResults)).not.toHaveBeenCalled();
+        expect(vi.mocked(clearPlatformCollection)).not.toHaveBeenCalled();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(50);
+          for (let i = 0; i < 20; i++) await Promise.resolve();
+        });
+        // The breather elapsed → the last removal ran, THEN the post-removal steps.
+        expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(26);
+        expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2]);
+        expect(vi.mocked(clearPlatformCollection)).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("remove-all: the backend list is chunk-paced before the orphan sweep and reporting run", async () => {
+      vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
+        success: true,
+        message: "Removed all",
+        app_ids: manyAppIds,
+        rom_ids: [7],
+      });
+      // No orphans beyond the backend list — isolate the pacing to the first loop.
+      vi.mocked(getLiveRomMShortcutAppIds).mockResolvedValue([]);
+      const { getByText } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Remove All RomM Shortcuts"));
+
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          fireEvent.click(getByText("Confirm: remove all RomM shortcuts?"));
+          for (let i = 0; i < 40; i++) await Promise.resolve();
+        });
+        // First chunk done; the orphan scan + reporting + collection clear are all
+        // gated behind the breather.
+        expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(25);
+        expect(vi.mocked(getLiveRomMShortcutAppIds)).not.toHaveBeenCalled();
+        expect(vi.mocked(backend.reportRemovalResults)).not.toHaveBeenCalled();
+        expect(vi.mocked(clearAllRomMCollections)).not.toHaveBeenCalled();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(50);
+          for (let i = 0; i < 20; i++) await Promise.resolve();
+        });
+        expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(26);
+        expect(vi.mocked(getLiveRomMShortcutAppIds)).toHaveBeenCalled();
+        expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([7]);
+        expect(vi.mocked(clearAllRomMCollections)).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("bulk non-steam removal: 25 back-to-back, one breather, then the 'Removed' status", async () => {
+      stubCollectionStore(manyAppIds);
+      stubAppStore(Object.fromEntries(manyAppIds.map((id) => [id, { strDisplayName: `Game ${id}` }])));
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Remove 26 Non-Steam Games"));
+
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          fireEvent.click(getByText(/Are you sure\? Remove 26 games/));
+          for (let i = 0; i < 40; i++) await Promise.resolve();
+        });
+        // First 25-item chunk done; the 26th removal + the "Removed" status (a
+        // post-removal step) are gated behind the breather.
+        expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(25);
+        expect(container.textContent).toContain("Removing 26 non-steam games...");
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(50);
+          for (let i = 0; i < 20; i++) await Promise.resolve();
+          // Drain the post-removal settle poll (store never shrinks — removeShortcut is mocked).
+          await vi.advanceTimersByTimeAsync(3500);
+        });
+        expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(26);
+        // Routed through the wrapper, never the direct SteamClient call.
+        expect(vi.mocked(SteamClient.Apps.RemoveShortcut)).not.toHaveBeenCalled();
+        expect(container.textContent).toContain("Removed 26 non-steam games");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("ShortcutRemovalSection — handleUninstallAll", () => {
     it("first click arms confirm + shows the warning Field; second click triggers uninstallAllRoms", async () => {
       vi.mocked(backend.uninstallAllRoms).mockResolvedValue({
@@ -1266,7 +1386,7 @@ describe("DangerZone", () => {
   });
 
   describe("RetroDeckSection — handleRemoveAll (no retrodeck risk)", () => {
-    it("first click arms confirm; second click removes via SteamClient.Apps.RemoveShortcut", async () => {
+    it("first click arms confirm; second click removes via the removeShortcut wrapper (#977)", async () => {
       stubCollectionStore([1, 2]);
       stubAppStore({
         1: { strDisplayName: "GameOne" },
@@ -1277,14 +1397,25 @@ describe("DangerZone", () => {
       fireEvent.click(getByText("Remove 2 Non-Steam Games"));
       // After first click — confirm copy without retrodeck warning.
       expect(container.textContent).toContain("Are you sure? Remove 2 games (0 whitelisted)?");
-      expect(vi.mocked(SteamClient.Apps.RemoveShortcut)).not.toHaveBeenCalled();
+      expect(vi.mocked(removeShortcut)).not.toHaveBeenCalled();
 
-      await act(async () => {
-        fireEvent.click(getByText("Are you sure? Remove 2 games (0 whitelisted)?"));
-        await Promise.resolve();
-      });
-      expect(vi.mocked(SteamClient.Apps.RemoveShortcut)).toHaveBeenCalledWith(1);
-      expect(vi.mocked(SteamClient.Apps.RemoveShortcut)).toHaveBeenCalledWith(2);
+      // Loop 3 now routes through the paced removeShortcut wrapper, never the
+      // direct SteamClient.Apps.RemoveShortcut. Drive the paced removal + the
+      // post-removal settle poll under fake timers so nothing waits on a real timer.
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          fireEvent.click(getByText("Are you sure? Remove 2 games (0 whitelisted)?"));
+          for (let i = 0; i < 8; i++) await Promise.resolve();
+          await vi.advanceTimersByTimeAsync(3500);
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(1);
+      expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(2);
+      // The direct SteamClient call is gone — removal goes through the wrapper only.
+      expect(vi.mocked(SteamClient.Apps.RemoveShortcut)).not.toHaveBeenCalled();
       // status surfaced.
       expect(container.textContent).toContain("Removed 2 non-steam games");
     });
@@ -1295,10 +1426,16 @@ describe("DangerZone", () => {
       const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
       fireEvent.click(getByText("Remove 1 Non-Steam Games"));
-      await act(async () => {
-        fireEvent.click(getByText("Are you sure? Remove 1 games (0 whitelisted)?"));
-        await Promise.resolve();
-      });
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          fireEvent.click(getByText("Are you sure? Remove 1 games (0 whitelisted)?"));
+          for (let i = 0; i < 8; i++) await Promise.resolve();
+          await vi.advanceTimersByTimeAsync(3500);
+        });
+      } finally {
+        vi.useRealTimers();
+      }
       expect(container.textContent).toContain("Removed 1 non-steam game");
       expect(container.textContent).not.toContain("Removed 1 non-steam games");
     });
@@ -1322,21 +1459,28 @@ describe("DangerZone", () => {
       // First click — generic confirm with retrodeck warning copy.
       fireEvent.click(getByText("Remove 2 Non-Steam Games"));
       expect(container.textContent).toContain("WARNING: RetroDECK not protected! Remove 2 games?");
-      expect(vi.mocked(SteamClient.Apps.RemoveShortcut)).not.toHaveBeenCalled();
+      expect(vi.mocked(removeShortcut)).not.toHaveBeenCalled();
 
       // Second click — RETRODECK warning escalation.
       fireEvent.click(getByText("WARNING: RetroDECK not protected! Remove 2 games?"));
       expect(container.textContent).toContain("!! RETRODECK WILL BE REMOVED !!");
       expect(container.textContent).toContain("RetroDECK is NOT in the whitelist and will be permanently removed!");
-      expect(vi.mocked(SteamClient.Apps.RemoveShortcut)).not.toHaveBeenCalled();
+      expect(vi.mocked(removeShortcut)).not.toHaveBeenCalled();
 
-      // Third click — actually remove.
-      await act(async () => {
-        fireEvent.click(getByText(/!! RETRODECK WILL BE REMOVED !!/));
-        await Promise.resolve();
-      });
-      expect(vi.mocked(SteamClient.Apps.RemoveShortcut)).toHaveBeenCalledWith(1);
-      expect(vi.mocked(SteamClient.Apps.RemoveShortcut)).toHaveBeenCalledWith(2);
+      // Third click — actually remove, through the paced removeShortcut wrapper.
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          fireEvent.click(getByText(/!! RETRODECK WILL BE REMOVED !!/));
+          for (let i = 0; i < 8; i++) await Promise.resolve();
+          await vi.advanceTimersByTimeAsync(3500);
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(1);
+      expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(2);
+      expect(vi.mocked(SteamClient.Apps.RemoveShortcut)).not.toHaveBeenCalled();
     });
   });
 

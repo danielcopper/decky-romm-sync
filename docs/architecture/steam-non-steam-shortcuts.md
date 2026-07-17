@@ -357,15 +357,27 @@ Launches fail or open the wrong thing. The plugin gates the `Set*` calls on an o
 [#827](https://github.com/danielcopper/decky-romm-sync/issues/827); see
 [Updating existing shortcuts](#updating-existing-shortcuts)) — the historical "property updates may not persist" warning
 has been narrowed. The remaining hazard is **removal-churn**: adding and removing many shortcuts in one pass can corrupt
-Steam's in-memory shortcut state. A Steam restart clears it. The sync engine processes removals before additions to keep
-churn down, and every launch-options write uses the fire-then-poll `setLaunchOptionsConfirmed` so a silently dropped
-write is observable rather than assumed. Only `exe`/name changes still go through delete + recreate — a fresh
-`AddShortcut`, which yields a new `appId`.
+Steam's in-memory shortcut state. A Steam restart clears it. Two things keep churn down. The sync engine processes
+removals before additions, and every launch-options write uses the fire-then-poll `setLaunchOptionsConfirmed` so a
+silently dropped write is observable rather than assumed. And **mass removals are awaited and chunk-paced** through the
+shared paced loop (`pacedForEach`, [#977](https://github.com/danielcopper/decky-romm-sync/issues/977)): every DangerZone
+removal path (`removeShortcut` per platform, Remove-All-RomM including the live-orphan sweep, and the Remove-Non-Steam
+bulk action) awaits each `removeShortcut` in sequence and yields a 50ms breather every 25 removals, so the CEF renderer
+never blocks and thousands of removals can't stack as fire-and-forget promises. Only `exe`/name changes still go through
+delete + recreate — a fresh `AddShortcut`, which yields a new `appId`.
 
-### AddShortcut timing between shortcuts
+### AddShortcut / RemoveShortcut timing between shortcuts
 
-When creating multiple shortcuts in a loop, a 50ms delay between each `addShortcut()` call prevents corrupting Steam's
-internal shortcut state. Without this delay, some shortcuts may silently fail to register.
+Bulk shortcut loops corrupt Steam's internal store if driven too fast — added shortcuts may silently fail to register,
+and removals churn the in-memory state (above). Both cadences live in one place: the shared paced loop `pacedForEach` in
+`src/utils/pacedOps.ts`, which iterates awaiting each item and yields a breather between chunks (no trailing delay). The
+two callers differ only in chunk size:
+
+- **Add** (`syncManager.ts` — `processUnitShortcuts`, `processCoverRefreshes`) paces **one item at a time**: a 50ms
+  breather after every `addShortcut()` / cover apply, plus the per-unit heartbeat + cancel hooks.
+- **Remove** (`DangerZone.tsx` — `removeShortcutsPaced`) paces in **25-item chunks with a 50ms breather** between them.
+  A removal is a single cheap call, so chunked yielding keeps a 5000-game teardown at ~seconds of overhead instead of
+  the ~4 minutes strict 50ms/item would cost, while still letting the renderer breathe.
 
 ### The apply is chunked; a heartbeat timeout must not discard a chunk's delivered bindings
 

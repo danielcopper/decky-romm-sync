@@ -27,6 +27,7 @@ import {
   updateWhitelistSettings,
 } from "../api/backend";
 import { removeShortcut, getAllNonSteamShortcutAppIds, getLiveRomMShortcutAppIds } from "../utils/steamShortcuts";
+import { pacedForEach } from "../utils/pacedOps";
 import { LoadingRow } from "./LoadingRow";
 import { batchConfirmLaunchOptions } from "../utils/launchOptionsReconcile";
 import { getSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
@@ -115,6 +116,28 @@ async function recountAfterStoreSettles(removedCount: number, loadNonSteamApps: 
   loadNonSteamApps();
 }
 
+// Bulk removals run through the shared paced loop in chunked mode: 25 removals
+// back-to-back, then a 50ms breather so the CEF renderer never blocks and Steam's
+// in-memory shortcut store can't be corrupted by removal churn (#977). Unlike the
+// add path (strict 50ms/item), a removal is a single cheap call, so chunked
+// yielding keeps overhead at ~seconds rather than minutes on a 5000-game library.
+const REMOVAL_CHUNK_SIZE = 25;
+const REMOVAL_CHUNK_DELAY_MS = 50;
+
+/**
+ * Remove many Steam shortcuts, chunk-paced. Each ``removeShortcut`` is awaited in
+ * sequence (no more fire-and-forget stacking of thousands of pending removals);
+ * per-item errors are swallowed by ``removeShortcut``, so one bad appId never
+ * aborts the batch. Resolves once every removal has run — callers await this
+ * before their post-removal steps (result reporting, collection clear, re-count).
+ */
+async function removeShortcutsPaced(appIds: number[]): Promise<void> {
+  await pacedForEach(appIds, (appId) => removeShortcut(appId), {
+    chunkSize: REMOVAL_CHUNK_SIZE,
+    delayMs: REMOVAL_CHUNK_DELAY_MS,
+  });
+}
+
 const PlatformActionModal: FC<{
   platform: RegistryPlatform;
   closeModal?: () => void;
@@ -199,9 +222,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
         setActionStatus(result.message ?? "Failed to remove shortcuts");
         return;
       }
-      for (const appId of result.app_ids ?? []) {
-        removeShortcut(appId);
-      }
+      await removeShortcutsPaced(result.app_ids ?? []);
       if (result.rom_ids?.length) {
         await reportRemovalResults(result.rom_ids);
       }
@@ -277,11 +298,9 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
         // Steam (exe = bin/rom-launcher) that were never committed — no binding,
         // so the backend never returns them. The live exe-ownership scan sees
         // them; remove the UNION so no orphan is left behind (#1381).
-        const removed = new Set<number>();
-        for (const appId of result.app_ids ?? []) {
-          removeShortcut(appId);
-          removed.add(appId);
-        }
+        const backendAppIds = result.app_ids ?? [];
+        await removeShortcutsPaced(backendAppIds);
+        const removed = new Set<number>(backendAppIds);
         const liveAppIds = await getLiveRomMShortcutAppIds();
         if (liveAppIds === null) {
           // The scan could not run (Steam's shortcut store was unreadable) —
@@ -290,10 +309,8 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
         } else {
           const orphans = liveAppIds.filter((appId) => !removed.has(appId));
           logInfo(`Remove-all: ${orphans.length} live-scanned RomM shortcut(s) were not in the backend list.`);
-          for (const appId of orphans) {
-            removeShortcut(appId);
-            removed.add(appId);
-          }
+          await removeShortcutsPaced(orphans);
+          for (const appId of orphans) removed.add(appId);
         }
         removedCount = removed.size;
         // rom_ids are backend DB rows — orphans have none, so report only the
@@ -699,9 +716,7 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
     }
     const toRemove = nonSteamApps.filter((a) => !whitelistedIds.has(a.appId));
     setStatus(`Removing ${toRemove.length} non-steam games...`);
-    for (const app of toRemove) {
-      SteamClient.Apps.RemoveShortcut(app.appId);
-    }
+    await removeShortcutsPaced(toRemove.map((a) => a.appId));
     setStatus(`Removed ${toRemove.length} non-steam game${toRemove.length === 1 ? "" : "s"}`);
     setConfirmRemoveAll(false);
     setConfirmRetrodeck(false);
