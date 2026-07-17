@@ -243,6 +243,17 @@ class RommRomReader(Protocol):
         """
         ...
 
+    def download_cover_from_url(self, url: str, dest: str) -> None:
+        """Download a ROM cover from an external ``url_cover`` CDN to a local path.
+
+        The fallback for a RomM-local cover asset that 404s (#1450): *url* is
+        the ROM's absolute ``url_cover`` (SteamGridDB / IGDB / …). Fetched
+        WITHOUT the RomM bearer — the host-bound token must never reach a
+        third-party origin — with the plugin ``User-Agent`` and spaces
+        URL-encoded.
+        """
+        ...
+
 
 class RommSaveApi(Protocol):
     """RomM saves API surface (list, up/download, confirm, summary, delete)."""

@@ -581,6 +581,15 @@ class TestDownloadCover:
         client.download.assert_called_once_with("/assets/covers/zelda.jpg", "/tmp/cover.jpg")
 
 
+class TestDownloadCoverFromUrl:
+    def test_delegates_to_client_download_external(self):
+        api, client = _make_api()
+        client.download_external = MagicMock()
+        api.download_cover_from_url("https://cdn.example.com/x.png", "/tmp/cover.png")
+        # The external CDN fetch routes through the bearer-free download_external.
+        client.download_external.assert_called_once_with("https://cdn.example.com/x.png", "/tmp/cover.png")
+
+
 class TestListVirtualCollections:
     def test_returns_list(self):
         api, client = _make_api()

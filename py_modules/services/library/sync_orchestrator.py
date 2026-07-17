@@ -1285,25 +1285,31 @@ class SyncOrchestrator:
         (``BIND_ROM_ID_KEY``), whose raw dict is the one present in *unit_roms*.
         A no-op when nothing is emitted.
 
-        Returns the confirmed cover fingerprints — ``rom_id → fresh cover
+        Returns the confirmed cover fingerprints — ``rom_id → applied cover
         source`` for every ROM whose cache the download resolved (fresh
         download, reuse, or grid seed all confirm; a failed download does not) —
-        which the per-unit commit persists as ``roms.cover_source`` (#1386).
+        which the per-unit commit persists as ``roms.cover_source`` (#1386). The
+        source is the one ArtworkService *actually* applied: the fresh
+        ``path_cover`` normally, or the ROM's ``url_cover`` when the RomM asset
+        404s and the external fallback wins (#1450), reported through the
+        ``applied_sources`` accumulator.
         """
         if not emitted:
             return {}
         artwork_ids = {int(e.get(BIND_ROM_ID_KEY, e["rom_id"])) for e in emitted}
         artwork_roms = [rom for rom in unit_roms if rom["id"] in artwork_ids]
+        applied_sources: dict[int, str] = {}
         cover_paths = await self._download_artwork(
             artwork_roms,
             progress_step=unit_index + 1,
             progress_total_steps=total_units,
             label=unit.name,
+            applied_sources=applied_sources,
         )
         for e in emitted:
             e["cover_path"] = cover_paths.get(int(e.get(BIND_ROM_ID_KEY, e["rom_id"])), "")
         return {
-            int(rom["id"]): source
+            int(rom["id"]): applied_sources.get(int(rom["id"])) or source
             for rom in artwork_roms
             if int(rom["id"]) in cover_paths and (source := rom.get("path_cover_large") or rom.get("path_cover_small"))
         }
@@ -1876,11 +1882,16 @@ class SyncOrchestrator:
 
     # ── Artwork delegation ───────────────────────────────────────
 
-    async def _download_artwork(self, all_roms, progress_step=4, progress_total_steps=6, label=""):
+    async def _download_artwork(
+        self, all_roms, progress_step=4, progress_total_steps=6, label="", applied_sources=None
+    ):
         """Delegate artwork download to ArtworkService callback.
 
         ``label`` is the unit's display name, threaded into the cover-download
-        progress frames ("Preparing covers for <label>").
+        progress frames ("Preparing covers for <label>"). ``applied_sources`` is
+        the optional accumulator ArtworkService fills with the cover source
+        actually applied per ROM (``url_cover`` on a 404 fallback, #1450), so the
+        per-unit commit persists a truthful ``cover_source`` fingerprint.
         """
         box = self._sync_state
         return await self._artwork.download_artwork(
@@ -1890,6 +1901,7 @@ class SyncOrchestrator:
             progress_step=progress_step,
             progress_total_steps=progress_total_steps,
             label=label,
+            applied_sources=applied_sources,
         )
 
     async def _refresh_changed_covers(self, unit_roms, registry, progress_step=4, progress_total_steps=6, label=""):

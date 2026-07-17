@@ -229,6 +229,21 @@ the apply path as before. The fingerprint is only ever advanced when the cache i
 old fingerprint and the change is retried next sync. A cover-only change never re-applies the shortcut itself (that
 apply path writes launch options under the ADR-0025 invariant — pure churn for a cover).
 
+**`url_cover` fallback on a 404 RomM asset (#1450).** When the RomM-local cover asset returns a definitive HTTP 404 (the
+server's own cover resources are missing while its web UI still renders from `url_cover`), the cover download retries
+**once** against the ROM's `url_cover` — an external metadata-provider CDN (SteamGridDB / IGDB / …) — before giving up.
+The retry lives in `ArtworkService._download_cover_atomic`: only a `RommNotFoundError` (404) with a non-empty
+`url_cover` triggers it, so a transient transport error keeps today's retry-ladder behaviour and never falls back, and
+an empty/absent `url_cover` is exactly today's failure (warning, gray tile). The fallback fetch goes through a
+**separate, bearer-free** adapter seam (`RommRomReader.download_cover_from_url` → `RommHttpAdapter.download_external`):
+the host-bound RomM bearer must never reach a third-party origin, so only the plugin `User-Agent` is attached (the CDN
+behind Cloudflare Bot Fight Mode also 403s the default `Python-urllib` UA). The fingerprint records the source
+**actually applied** — `url_cover` on a fallback, threaded back through the `download_artwork` `applied_sources`
+accumulator (sync path) or the direct persist (`refresh_changed_covers` / `refresh_cover`) — so the compare stays
+truthful: because the fresh RomM `path_cover` string never equals the stored `url_cover`, a later fixed RomM asset (or a
+changed `url_cover`) is always re-checked, at the cost of re-downloading the fallback ROM's cover each sync until the
+RomM asset is repaired.
+
 **Unstamped-platform re-run: the `restamp_platform_count` signal (#1416).** A heartbeat-timeout run's late-ack recovery
 (ADR-0023) leaves a platform **complete but unstamped**: the timed-out apply cleared the stamp at its start and its late
 ack re-binds the chunk without re-writing it (the late-ack path never passes a `platform_stamp`). The wholesale-skip

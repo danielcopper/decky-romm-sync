@@ -52,10 +52,15 @@ class FakeArtworkManager:
         progress_step: int = 4,
         progress_total_steps: int = 6,
         label: str = "",
+        applied_sources: dict[int, str] | None = None,
     ) -> dict[str, Any]:
         self.download_calls.append(
             (list(all_roms), emit_progress, is_cancelling, progress_step, progress_total_steps, label)
         )
+        # The real service fills ``applied_sources`` per resolved ROM (#1450); the
+        # canned fake records only the return dict, so the accumulator is left as
+        # the caller passed it — the orchestrator then derives ``cover_source``
+        # from the rom dict, matching pre-fallback behaviour under test.
         return dict(self.canned_download)
 
     async def refresh_changed_covers(

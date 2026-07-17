@@ -134,6 +134,7 @@ class FakeRommApi:
         # Resumability verdict the fake reports via ``on_meta`` (server range support).
         self.download_range_supported: bool = False
         self.download_cover_side_effect: Exception | None = None
+        self.download_cover_from_url_side_effect: Exception | None = None
         self.get_current_user_side_effect: Exception | None = None
         self.ingest_play_sessions_side_effect: Exception | None = None
         self.list_play_sessions_side_effect: Exception | None = None
@@ -362,6 +363,13 @@ class FakeRommApi:
         self._log("download_cover", (cover_url, dest))
         self._check_fail(self.download_cover_side_effect)
         key = f"cover:{cover_url}"
+        payload = self.download_payloads.get(key, b"")
+        self._materialize_download(dest, payload)
+
+    def download_cover_from_url(self, url: str, dest: str) -> None:
+        self._log("download_cover_from_url", (url, dest))
+        self._check_fail(self.download_cover_from_url_side_effect)
+        key = f"cover_url:{url}"
         payload = self.download_payloads.get(key, b"")
         self._materialize_download(dest, payload)
 

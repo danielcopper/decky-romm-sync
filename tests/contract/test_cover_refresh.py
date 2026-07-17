@@ -22,9 +22,11 @@ import asyncio
 
 from domain.rom import Rom
 from domain.sync_state import SyncState
+from lib.errors import RommNotFoundError
 
 _COVER_OLD = "/assets/romm/resources/roms/10/cover/big.png?ts=2026-01-01 00:00:00"
 _COVER_NEW = "/assets/romm/resources/roms/10/cover/big.png?ts=2026-07-11 12:00:00"
+_URL_COVER = "https://cdn2.steamgriddb.com/grid/abc123.png"
 
 
 def _orchestrator(harness):
@@ -83,6 +85,10 @@ def _apply_unit_events(harness):
 
 def _download_cover_urls(harness):
     return [args[0] for name, args, _kwargs in harness.romm.call_log if name == "download_cover"]
+
+
+def _download_cover_from_url_urls(harness):
+    return [args[0] for name, args, _kwargs in harness.romm.call_log if name == "download_cover_from_url"]
 
 
 async def _run_sync(harness, run_id: str) -> None:
@@ -250,6 +256,32 @@ async def test_cover_only_change_flows_from_preview_to_apply_via_callables(harne
     assert len(events) == 1
     assert events[0]["shortcuts"] == []
     assert events[0]["cover_refreshes"] == [{"rom_id": 10, "app_id": 7777}]
+
+
+async def test_cover_asset_404_falls_back_to_url_cover_and_records_it(harness):
+    """A 404 on the RomM cover asset retries against the ROM's ``url_cover`` and
+    persists the url_cover as the fingerprint across the real reporter commit —
+    the source actually applied, so a later fixed asset is still detected (#1450).
+    """
+    _make_grid_resolvable(harness)
+    _seed_library(harness, cover=_COVER_OLD)
+    harness.romm.roms[10]["url_cover"] = _URL_COVER
+    # The RomM-local cover asset 404s; the external url_cover serves real bytes.
+    harness.romm.download_cover_side_effect = RommNotFoundError("HTTP 404: Not Found")
+    harness.romm.download_payloads[f"cover_url:{_URL_COVER}"] = b"cdn cover bytes"
+    _orchestrator(harness)._wait_for_unit_complete = _ack_with({"10": 7777})
+
+    await _run_sync(harness, "run-fallback-1")
+
+    # The cache holds the external bytes, fetched via the bearer-free fallback path.
+    assert _cache_file(harness).read_bytes() == b"cdn cover bytes"
+    assert _download_cover_from_url_urls(harness) == [_URL_COVER]
+    with harness.uow_factory() as uow:
+        rom = uow.roms.get(10)
+    assert rom is not None
+    assert rom.shortcut_app_id == 7777
+    # The recorded fingerprint is the applied url_cover — NOT the 404'd RomM path.
+    assert rom.cover_source == _URL_COVER
 
 
 async def test_pure_no_changes_preview_keeps_zero_cover_count(harness):

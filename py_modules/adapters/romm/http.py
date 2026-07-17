@@ -526,6 +526,46 @@ class RommHttpAdapter:
 
         return self.with_retry(_do_download)
 
+    def download_external(self, url: str, dest: str) -> None:
+        """Download from an ARBITRARY absolute *url* — ``User-Agent`` only, never the bearer.
+
+        For a ROM's ``url_cover`` (an external metadata-provider CDN such as
+        SteamGridDB / IGDB) used as the fallback when the RomM-local cover asset
+        404s (#1450): the host-bound RomM bearer must NEVER reach a third-party
+        origin, so only the plugin ``User-Agent`` is attached — no
+        ``Authorization`` header is ever built here (the CDN behind Cloudflare
+        Bot Fight Mode also 403s the default ``Python-urllib`` UA). Spaces in
+        *url* are URL-encoded (RomM cover URLs carry them raw). Single-shot
+        streaming — no ``Range``/resume, covers are small; transient errors
+        retry through :meth:`with_retry` like every other download, a 404 raises
+        ``RommNotFoundError`` without retry.
+        """
+        encoded_url = urllib.parse.quote(url, safe="/:?=&@")
+        dest_path = Path(dest)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        def _do_download():
+            req = urllib.request.Request(encoded_url, method="GET")
+            req.add_header("User-Agent", self._user_agent)
+            try:
+                with urllib.request.urlopen(req, context=self.ssl_context(), timeout=self._CONNECT_TIMEOUT) as resp:
+                    raw_sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
+                    if raw_sock is not None:
+                        raw_sock.settimeout(self._READ_TIMEOUT)
+                    total, downloaded = self._stream_to_file(
+                        resp,
+                        dest_path,
+                        block_size=self._DOWNLOAD_BLOCK_SIZE,
+                        url=encoded_url,
+                    )
+                self._validate_download(total, downloaded)
+            except RommApiError:
+                raise
+            except Exception as exc:
+                raise self.translate_http_error(exc, encoded_url, "GET") from exc
+
+        return self.with_retry(_do_download)
+
     def _resume_branch(self, resp, status: int, existing_size: int) -> tuple[str, int, int]:
         """Decide ``(open_mode, seed_bytes, total)`` from the live response.
 

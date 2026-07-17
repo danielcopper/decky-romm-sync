@@ -14,6 +14,13 @@ came from, and every sync compares it against the fresh fetch (#1386). A
 mismatch re-downloads the cache and republishes the grid copy; a NULL
 fingerprint with an existing cache file is adopted without a download, so the
 fingerprint's introduction never mass re-downloads an existing library.
+
+When the RomM-local cover asset returns a definitive HTTP 404, the download
+retries once against the ROM's external ``url_cover`` (a metadata-provider CDN
+such as SteamGridDB / IGDB) before giving up — the RomM bearer is never sent to
+that third-party host (#1450). The fingerprint records the source *actually*
+applied (``url_cover`` on a fallback), so a later fixed RomM asset or changed
+``url_cover`` is still detected as a change.
 """
 
 from __future__ import annotations
@@ -35,6 +42,7 @@ from domain.artwork_paths import (
 )
 from domain.cover_refresh import scan_cover_refresh_candidates
 from domain.sync_stage import SyncStage
+from lib.errors import RommNotFoundError
 from lib.list_result import ErrorCode
 
 # Emit a cover-download progress frame on the first cover, every Nth cover, and
@@ -126,6 +134,7 @@ class ArtworkService:
         progress_step: int = 4,
         progress_total_steps: int = 6,
         label: str = "",
+        applied_sources: dict[int, str] | None = None,
     ) -> dict[int, str]:
         """Download cover artwork into the per-ROM cache, returning rom_id → cache path.
 
@@ -135,6 +144,15 @@ class ArtworkService:
         landed); else download from RomM. The returned cache path becomes the
         pending-sync ``cover_path`` that ``finalize_cover_path`` publishes onto
         the grid once the Steam app_id is known.
+
+        ``applied_sources`` is an optional accumulator the caller passes to learn
+        which cover source each resolved ROM's bytes actually came from —
+        ``path_cover_large``/``path_cover_small`` for the common case, or the
+        ROM's ``url_cover`` when the RomM asset 404s and the external fallback
+        wins (#1450). It is filled per resolved ROM (fresh download, reuse, or
+        grid seed), so the per-unit commit persists a truthful ``cover_source``
+        fingerprint even for fallback covers — the caller keys its own
+        derivation off it. Absent/unread, ``download_artwork`` behaves as before.
 
         Progress is narrated under the ``fetching`` stage with the ``covers``
         sub-stage (this runs in the per-unit prep phase, before the shortcuts
@@ -178,11 +196,17 @@ class ArtworkService:
             existing = self._resolve_cached_cover(rom_id, cache_path, grid, cover_url)
             if existing:
                 cover_paths[rom_id] = existing
+                if applied_sources is not None:
+                    applied_sources[rom_id] = cover_url
                 continue
 
             try:
-                await self._loop.run_in_executor(None, self._download_cover_atomic, cover_url, cache_path)
+                applied = await self._loop.run_in_executor(
+                    None, self._download_cover_atomic, cover_url, cache_path, rom.get("url_cover")
+                )
                 cover_paths[rom_id] = cache_path
+                if applied_sources is not None:
+                    applied_sources[rom_id] = applied
             except Exception as e:
                 self._logger.warning(f"Failed to download artwork for {rom['name']}: {e}")
 
@@ -297,6 +321,7 @@ class ArtworkService:
 
         self._cover_art_file_store.make_dirs(self._cover_cache_dir)
         grid = self._steam_config.grid_dir()
+        url_covers = {int(rom["id"]): rom.get("url_cover") for rom in all_roms if "id" in rom}
         refresh_target = f"Refreshing covers for {label}" if label else "Refreshing covers"
         refreshed: list[dict[str, int]] = []
         total = len(changed)
@@ -314,7 +339,9 @@ class ArtworkService:
                     total_steps=progress_total_steps,
                     sub_stage="covers",
                 )
-            ok = await self._loop.run_in_executor(None, self._refresh_one_cover_io, rom_id, app_id, cover_url, grid)
+            ok = await self._loop.run_in_executor(
+                None, self._refresh_one_cover_io, rom_id, app_id, cover_url, grid, url_covers.get(rom_id)
+            )
             if ok:
                 refreshed.append({"rom_id": rom_id, "app_id": app_id})
         if refreshed:
@@ -354,25 +381,29 @@ class ArtworkService:
                 rom.adopt_cover_source(source)
                 uow.roms.save(rom)
 
-    def _refresh_one_cover_io(self, rom_id: int, app_id: int, cover_url: str, grid: str | None) -> bool:
+    def _refresh_one_cover_io(
+        self, rom_id: int, app_id: int, cover_url: str, grid: str | None, url_cover: str | None = None
+    ) -> bool:
         """Re-download one changed cover, republish its grid copy, persist the fingerprint.
 
         Ordered so nothing advances on failure: the atomic download either
         replaces the cache in full or leaves the old bytes; only a successful
         download republishes the grid ``{app_id}p.png`` and persists the new
         ``cover_source`` (a missing grid dir skips the publish but still
-        persists — the cache is the source of truth). Returns whether the
+        persists — the cache is the source of truth). The persisted fingerprint
+        is the source actually applied — *url_cover* when the RomM asset 404s
+        and the fallback wins (#1450), else *cover_url*. Returns whether the
         cover was refreshed.
         """
         cache_path = self._cache_path(rom_id)
         try:
-            self._download_cover_atomic(cover_url, cache_path)
+            applied = self._download_cover_atomic(cover_url, cache_path, url_cover)
         except Exception as e:
             self._logger.warning(f"Cover refresh: failed to download cover for rom {rom_id}: {e}")
             return False
         if grid:
             self.finalize_cover_path(grid, cache_path, app_id, str(rom_id))
-        self._persist_cover_source(rom_id, cover_url)
+        self._persist_cover_source(rom_id, applied)
         return True
 
     def _persist_cover_source(self, rom_id: int, source: str) -> None:
@@ -386,8 +417,13 @@ class ArtworkService:
 
     # ── Atomic write helpers ───────────────────────────────────────────────
 
-    def _download_cover_atomic(self, cover_url: str, dest: str) -> None:
-        """Download *cover_url* into ``dest.tmp`` then atomically rename over *dest*.
+    def _download_cover_atomic(self, cover_url: str, dest: str, url_cover: str | None = None) -> str:
+        """Download the cover into ``dest.tmp`` then atomically rename over *dest*.
+
+        Returns the cover source actually applied — *cover_url* for the normal
+        RomM-asset fetch, or *url_cover* when the RomM asset returns a definitive
+        404 and the external ``url_cover`` fallback succeeds (#1450). The caller
+        records that source so the ``cover_source`` fingerprint stays truthful.
 
         A reader of *dest* sees either the old file or the complete new one,
         never a partially-streamed download. The sidecar is removed on any
@@ -395,11 +431,33 @@ class ArtworkService:
         """
         tmp = with_tmp_suffix(dest)
         try:
-            self._romm_api.download_cover(cover_url, tmp)
+            applied = self._fetch_cover_to_tmp(cover_url, tmp, url_cover)
             self._cover_art_file_store.rename(tmp, dest)
+            return applied
         except Exception:
             self._cover_art_file_store.remove_file(tmp)
             raise
+
+    def _fetch_cover_to_tmp(self, cover_url: str, tmp: str, url_cover: str | None) -> str:
+        """Fetch the RomM cover into *tmp*, falling back to *url_cover* on a 404.
+
+        Returns the source actually written (``cover_url`` normally, *url_cover*
+        on a successful fallback). ONLY a definitive RomM 404
+        (:class:`RommNotFoundError`) with a non-empty *url_cover* triggers the
+        external fetch — every other failure (transport, 5xx, auth) propagates
+        unchanged, keeping today's retry-ladder behaviour and no fallback. The
+        external fetch goes out WITHOUT the RomM bearer (host-bound token,
+        #1450) and is logged at INFO with no secret material.
+        """
+        try:
+            self._romm_api.download_cover(cover_url, tmp)
+            return cover_url
+        except RommNotFoundError:
+            if not url_cover:
+                raise
+            self._romm_api.download_cover_from_url(url_cover, tmp)
+            self._logger.info(f"Cover asset 404 ({cover_url}); applied url_cover fallback")
+            return url_cover
 
     def _copy_atomic(self, src: str, dest: str) -> None:
         """Copy *src* into ``dest.tmp`` then atomically rename over *dest*.
@@ -561,7 +619,9 @@ class ArtworkService:
 
         self._cover_art_file_store.make_dirs(self._cover_cache_dir)
         try:
-            await self._loop.run_in_executor(None, self._download_cover_atomic, cover_url, cache_path)
+            await self._loop.run_in_executor(
+                None, self._download_cover_atomic, cover_url, cache_path, rom.get("url_cover")
+            )
         except Exception as e:
             self._logger.warning(f"fetch_cover: failed to download cover for rom {rom_id}: {e}")
             return {"base64": None}
@@ -627,7 +687,9 @@ class ArtworkService:
         cache_path = self._cache_path(rom_id)
         self._cover_art_file_store.make_dirs(self._cover_cache_dir)
         try:
-            await self._loop.run_in_executor(None, self._download_cover_atomic, cover_url, cache_path)
+            applied = await self._loop.run_in_executor(
+                None, self._download_cover_atomic, cover_url, cache_path, rom.get("url_cover")
+            )
         except Exception as e:
             self._logger.warning(f"refresh_cover: failed to download cover for rom {rom_id}: {e}")
             return {
@@ -637,7 +699,7 @@ class ArtworkService:
             }
 
         self.finalize_cover_path(grid, cache_path, app_id, str(rom_id))
-        await self._loop.run_in_executor(None, self._persist_cover_path, rom_id, cache_path, cover_url)
+        await self._loop.run_in_executor(None, self._persist_cover_path, rom_id, cache_path, applied)
 
         return {
             "success": True,

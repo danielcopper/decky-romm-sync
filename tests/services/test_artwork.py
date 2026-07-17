@@ -13,7 +13,9 @@ import pytest
 from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 
+from domain.cover_refresh import scan_cover_refresh_candidates
 from domain.rom import Rom
+from lib.errors import RommConnectionError, RommNotFoundError
 from services.artwork import ArtworkService, ArtworkServiceConfig
 
 
@@ -472,6 +474,129 @@ class TestDownloadArtwork:
         assert _tmp(cache) not in file_store.files
 
 
+# ── TestUrlCoverFallback ──────────────────────────────────────────────────────
+
+
+class TestUrlCoverFallback:
+    """The url_cover fallback (#1450): a definitive 404 on the RomM cover asset
+    retries once against the ROM's external ``url_cover``.
+
+    The fallback bytes come from ``download_cover_from_url`` — the bearer-free
+    adapter path (the no-bearer guarantee itself is pinned on the HTTP adapter,
+    ``tests/adapters/romm/test_http.py::TestDownloadExternal``). Here we pin the
+    routing (fallback fires only on 404, records the applied source truthfully).
+    """
+
+    _URL_COVER = "https://cdn.example.com/grid/abc.png"
+
+    @pytest.mark.asyncio
+    async def test_404_falls_back_to_url_cover_and_records_applied_source(
+        self, artwork_service, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        romm_api.download_cover.side_effect = RommNotFoundError("HTTP 404: Not Found")
+        romm_api.download_cover_from_url.side_effect = _writing_download(file_store, b"cdn art")
+
+        applied: dict[int, str] = {}
+        roms = [{"id": 42, "name": "Game", "path_cover_large": "/cover.png", "url_cover": self._URL_COVER}]
+        result = await artwork_service.download_artwork(
+            roms, emit_progress=_noop_emit_progress, is_cancelling=_not_cancelling, applied_sources=applied
+        )
+
+        cache = _cache(cover_cache_dir, 42)
+        assert result[42] == cache
+        assert file_store.files[cache] == b"cdn art"
+        assert _tmp(cache) not in file_store.files
+        # The external url_cover was fetched into the .tmp sidecar (not the RomM path).
+        romm_api.download_cover_from_url.assert_called_once()
+        assert romm_api.download_cover_from_url.call_args[0] == (self._URL_COVER, _tmp(cache))
+        # The applied source is the url_cover, not the 404'd path_cover.
+        assert applied[42] == self._URL_COVER
+
+    @pytest.mark.asyncio
+    async def test_404_without_url_cover_keeps_todays_failure(self, artwork_service, steam_config, romm_api, tmp_path):
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        romm_api.download_cover.side_effect = RommNotFoundError("HTTP 404: Not Found")
+
+        roms = [{"id": 42, "name": "Game", "path_cover_large": "/cover.png"}]  # no url_cover
+        result = await artwork_service.download_artwork(
+            roms, emit_progress=_noop_emit_progress, is_cancelling=_not_cancelling
+        )
+        assert 42 not in result
+        romm_api.download_cover_from_url.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_404_with_empty_url_cover_keeps_todays_failure(
+        self, artwork_service, steam_config, romm_api, tmp_path
+    ):
+        """An empty ``url_cover`` string is falsy — no fallback, today's path."""
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        romm_api.download_cover.side_effect = RommNotFoundError("HTTP 404: Not Found")
+
+        roms = [{"id": 42, "name": "Game", "path_cover_large": "/cover.png", "url_cover": ""}]
+        result = await artwork_service.download_artwork(
+            roms, emit_progress=_noop_emit_progress, is_cancelling=_not_cancelling
+        )
+        assert 42 not in result
+        romm_api.download_cover_from_url.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_404_and_url_cover_also_failing_gives_up_once(
+        self, artwork_service, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        romm_api.download_cover.side_effect = RommNotFoundError("HTTP 404: Not Found")
+        romm_api.download_cover_from_url.side_effect = RommNotFoundError("HTTP 404: cdn miss")
+
+        roms = [{"id": 42, "name": "Game", "path_cover_large": "/cover.png", "url_cover": self._URL_COVER}]
+        result = await artwork_service.download_artwork(
+            roms, emit_progress=_noop_emit_progress, is_cancelling=_not_cancelling
+        )
+        assert 42 not in result
+        # Exactly one fallback attempt — the ROM is not retried in a loop.
+        romm_api.download_cover_from_url.assert_called_once()
+        # The broken write leaves no sidecar behind.
+        assert _tmp(_cache(cover_cache_dir, 42)) not in file_store.files
+
+    @pytest.mark.asyncio
+    async def test_transport_error_does_not_fall_back(self, artwork_service, steam_config, romm_api, tmp_path):
+        """A transient transport error keeps today's retry-ladder behaviour — the
+        url_cover fallback fires ONLY on a definitive 404."""
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        romm_api.download_cover.side_effect = RommConnectionError("connection refused")
+
+        roms = [{"id": 42, "name": "Game", "path_cover_large": "/cover.png", "url_cover": self._URL_COVER}]
+        result = await artwork_service.download_artwork(
+            roms, emit_progress=_noop_emit_progress, is_cancelling=_not_cancelling
+        )
+        assert 42 not in result
+        romm_api.download_cover_from_url.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_applied_url_cover_lets_refresh_detect_a_later_change(
+        self, artwork_service, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        """Recording url_cover as the applied source keeps the refresh compare
+        truthful: a later fetch whose fresh source is the (now-fixed) RomM
+        path_cover is detected as a change instead of being silently skipped."""
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        romm_api.download_cover.side_effect = RommNotFoundError("HTTP 404: Not Found")
+        romm_api.download_cover_from_url.side_effect = _writing_download(file_store, b"cdn art")
+
+        applied: dict[int, str] = {}
+        path_cover = "/cover.png?ts=2026-07-11 12:00:00"
+        roms = [{"id": 42, "name": "Game", "path_cover_large": path_cover, "url_cover": self._URL_COVER}]
+        await artwork_service.download_artwork(
+            roms, emit_progress=_noop_emit_progress, is_cancelling=_not_cancelling, applied_sources=applied
+        )
+
+        # The row's cover_source would be the applied url_cover.
+        registry = {"42": {"app_id": 99999, "cover_source": applied[42]}}
+        # A later sync fetches the (fixed) RomM asset — the compare flags it changed.
+        scan = scan_cover_refresh_candidates([{"id": 42, "path_cover_large": path_cover}], registry)
+        assert scan.changed == [(42, 99999, path_cover)]
+
+
 # ── TestRefreshChangedCovers ──────────────────────────────────────────────────
 
 
@@ -508,6 +633,36 @@ class TestRefreshChangedCovers:
         # The fresh fingerprint is persisted — the exact opaque string.
         with uow:
             assert uow.roms.get(42).cover_source == self._NEW
+
+    @pytest.mark.asyncio
+    async def test_404_falls_back_to_url_cover_and_persists_applied_source(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        """A 404 on the changed RomM cover retries against ``url_cover`` and
+        persists the url_cover as the fingerprint (the source actually applied,
+        #1450) — not the 404'd RomM path."""
+        grid_dir = str(tmp_path / "grid")
+        steam_config.grid_dir.return_value = grid_dir
+        cache = _cache(cover_cache_dir, 42)
+        file_store.files[cache] = b"stale"
+        _seed_rom(uow, 42, app_id=99999, cover_source=self._OLD)
+        url_cover = "https://cdn.example.com/grid/abc.png"
+        romm_api.download_cover.side_effect = RommNotFoundError("HTTP 404: Not Found")
+        romm_api.download_cover_from_url.side_effect = _writing_download(file_store, b"cdn art")
+
+        refreshed = await artwork_service.refresh_changed_covers(
+            [{"id": 42, "name": "Game", "path_cover_large": self._NEW, "url_cover": url_cover}],
+            _registry(uow),
+            emit_progress=_noop_emit_progress,
+            is_cancelling=_not_cancelling,
+        )
+
+        assert refreshed == [{"rom_id": 42, "app_id": 99999}]
+        romm_api.download_cover_from_url.assert_called_once()
+        assert file_store.files[cache] == b"cdn art"
+        assert file_store.files[os.path.join(grid_dir, "99999p.png")] == b"cdn art"
+        with uow:
+            assert uow.roms.get(42).cover_source == url_cover
 
     @pytest.mark.asyncio
     async def test_null_fingerprint_with_cache_adopts_without_download(
@@ -1200,6 +1355,21 @@ class TestFetchCoverBase64:
         assert result == {"base64": None}
 
     @pytest.mark.asyncio
+    async def test_404_falls_back_to_url_cover(self, artwork_service, romm_api, file_store, cover_cache_dir):
+        romm_api.get_rom.return_value = {
+            "id": 42,
+            "path_cover_large": "/c.png",
+            "url_cover": "https://cdn.example.com/x.png",
+        }
+        romm_api.download_cover.side_effect = RommNotFoundError("HTTP 404: Not Found")
+        romm_api.download_cover_from_url.side_effect = _writing_download(file_store, b"cdn cover")
+
+        result = await artwork_service.fetch_cover_base64(42)
+        assert base64.b64decode(result["base64"]) == b"cdn cover"
+        romm_api.download_cover_from_url.assert_called_once()
+        assert file_store.files[_cache(cover_cache_dir, 42)] == b"cdn cover"
+
+    @pytest.mark.asyncio
     async def test_cache_hit_read_error_returns_none(self, artwork_service, file_store, romm_api, cover_cache_dir):
         cache = _cache(cover_cache_dir, 42)
         file_store.files[cache] = b"data"
@@ -1386,6 +1556,37 @@ class TestRefreshCover:
         assert romm_api.download_cover.call_args[0][0] == "/small.png"
         with uow:
             assert uow.roms.get(42).cover_path == _cache(cover_cache_dir, 42)
+
+    @pytest.mark.asyncio
+    async def test_404_falls_back_to_url_cover_and_records_it(
+        self,
+        artwork_service,
+        uow,
+        steam_config,
+        file_store,
+        romm_api,
+        cover_cache_dir,
+        tmp_path,
+    ):
+        """A 404 on the RomM cover retries against ``url_cover`` and records the
+        url_cover as the confirmed fingerprint (the applied source, #1450)."""
+        grid = str(tmp_path / "grid")
+        steam_config.grid_dir.return_value = grid
+        _seed_rom(uow, 42, app_id=999, cover_path="")
+        url_cover = "https://cdn.example.com/x.png"
+        romm_api.get_rom.return_value = {"id": 42, "path_cover_large": "/c.png", "url_cover": url_cover}
+        romm_api.download_cover.side_effect = RommNotFoundError("HTTP 404: Not Found")
+        romm_api.download_cover_from_url.side_effect = _writing_download(file_store, b"cdn")
+
+        result = await artwork_service.refresh_cover(42)
+
+        cache = _cache(cover_cache_dir, 42)
+        assert result == {"success": True, "message": "Cover refreshed", "cover_path": cache}
+        romm_api.download_cover_from_url.assert_called_once()
+        assert file_store.files[cache] == b"cdn"
+        with uow:
+            assert uow.roms.get(42).cover_path == cache
+            assert uow.roms.get(42).cover_source == url_cover
 
     @pytest.mark.asyncio
     async def test_download_failure_does_not_mutate_rom(

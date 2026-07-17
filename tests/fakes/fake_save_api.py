@@ -288,6 +288,9 @@ class FakeSaveApi:
     def download_cover(self, cover_url: str, dest: str) -> None:
         raise NotImplementedError
 
+    def download_cover_from_url(self, url: str, dest: str) -> None:
+        raise NotImplementedError
+
     def list_firmware(self) -> list[dict[str, Any]]:
         raise NotImplementedError
 

@@ -206,6 +206,7 @@ class ArtworkManager(Protocol):
         progress_step: int = 4,
         progress_total_steps: int = 6,
         label: str = "",
+        applied_sources: dict[int, str] | None = None,
     ) -> dict[Any, Any]: ...
 
     async def refresh_changed_covers(
