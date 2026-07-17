@@ -1,7 +1,9 @@
 """Tests for domain/cover_refresh.py — the cover-fingerprint compare kernel (#1386)."""
 
 from domain.cover_refresh import (
+    _strip_cover_ts,
     count_cover_refreshes,
+    cover_ts_only_change,
     fresh_cover_source,
     scan_cover_refresh_candidates,
 )
@@ -136,3 +138,58 @@ class TestCountCoverRefreshes:
     def test_empty_inputs_count_zero(self):
         assert count_cover_refreshes([], {}) == 0
         assert count_cover_refreshes([{"id": 1, "path_cover_large": _NEW}], {}) == 0
+
+
+class TestStripCoverTs:
+    """_strip_cover_ts — drop the ?ts= cache-buster, keep everything else (#1454)."""
+
+    def test_drops_ts_query(self):
+        assert _strip_cover_ts("/cover/big.png?ts=2026-01-01 00:00:00") == "/cover/big.png"
+
+    def test_no_query_unchanged(self):
+        assert _strip_cover_ts("/cover/big.png") == "/cover/big.png"
+
+    def test_keeps_other_params_and_drops_only_ts(self):
+        assert _strip_cover_ts("/c.png?w=100&ts=abc&h=200") == "/c.png?w=100&h=200"
+
+    def test_ts_only_param_leaves_bare_path(self):
+        assert _strip_cover_ts("/c.png?ts=abc") == "/c.png"
+
+    def test_bare_ts_key_without_value_dropped(self):
+        assert _strip_cover_ts("/c.png?ts") == "/c.png"
+
+    def test_does_not_strip_a_param_that_merely_starts_like_ts(self):
+        assert _strip_cover_ts("/c.png?tsx=1") == "/c.png?tsx=1"
+
+
+class TestCoverTsOnlyChange:
+    """cover_ts_only_change — the #1454 revalidation trigger's pure part."""
+
+    _OLD_TS = "/cover/big.png?ts=2026-01-01 00:00:00"
+    _NEW_TS = "/cover/big.png?ts=2026-07-11 12:00:00"
+
+    def test_ts_only_change_is_true(self):
+        assert cover_ts_only_change(self._OLD_TS, self._NEW_TS) is True
+
+    def test_identical_is_false(self):
+        assert cover_ts_only_change(self._NEW_TS, self._NEW_TS) is False
+
+    def test_different_path_is_false(self):
+        assert cover_ts_only_change(self._OLD_TS, "/cover/other.png?ts=2026-07-11 12:00:00") is False
+
+    def test_url_cover_to_path_cover_switch_is_false(self):
+        # A #1450 fallback→RomM transition must NOT be treated as ts-only.
+        assert cover_ts_only_change("https://cdn.example.com/x.png", self._NEW_TS) is False
+
+    def test_none_stored_is_false(self):
+        assert cover_ts_only_change(None, self._NEW_TS) is False
+
+    def test_none_fresh_is_false(self):
+        assert cover_ts_only_change(self._OLD_TS, None) is False
+
+    def test_empty_strings_are_false(self):
+        assert cover_ts_only_change("", self._NEW_TS) is False
+        assert cover_ts_only_change(self._OLD_TS, "") is False
+
+    def test_gaining_a_ts_from_a_bare_path_is_ts_only(self):
+        assert cover_ts_only_change("/cover/big.png", self._NEW_TS) is True

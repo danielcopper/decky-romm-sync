@@ -26,6 +26,9 @@ from lib.errors import RommNotFoundError
 
 _COVER_OLD = "/assets/romm/resources/roms/10/cover/big.png?ts=2026-01-01 00:00:00"
 _COVER_NEW = "/assets/romm/resources/roms/10/cover/big.png?ts=2026-07-11 12:00:00"
+# The ts-stripped asset path — the ETag is opaque to ``?ts=`` (the live-probe fact),
+# so the fake keys its validators here (#1454).
+_COVER_ASSET = "/assets/romm/resources/roms/10/cover/big.png"
 _URL_COVER = "https://cdn2.steamgriddb.com/grid/abc123.png"
 
 
@@ -85,6 +88,11 @@ def _apply_unit_events(harness):
 
 def _download_cover_urls(harness):
     return [args[0] for name, args, _kwargs in harness.romm.call_log if name == "download_cover"]
+
+
+def _download_cover_calls(harness):
+    """Every ``download_cover`` call as ``(url, kwargs)`` — kwargs carry the #1454 validators."""
+    return [(args[0], kwargs) for name, args, kwargs in harness.romm.call_log if name == "download_cover"]
 
 
 def _download_cover_from_url_urls(harness):
@@ -305,3 +313,53 @@ async def test_pure_no_changes_preview_keeps_zero_cover_count(harness):
     # Fully stamped + unchanged → no re-stamp owed either: the "Everything is up
     # to date." short-circuit stays intact (#1416).
     assert summary["restamp_platform_count"] == 0
+
+
+async def test_ts_only_rescan_revalidates_304_then_second_sync_does_zero_cover_work(harness):
+    """The #1454 win, end to end over the real wiring.
+
+    A rescan re-stamps every cover's ``?ts=`` without touching the files, so the
+    fingerprint changes; run two REVALIDATES with a conditional request (the file
+    server's ETag is stable across ts), draws a 304, keeps the cached bytes, and
+    adopts the fresh fingerprint. A third sync over the unchanged state then does
+    ZERO cover work — the fingerprint is clean.
+    """
+    _make_grid_resolvable(harness)
+    _seed_library(harness, cover=_COVER_OLD)
+    harness.romm.download_payloads[f"cover:{_COVER_OLD}"] = b"the cover bytes"
+    # The validator is stable across ?ts= values (the live-probe fact).
+    harness.romm.cover_etags[_COVER_ASSET] = '"etag-v1"'
+    _orchestrator(harness)._wait_for_unit_complete = _ack_with({"10": 7777})
+
+    # Run 1: fresh download seeds the cache, the cover_source, AND the validator sidecar.
+    await _run_sync(harness, "run-reval-1")
+    assert _cache_file(harness).read_bytes() == b"the cover bytes"
+    with harness.uow_factory() as uow:
+        assert uow.roms.get(10).cover_source == _COVER_OLD
+
+    # A rescan re-stamps the ts + bumps updated_at, but the file (and its ETag) is unchanged.
+    _seed_library(harness, cover=_COVER_NEW, updated_at="2027-01-01T00:00:00")
+    harness.romm.cover_etags[_COVER_ASSET] = '"etag-v1"'
+    harness.emit.reset_mock()
+    calls_before_run_2 = len(_download_cover_calls(harness))
+
+    await _run_sync(harness, "run-reval-2")
+
+    # Run 2 REVALIDATED: exactly one conditional GET carrying the stored validator,
+    # a 304 → the cache bytes were kept (never re-downloaded) and the fingerprint adopted.
+    run_2_calls = _download_cover_calls(harness)[calls_before_run_2:]
+    assert len(run_2_calls) == 1
+    assert run_2_calls[0][1] == {"etag": '"etag-v1"', "last_modified": None}
+    assert _cache_file(harness).read_bytes() == b"the cover bytes"  # untouched by the 304
+    with harness.uow_factory() as uow:
+        assert uow.roms.get(10).cover_source == _COVER_NEW
+    # A 304 needs no in-session tile re-apply — the emitted chunk carries no cover refresh.
+    events = _apply_unit_events(harness)
+    assert len(events) == 1
+    assert events[0]["cover_refreshes"] == []
+
+    # Run 3 (the whole point): unchanged server state → ZERO cover work.
+    harness.emit.reset_mock()
+    calls_before_run_3 = len(_download_cover_calls(harness))
+    await _run_sync(harness, "run-reval-3")
+    assert _download_cover_calls(harness)[calls_before_run_3:] == []

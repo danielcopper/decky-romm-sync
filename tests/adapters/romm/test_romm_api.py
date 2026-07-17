@@ -575,10 +575,22 @@ class TestDownloadRomContent:
 
 
 class TestDownloadCover:
-    def test_delegates_to_client_download(self):
+    def test_delegates_to_client_download_conditional(self):
         api, client = _make_api()
+        client.download_conditional = MagicMock()
         api.download_cover("/assets/covers/zelda.jpg", "/tmp/cover.jpg")
-        client.download.assert_called_once_with("/assets/covers/zelda.jpg", "/tmp/cover.jpg")
+        # Routes through the conditional GET so a validator can revalidate (#1454).
+        client.download_conditional.assert_called_once_with(
+            "/assets/covers/zelda.jpg", "/tmp/cover.jpg", etag=None, last_modified=None
+        )
+
+    def test_forwards_validators_for_conditional_request(self):
+        api, client = _make_api()
+        client.download_conditional = MagicMock()
+        api.download_cover("/c.png", "/tmp/c.png", etag='"abc"', last_modified="Wed, 01 Jan 2025 00:00:00 GMT")
+        client.download_conditional.assert_called_once_with(
+            "/c.png", "/tmp/c.png", etag='"abc"', last_modified="Wed, 01 Jan 2025 00:00:00 GMT"
+        )
 
 
 class TestDownloadCoverFromUrl:

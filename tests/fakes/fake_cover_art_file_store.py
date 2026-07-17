@@ -87,3 +87,6 @@ class FakeCoverArtFileStore:
         if path not in self.files:
             raise FileNotFoundError(path)
         return self.files[path]
+
+    def write_text_atomic(self, path: str, content: str) -> None:
+        self.files[path] = content.encode("utf-8")

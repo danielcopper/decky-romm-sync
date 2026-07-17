@@ -33,6 +33,9 @@ import pathlib
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from models.cover import CoverRevalidation
+
+from domain.cover_refresh import _strip_cover_ts
 from fakes._romm_save_semantics import check_add_save_conflict, compute_is_current, tag_filename
 from lib.errors import RommUnprocessableEntityError
 from lib.romm_paging import LIST_PAGE_SIZE
@@ -113,6 +116,12 @@ class FakeRommApi:
         # ``"cover:{cover_url}"`` for covers,
         # ``"save:{save_id}"`` for save content.
         self.download_payloads: dict[str, bytes] = {}
+        # Cover HTTP validators (#1454), keyed by the ts-stripped cover path (the
+        # ETag is opaque to ``?ts=`` per the live-server probe). A conditional
+        # ``download_cover`` whose stored validator matches the current one draws
+        # a 304; otherwise a 200 that returns these as the fresh validators.
+        self.cover_etags: dict[str, str] = {}
+        self.cover_last_modified: dict[str, str] = {}
 
         # Failure-injection seams.
         self._fail_on_next: Exception | None = None
@@ -359,12 +368,25 @@ class FakeRommApi:
             total = len(payload)
             progress_callback(total, total)
 
-    def download_cover(self, cover_url: str, dest: str) -> None:
-        self._log("download_cover", (cover_url, dest))
+    def download_cover(
+        self, cover_url: str, dest: str, *, etag: str | None = None, last_modified: str | None = None
+    ) -> CoverRevalidation:
+        self._log("download_cover", (cover_url, dest), {"etag": etag, "last_modified": last_modified})
         self._check_fail(self.download_cover_side_effect)
-        key = f"cover:{cover_url}"
-        payload = self.download_payloads.get(key, b"")
+        asset_key = _strip_cover_ts(cover_url)
+        server_etag = self.cover_etags.get(asset_key)
+        server_last_modified = self.cover_last_modified.get(asset_key)
+        # A conditional request whose stored validator still matches the current
+        # server one is Not Modified — the cached bytes stay untouched.
+        etag_matches = etag is not None and server_etag is not None and etag == server_etag
+        lm_matches = (
+            last_modified is not None and server_last_modified is not None and last_modified == server_last_modified
+        )
+        if etag_matches or (lm_matches and server_etag is None):
+            return CoverRevalidation(not_modified=True, etag=server_etag, last_modified=server_last_modified)
+        payload = self.download_payloads.get(f"cover:{cover_url}", b"")
         self._materialize_download(dest, payload)
+        return CoverRevalidation(not_modified=False, etag=server_etag, last_modified=server_last_modified)
 
     def download_cover_from_url(self, url: str, dest: str) -> None:
         self._log("download_cover_from_url", (url, dest))

@@ -22,6 +22,7 @@ from lib.errors import (
 from lib.romm_paging import LIST_PAGE_SIZE
 
 if TYPE_CHECKING:
+    from models.cover import CoverRevalidation
     from models.play_sessions import PlaySessionIngestEntry, PlaySessionIngestResponse
     from models.sync import (
         ClientSaveState,
@@ -157,8 +158,14 @@ class RommApiAdapter:
             on_meta=on_meta,
         )
 
-    def download_cover(self, cover_url: str, dest: str) -> None:
-        self._client.download(cover_url, dest)
+    def download_cover(
+        self, cover_url: str, dest: str, *, etag: str | None = None, last_modified: str | None = None
+    ) -> CoverRevalidation:
+        # Routes through the conditional GET (#1454): with a validator it may draw
+        # a 304 (dest untouched); without one it is a plain download. Either way
+        # the response's ETag/Last-Modified come back so the caller can record
+        # them for the next sync's revalidation.
+        return self._client.download_conditional(cover_url, dest, etag=etag, last_modified=last_modified)
 
     def download_cover_from_url(self, url: str, dest: str) -> None:
         self._client.download_external(url, dest)

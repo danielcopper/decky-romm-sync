@@ -12,7 +12,9 @@ import decky
 import pytest
 from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
+from models.cover import CoverRevalidation
 
+from domain.artwork_paths import cover_meta_filename
 from domain.cover_refresh import scan_cover_refresh_candidates
 from domain.rom import Rom
 from lib.errors import RommConnectionError, RommNotFoundError
@@ -53,18 +55,54 @@ def _tmp(path: str) -> str:
     return path + ".tmp"
 
 
-def _writing_download(file_store, payload: bytes = b"downloaded"):
+def _writing_download(file_store, payload: bytes = b"downloaded", *, resp_etag=None, resp_last_modified=None):
     """A ``download_cover`` side effect that materializes its dest (the ``.tmp`` sidecar).
 
     The atomic download streams to ``dest.tmp`` then renames it over the cache
     file, so the mock must actually create the dest for the rename to succeed —
-    mirroring the real adapter's post-download contract.
+    mirroring the real adapter's post-download contract. Returns a 200-style
+    :class:`CoverRevalidation` carrying the response validators (*resp_etag* /
+    *resp_last_modified*, default none) so the service records the cover-meta
+    sidecar (#1454); accepts and ignores the conditional request kwargs.
     """
 
-    def _dl(_url, dest):
+    def _dl(_url, dest, *, etag=None, last_modified=None):
         file_store.files[dest] = payload
+        return CoverRevalidation(not_modified=False, etag=resp_etag, last_modified=resp_last_modified)
 
     return _dl
+
+
+def _conditional_download(file_store, *, resp: CoverRevalidation, payload: bytes = b"fresh"):
+    """A ``download_cover`` side effect that returns *resp* (#1454).
+
+    Writes *payload* to dest only on a 200 (``not_modified=False``), mirroring the
+    real adapter: a 304 leaves the destination untouched so the cached bytes are
+    kept. The conditional request kwargs are recorded on the mock for assertions.
+    """
+
+    def _dl(_url, dest, *, etag=None, last_modified=None):
+        if not resp.not_modified:
+            file_store.files[dest] = payload
+        return resp
+
+    return _dl
+
+
+def _seed_meta(file_store, cover_cache_dir, rom_id, *, etag=None, last_modified=None):
+    """Stage a validator sidecar ({rom_id}.cover-meta.json) for *rom_id* (#1454)."""
+    import json
+
+    path = os.path.join(cover_cache_dir, cover_meta_filename(rom_id))
+    file_store.files[path] = json.dumps({"etag": etag, "last_modified": last_modified}).encode("utf-8")
+
+
+def _read_meta(file_store, cover_cache_dir, rom_id) -> dict[str, Any]:
+    """Return the parsed validator sidecar dict for *rom_id* (raises if absent)."""
+    import json
+
+    path = os.path.join(cover_cache_dir, cover_meta_filename(rom_id))
+    return json.loads(file_store.files[path])
 
 
 def _registry(uow):
@@ -784,10 +822,11 @@ class TestRefreshChangedCovers:
         _seed_rom(uow, 1, app_id=1001, name="One", cover_source=self._OLD)
         _seed_rom(uow, 2, app_id=1002, name="Two", cover_source=self._OLD)
 
-        def fail_first(url, dest):
+        def fail_first(url, dest, *, etag=None, last_modified=None):
             if "/1.png" in url:
                 raise Exception("network blip")
             file_store.files[dest] = b"fresh two"
+            return CoverRevalidation(not_modified=False, etag=None, last_modified=None)
 
         romm_api.download_cover.side_effect = fail_first
 
@@ -894,6 +933,188 @@ class TestRefreshChangedCovers:
         assert frames[0]["total_steps"] == 5
         # The refresh pass shares the ``covers`` sub-slice with the download loop (#1407).
         assert frames[0]["sub_stage"] == "covers"
+
+
+# ── TestCoverRevalidation ─────────────────────────────────────────────────────
+
+
+class TestCoverRevalidation:
+    """The #1454 conditional-request revalidation decision matrix.
+
+    A ts-only fingerprint change with a stored validator revalidates (304 keeps
+    the bytes, 200 replaces them) instead of re-downloading; anything else — no
+    validator, a non-ts path change — plain-downloads and (re)seeds the sidecar.
+    Driven mostly through ``refresh_changed_covers`` (the invalidation pass a
+    rescan actually hits) so the DB fingerprint persist is asserted directly.
+    """
+
+    _OLD = "/cover/big.png?ts=2026-01-01 00:00:00"
+    _NEW = "/cover/big.png?ts=2026-07-11 12:00:00"
+
+    @pytest.mark.asyncio
+    async def test_ts_only_change_304_keeps_bytes_and_adopts_fingerprint(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        grid_dir = str(tmp_path / "grid")
+        steam_config.grid_dir.return_value = grid_dir
+        cache = _cache(cover_cache_dir, 42)
+        file_store.files[cache] = b"cached bytes"
+        _seed_meta(file_store, cover_cache_dir, 42, etag='"v1"')
+        _seed_rom(uow, 42, app_id=99999, cover_source=self._OLD)
+        romm_api.download_cover.side_effect = _conditional_download(
+            file_store, resp=CoverRevalidation(not_modified=True, etag='"v1"', last_modified=None)
+        )
+
+        refreshed = await artwork_service.refresh_changed_covers(
+            [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            _registry(uow),
+            emit_progress=_noop_emit_progress,
+            is_cancelling=_not_cancelling,
+        )
+
+        # The conditional request carried the stored validator.
+        assert romm_api.download_cover.call_args.kwargs["etag"] == '"v1"'
+        # A 304 kept the cached bytes (no re-download over them).
+        assert file_store.files[cache] == b"cached bytes"
+        # The fresh fingerprint was adopted so the NEXT sync is clean.
+        with uow:
+            assert uow.roms.get(42).cover_source == self._NEW
+        # No tile re-apply and no grid churn — the tile was already current.
+        assert refreshed == []
+        assert os.path.join(grid_dir, "99999p.png") not in file_store.files
+
+    @pytest.mark.asyncio
+    async def test_ts_only_change_200_replaces_bytes_and_validator(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        cache = _cache(cover_cache_dir, 42)
+        file_store.files[cache] = b"stale bytes"
+        _seed_meta(file_store, cover_cache_dir, 42, etag='"v1"')
+        _seed_rom(uow, 42, app_id=99999, cover_source=self._OLD)
+        romm_api.download_cover.side_effect = _conditional_download(
+            file_store,
+            resp=CoverRevalidation(not_modified=False, etag='"v2"', last_modified=None),
+            payload=b"new bytes",
+        )
+
+        await artwork_service.refresh_changed_covers(
+            [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            _registry(uow),
+            emit_progress=_noop_emit_progress,
+            is_cancelling=_not_cancelling,
+        )
+
+        # A genuine 200 replaced the cache bytes and refreshed the validator.
+        assert romm_api.download_cover.call_args.kwargs["etag"] == '"v1"'
+        assert file_store.files[cache] == b"new bytes"
+        assert _read_meta(file_store, cover_cache_dir, 42)["etag"] == '"v2"'
+        with uow:
+            assert uow.roms.get(42).cover_source == self._NEW
+
+    @pytest.mark.asyncio
+    async def test_no_validator_plain_downloads_and_seeds_one(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        cache = _cache(cover_cache_dir, 42)
+        file_store.files[cache] = b"stale bytes"
+        # No sidecar seeded — a ts change can't revalidate.
+        _seed_rom(uow, 42, app_id=99999, cover_source=self._OLD)
+        romm_api.download_cover.side_effect = _conditional_download(
+            file_store, resp=CoverRevalidation(not_modified=False, etag='"v9"', last_modified=None), payload=b"fresh"
+        )
+
+        await artwork_service.refresh_changed_covers(
+            [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            _registry(uow),
+            emit_progress=_noop_emit_progress,
+            is_cancelling=_not_cancelling,
+        )
+
+        # No stored validator → no conditional header, a plain download…
+        assert romm_api.download_cover.call_args.kwargs["etag"] is None
+        assert file_store.files[cache] == b"fresh"
+        # …and the response validator is SEEDED for the next sync to revalidate.
+        assert _read_meta(file_store, cover_cache_dir, 42)["etag"] == '"v9"'
+
+    @pytest.mark.asyncio
+    async def test_non_ts_path_change_plain_downloads(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        cache = _cache(cover_cache_dir, 42)
+        file_store.files[cache] = b"old bytes"
+        _seed_meta(file_store, cover_cache_dir, 42, etag='"v1"')
+        _seed_rom(uow, 42, app_id=99999, cover_source="/cover/old.png?ts=1")
+        romm_api.download_cover.side_effect = _conditional_download(
+            file_store, resp=CoverRevalidation(not_modified=False, etag='"v2"', last_modified=None), payload=b"fresh"
+        )
+
+        # The path itself changed (old.png → new.png), not just the ts — even with
+        # a validator present this must NOT revalidate.
+        await artwork_service.refresh_changed_covers(
+            [{"id": 42, "name": "Game", "path_cover_large": "/cover/new.png?ts=2"}],
+            _registry(uow),
+            emit_progress=_noop_emit_progress,
+            is_cancelling=_not_cancelling,
+        )
+
+        assert romm_api.download_cover.call_args.kwargs["etag"] is None
+        assert file_store.files[cache] == b"fresh"
+
+    @pytest.mark.asyncio
+    async def test_revalidation_transport_error_keeps_old_bytes_and_fingerprint(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        """A conditional-request transport error is today's failed-download path."""
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        cache = _cache(cover_cache_dir, 42)
+        file_store.files[cache] = b"old bytes"
+        _seed_meta(file_store, cover_cache_dir, 42, etag='"v1"')
+        _seed_rom(uow, 42, app_id=99999, cover_source=self._OLD)
+        romm_api.download_cover.side_effect = RommConnectionError("connection refused")
+
+        refreshed = await artwork_service.refresh_changed_covers(
+            [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            _registry(uow),
+            emit_progress=_noop_emit_progress,
+            is_cancelling=_not_cancelling,
+        )
+
+        # Nothing advanced: old bytes, old fingerprint, no refresh entry, no sidecar churn.
+        assert file_store.files[cache] == b"old bytes"
+        assert _tmp(cache) not in file_store.files
+        with uow:
+            assert uow.roms.get(42).cover_source == self._OLD
+        assert refreshed == []
+
+    @pytest.mark.asyncio
+    async def test_apply_path_304_adopts_fresh_source_via_accumulator(
+        self, artwork_service, uow, steam_config, file_store, romm_api, cover_cache_dir, tmp_path
+    ):
+        """The download_artwork apply path revalidates too, threading the fresh
+        source through ``applied_sources`` (the reporter persists it as cover_source)."""
+        steam_config.grid_dir.return_value = str(tmp_path / "grid")
+        cache = _cache(cover_cache_dir, 42)
+        file_store.files[cache] = b"cached bytes"
+        _seed_meta(file_store, cover_cache_dir, 42, etag='"v1"')
+        _seed_rom(uow, 42, app_id=99999, cover_source=self._OLD)
+        romm_api.download_cover.side_effect = _conditional_download(
+            file_store, resp=CoverRevalidation(not_modified=True, etag='"v1"', last_modified=None)
+        )
+
+        applied: dict[int, str] = {}
+        result = await artwork_service.download_artwork(
+            [{"id": 42, "name": "Game", "path_cover_large": self._NEW}],
+            emit_progress=_noop_emit_progress,
+            is_cancelling=_not_cancelling,
+            applied_sources=applied,
+        )
+
+        assert result[42] == cache
+        assert file_store.files[cache] == b"cached bytes"  # 304 kept the bytes
+        assert applied[42] == self._NEW  # fresh fingerprint flows to the reporter
 
 
 # ── TestDownloadArtworkProgress ───────────────────────────────────────────────
@@ -1051,6 +1272,18 @@ class TestRemoveArtworkFiles:
         entry = {"cover_path": "", "app_id": 100001}
         artwork_service.remove_artwork_files(grid, 42, entry)
         assert cache not in file_store.files
+
+    def test_removes_validator_sidecar(self, artwork_service, file_store, cover_cache_dir, tmp_path):
+        """The #1454 cover-meta sidecar is swept with the removed shortcut's cache."""
+        grid = str(tmp_path)
+        cache = _cache(cover_cache_dir, 42)
+        file_store.files[cache] = b"cache cover"
+        _seed_meta(file_store, cover_cache_dir, 42, etag='"v1"')
+        meta = os.path.join(cover_cache_dir, cover_meta_filename(42))
+        entry = {"cover_path": "", "app_id": 100001}
+        artwork_service.remove_artwork_files(grid, 42, entry)
+        assert cache not in file_store.files
+        assert meta not in file_store.files
 
     def test_removes_all_types(self, artwork_service, file_store, cover_cache_dir, tmp_path):
         grid = str(tmp_path)
@@ -1300,11 +1533,7 @@ class TestFetchCoverBase64:
     @pytest.mark.asyncio
     async def test_miss_downloads_from_romm_into_cache(self, artwork_service, file_store, romm_api, cover_cache_dir):
         romm_api.get_rom.return_value = {"id": 42, "path_cover_large": "/c.png"}
-
-        def fake_download(_url: str, dest: str) -> None:
-            file_store.files[dest] = b"downloaded cover"
-
-        romm_api.download_cover.side_effect = fake_download
+        romm_api.download_cover.side_effect = _writing_download(file_store, b"downloaded cover")
 
         result = await artwork_service.fetch_cover_base64(42)
         cache = _cache(cover_cache_dir, 42)
@@ -1319,11 +1548,7 @@ class TestFetchCoverBase64:
     async def test_works_without_local_db_row(self, artwork_service, uow, romm_api, file_store):
         """A group version with no local ``roms`` row still fetches its cover."""
         romm_api.get_rom.return_value = {"id": 77, "path_cover_small": "/s.png"}
-
-        def fake_download(_url: str, dest: str) -> None:
-            file_store.files[dest] = b"server-only cover"
-
-        romm_api.download_cover.side_effect = fake_download
+        romm_api.download_cover.side_effect = _writing_download(file_store, b"server-only cover")
 
         result = await artwork_service.fetch_cover_base64(77)
         assert base64.b64decode(result["base64"]) == b"server-only cover"
@@ -1405,11 +1630,7 @@ class TestRefreshCover:
         steam_config.grid_dir.return_value = grid
         _seed_rom(uow, 42, app_id=999, platform_slug="plat", name="Game", cover_path="")
         romm_api.get_rom.return_value = {"id": 42, "path_cover_large": "/c.png"}
-
-        def fake_download(_url: str, dest: str) -> None:
-            file_store.files[dest] = b"new cover bytes"
-
-        romm_api.download_cover.side_effect = fake_download
+        romm_api.download_cover.side_effect = _writing_download(file_store, b"new cover bytes")
 
         result = await artwork_service.refresh_cover(42)
 
@@ -1544,11 +1765,7 @@ class TestRefreshCover:
         steam_config.grid_dir.return_value = grid
         _seed_rom(uow, 42, app_id=999, cover_path="")
         romm_api.get_rom.return_value = {"id": 42, "path_cover_small": "/small.png"}
-
-        def fake_download(_url: str, dest: str) -> None:
-            file_store.files[dest] = b"small"
-
-        romm_api.download_cover.side_effect = fake_download
+        romm_api.download_cover.side_effect = _writing_download(file_store, b"small")
 
         result = await artwork_service.refresh_cover(42)
         assert result["success"] is True
@@ -1777,6 +1994,22 @@ class TestPruneOrphanedCoverCache:
         artwork_service.prune_orphaned_cover_cache()
         assert live in file_store.files  # the live cover survives
         assert stale_tmp not in file_store.files  # the sidecar is swept
+
+    def test_sweeps_orphaned_validator_sidecar_but_keeps_live_one(
+        self, artwork_service, uow, file_store, cover_cache_dir
+    ):
+        """A validator sidecar (#1454) is pruned when its rom_id has no row, kept when live."""
+        live_meta = os.path.join(cover_cache_dir, cover_meta_filename(1))
+        orphan_meta = os.path.join(cover_cache_dir, cover_meta_filename(3))
+        _seed_meta(file_store, cover_cache_dir, 1, etag='"live"')
+        _seed_meta(file_store, cover_cache_dir, 3, etag='"orphan"')
+        file_store.files[_cache(cover_cache_dir, 1)] = b"live"
+        file_store.made_dirs.add(cover_cache_dir)
+        _seed_rom(uow, 1, app_id=1001)
+
+        artwork_service.prune_orphaned_cover_cache()
+        assert live_meta in file_store.files
+        assert orphan_meta not in file_store.files
 
     def test_no_cache_dir_no_crash(self, artwork_service, file_store):
         # is_dir is False for a dir with no files and no make_dirs record.

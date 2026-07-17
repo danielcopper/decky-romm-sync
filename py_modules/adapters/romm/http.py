@@ -19,6 +19,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar
 
+from models.cover import CoverRevalidation
+
 from lib.certifi_bundle import ca_bundle as _ca_bundle
 from lib.errors import (
     RommApiError,
@@ -525,6 +527,66 @@ class RommHttpAdapter:
                 raise self.translate_http_error(exc, url, "GET") from exc
 
         return self.with_retry(_do_download)
+
+    def download_conditional(
+        self, path: str, dest: str, *, etag: str | None = None, last_modified: str | None = None
+    ) -> CoverRevalidation:
+        """GET *path* into *dest*, revalidating with a conditional request when a validator is given (#1454).
+
+        An authenticated RomM-origin GET (bearer + UA, same as :meth:`download`)
+        that attaches ``If-None-Match: <etag>`` (preferred) or, failing that,
+        ``If-Modified-Since: <last_modified>`` when a validator is supplied:
+
+        - **304 Not Modified** → *dest* is left untouched (the cached bytes are
+          still current); returns ``not_modified=True`` with whatever validators
+          the 304 carried.
+        - **200 OK** → streams the fresh bytes into *dest*; returns
+          ``not_modified=False`` with the response's validators.
+
+        With no validator supplied it is a plain unconditional GET that always
+        returns ``not_modified=False`` plus the response validators — the seed
+        path that records a validator for the *next* sync to revalidate against.
+        No ``Range``/resume (covers are small); transient errors retry through
+        :meth:`with_retry`, a 404 raises ``RommNotFoundError`` without retry.
+        """
+        encoded_path = urllib.parse.quote(path, safe="/:?=&@")
+        url = self._settings["romm_url"].rstrip("/") + encoded_path
+        dest_path = Path(dest)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        def _do_conditional():
+            req = urllib.request.Request(url, method="GET")
+            self._apply_default_headers(req)
+            if etag:
+                req.add_header("If-None-Match", etag)
+            elif last_modified:
+                req.add_header("If-Modified-Since", last_modified)
+            try:
+                with urllib.request.urlopen(req, context=self.ssl_context(), timeout=self._CONNECT_TIMEOUT) as resp:
+                    raw_sock = getattr(getattr(getattr(resp, "fp", None), "raw", None), "_sock", None)
+                    if raw_sock is not None:
+                        raw_sock.settimeout(self._READ_TIMEOUT)
+                    new_etag = resp.headers.get("ETag")
+                    new_last_modified = resp.headers.get("Last-Modified")
+                    total, downloaded = self._stream_to_file(
+                        resp, dest_path, block_size=self._DOWNLOAD_BLOCK_SIZE, url=url
+                    )
+                self._validate_download(total, downloaded)
+                return CoverRevalidation(not_modified=False, etag=new_etag, last_modified=new_last_modified)
+            except urllib.error.HTTPError as exc:
+                if exc.code == 304:
+                    return CoverRevalidation(
+                        not_modified=True,
+                        etag=exc.headers.get("ETag"),
+                        last_modified=exc.headers.get("Last-Modified"),
+                    )
+                raise self.translate_http_error(exc, url, "GET") from exc
+            except RommApiError:
+                raise
+            except Exception as exc:
+                raise self.translate_http_error(exc, url, "GET") from exc
+
+        return self.with_retry(_do_conditional)
 
     # Schemes an external ``url_cover`` fetch may use. A server-supplied
     # ``url_cover`` is untrusted input, so anything else (``file:``, ``ftp:``,

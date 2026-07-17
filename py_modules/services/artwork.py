@@ -21,18 +21,32 @@ such as SteamGridDB / IGDB) before giving up — the RomM bearer is never sent t
 that third-party host (#1450). The fingerprint records the source *actually*
 applied (``url_cover`` on a fallback), so a later fixed RomM asset or changed
 ``url_cover`` is still detected as a change.
+
+When the fingerprint changed by ONLY its ``?ts=`` cache-buster (a server-side
+rescan re-stamps every ROM's ``updated_at`` without touching the cover files),
+the cached bytes are REVALIDATED with a conditional request instead of
+re-downloaded (#1454): each regular download records the response's HTTP
+validator (``ETag`` / ``Last-Modified``) in a ``{rom_id}.cover-meta.json``
+sidecar beside the cache file, and a ts-only fingerprint change re-requests with
+``If-None-Match`` (else ``If-Modified-Since``) — a ``304`` keeps the bytes and
+adopts the fresh fingerprint, a ``200`` replaces them. Validators are an optional
+capability: a ROM with no stored validator (or a server/proxy that sends none)
+falls back to a plain download, unchanged.
 """
 
 from __future__ import annotations
 
 import base64
+import json
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.artwork_paths import (
+    COVER_META_SUFFIX,
     TMP_SUFFIX,
     cache_filename,
+    cover_meta_filename,
     final_filename,
     grid_image_filenames,
     is_shortcut_app_id,
@@ -40,10 +54,28 @@ from domain.artwork_paths import (
     staging_filename,
     with_tmp_suffix,
 )
-from domain.cover_refresh import scan_cover_refresh_candidates
+from domain.cover_refresh import cover_ts_only_change, scan_cover_refresh_candidates
 from domain.sync_stage import SyncStage
 from lib.errors import RommNotFoundError
 from lib.list_result import ErrorCode
+
+
+@dataclass(frozen=True)
+class _CoverWrite:
+    """The outcome of one cover download-or-revalidate (#1454, service-internal).
+
+    ``applied_source`` is the cover source now reflected by the cache bytes —
+    the fresh ``cover_url`` normally, or the ROM's ``url_cover`` when the #1450
+    fallback wins. ``not_modified`` is ``True`` when a conditional request drew a
+    304 (the cache bytes were kept). ``etag``/``last_modified`` are the validators
+    to record in the sidecar, or ``None`` when the server sent none.
+    """
+
+    applied_source: str
+    not_modified: bool
+    etag: str | None
+    last_modified: str | None
+
 
 # Emit a cover-download progress frame on the first cover, every Nth cover, and
 # the last one, so a large library's cover phase narrates its progress (a moving
@@ -102,6 +134,10 @@ class ArtworkService:
     def _cache_path(self, rom_id: int | str) -> str:
         """Return the per-ROM cover cache path for *rom_id*."""
         return os.path.join(self._cover_cache_dir, cache_filename(rom_id))
+
+    def _meta_path(self, rom_id: int | str) -> str:
+        """Return the per-ROM cover-validator sidecar path for *rom_id* (#1454)."""
+        return os.path.join(self._cover_cache_dir, cover_meta_filename(rom_id))
 
     # ── Existing cover path check ──────────────────────────────────────────
 
@@ -193,7 +229,7 @@ class ArtworkService:
 
             rom_id = rom["id"]
             cache_path = self._cache_path(rom_id)
-            existing = self._resolve_cached_cover(rom_id, cache_path, grid, cover_url)
+            existing, stored_source = self._resolve_cached_cover(rom_id, cache_path, grid, cover_url)
             if existing:
                 cover_paths[rom_id] = existing
                 if applied_sources is not None:
@@ -201,19 +237,33 @@ class ArtworkService:
                 continue
 
             try:
-                applied = await self._loop.run_in_executor(
-                    None, self._download_cover_atomic, cover_url, cache_path, rom.get("url_cover")
+                result = await self._loop.run_in_executor(
+                    None,
+                    self._fetch_and_record_cover,
+                    rom_id,
+                    cover_url,
+                    cache_path,
+                    rom.get("url_cover"),
+                    stored_source,
                 )
                 cover_paths[rom_id] = cache_path
                 if applied_sources is not None:
-                    applied_sources[rom_id] = applied
+                    applied_sources[rom_id] = result.applied_source
             except Exception as e:
                 self._logger.warning(f"Failed to download artwork for {rom['name']}: {e}")
 
         return cover_paths
 
-    def _resolve_cached_cover(self, rom_id: int, cache_path: str, grid: str, cover_url: str) -> str | None:
-        """Return a ready cache cover for *rom_id*, or ``None`` when a download is needed.
+    def _resolve_cached_cover(
+        self, rom_id: int, cache_path: str, grid: str, cover_url: str
+    ) -> tuple[str | None, str | None]:
+        """Resolve *rom_id*'s cache cover, returning ``(reuse_path, stored_source)``.
+
+        ``reuse_path`` is a ready cache cover to reuse, or ``None`` when a
+        download is needed; ``stored_source`` is the persisted
+        ``roms.cover_source`` fingerprint (surfaced so the caller can decide
+        between a plain download and a #1454 conditional revalidation without a
+        second DB read).
 
         The reuse gate is fingerprint-aware (#1386): a persisted
         ``roms.cover_source`` that differs from the fresh *cover_url* means the
@@ -237,14 +287,14 @@ class ArtworkService:
             seedable = rom is not None and rom.shortcut_app_id is not None and not self._is_multi_version(uow, rom)
             app_id = rom.shortcut_app_id if rom is not None else None
         if stored_source is not None and stored_source != cover_url:
-            return None
+            return None, stored_source
         if self._cover_art_file_store.exists(cache_path):
-            return cache_path
+            return cache_path, stored_source
         if seedable and app_id is not None:
             final = os.path.join(grid, final_filename(app_id))
             if self._cover_art_file_store.exists(final) and self._seed_cache(final, cache_path):
-                return cache_path
-        return None
+                return cache_path, stored_source
+        return None, stored_source
 
     @staticmethod
     def _is_multi_version(uow: Any, rom: Any) -> bool:
@@ -339,8 +389,9 @@ class ArtworkService:
                     total_steps=progress_total_steps,
                     sub_stage="covers",
                 )
+            stored_source = registry.get(str(rom_id), {}).get("cover_source")
             ok = await self._loop.run_in_executor(
-                None, self._refresh_one_cover_io, rom_id, app_id, cover_url, grid, url_covers.get(rom_id)
+                None, self._refresh_one_cover_io, rom_id, app_id, cover_url, grid, url_covers.get(rom_id), stored_source
             )
             if ok:
                 refreshed.append({"rom_id": rom_id, "app_id": app_id})
@@ -382,28 +433,45 @@ class ArtworkService:
                 uow.roms.save(rom)
 
     def _refresh_one_cover_io(
-        self, rom_id: int, app_id: int, cover_url: str, grid: str | None, url_cover: str | None = None
+        self,
+        rom_id: int,
+        app_id: int,
+        cover_url: str,
+        grid: str | None,
+        url_cover: str | None = None,
+        stored_source: str | None = None,
     ) -> bool:
-        """Re-download one changed cover, republish its grid copy, persist the fingerprint.
+        """Re-download (or revalidate) one changed cover, republish, persist the fingerprint.
 
-        Ordered so nothing advances on failure: the atomic download either
-        replaces the cache in full or leaves the old bytes; only a successful
-        download republishes the grid ``{app_id}p.png`` and persists the new
-        ``cover_source`` (a missing grid dir skips the publish but still
-        persists — the cache is the source of truth). The persisted fingerprint
-        is the source actually applied — *url_cover* when the RomM asset 404s
-        and the fallback wins (#1450), else *cover_url*. Returns whether the
-        cover was refreshed.
+        Ordered so nothing advances on failure: the fetch either replaces the
+        cache in full (200), keeps it on a 304 revalidation (#1454), or leaves the
+        old bytes on error. A 200 republishes the grid ``{app_id}p.png`` (a missing
+        grid dir skips the publish — the cache is the source of truth), persists
+        the new ``cover_source``, and returns ``True`` so the frontend re-applies
+        the tile; a 304 only persists the fingerprint (the bytes and the tile are
+        already current) and returns ``False``; a failure persists nothing and
+        returns ``False``. The persisted fingerprint is the source actually
+        applied — *url_cover* when the RomM asset 404s and the fallback wins
+        (#1450), else *cover_url*. When *stored_source* differs from *cover_url* by
+        only its ``?ts=`` and a validator sidecar exists, the fetch revalidates
+        with a conditional request instead of re-downloading.
         """
         cache_path = self._cache_path(rom_id)
         try:
-            applied = self._download_cover_atomic(cover_url, cache_path, url_cover)
+            result = self._fetch_and_record_cover(rom_id, cover_url, cache_path, url_cover, stored_source)
         except Exception as e:
             self._logger.warning(f"Cover refresh: failed to download cover for rom {rom_id}: {e}")
             return False
+        if result.not_modified:
+            # A 304 confirmed the cached bytes — and the already-published grid
+            # tile — are current; only the fingerprint advances. No republish and
+            # no ``refreshed`` entry (the frontend need not re-apply an unchanged
+            # tile), the whole point of the #1454 revalidation.
+            self._persist_cover_source(rom_id, result.applied_source)
+            return False
         if grid:
             self.finalize_cover_path(grid, cache_path, app_id, str(rom_id))
-        self._persist_cover_source(rom_id, applied)
+        self._persist_cover_source(rom_id, result.applied_source)
         return True
 
     def _persist_cover_source(self, rom_id: int, source: str) -> None:
@@ -417,47 +485,134 @@ class ArtworkService:
 
     # ── Atomic write helpers ───────────────────────────────────────────────
 
-    def _download_cover_atomic(self, cover_url: str, dest: str, url_cover: str | None = None) -> str:
-        """Download the cover into ``dest.tmp`` then atomically rename over *dest*.
+    def _fetch_and_record_cover(
+        self, rom_id: int | str, cover_url: str, cache_path: str, url_cover: str | None, stored_source: str | None
+    ) -> _CoverWrite:
+        """Download-or-revalidate *rom_id*'s cover and record its validator sidecar (#1454).
 
-        Returns the cover source actually applied — *cover_url* for the normal
-        RomM-asset fetch, or *url_cover* when the RomM asset returns a definitive
-        404 and the external ``url_cover`` fallback succeeds (#1450). The caller
-        records that source so the ``cover_source`` fingerprint stays truthful.
+        Sync worker for the executor. Revalidates with a conditional request
+        (instead of re-downloading) only when *stored_source* differs from
+        *cover_url* by ONLY its ``?ts=`` cache-buster, a validator sidecar
+        exists, and the cache file is present — the case a server-side rescan
+        creates. Otherwise it is a plain download. Either way the sidecar is
+        refreshed from the response so the *next* sync can revalidate. Returns
+        the :class:`_CoverWrite` the caller persists as the ``cover_source``
+        fingerprint.
+        """
+        etag, last_modified = self._read_cover_meta(rom_id)
+        revalidate = (
+            bool(etag or last_modified)
+            and cover_ts_only_change(stored_source, cover_url)
+            and self._cover_art_file_store.exists(cache_path)
+        )
+        result = self._download_cover_atomic(
+            cover_url,
+            cache_path,
+            url_cover,
+            etag if revalidate else None,
+            last_modified if revalidate else None,
+        )
+        self._record_cover_meta(rom_id, result)
+        return result
 
-        A reader of *dest* sees either the old file or the complete new one,
-        never a partially-streamed download. The sidecar is removed on any
-        failure so a broken write leaves no ``.tmp`` behind.
+    def _download_cover_atomic(
+        self,
+        cover_url: str,
+        dest: str,
+        url_cover: str | None = None,
+        etag: str | None = None,
+        last_modified: str | None = None,
+    ) -> _CoverWrite:
+        """Download-or-revalidate the cover into ``dest.tmp`` then atomically publish over *dest*.
+
+        With *etag*/*last_modified* the RomM fetch is a conditional request: a
+        304 leaves *dest* untouched (the cache bytes are still current, #1454) and
+        nothing is renamed; a 200 renames the freshly-streamed ``dest.tmp`` over
+        *dest*. Without a validator it is a plain download. Returns the applied
+        source (*cover_url*, or *url_cover* when the #1450 404-fallback wins) plus
+        the response validators. A reader of *dest* sees either the old file or
+        the complete new one, never a partial write; the sidecar is removed on any
+        failure — and on a 304 (no bytes streamed) — so no ``.tmp`` lingers.
         """
         tmp = with_tmp_suffix(dest)
         try:
-            applied = self._fetch_cover_to_tmp(cover_url, tmp, url_cover)
-            self._cover_art_file_store.rename(tmp, dest)
-            return applied
+            result = self._fetch_cover_to_tmp(cover_url, tmp, url_cover, etag, last_modified)
+            if result.not_modified:
+                self._cover_art_file_store.remove_file(tmp)
+            else:
+                self._cover_art_file_store.rename(tmp, dest)
+            return result
         except Exception:
             self._cover_art_file_store.remove_file(tmp)
             raise
 
-    def _fetch_cover_to_tmp(self, cover_url: str, tmp: str, url_cover: str | None) -> str:
-        """Fetch the RomM cover into *tmp*, falling back to *url_cover* on a 404.
+    def _fetch_cover_to_tmp(
+        self, cover_url: str, tmp: str, url_cover: str | None, etag: str | None, last_modified: str | None
+    ) -> _CoverWrite:
+        """Fetch the RomM cover into *tmp* (conditionally), falling back to *url_cover* on a 404.
 
-        Returns the source actually written (``cover_url`` normally, *url_cover*
-        on a successful fallback). ONLY a definitive RomM 404
-        (:class:`RommNotFoundError`) with a non-empty *url_cover* triggers the
-        external fetch — every other failure (transport, 5xx, auth) propagates
-        unchanged, keeping today's retry-ladder behaviour and no fallback. The
-        external fetch goes out WITHOUT the RomM bearer (host-bound token,
-        #1450) and is logged at INFO with no secret material.
+        Returns the source actually applied (``cover_url`` normally, *url_cover*
+        on a successful fallback) plus the outcome's validators. A conditional
+        request (when *etag*/*last_modified* are given) may draw a 304 — *tmp* is
+        then left unwritten and ``not_modified`` is ``True``. ONLY a definitive
+        RomM 404 (:class:`RommNotFoundError`) with a non-empty *url_cover*
+        triggers the external fetch — every other failure (transport, 5xx, auth)
+        propagates unchanged, keeping today's retry-ladder behaviour and no
+        fallback. The external fetch goes out WITHOUT the RomM bearer (host-bound
+        token, #1450), carries no validator (its revalidation is out of scope,
+        #1454), and is logged at INFO with no secret material.
         """
         try:
-            self._romm_api.download_cover(cover_url, tmp)
-            return cover_url
+            reval = self._romm_api.download_cover(cover_url, tmp, etag=etag, last_modified=last_modified)
+            return _CoverWrite(
+                applied_source=cover_url,
+                not_modified=reval.not_modified,
+                etag=reval.etag,
+                last_modified=reval.last_modified,
+            )
         except RommNotFoundError:
             if not url_cover:
                 raise
             self._romm_api.download_cover_from_url(url_cover, tmp)
             self._logger.info(f"Cover asset 404 ({cover_url}); applied url_cover fallback")
-            return url_cover
+            return _CoverWrite(applied_source=url_cover, not_modified=False, etag=None, last_modified=None)
+
+    def _read_cover_meta(self, rom_id: int | str) -> tuple[str | None, str | None]:
+        """Return the stored ``(etag, last_modified)`` validators for *rom_id*, or ``(None, None)``.
+
+        Reads the ``{rom_id}.cover-meta.json`` sidecar (#1454). A missing,
+        unreadable, or malformed sidecar degrades to ``(None, None)`` — the
+        signal to plain-download rather than revalidate, so a corrupt sidecar is
+        never fatal.
+        """
+        meta_path = self._meta_path(rom_id)
+        if not self._cover_art_file_store.exists(meta_path):
+            return None, None
+        try:
+            data = json.loads(self._cover_art_file_store.read_bytes(meta_path))
+        except Exception:
+            return None, None
+        if not isinstance(data, dict):
+            return None, None
+        etag = data.get("etag")
+        last_modified = data.get("last_modified")
+        return (etag if isinstance(etag, str) else None, last_modified if isinstance(last_modified, str) else None)
+
+    def _record_cover_meta(self, rom_id: int | str, result: _CoverWrite) -> None:
+        """Persist (or clear) *rom_id*'s validator sidecar from a fetch *result* (#1454).
+
+        Writes the sidecar when the response carried a validator; on a genuine
+        (re)download that carried NONE, removes any stale sidecar so the next sync
+        plain-downloads rather than revalidating bytes it can't validate. A 304
+        with no fresh validator keeps the existing sidecar — it still describes
+        the unchanged cached bytes.
+        """
+        meta_path = self._meta_path(rom_id)
+        if result.etag or result.last_modified:
+            content = json.dumps({"etag": result.etag, "last_modified": result.last_modified})
+            self._cover_art_file_store.write_text_atomic(meta_path, content)
+        elif not result.not_modified:
+            self._cover_art_file_store.remove_file(meta_path)
 
     def _copy_atomic(self, src: str, dest: str) -> None:
         """Copy *src* into ``dest.tmp`` then atomically rename over *dest*.
@@ -528,6 +683,10 @@ class ArtworkService:
         cache_path = self._cache_path(rom_id)
         if self._cover_art_file_store.exists(cache_path):
             self._cover_art_file_store.remove_file(cache_path)
+        # Remove the per-ROM cover-validator sidecar (#1454)
+        meta_path = self._meta_path(rom_id)
+        if self._cover_art_file_store.exists(meta_path):
+            self._cover_art_file_store.remove_file(meta_path)
 
     def _remove_grid_images(self, grid: str, app_id: int | str) -> None:
         """Remove every grid-image form for *app_id* from the grid dir."""
@@ -620,7 +779,7 @@ class ArtworkService:
         self._cover_art_file_store.make_dirs(self._cover_cache_dir)
         try:
             await self._loop.run_in_executor(
-                None, self._download_cover_atomic, cover_url, cache_path, rom.get("url_cover")
+                None, self._fetch_and_record_cover, rom_id, cover_url, cache_path, rom.get("url_cover"), None
             )
         except Exception as e:
             self._logger.warning(f"fetch_cover: failed to download cover for rom {rom_id}: {e}")
@@ -687,8 +846,10 @@ class ArtworkService:
         cache_path = self._cache_path(rom_id)
         self._cover_art_file_store.make_dirs(self._cover_cache_dir)
         try:
-            applied = await self._loop.run_in_executor(
-                None, self._download_cover_atomic, cover_url, cache_path, rom.get("url_cover")
+            # A manual repair forces a fresh download (stored_source=None never
+            # matches, so it never revalidates), but still seeds the validator.
+            result = await self._loop.run_in_executor(
+                None, self._fetch_and_record_cover, rom_id, cover_url, cache_path, rom.get("url_cover"), None
             )
         except Exception as e:
             self._logger.warning(f"refresh_cover: failed to download cover for rom {rom_id}: {e}")
@@ -699,7 +860,7 @@ class ArtworkService:
             }
 
         self.finalize_cover_path(grid, cache_path, app_id, str(rom_id))
-        await self._loop.run_in_executor(None, self._persist_cover_path, rom_id, cache_path, applied)
+        await self._loop.run_in_executor(None, self._persist_cover_path, rom_id, cache_path, result.applied_source)
 
         return {
             "success": True,
@@ -785,23 +946,40 @@ class ArtworkService:
         pruned = []
         for filename in self._cover_art_file_store.listdir(cache_dir):
             # Sweep any leftover atomic-write sidecar (a crash between write and
-            # rename): it belongs to no ROM's live cache.
+            # rename): it belongs to no ROM's live cache. Covers both the cover
+            # ``.tmp`` and a crashed validator-sidecar ``.cover-meta.json.tmp``.
             if filename.endswith(TMP_SUFFIX):
                 if self._remove_cache_entry(cache_dir, filename):
                     pruned.append(filename)
                 continue
+            # Cover-validator sidecar (#1454): orphaned when its rom_id has no row.
+            if filename.endswith(COVER_META_SUFFIX):
+                stem = filename[: -len(COVER_META_SUFFIX)]
+                if self._prune_cache_stem(cache_dir, filename, stem, known):
+                    pruned.append(filename)
+                continue
             if not filename.endswith(".png"):
                 continue
-            try:
-                rom_id = int(filename[: -len(".png")])
-            except ValueError:
-                continue
-            if rom_id in known:
-                continue
-            if self._remove_cache_entry(cache_dir, filename):
+            if self._prune_cache_stem(cache_dir, filename, filename[: -len(".png")], known):
                 pruned.append(filename)
         if pruned:
             self._logger.info(f"Pruned {len(pruned)} orphaned cover cache file(s)")
+
+    def _prune_cache_stem(self, cache_dir: str, filename: str, stem: str, known: set[int]) -> bool:
+        """Remove *filename* iff *stem* is a numeric rom_id absent from *known*.
+
+        Shared by the cache-file (``{rom_id}.png``) and validator-sidecar
+        (``{rom_id}.cover-meta.json``) sweeps: a non-numeric stem or a live
+        rom_id is kept, an orphaned one is removed. Returns whether it was
+        removed.
+        """
+        try:
+            rom_id = int(stem)
+        except ValueError:
+            return False
+        if rom_id in known:
+            return False
+        return self._remove_cache_entry(cache_dir, filename)
 
     def _remove_cache_entry(self, cache_dir: str, filename: str) -> bool:
         """Remove one cover-cache entry; return whether it was removed."""

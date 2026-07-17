@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from lib.romm_paging import LIST_PAGE_SIZE
 
 if TYPE_CHECKING:
+    from models.cover import CoverRevalidation
     from models.play_sessions import PlaySessionIngestEntry, PlaySessionIngestResponse
     from models.sync import (
         ClientSaveState,
@@ -235,11 +236,18 @@ class RommRomReader(Protocol):
         """
         ...
 
-    def download_cover(self, cover_url: str, dest: str) -> None:
-        """Download a ROM cover image to a local path.
+    def download_cover(
+        self, cover_url: str, dest: str, *, etag: str | None = None, last_modified: str | None = None
+    ) -> CoverRevalidation:
+        """Download (or conditionally revalidate) a ROM cover to a local path.
 
-        cover_url is the relative path from the RomM server.
-        Spaces in the URL are encoded before downloading.
+        cover_url is the relative path from the RomM server; spaces in the URL
+        are encoded before downloading. When ``etag``/``last_modified`` are
+        supplied the request is conditional (``If-None-Match`` preferred,
+        ``If-Modified-Since`` fallback): a ``304`` leaves *dest* untouched and
+        returns ``not_modified=True`` (#1454). With no validator it is a plain
+        download. Either way the returned :class:`CoverRevalidation` carries the
+        response's ETag/Last-Modified so the caller can record them.
         """
         ...
 

@@ -96,6 +96,22 @@ def cache_filename(rom_id: int | str) -> str:
     return f"{rom_id}.png"
 
 
+COVER_META_SUFFIX = ".cover-meta.json"
+
+
+def cover_meta_filename(rom_id: int | str) -> str:
+    """Return the per-ROM cover-validator sidecar filename, keyed by RomM ID.
+
+    Sits beside the ``{rom_id}.png`` cache file in the plugin-owned cover cache
+    and holds the HTTP validators (``ETag`` / ``Last-Modified``) of the cached
+    bytes, so a later sync can revalidate with a conditional request instead of
+    re-downloading when only the ``?ts=`` cache-buster changed (#1454). The
+    ``.cover-meta.json`` suffix keeps it clear of the ``.png`` cache sweep and
+    the ``.tmp`` write-sidecar sweep.
+    """
+    return f"{rom_id}{COVER_META_SUFFIX}"
+
+
 def staging_filename(rom_id: int | str) -> str:
     """Return the staging filename for a downloaded cover keyed by RomM ID.
 

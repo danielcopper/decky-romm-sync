@@ -85,6 +85,15 @@ class CoverArtFileStore(Protocol):
         """Return the contents of *path* as raw bytes."""
         ...
 
+    def write_text_atomic(self, path: str, content: str) -> None:
+        """Atomically write *content* to *path* as UTF-8 text.
+
+        Writes to a temp file beside *path* and ``os.replace``s it into place;
+        the temp file is removed on any failure. Backs the per-ROM cover-validator
+        sidecar (#1454).
+        """
+        ...
+
 
 class DownloadFileStore(Protocol):
     """Filesystem seam for ROM download target operations.

@@ -41,6 +41,38 @@ def fresh_cover_source(rom: dict[str, Any]) -> str | None:
     return rom.get("path_cover_large") or rom.get("path_cover_small") or None
 
 
+def _strip_cover_ts(source: str) -> str:
+    """Return *source* with its ``ts`` query parameter removed.
+
+    Splits off the query string and drops the ``ts=…`` cache-buster RomM embeds
+    (the value that a server-side rescan re-stamps without touching the file),
+    preserving any other query parameters and their order. Pure string algebra —
+    no URL parsing library — so it stays dependency-free and never rewrites the
+    path portion (the compare is exact-string equality).
+    """
+    base, sep, query = source.partition("?")
+    if not sep:
+        return base
+    kept = [param for param in query.split("&") if param != "ts" and not param.startswith("ts=")]
+    return base + ("?" + "&".join(kept) if kept else "")
+
+
+def cover_ts_only_change(stored_source: str | None, fresh_source: str | None) -> bool:
+    """True iff the cover source changed by ONLY its ``?ts=`` cache-buster (#1454).
+
+    The revalidation trigger's pure part: both sources are present, they differ
+    (a fingerprint change was already detected), and stripping the ``ts`` query
+    parameter from each yields equal, non-empty bases — i.e. the same underlying
+    asset path with only the rescan-restamped timestamp differing. A path change
+    beyond ``ts`` (a different rom path, or a ``url_cover``↔``path_cover`` switch
+    from #1450) is NOT ts-only and must take the regular download path.
+    """
+    if not stored_source or not fresh_source or stored_source == fresh_source:
+        return False
+    stripped = _strip_cover_ts(stored_source)
+    return bool(stripped) and stripped == _strip_cover_ts(fresh_source)
+
+
 def scan_cover_refresh_candidates(
     all_roms: list[dict[str, Any]],
     registry: dict[str, dict[str, Any]],

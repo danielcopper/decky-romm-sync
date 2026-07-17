@@ -55,3 +55,19 @@ class CoverArtFileStoreAdapter:
     def read_bytes(self, path: str) -> bytes:
         """Return the contents of *path* as raw bytes."""
         return pathlib.Path(path).read_bytes()
+
+    def write_text_atomic(self, path: str, content: str) -> None:
+        """Atomically write *content* to *path* as UTF-8 text.
+
+        Writes to ``path + ".tmp"`` first, then ``os.replace``s into place. The
+        temp file is removed on any failure so a broken write leaves no orphan.
+        """
+        tmp_path = path + ".tmp"
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            os.replace(tmp_path, path)
+        except Exception:
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(tmp_path)
+            raise

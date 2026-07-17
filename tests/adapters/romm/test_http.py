@@ -2119,3 +2119,107 @@ class TestDownloadExternal:
 
         mock_open.assert_not_called()
         assert not dest.exists()
+
+
+class TestDownloadConditional:
+    """download_conditional — the #1454 revalidation GET (304 vs 200 + validators)."""
+
+    def test_plain_get_returns_validators_and_streams(self, tmp_path):
+        adapter = _resume_adapter()
+        dest = str(tmp_path / "c.png")
+        resp = _make_resp(
+            200,
+            {"Content-Length": "5", "ETag": '"v1"', "Last-Modified": "Wed, 01 Jan 2025 00:00:00 GMT"},
+            b"BYTES",
+        )
+        with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+            result = adapter.download_conditional("/cover/big.png?ts=1", dest)
+        # No validator supplied → no conditional header sent.
+        req = mock_open.call_args[0][0]
+        assert req.get_header("If-none-match") is None
+        assert req.get_header("If-modified-since") is None
+        assert result.not_modified is False
+        assert result.etag == '"v1"'
+        assert result.last_modified == "Wed, 01 Jan 2025 00:00:00 GMT"
+        with open(dest, "rb") as f:
+            assert f.read() == b"BYTES"
+
+    def test_if_none_match_304_keeps_dest(self, tmp_path):
+        adapter = _resume_adapter()
+        dest = str(tmp_path / "c.png")
+        with open(dest, "wb") as f:
+            f.write(b"CACHED")
+        hdrs = http.client.HTTPMessage()
+        hdrs["ETag"] = '"v1"'
+        exc = urllib.error.HTTPError("http://romm.local/cover/big.png?ts=2", 304, "Not Modified", hdrs, None)
+        with patch("urllib.request.urlopen", side_effect=exc) as mock_open:
+            result = adapter.download_conditional("/cover/big.png?ts=2", dest, etag='"v1"')
+        req = mock_open.call_args[0][0]
+        assert req.get_header("If-none-match") == '"v1"'
+        assert result.not_modified is True
+        assert result.etag == '"v1"'
+        # The cached bytes survive — the 304 never touched dest.
+        with open(dest, "rb") as f:
+            assert f.read() == b"CACHED"
+
+    def test_if_none_match_200_replaces_dest(self, tmp_path):
+        adapter = _resume_adapter()
+        dest = str(tmp_path / "c.png")
+        with open(dest, "wb") as f:
+            f.write(b"OLD")
+        resp = _make_resp(200, {"Content-Length": "3", "ETag": '"v2"'}, b"NEW")
+        with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+            result = adapter.download_conditional("/cover/big.png?ts=2", dest, etag='"v1"')
+        req = mock_open.call_args[0][0]
+        assert req.get_header("If-none-match") == '"v1"'
+        assert result.not_modified is False
+        assert result.etag == '"v2"'
+        with open(dest, "rb") as f:
+            assert f.read() == b"NEW"
+
+    def test_if_modified_since_fallback_when_only_last_modified(self, tmp_path):
+        adapter = _resume_adapter()
+        dest = str(tmp_path / "c.png")
+        resp = _make_resp(200, {"Content-Length": "1"}, b"x")
+        with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+            adapter.download_conditional("/c.png?ts=2", dest, last_modified="Wed, 01 Jan 2025 00:00:00 GMT")
+        req = mock_open.call_args[0][0]
+        assert req.get_header("If-modified-since") == "Wed, 01 Jan 2025 00:00:00 GMT"
+        assert req.get_header("If-none-match") is None
+
+    def test_etag_preferred_over_last_modified(self, tmp_path):
+        adapter = _resume_adapter()
+        dest = str(tmp_path / "c.png")
+        resp = _make_resp(200, {"Content-Length": "1"}, b"x")
+        with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+            adapter.download_conditional(
+                "/c.png?ts=2", dest, etag='"v1"', last_modified="Wed, 01 Jan 2025 00:00:00 GMT"
+            )
+        req = mock_open.call_args[0][0]
+        assert req.get_header("If-none-match") == '"v1"'
+        assert req.get_header("If-modified-since") is None
+
+    def test_authenticated_get_carries_bearer(self, tmp_path):
+        """A RomM-origin cover GET keeps the bearer (unlike the external url_cover fetch)."""
+        import logging
+
+        settings = {
+            "romm_url": "http://romm.local",
+            "romm_api_token": "rmm_secret",
+            "romm_api_token_origin": "http://romm.local",
+        }
+        adapter = RommHttpAdapter(settings, "/fake/plugin_dir", logging.getLogger("test"), "decky-romm-sync/9.9.9")
+        dest = str(tmp_path / "c.png")
+        resp = _make_resp(200, {"Content-Length": "1"}, b"x")
+        with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+            adapter.download_conditional("/c.png?ts=1", dest, etag='"v1"')
+        req = mock_open.call_args[0][0]
+        assert req.get_header("Authorization") == "Bearer rmm_secret"
+        assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
+
+    def test_404_raises_not_found(self, tmp_path):
+        adapter = _resume_adapter()
+        dest = str(tmp_path / "c.png")
+        exc = urllib.error.HTTPError("http://romm.local/c.png", 404, "Not Found", http.client.HTTPMessage(), None)
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommNotFoundError):
+            adapter.download_conditional("/c.png?ts=1", dest, etag='"v1"')

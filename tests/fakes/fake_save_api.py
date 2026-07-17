@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from fakes._romm_save_semantics import check_add_save_conflict, compute_is_current, tag_filename
 
 if TYPE_CHECKING:
+    from models.cover import CoverRevalidation
     from models.play_sessions import (
         PlaySessionIngestEntry,
         PlaySessionIngestResponse,
@@ -285,7 +286,9 @@ class FakeSaveApi:
     ) -> None:
         raise NotImplementedError
 
-    def download_cover(self, cover_url: str, dest: str) -> None:
+    def download_cover(
+        self, cover_url: str, dest: str, *, etag: str | None = None, last_modified: str | None = None
+    ) -> CoverRevalidation:
         raise NotImplementedError
 
     def download_cover_from_url(self, url: str, dest: str) -> None:
