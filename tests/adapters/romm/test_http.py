@@ -2088,3 +2088,34 @@ class TestDownloadExternal:
 
         # A definitive 404 is not retryable — a single attempt.
         assert mock_open.call_count == 1
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "file:///etc/passwd",
+            "FILE:///etc/passwd",
+            "ftp://internal.host/secret",
+            "data:text/html,<script>x</script>",
+            "gopher://127.0.0.1:70/",
+            "//cdn.example.com/x.png",  # scheme-relative — no scheme
+            "/relative/path.png",  # not absolute
+        ],
+    )
+    def test_rejects_non_http_scheme_without_requesting(self, tmp_path, url):
+        """A server-supplied non-http(s) url_cover must never reach urlopen (#1450).
+
+        The RomM ``url_cover`` is untrusted input; a ``file:///etc/passwd`` (or
+        any other scheme) is refused with the adapter's normal error type before
+        any request, and nothing is written to disk.
+        """
+        adapter = self._adapter_with_token()
+        dest = tmp_path / "cover.png"
+
+        with (
+            patch("urllib.request.urlopen") as mock_open,
+            pytest.raises(RommApiError),
+        ):
+            adapter.download_external(url, str(dest))
+
+        mock_open.assert_not_called()
+        assert not dest.exists()
