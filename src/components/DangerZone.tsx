@@ -692,12 +692,15 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
       setConfirmRetrodeck(true);
       return;
     }
+    // Disarm the confirm BEFORE the awaited paced removal (mirrors
+    // handleRemoveAllRomm) — the removal now yields for seconds on a large library,
+    // so a stray tap while it runs must not re-enter and start a second concurrent run.
+    setConfirmRemoveAll(false);
+    setConfirmRetrodeck(false);
     const toRemove = nonSteamApps.filter((a) => !whitelistedIds.has(a.appId));
     setStatus(`Removing ${toRemove.length} non-steam games...`);
     await removeShortcutsPaced(toRemove.map((a) => a.appId));
     setStatus(`Removed ${toRemove.length} non-steam game${toRemove.length === 1 ? "" : "s"}`);
-    setConfirmRemoveAll(false);
-    setConfirmRetrodeck(false);
     refreshPlatforms().catch((e) => logError(`Failed to refresh platforms: ${e}`));
     await recountAfterStoreSettles(toRemove.length, loadNonSteamApps);
   };

@@ -1439,6 +1439,44 @@ describe("DangerZone", () => {
       expect(container.textContent).toContain("Removed 1 non-steam game");
       expect(container.textContent).not.toContain("Removed 1 non-steam games");
     });
+
+    it("disarms the confirm as the paced removal STARTS, not after it finishes (#977 re-entry guard)", async () => {
+      // 26 games → the paced removal parks on a 50ms breather after the first
+      // 25-item chunk. The confirm must already be disarmed at that mid-removal
+      // point (reset moved before the await), so a stray tap can't re-enter and
+      // start a second concurrent run. With the old post-await reset, the button
+      // would still read "Are you sure?" here.
+      const ids = Array.from({ length: 26 }, (_, i) => i + 1);
+      stubCollectionStore(ids);
+      stubAppStore(Object.fromEntries(ids.map((id) => [id, { strDisplayName: `Game ${id}` }])));
+      const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Remove 26 Non-Steam Games"));
+      expect(container.textContent).toContain("Are you sure? Remove 26 games (0 whitelisted)?");
+
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          fireEvent.click(getByText("Are you sure? Remove 26 games (0 whitelisted)?"));
+          for (let i = 0; i < 40; i++) await Promise.resolve();
+        });
+        // Mid-removal: first chunk removed, loop parked on the breather.
+        expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(25);
+        // The confirm is ALREADY disarmed — the armed label is gone, the button
+        // reads its default form again.
+        expect(container.textContent).not.toContain("Are you sure?");
+        expect(container.textContent).toContain("Remove 26 Non-Steam Games");
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(50);
+          for (let i = 0; i < 20; i++) await Promise.resolve();
+          await vi.advanceTimersByTimeAsync(3500);
+        });
+        expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(26);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("RetroDeckSection — handleRemoveAll (retrodeck at risk)", () => {
