@@ -2929,6 +2929,50 @@ describe("MainPage", () => {
         logSpy.mockRestore();
       }
     });
+
+    it("does NOT feed the live-rate estimator on a cover-refresh applying frame (#1456)", async () => {
+      const etaSpy = vi.spyOn(syncEta, "observeApplyProgress");
+      try {
+        // Recover an in-flight applying run so the subscriber fires on applying frames.
+        vi.mocked(backend.getSyncStatus).mockResolvedValue({
+          running: true,
+          stage: "applying",
+          step: 2,
+          totalSteps: 8,
+          current: 5,
+          total: 200,
+          message: "PSX: 5/200",
+          runId: "run-cover-eta",
+        });
+        render(<MainPage onNavigate={vi.fn()} />);
+        await flushAsync();
+        etaSpy.mockClear();
+
+        // A normal shortcut-item applying frame DOES feed the estimator.
+        await act(async () => {
+          updateSyncProgress({ running: true, stage: "applying", step: 2, totalSteps: 8, current: 6, total: 200 });
+        });
+        expect(etaSpy).toHaveBeenCalledTimes(1);
+        etaSpy.mockClear();
+
+        // A cover-refresh applying frame carries a cover counter, not item
+        // progress (current is unchanged) — the estimator must NOT be fed, or the
+        // cover phase would distort the rate (#1456).
+        await act(async () => {
+          updateSyncProgress({
+            running: true,
+            stage: "applying",
+            step: 2,
+            totalSteps: 8,
+            message: "PSX: covers 37/140",
+            coverRefresh: true,
+          });
+        });
+        expect(etaSpy).not.toHaveBeenCalled();
+      } finally {
+        etaSpy.mockRestore();
+      }
+    });
   });
 
   describe("sync button label (resume vs fresh)", () => {

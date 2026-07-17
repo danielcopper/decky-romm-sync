@@ -268,13 +268,36 @@ async function applyCoverArtwork(appId: number, romId: number): Promise<void> {
  * heartbeats so a long refresh tail never trips the backend's per-unit
  * timeout. Runs BEFORE the chunk ack so the backend's wait covers this work.
  * Fail-soft per item; exits early on cancel.
+ *
+ * The unit progress line reflects the cover work — ``<unit>: covers x/y`` — so a
+ * cover-only unit no longer shows a frozen ``0/0`` for the whole cover phase
+ * (#1456). Each frame carries ``coverRefresh: true`` so the live-rate ETA skips
+ * it (a cover count is not item progress); ``current``/``total`` are left
+ * untouched so the coarse bar rests at the unit's apply position rather than
+ * re-animating off the cover count.
  */
-async function processCoverRefreshes(refreshes: { rom_id: number; app_id: number }[]): Promise<void> {
+async function processCoverRefreshes(data: SyncApplyUnitData): Promise<void> {
+  const refreshes = data.cover_refreshes ?? [];
+  const total = refreshes.length;
+  const showCoverProgress = (done: number): void => {
+    updateSyncProgress({
+      running: true,
+      stage: "applying",
+      message: `${data.unit_name}: covers ${done}/${total}`,
+      step: data.unit_index + 1,
+      totalSteps: data.total_units,
+      coverRefresh: true,
+    });
+  };
+  // Seed the counter before the first cover so the line reads ``covers 0/N`` at
+  // once, never the seed's ``0/0`` even for the first item's duration.
+  showCoverProgress(0);
   const completed = await pacedForEach(refreshes, (entry) => applyCoverArtwork(entry.app_id, entry.rom_id), {
     heartbeat: () => {
       syncHeartbeat().catch(() => {});
     },
     isCancelled: isCancelRequested,
+    onProgress: showCoverProgress,
   });
   if (!completed) logInfo("Per-unit cancel observed during cover refresh");
 }
@@ -460,6 +483,9 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
         message: `${data.unit_name}: ${data.chunk_offset}/${data.unit_total}`,
         step: data.unit_index + 1,
         totalSteps: data.total_units,
+        // Clear any cover-refresh marker a prior unit left in the store so this
+        // unit's shortcut phase feeds the ETA again (#1456).
+        coverRefresh: false,
       });
 
       const { map: existing, liveAppIds } = await resolveExistingShortcuts(data.run_id);
@@ -470,7 +496,7 @@ export function initUnitSyncManager(): ReturnType<typeof addEventListener> {
       // Processed before the ack so the backend's per-unit wait (heartbeat-fed)
       // covers this work; a cancel observed above skips it entirely.
       if (!isCancelRequested() && data.cover_refreshes?.length) {
-        await processCoverRefreshes(data.cover_refreshes);
+        await processCoverRefreshes(data);
       }
 
       // Do NOT ack a cancelled unit: the backend has already discarded this

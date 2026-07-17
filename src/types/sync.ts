@@ -58,6 +58,18 @@ export interface SyncProgress {
    */
   subStage?: string;
   /**
+   * ``true`` on the frontend applying-stage frames that report cover-refresh
+   * progress (``processCoverRefreshes``) rather than shortcut-item progress
+   * (#1456). Frontend-only; the seed clears it at the start of every unit. Its
+   * one job is to keep the live-rate ETA honest: a cover-refresh frame carries a
+   * cover counter, not item progress, so the estimator must skip it exactly as it
+   * skips fetch/cover frames — see the ``observeApplyProgress`` gate in
+   * ``MainPage``. The counter itself surfaces only through ``message``; the bar's
+   * ``current``/``total`` are left untouched (they rest at the unit's apply
+   * position), so this flag has no bar effect.
+   */
+  coverRefresh?: boolean;
+  /**
    * Backend run identity for the in-flight sync, stamped from the backend's
    * ``current_sync_id``. ``""`` when no run is in flight. The authoritative
    * source a Cancel click scopes itself to — the frontend no longer mirrors a

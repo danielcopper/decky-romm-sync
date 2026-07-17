@@ -900,6 +900,84 @@ describe("syncManager — applies cover artwork to created shortcuts via the API
     expect(vi.mocked(backend.reportUnitResults)).toHaveBeenCalledWith({}, "run-cover-only", 1, 0);
   });
 
+  it("cover-only unit: the progress line advances a cover counter, never a frozen 0/0 (#1456)", async () => {
+    getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
+    vi.mocked(backend.getArtworkBase64).mockImplementation(async (romId: number) => ({ base64: `COVER-${romId}` }));
+
+    // Capture every progress frame so we can "park" at each cover step and read
+    // the visible text, plus the coverRefresh marker each frame carries.
+    const messages: string[] = [];
+    const coverFlags: (boolean | undefined)[] = [];
+    const unsub = onSyncProgressChange(() => {
+      const p = getSyncProgress();
+      messages.push(p.message ?? "");
+      coverFlags.push(p.coverRefresh);
+    });
+
+    const data = chunkOf([], "run-cover-progress");
+    data.cover_refreshes = [
+      { rom_id: 10, app_id: 7010 },
+      { rom_id: 11, app_id: 7011 },
+      { rom_id: 12, app_id: 7012 },
+    ];
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", data);
+      await flush(300);
+    });
+    unsub();
+
+    // The line reads the advancing cover counter through the whole phase —
+    // "covers 0/3" the moment covers begin, then 1..3 — never the frozen "0/0".
+    expect(messages).toContain("PSX: covers 0/3");
+    expect(messages).toContain("PSX: covers 1/3");
+    expect(messages).toContain("PSX: covers 2/3");
+    expect(messages).toContain("PSX: covers 3/3");
+    expect(getSyncProgress().message).toBe("PSX: covers 3/3");
+    // The seed's "0/0" is never the last thing shown while busy.
+    expect(messages[messages.length - 1]).not.toBe("PSX: 0/0");
+    // Every cover frame is marked so the live-rate ETA skips it.
+    expect(coverFlags).toContain(true);
+  });
+
+  it("mixed unit: shortcut counter during shortcuts, cover counter during covers (#1456)", async () => {
+    // rom 1,2 are existing shortcuts (update path); the chunk also carries 3
+    // cover refreshes for other roms.
+    getExistingRomMShortcuts.mockResolvedValue(
+      new Map<number, number>([
+        [1, 5001],
+        [2, 5002],
+      ]),
+    );
+    vi.mocked(backend.getArtworkBase64).mockImplementation(async (romId: number) => ({ base64: `COVER-${romId}` }));
+
+    const messages: string[] = [];
+    const unsub = onSyncProgressChange(() => messages.push(getSyncProgress().message ?? ""));
+
+    const data = chunkOf([sc(1), sc(2)], "run-mixed-progress");
+    data.cover_refreshes = [
+      { rom_id: 77, app_id: 5077 },
+      { rom_id: 88, app_id: 5088 },
+      { rom_id: 99, app_id: 5099 },
+    ];
+
+    initUnitSyncManager();
+    await act(async () => {
+      emitDeckyEvent<[SyncApplyUnitData]>("sync_apply_unit", data);
+      await flush(400);
+    });
+    unsub();
+
+    // Shortcut phase: the item counter (against the 2 shortcut items).
+    expect(messages).toContain("PSX: 1/2");
+    expect(messages).toContain("PSX: 2/2");
+    // Cover phase: the cover counter (against the 3 cover refreshes).
+    expect(messages).toContain("PSX: covers 1/3");
+    expect(messages).toContain("PSX: covers 3/3");
+    expect(getSyncProgress().message).toBe("PSX: covers 3/3");
+  });
+
   it("fail-soft: one refresh entry's failure never blocks the rest or the ack (#1386)", async () => {
     getExistingRomMShortcuts.mockResolvedValue(new Map<number, number>());
     vi.mocked(backend.getArtworkBase64).mockResolvedValue({ base64: "COVERPNG" });

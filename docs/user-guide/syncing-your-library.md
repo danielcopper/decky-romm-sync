@@ -63,7 +63,8 @@ A few things worth knowing for a large library:
   "Fetching Game Boy Advance (page 12/62)" then "Preparing covers for Game Boy Advance"), and the bar now edges forward
   through the fetch and cover phases as well — not only while shortcuts are being created. A platform whose cost is
   mostly its cover pull no longer shows a bar that sits frozen until the very end, and the bar never jumps backwards as
-  the phases hand over.
+  the phases hand over. When a platform's games are already up to date and only their cover art changed on the server,
+  the line counts those cover updates as they apply — "Game Boy: covers 37/140" — instead of resting at a bare "0/0".
 - **Cover art fills in as the run goes.** Covers appear on your library tiles progressively while the sync creates
   shortcuts, not only at the very end, so you can watch the library fill in. A few tiles may stay gray until the first
   time you open that game's page (or the next time Steam restarts) — that is expected and does not mean the cover is

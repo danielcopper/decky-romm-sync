@@ -646,12 +646,19 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             .then(setBudgetStatus)
             .catch((e) => logError(`Failed to refresh session budget status: ${e}`));
         } else {
-          // Feed the live-rate estimator from applying frames only (fetch frames
-          // carry page/cover counters, not item progress). syncEta re-anchors its
-          // sticky deadline internally; then mirror the current countdown into
-          // state here — the impure now-read must live in this subscriber (an
-          // event handler), never in render, which must stay pure.
-          if (progress.stage === "applying" && progress.step !== undefined && progress.current !== undefined) {
+          // Feed the live-rate estimator from applying frames that carry ITEM
+          // progress only — fetch frames carry page/cover counters, and an
+          // applying-stage cover-refresh frame (``coverRefresh``, #1456) carries a
+          // cover counter, not item progress, so both must be skipped. syncEta
+          // re-anchors its sticky deadline internally; then mirror the current
+          // countdown into state here — the impure now-read must live in this
+          // subscriber (an event handler), never in render, which must stay pure.
+          if (
+            progress.stage === "applying" &&
+            progress.step !== undefined &&
+            progress.current !== undefined &&
+            !progress.coverRefresh
+          ) {
             observeApplyProgress(progress.step, progress.current, Date.now());
           }
           setLiveEtaDisplay(displayedEtaSeconds(Date.now()));
