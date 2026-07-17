@@ -127,6 +127,7 @@ def rom_save_state_from_dict(data: dict[str, Any]) -> RomSaveState:
     _FILE_FIELDS = {
         "tracked_save_id",
         "last_sync_hash",
+        "last_sync_server_hash",
         "last_sync_at",
         "last_sync_server_updated_at",
         "last_sync_server_save_id",

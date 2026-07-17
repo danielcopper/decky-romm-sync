@@ -46,6 +46,12 @@ Invariants encoded here:
   ``Download`` / ``Upload`` of an unbacked local edit; a byte-identical local is
   adopted (``Skip(adopt_baseline=True)``), never a duplicate POST. Branch-5
   parity.
+- Inv10 (#1468): branch-6 adopts the baseline (``Skip(adopt_baseline=True)``)
+  ONLY when the local is proven byte-identical to the head — either the stored
+  server hash matches while local is unchanged since baseline (provenance) or the
+  live parity hash matches (fallback). The provenance route never fires when
+  local has diverged from the baseline, so a stored server hash can never
+  fabricate a false identity for changed local content.
 """
 
 from __future__ import annotations
@@ -140,7 +146,10 @@ def _server_saves(draw: st.DrawFn) -> dict[str, Any]:
 
 _server_lists = st.lists(_server_saves(), min_size=0, max_size=5)
 _sizes = st.integers(min_value=0, max_value=1_048_576)
-_files_states = st.fixed_dictionaries({}, optional={"last_sync_hash": _hashes, "last_sync_local_size": _sizes})
+_files_states = st.fixed_dictionaries(
+    {},
+    optional={"last_sync_hash": _hashes, "last_sync_server_hash": _hashes, "last_sync_local_size": _sizes},
+)
 
 
 def _action(
@@ -511,20 +520,24 @@ def test_not_current_no_baseline_downloads_only_when_content_identical(
     local_hash=_opt_hashes,
     last_sync_hash=_opt_hashes,
     server_content_hash=_opt_hashes,
+    last_sync_server_hash=_opt_hashes,
 )
 def test_resolve_upload_conflict_never_downloads_unless_provably_unchanged(
     local_hash: str | None,
     last_sync_hash: str | None,
     server_content_hash: str | None,
+    last_sync_server_hash: str | None,
 ) -> None:
-    """Branch 409 / #1276 — ``resolve_upload_conflict`` maps a write-time 409 to
-    an action. It returns ``"download"`` (adopt the server) ONLY when
+    """Branch 409 / #1276 + #1468 — ``resolve_upload_conflict`` maps a write-time
+    409 to an action. It returns ``"download"`` (adopt the server) ONLY when
     ``local_hash`` is non-None and equals either our recorded baseline
     (``last_sync_hash``) or the server's current content (``server_content_hash``);
-    a missing ``local_hash`` always yields ``"conflict"``. Missing evidence never
-    downgrades to a data-losing download.
+    a missing ``local_hash`` always yields ``"conflict"``. A stored server hash
+    (the #1468 provenance input) never enables a download outside those two
+    equalities — provenance requires ``local_hash == last_sync_hash``, already
+    covered. Missing evidence never downgrades to a data-losing download.
     """
-    result = resolve_upload_conflict(local_hash, last_sync_hash, server_content_hash)
+    result = resolve_upload_conflict(local_hash, last_sync_hash, server_content_hash, last_sync_server_hash)
     assert result in ("download", "conflict")
 
     if local_hash is None:
@@ -590,3 +603,58 @@ def test_no_entry_no_baseline_differing_local_is_conflict(
         assert result == Skip(reason="synced", adopt_baseline=True)
     else:
         assert result == Conflict(server_save=server)
+
+
+# ---------------------------------------------------------------------------
+# Invariant 10 (#1468): branch-6 adopts only on proven identity; provenance
+# never fires on a diverged local.
+# ---------------------------------------------------------------------------
+
+
+@given(
+    local_file=_local_files(),
+    server=_head_no_entry(),
+    local_hash=_hashes,
+    baseline=_opt_hashes,
+    stored_server_hash=_opt_hashes,
+)
+def test_no_entry_adopts_baseline_only_on_proven_identity(
+    local_file: dict[str, Any],
+    server: dict[str, Any],
+    local_hash: str,
+    baseline: str | None,
+    stored_server_hash: str | None,
+) -> None:
+    """Branch 6 / #1468 — with a present local and NO ``device_syncs`` entry for
+    our device, the kernel adopts the head as the baseline
+    (``Skip(adopt_baseline=True)``) ONLY when the local is proven byte-identical
+    to it: either the stored server hash matches the head's ``content_hash`` while
+    local is unchanged since our baseline (provenance) OR the live parity hash
+    matches (``local_hash == server.content_hash``). Crucially, the provenance
+    route never fires on a local that has diverged from the baseline
+    (``local_hash != last_sync_hash``) — a stored server hash can never fabricate
+    a false identity for changed local content.
+    """
+    files_state: dict[str, Any] = {}
+    if baseline is not None:
+        files_state["last_sync_hash"] = baseline
+    if stored_server_hash is not None:
+        files_state["last_sync_server_hash"] = stored_server_hash
+
+    result = _action(local_file, [server], files_state, local_hash)
+
+    server_hash = server.get("content_hash")
+    parity = server_hash is not None and local_hash == server_hash
+    provenance = (
+        baseline is not None
+        and local_hash == baseline
+        and bool(stored_server_hash)
+        and stored_server_hash == server_hash
+    )
+
+    if isinstance(result, Skip) and result.adopt_baseline:
+        assert parity or provenance
+
+    # The literal safety statement: provenance can never rescue a diverged local.
+    if baseline is not None and local_hash != baseline and not parity:
+        assert not (isinstance(result, Skip) and result.adopt_baseline)

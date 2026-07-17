@@ -508,6 +508,18 @@ persists without a re-download, so the upgrade never mass re-downloads a library
 before. Unlike the pin columns it rides the sync UPSERT, but the commit always writes the confirmed-else-preserved merge
 — a fingerprint advances only when the cache was actually confirmed against the server.
 
+`017_add_last_sync_server_hash.sql` (`user_version = 17`) adds the nullable `last_sync_server_hash TEXT` column to
+`rom_save_files` — the first schema change to a `FileSyncState` child
+([#1468](https://github.com/danielcopper/decky-romm-sync/issues/1468)) — a single
+`ALTER TABLE rom_save_files ADD COLUMN last_sync_server_hash TEXT;` with no backfill. It records the server's own
+`content_hash` for the save synced at the last baseline, so the save-sync identity check
+(`domain.sync_action._local_matches_server`) can compare two server-produced hashes (the stored one against the live
+`server.content_hash`) instead of relying on the client's local reimplementation of RomM's hashing — the **provenance**
+route, now primary. `NULL` means "no stored server hash": a pre-migration baseline (or a hash-only skip-adopt) uses the
+**parity** fallback (`local_hash == server.content_hash`, #1457) until the next full sync stamps a value. Written only
+alongside `last_sync_hash` at the recorded-baseline writer sites (`adopt_baseline`), so a stored server hash always
+truthfully pairs with its `last_sync_hash`.
+
 ## The runtime Unit of Work
 
 The schema is read and written at runtime through a **Unit of Work** (UoW) — the atomic transaction boundary one

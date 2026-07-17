@@ -68,6 +68,30 @@ class TestUpdateFileSyncState:
         assert entry.last_sync_at is not None
         assert entry.last_sync_server_save_id == 200
 
+    def test_records_server_content_hash_from_response(self, tmp_path):
+        """#1468 — the server response's ``content_hash`` (RomM's own digest of the
+        bytes) is stored as ``last_sync_server_hash``, the provenance anchor."""
+        svc, _ = make_service(tmp_path)
+        save_file = _create_save(tmp_path)
+        server_resp = {"id": 200, "updated_at": "2026-02-17T15:00:00Z", "content_hash": "srv-abc123"}
+
+        state = RomSaveState()
+        svc._sync_engine._matrix.update_file_sync_state(state, "pokemon.srm", server_resp, str(save_file), "gba")
+
+        assert state.files["pokemon.srm"].last_sync_server_hash == "srv-abc123"
+
+    def test_records_none_server_hash_when_response_lacks_content_hash(self, tmp_path):
+        """#1468 — a response without ``content_hash`` records ``None`` (never a
+        fabricated or locally-computed value); the identity check falls back to parity."""
+        svc, _ = make_service(tmp_path)
+        save_file = _create_save(tmp_path)
+        server_resp = {"id": 200, "updated_at": "2026-02-17T15:00:00Z"}  # no content_hash
+
+        state = RomSaveState()
+        svc._sync_engine._matrix.update_file_sync_state(state, "pokemon.srm", server_resp, str(save_file), "gba")
+
+        assert state.files["pokemon.srm"].last_sync_server_hash is None
+
     def test_creates_entry_with_new_fields(self, tmp_path):
         svc, _ = make_service(tmp_path)
         save_file = _create_save(tmp_path)
@@ -184,6 +208,52 @@ class TestUpdateFileSyncState:
 
         # No baseline is recorded — the aggregate rejects a hash-less file entry.
         assert "missing.srm" not in state.files
+
+
+class TestServerHashBaselineWriterFlows:
+    """#1468 — each transfer flow records the SERVER's content_hash as the provenance
+    anchor, with honest provenance per flow (upload response vs adopted server save)."""
+
+    def test_upload_flow_records_server_content_hash_from_response(self, tmp_path):
+        """The upload flow records the upload RESPONSE's ``content_hash`` (RomM's
+        digest of the bytes it received), not a locally-recomputed value."""
+        svc, _ = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_file = _create_save(tmp_path)
+
+        state = _do_upload(svc, 42, str(save_file), "pokemon.srm", "gba")
+
+        # The fake server returns content_hash = its own hash of the received bytes.
+        expected = svc._save_file_store.content_hash(str(save_file))
+        assert state.files["pokemon.srm"].last_sync_server_hash == expected
+
+    def test_download_flow_records_adopted_server_save_content_hash(self, tmp_path):
+        """The download flow records the ADOPTED server save's ``content_hash``."""
+        svc, _ = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        saves_dir = str(tmp_path / "saves" / "gba")
+        server_save = _server_save(save_id=100)
+        server_save["content_hash"] = "srv-download-hash"
+
+        state = RomSaveState()
+        svc._sync_engine._matrix.do_download_save(server_save, saves_dir, "pokemon.srm", state, "device-1", "gba")
+
+        assert state.files["pokemon.srm"].last_sync_server_hash == "srv-download-hash"
+
+    def test_download_flow_records_none_when_server_save_lacks_content_hash(self, tmp_path):
+        """A server save with no ``content_hash`` records ``None`` (parity fallback)."""
+        svc, _ = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        saves_dir = str(tmp_path / "saves" / "gba")
+        server_save = _server_save(save_id=100)  # no content_hash
+
+        state = RomSaveState()
+        svc._sync_engine._matrix.do_download_save(server_save, saves_dir, "pokemon.srm", state, "device-1", "gba")
+
+        assert state.files["pokemon.srm"].last_sync_server_hash is None
 
 
 class TestV47SyncFlow:
@@ -1841,6 +1911,7 @@ class TestSyncRomSavesDispatch:
             local_path=str(save_path),
             local_hash=_file_md5(str(save_path)),
             last_sync_hash=None,
+            last_sync_server_hash=None,
             options=SyncRunOptions(default_slot="default"),
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
@@ -1943,6 +2014,7 @@ class TestHandleUnexpectedError:
             local_path=None,
             local_hash=None,
             last_sync_hash=None,
+            last_sync_server_hash=None,
             options=SyncRunOptions(),
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
@@ -1993,6 +2065,7 @@ class TestDispatchSyncActionErrorBranches:
             local_path=None,
             local_hash=None,
             last_sync_hash=None,
+            last_sync_server_hash=None,
             options=SyncRunOptions(),
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
@@ -2038,6 +2111,7 @@ class TestDispatchUploadDefensiveBranches:
             local_path=None,
             local_hash=None,
             last_sync_hash=None,
+            last_sync_server_hash=None,
             options=SyncRunOptions(),
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )

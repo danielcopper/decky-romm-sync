@@ -296,7 +296,13 @@ class RollbackOrchestrator:
 
         server_id = server.get("id")
         if server_hash and local_hash == server_hash and server_id is not None:
-            # Hashes match — adopt server's id without re-uploading.
+            # Hashes match — adopt server's id without re-uploading. Store the
+            # server's own ``content_hash`` (never our downloaded-and-recomputed
+            # ``server_hash``, which is parity-derived) as ``last_sync_server_hash``
+            # so a later identity check can take the provenance route; ``None``
+            # when the listed save carried no ``content_hash`` (the reason
+            # ``get_server_save_hash`` had to download to compare), falling back to
+            # parity (#1468).
             self._log_debug(
                 f"keep_local: hash matches server, adopting without upload (rom={rom_id} filename={target})"
             )
@@ -304,6 +310,7 @@ class RollbackOrchestrator:
                 target,
                 tracked_save_id=int(server_id),
                 last_sync_hash=local_hash,
+                last_sync_server_hash=server.get("content_hash"),
                 last_sync_at=self._clock.now().isoformat(),
                 last_sync_server_updated_at=server.get("updated_at", "") or "",
                 last_sync_server_save_id=server_id,

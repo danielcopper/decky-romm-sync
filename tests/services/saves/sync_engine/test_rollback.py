@@ -60,6 +60,60 @@ class TestResolveSyncConflict:
         assert file_state.last_sync_hash == local_hash
 
     @pytest.mark.asyncio
+    async def test_resolve_keep_local_adopt_records_server_content_hash_honestly(self, tmp_path):
+        """#1468 — the keep_local adopt-without-upload branch stores the server's
+        OWN ``content_hash`` as ``last_sync_server_hash``, never the
+        downloaded-and-recomputed ``server_hash`` (which is parity-derived). Here
+        the server save advertises a distinct ``content_hash`` while the download
+        still hashes equal to local (so the adopt fires); the recorded provenance
+        anchor must be the advertised server value.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"identical content")
+        local_hash = _file_md5(str(save_path))
+
+        ss = _server_save_with_syncs(device_syncs=[{"device_id": "device-1", "is_current": False}])
+        ss["content_hash"] = "distinct-server-hash"  # honest server value, != local_hash
+        fake.saves[100] = ss
+        fake.uploaded_files[100] = str(save_path)  # download hashes equal → adopt fires
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42, filename="pokemon.srm", server_save_id=100, action="keep_local"
+        )
+
+        assert result["success"] is True
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
+        assert file_state.last_sync_hash == local_hash
+        assert file_state.last_sync_server_hash == "distinct-server-hash"
+
+    @pytest.mark.asyncio
+    async def test_resolve_keep_local_adopt_records_none_when_no_content_hash(self, tmp_path):
+        """#1468 — a keep_local adopt against a server save with no ``content_hash``
+        records ``None`` (never the computed hash); the identity check falls back to
+        parity."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"identical content")
+
+        ss = _server_save_with_syncs(device_syncs=[{"device_id": "device-1", "is_current": False}])
+        # No content_hash advertised by the server save.
+        fake.saves[100] = ss
+        fake.uploaded_files[100] = str(save_path)
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42, filename="pokemon.srm", server_save_id=100, action="keep_local"
+        )
+
+        assert result["success"] is True
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
+        assert file_state.last_sync_server_hash is None
+
+    @pytest.mark.asyncio
     async def test_resolve_keep_local_hash_mismatch_reposts_with_overwrite(self, tmp_path):
         """Local differs from server content → POST a new save with overwrite=true."""
         svc, fake = make_service(tmp_path)

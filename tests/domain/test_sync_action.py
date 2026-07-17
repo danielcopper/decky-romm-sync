@@ -690,6 +690,115 @@ def test_no_device_entry_diverged_baseline_with_different_content_hash_returns_c
     assert result == Conflict(server_save=server)
 
 
+# ---------------------------------------------------------------------------
+# #1468 — provenance-first identity (stored server hash), parity fallback
+# ---------------------------------------------------------------------------
+
+
+def test_no_device_entry_provenance_adopts_despite_scheme_drift():
+    """Branch 6 / #1468 — the whole point of the issue. We hold a baseline the
+    local still matches (``local_hash == last_sync_hash``) and a stored server
+    hash equal to the picked head's ``content_hash``, but the computed
+    ``local_hash`` DIFFERS from ``server.content_hash`` (a future drift between
+    our local hashing and RomM's). The parity route would miss the identity;
+    provenance — two server-produced hashes — proves it, so the head is adopted
+    (``Skip(adopt_baseline=True)``), never re-POSTed as a duplicate.
+    """
+    server = _server_save(
+        content_hash="server-scheme-hash",
+        device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
+    )
+    result = compute_sync_action(
+        local_file=_local(),
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "local-scheme-hash", "last_sync_server_hash": "server-scheme-hash"},
+        device_id=DEVICE_ID,
+        local_hash="local-scheme-hash",  # unchanged since baseline, but != server.content_hash
+    )
+    assert result == Skip(reason="synced", adopt_baseline=True)
+
+
+def test_not_current_provenance_does_not_apply_without_baseline():
+    """Branch 5 / #1468 — the no-baseline slice can only ever use parity, by
+    design. A stored server hash is impossible here (no baseline), so a scheme
+    drift where ``local_hash != server.content_hash`` cannot be rescued by
+    provenance → ``Conflict``, exactly as before this issue.
+    """
+    server = _server_save(
+        content_hash="server-scheme-hash",
+        device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
+    )
+    result = compute_sync_action(
+        local_file=_local(),
+        server_saves_in_slot=[server],
+        files_state={},  # no baseline → no stored server hash
+        device_id=DEVICE_ID,
+        local_hash="local-scheme-hash",
+    )
+    assert result == Conflict(server_save=server)
+
+
+def test_no_device_entry_parity_adopts_fresh_install_no_stored_hash():
+    """Branch 6 / #1468 fallback — a fresh install / copied SD card has a local
+    file byte-identical to the server head but NO sync history (no baseline, no
+    stored server hash). Parity (``local_hash == server.content_hash``) is the
+    only route and still adopts (``Skip(adopt_baseline=True)``).
+    """
+    server = _server_save(
+        content_hash="same-hash",
+        device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
+    )
+    result = compute_sync_action(
+        local_file=_local(),
+        server_saves_in_slot=[server],
+        files_state={},  # no baseline, no last_sync_server_hash
+        device_id=DEVICE_ID,
+        local_hash="same-hash",
+    )
+    assert result == Skip(reason="synced", adopt_baseline=True)
+
+
+def test_no_device_entry_provenance_not_taken_when_local_changed():
+    """Branch 6 / #1468 poisoned input — a stored server hash equal to the head's
+    ``content_hash`` must NOT rescue a local that DIVERGED from the baseline. The
+    provenance route requires ``local_hash == last_sync_hash``; here local drifted
+    and is not byte-identical to the head, so identity fails → ``Conflict``. The
+    stored hash never fabricates a false match for changed local content.
+    """
+    server = _server_save(
+        content_hash="server-content",
+        device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
+    )
+    result = compute_sync_action(
+        local_file=_local(),
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "baseline", "last_sync_server_hash": "server-content"},
+        device_id=DEVICE_ID,
+        local_hash="CHANGED",  # != baseline AND != server.content_hash
+    )
+    assert result == Conflict(server_save=server)
+
+
+def test_no_device_entry_empty_stored_server_hash_falls_back_to_parity():
+    """Branch 6 / #1468 poisoned input — an empty-string ``last_sync_server_hash``
+    proves nothing (truthiness guard), so provenance cannot fire. With the head's
+    ``content_hash`` also differing from ``local_hash``, parity fails too → the
+    diverged-baseline path decides ``Conflict``, never a false provenance adopt.
+    """
+    server = _server_save(
+        content_hash="server-content",
+        device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)],
+    )
+    result = compute_sync_action(
+        local_file=_local(),
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "baseline", "last_sync_server_hash": ""},
+        device_id=DEVICE_ID,
+        local_hash="CHANGED",
+    )
+    assert result == Conflict(server_save=server)
+
+
 def test_no_device_entry_garbled_server_updated_at_returns_download():
     """Parse-failure path: unparseable server `updated_at` → server effectively
     wins (Download), per the conservative-fallthrough contract.
@@ -808,3 +917,30 @@ def test_resolve_upload_conflict_empty_local_and_server_content_conflicts():
     coincidentally match — the truthiness guard keeps it ``"conflict"``.
     """
     assert resolve_upload_conflict("", None, "") == "conflict"
+
+
+def test_resolve_upload_conflict_downloads_despite_scheme_drift():
+    """#1468 shape (a) — local is unchanged since our baseline and the server
+    still holds what we synced (``last_sync_server_hash == server_content_hash``),
+    but the computed ``local_hash`` differs from ``server_content_hash`` (scheme
+    drift). We still ``"download"``: our own baseline proves the local carries no
+    un-synced work, so parity is not required to decide it is safe to adopt.
+    """
+    assert resolve_upload_conflict("local-scheme", "local-scheme", "server-scheme", "server-scheme") == "download"
+
+
+def test_resolve_upload_conflict_parity_downloads_without_stored_hash():
+    """#1468 shape (b) — a diverged local (``!= last_sync_hash``) that is
+    byte-identical to the fresh server head still downloads via the parity
+    fallback, even with no ``last_sync_server_hash`` stored (fresh-install shape).
+    """
+    assert resolve_upload_conflict("abc", "old-baseline", "abc", None) == "download"
+
+
+def test_resolve_upload_conflict_stored_hash_alone_does_not_download():
+    """#1468 shape (c) — a stored server hash matching the head is NOT enough on
+    its own: with local diverged from baseline (``local_hash != last_sync_hash``)
+    and not byte-identical to the head (``local_hash != server_content_hash``),
+    the stored hash never fabricates a provenance match → ``"conflict"``.
+    """
+    assert resolve_upload_conflict("CHANGED", "baseline", "server-content", "server-content") == "conflict"

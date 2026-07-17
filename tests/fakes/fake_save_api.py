@@ -214,6 +214,20 @@ class FakeSaveApi:
         last_sep = max(path.rfind("/"), path.rfind("\\"))
         return path[last_sep + 1 :] if last_sep >= 0 else path
 
+    def _server_content_hash(self, file_path: str) -> str | None:
+        """RomM's own ``content_hash`` of the uploaded bytes, or None with no adapter.
+
+        Models the server computing and returning ``content_hash`` on the upload
+        SaveSchema response. Computed with the injected store's zip-aware parity
+        hash — the same scheme the real server uses today — so the fake's response
+        hash agrees with what the client would compute for a non-drifted server.
+        Added to the response only (never to the stored save), so ``list_saves``
+        behaviour is unchanged.
+        """
+        if self.save_file_store is None or not self.save_file_store.is_file(file_path):
+            return None
+        return self.save_file_store.content_hash(file_path)
+
     def _capture_upload(self, save_id: int, file_path: str) -> int:
         """Read bytes from *file_path* via the injected adapter and return size.
 
@@ -550,7 +564,9 @@ class FakeSaveApi:
             entry["file_size_bytes"] = size
             entry["emulator"] = emulator
             self.uploaded_files[save_id] = file_path
-            return dict(entry)
+            response = dict(entry)
+            response["content_hash"] = self._server_content_hash(file_path)
+            return response
 
         # add_save content-dedup early-return (saves.py:253-267): a named-slot
         # ``overwrite=false`` POST whose content matches an existing slot save
@@ -595,7 +611,9 @@ class FakeSaveApi:
                 existing["file_size_bytes"] = size
                 existing["emulator"] = emulator
                 self.uploaded_files[save_id] = file_path
-                return dict(existing)
+                response = dict(existing)
+                response["content_hash"] = self._server_content_hash(file_path)
+                return response
 
         save_id = self._next_save_id
         self._next_save_id += 1
@@ -619,6 +637,7 @@ class FakeSaveApi:
         self._record_device_sync(save_id, device_id)
         response = dict(entry)
         response["device_syncs"] = self._device_syncs_for(entry)
+        response["content_hash"] = self._server_content_hash(file_path)
         return response
 
     def download_save(self, save_id: int, dest_path: str) -> None:

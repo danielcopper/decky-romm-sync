@@ -206,7 +206,11 @@ class MatrixExecutor:
         active slot from *default_slot* so the first sync lands in the
         configured slot. The per-file baseline is recorded via
         :meth:`RomSaveState.adopt_baseline` — the server response always
-        carries the tracked save id.
+        carries the tracked save id. Its ``content_hash`` (RomM's own digest of
+        the bytes: the save it holds after a download, the bytes it received
+        after an upload) is stored as ``last_sync_server_hash`` so the next sync's
+        identity check can compare server-produced hashes; a response without one
+        records ``None`` and the identity check falls back to parity (#1468).
         """
         if not save_state.system and system:
             save_state.adopt_system(system)
@@ -239,6 +243,7 @@ class MatrixExecutor:
             filename,
             tracked_save_id=int(server_save_id),
             last_sync_hash=local_hash,
+            last_sync_server_hash=server_response.get("content_hash"),
             last_sync_at=now,
             last_sync_server_updated_at=server_response.get("updated_at", now) or now,
             last_sync_server_save_id=server_save_id,
@@ -536,6 +541,7 @@ class MatrixExecutor:
         local_path: str | None,
         local_hash: str | None,
         last_sync_hash: str | None,
+        last_sync_server_hash: str | None,
         options: SyncRunOptions,
         sink: DispatchSink,
     ) -> bool:
@@ -582,6 +588,7 @@ class MatrixExecutor:
                 local_path=local_path,
                 local_hash=local_hash,
                 last_sync_hash=last_sync_hash,
+                last_sync_server_hash=last_sync_server_hash,
                 options=options,
                 sink=sink,
             )
@@ -594,6 +601,7 @@ class MatrixExecutor:
         local_path: str,
         local_hash: str | None,
         last_sync_hash: str | None,
+        last_sync_server_hash: str | None,
         options: SyncRunOptions,
         sink: DispatchSink,
     ) -> bool:
@@ -618,7 +626,10 @@ class MatrixExecutor:
             sink.errors.append(f"{filename}: upload rejected by server and no server save found to reconcile")
             return False
         fresh = max(group, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
-        if resolve_upload_conflict(local_hash, last_sync_hash, fresh.get("content_hash")) == "download":
+        if (
+            resolve_upload_conflict(local_hash, last_sync_hash, fresh.get("content_hash"), last_sync_server_hash)
+            == "download"
+        ):
             self.do_download_save(
                 fresh, ctx.saves_dir, filename, ctx.save_state, ctx.device_id, ctx.system, options.default_slot
             )
@@ -635,6 +646,7 @@ class MatrixExecutor:
         local_path: str | None,
         local_hash: str | None,
         last_sync_hash: str | None,
+        last_sync_server_hash: str | None,
         options: SyncRunOptions,
         sink: DispatchSink,
     ) -> bool:
@@ -643,9 +655,9 @@ class MatrixExecutor:
         Centralises the I/O dispatch so ``sync_rom_saves`` stays declarative.
         Errors are caught and pushed onto ``sink.errors`` so a single failure
         can't abort the whole rom-level sync; conflicts land on
-        ``sink.conflicts``. ``ctx.rom_name`` + ``last_sync_hash`` are threaded
-        through for the upload 409 backstop (canonical-target regroup + hash
-        re-decision).
+        ``sink.conflicts``. ``ctx.rom_name`` + the stored baseline pair
+        (``last_sync_hash`` / ``last_sync_server_hash``) are threaded through for
+        the upload 409 backstop (canonical-target regroup + hash re-decision).
         """
         try:
             if isinstance(action, Skip):
@@ -664,6 +676,7 @@ class MatrixExecutor:
                     local_path=local_path,
                     local_hash=local_hash,
                     last_sync_hash=last_sync_hash,
+                    last_sync_server_hash=last_sync_server_hash,
                     options=options,
                     sink=sink,
                 )
@@ -880,6 +893,7 @@ class MatrixExecutor:
                 local_path=outcome.local_path,
                 local_hash=outcome.local_hash,
                 last_sync_hash=outcome.file_state.last_sync_hash,
+                last_sync_server_hash=outcome.file_state.last_sync_server_hash,
                 options=options,
                 sink=sink,
             ):
@@ -923,6 +937,7 @@ def _file_state_to_dict(file_state: FileSyncState) -> dict[str, Any]:
     return {
         "tracked_save_id": file_state.tracked_save_id,
         "last_sync_hash": file_state.last_sync_hash,
+        "last_sync_server_hash": file_state.last_sync_server_hash,
         "last_sync_at": file_state.last_sync_at,
         "last_sync_server_updated_at": file_state.last_sync_server_updated_at,
         "last_sync_server_save_id": file_state.last_sync_server_save_id,

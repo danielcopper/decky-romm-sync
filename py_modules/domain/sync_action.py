@@ -37,15 +37,25 @@ Recovery: ``is_current=true`` + no local file means our last upload is
 still tracked on the server but the local copy disappeared. We download to
 recover the canonical content.
 
+Identity — "is my local file byte-identical to that server save?" — is decided
+by ``_local_matches_server`` (used at branches 5, 6, and the 409 backstop): the
+**primary** route compares the server hash we stored at the last sync
+(``last_sync_server_hash``) against the save's live ``content_hash`` while local
+is unchanged since baseline — both operands are hashes RomM produced, so it
+survives a future drift between our local hashing and the server's; the
+**fallback** route is the direct parity check ``local_hash == content_hash``,
+the only one available to a file with no sync history on this device (fresh
+reinstall, copied SD card, second device — branch 5's no-baseline slice and true
+fresh installs can *only* ever use it, by design). The stored server hash makes
+identity robust; parity stays correct (#1457) as the no-history fallback (#1468).
+
 When our device has never touched the picked save (no entry in
 ``device_syncs``) and the local file is present: first, if the local content is
-byte-identical to that server save — RomM stamps each save with a
-``content_hash``, so ``server.content_hash == local_hash`` proves identity
-without any I/O — we adopt it as the baseline (``Skip(adopt_baseline=True)``)
-rather than POSTing a duplicate of bytes the server already holds (copied SD
-card, restored backup, fresh reinstall). Otherwise, if we hold a baseline
-(``last_sync_hash``) and local has diverged from it, both sides moved — the
-chosen head is a save we never synced — so that is a ``Conflict``, the same as
+byte-identical to that server save (``_local_matches_server`` — provenance or
+parity), we adopt it as the baseline (``Skip(adopt_baseline=True)``) rather than
+POSTing a duplicate of bytes the server already holds. Otherwise, if we hold a
+baseline (``last_sync_hash``) and local has diverged from it, both sides moved —
+the chosen head is a save we never synced — so that is a ``Conflict``, the same as
 branch 5. And if we hold no baseline at all but the present local is not
 byte-identical to that head, its provenance is unknown and it collides with a
 save we never synced — likewise the "user decides" case, a ``Conflict`` in both
@@ -133,6 +143,46 @@ SyncAction = Skip | Upload | Download | Conflict
 # ---------------------------------------------------------------------------
 
 
+def _local_matches_server(
+    local_hash: str | None,
+    server_content_hash: str | None,
+    last_sync_hash: str | None,
+    last_sync_server_hash: str | None,
+) -> bool:
+    """Whether the present local file is byte-identical to a server save.
+
+    The single identity question the kernel asks wherever it must decide "are
+    these the same bytes?" — answered by a disjunction so a future divergence
+    between our local content-hash reimplementation and RomM's own hashing never
+    silently breaks it (#1468):
+
+    - **Provenance** (primary): the local file is unchanged since our recorded
+      baseline (``local_hash == last_sync_hash``) AND that baseline was synced
+      against this exact server content (``last_sync_server_hash ==
+      server_content_hash``). Every value in the two comparisons must be truthy —
+      an empty string proves nothing. Both operands are hashes RomM itself
+      produced (the stored one against the live one), so this route holds even if
+      our local hashing scheme drifts from the server's.
+    - **Parity** (fallback): the local content hash equals the server content
+      hash directly (``local_hash == server_content_hash``, both truthy). The
+      only route available to a file with no sync history on this device (fresh
+      reinstall, copied SD card, second device) — it has no stored server hash to
+      anchor provenance. Correct only while our ``content_hash`` reproduces
+      RomM's scheme (#1457), which is why it is the fallback, not the primary.
+
+    Truthiness guards mirror the kernel's ``not last_sync_hash`` convention:
+    uncertainty (a missing or empty hash on either side) never reads as a match.
+    """
+    if (
+        local_hash
+        and local_hash == last_sync_hash
+        and last_sync_server_hash
+        and last_sync_server_hash == server_content_hash
+    ):
+        return True
+    return bool(local_hash) and local_hash == server_content_hash
+
+
 def _local_mtime_ge_server_updated_at(local_file: dict[str, Any], server: dict[str, Any]) -> bool:
     """Return True iff local mtime is at-or-after the server save's updated_at.
 
@@ -185,7 +235,11 @@ def _decide_when_is_current(
 
 
 def _decide_when_not_current(
-    server: dict[str, Any], local_file: dict[str, Any] | None, local_hash: str | None, last_sync_hash: str | None
+    server: dict[str, Any],
+    local_file: dict[str, Any] | None,
+    local_hash: str | None,
+    last_sync_hash: str | None,
+    last_sync_server_hash: str | None,
 ) -> SyncAction:
     """Branch 5: ``our_entry`` exists but ``is_current=False`` (server moved past us)."""
     if local_file is None:
@@ -193,13 +247,13 @@ def _decide_when_not_current(
         return Download(server_save=server)
     if not last_sync_hash:
         # Local present but no baseline to prove it's unchanged. If it is
-        # byte-identical to this server save (RomM content_hash), adopting via
-        # download is harmless and re-establishes the baseline + is_current.
-        # Otherwise a present local of unknown provenance colliding with a
-        # moved-past head is the "no assumptions, user decides" case (#1276) —
-        # not a safe silent download.
-        server_hash = server.get("content_hash")
-        if server_hash and local_hash and server_hash == local_hash:
+        # byte-identical to this server save, adopting via download is harmless
+        # and re-establishes the baseline + is_current. With no baseline the
+        # identity check can only take the parity route (#1468) — there is no
+        # stored server hash to anchor provenance. Otherwise a present local of
+        # unknown provenance colliding with a moved-past head is the "no
+        # assumptions, user decides" case (#1276) — not a safe silent download.
+        if _local_matches_server(local_hash, server.get("content_hash"), last_sync_hash, last_sync_server_hash):
             return Download(server_save=server)
         return Conflict(server_save=server)
     if local_hash and local_hash != last_sync_hash:
@@ -209,15 +263,20 @@ def _decide_when_not_current(
 
 
 def _decide_when_no_entry(
-    server: dict[str, Any], local_file: dict[str, Any] | None, local_hash: str | None, last_sync_hash: str | None
+    server: dict[str, Any],
+    local_file: dict[str, Any] | None,
+    local_hash: str | None,
+    last_sync_hash: str | None,
+    last_sync_server_hash: str | None,
 ) -> SyncAction:
     """Branch 6: no ``device_syncs`` entry for our device on the chosen save."""
     if local_file is None:
         return Download(server_save=server)
-    # #1013: local content is byte-identical to this server save (RomM-provided
-    # content_hash) → adopt it as the baseline instead of POSTing a duplicate.
-    server_hash = server.get("content_hash")
-    if server_hash and local_hash and server_hash == local_hash:
+    # #1013 / #1468: local content is byte-identical to this server save → adopt
+    # it as the baseline instead of POSTing a duplicate. Identity is proven by
+    # the stored server hash when we hold one (provenance, immune to scheme
+    # drift) and by RomM's ``content_hash`` otherwise (parity fallback).
+    if _local_matches_server(local_hash, server.get("content_hash"), last_sync_hash, last_sync_server_hash):
         return Skip(reason="synced", adopt_baseline=True)
     if last_sync_hash and local_hash and local_hash != last_sync_hash:
         # Both sides moved — the chosen head is a save we never synced while
@@ -250,13 +309,18 @@ def compute_sync_action(
     - `local_file`: {"filename", "path", "size", "mtime"} or None
     - `server_saves_in_slot`: list of RomM API server-save dicts, already
       filtered by the caller to the relevant slot
-    - `files_state`: the per-filename slice of saved sync state (may be empty)
+    - `files_state`: the per-filename slice of saved sync state (may be empty).
+      ``last_sync_hash`` is our own content hash of the local file at the last
+      sync (the drift baseline); ``last_sync_server_hash`` is the server's own
+      ``content_hash`` for that same sync (``None`` before this field existed or
+      for a hash-only skip-adopt), the primary anchor for the identity check via
+      ``_local_matches_server``; ``last_sync_local_size`` backs the shrink guard.
     - `device_id`: this device's id (string)
     - `local_hash`: pre-computed RomM-parity content hash of local_file
       (zip-aware; a plain MD5 for a single-file save, the per-entry combined
       hash for a zip), or None when unknown. Must be computed the same way as
-      the server's ``content_hash`` so the byte-identity checks against it can
-      match for zip saves too.
+      the server's ``content_hash`` so the parity-route byte-identity checks
+      against it can match for zip saves too.
     """
     # 1. No server saves in slot.
     if not server_saves_in_slot:
@@ -275,19 +339,21 @@ def compute_sync_action(
     device_syncs = server.get("device_syncs") or []
     our_entry = next((ds for ds in device_syncs if ds.get("device_id") == device_id), None)
     last_sync_hash = files_state.get("last_sync_hash")
+    last_sync_server_hash = files_state.get("last_sync_server_hash")
     last_sync_local_size = files_state.get("last_sync_local_size")
 
     if our_entry and our_entry.get("is_current"):
         return _decide_when_is_current(server, local_file, local_hash, last_sync_hash, last_sync_local_size)
     if our_entry is not None:
-        return _decide_when_not_current(server, local_file, local_hash, last_sync_hash)
-    return _decide_when_no_entry(server, local_file, local_hash, last_sync_hash)
+        return _decide_when_not_current(server, local_file, local_hash, last_sync_hash, last_sync_server_hash)
+    return _decide_when_no_entry(server, local_file, local_hash, last_sync_hash, last_sync_server_hash)
 
 
 def resolve_upload_conflict(
     local_hash: str | None,
     last_sync_hash: str | None,
     server_content_hash: str | None = None,
+    last_sync_server_hash: str | None = None,
 ) -> Literal["download", "conflict"]:
     """Decide the fallback when an upload POST is rejected by RomM's 409.
 
@@ -297,9 +363,14 @@ def resolve_upload_conflict(
     Two provably-safe outcomes, else a user decision:
 
     - local is unchanged since our own recorded baseline
-      (``local_hash == last_sync_hash``), or byte-identical to what the server
-      now holds (``local_hash == server_content_hash``) → nothing of ours to
-      protect; adopt the server save via ``"download"``.
+      (``local_hash == last_sync_hash``), so we hold no un-synced work — nothing
+      of ours to protect; adopt the server save via ``"download"``.
+    - local is byte-identical to what the server now holds
+      (:func:`_local_matches_server`, provenance-first with a parity fallback) →
+      also ``"download"``. When local is unchanged since baseline this route is
+      already covered by the first check, so here it is the parity fallback that
+      earns its keep — a local that *diverged* from baseline yet reproduces the
+      server head byte-for-byte.
     - otherwise local carries changes AND the server independently moved (which
       is exactly what the 409 proves) → genuine two-sided divergence →
       ``"conflict"`` for the user to resolve.
@@ -312,6 +383,6 @@ def resolve_upload_conflict(
     """
     if local_hash and last_sync_hash and local_hash == last_sync_hash:
         return "download"
-    if local_hash and server_content_hash and local_hash == server_content_hash:
+    if _local_matches_server(local_hash, server_content_hash, last_sync_hash, last_sync_server_hash):
         return "download"
     return "conflict"
