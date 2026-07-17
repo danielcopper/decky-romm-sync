@@ -32,15 +32,27 @@ from domain._aggregate import cosmic_aggregate
 
 @dataclass(frozen=True, slots=True)
 class FileSyncState:
-    """Per-file sync baseline — last-observed hash, sizes, and timestamps.
+    """Per-file sync baseline — last-observed hashes, sizes, and timestamps.
 
     Immutable value object owned by :class:`RomSaveState`; the aggregate builds
     one whole on :meth:`RomSaveState.adopt_baseline` so the newest-wins matrix
     can detect drift against it on the next sync.
+
+    ``last_sync_hash`` is our own content hash of the local file at the last
+    sync (the drift baseline). ``last_sync_server_hash`` is the server-provided
+    ``content_hash`` of that same sync — RomM's own digest of the bytes, stored
+    so an identity-vs-server check can compare two server-produced hashes
+    instead of relying on our local reimplementation staying byte-for-byte
+    identical to RomM's scheme (#1468). It is ``None`` for a baseline recorded
+    before this field existed or for a hash-only skip-adopt; the identity check
+    falls back to parity there. The two hashes are always recorded together at a
+    single sync event — never re-paired independently — so a stored server hash
+    truthfully corresponds to its ``last_sync_hash``.
     """
 
     tracked_save_id: int | None = None
     last_sync_hash: str | None = None
+    last_sync_server_hash: str | None = None
     last_sync_at: str = ""
     last_sync_server_updated_at: str = ""
     last_sync_server_save_id: int | None = None
@@ -73,6 +85,7 @@ class RomSaveState:
         *,
         tracked_save_id: int,
         last_sync_hash: str,
+        last_sync_server_hash: str | None = None,
         last_sync_at: str = "",
         last_sync_server_updated_at: str = "",
         last_sync_server_save_id: int | None = None,
@@ -85,8 +98,12 @@ class RomSaveState:
         The only way to add a file to ``files`` — enforces that every tracked
         file carries both a server save id and a hash baseline (invariant 1).
         Re-calling with an existing filename re-adopts the baseline under the
-        known ``tracked_save_id``. Raises ``ValueError`` if the id is not
-        positive or the hash is empty.
+        known ``tracked_save_id``. ``last_sync_server_hash`` is the server's own
+        ``content_hash`` for this sync (``None`` when the response/save carried
+        none — the identity check then falls back to parity, #1468); it is paired
+        with ``last_sync_hash`` here so the two always describe the same sync
+        event. Raises ``ValueError`` if the id is not positive or the hash is
+        empty.
         """
         if tracked_save_id <= 0:
             raise ValueError("tracked_save_id must be positive")
@@ -95,6 +112,7 @@ class RomSaveState:
         self.files[filename] = FileSyncState(
             tracked_save_id=tracked_save_id,
             last_sync_hash=last_sync_hash,
+            last_sync_server_hash=last_sync_server_hash,
             last_sync_at=last_sync_at,
             last_sync_server_updated_at=last_sync_server_updated_at,
             last_sync_server_save_id=last_sync_server_save_id,
@@ -111,16 +129,24 @@ class RomSaveState:
         save id to anchor a full baseline, but still wants to record the hash so
         a later run can detect offline-edit drift. Updates the hash in place when
         ``filename`` is already tracked (preserving its other anchors), else
-        creates a minimal :class:`FileSyncState` carrying just the hash. Raises
-        ``ValueError`` if the hash is empty.
+        creates a minimal :class:`FileSyncState` carrying just the hash.
+
+        ``last_sync_server_hash`` is kept only while the local hash is unchanged
+        (a re-adopt of the same content — the stored server hash still pairs with
+        it, so provenance survives repeated syncs and status reads); it is dropped
+        when the local hash actually changes, since this path has no server hash
+        for the new content and a stale one would pair a fresh ``last_sync_hash``
+        with a server hash from an unrelated sync — a false provenance match
+        (#1468). Raises ``ValueError`` if the hash is empty.
         """
         if not last_sync_hash:
             raise ValueError("last_sync_hash is required")
         existing = self.files.get(filename)
         if existing is None:
             self.files[filename] = FileSyncState(last_sync_hash=last_sync_hash)
-        else:
-            self.files[filename] = replace(existing, last_sync_hash=last_sync_hash)
+            return
+        server_hash = existing.last_sync_server_hash if existing.last_sync_hash == last_sync_hash else None
+        self.files[filename] = replace(existing, last_sync_hash=last_sync_hash, last_sync_server_hash=server_hash)
 
     def track_own_upload(self, save_id: int) -> None:
         """Attribute ``save_id`` to an upload we made (idempotent).

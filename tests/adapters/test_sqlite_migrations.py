@@ -76,8 +76,9 @@ def _set_user_version(db_path: str, version: int) -> None:
 # + 009_add_last_session_start_monotonic + 010_add_sibling_group_key_index
 # + 011_rekey_sibling_group_key + 012_add_platform_sync_state
 # + 013_add_interrupted_sync_run_status + 014_add_paused_sync_run_status
-# + 015_add_applied_launch_options + 016_add_cover_source).
-_SHIPPED_VERSION = 16
+# + 015_add_applied_launch_options + 016_add_cover_source
+# + 017_add_last_sync_server_hash).
+_SHIPPED_VERSION = 17
 
 # Tables after every shipped migration: the v1 set plus 006's play-session outbox
 # and 012's per-platform completion stamp.
@@ -1051,6 +1052,57 @@ class Test016CoverSource:
         db_path = str(tmp_path / "romm_sync.db")
         apply_migrations(db_path, str(_only_migrations_through(tmp_path, 15)))
         assert "cover_source" not in _columns(db_path, "roms")
+
+
+class Test017LastSyncServerHash:
+    """017 — adds the nullable last_sync_server_hash column to rom_save_files only (#1468)."""
+
+    def test_adds_last_sync_server_hash_to_rom_save_files_only(self, tmp_path: Path):
+        # 017 ALTERs only rom_save_files; rom_save_states (and every other table) is untouched.
+        db_path = str(tmp_path / "romm_sync.db")
+
+        apply_migrations(db_path)
+
+        assert _user_version(db_path) == _SHIPPED_VERSION
+        assert "last_sync_server_hash" in _columns(db_path, "rom_save_files")
+        assert "last_sync_server_hash" not in _columns(db_path, "rom_save_states")
+
+    def test_existing_row_reads_null_across_the_migration(self, tmp_path: Path):
+        # A file baseline seeded before 017 reads NULL for the new column (no
+        # stored server hash → the identity check's parity fallback), the "no
+        # data invented" contract: a server hash is never fabricated by the
+        # migration, only stamped by a later real sync.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 16)))
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute(
+                "INSERT INTO roms (rom_id, platform_slug, name, fs_name, last_synced_at) "
+                "VALUES (1, 'gba', 'Game', 'game.gba', '2026-07-11T10:00:00')"
+            )
+            conn.execute("INSERT INTO rom_save_states (rom_id) VALUES (1)")
+            conn.execute(
+                "INSERT INTO rom_save_files (rom_id, filename, last_sync_hash) VALUES (1, 'game.srm', 'deadbeef')"
+            )
+        finally:
+            conn.close()
+
+        assert apply_migrations(db_path) == _SHIPPED_VERSION
+
+        conn = sqlite3.connect(db_path)
+        try:
+            value = conn.execute(
+                "SELECT last_sync_server_hash FROM rom_save_files WHERE rom_id = 1 AND filename = 'game.srm'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert value is None
+
+    def test_last_sync_server_hash_absent_before_017(self, tmp_path: Path):
+        # At v16 the column does not yet exist.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 16)))
+        assert "last_sync_server_hash" not in _columns(db_path, "rom_save_files")
 
 
 def test_shipped_migrations_dir_resolves_to_real_schema():

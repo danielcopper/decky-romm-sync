@@ -60,6 +60,23 @@ class TestRoundTrip:
         assert loaded == state
         assert set(loaded.files) == {"save.srm", "save.state"}
 
+    def test_last_sync_server_hash_round_trips_value_and_none(self, uow: SqliteUnitOfWork):
+        # #1468 — the provenance anchor persists as a value and as NULL (parity
+        # fallback) across the rom_save_files column.
+        _seed_rom(uow, 5)
+        state = RomSaveState(
+            files={
+                "with.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h1", last_sync_server_hash="srv-h1"),
+                "without.srm": FileSyncState(tracked_save_id=2, last_sync_hash="h2"),  # no stored server hash
+            },
+        )
+        uow.rom_save_states.save(5, state)
+
+        loaded = uow.rom_save_states.get(5)
+        assert loaded is not None
+        assert loaded.files["with.srm"].last_sync_server_hash == "srv-h1"
+        assert loaded.files["without.srm"].last_sync_server_hash is None
+
     def test_slot_confirmed_bool_round_trips(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 5)
         uow.rom_save_states.save(5, RomSaveState(slot_confirmed=False))

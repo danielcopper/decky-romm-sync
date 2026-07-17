@@ -28,13 +28,14 @@ def _rewind_to_v4(db_path: str) -> None:
 
     Bootstrap stamps the DB at the latest version with the full schema. To replay
     the real 005 upgrade path the runner must see a genuine v4 database: the
-    version stamp AND the pre-006/007/008/009/010/011/015/016 schema (006's
+    version stamp AND the pre-006/007/008/009/010/011/015/016/017 schema (006's
     play-session outbox table absent and ``note_id`` present, 007's
     ``last_played`` column absent, 008's version-metadata columns absent, 009's
     ``last_session_start_monotonic`` column absent, 010's sibling_group_key index
     absent, 011's platform_sync_state table absent, 015's
-    ``applied_launch_options`` column absent, and 016's ``cover_source`` column
-    absent) so the sequential 005→…→016 re-run applies cleanly.
+    ``applied_launch_options`` column absent, 016's ``cover_source`` column
+    absent, and 017's ``last_sync_server_hash`` column absent) so the sequential
+    005→…→017 re-run applies cleanly.
     """
     conn = sqlite3.connect(db_path, isolation_level=None)
     try:
@@ -55,6 +56,8 @@ def _rewind_to_v4(db_path: str) -> None:
         conn.execute("ALTER TABLE roms DROP COLUMN applied_launch_options")
         # Reverse 016 so its ADD COLUMN re-applies instead of duplicating.
         conn.execute("ALTER TABLE roms DROP COLUMN cover_source")
+        # Reverse 017 so its ADD COLUMN re-applies instead of duplicating.
+        conn.execute("ALTER TABLE rom_save_files DROP COLUMN last_sync_server_hash")
         conn.execute("PRAGMA user_version = 4")
     finally:
         conn.close()

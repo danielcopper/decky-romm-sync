@@ -29,7 +29,7 @@ _STATE_COLUMNS = (
     "rom_id, active_slot, slot_confirmed, emulator, system, last_synced_core, own_upload_ids, slots, last_sync_check_at"
 )
 _FILE_COLUMNS = (
-    "rom_id, filename, tracked_save_id, last_sync_hash, last_sync_at, "
+    "rom_id, filename, tracked_save_id, last_sync_hash, last_sync_server_hash, last_sync_at, "
     "last_sync_server_updated_at, last_sync_server_save_id, last_sync_server_size, "
     "last_sync_local_mtime, last_sync_local_size"
 )
@@ -39,6 +39,7 @@ def _row_to_file(row: sqlite3.Row) -> FileSyncState:
     return FileSyncState(
         tracked_save_id=row["tracked_save_id"],
         last_sync_hash=row["last_sync_hash"],
+        last_sync_server_hash=row["last_sync_server_hash"],
         last_sync_at=row["last_sync_at"],
         last_sync_server_updated_at=row["last_sync_server_updated_at"],
         last_sync_server_save_id=row["last_sync_server_save_id"],
@@ -97,13 +98,14 @@ class SqliteRomSaveStateRepository(BaseRepository):
         )
         self._conn.execute("DELETE FROM rom_save_files WHERE rom_id = ?", (rom_id,))
         self._conn.executemany(
-            f"INSERT INTO rom_save_files ({_FILE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT INTO rom_save_files ({_FILE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 (
                     rom_id,
                     filename,
                     file.tracked_save_id,
                     file.last_sync_hash,
+                    file.last_sync_server_hash,
                     file.last_sync_at,
                     file.last_sync_server_updated_at,
                     file.last_sync_server_save_id,

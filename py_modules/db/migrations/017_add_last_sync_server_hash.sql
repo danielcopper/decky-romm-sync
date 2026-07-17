@@ -1,0 +1,29 @@
+-- =============================================================================
+-- 017_add_last_sync_server_hash.sql — server-provided baseline hash on FileSyncState
+-- #1468 (server-hash baseline; parity demoted to the no-history fallback)
+-- =============================================================================
+--
+-- Adds a nullable column recording the server's own ``content_hash`` for the
+-- save synced at the last baseline. The identity check ("is my local file
+-- byte-identical to that server save?") now prefers comparing this stored,
+-- server-produced hash against the save's live ``content_hash`` (the provenance
+-- route, immune to a future drift between our local hashing and RomM's) and
+-- falls back to the parity recomputation (``local_hash == content_hash``, #1457)
+-- only for files with no sync history on this device.
+--
+-- NULL = no stored server hash. A pre-migration baseline (and every hash-only
+-- skip-adopt) reads NULL, so the identity check simply uses the parity fallback
+-- until the next full sync stamps a value — no data is invented from the
+-- migration, and no backfill is possible or needed.
+--
+-- Written only alongside ``last_sync_hash`` at the recorded-baseline writer
+-- sites (``adopt_baseline`` via ``update_file_sync_state`` on upload/download
+-- and the keep_local adopt-without-upload path); the hash-only
+-- ``update_baseline_hash`` clears it, so a stored server hash always truthfully
+-- pairs with its ``last_sync_hash``. Anchored on ``rom_save_files`` (the
+-- FileSyncState child of the RomSaveState aggregate).
+--
+-- Transaction-safe DDL only — the runner (adapters/sqlite_migrations.py) wraps
+-- BEGIN/COMMIT and stamps PRAGMA user_version = 17.
+-- -----------------------------------------------------------------------------
+ALTER TABLE rom_save_files ADD COLUMN last_sync_server_hash TEXT;  -- server's content_hash at last sync; NULL = none stored (parity fallback)

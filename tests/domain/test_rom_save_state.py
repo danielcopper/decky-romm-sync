@@ -34,6 +34,7 @@ class TestFileSyncState:
         fs = FileSyncState()
         assert fs.tracked_save_id is None
         assert fs.last_sync_hash is None
+        assert fs.last_sync_server_hash is None
         assert fs.last_sync_at == ""
         assert fs.last_sync_server_updated_at == ""
         assert fs.last_sync_server_save_id is None
@@ -55,6 +56,7 @@ class TestAdoptBaseline:
         assert fs.tracked_save_id == 11
         assert fs.last_sync_hash == "deadbeef"
         # Untouched optionals fall back to FileSyncState defaults.
+        assert fs.last_sync_server_hash is None
         assert fs.last_sync_at == ""
         assert fs.last_sync_server_updated_at == ""
         assert fs.last_sync_server_save_id is None
@@ -68,6 +70,7 @@ class TestAdoptBaseline:
             "game.srm",
             tracked_save_id=11,
             last_sync_hash="deadbeef",
+            last_sync_server_hash="srv-deadbeef",
             last_sync_at="2026-05-28T10:00:00",
             last_sync_server_updated_at="2026-05-28T09:00:00",
             last_sync_server_save_id=99,
@@ -78,6 +81,7 @@ class TestAdoptBaseline:
         fs = state.files["game.srm"]
         assert fs.tracked_save_id == 11
         assert fs.last_sync_hash == "deadbeef"
+        assert fs.last_sync_server_hash == "srv-deadbeef"
         assert fs.last_sync_at == "2026-05-28T10:00:00"
         assert fs.last_sync_server_updated_at == "2026-05-28T09:00:00"
         assert fs.last_sync_server_save_id == 99
@@ -142,6 +146,44 @@ class TestUpdateBaselineHash:
         assert fs.last_sync_at == "2026-05-28T10:00:00"
         assert fs.last_sync_server_save_id == 99
         assert fs.last_sync_server_size == 2048
+
+    def test_clears_stale_server_hash_when_hash_changes(self):
+        # A changed local hash has no server hash for the new content; a kept
+        # stale one would pair a fresh last_sync_hash with an unrelated server
+        # hash, which the provenance identity check would misread (#1468).
+        state = RomSaveState()
+        state.adopt_baseline(
+            "game.srm",
+            tracked_save_id=11,
+            last_sync_hash="old",
+            last_sync_server_hash="srv-old",
+        )
+        state.update_baseline_hash("game.srm", "new")
+        fs = state.files["game.srm"]
+        assert fs.last_sync_hash == "new"
+        assert fs.last_sync_server_hash is None
+
+    def test_keeps_server_hash_when_hash_unchanged(self):
+        # A re-adopt of the SAME content (e.g. a status read or repeat sync of an
+        # unchanged file) keeps the stored server hash — it still pairs with the
+        # unchanged last_sync_hash, so provenance survives repeated evaluation
+        # (#1468).
+        state = RomSaveState()
+        state.adopt_baseline(
+            "game.srm",
+            tracked_save_id=11,
+            last_sync_hash="same",
+            last_sync_server_hash="srv-same",
+        )
+        state.update_baseline_hash("game.srm", "same")
+        fs = state.files["game.srm"]
+        assert fs.last_sync_hash == "same"
+        assert fs.last_sync_server_hash == "srv-same"
+
+    def test_minimal_entry_has_no_server_hash(self):
+        state = RomSaveState()
+        state.update_baseline_hash("game.srm", "abc123")
+        assert state.files["game.srm"].last_sync_server_hash is None
 
     def test_does_not_add_a_second_entry_on_update(self):
         state = RomSaveState()
