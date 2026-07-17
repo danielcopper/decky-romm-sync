@@ -180,4 +180,33 @@ describe("pacedOps — pacedForEach", () => {
     const done = await pacedForEach([1, 2, 3], () => {}, { delayMs: 0 });
     expect(done).toBe(true);
   });
+
+  it("onProgress fires once per item with the running count, independent of chunk size", async () => {
+    const seen: number[] = [];
+    await pacedForEach([10, 20, 30, 40], () => {}, { delayMs: 0, chunkSize: 2, onProgress: (c) => seen.push(c) });
+    // One tick per item (1..4), not one per chunk.
+    expect(seen).toEqual([1, 2, 3, 4]);
+  });
+
+  it("onProgress is never called for an empty list", async () => {
+    const onProgress = vi.fn();
+    await pacedForEach([], () => {}, { onProgress });
+    expect(onProgress).not.toHaveBeenCalled();
+  });
+
+  it("onProgress still fires for an item whose fn throws (count reflects items attempted)", async () => {
+    const logSpy = vi.spyOn(backend, "logError").mockImplementation(() => {});
+    const seen: number[] = [];
+    await pacedForEach(
+      [1, 2, 3],
+      (x) => {
+        if (x === 2) throw new Error("boom");
+      },
+      { delayMs: 0, onProgress: (c) => seen.push(c) },
+    );
+    // Item 2 threw (logged + swallowed) but its progress tick still fired.
+    expect(seen).toEqual([1, 2, 3]);
+    expect(logSpy).toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
 });

@@ -34,4 +34,14 @@ describe("shortcutRemoval — removeShortcutsPaced", () => {
     await removeShortcutsPaced([5, 9, 3]);
     expect(removeShortcut.mock.calls.map((c) => c[0])).toEqual([5, 9, 3]);
   });
+
+  it("reports (removed, total) after each removal when a progress callback is given", async () => {
+    const progress: [number, number][] = [];
+    await removeShortcutsPaced([11, 22, 33], (removed, total) => progress.push([removed, total]));
+    expect(progress).toEqual([
+      [1, 3],
+      [2, 3],
+      [3, 3],
+    ]);
+  });
 });

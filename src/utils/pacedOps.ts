@@ -39,6 +39,13 @@ export interface PacedForEachOptions {
    * item. Omit for operations that can't be cancelled (removals).
    */
   isCancelled?: () => boolean;
+  /**
+   * Called after each processed item with the running completed count (1-based),
+   * regardless of chunk size — once per item, never for an empty list, and even
+   * for an item whose *fn* threw (the count reflects items attempted). Additive:
+   * omit it and the loop behaves exactly as before.
+   */
+  onProgress?: (completed: number) => void;
 }
 
 /**
@@ -61,7 +68,7 @@ export async function pacedForEach<T>(
   fn: (item: T, index: number) => void | Promise<void>,
   options: PacedForEachOptions = {},
 ): Promise<boolean> {
-  const { chunkSize = 1, delayMs = 50, heartbeat, heartbeatIntervalMs = 10_000, isCancelled } = options;
+  const { chunkSize = 1, delayMs = 50, heartbeat, heartbeatIntervalMs = 10_000, isCancelled, onProgress } = options;
   let lastHeartbeat = Date.now();
   for (const [i, item] of items.entries()) {
     try {
@@ -70,6 +77,7 @@ export async function pacedForEach<T>(
       logError(`pacedForEach: item ${i} failed: ${e}`);
     }
     const done = i + 1;
+    onProgress?.(done);
     if (done % chunkSize === 0 && done < items.length) {
       await delay(delayMs);
     }
