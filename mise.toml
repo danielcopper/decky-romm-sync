@@ -153,10 +153,10 @@ usage = '''
 arg "[display]" help="Monitor for the Big Picture window: 'internal' or an output name (dp2, DP-3, ...). Omit to deploy only, no BPM."
 complete "display" run="bash scripts/dev_open_bpm.sh --list"
 '''
-run = """
 # A display target given? Fail fast on a typo before sudo / stopping the loader —
 # a bad name shouldn't prompt for sudo or kill the loader for nothing. Omitted →
 # $usage_display empty → this and the BPM open below are skipped (deploy-only).
+run = """
 if [ -n "${usage_display:-}" ]; then
   bash scripts/dev_open_bpm.sh --resolve "$usage_display" >/dev/null
 fi
@@ -272,13 +272,13 @@ usage = '''
 arg "[mode]" help="'deck' (1.5, = Game Mode metrics), a bare factor (2.0-2.4 = 'Larger text', ~1.28 = docked 1080p, ~1.71 = docked 1440p), 'steam' (adopt the UI Scale set in Steam), or 'auto' (restore automatic scaling and exit)" default="deck"
 complete "mode" run="printf 'deck\\nsteam\\nauto\\n'"
 '''
-run = '''
 # Holds until Ctrl-C, then restores BOTH halves as they were BEFORE the run: the
 # scale (auto stays auto; a manual UI Scale is put back as it was, never flipped to
 # auto) and the Big Picture window's geometry + fullscreen state. Steam persists a
 # forced factor to config.vdf, so leaving it forced is not harmless.
 # `exec` so Ctrl-C / SIGTERM reach the script itself (mise is not left in the
 # signal path, which is what makes the restore reliable).
+run = '''
 exec python3 scripts/dev_ui_scale.py "$usage_mode"
 '''
 
@@ -289,11 +289,11 @@ usage = '''
 arg "[display]" help="Monitor for the Big Picture window: 'internal' or an output name (dp2, DP-3, ...)" default="internal"
 complete "display" run="bash scripts/dev_open_bpm.sh --list"
 '''
-run = '''
 # Opens BPM non-blocking (starting Steam straight into it if it isn't running)
 # and places the window on the chosen display via a short-lived KWin script —
 # the same helper dev:watch and dev:bpm-reset use, without their deploy /
 # restart halves. Pairs with a one-off `mise run dev` test build.
+run = '''
 exec bash scripts/dev_open_bpm.sh "$usage_display"
 '''
 
@@ -304,8 +304,8 @@ usage = '''
 arg "[display]" help="Monitor for the Big Picture window: 'internal' or an output name (dp2, DP-3, ...)" default="internal"
 complete "display" run="bash scripts/dev_open_bpm.sh --list"
 '''
-run = '''
 # Fail fast on a typo'd display target before shutting Steam down.
+run = '''
 bash scripts/dev_open_bpm.sh --resolve "$usage_display" >/dev/null
 # Decky's UI survives only the FIRST Big Picture entry per Steam process:
 # leaving BPM and re-entering loses the Decky QAM until Steam restarts.
