@@ -1522,6 +1522,96 @@ describe("DangerZone", () => {
     });
   });
 
+  describe("busy state during removals (#1449)", () => {
+    it("disables every removal button, shows the spinner + counter mid-removal, then re-enables", async () => {
+      const ids = Array.from({ length: 26 }, (_, i) => i + 1);
+      stubCollectionStore(ids);
+      stubAppStore(Object.fromEntries(ids.map((id) => [id, { strDisplayName: `Game ${id}` }])));
+      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
+        platforms: [{ slug: "snes", name: "Super Nintendo", count: 2 }],
+      });
+      const { getByText, queryAllByTestId, container } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+
+      // Before the removal: no busy spinner, every removal button enabled.
+      expect(queryAllByTestId("spinner").length).toBe(0);
+      expect(getByText("Remove All RomM Shortcuts")).not.toBeDisabled();
+      expect(getByText("Super Nintendo (2)")).not.toBeDisabled();
+
+      fireEvent.click(getByText("Remove 26 Non-Steam Games"));
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          fireEvent.click(getByText(/Are you sure\? Remove 26 games/));
+          for (let i = 0; i < 40; i++) await Promise.resolve();
+        });
+        // Mid-removal, parked on the breather after the first 25-item chunk.
+        expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(25);
+        // Spinner visible + live counter reflects progress.
+        expect(queryAllByTestId("spinner").length).toBeGreaterThan(0);
+        expect(container.textContent).toContain("Removing 25 of 26...");
+        // Every removal button — across BOTH sections — is disabled: a second
+        // concurrent run is impossible via the UI, not merely harmless.
+        expect(getByText("Remove 26 Non-Steam Games")).toBeDisabled();
+        expect(getByText("Remove All RomM Shortcuts")).toBeDisabled();
+        expect(getByText("Uninstall All Installed ROMs")).toBeDisabled();
+        expect(getByText("Super Nintendo (2)")).toBeDisabled();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(50);
+          for (let i = 0; i < 20; i++) await Promise.resolve();
+          await vi.advanceTimersByTimeAsync(3500); // drain the settle poll
+        });
+        // After completion: last removal ran, spinner gone, buttons re-enabled,
+        // final status text shown.
+        expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(26);
+        expect(queryAllByTestId("spinner").length).toBe(0);
+        expect(getByText("Remove 26 Non-Steam Games")).not.toBeDisabled();
+        expect(getByText("Remove All RomM Shortcuts")).not.toBeDisabled();
+        expect(getByText("Super Nintendo (2)")).not.toBeDisabled();
+        expect(container.textContent).toContain("Removed 26 non-steam games");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("remove-all-RomM drives the counter and clears busy on completion", async () => {
+      const appIds = Array.from({ length: 26 }, (_, i) => i + 1);
+      vi.mocked(backend.removeAllShortcuts).mockResolvedValue({
+        success: true,
+        message: "Removed all",
+        app_ids: appIds,
+        rom_ids: [1],
+      });
+      vi.mocked(getLiveRomMShortcutAppIds).mockResolvedValue([]);
+      const { getByText, container, queryAllByTestId } = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(getByText("Remove All RomM Shortcuts"));
+      vi.useFakeTimers();
+      try {
+        await act(async () => {
+          fireEvent.click(getByText("Confirm: remove all RomM shortcuts?"));
+          for (let i = 0; i < 40; i++) await Promise.resolve();
+        });
+        expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(25);
+        expect(container.textContent).toContain("Removing 25 of 26...");
+        expect(queryAllByTestId("spinner").length).toBeGreaterThan(0);
+        expect(getByText("Remove All RomM Shortcuts")).toBeDisabled();
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(50);
+          for (let i = 0; i < 20; i++) await Promise.resolve();
+        });
+        expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(26);
+        expect(container.textContent).toContain("Removed all");
+        expect(queryAllByTestId("spinner").length).toBe(0);
+        expect(getByText("Remove All RomM Shortcuts")).not.toBeDisabled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe("WhitelistSection — collapse / expand + spinner", () => {
     it("collapsed by default; click reveals search + toggle list", async () => {
       stubCollectionStore([1]);

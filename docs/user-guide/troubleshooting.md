@@ -187,6 +187,11 @@ While a library sync is running (or cancelling), the shortcut and ROM removal ac
 unavailable — the buttons are disabled with a short hint, and the backend refuses the request too. Wait for the sync to
 finish, or cancel it, before removing shortcuts or ROMs. Save-file and BIOS deletions are not affected.
 
+A bulk shortcut removal is paced so it never freezes the interface, so on a large library it can take a few seconds.
+While one is running, all the removal buttons are disabled and a spinner with a live **Removing x of y** counter shows
+the progress; the buttons re-enable and the final count appears once it finishes. You can't start a second removal (or a
+new one from another button) until the current one completes.
+
 ### Remove by Platform
 
 Removes all shortcuts for a specific platform (e.g. all Game Boy Advance games). The associated Steam collection is also

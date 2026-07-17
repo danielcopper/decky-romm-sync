@@ -166,6 +166,17 @@ const PlatformActionModal: FC<{
   );
 };
 
+/** Live progress of an in-flight bulk removal. */
+type RemovalProgress = { removed: number; total: number };
+
+/**
+ * Run a bulk removal wrapped in the DangerZone busy affordance: the removal
+ * buttons disable and the spinner + progress counter show for its duration.
+ * *work* receives an ``onProgress(removed, total)`` reporter to thread into
+ * ``removeShortcutsPaced``; busy + progress are always cleared when it settles.
+ */
+type RunRemoval = (work: (onProgress: (removed: number, total: number) => void) => Promise<void>) => Promise<void>;
+
 interface ShortcutRemovalSectionProps {
   platforms: RegistryPlatform[];
   loading: boolean;
@@ -173,6 +184,8 @@ interface ShortcutRemovalSectionProps {
   loadNonSteamApps: () => void;
   status: string;
   setStatus: (s: string) => void;
+  busy: boolean;
+  runRemoval: RunRemoval;
 }
 
 const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
@@ -182,36 +195,40 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
   loadNonSteamApps,
   status,
   setStatus,
+  busy,
+  runRemoval,
 }) => {
   const [actionStatus, setActionStatus] = useState("");
   const [uninstallStatus, setUninstallStatus] = useState("");
   const [confirmRemoveAllRomm, setConfirmRemoveAllRomm] = useState(false);
   const [confirmUninstall, setConfirmUninstall] = useState(false);
   const syncRunning = useSyncRunning();
+  const removalDisabled = busy || syncRunning;
 
-  const handleRemoveShortcuts = async (p: RegistryPlatform) => {
-    setActionStatus(`Removing ${p.name} shortcuts...`);
-    try {
-      const result = await removePlatformShortcuts(p.slug);
-      // The @migration_blocked / @sync_active_blocked gates short-circuit to
-      // { success: false, message, ... } with no app_ids/rom_ids — surface
-      // that message instead of cosmetically reporting a removal.
-      if (!result.success) {
-        setActionStatus(result.message ?? "Failed to remove shortcuts");
-        return;
+  const handleRemoveShortcuts = (p: RegistryPlatform) =>
+    runRemoval(async (onProgress) => {
+      setActionStatus(`Removing ${p.name} shortcuts...`);
+      try {
+        const result = await removePlatformShortcuts(p.slug);
+        // The @migration_blocked / @sync_active_blocked gates short-circuit to
+        // { success: false, message, ... } with no app_ids/rom_ids — surface
+        // that message instead of cosmetically reporting a removal.
+        if (!result.success) {
+          setActionStatus(result.message ?? "Failed to remove shortcuts");
+          return;
+        }
+        await removeShortcutsPaced(result.app_ids ?? [], onProgress);
+        if (result.rom_ids?.length) {
+          await reportRemovalResults(result.rom_ids);
+        }
+        await clearPlatformCollection(result.platform_name || p.name);
+        setActionStatus(`Removed ${p.count} ${p.name} game${p.count === 1 ? "" : "s"}`);
+        await refreshPlatforms();
+        loadNonSteamApps();
+      } catch {
+        setActionStatus("Failed to remove shortcuts");
       }
-      await removeShortcutsPaced(result.app_ids ?? []);
-      if (result.rom_ids?.length) {
-        await reportRemovalResults(result.rom_ids);
-      }
-      await clearPlatformCollection(result.platform_name || p.name);
-      setActionStatus(`Removed ${p.count} ${p.name} game${p.count === 1 ? "" : "s"}`);
-      await refreshPlatforms();
-      loadNonSteamApps();
-    } catch {
-      setActionStatus("Failed to remove shortcuts");
-    }
-  };
+    });
 
   const handleDeleteSaves = (p: RegistryPlatform) => {
     const platformName = p.name || p.slug;
@@ -262,48 +279,54 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
       return;
     }
     setConfirmRemoveAllRomm(false);
-    setStatus("Removing all shortcuts...");
-    let removedCount = 0;
-    try {
-      const result = await removeAllShortcuts();
-      if (!result.success) {
-        // A gate refusal (@sync_active_blocked / @migration_blocked) carries
-        // no app_ids/rom_ids — surface its message and remove nothing.
-        setStatus(result.message ?? "Failed to remove shortcuts");
-      } else {
-        // The backend list is the DB binding map (roms.shortcut_app_id). A
-        // crashed sync run's in-flight chunk can leave RomM-owned shortcuts in
-        // Steam (exe = bin/rom-launcher) that were never committed — no binding,
-        // so the backend never returns them. The live exe-ownership scan sees
-        // them; remove the UNION so no orphan is left behind (#1381).
-        const backendAppIds = result.app_ids ?? [];
-        await removeShortcutsPaced(backendAppIds);
-        const removed = new Set<number>(backendAppIds);
-        const liveAppIds = await getLiveRomMShortcutAppIds();
-        if (liveAppIds === null) {
-          // The scan could not run (Steam's shortcut store was unreadable) —
-          // fall back to the backend-bound list alone rather than skip removal.
-          logWarn("Live RomM shortcut scan unavailable — removed backend-bound shortcuts only.");
+    await runRemoval(async (onProgress) => {
+      setStatus("Removing all shortcuts...");
+      let removedCount = 0;
+      try {
+        const result = await removeAllShortcuts();
+        if (!result.success) {
+          // A gate refusal (@sync_active_blocked / @migration_blocked) carries
+          // no app_ids/rom_ids — surface its message and remove nothing.
+          setStatus(result.message ?? "Failed to remove shortcuts");
         } else {
-          const orphans = liveAppIds.filter((appId) => !removed.has(appId));
-          logInfo(`Remove-all: ${orphans.length} live-scanned RomM shortcut(s) were not in the backend list.`);
-          await removeShortcutsPaced(orphans);
-          for (const appId of orphans) removed.add(appId);
+          // The backend list is the DB binding map (roms.shortcut_app_id). A
+          // crashed sync run's in-flight chunk can leave RomM-owned shortcuts in
+          // Steam (exe = bin/rom-launcher) that were never committed — no binding,
+          // so the backend never returns them. The live exe-ownership scan sees
+          // them; remove the UNION so no orphan is left behind (#1381).
+          const backendAppIds = result.app_ids ?? [];
+          await removeShortcutsPaced(backendAppIds, onProgress);
+          const removed = new Set<number>(backendAppIds);
+          const liveAppIds = await getLiveRomMShortcutAppIds();
+          if (liveAppIds === null) {
+            // The scan could not run (Steam's shortcut store was unreadable) —
+            // fall back to the backend-bound list alone rather than skip removal.
+            logWarn("Live RomM shortcut scan unavailable — removed backend-bound shortcuts only.");
+          } else {
+            const orphans = liveAppIds.filter((appId) => !removed.has(appId));
+            logInfo(`Remove-all: ${orphans.length} live-scanned RomM shortcut(s) were not in the backend list.`);
+            // Continue the counter across the orphan sweep: offset by the backend
+            // count so "removed of total" stays cumulative (orphans are usually none).
+            await removeShortcutsPaced(orphans, (done, orphanTotal) =>
+              onProgress(backendAppIds.length + done, backendAppIds.length + orphanTotal),
+            );
+            for (const appId of orphans) removed.add(appId);
+          }
+          removedCount = removed.size;
+          // rom_ids are backend DB rows — orphans have none, so report only the
+          // backend set exactly as before.
+          if (result.rom_ids?.length) {
+            await reportRemovalResults(result.rom_ids);
+          }
+          await clearAllRomMCollections();
+          setStatus(result.message ?? "All shortcuts removed");
         }
-        removedCount = removed.size;
-        // rom_ids are backend DB rows — orphans have none, so report only the
-        // backend set exactly as before.
-        if (result.rom_ids?.length) {
-          await reportRemovalResults(result.rom_ids);
-        }
-        await clearAllRomMCollections();
-        setStatus(result.message ?? "All shortcuts removed");
+      } catch {
+        setStatus("Failed to remove shortcuts");
       }
-    } catch {
-      setStatus("Failed to remove shortcuts");
-    }
-    await refreshPlatforms();
-    await recountAfterStoreSettles(removedCount, loadNonSteamApps);
+      await refreshPlatforms();
+      await recountAfterStoreSettles(removedCount, loadNonSteamApps);
+    });
   };
 
   const handleUninstallAll = async () => {
@@ -354,6 +377,10 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
       <PanelSectionRow key={p.slug || p.name}>
         <ButtonItem
           layout="below"
+          // Busy-only (not sync): a sync leaves the platform modal openable — its
+          // own Remove Shortcuts button carries the sync gate (#1390). A busy
+          // removal disables opening the modal so no second run can be started.
+          disabled={busy}
           onClick={() => {
             showModal(
               <PlatformActionModal
@@ -384,9 +411,11 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
             onClick={() => {
               detach(handleRemoveAllRomm());
             }}
-            disabled={syncRunning}
+            disabled={removalDisabled}
             // Description ONLY for the disabled-while-syncing case, where it
             // explains why the button can't be pressed (mirrors SessionBudgetBanner).
+            // The in-flight removal has its own affordance (spinner + counter), so
+            // no hint there — the disable reads as "a removal is running".
             description={syncRunning ? SYNC_RUNNING_HINT : undefined}
           >
             {confirmRemoveAllRomm ? (
@@ -419,7 +448,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
             onClick={() => {
               detach(handleUninstallAll());
             }}
-            disabled={syncRunning}
+            disabled={removalDisabled}
             description={syncRunning ? SYNC_RUNNING_HINT : undefined}
           >
             {confirmUninstall ? (
@@ -658,6 +687,8 @@ interface RetroDeckSectionProps {
   refreshPlatforms: () => Promise<void>;
   loadNonSteamApps: () => void;
   setStatus: (s: string) => void;
+  busy: boolean;
+  runRemoval: RunRemoval;
 }
 
 const RetroDeckSection: FC<RetroDeckSectionProps> = ({
@@ -670,6 +701,8 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
   refreshPlatforms,
   loadNonSteamApps,
   setStatus,
+  busy,
+  runRemoval,
 }) => {
   const [confirmRemoveAll, setConfirmRemoveAll] = useState(false);
   const [confirmRetrodeck, setConfirmRetrodeck] = useState(false);
@@ -695,14 +728,20 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
     // Disarm the confirm BEFORE the awaited paced removal (mirrors
     // handleRemoveAllRomm) — the removal now yields for seconds on a large library,
     // so a stray tap while it runs must not re-enter and start a second concurrent run.
+    // (The button also busy-disables for the duration; the disarm keeps the label correct.)
     setConfirmRemoveAll(false);
     setConfirmRetrodeck(false);
-    const toRemove = nonSteamApps.filter((a) => !whitelistedIds.has(a.appId));
-    setStatus(`Removing ${toRemove.length} non-steam games...`);
-    await removeShortcutsPaced(toRemove.map((a) => a.appId));
-    setStatus(`Removed ${toRemove.length} non-steam game${toRemove.length === 1 ? "" : "s"}`);
-    refreshPlatforms().catch((e) => logError(`Failed to refresh platforms: ${e}`));
-    await recountAfterStoreSettles(toRemove.length, loadNonSteamApps);
+    await runRemoval(async (onProgress) => {
+      const toRemove = nonSteamApps.filter((a) => !whitelistedIds.has(a.appId));
+      setStatus(`Removing ${toRemove.length} non-steam games...`);
+      await removeShortcutsPaced(
+        toRemove.map((a) => a.appId),
+        onProgress,
+      );
+      setStatus(`Removed ${toRemove.length} non-steam game${toRemove.length === 1 ? "" : "s"}`);
+      refreshPlatforms().catch((e) => logError(`Failed to refresh platforms: ${e}`));
+      await recountAfterStoreSettles(toRemove.length, loadNonSteamApps);
+    });
   };
 
   const removeButtonLabel = () => {
@@ -737,6 +776,7 @@ const RetroDeckSection: FC<RetroDeckSectionProps> = ({
           <PanelSectionRow>
             <ButtonItem
               layout="below"
+              disabled={busy}
               onClick={() => {
                 detach(handleRemoveAll());
               }}
@@ -782,6 +822,22 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
   const [customNames, setCustomNames] = useState<string[]>([]);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [nonSteamApps, setNonSteamApps] = useState<NonSteamApp[]>([]);
+  // In-flight bulk removal: `busy` disables every removal button (no second
+  // concurrent run via the UI), `removalProgress` drives the spinner's live
+  // "removed of total" counter. Shared across both sections so any removal
+  // disables all of them.
+  const [busy, setBusy] = useState(false);
+  const [removalProgress, setRemovalProgress] = useState<RemovalProgress | null>(null);
+
+  const runRemoval: RunRemoval = async (work) => {
+    setBusy(true);
+    try {
+      await work((removed, total) => setRemovalProgress({ removed, total }));
+    } finally {
+      setBusy(false);
+      setRemovalProgress(null);
+    }
+  };
 
   const activeDefaults = useMemo(
     () => DEFAULT_WHITELIST_PATTERNS.filter((p) => !disabledDefaults.includes(p)),
@@ -878,6 +934,16 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
         </PanelSectionRow>
       </PanelSection>
 
+      {busy && (
+        <PanelSection>
+          <LoadingRow
+            label={
+              removalProgress ? `Removing ${removalProgress.removed} of ${removalProgress.total}...` : "Removing..."
+            }
+          />
+        </PanelSection>
+      )}
+
       <ShortcutRemovalSection
         platforms={platforms}
         loading={loading}
@@ -885,6 +951,8 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
         loadNonSteamApps={loadNonSteamApps}
         status={status}
         setStatus={setStatus}
+        busy={busy}
+        runRemoval={runRemoval}
       />
 
       <OrphanedGridCleanupSection />
@@ -899,6 +967,8 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
         refreshPlatforms={refreshPlatforms}
         loadNonSteamApps={loadNonSteamApps}
         setStatus={setStatus}
+        busy={busy}
+        runRemoval={runRemoval}
       />
     </>
   );
