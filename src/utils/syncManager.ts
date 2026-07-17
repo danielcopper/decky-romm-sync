@@ -18,9 +18,7 @@ import { updateSyncProgress } from "./syncProgress";
 import { recordSyncCreated } from "./syncDeltaStore";
 import { observeUnitTotal } from "./syncEta";
 import { registerRomMAppId } from "../patches/gameDetailPatch";
-
-const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-const HEARTBEAT_INTERVAL_MS = 10_000;
+import { pacedForEach } from "./pacedOps";
 
 let _cancelRequested = false;
 let _isUnitRunning = false;
@@ -272,19 +270,13 @@ async function applyCoverArtwork(appId: number, romId: number): Promise<void> {
  * Fail-soft per item; exits early on cancel.
  */
 async function processCoverRefreshes(refreshes: { rom_id: number; app_id: number }[]): Promise<void> {
-  let lastHeartbeat = Date.now();
-  for (const entry of refreshes) {
-    if (isCancelRequested()) {
-      logInfo("Per-unit cancel observed during cover refresh");
-      break;
-    }
-    await applyCoverArtwork(entry.app_id, entry.rom_id);
-    await delay(50);
-    if (Date.now() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
+  const completed = await pacedForEach(refreshes, (entry) => applyCoverArtwork(entry.app_id, entry.rom_id), {
+    heartbeat: () => {
       syncHeartbeat().catch(() => {});
-      lastHeartbeat = Date.now();
-    }
-  }
+    },
+    isCancelled: isCancelRequested,
+  });
+  if (!completed) logInfo("Per-unit cancel observed during cover refresh");
 }
 
 /**
@@ -310,57 +302,56 @@ async function processUnitShortcuts(
   liveAppIds: number[] | null,
   romIdToAppId: Record<string, number>,
 ): Promise<void> {
-  let lastHeartbeat = Date.now();
-  for (const [i, item] of data.shortcuts.entries()) {
-    const unitCurrent = data.chunk_offset + i + 1;
-    try {
-      // Carry the chunk-constant fields on every per-item update, not just the
-      // fine current/message. The chunk-init emit (initUnitSyncManager) seeds
-      // these once, but a QAM remount mid-chunk can replace the module store
-      // with the backend's coarse snapshot; re-asserting the full field set here
-      // lets the store self-heal on the next item (≤0.55s), so the fine line +
-      // step counter reappear without waiting for the next chunk boundary.
-      updateSyncProgress({
-        running: true,
-        stage: "applying",
-        current: unitCurrent,
-        total: data.unit_total,
-        message: `${data.unit_name}: ${unitCurrent}/${data.unit_total}`,
-        step: data.unit_index + 1,
-        totalSteps: data.total_units,
-      });
-      const { appId, created } = await resolveShortcutAppId(item, existing, data.run_id, liveAppIds);
-      if (appId) {
-        romIdToAppId[String(item.rom_id)] = appId;
-        // Register the appId as RomM-owned the moment the mapping exists — the
-        // earliest point the game-detail patch and launch interceptor can gate
-        // on it. Registering only at sync_complete leaves a newly created
-        // shortcut's detail page rendering native Steam UI for the whole run's
-        // artwork/collection tail, and a collection-only sync's appIds may never
-        // reach platform_app_ids at all (#1205). Idempotent (Set.add); covers
-        // created, updated, and rebind entries alike.
-        registerRomMAppId(appId);
-        // Apply cover artwork to newly-managed shortcuts — a fresh create or an
-        // adopted orphan (#1366; ``created`` covers both). An updated/rebound
-        // shortcut keeps its existing grid file (cover refresh on change is
-        // #1386). Awaited so covers stay one-per-item under the 50ms pacing;
-        // fail-soft.
-        if (created) await applyCoverArtwork(appId, item.rom_id);
+  const completed = await pacedForEach(
+    data.shortcuts,
+    async (item, i) => {
+      const unitCurrent = data.chunk_offset + i + 1;
+      try {
+        // Carry the chunk-constant fields on every per-item update, not just the
+        // fine current/message. The chunk-init emit (initUnitSyncManager) seeds
+        // these once, but a QAM remount mid-chunk can replace the module store
+        // with the backend's coarse snapshot; re-asserting the full field set here
+        // lets the store self-heal on the next item (≤0.55s), so the fine line +
+        // step counter reappear without waiting for the next chunk boundary.
+        updateSyncProgress({
+          running: true,
+          stage: "applying",
+          current: unitCurrent,
+          total: data.unit_total,
+          message: `${data.unit_name}: ${unitCurrent}/${data.unit_total}`,
+          step: data.unit_index + 1,
+          totalSteps: data.total_units,
+        });
+        const { appId, created } = await resolveShortcutAppId(item, existing, data.run_id, liveAppIds);
+        if (appId) {
+          romIdToAppId[String(item.rom_id)] = appId;
+          // Register the appId as RomM-owned the moment the mapping exists — the
+          // earliest point the game-detail patch and launch interceptor can gate
+          // on it. Registering only at sync_complete leaves a newly created
+          // shortcut's detail page rendering native Steam UI for the whole run's
+          // artwork/collection tail, and a collection-only sync's appIds may never
+          // reach platform_app_ids at all (#1205). Idempotent (Set.add); covers
+          // created, updated, and rebind entries alike.
+          registerRomMAppId(appId);
+          // Apply cover artwork to newly-managed shortcuts — a fresh create or an
+          // adopted orphan (#1366; ``created`` covers both). An updated/rebound
+          // shortcut keeps its existing grid file (cover refresh on change is
+          // #1386). Awaited so covers stay one-per-item under the 50ms pacing;
+          // fail-soft.
+          if (created) await applyCoverArtwork(appId, item.rom_id);
+        }
+      } catch (e) {
+        logError(`Per-unit: failed to process shortcut for rom ${item.rom_id}: ${e}`);
       }
-    } catch (e) {
-      logError(`Per-unit: failed to process shortcut for rom ${item.rom_id}: ${e}`);
-    }
-    await delay(50);
-
-    if (Date.now() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
-      syncHeartbeat().catch(() => {});
-      lastHeartbeat = Date.now();
-    }
-    if (isCancelRequested()) {
-      logInfo(`Per-unit cancel observed during ${data.unit_name}`);
-      break;
-    }
-  }
+    },
+    {
+      heartbeat: () => {
+        syncHeartbeat().catch(() => {});
+      },
+      isCancelled: isCancelRequested,
+    },
+  );
+  if (!completed) logInfo(`Per-unit cancel observed during ${data.unit_name}`);
 }
 
 /**

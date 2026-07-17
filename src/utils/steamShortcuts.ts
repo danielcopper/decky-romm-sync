@@ -1,5 +1,6 @@
 import type { SyncAddItem } from "../types";
 import { getAppIdRomIdMap, syncHeartbeat, logError, logInfo } from "../api/backend";
+import { delay } from "./pacedOps";
 
 /**
  * Ownership marker: RomM-managed shortcuts launch through the plugin's
@@ -10,8 +11,6 @@ import { getAppIdRomIdMap, syncHeartbeat, logError, logInfo } from "../api/backe
 const ROM_LAUNCHER_SUFFIX = "/bin/rom-launcher";
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
-
-const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
  * Resolve a shortcut's `SteamAppDetails` via the one-shot RegisterForAppDetails

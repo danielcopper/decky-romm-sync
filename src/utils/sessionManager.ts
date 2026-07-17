@@ -14,8 +14,7 @@ import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import { detach } from "./detach";
 import { readPrimaryRunningApp, readRunningApps, type RunningApp } from "./runningApps";
-
-const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+import { delay } from "./pacedOps";
 
 // Active session tracking
 let activeRomId: number | null = null;
