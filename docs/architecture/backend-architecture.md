@@ -237,12 +237,15 @@ The retry lives in `ArtworkService._download_cover_atomic`: only a `RommNotFound
 an empty/absent `url_cover` is exactly today's failure (warning, gray tile). The fallback fetch goes through a
 **separate, bearer-free** adapter seam (`RommRomReader.download_cover_from_url` → `RommHttpAdapter.download_external`):
 the host-bound RomM bearer must never reach a third-party origin, so only the plugin `User-Agent` is attached (the CDN
-behind Cloudflare Bot Fight Mode also 403s the default `Python-urllib` UA). The fingerprint records the source
-**actually applied** — `url_cover` on a fallback, threaded back through the `download_artwork` `applied_sources`
-accumulator (sync path) or the direct persist (`refresh_changed_covers` / `refresh_cover`) — so the compare stays
-truthful: because the fresh RomM `path_cover` string never equals the stored `url_cover`, a later fixed RomM asset (or a
-changed `url_cover`) is always re-checked, at the cost of re-downloading the fallback ROM's cover each sync until the
-RomM asset is repaired.
+behind Cloudflare Bot Fight Mode also 403s the default `Python-urllib` UA). Because `url_cover` is untrusted
+server-supplied input, `download_external` scheme-allowlists it to `http`/`https` before any fetch — a
+`file:`/`data:`/`ftp:`/scheme-relative URL is rejected with a `RommApiError` so a `file:///etc/passwd` never reaches
+`urlopen` (the broader bounded-SSRF hardening — post-DNS private/link-local IP blocking and per-redirect-hop
+revalidation — is deferred to #1182). The fingerprint records the source **actually applied** — `url_cover` on a
+fallback, threaded back through the `download_artwork` `applied_sources` accumulator (sync path) or the direct persist
+(`refresh_changed_covers` / `refresh_cover`) — so the compare stays truthful: because the fresh RomM `path_cover` string
+never equals the stored `url_cover`, a later fixed RomM asset (or a changed `url_cover`) is always re-checked, at the
+cost of re-downloading the fallback ROM's cover each sync until the RomM asset is repaired.
 
 **Unstamped-platform re-run: the `restamp_platform_count` signal (#1416).** A heartbeat-timeout run's late-ack recovery
 (ADR-0023) leaves a platform **complete but unstamped**: the timed-out apply cleared the stamp at its start and its late
