@@ -612,8 +612,9 @@ class SyncEngine:
         because the local ``compute_sync_action`` matrix is the sole detection
         authority (ADR-0017). Any failure (transport error, or a 200 body missing
         ``session_id``) degrades to ``None``: the sync run proceeds without a
-        session envelope rather than aborting. A session the server never hears
-        completed times out server-side, so a missed close is harmless.
+        session envelope rather than aborting. An unclosed session lingers
+        harmlessly until this device's next ``negotiate`` cancels it, so a missed
+        close is harmless.
         """
         try:
             inventory = await self._loop.run_in_executor(None, self._build_inventory, rom_id)
@@ -630,9 +631,9 @@ class SyncEngine:
         """Close a negotiate session, reporting op counts (non-fatal).
 
         Invoked off-loop like :meth:`_write_save_state` and swallows any failure:
-        a session the server never hears closed times out server-side and is
-        cancelled by this device's next ``negotiate``, so a failed close must
-        never fail the sync run.
+        a session the server never hears closed lingers until it is cancelled by
+        this device's next ``negotiate``, so a failed close must never fail the
+        sync run.
         """
         try:
             await self._loop.run_in_executor(

@@ -125,3 +125,16 @@ automatic POST path, still live for the version-switch flow),
 [#1013](https://github.com/danielcopper/decky-romm-sync/issues/1013) (byte-identical dedup),
 [#1061](https://github.com/danielcopper/decky-romm-sync/issues/1061) (legacy `slot:null` wire addressing, now
 migration-only).
+
+## Status note — 2026-07-17 (RomM 5.0.0)
+
+Re-verified against RomM 4.9.0 / 4.9.1 / 4.9.2 / 5.0.0. The negotiate session's per-device serialization is now
+bookkeeping-only: opening a session cancels this device's prior session rows, but nothing on the API-mode save paths
+reads session state, and there is no server-side session timeout (an unclosed session lingers until this device's next
+`negotiate` cancels it). Play sessions ship via the standalone `/api/play-sessions` route
+([ADR-0018](0018-native-play-session-tracking-additive-ingest.md)), not through the negotiate envelope. So the
+load-bearing reason the session stays is ecosystem interop with RomM's first-party device-sync clients — not any
+behaviour on our own paths. Decision unchanged: negotiate stays as transport. (Recorded with
+[#1458](https://github.com/danielcopper/decky-romm-sync/issues/1458), which skips the redundant post-upload
+`confirm_download` now that `add_save` / `update_save` are confirmed to upsert the uploader's sync row on every
+supported version.)

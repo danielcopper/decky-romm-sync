@@ -134,10 +134,15 @@ migration is pending (#238).
 a POST with `overwrite=false` — see [Upload-time conflicts (the 409 backstop)](#upload-time-conflicts-the-409-backstop)
 below. The old in-place PUT is no longer on the automatic path.
 
-On the automatic path there is no PUT-in-place to bump, so the #748 "drop the PUT-bump" work is **moot** for it;
-`confirm_download` still runs after a successful POST to register this device as `is_current` on the newly created save.
-The version-switch flow (`versions.py`) keeps **both** the PUT-bump and `confirm_download` and is out of scope here —
-see [Version Switch Flow](#version-switch-flow-rollback).
+On the automatic path there is no PUT-in-place to bump, so the #748 "drop the PUT-bump" work is **moot** for it.
+`add_save` (POST) already upserts this device's `device_save_sync` row (`last_synced_at = updated_at`) and serializes it
+into the response's `device_syncs`, so `is_current` is true for us the moment the POST returns — the follow-up
+`confirm_download` ack is redundant and is **skipped** when the response proves us current (`_confirm_upload_sync`,
+#1458). The one path that still needs the ack is `add_save`'s content-dedup early-return: a byte-identical
+`overwrite=false` POST returns the matching save **before** the upsert with `is_current=false`, so the ack is the only
+writer of our sync row there. The version-switch flow (`versions.py`) runs the same `_confirm_upload_sync` after its PUT
+(a redundant idempotent re-ack, since the PUT upserts too) and is out of scope here — see
+[Version Switch Flow](#version-switch-flow-rollback).
 
 ## Save Slots
 
@@ -882,8 +887,8 @@ The façade delegates to `SyncEngine.resolve_sync_conflict`, whose rollback sub-
    - `keep_local` → `_resolve_conflict_keep_local` reads the server save's content hash. If it matches local (rare, but
      possible — both devices ended up at the same content via different paths), the server's id is adopted into state
      without re-uploading. Otherwise the local file is POSTed as a new version with `overwrite=true` — the user's
-     deliberate overwrite bypasses the 409 gate (#1276) — then `confirm_download` registers our device as
-     `is_current=true` on it.
+     deliberate overwrite bypasses the 409 gate (#1276). The POST's own `device_save_sync` upsert leaves us
+     `is_current=true`, so the redundant `confirm_download` ack is skipped (#1458).
    - `use_server` → `_resolve_conflict_use_server` downloads the picked save and writes it to the local path.
 
 The modal only accepts `keep_local` or `use_server`; `cancel` never reaches the backend. A wrong action string is
@@ -1026,13 +1031,13 @@ the actual file/server writes go through `SyncEngine`:
    `tracked_save_id` and `last_sync_hash` to the target version, so even if step 2 fails the local view is consistent
    with the target.
 2. **PUT to bump `updated_at`**: re-upload local content via `_do_upload_save(server_save=target_save)`. This issues a
-   PUT against the target save id with byte-identical content. RomM v4.8.1 fires the SQLAlchemy `onupdate=utc_now` hook
-   on every PUT regardless of whether the content changed, so `save.updated_at` becomes NOW. The target save is now
-   newest in the slot.
-3. **Confirm download**: `_do_upload_save` also calls `confirm_download(target_save_id, device_id)`. RomM v4.8.1's PUT
-   does **not** auto-upsert the calling device's `device_save_sync` row, so without this call our `is_current` would
-   evaluate `false` immediately after our own PUT. The dedicated `/api/saves/{id}/downloaded` endpoint upserts
-   `last_synced_at = save.updated_at` so the computed `is_current` flips back to `true` for us.
+   PUT against the target save id with byte-identical content. RomM fires the SQLAlchemy `onupdate=utc_now` hook on
+   every PUT regardless of whether the content changed, so `save.updated_at` becomes NOW; the same request also upserts
+   our `device_save_sync` row (`last_synced_at = updated_at`). The target save is now newest in the slot and
+   `is_current` is already `true` for us.
+3. **Confirm download (redundant)**: `_do_upload_save` still runs `_confirm_upload_sync`. On every supported RomM
+   version the PUT already upserted our sync row (step 2), so this ack is at most a redundant idempotent re-write of
+   `last_synced_at = save.updated_at`, not the load-bearing step it once was (#1458).
 4. **Update local state**: `_do_upload_save` records `tracked_save_id`, `last_sync_hash`, `last_sync_server_updated_at`,
    and friends from the post-PUT response, leaving local state consistent with the now-newest server save.
 
@@ -1097,17 +1102,23 @@ backstop for its automatic-upload conflict path (see
 [Upload-time conflicts (the 409 backstop)](#upload-time-conflicts-the-409-backstop)); an explicit `keep_local` sets
 `overwrite=true`, which skips the gate entirely.
 
-### PUT bumps `updated_at`, not the calling device's sync row
+### POST and PUT both upsert the calling device's sync row
 
-`PUT /api/saves/{id}` triggers SQLAlchemy's `onupdate=utc_now` hook on every PUT, so `save.updated_at` becomes the
-server's NOW even if the content is byte-identical. **It does not** upsert the calling device's
-`device_save_sync.last_synced_at`. The computed `is_current` flag therefore flips to `false` for the calling device
-immediately after the PUT response is observed (because `save.updated_at > sync.last_synced_at` for everyone, including
-us).
+Re-verified against RomM 4.9.0 / 4.9.1 / 4.9.2 / 5.0.0: both `POST /api/saves` (`add_save`) and `PUT /api/saves/{id}`
+(`update_save`) bump `save.updated_at` to the server's NOW **and** upsert the calling device's
+`device_save_sync.last_synced_at = updated_at`, serializing that row into the response's `device_syncs`. So after our
+own write we read back `is_current = true` (equality counts), without any follow-up call.
 
-To restore `is_current=true` for our device after a PUT, we must explicitly call `POST /api/saves/{id}/downloaded`,
-which upserts `last_synced_at = save.updated_at`. `_do_upload_save` does this unconditionally after every successful
-POST or PUT (best-effort — failures are logged at debug and don't fail the upload).
+This makes the dedicated `POST /api/saves/{id}/downloaded` ack **redundant on the normal upload path** — the sync engine
+skips it when the upload response already shows this device `is_current` (`_confirm_upload_sync`, #1458), saving one
+round-trip per uploaded file. The historical `v4.8.1` note claiming the PUT did **not** upsert the sync row is obsolete
+at the ≥ 4.9.0 floor.
+
+**The one exception — `add_save`'s content-dedup early-return.** A named-slot `overwrite=false` POST whose content hash
+matches an existing save in the slot returns that pre-existing save **before** the `device_save_sync` upsert (a stale
+row, or a synthesized `is_current=false` placeholder). On that path the ack is the only writer of our sync row, so
+`_confirm_upload_sync` fails open (any non-`is_current` response) and still fires. The ack stays best-effort — failures
+are logged at debug and never fail the upload.
 
 ### GET `/content?optimistic=true` auto-upserts the sync row
 
@@ -1121,10 +1132,10 @@ is not used by the sync flow.
 
 ### Implication for the sync algorithm
 
-Because `is_current` is computed and the only ways to make it `true` are PUT/POST followed by `confirm_download`, or a
-`GET /content?optimistic=true`, the algorithm can trust `is_current` as authoritative without further hashing. Row 8 in
-the matrix (no baseline yet, `is_current=true`, local exists) is the canonical adopt-baseline case: we believe the
-server's claim and write `last_sync_hash := local_hash` so future runs can detect drift.
+Because `is_current` is computed and the only ways to make it `true` are a PUT/POST (which upserts the uploader's sync
+row directly), or a `GET /content?optimistic=true`, the algorithm can trust `is_current` as authoritative without
+further hashing. Row 8 in the matrix (no baseline yet, `is_current=true`, local exists) is the canonical adopt-baseline
+case: we believe the server's claim and write `last_sync_hash := local_hash` so future runs can detect drift.
 
 ## Sync Flows
 

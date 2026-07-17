@@ -204,14 +204,15 @@ class VersionsService:
         1. Download id=save_id content → overwrite local file.
            ``do_download_save`` updates ``tracked_save_id`` /
            ``last_sync_hash`` to point at the target version locally.
-        2. PUT id=save_id with the same content. RomM v4.8.1 fires the
-           SQLAlchemy ``onupdate=utc_now`` hook, so ``save.updated_at``
-           becomes NOW and id=save_id is now newest in the slot — beating
-           anything else there.
-        3. ``do_upload_save`` calls ``confirm_download(save_id, device_id)``,
-           setting our ``last_synced_at = save.updated_at`` so
-           ``is_current`` evaluates true for us. Required because v4.8.1
-           PUT does NOT auto-upsert sync rows.
+        2. PUT id=save_id with the same content. RomM bumps
+           ``save.updated_at`` to NOW (the ``onupdate=utc_now`` hook) and
+           upserts our DeviceSaveSync row (``synced_at = updated_at``), so
+           id=save_id is now newest in the slot and ``is_current`` already
+           evaluates true for us.
+        3. ``do_upload_save`` acks via ``_confirm_upload_sync``. The PUT
+           already upserted our sync row (RomM's PUT auto-upserts on every
+           supported version), so this ack is at most a redundant idempotent
+           re-write, not the required step it was once described as (#1458).
         4. ``do_upload_save`` refreshes local sync state via
            ``update_file_sync_state`` to match the post-PUT response.
 
