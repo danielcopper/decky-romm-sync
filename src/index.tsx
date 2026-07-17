@@ -23,7 +23,6 @@ import {
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./utils/launchInterceptor";
 import { hasAnySaveConflict } from "./utils/saveStatus";
 import {
-  getMetadataCachePage,
   getAppIdRomIdMap,
   ensureDeviceRegistered,
   getSaveSyncSettings,
@@ -59,12 +58,12 @@ import type {
   SyncStaleData,
   SyncCollectionsData,
   ServerRetryProgressEvent,
-  RomMetadata,
 } from "./types";
 import { setLaunchOptionsConfirmed } from "./utils/steamShortcuts";
 import { removeShortcutsPaced } from "./utils/shortcutRemoval";
 import { batchConfirmLaunchOptions } from "./utils/launchOptionsReconcile";
 import { withTimeout } from "./utils/withTimeout";
+import { fetchMetadataCachePages } from "./utils/metadataCache";
 
 type Page = "main" | "settings" | "library" | "data" | "downloads" | "system";
 
@@ -202,22 +201,9 @@ export default definePlugin(() => {
     const appIdMap = await withTimeout(getAppIdRomIdMap(), CALLABLE_TIMEOUT);
 
     // Page the metadata cache until every row is collected. A failed page throws
-    // out of the loop (each raced against the same per-callable deadline) and
-    // the outer retry loop restarts init from offset 0. The empty-page guard
-    // stops the loop even if ``total`` overshoots the rows actually returned.
-    const cache: Record<string, RomMetadata> = {};
-    let collected = 0;
-    let total = Number.POSITIVE_INFINITY;
-    let offset = 0;
-    while (collected < total) {
-      const page = await withTimeout(getMetadataCachePage(offset, METADATA_PAGE_SIZE), CALLABLE_TIMEOUT);
-      total = page.total;
-      const keys = Object.keys(page.items);
-      if (keys.length === 0) break;
-      for (const key of keys) cache[key] = page.items[key]!;
-      collected += keys.length;
-      offset += METADATA_PAGE_SIZE;
-    }
+    // out of the shared loop (each raced against the per-callable deadline) and
+    // the outer retry loop restarts init from offset 0.
+    const cache = await fetchMetadataCachePages(METADATA_PAGE_SIZE, CALLABLE_TIMEOUT);
 
     registerMetadataPatches(cache, appIdMap);
 
@@ -504,6 +490,32 @@ export default definePlugin(() => {
           await applyAllPlaytime(playtime, appIdMap);
         } catch (e) {
           logError(`Failed to re-apply playtime after sync: ${e}`);
+        }
+      })(),
+    );
+
+    // Re-apply overview metadata (controller badge / metacritic score / store
+    // categories) to the freshly-synced ROMs. Init runs this pass once on mount,
+    // but onSyncComplete otherwise never re-runs it or refreshes the module-level
+    // metadata cache — so a ROM synced this session misses those overview fields
+    // until the next plugin mount (#1207). Re-fetch the full paged cache + the
+    // appId map, re-register the patches with the fresh data (replacing the
+    // init-time state), and re-apply. Mirrors the playtime re-apply above and
+    // runs on EVERY sync_complete, cancelled included: a partial run's committed
+    // units still have fresh metadata and applyAllMetadata is idempotent.
+    // Detached with its own try/catch so a re-fetch failure never breaks the
+    // toast, collections, or playtime paths.
+    detach(
+      (async () => {
+        try {
+          const [cache, appIdMap] = await Promise.all([
+            fetchMetadataCachePages(METADATA_PAGE_SIZE, CALLABLE_TIMEOUT),
+            getAppIdRomIdMap(),
+          ]);
+          registerMetadataPatches(cache, appIdMap);
+          await applyAllMetadata();
+        } catch (e) {
+          logError(`Failed to re-apply metadata after sync: ${e}`);
         }
       })(),
     );

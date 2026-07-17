@@ -185,7 +185,15 @@ applies the mutations with a **readiness retry** (the same `[0, 1s, 3s, 5s]` lad
 retry the pass runs before `appStore` is populated and silently no-ops on a cold boot, so the badge/rating/categories
 never appear until a later mount (#1203). The mutations are idempotent, so retries are safe.
 
-See: `src/patches/metadataPatches.ts`
+The pass also re-runs on **`sync_complete`**. A sync adds or re-keys ROMs whose metadata the init-time pass never saw,
+so `onSyncComplete` re-fetches the full paged metadata cache + appId map (`fetchMetadataCachePages`, shared with init),
+re-registers via `registerMetadataPatches` with the fresh data, and re-applies — mirroring the playtime re-apply beside
+it. It runs on every `sync_complete`, cancelled runs included (a partial run's committed units still carry fresh
+metadata, and the pass is idempotent), in its own detached block with its own error handling so a re-fetch failure never
+touches the toast, collections, or playtime paths (#1207). The backend commits metadata per unit during the sync (before
+the terminal emit), so this re-fetch always sees the new ROMs.
+
+See: `src/patches/metadataPatches.ts`, `src/utils/metadataCache.ts` (paged fetch), `onSyncComplete` in `src/index.tsx`
 
 ## VDF Format Notes
 

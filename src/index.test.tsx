@@ -29,7 +29,14 @@ import { estimateApplySeconds } from "./utils/syncEstimate";
 import { resetEta, weightedCoarseFraction } from "./utils/syncEta";
 import { recordSyncCreated, resetSyncDelta, getSyncDelta } from "./utils/syncDeltaStore";
 import { resetSyncCancel } from "./utils/syncManager";
-import type { DownloadCompleteEvent, DownloadProgressEvent, SyncPlanData, SyncProgress, SyncStaleData } from "./types";
+import type {
+  DownloadCompleteEvent,
+  DownloadProgressEvent,
+  SyncPlanData,
+  SyncProgress,
+  SyncStaleData,
+  RomMetadata,
+} from "./types";
 
 vi.mock("./patches/gameDetailPatch", () => ({
   registerGameDetailPatch: vi.fn(),
@@ -87,7 +94,7 @@ vi.mock("./api/backend", async () => {
   };
 });
 
-import { applyAllPlaytime } from "./patches/metadataPatches";
+import { applyAllPlaytime, registerMetadataPatches, applyAllMetadata } from "./patches/metadataPatches";
 import { registerRomMAppId } from "./patches/gameDetailPatch";
 import definePluginResult from "./index";
 
@@ -769,6 +776,104 @@ describe("index.tsx — sync_complete stale-collection cleanup (#1040)", () => {
     // The additive create/update path is NOT gated on cancel — the platforms
     // that DID complete still get their collections.
     expect(createOrUpdateCollections).toHaveBeenCalledWith({ "Nintendo 64": [1] });
+    plugin.onDismount();
+  });
+});
+
+describe("index.tsx — sync_complete re-applies overview metadata (#1207)", () => {
+  type SyncCompletePayload = {
+    platform_app_ids: Record<string, number[]>;
+    romm_collection_app_ids?: Record<string, number[]>;
+    total_games: number;
+    cancelled?: boolean;
+  };
+
+  function meta(summary: string): RomMetadata {
+    return {
+      summary,
+      genres: [],
+      companies: [],
+      first_release_date: null,
+      average_rating: null,
+      game_modes: [],
+      player_count: "",
+      cached_at: 0,
+    };
+  }
+
+  beforeEach(() => {
+    vi.mocked(registerMetadataPatches).mockClear();
+    vi.mocked(applyAllMetadata).mockClear();
+    vi.mocked(applyAllMetadata).mockResolvedValue(undefined);
+    vi.mocked(applyAllPlaytime).mockResolvedValue(undefined);
+    vi.mocked(getAllPlaytime).mockResolvedValue({ playtime: {} });
+    // Init's own metadata fetch resolves empty; each test sets distinct fresh
+    // data AFTER init so the sync_complete re-fetch is provably re-fetched.
+    vi.mocked(getMetadataCachePage).mockResolvedValue({ items: {}, total: 0 });
+    vi.mocked(getAppIdRomIdMap).mockResolvedValue({});
+  });
+
+  it("re-fetches the paged cache + map and re-applies on a normal completion", async () => {
+    const plugin = pluginFactory();
+    await flush(); // init done — registerMetadataPatches called once with the empty init cache
+    vi.mocked(registerMetadataPatches).mockClear();
+    vi.mocked(applyAllMetadata).mockClear();
+
+    // The re-fetch after sync must see FRESH data, not the init-time empty cache.
+    vi.mocked(getMetadataCachePage).mockResolvedValue({ items: { "100": meta("Fresh") }, total: 1 });
+    vi.mocked(getAppIdRomIdMap).mockResolvedValue({ "100": 55 });
+
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", { platform_app_ids: {}, total_games: 1 });
+    });
+    await flush();
+
+    // registerMetadataPatches received the RE-FETCHED cache + map (distinct page content).
+    expect(registerMetadataPatches).toHaveBeenCalledTimes(1);
+    const [cacheArg, mapArg] = vi.mocked(registerMetadataPatches).mock.calls[0]!;
+    expect((cacheArg as Record<string, RomMetadata>)["100"]!.summary).toBe("Fresh");
+    expect(mapArg).toEqual({ "100": 55 });
+    // …and the readiness-gated overview pass re-ran.
+    expect(applyAllMetadata).toHaveBeenCalledTimes(1);
+    plugin.onDismount();
+  });
+
+  it("re-applies overview metadata on a CANCELLED sync too (partial units are still fresh)", async () => {
+    const plugin = pluginFactory();
+    await flush();
+    vi.mocked(registerMetadataPatches).mockClear();
+    vi.mocked(applyAllMetadata).mockClear();
+    vi.mocked(getMetadataCachePage).mockResolvedValue({ items: { "7": meta("Partial") }, total: 1 });
+    vi.mocked(getAppIdRomIdMap).mockResolvedValue({ "7": 9 });
+
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", { platform_app_ids: {}, total_games: 3, cancelled: true });
+    });
+    await flush();
+
+    expect(registerMetadataPatches).toHaveBeenCalledTimes(1);
+    expect(applyAllMetadata).toHaveBeenCalledTimes(1);
+    plugin.onDismount();
+  });
+
+  it("logs and leaves the other blocks intact when the metadata re-fetch fails", async () => {
+    const plugin = pluginFactory();
+    await flush();
+    vi.mocked(applyAllMetadata).mockClear();
+    vi.mocked(applyAllPlaytime).mockClear();
+    logError.mockClear();
+    // The paged re-fetch throws; the detached block's own catch logs it.
+    vi.mocked(getMetadataCachePage).mockRejectedValue(new Error("boom"));
+
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", { platform_app_ids: {}, total_games: 1 });
+    });
+    await flush();
+
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining("Failed to re-apply metadata after sync"));
+    expect(applyAllMetadata).not.toHaveBeenCalled();
+    // Non-vacuous: the playtime re-apply is a separate detached block and still ran.
+    expect(applyAllPlaytime).toHaveBeenCalled();
     plugin.onDismount();
   });
 });
