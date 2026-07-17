@@ -129,7 +129,10 @@ class SlotSwitcher:
             file_state = files_state.get(filename)
             last_sync_hash = file_state.last_sync_hash if file_state else None
             if last_sync_hash:
-                current_hash = self._save_file_store.checksum_md5(lf["path"])
+                # Zip-aware RomM-parity hash — the same scheme the baseline was
+                # written with, so a zip save isn't seen as perpetually pending
+                # (#1457).
+                current_hash = self._save_file_store.content_hash(lf["path"])
                 if current_hash != last_sync_hash:
                     pending.append(filename)
 

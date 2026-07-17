@@ -114,9 +114,9 @@ class FakeDriftReader:
 
 
 class FakeSaveFileStore:
-    """Minimal ``SaveFileStore`` stub — only ``checksum_md5`` is exercised here.
+    """Minimal ``SaveFileStore`` stub — only ``content_hash`` is exercised here.
 
-    ``hashes`` maps path → its content MD5; ``checksum_raises`` arms a
+    ``hashes`` maps path → its content hash; ``content_hash_raises`` arms a
     mid-hash failure (e.g. the file vanished between enumeration and hashing).
     """
 
@@ -124,16 +124,16 @@ class FakeSaveFileStore:
         self,
         *,
         hashes: dict[str, str] | None = None,
-        checksum_raises: BaseException | None = None,
+        content_hash_raises: BaseException | None = None,
     ) -> None:
         self.hashes = hashes if hashes is not None else {}
-        self.checksum_raises = checksum_raises
-        self.checksum_calls: list[str] = []
+        self.content_hash_raises = content_hash_raises
+        self.content_hash_calls: list[str] = []
 
-    def checksum_md5(self, path: str) -> str:
-        self.checksum_calls.append(path)
-        if self.checksum_raises is not None:
-            raise self.checksum_raises
+    def content_hash(self, path: str) -> str:
+        self.content_hash_calls.append(path)
+        if self.content_hash_raises is not None:
+            raise self.content_hash_raises
         return self.hashes[path]
 
 
@@ -471,7 +471,7 @@ class TestCheckLocalDrift:
         result = event_loop.run_until_complete(service.check_local_drift(99))
 
         assert result == {"drifted": False, "rom_id": 99}
-        assert save_file_store.checksum_calls == []
+        assert save_file_store.content_hash_calls == []
 
     def test_single_file_hash_matches_not_drifted(self, event_loop, logger):
         """One local file whose current hash equals its baseline → drifted False."""
@@ -487,7 +487,7 @@ class TestCheckLocalDrift:
         result = event_loop.run_until_complete(service.check_local_drift(42))
 
         assert result == {"drifted": False, "rom_id": 42}
-        assert save_file_store.checksum_calls == ["/saves/game.srm"]
+        assert save_file_store.content_hash_calls == ["/saves/game.srm"]
 
     def test_single_file_hash_mismatch_drifted(self, event_loop, logger):
         """One local file whose current hash differs from its baseline → drifted True."""
@@ -519,7 +519,7 @@ class TestCheckLocalDrift:
 
         assert result == {"drifted": False, "rom_id": 42}
         # No baseline → nothing to compare, so the file is never hashed.
-        assert save_file_store.checksum_calls == []
+        assert save_file_store.content_hash_calls == []
 
     def test_missing_baseline_key_is_not_drift(self, event_loop, logger):
         """A present file with no baseline entry at all → not drift (baselines.get → None)."""
@@ -535,7 +535,7 @@ class TestCheckLocalDrift:
         result = event_loop.run_until_complete(service.check_local_drift(42))
 
         assert result == {"drifted": False, "rom_id": 42}
-        assert save_file_store.checksum_calls == []
+        assert save_file_store.content_hash_calls == []
 
     def test_multi_file_one_drifted_is_drifted(self, event_loop, logger):
         """Multiple component files, one drifted → drifted True."""
@@ -573,12 +573,12 @@ class TestCheckLocalDrift:
         assert "rom_id=42" in warnings[0].getMessage()
 
     def test_internal_error_during_hash_is_not_drifted(self, event_loop, logger):
-        """``checksum_md5`` raising mid-hash → drifted False (no raise)."""
+        """``content_hash`` raising mid-hash → drifted False (no raise)."""
         drift_reader = FakeDriftReader(
             files={42: [{"path": "/saves/game.srm", "filename": "game.srm"}]},
             baselines={42: {"game.srm": "hash-A"}},
         )
-        save_file_store = FakeSaveFileStore(checksum_raises=OSError("file vanished"))
+        save_file_store = FakeSaveFileStore(content_hash_raises=OSError("file vanished"))
         service = self._drift_service(
             event_loop=event_loop, logger=logger, drift_reader=drift_reader, save_file_store=save_file_store
         )

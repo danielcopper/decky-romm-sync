@@ -285,7 +285,10 @@ class RollbackOrchestrator:
         local_path = os.path.join(saves_dir, target)
         if not self._save_file_store.is_file(local_path):
             raise FileNotFoundError(f"Local save not found: {local_path}")
-        local_hash = self._save_file_store.checksum_md5(local_path)
+        # Zip-aware RomM-parity hash on both sides — get_server_save_hash hashes
+        # the downloaded server copy the same way — so a zip save's adopt-without-
+        # upload check can actually match instead of always re-POSTing (#1457).
+        local_hash = self._save_file_store.content_hash(local_path)
         try:
             server_hash = self._retry.with_retry(lambda: self._matrix.get_server_save_hash(server))
         except Exception:

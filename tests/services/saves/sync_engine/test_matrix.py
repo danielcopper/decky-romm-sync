@@ -8,11 +8,13 @@ device registration in test_devices.py; conflict rollback in test_rollback.py.
 
 import hashlib
 import os
+import zipfile
 from typing import Any
 
 import pytest
 
 from domain.rom_save_state import RomSaveState
+from domain.sync_action import Conflict, Skip, compute_sync_action
 from lib.errors import RommApiError
 from services.saves.sync_engine.matrix import DispatchSink, RomDispatchContext, SyncRunOptions
 from tests.services.saves._helpers import (
@@ -864,6 +866,100 @@ class TestMultiFileSaveSetGrouping:
         chosen_rtc = resolve_chosen_server(rtc_outcome.action, rtc_outcome.server_candidates)
         assert chosen_rtc is not None
         assert chosen_rtc["id"] == 20
+
+
+class TestZipSaveContentHashParity:
+    """#1457: a zip-container local save must be fed to the kernel as RomM's
+    per-entry content hash, never the whole-archive MD5.
+
+    A multi-file save uploaded by another client / the web UI lands locally as a
+    zip file (downloads are written verbatim, no unzip). Before the fix the matrix
+    hashed it whole, so its ``local_hash`` could never equal its own
+    ``server.content_hash`` and the #1013 byte-identical dedup (branch 6) and the
+    branch-5 byte-identical adoption silently degraded to spurious ``Conflict``.
+    """
+
+    @staticmethod
+    def _write_zip_save(saves_dir, filename: str) -> None:
+        """Write a two-member zip at ``saves_dir/filename`` (a zipped multi-file save)."""
+        saves_dir.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(saves_dir / filename, "w") as zf:
+            zf.writestr("battery.srm", b"battery-bytes")
+            zf.writestr("rtc.bin", b"rtc-bytes")
+
+    def test_zip_local_byte_identical_to_server_adopts_not_conflicts(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+
+        saves_dir = tmp_path / "saves" / "gba"
+        self._write_zip_save(saves_dir, "pokemon.srm")
+        zip_path = str(saves_dir / "pokemon.srm")
+
+        store = svc._save_file_store
+        per_entry_hash = store.content_hash(zip_path)  # RomM parity (zip-aware)
+        whole_archive_md5 = store.checksum_md5(zip_path)  # the pre-fix (wrong) scheme
+        # The bug's precondition: the two schemes disagree for a zip container.
+        assert per_entry_hash != whole_archive_md5
+
+        # Server holds this exact save (content_hash = per-entry) with NO
+        # device_syncs entry for us → branch 6 (never-touched head).
+        ss = _server_save_with_syncs(filename="pokemon.srm", slot="default", device_syncs=[])
+        ss["file_extension"] = "srm"
+        ss["content_hash"] = per_entry_hash
+
+        save_state = rom_save_state_from_dict(
+            {"system": "gba", "active_slot": "default", "slot_confirmed": True, "files": {}}
+        )
+        info = svc._sync_engine._rom_info.get_rom_save_info(42)
+        assert info is not None
+
+        outcomes = list(
+            svc._sync_engine._matrix.iter_matrix_outcomes(42, [ss], save_state=save_state, device_id="dev-1", info=info)
+        )
+        assert len(outcomes) == 1
+        outcome = outcomes[0]
+        # Post-fix: the matrix fed the per-entry hash, so it matched the server's
+        # content_hash → dedup adopt-baseline (no duplicate upload, no conflict).
+        assert outcome.local_hash == per_entry_hash
+        assert isinstance(outcome.action, Skip)
+        assert outcome.action.adopt_baseline is True
+
+    def test_regression_shape_whole_archive_md5_would_conflict(self, tmp_path):
+        """Pin the degraded shape: feeding the whole-archive MD5 (the pre-fix
+        value) into the same branch-6 inputs yields ``Conflict``, while the
+        per-entry hash yields ``Skip(adopt_baseline)``."""
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path)
+        saves_dir = tmp_path / "saves" / "gba"
+        self._write_zip_save(saves_dir, "pokemon.srm")
+        zip_path = str(saves_dir / "pokemon.srm")
+
+        store = svc._save_file_store
+        per_entry_hash = store.content_hash(zip_path)
+        whole_archive_md5 = store.checksum_md5(zip_path)
+
+        server = _server_save_with_syncs(filename="pokemon.srm", slot="default", device_syncs=[])
+        server["content_hash"] = per_entry_hash
+        local_file = {"filename": "pokemon.srm", "path": zip_path, "size": os.path.getsize(zip_path), "mtime": 1.0}
+
+        def _decide(local_hash: str):
+            return compute_sync_action(
+                local_file=local_file,
+                server_saves_in_slot=[server],
+                files_state={},
+                device_id="dev-1",
+                local_hash=local_hash,
+            )
+
+        # Whole-archive MD5 (pre-fix): never matches the per-entry server hash →
+        # unknown-provenance local colliding with a never-synced head → Conflict.
+        assert isinstance(_decide(whole_archive_md5), Conflict)
+        # Per-entry hash (post-fix): byte-identity proven → Skip(adopt_baseline).
+        post_fix = _decide(per_entry_hash)
+        assert isinstance(post_fix, Skip)
+        assert post_fix.adopt_baseline is True
 
 
 class TestOwnUploadIds:

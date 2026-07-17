@@ -252,7 +252,11 @@ def compute_sync_action(
       filtered by the caller to the relevant slot
     - `files_state`: the per-filename slice of saved sync state (may be empty)
     - `device_id`: this device's id (string)
-    - `local_hash`: pre-computed MD5 of local_file, or None when unknown
+    - `local_hash`: pre-computed RomM-parity content hash of local_file
+      (zip-aware; a plain MD5 for a single-file save, the per-entry combined
+      hash for a zip), or None when unknown. Must be computed the same way as
+      the server's ``content_hash`` so the byte-identity checks against it can
+      match for zip saves too.
     """
     # 1. No server saves in slot.
     if not server_saves_in_slot:

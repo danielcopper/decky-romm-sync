@@ -158,11 +158,15 @@ class MatrixExecutor:
     # ------------------------------------------------------------------
 
     def get_server_save_hash(self, server_save: dict[str, Any]) -> str | None:
-        """Download a server save to temp and compute its MD5 hash.
+        """Download a server save to temp and compute its RomM content hash.
 
-        Used for slow-path conflict detection when no content_hash is available.
-        Returns hash string or None on non-retryable error.
-        Raises on retryable errors so the caller can retry.
+        Used for slow-path conflict detection when the listed save carries no
+        ``content_hash`` field. Hashes the downloaded copy with the zip-aware
+        :meth:`SaveFileStore.content_hash` (never the whole-archive MD5) so the
+        digest is comparable to a local ``content_hash`` for zip saves too —
+        otherwise the keep_local adopt-without-upload check could never match a
+        zip. Returns the hash string or None on non-retryable error. Raises on
+        retryable errors so the caller can retry.
         """
         save_id = server_save.get("id")
         if not save_id:
@@ -171,7 +175,7 @@ class MatrixExecutor:
         try:
             tmp_path = self._save_file_store.make_temp_path(suffix=".tmp")
             self._romm_api.download_save(save_id, tmp_path)
-            return self._save_file_store.checksum_md5(tmp_path)
+            return self._save_file_store.content_hash(tmp_path)
         except Exception as e:
             self._log_debug(f"Failed to hash server save {save_id}: {e}")
             if self._retry.is_retryable(e):
@@ -212,7 +216,10 @@ class MatrixExecutor:
 
         now = self._clock.now().isoformat()
         local_exists = self._save_file_store.is_file(local_path)
-        local_hash = self._save_file_store.checksum_md5(local_path) if local_exists else ""
+        # RomM-parity content hash (zip-aware) so a zip save's baseline is on the
+        # same scheme the matrix compares against server.content_hash — never the
+        # whole-archive MD5, which no server content_hash could match (#1457).
+        local_hash = self._save_file_store.content_hash(local_path) if local_exists else ""
 
         server_save_id = server_response.get("id")
         if server_save_id is None or not local_hash:
@@ -711,7 +718,10 @@ class MatrixExecutor:
             local_path = lf["path"]
             handled_filenames.add(filename)
             local_exists = self._save_file_store.is_file(local_path)
-            local_hash = self._save_file_store.checksum_md5(local_path) if local_exists else None
+            # RomM-parity content hash (zip-aware) — the kernel compares this to
+            # server.content_hash for its byte-identity checks, so a zip save
+            # must be hashed per-entry, not as the whole archive (#1457).
+            local_hash = self._save_file_store.content_hash(local_path) if local_exists else None
             file_state = files_state.get(filename, FileSyncState())
             local_mtime_iso = (
                 datetime.fromtimestamp(self._save_file_store.get_mtime(local_path), tz=UTC).isoformat()

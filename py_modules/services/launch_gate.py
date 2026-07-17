@@ -192,9 +192,11 @@ class LaunchGateService:
 
         Enumerates the ROM's local save files the same way the sync/status path
         does (``find_local_save_files`` → the shared ``RomInfoService``
-        discovery), hashes each present file (content MD5 via the injected
-        ``SaveFileStore``, run on the executor), and compares it to that file's
-        persisted ``last_sync_hash``. ``drifted`` is ``True`` when any present
+        discovery), hashes each present file (the zip-aware RomM-parity
+        ``content_hash`` via the injected ``SaveFileStore``, run on the executor
+        — the same scheme the sync baseline is written with, so a zip save's
+        drift check stays consistent), and compares it to that file's persisted
+        ``last_sync_hash``. ``drifted`` is ``True`` when any present
         file's current hash differs from its non-``None`` baseline. A file with
         no baseline yet (``last_sync_hash is None``) is NOT drift — there is no
         recorded state to diverge from. A ROM that is not installed or has no
@@ -230,7 +232,7 @@ class LaunchGateService:
             if baseline is None:
                 # No recorded baseline → nothing to diverge from (not drift).
                 continue
-            current = self._save_file_store.checksum_md5(entry["path"])
+            current = self._save_file_store.content_hash(entry["path"])
             if current != baseline:
                 return {"drifted": True, "rom_id": rom_id}
 
