@@ -1949,12 +1949,14 @@ describe("RomMPlaySection", () => {
       return openRomMMenuAndGetItems(testAppId);
     }
 
-    it("success with synced=0 → label 'no files updated'", async () => {
+    it("success upload-only → directional 'Saves uploaded to RomM' via the shared helper", async () => {
       const items = await setupSavesAction();
       vi.mocked(backend.syncRomSaves).mockResolvedValue({
         success: true,
         message: "ok",
-        synced: 0,
+        synced: 2,
+        uploaded: 2,
+        downloaded: 0,
         conflicts: [],
       });
       vi.mocked(toaster.toast).mockClear();
@@ -1962,66 +1964,100 @@ describe("RomMPlaySection", () => {
         await items[2]!.props.onClick?.();
       });
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({
-          body: "Saves synced (no files updated)",
-        }),
+        expect.objectContaining({ body: "Saves uploaded to RomM" }),
       );
     });
 
-    it("success with synced=1 → singular form", async () => {
-      const items = await setupSavesAction();
-      vi.mocked(backend.syncRomSaves).mockResolvedValue({
-        success: true,
-        message: "",
-        synced: 1,
-        conflicts: [],
-      });
-      vi.mocked(toaster.toast).mockClear();
-      await act(async () => {
-        await items[2]!.props.onClick?.();
-      });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({
-          body: "Saves synced (1 file updated)",
-        }),
-      );
-    });
-
-    it("success with synced=N + conflicts → label '... N files updated, M conflict(s) need resolution'", async () => {
+    it("success download-only → directional 'Saves downloaded from RomM'", async () => {
       const items = await setupSavesAction();
       vi.mocked(backend.syncRomSaves).mockResolvedValue({
         success: true,
         message: "",
         synced: 3,
+        uploaded: 0,
+        downloaded: 3,
+        conflicts: [],
+      });
+      vi.mocked(toaster.toast).mockClear();
+      await act(async () => {
+        await items[2]!.props.onClick?.();
+      });
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
+        expect.objectContaining({ body: "Saves downloaded from RomM" }),
+      );
+    });
+
+    it("success both directions → directional 'Saves synced with RomM (1 up, 2 down)'", async () => {
+      const items = await setupSavesAction();
+      vi.mocked(backend.syncRomSaves).mockResolvedValue({
+        success: true,
+        message: "",
+        synced: 3,
+        uploaded: 1,
+        downloaded: 2,
+        conflicts: [],
+      });
+      vi.mocked(toaster.toast).mockClear();
+      await act(async () => {
+        await items[2]!.props.onClick?.();
+      });
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
+        expect.objectContaining({ body: "Saves synced with RomM (1 up, 2 down)" }),
+      );
+    });
+
+    it("success with nothing moved and no conflicts → no toast (zero-case)", async () => {
+      const items = await setupSavesAction();
+      vi.mocked(backend.syncRomSaves).mockResolvedValue({
+        success: true,
+        message: "",
+        synced: 0,
+        uploaded: 0,
+        downloaded: 0,
+        conflicts: [],
+      });
+      vi.mocked(toaster.toast).mockClear();
+      await act(async () => {
+        await items[2]!.props.onClick?.();
+      });
+      expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
+    });
+
+    it("success with conflicts but nothing moved → conflict toast only (signal preserved)", async () => {
+      const items = await setupSavesAction();
+      vi.mocked(backend.syncRomSaves).mockResolvedValue({
+        success: true,
+        message: "",
+        synced: 0,
+        uploaded: 0,
+        downloaded: 0,
         conflicts: [{ filename: "x" } as never, { filename: "y" } as never],
       });
       vi.mocked(toaster.toast).mockClear();
       await act(async () => {
         await items[2]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({
-          body: "Saves synced (3 files updated, 2 conflict(s) need resolution)",
-        }),
-      );
+      const bodies = vi.mocked(toaster.toast).mock.calls.map((c) => c[0].body);
+      expect(bodies).toEqual(["2 conflict(s) need resolution"]);
     });
 
-    it("success with synced=0 / conflicts=undefined → treats conflicts as 0", async () => {
+    it("success with transfers + conflicts → directional toast plus additive conflict toast", async () => {
       const items = await setupSavesAction();
       vi.mocked(backend.syncRomSaves).mockResolvedValue({
         success: true,
         message: "",
-        synced: 0,
+        synced: 3,
+        uploaded: 3,
+        downloaded: 0,
+        conflicts: [{ filename: "x" } as never, { filename: "y" } as never],
       });
       vi.mocked(toaster.toast).mockClear();
       await act(async () => {
         await items[2]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({
-          body: "Saves synced (no files updated)",
-        }),
-      );
+      const bodies = vi.mocked(toaster.toast).mock.calls.map((c) => c[0].body);
+      expect(bodies).toContain("Saves uploaded to RomM");
+      expect(bodies).toContain("2 conflict(s) need resolution");
     });
 
     it("failure → surfaces result.message", async () => {

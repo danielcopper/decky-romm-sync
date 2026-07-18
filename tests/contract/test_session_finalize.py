@@ -126,3 +126,29 @@ async def test_finalize_unregistered_device_folds_locally_no_ingest(harness):
 
     assert result["total_seconds"] == 300  # counted locally
     assert harness.romm.play_sessions == {}  # nothing ingested
+
+
+async def test_finalize_sync_payload_carries_counts_not_toast_keys(harness):
+    """The ``sync`` payload carries per-direction counts + ``failure_toast``; the
+    removed backend-rendered ``toast_title`` / ``toast_body`` keys are gone (#1481)."""
+    seed_rom(harness, 1)
+    harness.plugin.settings["save_sync_enabled"] = False
+    await harness.plugin.record_session_start(1)
+    harness.clock.advance(60)
+
+    result = await harness.plugin.finalize_game_session(1)
+
+    sync = result["sync"]
+    assert set(sync.keys()) == {
+        "offline",
+        "success",
+        "synced",
+        "uploaded",
+        "downloaded",
+        "conflicts",
+        "failure_toast",
+        "conflicts_toast",
+    }
+    # The directional copy is rendered frontend-side now — no backend toast strings.
+    assert "toast_title" not in sync
+    assert "toast_body" not in sync

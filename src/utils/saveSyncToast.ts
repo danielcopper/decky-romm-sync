@@ -1,14 +1,18 @@
 /**
- * Save-sync completion toast copy (#250) — the canonical per-direction wording
- * shared by the surfaces that confirm a sync. A run can move saves either way
- * (a pre-launch download OR a row-9 upload; a post-exit upload OR a row-5/10
- * adopt-download), so a single "synced" line hid which direction actually ran.
+ * Save-sync completion toast copy (#250, #1481) — the single source of the
+ * per-direction wording for every surface that confirms a sync. A run can move
+ * saves either way (a pre-launch download OR a row-9 upload; a post-exit upload
+ * OR a row-5/10 adopt-download), so a single "synced" line hid which direction
+ * actually ran.
  *
  * ``saveSyncToastBody`` names the single direction when saves moved only one
  * way, both counts when a run went both ways, and returns ``null`` when nothing
- * transferred so a no-op sync fires no toast. The backend mirrors this verbatim
- * in ``services/session_lifecycle.py`` (``sync_toast_body``) for the post-exit
- * toast it renders itself; keep the two in lockstep.
+ * transferred so a no-op sync fires no toast. Every surface renders through this
+ * helper from the per-direction counts on its result — pre-launch
+ * (``CustomPlayButton``), post-exit (``sessionManager``, from the
+ * ``finalize_game_session`` payload), and the manual per-game sync
+ * (``RomMPlaySection``). The backend delivers the counts as data, never this
+ * copy; it owns only the offline/failure body it renders itself (#1481).
  */
 
 /**

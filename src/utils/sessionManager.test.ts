@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { toaster } from "@decky/api";
 import * as backend from "../api/backend";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import { initSessionManager, destroySessionManager, ADOPTION_POLL_MAX_MS } from "./sessionManager";
@@ -33,9 +34,10 @@ const IDLE_FINALIZE = {
     offline: false,
     success: true,
     synced: 0,
+    uploaded: 0,
+    downloaded: 0,
     conflicts: [],
-    toast_title: null,
-    toast_body: null,
+    failure_toast: null,
     conflicts_toast: null,
   },
   migration: null,
@@ -146,9 +148,10 @@ describe("sessionManager lifecycle forwarding", () => {
         offline: false,
         success: false,
         synced: 0,
+        uploaded: 0,
+        downloaded: 0,
         conflicts: [],
-        toast_title: "RomM Save Sync",
-        toast_body: "Access denied — your account lacks permissions for this action",
+        failure_toast: "Access denied — your account lacks permissions for this action",
         conflicts_toast: null,
       },
       migration: null,
@@ -167,6 +170,94 @@ describe("sessionManager lifecycle forwarding", () => {
     } finally {
       globalThis.removeEventListener("romm_data_changed", listener);
     }
+  });
+});
+
+describe("sessionManager post-exit save-sync toast (#1481)", () => {
+  // The directional completion toast is rendered frontend-side from the transfer
+  // counts via `saveSyncToastBody`; the offline/failure body stays backend-owned
+  // (`failure_toast`). These pin both surfaces onto the finalize payload.
+  type SyncOverride = Partial<Awaited<ReturnType<typeof backend.finalizeGameSession>>["sync"]>;
+
+  const finalizeWithSync = (override: SyncOverride) =>
+    vi.mocked(backend.finalizeGameSession).mockResolvedValue({
+      ...IDLE_FINALIZE,
+      sync: { ...IDLE_FINALIZE.sync, ...override },
+    });
+
+  const runStop = async () => {
+    await initDrainingAdoptionPoll();
+    const lifetime = captureLifetimeCb();
+    await startGame(lifetime);
+    await stopGame(lifetime);
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    stubLifecycleSteamClient();
+    vi.mocked(backend.getAppIdRomIdMap).mockResolvedValue({ [String(APP_ID)]: ROM_ID });
+    vi.mocked(backend.finalizeGameSession).mockResolvedValue({ ...IDLE_FINALIZE });
+  });
+
+  afterEach(() => {
+    destroySessionManager();
+    vi.useRealTimers();
+  });
+
+  it("renders the upload-only directional toast from the counts", async () => {
+    finalizeWithSync({ success: true, uploaded: 2, downloaded: 0 });
+    await runStop();
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "RomM Save Sync", body: "Saves uploaded to RomM" }),
+    );
+  });
+
+  it("renders the both-directions directional toast from the counts", async () => {
+    finalizeWithSync({ success: true, uploaded: 1, downloaded: 2 });
+    await runStop();
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
+      expect.objectContaining({ body: "Saves synced with RomM (1 up, 2 down)" }),
+    );
+  });
+
+  it("renders the backend-owned failure_toast when the sync failed", async () => {
+    finalizeWithSync({ success: false, uploaded: 0, downloaded: 0, failure_toast: "Failed to sync saves after exit" });
+    await runStop();
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "RomM Save Sync", body: "Failed to sync saves after exit" }),
+    );
+  });
+
+  it("fires no toast when nothing moved and there was no failure (zero-case)", async () => {
+    // IDLE_FINALIZE is success=true with zero counts and no failure_toast.
+    finalizeWithSync({ success: true, uploaded: 0, downloaded: 0, failure_toast: null });
+    await runStop();
+    expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
+  });
+
+  it("does not render the failure_toast on a successful transfer (mutual exclusivity)", async () => {
+    // A success result carries failure_toast=null by construction; even if a
+    // stray body slipped through, the directional path wins on success.
+    finalizeWithSync({ success: true, uploaded: 3, downloaded: 0, failure_toast: null });
+    await runStop();
+    const bodies = vi.mocked(toaster.toast).mock.calls.map((c) => c[0].body);
+    expect(bodies).toContain("Saves uploaded to RomM");
+    expect(bodies).not.toContain("Failed to sync saves after exit");
+  });
+
+  it("fires the additive conflicts toast alongside the directional toast", async () => {
+    finalizeWithSync({
+      success: true,
+      uploaded: 1,
+      downloaded: 0,
+      conflicts_toast: "2 save conflicts need resolution",
+    });
+    await runStop();
+    const bodies = vi.mocked(toaster.toast).mock.calls.map((c) => c[0].body);
+    expect(bodies).toContain("Saves uploaded to RomM");
+    expect(bodies).toContain("2 save conflicts need resolution");
   });
 });
 
@@ -574,9 +665,10 @@ describe("sessionManager session-changed dispatch (#1313)", () => {
         offline: false,
         success: true,
         synced: 0,
+        uploaded: 0,
+        downloaded: 0,
         conflicts: [],
-        toast_title: null,
-        toast_body: null,
+        failure_toast: null,
         conflicts_toast: null,
       },
       migration: null,

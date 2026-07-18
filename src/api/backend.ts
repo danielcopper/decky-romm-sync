@@ -660,9 +660,17 @@ interface SessionFinalizeSyncResult {
   offline: boolean;
   success: boolean;
   synced: number | null;
+  // Per-direction transfer counts. The directional completion toast is rendered
+  // frontend-side from these via the shared `saveSyncToastBody` helper — the
+  // single source of that copy (#1481).
+  uploaded: number;
+  downloaded: number;
   conflicts: SyncConflict[];
-  toast_title: string | null;
-  toast_body: string | null;
+  // Backend-owned body for the non-directional outcomes (offline / classified
+  // failure / generic failure); `null` when no failure toast should fire —
+  // including the #239 content-dir benign skip. Mutually exclusive with the
+  // directional toast by construction.
+  failure_toast: string | null;
   conflicts_toast: string | null;
 }
 

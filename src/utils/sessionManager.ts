@@ -9,6 +9,7 @@
 
 import { toaster } from "@decky/api";
 import { recordSessionStart, getAppIdRomIdMap, finalizeGameSession, logInfo, logError, debugLog } from "../api/backend";
+import { saveSyncToastBody } from "./saveSyncToast";
 import { setMigrationStatus } from "./migrationStore";
 import { setSaveSortMigrationStatus } from "./saveSortMigrationStore";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
@@ -189,9 +190,18 @@ async function handleGameStop(): Promise<void> {
       }
     }
 
-    // Post-exit sync toast (backend rendered).
-    if (result.sync.toast_title && result.sync.toast_body) {
-      toaster.toast({ title: result.sync.toast_title, body: result.sync.toast_body });
+    // Post-exit save-sync toast. The directional success toast is rendered
+    // frontend-side from the transfer counts via the shared helper (the single
+    // source of that copy, #1481); the offline/failure body stays backend-owned
+    // (failure_toast). The two are mutually exclusive — a successful run carries
+    // failure_toast=null — so only one fires.
+    const directionalBody = result.sync.success
+      ? saveSyncToastBody(result.sync.uploaded, result.sync.downloaded)
+      : null;
+    if (directionalBody) {
+      toaster.toast({ title: "RomM Save Sync", body: directionalBody });
+    } else if (result.sync.failure_toast) {
+      toaster.toast({ title: "RomM Save Sync", body: result.sync.failure_toast });
     }
 
     // Save-sync event dispatch — fires unconditionally so open surfaces refresh

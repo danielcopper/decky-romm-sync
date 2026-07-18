@@ -4,11 +4,17 @@ Composes the four cross-service reads the frontend's game-stop handler
 used to interleave into one round-trip: end-of-session playtime
 record, fire-and-forget achievement refresh, post-exit save sync, and
 the migration-state refresh. Returns a typed ``SessionFinalizeResult``
-carrying the playtime delta plus the rendered toast strings and the
-migration-status payloads the frontend feeds into its in-memory
+carrying the playtime delta plus the per-direction transfer counts and
+the migration-status payloads the frontend feeds into its in-memory
 stores. The playtime-display update (Steam's ``appStore`` mutation)
 stays on the frontend because it touches Steam IPC; everything else
 about the end-of-session flow is now a backend decision.
+
+Save-sync completion copy is split by kind: the directional success
+toast is presentation the frontend renders from the counts (via the
+shared ``saveSyncToastBody`` helper, the single source of that copy and
+i18n-ready), while the offline/failure body (``failure_toast``) follows
+the backend-owned message convention.
 """
 
 from __future__ import annotations
@@ -30,51 +36,36 @@ if TYPE_CHECKING:
     )
 
 
-_TOAST_TITLE = "RomM Save Sync"
 _TOAST_BODY_OFFLINE = "Server offline — saves will sync next time"
-_TOAST_BODY_UPLOADED = "Saves uploaded to RomM"
-_TOAST_BODY_DOWNLOADED = "Saves downloaded from RomM"
 _TOAST_BODY_FAILED = "Failed to sync saves after exit"
-
-
-def sync_toast_body(uploaded: int, downloaded: int) -> str | None:
-    """Compose the per-direction save-sync completion toast body (#250).
-
-    Mirrors the frontend ``saveSyncToastBody`` (``src/utils/saveSyncToast.ts``)
-    verbatim so the pre-launch (frontend-rendered) and post-exit (this,
-    backend-rendered) toasts read identically. Names the single direction when
-    saves moved only one way, both counts when a run went both ways, and returns
-    ``None`` when nothing transferred so a no-op sync fires no toast.
-    """
-    if uploaded > 0 and downloaded > 0:
-        return f"Saves synced with RomM ({uploaded} up, {downloaded} down)"
-    if uploaded > 0:
-        return _TOAST_BODY_UPLOADED
-    if downloaded > 0:
-        return _TOAST_BODY_DOWNLOADED
-    return None
 
 
 @dataclass(frozen=True)
 class SessionFinalizeSyncResult:
-    """Post-exit-sync verdict rendered for the frontend.
+    """Post-exit-sync verdict handed to the frontend for toast rendering + dispatch.
 
-    Carries the raw outcome flags the frontend still needs for event
-    dispatch (``offline`` / ``success``) plus the pre-rendered toast
-    strings. ``toast_body=None`` means "do not fire a toast for this
-    scenario" — for example a successful sync that uploaded nothing.
-    ``conflicts_toast`` is the second, additive toast fired when the
-    sync surfaces unresolved conflicts; ``None`` when there are no
-    conflicts. Conflict-string rendering lives here so the frontend
-    receives a ready-to-display body.
+    Carries the raw outcome flags (``offline`` / ``success``) plus the
+    per-direction transfer counts (``uploaded`` / ``downloaded``) the
+    frontend renders the directional completion toast from via its shared
+    ``saveSyncToastBody`` helper — the single source of that copy.
+    ``failure_toast`` is the backend-owned body for the non-directional
+    outcomes (offline, classified failure, generic failure); ``None``
+    means no failure toast — including the #239 content-dir benign skip,
+    whose suppression stays a backend decision. The directional and
+    failure toasts are mutually exclusive by construction: a successful
+    run renders directional from the counts and carries
+    ``failure_toast=None``. ``conflicts_toast`` is the additive
+    "N save conflict(s) need resolution" body, ``None`` when there are no
+    conflicts.
     """
 
     offline: bool
     success: bool
     synced: int | None
+    uploaded: int
+    downloaded: int
     conflicts: list[dict[str, Any]]
-    toast_title: str | None
-    toast_body: str | None
+    failure_toast: str | None
     conflicts_toast: str | None
 
 
@@ -130,27 +121,22 @@ class SessionLifecycleServiceConfig:
     logger: logging.Logger
 
 
-def _render_sync_toast(
-    *, offline: bool, success: bool, uploaded: int, downloaded: int, message: str | None = None
-) -> tuple[str | None, str | None]:
-    """Map the raw post-exit-sync flags onto the (title, body) toast pair.
+def _render_failure_toast(*, offline: bool, success: bool, message: str | None = None) -> str | None:
+    """Map the non-success post-exit-sync flags onto the failure/offline toast body.
 
-    Branching: offline wins over success, a successful transfer renders the
-    per-direction body (:func:`sync_toast_body` — "uploaded" / "downloaded" /
-    both counts), a successful no-op produces no toast at all, and any
-    non-success/non-offline state falls through to the failure toast.
-    ``message`` is the classified failure cause from the sync result (e.g.
-    "Authentication failed — sign in again", #971); when present it names the
-    cause in the failure body instead of the generic fallback, keeping the
-    post-exit toast consistent with the pre-launch fallback modal. Only the
-    failure body honours it — the offline and success branches are unaffected.
+    The directional success toast is presentation the frontend renders from the
+    transfer counts (``saveSyncToastBody``), so a successful run returns ``None``
+    here. Offline wins over the generic failure body; a classified ``message``
+    (e.g. "Authentication failed — sign in again", #971) names the cause instead
+    of the generic fallback, keeping the post-exit toast consistent with the
+    pre-launch fallback modal. The #239 content-dir benign skip is suppressed by
+    its caller before this is reached.
     """
     if offline:
-        return _TOAST_TITLE, _TOAST_BODY_OFFLINE
+        return _TOAST_BODY_OFFLINE
     if success:
-        body = sync_toast_body(uploaded, downloaded)
-        return (_TOAST_TITLE, body) if body is not None else (None, None)
-    return _TOAST_TITLE, message or _TOAST_BODY_FAILED
+        return None
+    return message or _TOAST_BODY_FAILED
 
 
 def _render_conflicts_toast(conflicts: list[dict[str, Any]]) -> str | None:
@@ -264,21 +250,25 @@ class SessionLifecycleService:
             self._logger.warning(f"SessionLifecycle achievement sync failed for rom_id={rom_id}: {e}")
 
     async def _build_sync_result(self, rom_id: int) -> SessionFinalizeSyncResult:
-        """Run post-exit sync and render the resulting toast strings.
+        """Run post-exit sync and build the frontend's sync verdict.
 
+        Carries the per-direction transfer counts (from which the
+        frontend renders the directional success toast) plus the
+        backend-owned ``failure_toast`` / ``conflicts_toast`` bodies.
         Honours the ``@migration_blocked`` gate: when a RetroDECK
         migration is pending the destructive post-exit sync is skipped
-        and rendered as the standard "failed to sync saves after exit"
-        toast.
+        and surfaced as the standard "failed to sync saves after exit"
+        failure toast.
         """
         if self._migration_reader.is_retrodeck_migration_pending():
             return SessionFinalizeSyncResult(
                 offline=False,
                 success=False,
                 synced=None,
+                uploaded=0,
+                downloaded=0,
                 conflicts=[],
-                toast_title=_TOAST_TITLE,
-                toast_body=_TOAST_BODY_FAILED,
+                failure_toast=_TOAST_BODY_FAILED,
                 conflicts_toast=None,
             )
 
@@ -293,9 +283,10 @@ class SessionLifecycleService:
                 offline=False,
                 success=False,
                 synced=None,
+                uploaded=0,
+                downloaded=0,
                 conflicts=[],
-                toast_title=_TOAST_TITLE,
-                toast_body=_TOAST_BODY_FAILED,
+                failure_toast=_TOAST_BODY_FAILED,
                 conflicts_toast=None,
             )
 
@@ -307,9 +298,10 @@ class SessionLifecycleService:
                 offline=False,
                 success=False,
                 synced=0,
+                uploaded=0,
+                downloaded=0,
                 conflicts=[],
-                toast_title=None,
-                toast_body=None,
+                failure_toast=None,
                 conflicts_toast=None,
             )
 
@@ -326,18 +318,17 @@ class SessionLifecycleService:
         raw_message = result.get("message")
         message = raw_message if isinstance(raw_message, str) else None
 
-        toast_title, toast_body = _render_sync_toast(
-            offline=offline, success=success, uploaded=uploaded, downloaded=downloaded, message=message
-        )
+        failure_toast = _render_failure_toast(offline=offline, success=success, message=message)
         conflicts_toast = _render_conflicts_toast(conflicts)
 
         return SessionFinalizeSyncResult(
             offline=offline,
             success=success,
             synced=synced,
+            uploaded=uploaded,
+            downloaded=downloaded,
             conflicts=conflicts,
-            toast_title=toast_title,
-            toast_body=toast_body,
+            failure_toast=failure_toast,
             conflicts_toast=conflicts_toast,
         )
 

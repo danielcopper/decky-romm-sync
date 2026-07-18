@@ -261,11 +261,14 @@ class TestFinalizeSyncToasts:
         event_loop.run_until_complete(_drain_background_tasks(service))
 
         assert result.sync.offline is True
-        assert result.sync.toast_title == "RomM Save Sync"
-        assert result.sync.toast_body == "Server offline — saves will sync next time"
+        assert result.sync.failure_toast == "Server offline — saves will sync next time"
 
-    def test_success_upload_only_renders_uploaded_toast(self, event_loop, logger):
-        """``success=True`` with only uploads → "Saves uploaded to RomM" (#250)."""
+    def test_success_upload_only_carries_upload_counts(self, event_loop, logger):
+        """``success=True`` with only uploads → counts carried, no failure toast (#250, #1481).
+
+        The directional "Saves uploaded to RomM" string is rendered frontend-side
+        from these counts; the backend only carries the data.
+        """
         post = FakePostExitSync(payload={"success": True, "synced": 3, "uploaded": 3, "downloaded": 0, "conflicts": []})
         service = _make_service(
             playtime_recorder=FakePlaytimeRecorder(),
@@ -280,11 +283,12 @@ class TestFinalizeSyncToasts:
 
         assert result.sync.success is True
         assert result.sync.synced == 3
-        assert result.sync.toast_title == "RomM Save Sync"
-        assert result.sync.toast_body == "Saves uploaded to RomM"
+        assert result.sync.uploaded == 3
+        assert result.sync.downloaded == 0
+        assert result.sync.failure_toast is None
 
-    def test_success_download_only_renders_downloaded_toast(self, event_loop, logger):
-        """``success=True`` with only downloads → "Saves downloaded from RomM" (#250)."""
+    def test_success_download_only_carries_download_counts(self, event_loop, logger):
+        """``success=True`` with only downloads → counts carried, no failure toast (#250, #1481)."""
         post = FakePostExitSync(payload={"success": True, "synced": 2, "uploaded": 0, "downloaded": 2, "conflicts": []})
         service = _make_service(
             playtime_recorder=FakePlaytimeRecorder(),
@@ -298,10 +302,12 @@ class TestFinalizeSyncToasts:
         event_loop.run_until_complete(_drain_background_tasks(service))
 
         assert result.sync.success is True
-        assert result.sync.toast_body == "Saves downloaded from RomM"
+        assert result.sync.uploaded == 0
+        assert result.sync.downloaded == 2
+        assert result.sync.failure_toast is None
 
-    def test_success_both_directions_renders_mixed_toast(self, event_loop, logger):
-        """``success=True`` with both directions → names both counts (#250)."""
+    def test_success_both_directions_carries_both_counts(self, event_loop, logger):
+        """``success=True`` with both directions → both counts carried (#250, #1481)."""
         post = FakePostExitSync(payload={"success": True, "synced": 3, "uploaded": 1, "downloaded": 2, "conflicts": []})
         service = _make_service(
             playtime_recorder=FakePlaytimeRecorder(),
@@ -315,10 +321,12 @@ class TestFinalizeSyncToasts:
         event_loop.run_until_complete(_drain_background_tasks(service))
 
         assert result.sync.success is True
-        assert result.sync.toast_body == "Saves synced with RomM (1 up, 2 down)"
+        assert result.sync.uploaded == 1
+        assert result.sync.downloaded == 2
+        assert result.sync.failure_toast is None
 
-    def test_success_with_no_transfers_renders_no_toast(self, event_loop, logger):
-        """``success=True`` with nothing moved → no toast (frontend still dispatches event)."""
+    def test_success_with_no_transfers_carries_zero_counts(self, event_loop, logger):
+        """``success=True`` with nothing moved → zero counts, no failure toast (frontend fires no toast)."""
         post = FakePostExitSync(payload={"success": True, "synced": 0, "uploaded": 0, "downloaded": 0, "conflicts": []})
         service = _make_service(
             playtime_recorder=FakePlaytimeRecorder(),
@@ -333,11 +341,12 @@ class TestFinalizeSyncToasts:
 
         assert result.sync.success is True
         assert result.sync.synced == 0
-        assert result.sync.toast_title is None
-        assert result.sync.toast_body is None
+        assert result.sync.uploaded == 0
+        assert result.sync.downloaded == 0
+        assert result.sync.failure_toast is None
 
     def test_failure_renders_failure_toast(self, event_loop, logger):
-        """``success=False, offline=False`` → failure toast."""
+        """``success=False, offline=False`` → generic failure toast on ``failure_toast``."""
         post = FakePostExitSync(payload={"success": False})
         service = _make_service(
             playtime_recorder=FakePlaytimeRecorder(),
@@ -350,8 +359,7 @@ class TestFinalizeSyncToasts:
         result = event_loop.run_until_complete(service.finalize(99))
         event_loop.run_until_complete(_drain_background_tasks(service))
 
-        assert result.sync.toast_title == "RomM Save Sync"
-        assert result.sync.toast_body == "Failed to sync saves after exit"
+        assert result.sync.failure_toast == "Failed to sync saves after exit"
 
     def test_failure_with_auth_message_names_the_cause(self, event_loop, logger):
         """#971: a classified auth failure surfaces its own message, not the generic body."""
@@ -374,10 +382,9 @@ class TestFinalizeSyncToasts:
         result = event_loop.run_until_complete(service.finalize(99))
         event_loop.run_until_complete(_drain_background_tasks(service))
 
-        assert result.sync.toast_title == "RomM Save Sync"
-        assert result.sync.toast_body == "Authentication failed — sign in again"
+        assert result.sync.failure_toast == "Authentication failed — sign in again"
         # The generic fallback must NOT be used when a classified cause is present.
-        assert result.sync.toast_body != "Failed to sync saves after exit"
+        assert result.sync.failure_toast != "Failed to sync saves after exit"
 
     def test_failure_with_ssl_message_names_the_cause(self, event_loop, logger):
         """#971: an SSL/server-classified failure surfaces its specific message."""
@@ -400,8 +407,7 @@ class TestFinalizeSyncToasts:
         result = event_loop.run_until_complete(service.finalize(99))
         event_loop.run_until_complete(_drain_background_tasks(service))
 
-        assert result.sync.toast_title == "RomM Save Sync"
-        assert result.sync.toast_body == "SSL certificate verification failed"
+        assert result.sync.failure_toast == "SSL certificate verification failed"
 
     def test_failure_without_message_falls_back_to_generic_body(self, event_loop, logger):
         """A failure with no ``message`` key falls back to the generic failure body."""
@@ -417,8 +423,7 @@ class TestFinalizeSyncToasts:
         result = event_loop.run_until_complete(service.finalize(99))
         event_loop.run_until_complete(_drain_background_tasks(service))
 
-        assert result.sync.toast_title == "RomM Save Sync"
-        assert result.sync.toast_body == "Failed to sync saves after exit"
+        assert result.sync.failure_toast == "Failed to sync saves after exit"
 
     def test_failure_with_non_str_message_falls_back_to_generic_body(self, event_loop, logger):
         """A non-str ``message`` (e.g. None) is coerced away → generic failure body."""
@@ -434,8 +439,7 @@ class TestFinalizeSyncToasts:
         result = event_loop.run_until_complete(service.finalize(99))
         event_loop.run_until_complete(_drain_background_tasks(service))
 
-        assert result.sync.toast_title == "RomM Save Sync"
-        assert result.sync.toast_body == "Failed to sync saves after exit"
+        assert result.sync.failure_toast == "Failed to sync saves after exit"
 
     def test_offline_message_does_not_override_offline_body(self, event_loop, logger):
         """Regression guard: the offline branch keeps its body even when a message is present."""
@@ -452,10 +456,14 @@ class TestFinalizeSyncToasts:
         event_loop.run_until_complete(_drain_background_tasks(service))
 
         assert result.sync.offline is True
-        assert result.sync.toast_body == "Server offline — saves will sync next time"
+        assert result.sync.failure_toast == "Server offline — saves will sync next time"
 
-    def test_success_message_does_not_override_synced_body(self, event_loop, logger):
-        """Regression guard: a successful sync keeps the per-direction body, ignoring ``message``."""
+    def test_success_message_does_not_leak_into_failure_toast(self, event_loop, logger):
+        """Regression guard: a successful sync carries no failure toast, even with a ``message``.
+
+        The directional success toast is rendered frontend-side from the counts;
+        a ``message`` on a successful result must never surface as a failure body.
+        """
         post = FakePostExitSync(
             payload={
                 "success": True,
@@ -478,7 +486,9 @@ class TestFinalizeSyncToasts:
         event_loop.run_until_complete(_drain_background_tasks(service))
 
         assert result.sync.success is True
-        assert result.sync.toast_body == "Saves uploaded to RomM"
+        assert result.sync.uploaded == 2
+        assert result.sync.downloaded == 0
+        assert result.sync.failure_toast is None
 
     def test_post_exit_exception_renders_failure_toast(self, event_loop, logger):
         """Post-exit sync raises → failure toast, downstream still runs."""
@@ -497,8 +507,7 @@ class TestFinalizeSyncToasts:
 
         assert result.sync.offline is False
         assert result.sync.success is False
-        assert result.sync.toast_title == "RomM Save Sync"
-        assert result.sync.toast_body == "Failed to sync saves after exit"
+        assert result.sync.failure_toast == "Failed to sync saves after exit"
         assert result.sync.conflicts == []
         # Post-exit failure must NOT short-circuit migration refresh.
         assert migration.refresh_calls == 1
@@ -524,9 +533,9 @@ class TestFinalizeSyncToasts:
         result = event_loop.run_until_complete(service.finalize(99))
         event_loop.run_until_complete(_drain_background_tasks(service))
 
-        assert result.sync.toast_body == "Failed to sync saves after exit"
-        # The exception text must never leak into the toast body.
-        assert "Authentication failed" not in result.sync.toast_body
+        assert result.sync.failure_toast == "Failed to sync saves after exit"
+        # The exception text must never leak into the failure toast body.
+        assert "Authentication failed" not in result.sync.failure_toast
 
     def test_direction_counts_non_int_treated_as_zero(self, event_loop, logger):
         """``uploaded`` / ``downloaded`` not ints (None, str) → treated as 0 → no toast."""
@@ -544,10 +553,11 @@ class TestFinalizeSyncToasts:
         result = event_loop.run_until_complete(service.finalize(99))
         event_loop.run_until_complete(_drain_background_tasks(service))
 
-        # Malformed counts default to 0 → no transfer detected → no toast.
+        # Malformed counts default to 0 → the frontend helper renders no toast.
         assert result.sync.synced is None
-        assert result.sync.toast_title is None
-        assert result.sync.toast_body is None
+        assert result.sync.uploaded == 0
+        assert result.sync.downloaded == 0
+        assert result.sync.failure_toast is None
 
 
 class TestFinalizeContentDirBenignSkip:
@@ -580,8 +590,7 @@ class TestFinalizeContentDirBenignSkip:
         # The post-exit sync ran (benign skip is the sync's own verdict)...
         assert post.calls == [99]
         # ...but NO toast fires — neither the failure toast nor any other.
-        assert result.sync.toast_title is None
-        assert result.sync.toast_body is None
+        assert result.sync.failure_toast is None
         assert result.sync.conflicts_toast is None
         # Verdict flags reflect a non-error skip.
         assert result.sync.offline is False
@@ -603,8 +612,7 @@ class TestFinalizeContentDirBenignSkip:
         result = event_loop.run_until_complete(service.finalize(99))
         event_loop.run_until_complete(_drain_background_tasks(service))
 
-        assert result.sync.toast_title == "RomM Save Sync"
-        assert result.sync.toast_body == "Failed to sync saves after exit"
+        assert result.sync.failure_toast == "Failed to sync saves after exit"
 
 
 class TestFinalizeConflicts:
@@ -805,8 +813,7 @@ class TestFinalizeMigrationGate:
         assert post.calls == []
         assert result.sync.offline is False
         assert result.sync.success is False
-        assert result.sync.toast_title == "RomM Save Sync"
-        assert result.sync.toast_body == "Failed to sync saves after exit"
+        assert result.sync.failure_toast == "Failed to sync saves after exit"
         # Playtime + migration refresh still ran.
         assert result.total_seconds == 3600
         assert migration.refresh_calls == 1
@@ -884,9 +891,10 @@ class TestFinalizeResultShape:
                 offline=False,
                 success=True,
                 synced=2,
+                uploaded=2,
+                downloaded=0,
                 conflicts=conflicts,
-                toast_title="RomM Save Sync",
-                toast_body="Saves uploaded to RomM",
+                failure_toast=None,
                 conflicts_toast="1 save conflict need resolution",
             ),
             migration=SessionFinalizeMigration(

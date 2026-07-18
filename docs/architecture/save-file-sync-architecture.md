@@ -1204,14 +1204,16 @@ case: we believe the server's claim and write `last_sync_hash := local_hash` so 
 All four sync entry points share a single decision primitive — `compute_sync_action` — and a single dispatch path —
 `_dispatch_sync_action`. The flows differ only in _when_ they fire and how they surface results.
 
-**Completion toast — per-direction counts (#250).** `_dispatch_sync_action` returns a `TransferDirection` (`UPLOAD` /
-`DOWNLOAD` / `None`), so `sync_rom_saves` tallies uploads and downloads separately and each per-ROM result dict carries
-additive `uploaded` / `downloaded` counts beside the `synced` total (a 409-backstop download counts as a _download_, not
-the upload that lost the race). The completion toast names which way saves moved — "Saves uploaded to RomM", "Saves
-downloaded from RomM", or "Saves synced with RomM (1 up, 2 down)" when a run went both ways — and a run that transferred
-nothing shows no toast. The wording is a single contract mirrored on both sides: the frontend renders the pre-launch
-toast via `saveSyncToastBody` (`src/utils/saveSyncToast.ts`); the backend renders the post-exit toast itself via
-`sync_toast_body` (`services/session_lifecycle.py`) since that flow returns a pre-built `toast_body`.
+**Completion toast — per-direction counts (#250, #1481).** `_dispatch_sync_action` returns a `TransferDirection`
+(`UPLOAD` / `DOWNLOAD` / `None`), so `sync_rom_saves` tallies uploads and downloads separately and each per-ROM result
+dict carries additive `uploaded` / `downloaded` counts beside the `synced` total (a 409-backstop download counts as a
+_download_, not the upload that lost the race). The completion toast names which way saves moved — "Saves uploaded to
+RomM", "Saves downloaded from RomM", or "Saves synced with RomM (1 up, 2 down)" when a run went both ways — and a run
+that transferred nothing shows no toast. The wording lives in exactly one place: the frontend helper `saveSyncToastBody`
+(`src/utils/saveSyncToast.ts`), which every surface renders through — pre-launch (`CustomPlayButton`), post-exit
+(`sessionManager`, from the counts on the `finalize_game_session` payload), and the manual per-game sync
+(`RomMPlaySection`). The backend delivers the counts as data, never the directional copy (#1481); the offline/failure
+body it still owns rides a separate `failure_toast` field on `SessionFinalizeSyncResult`.
 
 ### Pre-launch sync
 
@@ -1250,7 +1252,9 @@ Triggered automatically when a game stops (if `sync_after_exit` is enabled).
 4. If a `Conflict` is returned, a toast notifies the user. The modal is **not** opened post-exit — the conflict re-fires
    at the next pre-launch sync, where the user resolves it via Keep Local / Use Server before launch.
 5. Toast notification shown on success or conflict — the per-direction completion toast above (uploaded / downloaded /
-   both) on a successful transfer, rendered backend-side into `SessionFinalizeSyncResult.toast_body`.
+   both) on a successful transfer, rendered frontend-side by `sessionManager` from the `uploaded` / `downloaded` counts
+   on the `SessionFinalizeSyncResult` payload via `saveSyncToastBody` (#1481). Offline / failure keeps its backend-owned
+   body on `SessionFinalizeSyncResult.failure_toast`.
 
 ### Manual sync all
 

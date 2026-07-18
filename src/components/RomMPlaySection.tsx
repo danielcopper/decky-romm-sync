@@ -31,6 +31,7 @@ import { WarningCard } from "./WarningCard";
 import { SgdbGamePickerModalContent } from "./SgdbGamePickerModal";
 import { applyArtwork } from "../utils/artwork";
 import { hasAnySaveConflict } from "../utils/saveStatus";
+import { saveSyncToastBody } from "../utils/saveSyncToast";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { getEventTarget } from "../utils/events";
 import {
@@ -719,18 +720,20 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     try {
       const result = await syncRomSaves(info.romId);
       if (result.success) {
-        const n = result.synced;
-        const c = result.conflicts?.length ?? 0;
-        let label: string;
-        if (n === 0) {
-          label = "no files updated";
-        } else if (n === 1) {
-          label = "1 file updated";
-        } else {
-          label = `${n} files updated`;
+        // Directional completion toast via the shared helper — the single source
+        // of that copy across every save-sync surface (#1481). Nothing moved →
+        // no toast (the uniform zero-case).
+        const directionalBody = saveSyncToastBody(result.uploaded, result.downloaded);
+        if (directionalBody) {
+          toaster.toast({ title: "RomM Save Sync", body: directionalBody });
         }
-        if (c > 0) label += `, ${c} conflict(s) need resolution`;
-        toaster.toast({ title: "RomM Sync", body: `Saves synced (${label})` });
+        // Preserve the conflict signal as its own additive toast (mirroring the
+        // post-exit conflicts_toast) — it must stay visible even when nothing
+        // transferred.
+        const c = result.conflicts?.length ?? 0;
+        if (c > 0) {
+          toaster.toast({ title: "RomM Save Sync", body: `${c} conflict(s) need resolution` });
+        }
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: info.romId } }),
         );
