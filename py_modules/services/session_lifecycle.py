@@ -192,8 +192,10 @@ class SessionLifecycleService:
         SessionFinalizeResult
             ``total_seconds`` carries the updated total when the
             playtime record succeeded, ``None`` otherwise. ``sync``
-            carries the pre-rendered toast strings and the raw offline /
-            success flags the frontend still needs for the
+            carries the per-direction transfer counts (the frontend
+            renders the directional toast from them), the backend-owned
+            ``failure_toast`` / ``conflicts_toast`` strings, and the raw
+            offline / success flags the frontend still needs for the
             ``romm_data_changed`` event dispatch. ``migration`` carries
             the two migration-status payloads.
         """
