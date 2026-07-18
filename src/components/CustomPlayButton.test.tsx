@@ -960,12 +960,14 @@ describe("CustomPlayButton — pre-launch failure shapes without an errors array
     await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100));
   });
 
-  it("proceeds with the synced toast and no fallback confirm on a clean pre-launch sync", async () => {
+  it("proceeds with the downloaded toast and no fallback confirm on a clean pre-launch download", async () => {
     mockCachedDetail();
     vi.mocked(backend.preLaunchSync).mockResolvedValue({
       success: true,
       message: "",
       synced: 1,
+      uploaded: 0,
+      downloaded: 1,
       errors: [],
       conflicts: [],
     });
@@ -979,7 +981,78 @@ describe("CustomPlayButton — pre-launch failure shapes without an errors array
     await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalled());
     expect(vi.mocked(showFallbackLaunchModal)).not.toHaveBeenCalled();
     expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100);
-    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Saves synced with RomM" }));
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
+      expect.objectContaining({ body: "Saves downloaded from RomM" }),
+    );
+  });
+
+  it("shows the uploaded toast when a pre-launch sync only pushed saves (row-9 upload)", async () => {
+    mockCachedDetail();
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: true,
+      message: "",
+      synced: 1,
+      uploaded: 1,
+      downloaded: 0,
+      errors: [],
+      conflicts: [],
+    });
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+    });
+
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalled());
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Saves uploaded to RomM" }));
+  });
+
+  it("names both directions when a pre-launch sync moved saves both ways", async () => {
+    mockCachedDetail();
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: true,
+      message: "",
+      synced: 3,
+      uploaded: 1,
+      downloaded: 2,
+      errors: [],
+      conflicts: [],
+    });
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+    });
+
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalled());
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
+      expect.objectContaining({ body: "Saves synced with RomM (1 up, 2 down)" }),
+    );
+  });
+
+  it("fires no toast when a clean pre-launch sync transferred nothing", async () => {
+    mockCachedDetail();
+    vi.mocked(toaster.toast).mockReset();
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: true,
+      message: "",
+      synced: 0,
+      uploaded: 0,
+      downloaded: 0,
+      errors: [],
+      conflicts: [],
+    });
+
+    const { findByText } = render(<CustomPlayButton appId={100} />);
+    const playBtn = await findByText("Play");
+    await act(async () => {
+      playBtn.click();
+    });
+
+    await waitFor(() => expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalled());
+    expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
   });
 
   it("surfaces the shared fallback (empty message → generic copy) when pre-launch sync throws", async () => {

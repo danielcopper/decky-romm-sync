@@ -54,6 +54,7 @@ import { SAVEFILES_IN_CONTENT_DIR_REASON } from "../types";
 import { detach } from "../utils/detach";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { reconfirmLaunchOptions } from "../utils/launchOptionsReconcile";
+import { saveSyncToastBody } from "../utils/saveSyncToast";
 
 type PlayButtonState =
   "loading" | "not_romm" | "download" | "conflict" | "syncing" | "play" | "launching" | "dl_complete" | "uninstalling";
@@ -502,8 +503,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       return { success: false, message: result.message };
     }
 
-    if (result.synced && result.synced > 0) {
-      toaster.toast({ title: "RomM Save Sync", body: "Saves synced with RomM" });
+    const toastBody = saveSyncToastBody(result.uploaded, result.downloaded);
+    if (toastBody) {
+      toaster.toast({ title: "RomM Save Sync", body: toastBody });
     }
     return { success: true, message: result.message };
   };

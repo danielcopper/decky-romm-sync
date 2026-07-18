@@ -532,11 +532,31 @@ export const listDevices = callable<[], ListDevicesResponse>("list_devices");
 export const getSaveStatus = callable<[number], SaveStatus>("get_save_status");
 export const preLaunchSync = callable<
   [number],
-  { success: boolean; message: string; synced?: number; errors?: string[]; conflicts?: SyncConflict[]; reason?: string }
+  {
+    success: boolean;
+    message: string;
+    synced?: number;
+    // Per-direction transfer counts (#250) — additive; absent on the skip /
+    // failure branches (treat absent as 0).
+    uploaded?: number;
+    downloaded?: number;
+    errors?: string[];
+    conflicts?: SyncConflict[];
+    reason?: string;
+  }
 >("pre_launch_sync");
 export const syncRomSaves = callable<
   [number],
-  { success: boolean; message: string; synced: number; errors?: string[]; conflicts?: SyncConflict[]; reason?: string }
+  {
+    success: boolean;
+    message: string;
+    synced: number;
+    uploaded?: number;
+    downloaded?: number;
+    errors?: string[];
+    conflicts?: SyncConflict[];
+    reason?: string;
+  }
 >("sync_rom_saves");
 export const syncAllSaves = callable<
   [],
