@@ -602,8 +602,8 @@ Earlier versions surfaced every server save in the slot the user had not authore
 pragmatic newest-wins model used by the official RomM clients (Argosy, Grout) treats the slot as a single timeline:
 whichever save has the highest `updated_at` wins, regardless of which device PUT it. We adopted that model in v0.16
 because it eliminates ~1500 lines of foreign-tracking code and aligns with the wider RomM ecosystem. Cross-device
-uploads are silently adopted unless local edits diverge from baseline (rows 12 / 11b). This is documented behaviour, not
-a regression.
+uploads are silently adopted unless local edits diverge from baseline (rows 12b / 11b). This is documented behaviour,
+not a regression.
 
 ### Upload-time conflicts (the 409 backstop)
 
