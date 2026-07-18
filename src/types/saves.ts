@@ -8,7 +8,7 @@ export interface SaveSyncSettings {
   save_sync_enabled: boolean;
   sync_before_launch: boolean;
   sync_after_exit: boolean;
-  default_slot: string | null;
+  default_slot: string;
   autocleanup_limit: number;
 }
 

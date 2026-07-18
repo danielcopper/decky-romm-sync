@@ -89,7 +89,7 @@ export const SaveSyncSection: FC<SaveSyncSectionProps> = ({
               <PanelSectionRow>
                 <Field
                   label="Default Save Slot"
-                  description={`${saveSyncSettings.default_slot || "Legacy"} — applies to new games and games without a per-game slot override`}
+                  description={`${saveSyncSettings.default_slot} — applies to new games and games without a per-game slot override`}
                 >
                   <DialogButton
                     style={{ minWidth: "auto", width: "auto" }}
@@ -97,7 +97,7 @@ export const SaveSyncSection: FC<SaveSyncSectionProps> = ({
                       showModal(
                         <TextInputModal
                           label="Default Save Slot"
-                          value={saveSyncSettings.default_slot ?? ""}
+                          value={saveSyncSettings.default_slot}
                           onSubmit={onDefaultSlotSubmit}
                         />,
                       )

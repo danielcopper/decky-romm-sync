@@ -1251,38 +1251,28 @@ describe("SettingsPage", () => {
       );
     });
 
-    it("opens the clear-default-slot ConfirmModal when the value is empty", async () => {
-      render(<SettingsPage onBack={vi.fn()} />);
-      await flushAsync();
-      act(() => {
-        capturedSaveSync[capturedSaveSync.length - 1]?.onDefaultSlotSubmit("   ");
-      });
-      const props = lastConfirmModalProps<{
-        strTitle?: string;
-        strOKButtonText?: string;
-        onOK?: () => void | Promise<void>;
-      }>();
-      expect(props?.strTitle).toBe("Clear Default Slot?");
-      expect(props?.strOKButtonText).toBe("Clear Slot");
-    });
-
-    it("clears default_slot when the clear-default-slot confirmation is OK'd", async () => {
+    it("resets to 'default' without a confirm modal when the value is empty", async () => {
       vi.mocked(backend.updateSaveSyncSettings).mockResolvedValue({ success: true });
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
-      act(() => {
-        capturedSaveSync[capturedSaveSync.length - 1]?.onDefaultSlotSubmit("");
-      });
-      const props = lastConfirmModalProps<{ onOK?: () => void | Promise<void> }>();
       await act(async () => {
-        await props?.onOK?.();
+        capturedSaveSync[capturedSaveSync.length - 1]?.onDefaultSlotSubmit("   ");
+        await Promise.resolve();
       });
       expect(vi.mocked(backend.updateSaveSyncSettings)).toHaveBeenCalledWith(
-        expect.objectContaining({ default_slot: null }),
+        expect.objectContaining({ default_slot: "default" }),
+      );
+      // The old "enables legacy mode" clear-slot confirm modal is gone.
+      expect(vi.mocked(showModal)).not.toHaveBeenCalled();
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "RomM Sync",
+          body: 'Default save slot reset to "default".',
+        }),
       );
     });
 
-    it("handleResetDefaultSlot sets default_slot='default'", async () => {
+    it("handleResetDefaultSlot sets default_slot='default' and toasts", async () => {
       vi.mocked(backend.updateSaveSyncSettings).mockResolvedValue({ success: true });
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
@@ -1292,6 +1282,12 @@ describe("SettingsPage", () => {
       });
       expect(vi.mocked(backend.updateSaveSyncSettings)).toHaveBeenCalledWith(
         expect.objectContaining({ default_slot: "default" }),
+      );
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "RomM Sync",
+          body: 'Default save slot reset to "default".',
+        }),
       );
     });
   });

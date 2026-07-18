@@ -268,22 +268,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
 
   const saveSyncEnabled = saveSyncSettings?.save_sync_enabled ?? false;
 
-  /** Show confirmation modal and clear the default slot on OK. */
-  function confirmClearDefaultSlot(): void {
-    showModal(
-      <ConfirmModal
-        strTitle="Clear Default Slot?"
-        strDescription="Clearing the default slot enables legacy mode. New games will not use a slot, which limits saves to one version per game. Are you sure?"
-        strOKButtonText="Clear Slot"
-        strCancelButtonText="Cancel"
-        onOK={() => {
-          setSaveSyncSettings((prev) => (prev ? { ...prev, default_slot: null } : prev));
-          detach(handleSaveSyncSettingChange({ default_slot: null }));
-        }}
-      />,
-    );
-  }
-
   // --- Connection handlers wired into ConnectionSection ---
   const handleUrlChange = async (value: string) => {
     const trimmed = trimServerUrl(value);
@@ -394,18 +378,22 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   };
 
   // --- Save-sync default-slot handlers ---
+  const handleResetDefaultSlot = () => {
+    setSaveSyncSettings((prev) => (prev ? { ...prev, default_slot: "default" } : prev));
+    detach(handleSaveSyncSettingChange({ default_slot: "default" }));
+    toaster.toast({
+      title: "RomM Sync",
+      body: 'Default save slot reset to "default".',
+    });
+  };
   const handleDefaultSlotSubmit = (value: string) => {
     const trimmed = value.trim();
     if (trimmed) {
       setSaveSyncSettings((prev) => (prev ? { ...prev, default_slot: trimmed } : prev));
       detach(handleSaveSyncSettingChange({ default_slot: trimmed }));
     } else {
-      confirmClearDefaultSlot();
+      handleResetDefaultSlot();
     }
-  };
-  const handleResetDefaultSlot = () => {
-    setSaveSyncSettings((prev) => (prev ? { ...prev, default_slot: "default" } : prev));
-    detach(handleSaveSyncSettingChange({ default_slot: "default" }));
   };
 
   // --- Controller handlers ---

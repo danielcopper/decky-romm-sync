@@ -228,14 +228,6 @@ describe("SaveSyncSection", () => {
       expect(container.textContent).toContain("speedrun");
     });
 
-    it("shows 'Legacy' when default_slot is empty", () => {
-      const { container } = render(
-        <SaveSyncSection {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: "" }) })} />,
-      );
-      expect(container.textContent).toContain("Legacy");
-      expect(container.textContent).not.toContain("(no slot)");
-    });
-
     it("opens a TextInputModal on Edit with the current default_slot", () => {
       const onDefaultSlotSubmit = vi.fn();
       const { getByText } = render(
@@ -251,14 +243,6 @@ describe("SaveSyncSection", () => {
       expect(props?.label).toBe("Default Save Slot");
       expect(props?.value).toBe("main");
       expect(props?.onSubmit).toBe(onDefaultSlotSubmit);
-    });
-
-    it("passes an empty string to the modal when default_slot is null", () => {
-      const { getByText } = render(
-        <SaveSyncSection {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: null }) })} />,
-      );
-      fireEvent.click(getByText("Edit"));
-      expect(lastShownModalProps()?.value).toBe("");
     });
   });
 
@@ -280,13 +264,6 @@ describe("SaveSyncSection", () => {
       );
       fireEvent.click(getByText("Reset to default"));
       expect(onResetDefaultSlot).toHaveBeenCalledTimes(1);
-    });
-
-    it("is rendered when default_slot is null (null !== 'default')", () => {
-      const { getByText } = render(
-        <SaveSyncSection {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: null }) })} />,
-      );
-      expect(getByText("Reset to default")).toBeInTheDocument();
     });
   });
 
