@@ -277,6 +277,18 @@ therefore deletes **only** the `slot: null` saves and never touches named slots.
 op was the bug: the server returned `[]`, the local tracking was cleared, and the slot resurrected on the next merge
 (zombie slot).
 
+The **active-slot matching filter** applies the same funnel from the other direction. The matrix sync run,
+`get_save_status`, and rollback narrow the fetched saves through `MatrixExecutor.filter_server_saves_to_slot`, and
+`switch_slot` client-filters its fetch the same way — every one keeps only `save_in_slot(save, active_slot)`. So a
+legacy `slot:null` save belongs **only** to the legacy slot and is **isolated from every named slot, including
+`"default"`** ([#877](https://github.com/danielcopper/decky-romm-sync/issues/877)): it never enters a named slot's
+`compute_sync_action` inputs (no spurious download or conflict from a newer legacy head), its status counts, or its slot
+listing, and a brand-new named slot is genuinely empty. The legacy saves stay readable through the legacy bucket
+(`get_slot_saves(rom, "")` and the Setup Wizard's server-slot grouping) — the null bucket is deliberately separate from
+`"default"`, never merged onto or aliased with it. The original bug matched `slot == active or slot is None` under every
+named slot (fixed by #1061); routing the switch fetch through the shared `save_in_slot` funnel closes the last
+hand-rolled site.
+
 The **upload** side honours the same equivalence (`MatrixExecutor._resolve_upload_slot`): a sync on the legacy slot
 (`active_slot=None` with a populated `slots` map) uploads with the `slot` param **omitted**, so the server stores a
 `slot: null` save. Only a brand-new ROM (no `slots` yet) seeds the configured default slot for its first sync. Since

@@ -434,6 +434,70 @@ class TestV47SyncFlow:
         # Verify download happened
         assert 100 in fake.downloaded_files
 
+    def test_sync_ignores_newer_legacy_save_under_named_slot(self, tmp_path):
+        """#877: a slot:null save NEWER than the named-slot head never enters the sync decision.
+
+        Non-vacuous regression: the legacy save (id=200, updated 20:00) is newer
+        than the named-slot head (id=100, updated 06:00) the local file is synced
+        to. Absent slot isolation the newest-wins pick for the "pokemon.srm"
+        target under the active "default" slot would choose 200 and download it —
+        so the leaky filter would report ``synced==1`` with 200 in the downloads.
+        With ``filter_server_saves_to_slot`` the "default" slot only sees 100
+        (matches local → Skip) and the legacy save is never pulled in.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        content = b"named-slot content"
+        _create_save(tmp_path, content=content)
+        local_hash = hashlib.md5(content).hexdigest()
+
+        # Local is synced to the named-slot head; active slot is "default".
+        _seed_save_state_dict(
+            svc,
+            42,
+            {
+                "active_slot": "default",
+                "slot_confirmed": True,
+                "files": {
+                    "pokemon.srm": {
+                        "last_sync_hash": local_hash,
+                        "last_sync_server_updated_at": "2026-02-17T06:00:00Z",
+                        "last_sync_server_save_id": 100,
+                        "last_sync_server_size": len(content),
+                    }
+                },
+            },
+        )
+        # Named-slot head (older, is_current) + a NEWER legacy save on the server.
+        fake.saves[100] = {
+            "id": 100,
+            "rom_id": 42,
+            "file_name": "pokemon.srm",
+            "updated_at": "2026-02-17T06:00:00Z",
+            "file_size_bytes": len(content),
+            "slot": "default",
+            "device_syncs": [{"device_id": "dev-1", "is_current": True}],
+        }
+        fake.saves[200] = {
+            "id": 200,
+            "rom_id": 42,
+            "file_name": "pokemon.srm",
+            "updated_at": "2026-02-17T20:00:00Z",
+            "file_size_bytes": 4096,
+            "slot": None,
+            "device_syncs": [{"device_id": "dev-1", "is_current": False}],
+        }
+
+        synced, errors, conflicts = _do_sync(svc, 42)
+
+        assert synced == 0
+        assert errors == []
+        assert conflicts == []
+        # The newer legacy save was never downloaded into the named slot.
+        assert 200 not in fake.downloaded_files
+
 
 class TestConfirmDownloadAfterSync:
     """Verify the device's last_synced_at ends up registered with RomM after each

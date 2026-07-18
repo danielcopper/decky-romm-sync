@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_state import RomSaveState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
+from domain.save_slot import save_in_slot
 from lib.list_result import ErrorCode
 from services.saves._helpers import local_save_target
 from services.saves._messages import SAVE_SYNC_IN_CONTENT_DIR
@@ -230,9 +231,13 @@ class SlotSwitcher:
                     "message": str(e),
                 }
 
-            # Filter to the target slot (FakeSaveApi doesn't filter, real API may not either)
-            # Normalize "" and None both to None before comparing (legacy saves may use either)
-            slot_saves = [s for s in all_server_saves if (s.get("slot") or None) == resolved_slot]
+            # Filter to the target slot client-side. The fetch above omits the
+            # ``slot=`` param (RomM can't address ``slot:null``), so this is the
+            # legacy-safe path: route membership through the single
+            # ``domain.save_slot.save_in_slot`` funnel (#1061) so the legacy
+            # bucket stays isolated from every named switch target — a slot:null
+            # save is never pulled into a named slot (#877).
+            slot_saves = [s for s in all_server_saves if save_in_slot(s, resolved_slot)]
             self._log_debug(
                 f"switch_slot: fetch rom={rom_id} resolved_slot={resolved_slot!r} "
                 f"server_all={[(s.get('id'), s.get('slot')) for s in all_server_saves]} "

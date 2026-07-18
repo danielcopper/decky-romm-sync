@@ -106,6 +106,69 @@ class TestSaveStatus:
         assert result["files"][0]["status"] == "upload"
         assert result["files"][0]["server_save_id"] is None
 
+    @pytest.mark.asyncio
+    async def test_status_ignores_newer_legacy_save_under_named_slot(self, tmp_path):
+        """#877: a slot:null save NEWER than the named-slot head is absent from status.
+
+        Non-vacuous regression: the legacy save (id=200, updated 20:00) is newer
+        than the named-slot head (id=100, updated 06:00) the local file is synced
+        to. Absent slot isolation the newest-wins pick under the active "default"
+        slot would surface 200 as a pending Download; with
+        ``filter_server_saves_to_slot`` the slot only sees 100 (matches local →
+        synced) and the legacy save never appears.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        content = b"named-slot content"
+        save_path = _create_save(tmp_path, content=content)
+        local_hash = _file_md5(str(save_path))
+
+        _seed_save_state_dict(
+            svc,
+            42,
+            {
+                "active_slot": "default",
+                "slot_confirmed": True,
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": local_hash,
+                        "last_sync_server_updated_at": "2026-02-17T06:00:00Z",
+                        "last_sync_server_save_id": 100,
+                        "last_sync_server_size": len(content),
+                    }
+                },
+            },
+        )
+        fake.saves[100] = {
+            "id": 100,
+            "rom_id": 42,
+            "file_name": "pokemon.srm",
+            "updated_at": "2026-02-17T06:00:00Z",
+            "file_size_bytes": len(content),
+            "slot": "default",
+            "device_syncs": [{"device_id": "dev-1", "is_current": True}],
+        }
+        fake.saves[200] = {
+            "id": 200,
+            "rom_id": 42,
+            "file_name": "pokemon.srm",
+            "updated_at": "2026-02-17T20:00:00Z",
+            "file_size_bytes": 4096,
+            "slot": None,
+            "device_syncs": [{"device_id": "dev-1", "is_current": False}],
+        }
+
+        result = await svc.get_save_status(42)
+
+        assert len(result["files"]) == 1
+        entry = result["files"][0]
+        assert entry["server_save_id"] == 100
+        assert entry["status"] == "synced"
+        assert 200 not in [f["server_save_id"] for f in result["files"]]
+
 
 class TestSaveStatusContentDir:
     """get_save_status surfaces the additive ``savefiles_in_content_dir`` flag

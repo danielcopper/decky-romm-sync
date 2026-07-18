@@ -174,6 +174,42 @@ async def test_get_slot_saves_server_failure_shape(harness):
     assert result["saves"] == []
 
 
+# ── #877 null-slot isolation ─────────────────────────────────────────────
+
+
+async def test_null_slot_save_isolated_from_named_slot_but_visible_in_legacy_bucket(harness):
+    """#877: a slot:null save never leaks into a named slot's status, yet stays
+    readable in the legacy bucket.
+
+    Non-vacuous: the legacy (slot:null) save (id=600) is NEWER than the
+    named-slot head (id=500). Absent slot isolation the newest-wins pick under
+    the active "default" slot would surface 600 in ``get_save_status``. The
+    legacy save stays legacy-only — invisible to the named slot, visible via
+    ``get_slot_saves(rom, "")`` (the legacy bucket the migration/browsing
+    surfaces render).
+    """
+    enable_save_sync(harness)
+    seed_install(harness, 42, system="gba", file_name="game.gba")
+    seed_save_state(harness, 42, RomSaveState(active_slot="default", slot_confirmed=True, system="gba"))
+    seed_server_save(
+        harness, save_id=500, rom_id=42, slot="default", file_name="game.srm", updated_at="2026-02-17T06:00:00Z"
+    )
+    seed_server_save(
+        harness, save_id=600, rom_id=42, slot=None, file_name="game.srm", updated_at="2026-02-17T20:00:00Z"
+    )
+
+    # Named-slot status: the newer legacy save is absent; only the "default" head shows.
+    status = await harness.plugin.get_save_status(42)
+    surfaced = [f["server_save_id"] for f in status["files"]]
+    assert 600 not in surfaced
+    assert surfaced == [500]
+
+    # The legacy bucket still renders the null save — and only it.
+    legacy = await harness.plugin.get_slot_saves(42, "")
+    assert legacy["success"] is True
+    assert [s["id"] for s in legacy["saves"]] == [600]
+
+
 # ── get_slot_delete_info ─────────────────────────────────────────────────
 
 
