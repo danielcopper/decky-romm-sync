@@ -228,11 +228,12 @@ describe("SaveSyncSection", () => {
       expect(container.textContent).toContain("speedrun");
     });
 
-    it("shows '(no slot)' when default_slot is empty", () => {
+    it("shows 'Legacy' when default_slot is empty", () => {
       const { container } = render(
         <SaveSyncSection {...defaultProps({ saveSyncSettings: makeSettings({ default_slot: "" }) })} />,
       );
-      expect(container.textContent).toContain("(no slot)");
+      expect(container.textContent).toContain("Legacy");
+      expect(container.textContent).not.toContain("(no slot)");
     });
 
     it("opens a TextInputModal on Edit with the current default_slot", () => {

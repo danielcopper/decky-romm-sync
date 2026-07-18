@@ -17,15 +17,11 @@ import { formatBytes } from "../utils/formatters";
 import type { SaveSetupInfo } from "../types";
 import { detach } from "../utils/detach";
 import { ConnectingIndicator } from "./saves/ConnectingIndicator";
+import { displaySlot } from "./saves/helpers";
 
 interface SlotSetupWizardProps {
   romId: number;
   onComplete: () => void;
-}
-
-function displaySlot(slot: string | null): string {
-  if (slot === null || slot === "") return "Legacy (no slot)";
-  return slot;
 }
 
 function formatTimestamp(iso: string | null): string {

@@ -12,16 +12,16 @@ import {
 import type { DeviceSyncInfo, SaveStatus, SyncConflict, SlotDeleteInfo } from "../../types";
 
 describe("displaySlot", () => {
-  it("returns '(no slot)' for null", () => {
-    expect(displaySlot(null)).toBe("Legacy (no slot)");
+  it("returns 'Legacy' for null", () => {
+    expect(displaySlot(null)).toBe("Legacy");
   });
 
-  it("returns '(no slot)' for undefined", () => {
-    expect(displaySlot(undefined)).toBe("Legacy (no slot)");
+  it("returns 'Legacy' for undefined", () => {
+    expect(displaySlot(undefined)).toBe("Legacy");
   });
 
-  it("returns '(no slot)' for empty string", () => {
-    expect(displaySlot("")).toBe("Legacy (no slot)");
+  it("returns 'Legacy' for empty string", () => {
+    expect(displaySlot("")).toBe("Legacy");
   });
 
   it("returns the slot name as-is for non-empty input", () => {
