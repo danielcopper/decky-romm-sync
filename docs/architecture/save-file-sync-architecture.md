@@ -66,7 +66,12 @@ the negotiate inventory param. See
 The plugin reproduces this `content_hash` byte-for-byte so a save's local and server hashes agree and sync converges:
 single-file MD5 via `SaveFileStore.checksum_md5`, and the zip per-entry scheme via `SaveFileStore.content_hash` →
 `domain.save_hash.combine_zip_entry_hashes` (sorted `name:md5(entry)` lines joined by `\n`, then MD5'd; dispatch is by
-`zipfile.is_zipfile`, a content sniff, not the extension). This hash reproduction is what the sync decision needs
+`zipfile.is_zipfile`, a content sniff, not the extension). A file that `is_zipfile` accepts but that cannot actually be
+read as a zip — a corrupt or truncated archive, an encrypted entry, or a compression method this Python runtime lacks —
+falls back to the plain `checksum_md5` rather than raising, so one poison save can never abort the whole sweep (#1470);
+RomM's server degrades the same file to `content_hash=None`, so the kernel's truthiness guards reject a `None`-side
+identity match and the fallback can never manufacture a false byte-identical match — it only keeps the local drift
+baseline working. This hash reproduction is what the sync decision needs
 ([ADR-0016](../adr/0016-save-sync-hands-detection-to-romm-negotiate.md) /
 [ADR-0017](../adr/0017-client-baseline-detection-authoritative-negotiate-is-transport.md) / #1234): the client's
 `compute_sync_action` decides `upload` / `download` / `conflict` / `no_op` without a download-and-rehash, for every ROM

@@ -31,7 +31,7 @@ async def _noop_emit(_event: str, /, *_args: object) -> None:
 
 def make_service(tmp_path, fake_api=None, *, emit=None, **overrides) -> tuple["SaveService", "FakeSaveApi"]:
     """Create a SaveService with sensible defaults for testing."""
-    save_file_store = SaveFileAdapter()
+    save_file_store = SaveFileAdapter(logger=logging.getLogger("test"))
     fake: FakeSaveApi = fake_api or FakeSaveApi(save_file_store=save_file_store)
     # Tests that build their own FakeSaveApi without wiring the adapter get
     # the same instance as the service so download_save_content materializes

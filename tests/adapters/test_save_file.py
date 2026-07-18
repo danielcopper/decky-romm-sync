@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
+import struct
 import zipfile
+import zlib
 
 import pytest
 
@@ -20,7 +23,7 @@ _GOLDEN_TWO_ENTRY_ZIP_HASH = "6e42de0bba44de86f213ca48f5c388dd"
 
 @pytest.fixture
 def save_files() -> SaveFileAdapter:
-    return SaveFileAdapter()
+    return SaveFileAdapter(logger=logging.getLogger("test"))
 
 
 class TestExists:
@@ -188,6 +191,45 @@ def _write_zip(path, entries: list[tuple[str, bytes]]) -> None:
             zf.writestr(name, data)
 
 
+def _write_corrupt_central_dir_zip(path) -> None:
+    """Write a real zip, then clobber its central-directory signature.
+
+    The End-Of-Central-Directory record stays intact, so ``is_zipfile`` still
+    sniffs it as a zip — but ``ZipFile(path)`` raises ``BadZipFile`` on open. The
+    dominant real-world poison: a corrupt / truncated archive.
+    """
+    _write_zip(path, [("battery.srm", b"battery-bytes"), ("rtc.bin", b"rtc-bytes")])
+    data = bytearray(path.read_bytes())
+    cd_offset = struct.unpack("<I", data[-22:][16:20])[0]  # EOCD → central-dir offset
+    data[cd_offset : cd_offset + 4] = b"\x00\x00\x00\x00"  # kill the PK\x01\x02 magic
+    path.write_bytes(bytes(data))
+
+
+def _write_unknown_compression_zip(path) -> None:
+    """Write a stored zip, then patch both compression-method fields to a value
+    this runtime cannot decode → ``NotImplementedError`` (a ``RuntimeError``) on
+    read. Models a save compressed with a method the stdlib lacks (e.g. zstd,
+    which ``zipfile`` only learns to read in 3.14)."""
+    _write_zip(path, [("a.srm", b"hello world")])
+    data = bytearray(path.read_bytes())
+    data[8:10] = struct.pack("<H", 99)  # local file header compression method
+    cd = data.find(b"PK\x01\x02")
+    data[cd + 10 : cd + 12] = struct.pack("<H", 99)  # central directory method
+    path.write_bytes(bytes(data))
+
+
+def _write_corrupt_deflate_zip(path) -> None:
+    """Write a deflate zip with an intact directory, then scramble the compressed
+    payload bytes → ``zlib.error`` (a decompression failure) on read."""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("a.srm", b"A" * 5000)
+    data = bytearray(path.read_bytes())
+    cd = data.find(b"PK\x01\x02")
+    for i in range(40, min(80, cd)):
+        data[i] ^= 0xFF
+    path.write_bytes(bytes(data))
+
+
 class TestContentHash:
     """``content_hash`` mirrors RomM's ``compute_content_hash`` (zip-aware MD5)."""
 
@@ -239,6 +281,45 @@ class TestContentHash:
     def test_missing_file_raises(self, save_files, tmp_path):
         with pytest.raises(OSError):
             save_files.content_hash(str(tmp_path / "missing.srm"))
+
+
+class TestContentHashUnreadableZipFallback:
+    """#1470 — a file that sniffs as a zip but cannot be read as one falls back to
+    the plain ``checksum_md5`` instead of raising, so one poison save can never
+    abort the whole sync sweep. RomM's server degrades the same file to
+    ``content_hash=None``; the plain MD5 keeps the local drift baseline working
+    and the kernel's truthiness guards reject the ``None``-side identity match.
+    """
+
+    _POISON_BUILDERS = (_write_corrupt_central_dir_zip, _write_unknown_compression_zip, _write_corrupt_deflate_zip)
+
+    @pytest.mark.parametrize("build", _POISON_BUILDERS)
+    def test_fixture_sniffs_as_zip_but_is_unreadable(self, build, tmp_path):
+        """Guard against a vacuous fixture: each poison must genuinely pass the
+        ``is_zipfile`` sniff yet raise when actually read — otherwise the fallback
+        tests would go green without exercising the fallback at all."""
+        f = tmp_path / "poison.srm"
+        build(f)
+        assert zipfile.is_zipfile(str(f)) is True
+        with pytest.raises((zipfile.BadZipFile, zlib.error, RuntimeError)), zipfile.ZipFile(str(f), "r") as zf:
+            for name in zf.namelist():
+                zf.read(name)
+
+    @pytest.mark.parametrize("build", _POISON_BUILDERS)
+    def test_falls_back_to_checksum_md5(self, build, save_files, tmp_path):
+        """No raise, and the digest is the whole-file MD5 (never a partial zip
+        per-entry hash) — the same value RomM's local drift baseline expects."""
+        f = tmp_path / "poison.srm"
+        build(f)
+        assert save_files.content_hash(str(f)) == save_files.checksum_md5(str(f))
+
+    def test_fallback_is_debug_logged(self, save_files, tmp_path, caplog):
+        f = tmp_path / "poison.srm"
+        _write_corrupt_central_dir_zip(f)
+        with caplog.at_level(logging.DEBUG, logger="test"):
+            save_files.content_hash(str(f))
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("unreadable" in m and str(f) in m for m in messages)
 
 
 class TestHashMemoScope:
@@ -349,6 +430,41 @@ class TestHashMemoScope:
         # Scope closed → memo discarded → recompute now reflects the new bytes,
         # confirming the in-scope value was served from the memo, not recomputed.
         assert save_files.content_hash(str(z)) != first
+
+    def test_unreadable_zip_fallback_is_memoized(self, save_files, tmp_path):
+        """#1470 — the fallback digest populates the memo under the file's stat key
+        (it does not bypass it): a same-stat rewrite to readable content still
+        serves the fallback digest, proving the in-scope value came from the memo."""
+        f = tmp_path / "poison.srm"
+        _write_corrupt_central_dir_zip(f)
+        fallback = hashlib.md5(f.read_bytes()).hexdigest()
+        with save_files.hash_memo_scope():
+            assert save_files.content_hash(str(f)) == fallback
+            # Overwrite with a readable single-file save of identical (mtime_ns,
+            # size) → same memo key → a hit must still return the fallback digest.
+            before = os.stat(f)
+            new = b"Z" * before.st_size
+            f.write_bytes(new)
+            os.utime(f, ns=(before.st_atime_ns, before.st_mtime_ns))
+            assert os.stat(f).st_size == before.st_size  # guards against a vacuous pass
+            assert save_files.content_hash(str(f)) == fallback
+            assert save_files.content_hash(str(f)) != hashlib.md5(new).hexdigest()
+
+    def test_unreadable_zip_fallback_memo_invalidated_on_change(self, save_files, tmp_path):
+        """#1470 — a stat change to the poison file misses the memo and re-hashes,
+        so the fallback digest is bound to ``(path, mtime_ns, size)``, not pinned
+        across a real edit."""
+        f = tmp_path / "poison.srm"
+        _write_corrupt_central_dir_zip(f)
+        with save_files.hash_memo_scope():
+            first = save_files.content_hash(str(f))
+            assert first == hashlib.md5(f.read_bytes()).hexdigest()
+            # Grow the file → different size → new memo key → recompute reflects the
+            # new bytes (still whole-file MD5: garbage can't become a readable zip).
+            f.write_bytes(f.read_bytes() + b"tail-bytes")
+            recomputed = save_files.content_hash(str(f))
+            assert recomputed == hashlib.md5(f.read_bytes()).hexdigest()
+            assert recomputed != first
 
 
 class TestMakeTempPath:

@@ -431,7 +431,10 @@ class SaveFileStore(Protocol):
         Identical to :meth:`checksum_md5` for a plain file; for a zip archive
         (a multi-file save) the per-entry combined hash RomM computes, so a
         zipped save converges on its content rather than mismatching on the
-        archive container's framing. Non-security use, like ``checksum_md5``.
+        archive container's framing. A file that sniffs as a zip but cannot be
+        read as one falls back to the plain MD5 rather than raising, so one
+        unreadable save never aborts a sync sweep. Non-security use, like
+        ``checksum_md5``.
 
         Inside a :meth:`hash_memo_scope` the result is memoized per file; see
         that method.

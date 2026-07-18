@@ -82,7 +82,7 @@ def plugin(tmp_path):
 
     # Wire services with FakeSaveApi sharing the SaveFileAdapter so download
     # bytes land on the same filesystem view the service inspects.
-    save_file_adapter = SaveFileAdapter()
+    save_file_adapter = SaveFileAdapter(logger=logging.getLogger("test"))
     fake_api = FakeSaveApi(save_file_store=save_file_adapter)
     # One shared Unit of Work so test seeds and the saves vertical agree on state.
     p._uow_factory = FakeUnitOfWorkFactory()

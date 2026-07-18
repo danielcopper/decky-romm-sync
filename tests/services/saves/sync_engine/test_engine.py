@@ -7,9 +7,12 @@ conflict rollback in tests/services/saves/sync_engine/test_rollback.py.
 """
 
 import asyncio
+import io
 import logging
+import struct
 import threading
 import time
+import zipfile
 
 import pytest
 
@@ -40,6 +43,24 @@ from tests.services.saves._helpers import (
     _set_sort_settings_previous,
     make_service,
 )
+
+
+def _corrupt_zip_bytes() -> bytes:
+    """Bytes that ``zipfile.is_zipfile`` accepts but ``ZipFile`` cannot open.
+
+    A real two-member zip with its central-directory signature clobbered — the
+    #1470 poison: an intact End-Of-Central-Directory record makes it sniff as a
+    zip, but reading it raises ``BadZipFile``, the failure that used to escape
+    the sweep and abort every remaining ROM.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as zf:
+        zf.writestr("battery.srm", b"battery-bytes")
+        zf.writestr("rtc.bin", b"rtc-bytes")
+    data = bytearray(buf.getvalue())
+    cd_offset = struct.unpack("<I", data[-22:][16:20])[0]  # EOCD → central-dir offset
+    data[cd_offset : cd_offset + 4] = b"\x00\x00\x00\x00"  # kill the PK\x01\x02 magic
+    return bytes(data)
 
 
 class TestSyncRomSaves:
@@ -222,6 +243,38 @@ class TestSyncAllSaves:
         assert result["roms_checked"] == 2
         # Exactly one whole-device transport session for both ROMs.
         assert len([c for c in fake.call_log if c[0] == "negotiate_sync"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_unreadable_zip_save_does_not_abort_sweep(self, tmp_path):
+        """#1470 — a save that sniffs as a zip but cannot be read as one must not
+        crash the whole sweep: the other ROM still syncs, and the poison ROM falls
+        back to its plain MD5 and uploads like any new save. Before the adapter
+        fallback, the matrix per-file hash raised ``BadZipFile`` and aborted the run.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
+        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(
+            svc, 2, RomSaveState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
+        )
+        _create_save(tmp_path, system="gba", rom_name="game1", content=b"good-save")
+        # ROM 2's save is the poison: it sniffs as a zip but cannot be read as one.
+        _create_save(tmp_path, system="snes", rom_name="game2", content=_corrupt_zip_bytes())
+
+        result = await svc.sync_all_saves()
+
+        # The run completed (no BadZipFile escaped) and swept both ROMs cleanly.
+        assert result["success"] is True
+        assert result["roms_checked"] == 2
+        assert result["errors"] == []
+        assert result["synced"] == 2
+        # Both uploaded — the good save normally, the poison via its MD5 fallback.
+        uploaded_roms = {c[1][0] for c in fake.call_log if c[0] == "upload_save"}
+        assert uploaded_roms == {1, 2}
 
     @pytest.mark.asyncio
     async def test_disabled_returns_early(self, tmp_path):

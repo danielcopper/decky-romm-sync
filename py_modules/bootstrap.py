@@ -352,7 +352,7 @@ def bootstrap(
     firmware_file_store = FirmwareFileAdapter()
     migration_file_store = MigrationFileAdapter()
     rom_file_store = RomFileAdapter()
-    save_file_store = SaveFileAdapter()
+    save_file_store = SaveFileAdapter(logger=logger)
     path_probe = PathProbeAdapter()
     renderer_rss = RendererRssAdapter()
     renderer_gc = RendererGcAdapter(logger=logger)

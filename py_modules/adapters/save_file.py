@@ -16,14 +16,29 @@ import hashlib
 import os
 import tempfile
 import zipfile
+import zlib
 from typing import TYPE_CHECKING
 
 from domain.save_hash import combine_zip_entry_hashes
 
 if TYPE_CHECKING:
+    import logging
     from collections.abc import Iterator
 
 _MD5_CHUNK_SIZE = 8192
+
+# Zip-decode failures a positive ``zipfile.is_zipfile`` sniff can still hit once
+# the archive is actually read (the sniff only inspects the End-Of-Central-
+# Directory record): a corrupt / truncated central directory or a bad entry CRC
+# (``BadZipFile``), a compressed stream ``zlib`` cannot inflate (``zlib.error``),
+# or an entry this runtime cannot decode — an encrypted member or a compression
+# method the stdlib lacks (``RuntimeError``; the unknown-method
+# ``NotImplementedError`` is a ``RuntimeError`` subclass, e.g. a save zipped with
+# zstd, which ``zipfile`` only learns to read in 3.14). ``OSError`` is
+# deliberately excluded so a genuine I/O fault (a vanished / unreadable file)
+# still surfaces, matching the non-zip branch and ``checksum_md5``;
+# ``LargeZipFile`` is excluded as an unreachable write-time ZIP64 guard.
+_ZIP_READ_ERRORS = (zipfile.BadZipFile, zlib.error, RuntimeError)
 
 
 class SaveFileAdapter:
@@ -34,7 +49,8 @@ class SaveFileAdapter:
     ``loop.run_in_executor``.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, logger: logging.Logger) -> None:
+        self._logger = logger
         # Per-run content-hash memo, live only inside ``hash_memo_scope``.
         # ``None`` outside a scope so non-sync callers never populate a
         # process-lifetime cache; a fresh dict per outermost scope bounds it to
@@ -109,7 +125,9 @@ class SaveFileAdapter:
         content sniff, not the extension) is hashed per entry and combined via
         :func:`domain.save_hash.combine_zip_entry_hashes`; any other file is the
         plain streamed MD5 of :meth:`checksum_md5`. Directory entries inside the
-        archive are skipped. Non-security use, like ``checksum_md5``.
+        archive are skipped. A positive sniff over a file that cannot be read as
+        a zip falls back to the plain MD5 rather than raising (see
+        :meth:`_compute_content_hash`). Non-security use, like ``checksum_md5``.
 
         Inside a :meth:`hash_memo_scope` the digest is memoized by the file's
         ``(path, mtime_ns, size)`` so one sync run's repeated hashings of the
@@ -129,15 +147,30 @@ class SaveFileAdapter:
         return digest
 
     def _compute_content_hash(self, path: str) -> str:
-        """Read *path* and compute its zip-aware RomM content hash (no memo)."""
+        """Read *path* and compute its zip-aware RomM content hash (no memo).
+
+        A file that ``zipfile.is_zipfile`` accepts but that cannot be read as a
+        zip (``_ZIP_READ_ERRORS``) falls back to the plain streamed MD5 of
+        :meth:`checksum_md5`. RomM's server degrades the same file to
+        ``content_hash=None``, so the kernel's truthiness guards reject a
+        ``None``-side identity match and the fallback can never manufacture a
+        false byte-identical match — it only keeps the local drift baseline
+        working. Both sides of the memo see the fallback value: the public
+        :meth:`content_hash` memoizes whatever this method returns under the
+        file's stat key.
+        """
         if not zipfile.is_zipfile(path):
             return self.checksum_md5(path)
-        with zipfile.ZipFile(path, "r") as zf:
-            entries = [
-                (name, hashlib.md5(zf.read(name), usedforsecurity=False).hexdigest())
-                for name in zf.namelist()
-                if not name.endswith("/")
-            ]
+        try:
+            with zipfile.ZipFile(path, "r") as zf:
+                entries = [
+                    (name, hashlib.md5(zf.read(name), usedforsecurity=False).hexdigest())
+                    for name in zf.namelist()
+                    if not name.endswith("/")
+                ]
+        except _ZIP_READ_ERRORS as exc:
+            self._logger.debug("content_hash: %s sniffed as zip but unreadable (%s); MD5 fallback", path, exc)
+            return self.checksum_md5(path)
         return combine_zip_entry_hashes(entries)
 
     @contextlib.contextmanager
