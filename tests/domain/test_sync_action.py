@@ -285,6 +285,115 @@ def test_both_changed_returns_conflict():
     assert result == Conflict(server_save=server)
 
 
+# ---------------------------------------------------------------------------
+# #1480 — row 12 split: both sides moved off the baseline, check byte-identity
+# before conflicting.
+# ---------------------------------------------------------------------------
+
+
+def test_not_current_diverged_but_identical_to_head_downloads():
+    """Row 12a (#1480) — is_current=false, baseline held, local diverged from it
+    (``local_hash != last_sync_hash``), but the picked head's ``content_hash``
+    equals ``local_hash`` (both sides independently moved to the SAME bytes). The
+    two moves collide on identical content, so there is nothing to reconcile:
+    adopt the head via ``Download`` (re-establishes baseline + is_current), never
+    a spurious Conflict. Only the parity route can prove identity here — the
+    diverged local can't satisfy the provenance route's unchanged-since-baseline
+    precondition.
+    """
+    server = _server_save(
+        content_hash="moved-content",
+        device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
+    )
+    result = compute_sync_action(
+        local_file=_local(),
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "old-baseline"},
+        device_id=DEVICE_ID,
+        local_hash="moved-content",  # != baseline, but == server.content_hash
+    )
+    assert result == Download(server_save=server)
+
+
+def test_not_current_diverged_and_differs_from_head_returns_conflict():
+    """Row 12b (#1480) — is_current=false, baseline held, local diverged, and the
+    picked head's ``content_hash`` differs from ``local_hash``. Both sides moved
+    to DIFFERENT content — the only true Conflict. The 12a identity check must
+    NOT swallow a genuine two-sided divergence.
+    """
+    server = _server_save(
+        content_hash="server-content",
+        device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
+    )
+    result = compute_sync_action(
+        local_file=_local(),
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "old-baseline"},
+        device_id=DEVICE_ID,
+        local_hash="local-content",  # != baseline AND != server.content_hash
+    )
+    assert result == Conflict(server_save=server)
+
+
+def test_not_current_diverged_empty_server_hash_stays_conflict():
+    """Row 12b guard (#1480) — an empty-string ``content_hash`` on the head proves
+    nothing (truthiness guard in ``_local_matches_server``). A diverged local can
+    never parity-match it, so the 12a path never fires → ``Conflict``.
+    """
+    server = _server_save(
+        content_hash="",
+        device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
+    )
+    result = compute_sync_action(
+        local_file=_local(),
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "old-baseline"},
+        device_id=DEVICE_ID,
+        local_hash="local-content",
+    )
+    assert result == Conflict(server_save=server)
+
+
+def test_not_current_diverged_missing_server_hash_stays_conflict():
+    """Row 12b guard (#1480) — the picked head carries NO ``content_hash`` key
+    (older / migrated saves). ``server.get("content_hash")`` is ``None``, so the
+    diverged local can't parity-match → the 12a path never fires → ``Conflict``.
+    """
+    server = _server_save(  # no content_hash key
+        device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
+    )
+    result = compute_sync_action(
+        local_file=_local(),
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "old-baseline"},
+        device_id=DEVICE_ID,
+        local_hash="local-content",
+    )
+    assert result == Conflict(server_save=server)
+
+
+def test_not_current_diverged_stale_stored_server_hash_stays_conflict():
+    """Row 12b guard (#1480) — the provenance leg is inert in the diverged slice.
+    A stored ``last_sync_server_hash`` equal to the head's ``content_hash`` must
+    NOT rescue a local that DIVERGED from the baseline: provenance requires
+    ``local_hash == last_sync_hash`` (false here), and parity requires
+    ``local_hash == server.content_hash`` (also false here). So the stale stored
+    hash can never fabricate a 12a match → ``Conflict``.
+    """
+    server = _server_save(
+        content_hash="server-content",
+        device_syncs=[_device_sync(DEVICE_ID, is_current=False)],
+    )
+    result = compute_sync_action(
+        local_file=_local(),
+        server_saves_in_slot=[server],
+        files_state={"last_sync_hash": "old-baseline", "last_sync_server_hash": "server-content"},
+        device_id=DEVICE_ID,
+        local_hash="CHANGED",  # != baseline AND != server.content_hash
+    )
+    assert result == Conflict(server_save=server)
+
+
 def test_no_device_entry_no_local_returns_download():
     server = _server_save(device_syncs=[_device_sync(OTHER_DEVICE_ID, is_current=True)])
     result = compute_sync_action(

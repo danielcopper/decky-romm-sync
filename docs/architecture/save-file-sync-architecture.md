@@ -486,15 +486,16 @@ Dimensions:
 | 10  | yes        | ≥1             | current=false | unchanged         | n/a                  | `Download(picked)`                  | another device synced; we did nothing — adopt their version                                                                                                             |
 | 11a | yes        | ≥1             | current=false | no baseline       | n/a                  | `Download(picked)`                  | no baseline (so parity only, #1468), but `server.content_hash == local_hash` — byte-identical, adopt the server head safely                                             |
 | 11b | yes        | ≥1             | current=false | no baseline       | n/a                  | **`Conflict(picked)`**              | no baseline and content differs from the server head — cannot prove which side is newer; refuse the silent overwrite (#1276)                                            |
-| 12  | yes        | ≥1             | current=false | changed           | n/a                  | **`Conflict(picked)`**              | both sides changed independently — only true conflict                                                                                                                   |
+| 12a | yes        | ≥1             | current=false | changed           | n/a                  | `Download(picked)`                  | both sides moved off the baseline but landed on the SAME bytes (`server.content_hash == local_hash`, parity only) — adopt the head, nothing to reconcile (#1480)        |
+| 12b | yes        | ≥1             | current=false | changed           | n/a                  | **`Conflict(picked)`**              | both sides moved to DIFFERENT content — the only true conflict                                                                                                          |
 
-Conflict happens in four rows — #12 (we already hold an entry on the picked save and our local diverged from the
-baseline), #6c (we hold a baseline from a prior sync but no entry on the picked head), #11b (we hold an
-`is_current=false` entry, have no baseline, and our local content differs from the server head), and #9b (we own the
-picked save and our local diverged, but the local file is 0-byte / implausibly shrunk). #12, #6c, and #11b are all "both
-sides hold content we never reconciled" situations; #9b is a different hazard — protecting the server's only good copy
-from being overwritten in place by a corrupt-looking local file (#1062). Every other row resolves silently to a Skip,
-Upload, or Download.
+Conflict happens in four rows — #12b (we already hold an entry on the picked save and our local diverged from the
+baseline to content that differs from the head), #6c (we hold a baseline from a prior sync but no entry on the picked
+head), #11b (we hold an `is_current=false` entry, have no baseline, and our local content differs from the server head),
+and #9b (we own the picked save and our local diverged, but the local file is 0-byte / implausibly shrunk). #12b, #6c,
+and #11b are all "both sides hold content we never reconciled" situations; #9b is a different hazard — protecting the
+server's only good copy from being overwritten in place by a corrupt-looking local file (#1062). Every other row
+resolves silently to a Skip, Upload, or Download.
 
 ### Why row 6d adopts instead of posting
 
@@ -520,12 +521,14 @@ newest. Subsequent syncs pick our save naturally.
 
 ### Why row 6c conflicts instead of downloading
 
-Row 6c is the never-touched sibling of row 12. We hold a baseline (`last_sync_hash`) from a prior sync, but the picked
+Row 6c is the never-touched sibling of row 12b. We hold a baseline (`last_sync_hash`) from a prior sync, but the picked
 head is a save we have no `device_syncs` entry for — another timeline became newest while our local diverged from the
-baseline (`local_hash != last_sync_hash`). That is the same "both sides moved independently" situation as row 12, so it
+baseline (`local_hash != last_sync_hash`). That is the same "both sides moved independently" situation as row 12b, so it
 takes the same exit: a `Conflict` the user resolves, never a silent `Download` that would discard the diverged local
-progress (whose only surviving copy would be the `.romm-backup`). When there is no baseline, or local still matches it,
-we cannot claim divergence — rows 6a/6b apply and the mtime heuristic breaks the tie.
+progress (whose only surviving copy would be the `.romm-backup`). As in row 12b, byte-identity is checked first — if the
+diverged local happens to match the head's `content_hash`, row 6d adopts it instead of conflicting — so 6c fires only on
+genuinely-different content. When there is no baseline, or local still matches it, we cannot claim divergence — rows
+6a/6b apply and the mtime heuristic breaks the tie.
 
 ### Why row 9b conflicts instead of uploading
 
@@ -564,9 +567,34 @@ The content hash breaks the tie:
   which is newer. The earlier design silently `Download`ed here, quarantining the local bytes into `.romm-backup` on the
   bet that another device's work mattered more — a silent overwrite of possibly-newer local progress. Under
   [#1276](https://github.com/danielcopper/decky-romm-sync/issues/1276) this is a **`Conflict`** instead: the user
-  decides via Keep Local / Use Server, the same exit rows 6c and 12 take. When the server save carries no `content_hash`
-  (older / migrated saves) the equality fails closed to this conflict — the safe default. mtime is never trusted to
-  break this tie.
+  decides via Keep Local / Use Server, the same exit rows 6c and 12b take. When the server save carries no
+  `content_hash` (older / migrated saves) the equality fails closed to this conflict — the safe default. mtime is never
+  trusted to break this tie.
+
+### Why row 12 splits into download (12a) vs conflict (12b)
+
+Row 12 is the both-sides-moved case where we already hold an `is_current=false` entry on the picked head **and** a
+baseline our local has diverged from (`local_hash != last_sync_hash`). The intuition is "two timelines, user decides",
+and 12b is exactly that. But the two independent moves can coincidentally land on the **same** bytes — the same change
+synced from another device, or an identical backup restored on both sides — and then there is nothing to reconcile.
+
+The content hash breaks the tie, mirroring row 11's split:
+
+- **12a — `server.content_hash == local_hash`.** The bytes on disk already equal the moved-past head, so adopting it is
+  risk-free by construction (nothing differs to lose). We `Download(picked)`; the normal download bookkeeping
+  re-establishes the baseline and `is_current`, so the next sync is a plain `Skip`. This is the
+  [#1480](https://github.com/danielcopper/decky-romm-sync/issues/1480) fix — before it, this collision surfaced a
+  needless conflict modal.
+- **12b — the content differs.** Both sides genuinely hold unreconciled bytes → **`Conflict`**, the user decides via
+  Keep Local / Use Server. Unchanged from before.
+
+The identity check reuses the shared `_local_matches_server` helper (the same one rows 6d / 11a use). One subtlety: in
+this slice the local has **diverged** from the baseline, so the helper's provenance route — which requires local
+_unchanged_ since baseline (`local_hash == last_sync_hash`) — can never fire; only the parity route
+(`local_hash ==
+server.content_hash`) can prove identity here. The helper is called anyway for a uniform call shape; the
+provenance leg is simply inert. When the head carries no `content_hash` (older / migrated saves) or either hash is
+empty, parity fails closed to 12b — the safe default.
 
 ### Why is there no foreign-save modal anymore
 
@@ -899,10 +927,10 @@ frontend no longer fetches or checks capability flags.
 
 ## Conflict Resolution
 
-A `Conflict` outcome from `compute_sync_action` (matrix rows 12, 6c, 11b, and 9b) is the only surface that shows a
+A `Conflict` outcome from `compute_sync_action` (matrix rows 12b, 6c, 11b, and 9b) is the only surface that shows a
 modal. The common case fires when the local file has diverged from the recorded baseline
 (`local_hash != last_sync_hash`) while the server moved to content we never synced — either on a save we already have an
-entry for (`device_syncs[me].is_current=false`, row 12) or on a new head we have no entry for (row 6c). Row 11b is the
+entry for (`device_syncs[me].is_current=false`, row 12b) or on a new head we have no entry for (row 6c). Row 11b is the
 no-baseline sibling: we hold an `is_current=false` entry, have no baseline, and our local content differs from the
 server head — the same both-sides-unreconciled hazard (#1276). In all three the two sides have unsynced changes that
 cannot be silently merged. Row 9b is the corrupt-local guard: we own the picked save and our local diverged, but the
@@ -919,7 +947,7 @@ side by side, each with size and timestamp. Three actions:
 - **Use Server** → `resolveSyncConflict(rom_id, filename, "use_server")` → backend downloads the picked server save and
   overwrites local.
 - **Cancel** → pure UI close, no callable, no state mutation. The conflict re-fires on the next sync as long as the
-  underlying state still produces matrix row 12, 6c, 11b, or 9b.
+  underlying state still produces matrix row 12b, 6c, 11b, or 9b.
 
 On a successful resolution the modal closes and surfaces a branch-specific confirmation toast — **Keep Local** confirms
 the local save was uploaded to the server, **Use Server** confirms the server save is now in use and the prior local
@@ -1479,7 +1507,7 @@ names and constraints.
 | `saves.<id>.last_sync_check_at`                     | ISO-8601 string / null  | Timestamp of the most recent `do_sync_rom_saves` run for this rom (regardless of whether files transferred).                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `saves.<id>.files`                                  | object                  | Per-file sync state, keyed by filename (e.g. `"game.srm"`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `saves.<id>.files.<fn>.tracked_save_id`             | integer / null          | Most recent RomM save id this device tracked. Used to exclude the active save from the Previous Versions dropdown and as an uploader-attribution hint; **not** consulted by `compute_sync_action` (the algorithm picks newest by `updated_at`).                                                                                                                                                                                                                                                                                                          |
-| `saves.<id>.files.<fn>.last_sync_hash`              | content-hash hex string | RomM-parity `content_hash` of the save file at last sync (zip-aware: MD5 for a single file, per-entry combined for a zip — `SaveFileStore.content_hash`, #1457). Drift baseline used by matrix rows 7/8/9/10/11a/11b/12.                                                                                                                                                                                                                                                                                                                                 |
+| `saves.<id>.files.<fn>.last_sync_hash`              | content-hash hex string | RomM-parity `content_hash` of the save file at last sync (zip-aware: MD5 for a single file, per-entry combined for a zip — `SaveFileStore.content_hash`, #1457). Drift baseline used by matrix rows 7/8/9/10/11a/11b/12a/12b.                                                                                                                                                                                                                                                                                                                            |
 | `saves.<id>.files.<fn>.last_sync_at`                | ISO-8601 string         | Timestamp of last successful sync.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `saves.<id>.files.<fn>.last_sync_server_updated_at` | ISO-8601 string         | Server's `updated_at` at last sync.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `saves.<id>.files.<fn>.last_sync_server_save_id`    | integer                 | RomM save id for the most recently synced server save.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -1505,7 +1533,7 @@ games adopt (`"default"`); `autocleanup_limit` caps retained save versions per s
 
 Conflicts are no longer persisted. They are returned ephemerally from `do_sync_rom_saves` and `_get_save_status_io` and
 surfaced via the modal at the moment of the sync. If the user dismisses the modal (Cancel), the conflict re-fires on the
-next sync as long as the underlying state still produces a conflict row (12, 6c, 11b, or 9b).
+next sync as long as the underlying state still produces a conflict row (12b, 6c, 11b, or 9b).
 
 ### Legacy field migration
 

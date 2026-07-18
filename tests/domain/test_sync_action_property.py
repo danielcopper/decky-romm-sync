@@ -52,6 +52,12 @@ Invariants encoded here:
   live parity hash matches (fallback). The provenance route never fires when
   local has diverged from the baseline, so a stored server hash can never
   fabricate a false identity for changed local content.
+- Inv11 (#1480): whenever ``local_hash`` and the picked head's ``content_hash``
+  are both truthy and equal (byte-identical content), the kernel never returns
+  ``Conflict`` — the row-12 split (12a). The sole carve-out is the branch-4
+  size-corruption guard (#1062 / row 9b), which is orthogonal to content
+  identity: a truncated local that happens to hash-match an equally-truncated
+  head is still refused in place.
 """
 
 from __future__ import annotations
@@ -658,3 +664,81 @@ def test_no_entry_adopts_baseline_only_on_proven_identity(
     # The literal safety statement: provenance can never rescue a diverged local.
     if baseline is not None and local_hash != baseline and not parity:
         assert not (isinstance(result, Skip) and result.adopt_baseline)
+
+
+# ---------------------------------------------------------------------------
+# Invariant 11 (#1480): byte-identical content never surfaces a Conflict
+# (except the orthogonal branch-4 size-corruption guard).
+# ---------------------------------------------------------------------------
+
+
+@st.composite
+def _identical_content_scenario(draw: st.DrawFn) -> dict[str, Any]:
+    """A present local plus a SINGLE server head whose ``content_hash`` EQUALS the
+    truthy ``local_hash`` — byte-identical by construction — with arbitrary
+    ``device_syncs`` (all three branches: our device current / not-current /
+    absent), an arbitrary baseline, and arbitrary sizes.
+
+    A single head keeps ``max(updated_at)`` selection unambiguous, so the invariant
+    can be stated against *the* picked head without replaying the pick logic here.
+    """
+    local_hash = draw(_hashes)
+    local_file = {
+        "filename": "Game.srm",
+        "path": "/tmp/Game.srm",
+        "size": draw(_sizes),
+        "mtime": draw(_epochs),
+    }
+    device_syncs: list[dict[str, Any]] = []
+    if draw(st.booleans()):
+        device_syncs.append({"device_id": DEVICE_ID, "is_current": draw(st.booleans())})
+    if draw(st.booleans()):
+        device_syncs.append({"device_id": OTHER_DEVICE_ID, "is_current": draw(st.booleans())})
+    server = {
+        "id": draw(st.integers(min_value=1, max_value=9999)),
+        "slot": 0,
+        "updated_at": _epoch_to_iso(draw(_epochs), zulu=draw(st.booleans()), micros=draw(st.booleans())),
+        "file_extension": "srm",
+        "content_hash": local_hash,  # byte-identical by construction
+        "device_syncs": device_syncs,
+    }
+    return {
+        "local_file": local_file,
+        "server": server,
+        "files_state": draw(_files_states),
+        "local_hash": local_hash,
+    }
+
+
+@given(scenario=_identical_content_scenario())
+def test_identical_content_never_conflicts(scenario: dict[str, Any]) -> None:
+    """Branch 5 / #1480 (also re-verified at branches 6 and 5's no-baseline
+    slice) — whenever ``local_hash`` and the picked head's ``content_hash`` are
+    both truthy and EQUAL, the kernel never returns ``Conflict``. Two independent
+    moves that land on identical bytes have nothing to reconcile, so the safe
+    outcome is always a ``Download`` (adopt the head) or a ``Skip`` (adopt the
+    baseline) — the row-12 split (12a) stated directly.
+
+    The single documented carve-out is the branch-4 (``is_current=true``)
+    size-corruption guard (#1062 / row 9b): a 0-byte or truncated local that
+    happens to hash-match an equally-truncated server head is still refused in
+    place. That guard is size-based, orthogonal to content identity — so the ONLY
+    identical-content ``Conflict`` the kernel may emit is that shrink-guarded one.
+    """
+    local_file = scenario["local_file"]
+    server = scenario["server"]
+    files_state = scenario["files_state"]
+    local_hash = scenario["local_hash"]
+
+    result = _action(local_file, [server], files_state, local_hash)
+
+    if isinstance(result, Conflict):
+        # Must be the branch-4 shrink guard and nothing else.
+        our_entry = next(
+            (d for d in server["device_syncs"] if d["device_id"] == DEVICE_ID),
+            None,
+        )
+        assert our_entry is not None and our_entry["is_current"] is True
+        # Divergence from a held baseline is the precondition for reaching the guard.
+        assert files_state.get("last_sync_hash") not in (None, local_hash)
+        assert is_implausibly_shrunken(local_file["size"], files_state.get("last_sync_local_size"))

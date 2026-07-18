@@ -29,9 +29,13 @@ only good copy over the cliff we route that case to ``Conflict``
 (``domain/save_size.is_implausibly_shrunken``).
 
 When ``is_current=false`` (the server moved past us) AND a present local either
-diverges from the baseline or has no baseline yet and does not match the
-server's content, both sides moved independently — a true ``Conflict`` that
-requires a user choice via ``resolve_sync_conflict``.
+diverges from the baseline or has no baseline yet, both sides moved
+independently. That is a true ``Conflict`` requiring a user choice via
+``resolve_sync_conflict`` UNLESS the two independent moves happen to have landed
+on the same content: a present local that is byte-identical to the moved-past
+head is adopted via ``Download`` (row 12a — adopting identical bytes loses
+nothing and re-establishes the baseline + is_current through normal download
+bookkeeping). Only genuinely-different content is the conflict (row 12b).
 
 Recovery: ``is_current=true`` + no local file means our last upload is
 still tracked on the server but the local copy disappeared. We download to
@@ -46,8 +50,11 @@ survives a future drift between our local hashing and the server's; the
 **fallback** route is the direct parity check ``local_hash == content_hash``,
 the only one available to a file with no sync history on this device (fresh
 reinstall, copied SD card, second device — branch 5's no-baseline slice and true
-fresh installs can *only* ever use it, by design). The stored server hash makes
-identity robust; parity stays correct (#1457) as the no-history fallback (#1468).
+fresh installs can *only* ever use it, by design) and the only one that CAN fire
+in branch 5's diverged slice (row 12a): a local that diverged from the baseline
+can never satisfy the provenance route's unchanged-since-baseline precondition,
+so there the provenance leg is inert. The stored server hash makes identity
+robust; parity stays correct (#1457) as the no-history fallback (#1468).
 
 When our device has never touched the picked save (no entry in
 ``device_syncs``) and the local file is present: first, if the local content is
@@ -257,7 +264,19 @@ def _decide_when_not_current(
             return Download(server_save=server)
         return Conflict(server_save=server)
     if local_hash and local_hash != last_sync_hash:
-        # Both sides changed — the only true Conflict.
+        # Both sides moved off the baseline. Before declaring a conflict, check
+        # whether the two independent moves happen to have landed on the SAME
+        # bytes — if so there is nothing to reconcile.
+        if _local_matches_server(local_hash, server.get("content_hash"), last_sync_hash, last_sync_server_hash):
+            # 12a: byte-identical to the moved-past head. Adopting it via
+            # download re-establishes the baseline + is_current through the
+            # normal bookkeeping, and adopting identical content loses nothing.
+            # Only the parity route can fire here: the provenance route requires
+            # local UNCHANGED since baseline (``local_hash == last_sync_hash``),
+            # which this branch has already ruled out — it is inert, called only
+            # for a uniform identity-check shape shared with branches 6 / 11a.
+            return Download(server_save=server)
+        # 12b: both sides moved to DIFFERENT content — the only true Conflict.
         return Conflict(server_save=server)
     return Download(server_save=server)
 

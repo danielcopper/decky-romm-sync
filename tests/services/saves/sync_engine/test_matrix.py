@@ -1701,6 +1701,55 @@ class TestSyncRomSavesDispatch:
         assert c["local_size"] == os.path.getsize(str(save_path))
         assert "created_at" in c
 
+    def test_sync_rom_saves_download_when_both_moved_to_identical_content(self, tmp_path):
+        """Row 12a (#1480) — is_current=false + local diverged from baseline, but
+        byte-identical to the moved-past head (``server.content_hash ==
+        local_hash``) → Download, not Conflict. Both sides independently landed on
+        the same bytes, so there is nothing to reconcile: the served decision
+        downloads (adopting the head re-establishes baseline + is_current), and no
+        conflict is surfaced.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"converged content")
+        local_hash = _file_md5(str(save_path))
+
+        ss = _server_save_with_syncs(
+            device_syncs=[{"device_id": "device-1", "is_current": False}],
+        )
+        # The moved-past head holds exactly the local's bytes.
+        ss["content_hash"] = local_hash
+        fake.saves[100] = ss
+
+        _seed_save_state_dict(
+            svc,
+            42,
+            {
+                "files": {
+                    "pokemon.srm": {
+                        "tracked_save_id": 100,
+                        "last_sync_hash": "deadbeef" * 4,  # baseline differs → diverged
+                        "last_sync_server_updated_at": "2025-01-01T00:00:00Z",
+                    }
+                }
+            },
+        )
+
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
+
+        assert uploaded == 0
+        assert downloaded == 1
+        assert errors == []
+        assert conflicts == []
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
+        assert len(download_calls) == 1
+        assert download_calls[0][1][0] == 100
+
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
+        assert file_state.tracked_save_id == 100
+        assert file_state.last_sync_hash
+
     def test_sync_rom_saves_server_only_downloads(self, tmp_path):
         """No local file, one server save in slot → Download."""
         svc, fake = make_service(tmp_path)

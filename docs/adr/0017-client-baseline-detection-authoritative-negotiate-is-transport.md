@@ -27,7 +27,7 @@ the detection handoff:
   the device out of. In practice the server almost never returns `conflict`. Handing it detection therefore silences the
   client's baseline-anchored safety branches — the [#1062](https://github.com/danielcopper/decky-romm-sync/issues/1062)
   corrupt/shrunk-local guard, the [#1013](https://github.com/danielcopper/decky-romm-sync/issues/1013) byte-identical
-  dedup, and the "both sides moved to content we never synced" conflict (matrix rows 6c / 12).
+  dedup, and the "both sides moved to content we never synced" conflict (matrix rows 6c / 12b).
 - **`POST /api/saves` self-guards with a 409.** RomM's `add_save` rejects a plain (non-`overwrite`) POST into a slot the
   device is not current on — **including a device that has never synced that slot** (the `not sync` branch of the gate).
   This is a real server-side conflict backstop the detection path never leaned on.
@@ -105,7 +105,7 @@ transport.**
 
 - **A — Keep the server's operation list authoritative (ADR-0016 as written) and only bolt the 409 backstop onto
   uploads.** Rejected: the 4.9.2 comparator is timestamp-only with a near-dead `conflict` branch, so it cannot reproduce
-  the client's baseline-anchored safety (the #1062 shrink guard, the #1013 dedup, and the rows 6c / 12 both-sides-moved
+  the client's baseline-anchored safety (the #1062 shrink guard, the #1013 dedup, and the rows 6c / 12b both-sides-moved
   conflict), and it leaves the `StatusService`-versus-sync divergence in place — the SAVES tab and the sync run would
   still decide from different sources.
 - **B — Drop `negotiate` entirely and return to pure `list_saves` + `compute_sync_action` with no session.** Rejected:
