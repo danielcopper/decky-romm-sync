@@ -1178,7 +1178,10 @@ describe("SettingsPage", () => {
         onCancel?: () => void;
       }>();
       expect(props?.strTitle).toBe("Enable Save Sync?");
-      expect(props?.strDescription).toContain("RetroArch save files");
+      expect(props?.strDescription).toContain("RetroArch game saves");
+      // #1189: the copy must not claim only .srm files sync, and points at the support matrix instead.
+      expect(props?.strDescription).not.toContain("(.srm)");
+      expect(props?.strDescription).toContain("support matrix");
       expect(props?.strOKButtonText).toBe("I am sure");
       expect(props?.strCancelButtonText).toBe("Cancel");
     });

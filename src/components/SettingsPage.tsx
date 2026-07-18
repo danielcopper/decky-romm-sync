@@ -231,7 +231,10 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
       <ConfirmModal
         strTitle="Enable Save Sync?"
         strDescription={
-          "This will sync RetroArch save files (.srm) between this device and your RomM server.\n\n" +
+          "This will sync your RetroArch game saves between this device and your RomM server. " +
+          "Save sync covers the per-game save files RetroArch writes for the systems it supports " +
+          "- SRAM, RTC, EEPROM, and other per-system formats, not a single file type. " +
+          "Coverage varies by system; see the save sync support matrix in the docs.\n\n" +
           "Before enabling, please back up your local save files. " +
           "They are stored in your RetroArch/RetroDECK saves directory.\n\n" +
           "IMPORTANT: Save sync requires RetroArch's save sorting to be set to " +

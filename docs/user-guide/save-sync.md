@@ -5,7 +5,7 @@ Deck, then continue where you left off on your HTPC — your saves travel with y
 
 ## How It Works
 
-The plugin uploads and downloads RetroArch save files (`.srm`) to and from your RomM server. When you start a game, the
+The plugin uploads and downloads your RetroArch game saves to and from your RomM server. When you start a game, the
 plugin checks if the server has a newer save and downloads it. When you stop playing, it uploads your updated save.
 
 > **Important:** Save sync runs in **Game Mode only**, but there it covers every way a game can start: the Play button
@@ -48,14 +48,11 @@ the plugin.
 
 ## Supported Systems
 
-Save sync currently supports **RetroArch per-game `.srm` saves only**. This covers all systems that use RetroArch cores
-through RetroDECK:
-
-- NES, SNES, Game Boy, Game Boy Color, Game Boy Advance
-- Genesis / Mega Drive, Master System, Nintendo 64
-- PlayStation (via RetroArch cores like SwanStation/Beetle PSX)
-- Saturn, Dreamcast, PC Engine / TurboGrafx-16
-- Neo Geo Pocket, WonderSwan, Atari Lynx
+Save sync works on the **per-game save files RetroArch writes** for the systems RetroDECK supports. Standard cartridge
+saves (SRAM) sync automatically; several systems also sync their own formats — RTC, EEPROM, and console-specific backup
+RAM — so it is not limited to a single file type. Exactly what syncs varies by system: for the current per-system
+breakdown of what carries across devices today and what's planned, see the
+[save sync support matrix](save-sync-support-matrix.md).
 
 Standalone emulator saves (PCSX2, DuckStation, Dolphin, PPSSPP, melonDS, etc.) are **not yet supported** and are planned
 for a future update.
