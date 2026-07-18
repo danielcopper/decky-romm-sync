@@ -177,11 +177,14 @@ On the automatic path there is no PUT-in-place to bump, so the #748 "drop the PU
 `add_save` (POST) already upserts this device's `device_save_sync` row (`last_synced_at = updated_at`) and serializes it
 into the response's `device_syncs`, so `is_current` is true for us the moment the POST returns — the follow-up
 `confirm_download` ack is redundant and is **skipped** when the response proves us current (`_confirm_upload_sync`,
-#1458). The one path that still needs the ack is `add_save`'s content-dedup early-return: a byte-identical
-`overwrite=false` POST returns the matching save **before** the upsert with `is_current=false`, so the ack is the only
-writer of our sync row there. The version-switch flow (`versions.py`) routes through the same `_confirm_upload_sync`
-after its PUT — the PUT upserts too, so the ack is at most an idempotent re-ack (and is skipped if the PUT response
-already proves us current) — and is out of scope here — see [Version Switch Flow](#version-switch-flow-rollback).
+#1458). The one path that still needs the ack is `add_save`'s content-dedup early-return: a POST returns the matching
+save **before** the upsert with `is_current=false`, so the ack is the only writer of our sync row there. On the
+automatic path this only fires for a **benign** dedup where the returned save is the slot head (e.g. the empty-slot
+race) — a dedup to an older, non-head save is guarded away first and routed to a conflict, never acked (see
+[Dedup-to-non-head](#upload-time-conflicts-the-409-backstop) below). The version-switch flow (`versions.py`) routes
+through the same `_confirm_upload_sync` after its PUT — the PUT upserts too, so the ack is at most an idempotent re-ack
+(and is skipped if the PUT response already proves us current) — and is out of scope here — see
+[Version Switch Flow](#version-switch-flow-rollback).
 
 ## Save Slots
 
@@ -613,7 +616,22 @@ current on the slot's newest save (see [The `add_save` POST 409-gate](#the-add_s
 predicate). The adapter maps that 409 to `RommConflictError`, which is non-retryable and propagates on the first
 attempt.
 
-On a 409 the executor re-fetches the slot, picks the newest save in the canonical group, and resolves through the pure
+**Dedup-to-non-head (detected client-side).** A second signal routes to the same backstop. RomM's `add_save` content
+dedup can early-return an **existing** save whose content matches the upload instead of creating a new version — and
+that returned save may not be the slot head. Because the automatic path only POSTs when local content diverged from the
+head, a dedup on that path resolves to an **older** save while a newer, different head still leads the slot: no new
+version, the foreign head stays authoritative, yet the response looks like a successful upload. Recording it as a synced
+baseline would falsely report "synced" while the upload intent (make our content the head) went silently unfulfilled
+cross-device. `do_upload_save` compares the POST response against the pre-upload `list_saves` snapshot
+(`_dedup_returned_non_head`: the response is a pre-existing snapshot member that is not the newest) and raises
+`RommConflictError` **before** any baseline / confirm / own-upload write, so the same backstop below surfaces the true
+state and nothing stamps currency on the non-head save
+([#1482](https://github.com/danielcopper/decky-romm-sync/issues/1482)). An **empty** planned slot (no head to bypass —
+the empty-slot race) keeps today's behavior: the dedup response holds our content, so it is recorded as the baseline and
+any concurrent newer head is caught on the next sync's fresh list.
+
+On a 409 (or a client-detected dedup-to-non-head) the executor re-fetches the slot, picks the newest save in the
+canonical group, and resolves through the pure
 `resolve_upload_conflict(local_hash, last_sync_hash, server_content_hash)`:
 
 | Condition                           | Result       | Why                                                                                 |

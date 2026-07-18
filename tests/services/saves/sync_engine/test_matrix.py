@@ -15,8 +15,13 @@ import pytest
 
 from domain.rom_save_state import RomSaveState
 from domain.sync_action import Conflict, Skip, compute_sync_action
-from lib.errors import RommApiError
-from services.saves.sync_engine.matrix import DispatchSink, RomDispatchContext, SyncRunOptions
+from lib.errors import RommApiError, RommConflictError
+from services.saves.sync_engine.matrix import (
+    DispatchSink,
+    RomDispatchContext,
+    SyncRunOptions,
+    _dedup_returned_non_head,
+)
 from tests.services.saves._helpers import (
     _create_save,
     _do_sync,
@@ -727,6 +732,165 @@ class TestConfirmUploadSyncDiscriminator:
         matrix._confirm_upload_sync(response, "dev-1")
 
         assert self._confirmed(fake) is False
+
+
+_DEDUP_GROUP = [
+    {"id": 100, "updated_at": "2026-02-17T06:00:00Z"},  # older
+    {"id": 200, "updated_at": "2026-03-01T00:00:00Z"},  # newest = head
+]
+
+
+class TestDedupReturnedNonHeadPredicate:
+    """`_dedup_returned_non_head` — pure id-based detection of an ``add_save``
+    POST that deduped to a pre-existing NON-head save (#1482)."""
+
+    def test_empty_planned_group_is_benign(self):
+        """No planned head to bypass (e.g. an empty-slot race) → benign."""
+        assert _dedup_returned_non_head({"id": 100}, []) is False
+
+    def test_missing_response_id_is_benign(self):
+        assert _dedup_returned_non_head({}, _DEDUP_GROUP) is False
+
+    def test_response_is_the_head_is_benign(self):
+        """Dedup returned the newest save in the snapshot → benign."""
+        assert _dedup_returned_non_head({"id": 200}, _DEDUP_GROUP) is False
+
+    def test_new_version_id_absent_from_snapshot_is_benign(self):
+        """A freshly minted version (id not in the pre-upload snapshot) → benign."""
+        assert _dedup_returned_non_head({"id": 999}, _DEDUP_GROUP) is False
+
+    def test_pre_existing_non_head_is_flagged(self):
+        """Dedup returned the older 100 while 200 still leads the slot → flagged."""
+        assert _dedup_returned_non_head({"id": 100}, _DEDUP_GROUP) is True
+
+
+class TestDedupToNonHeadUploadGuard:
+    """``do_upload_save`` routes a dedup-to-non-head POST response through the
+    409 backstop instead of recording a false ``synced`` baseline (#1482).
+
+    RomM's ``add_save`` content-dedup can early-return an older matching save
+    while a newer, different head still leads the slot — no new version, the
+    foreign head stays authoritative. The automatic POST path passes its
+    pre-upload ``list_saves`` snapshot as ``planned_group`` so the response can
+    be classified; the PUT / explicit-action callers pass none and are inert.
+    """
+
+    def test_dedup_to_non_head_raises_conflict_without_baseline_or_confirm(self, tmp_path):
+        """Non-head dedup → RommConflictError before any baseline / own-upload /
+        confirm write (value-exact: nothing was stamped on the non-head save)."""
+        svc, fake = make_service(tmp_path)
+        _set_device_id(svc, "device-1")
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"local reverted content")
+
+        older = _server_save(save_id=100, slot="default", updated_at="2026-02-17T06:00:00Z")
+        head = _server_save(save_id=200, slot="default", updated_at="2026-03-01T00:00:00Z")
+        fake.saves[100] = older
+        fake.saves[200] = head
+        fake.arm_add_save_dedup(100)  # the POST dedups to the OLDER save
+
+        state = RomSaveState(active_slot="default")
+        with pytest.raises(RommConflictError):
+            svc._sync_engine._matrix.do_upload_save(
+                42,
+                str(save_path),
+                "pokemon.srm",
+                state,
+                "device-1",
+                "gba",
+                None,
+                planned_group=[older, head],
+            )
+
+        # No baseline recorded for the dedup response…
+        assert "pokemon.srm" not in state.files
+        # …no own-upload attribution, no slot promotion, and no confirm ack that
+        # would falsely stamp currency on the non-head save.
+        assert state.own_upload_ids is None
+        assert not any(c[0] == "confirm_download" for c in fake.call_log)
+
+    def test_dedup_to_head_records_baseline_and_confirms(self, tmp_path):
+        """Dedup to the head itself is benign — baseline recorded on the head and
+        the #1458 confirm ack still fires (today's behavior, unchanged)."""
+        svc, fake = make_service(tmp_path)
+        _set_device_id(svc, "device-1")
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"head content")
+
+        older = _server_save(save_id=100, slot="default", updated_at="2026-02-17T06:00:00Z")
+        head = _server_save(save_id=200, slot="default", updated_at="2026-03-01T00:00:00Z")
+        fake.saves[100] = older
+        fake.saves[200] = head
+        fake.arm_add_save_dedup(200)  # dedup to the HEAD → benign
+
+        state = RomSaveState(active_slot="default")
+        result = svc._sync_engine._matrix.do_upload_save(
+            42,
+            str(save_path),
+            "pokemon.srm",
+            state,
+            "device-1",
+            "gba",
+            None,
+            planned_group=[older, head],
+        )
+
+        assert result["id"] == 200
+        assert state.files["pokemon.srm"].tracked_save_id == 200
+        # Dedup response reported is_current=false → the ack stays load-bearing.
+        assert fake.call_log[-1] == ("confirm_download", (200, "device-1"), {})
+
+    def test_empty_planned_group_records_baseline(self, tmp_path):
+        """Empty planned slot (no head to bypass — the empty-slot race) keeps
+        today's behavior: the dedup response is recorded as the baseline. Safe
+        because the response holds our content; a concurrent newer head is caught
+        on the next sync's fresh ``list_saves`` (#1482 documented edge)."""
+        svc, fake = make_service(tmp_path)
+        _set_device_id(svc, "device-1")
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"raced content")
+
+        raced = _server_save(save_id=300, slot="default", updated_at="2026-03-01T00:00:00Z")
+        fake.saves[300] = raced
+        fake.arm_add_save_dedup(300)
+
+        state = RomSaveState(active_slot="default")
+        result = svc._sync_engine._matrix.do_upload_save(
+            42,
+            str(save_path),
+            "pokemon.srm",
+            state,
+            "device-1",
+            "gba",
+            None,
+            planned_group=[],  # the plan saw an empty slot
+        )
+
+        assert result["id"] == 300
+        assert state.files["pokemon.srm"].tracked_save_id == 300
+
+    def test_no_planned_group_leaves_guard_inert(self, tmp_path):
+        """A caller that passes no ``planned_group`` (PUT / explicit actions)
+        never triggers the guard, even on a non-head dedup shape — baseline is
+        recorded as before."""
+        svc, fake = make_service(tmp_path)
+        _set_device_id(svc, "device-1")
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"local content")
+
+        older = _server_save(save_id=100, slot="default", updated_at="2026-02-17T06:00:00Z")
+        head = _server_save(save_id=200, slot="default", updated_at="2026-03-01T00:00:00Z")
+        fake.saves[100] = older
+        fake.saves[200] = head
+        fake.arm_add_save_dedup(100)  # non-head dedup, but no planned_group passed
+
+        state = RomSaveState(active_slot="default")
+        result = svc._sync_engine._matrix.do_upload_save(
+            42, str(save_path), "pokemon.srm", state, "device-1", "gba", None
+        )
+
+        assert result["id"] == 100
+        assert state.files["pokemon.srm"].tracked_save_id == 100
 
 
 class TestTrackedSaveIdMatching:
@@ -2049,6 +2213,77 @@ class TestSyncRomSavesDispatch:
         assert save_path.read_bytes() == b"local unsynced edit"
         assert not any(x[0] == "download_save_content" for x in fake.call_log)
 
+    def test_sync_rom_saves_dedup_to_non_head_surfaces_conflict(self, tmp_path):
+        """On-device #1482 repro: slot holds an older save A and a newer head B
+        (different content); this device is current on B; local content reverted
+        to A. The automatic POST content-dedups to A while B still leads the slot
+        — the upload never became the head. The guard routes it through the 409
+        backstop, surfacing the true state as a conflict on B instead of a false
+        ``synced`` on A, and leaves the DB baseline untouched."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"reverted-to-A content")
+
+        # B: the newer head this device is current on (branch 4 → Upload).
+        head = fake.seed_foreign_save(
+            42,
+            save_id=200,
+            uploaded_by="device-1",
+            slot="default",
+            updated_at="2026-03-01T00:00:00Z",
+            content=b"head B content",
+        )
+        # A: an older sibling version we never synced; the POST dedups to it.
+        older = fake.seed_foreign_save(
+            42,
+            save_id=100,
+            uploaded_by="device-B",
+            slot="default",
+            updated_at="2026-02-17T06:00:00Z",
+            content=b"old A content",
+        )
+        _seed_save_state_dict(
+            svc,
+            42,
+            {
+                "active_slot": "default",
+                "slot_confirmed": True,
+                "files": {
+                    "pokemon.srm": {
+                        "last_sync_hash": hashlib.md5(b"head B content").hexdigest(),
+                        "tracked_save_id": 200,
+                        "last_sync_server_save_id": 200,
+                    }
+                },
+            },
+        )
+        fake.arm_add_save_dedup(older["id"])
+
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
+
+        assert errors == []
+        assert uploaded == 0
+        assert downloaded == 0
+        # The true state surfaced: a conflict against the head B, not a false sync on A.
+        assert len(conflicts) == 1
+        c = conflicts[0]
+        assert c["type"] == "sync_conflict"
+        assert c["server_save_id"] == head["id"]
+        # Exactly one POST was attempted (overwrite=false), then no download/confirm.
+        upload_calls = [x for x in fake.call_log if x[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        assert upload_calls[0][2]["overwrite"] is False
+        assert not any(x[0] == "download_save_content" for x in fake.call_log)
+        assert not any(x[0] == "confirm_download" for x in fake.call_log)
+        # Local file untouched (no download), and the baseline still points at B —
+        # the dedup response A was never recorded as synced.
+        assert save_path.read_bytes() == b"reverted-to-A content"
+        file_state = _require_save_state(svc, 42).files["pokemon.srm"]
+        assert file_state.tracked_save_id == 200
+        assert file_state.last_sync_server_save_id == 200
+        assert file_state.last_sync_hash == hashlib.md5(b"head B content").hexdigest()
+
     def test_handle_upload_409_empty_regroup_records_error(self, tmp_path):
         """A 409 whose re-fetch finds no server save in the file's canonical group
         is a non-fatal error — never a crash or a blind download."""
@@ -2178,6 +2413,7 @@ class TestHandleUnexpectedError:
             local_hash=None,
             last_sync_hash=None,
             last_sync_server_hash=None,
+            server_candidates=[],
             options=SyncRunOptions(),
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
@@ -2229,6 +2465,7 @@ class TestDispatchSyncActionErrorBranches:
             local_hash=None,
             last_sync_hash=None,
             last_sync_server_hash=None,
+            server_candidates=[],
             options=SyncRunOptions(),
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
@@ -2275,6 +2512,7 @@ class TestDispatchUploadDefensiveBranches:
             local_hash=None,
             last_sync_hash=None,
             last_sync_server_hash=None,
+            server_candidates=[],
             options=SyncRunOptions(),
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )

@@ -790,6 +790,11 @@ class FakeRommApi:
         row, no ledger write — with the uploading device reported ``is_current=false``.
         Mirrors saves.py:253-267 so a test can exercise the dedup path where the
         post-upload confirm ack is the only writer of our sync row (#1458).
+
+        *save_id* need not be the slot head: arm an OLDER save while a newer,
+        different head is present to model the dedup-to-non-head shape — the POST
+        deduped to a save that is not the slot head, so the upload never became
+        authoritative (#1482).
         """
         self._dedup_next_upload_save_id = save_id
 

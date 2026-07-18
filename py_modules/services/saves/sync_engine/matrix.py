@@ -409,6 +409,7 @@ class MatrixExecutor:
         default_slot: str | None = None,
         autocleanup_limit: int | None = None,
         overwrite: bool = False,
+        planned_group: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Upload a local save file to server.
 
@@ -423,6 +424,15 @@ class MatrixExecutor:
         must win (the ``keep_local`` conflict resolution); the automatic sync
         dispatch leaves it ``False`` so the 409 backstop can catch a stale-current
         race (ADR-0017).
+
+        *planned_group* is the automatic POST path's pre-upload ``list_saves``
+        snapshot for this file (``None`` for the PUT / explicit-action callers,
+        who never dedup): when the POST response deduped to a pre-existing
+        non-head save (:func:`_dedup_returned_non_head`, #1482), this raises
+        ``RommConflictError`` BEFORE any baseline / own-upload / confirm write so
+        the same 409 backstop that catches a write-time stale-current race
+        surfaces the true state — no false "synced", no currency stamped on the
+        non-head response.
         """
         save_id = server_save.get("id") if server_save else None
         emulator = build_emulator_tag(core_so)
@@ -442,6 +452,19 @@ class MatrixExecutor:
                 autocleanup_limit=autocleanup_limit,
             )
         )
+
+        if planned_group is not None and _dedup_returned_non_head(result, planned_group):
+            # Dedup to a non-head save: RomM created no new version and the
+            # foreign head still leads the slot, so recording this response as a
+            # synced baseline would falsely report the upload landed (#1482).
+            # Route it through the write-time 409 backstop — the raise reaches
+            # ``_dispatch_upload``'s ``except RommConflictError`` before any
+            # baseline / confirm / own-upload write runs, so nothing stamps
+            # currency on the non-head response.
+            raise RommConflictError(
+                "add_save deduped to a non-head save; the slot head is newer",
+                method="POST",
+            )
 
         self.update_file_sync_state(
             save_state,
@@ -559,6 +582,7 @@ class MatrixExecutor:
         local_hash: str | None,
         last_sync_hash: str | None,
         last_sync_server_hash: str | None,
+        server_candidates: list[dict[str, Any]],
         options: SyncRunOptions,
         sink: DispatchSink,
     ) -> TransferDirection | None:
@@ -566,16 +590,19 @@ class MatrixExecutor:
 
         Every automatic upload POSTs a new save in the slot (``server_save=None``,
         ``overwrite=False``); ``Upload.target_save_id`` no longer selects a PUT
-        (ADR-0017). The POST is planned against a ``list_saves`` snapshot that can
-        be stale by the time it lands — another device may have moved the slot head
-        past our last sync in between. RomM answers that race with a 409;
-        :meth:`_handle_upload_409` re-fetches the slot and lets
-        ``resolve_upload_conflict`` decide from hashes alone (download the fresh
-        head when local is provably unchanged, else surface a conflict). Any other
-        ``RommApiError`` propagates to the generic handler in
-        :meth:`_dispatch_sync_action`. Returns the transfer direction that was
-        issued (``UPLOAD`` on a clean POST, ``DOWNLOAD`` when the 409 backstop
-        downgrades), or ``None`` when nothing transferred.
+        (ADR-0017). The POST is planned against a ``list_saves`` snapshot
+        (*server_candidates*) that can be stale by the time it lands — another
+        device may have moved the slot head past our last sync in between. Two
+        signals route to the same backstop: RomM rejects the stale POST with a
+        409, and RomM's content-dedup can early-return a pre-existing non-head
+        save (:func:`_dedup_returned_non_head`, #1482) that ``do_upload_save``
+        turns into a ``RommConflictError``. Either way :meth:`_handle_upload_409`
+        re-fetches the slot and lets ``resolve_upload_conflict`` decide from
+        hashes alone (download the fresh head when local is provably unchanged,
+        else surface a conflict). Any other ``RommApiError`` propagates to the
+        generic handler in :meth:`_dispatch_sync_action`. Returns the transfer
+        direction that was issued (``UPLOAD`` on a clean POST, ``DOWNLOAD`` when
+        the backstop downgrades), or ``None`` when nothing transferred.
         """
         if local_path is None:
             self._logger.warning(
@@ -586,6 +613,8 @@ class MatrixExecutor:
         try:
             # POST (create) a new save in the slot. The retention cap is POST-only —
             # RomM stacks versions on create, so the limit is sent here alone.
+            # ``planned_group`` lets the POST catch a dedup-to-non-head response
+            # (#1482) and route it through the same 409 backstop below.
             self.do_upload_save(
                 ctx.rom_id,
                 local_path,
@@ -598,6 +627,7 @@ class MatrixExecutor:
                 options.default_slot,
                 autocleanup_limit=options.autocleanup_limit,
                 overwrite=False,
+                planned_group=server_candidates,
             )
             return TransferDirection.UPLOAD
         except RommConflictError:
@@ -624,10 +654,14 @@ class MatrixExecutor:
         options: SyncRunOptions,
         sink: DispatchSink,
     ) -> TransferDirection | None:
-        """Re-decide an upload rejected by RomM's write-time 409.
+        """Re-decide an upload the POST could not land as a new slot head.
 
-        The POST proved the slot head moved past our last sync since the
-        ``list_saves`` snapshot that planned it. Re-fetch the slot, regroup to
+        Reached from two signals that mean the same thing — the slot head is not
+        where our POST assumed: RomM's write-time 409 (the head moved past our
+        last sync since the ``list_saves`` snapshot that planned the POST), and a
+        dedup-to-non-head early-return the POST turned into a ``RommConflictError``
+        (#1482, RomM created no new version and an older save came back while a
+        newer head still leads). Re-fetch the slot, regroup to
         this file's canonical target (the same grouping
         :meth:`iter_matrix_outcomes` uses), pick the newest, and let
         ``resolve_upload_conflict`` decide purely from hashes: a provably-unchanged
@@ -668,6 +702,7 @@ class MatrixExecutor:
         local_hash: str | None,
         last_sync_hash: str | None,
         last_sync_server_hash: str | None,
+        server_candidates: list[dict[str, Any]],
         options: SyncRunOptions,
         sink: DispatchSink,
     ) -> TransferDirection | None:
@@ -677,10 +712,12 @@ class MatrixExecutor:
         Errors are caught and pushed onto ``sink.errors`` so a single failure
         can't abort the whole rom-level sync; conflicts land on
         ``sink.conflicts``. ``ctx.rom_name`` + the stored baseline pair
-        (``last_sync_hash`` / ``last_sync_server_hash``) are threaded through for
-        the upload 409 backstop (canonical-target regroup + hash re-decision).
-        Returns the :class:`TransferDirection` a transfer moved, or ``None`` for a
-        skip, a surfaced conflict, or a failed transfer.
+        (``last_sync_hash`` / ``last_sync_server_hash``) + this file's
+        ``server_candidates`` (the pre-upload snapshot, for the dedup-to-non-head
+        guard) are threaded through for the upload 409 backstop (canonical-target
+        regroup + hash re-decision). Returns the :class:`TransferDirection` a
+        transfer moved, or ``None`` for a skip, a surfaced conflict, or a failed
+        transfer.
         """
         try:
             if isinstance(action, Skip):
@@ -700,6 +737,7 @@ class MatrixExecutor:
                     local_hash=local_hash,
                     last_sync_hash=last_sync_hash,
                     last_sync_server_hash=last_sync_server_hash,
+                    server_candidates=server_candidates,
                     options=options,
                     sink=sink,
                 )
@@ -920,6 +958,7 @@ class MatrixExecutor:
                 local_hash=outcome.local_hash,
                 last_sync_hash=outcome.file_state.last_sync_hash,
                 last_sync_server_hash=outcome.file_state.last_sync_server_hash,
+                server_candidates=outcome.server_candidates,
                 options=options,
                 sink=sink,
             )
@@ -936,6 +975,33 @@ class MatrixExecutor:
             f" uploaded={uploaded} downloaded={downloaded} errors={len(errors)}"
         )
         return uploaded, downloaded, errors, conflicts
+
+
+def _dedup_returned_non_head(response: dict[str, Any], planned_group: list[dict[str, Any]]) -> bool:
+    """Whether an ``add_save`` POST deduped to a pre-existing NON-head save (#1482).
+
+    RomM's ``add_save`` content-dedup can early-return an EXISTING save whose
+    content matches the upload instead of creating a new version. When that
+    returned save is not the slot head the run planned against — an older save
+    while a newer, different head still leads the slot — the upload intent (make
+    our content the slot head) went silently unfulfilled: no new version, the
+    foreign head stays authoritative, yet the response looks like a successful
+    upload. Recording it as a synced baseline would falsely report "synced".
+
+    Detected purely from ids against *planned_group* (the pre-upload
+    ``list_saves`` snapshot for this file, the same group ``compute_sync_action``
+    evaluated): the response is a member of that snapshot (an existing save, not
+    a freshly minted version whose id is absent from it) that is not the newest
+    save in it. Benign — today's baseline write stands — for an empty planned
+    slot (no head to bypass, e.g. an empty-slot race whose only signal is the
+    dedup response itself), a freshly created version, or the head coming back.
+    """
+    response_id = response.get("id")
+    if response_id is None or not planned_group:
+        return False
+    head = max(planned_group, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
+    group_ids = {s.get("id") for s in planned_group}
+    return response_id in group_ids and response_id != head.get("id")
 
 
 def _upload_response_proves_current(response: dict[str, Any], device_id: str) -> bool:
