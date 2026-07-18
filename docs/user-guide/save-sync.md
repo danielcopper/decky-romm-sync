@@ -67,8 +67,10 @@ Open **Save Sync** from the main QAM page to configure sync behavior.
 
 - **Sync before launch** (default: on) — runs sync when a game starts, whether via the Play button or the launch gate.
   If the server is unreachable, the game launches with whatever local save exists.
-- **Sync after exit** (default: on) — runs sync after closing a game. A toast confirms a successful upload; if the sync
-  fails, the toast names the actual cause (see [Offline Behavior](#offline-behavior)) instead of a generic message.
+- **Sync after exit** (default: on) — runs sync after closing a game. A toast confirms what moved and which way — "Saves
+  uploaded to RomM", "Saves downloaded from RomM", or "Saves synced with RomM (1 up, 2 down)" when a run went both ways;
+  a sync that transferred nothing shows no toast. If the sync fails, the toast names the actual cause (see
+  [Offline Behavior](#offline-behavior)) instead of a generic message.
 
 ### When saves conflict
 

@@ -1204,6 +1204,15 @@ case: we believe the server's claim and write `last_sync_hash := local_hash` so 
 All four sync entry points share a single decision primitive — `compute_sync_action` — and a single dispatch path —
 `_dispatch_sync_action`. The flows differ only in _when_ they fire and how they surface results.
 
+**Completion toast — per-direction counts (#250).** `_dispatch_sync_action` returns a `TransferDirection` (`UPLOAD` /
+`DOWNLOAD` / `None`), so `sync_rom_saves` tallies uploads and downloads separately and each per-ROM result dict carries
+additive `uploaded` / `downloaded` counts beside the `synced` total (a 409-backstop download counts as a _download_, not
+the upload that lost the race). The completion toast names which way saves moved — "Saves uploaded to RomM", "Saves
+downloaded from RomM", or "Saves synced with RomM (1 up, 2 down)" when a run went both ways — and a run that transferred
+nothing shows no toast. The wording is a single contract mirrored on both sides: the frontend renders the pre-launch
+toast via `saveSyncToastBody` (`src/utils/saveSyncToast.ts`); the backend renders the post-exit toast itself via
+`sync_toast_body` (`services/session_lifecycle.py`) since that flow returns a pre-built `toast_body`.
+
 ### Pre-launch sync
 
 Triggered from the game detail page when the user clicks the Play button (if `sync_before_launch` is enabled). This is
@@ -1221,7 +1230,8 @@ Triggered from the game detail page when the user clicks the Play button (if `sy
    Sync Unavailable" fallback-launch confirm; the launch proceeds only if the user confirms it, and is aborted (the
    button returns to "play") if they decline (#1050). The benign `savefiles_in_content_dir` skip still proceeds
    silently.
-6. Toast notification shown on sync result.
+6. Toast notification shown on sync result — the per-direction completion toast above (uploaded / downloaded / both), or
+   the classified failure/offline message.
 
 ### Post-exit sync
 
@@ -1239,7 +1249,8 @@ Triggered automatically when a game stops (if `sync_after_exit` is enabled).
    409-backstopped).
 4. If a `Conflict` is returned, a toast notifies the user. The modal is **not** opened post-exit — the conflict re-fires
    at the next pre-launch sync, where the user resolves it via Keep Local / Use Server before launch.
-5. Toast notification shown on success or conflict.
+5. Toast notification shown on success or conflict — the per-direction completion toast above (uploaded / downloaded /
+   both) on a successful transfer, rendered backend-side into `SessionFinalizeSyncResult.toast_body`.
 
 ### Manual sync all
 
