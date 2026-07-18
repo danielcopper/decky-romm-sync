@@ -85,7 +85,10 @@ disjunction used at matrix rows 6d / 11a and the `resolve_upload_conflict` 409 b
 - **Parity (fallback).** A file with **no sync history on this device** (fresh reinstall, copied SD card, second device)
   has no stored server hash, so identity falls back to the direct `local_hash == server.content_hash` comparison — kept
   correct by the hash reproduction above (#1457). Branch 5's no-baseline slice and true fresh installs can only ever use
-  this route, by design.
+  this route, by design. Watch item: RomM's zip scheme is undocumented internal behavior and its author has publicly
+  sketched a metadata-based variant that does not match the shipped code — re-verify the zip branch of this fallback
+  against the RomM source on server version bumps. If it ever drifts, the fallback degrades to spurious conflict prompts
+  (never data loss); the stored-server-hash primary route is unaffected.
 
 The baseline pair is written together at the recorded-baseline writer sites (`update_file_sync_state` on upload/download
 and the keep_local adopt-without-upload path) with honest provenance per flow — the upload response's `content_hash`
