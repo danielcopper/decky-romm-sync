@@ -388,8 +388,9 @@ class TestV47SyncFlow:
             "device_syncs": [{"device_id": "dev-1", "is_current": True}],
         }
 
-        synced, errors, conflicts = _do_sync(svc, 42)
-        assert synced == 0
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
+        assert uploaded == 0
+        assert downloaded == 0
         assert errors == []
         assert conflicts == []
 
@@ -428,8 +429,9 @@ class TestV47SyncFlow:
             "device_syncs": [{"device_id": "dev-1", "is_current": False}],
         }
 
-        synced, errors, _conflicts = _do_sync(svc, 42)
-        assert synced == 1
+        uploaded, downloaded, errors, _conflicts = _do_sync(svc, 42)
+        assert uploaded == 0
+        assert downloaded == 1
         assert errors == []
         # Verify download happened
         assert 100 in fake.downloaded_files
@@ -490,9 +492,10 @@ class TestV47SyncFlow:
             "device_syncs": [{"device_id": "dev-1", "is_current": False}],
         }
 
-        synced, errors, conflicts = _do_sync(svc, 42)
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
 
-        assert synced == 0
+        assert uploaded == 0
+        assert downloaded == 0
         assert errors == []
         assert conflicts == []
         # The newer legacy save was never downloaded into the named slot.
@@ -770,7 +773,7 @@ class TestTrackedSaveIdMatching:
         )
 
         # Sync should NOT download the timestamp-named file as a new server-only save
-        _synced, errors, _conflicts = _do_sync(svc, 42)
+        _uploaded, _downloaded, errors, _conflicts = _do_sync(svc, 42)
         assert len(errors) == 0
         # No downloads should have occurred (files are in sync)
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
@@ -908,9 +911,10 @@ class TestTrackedSaveIdMatching:
             },
         )
 
-        synced, errors, _conflicts = _do_sync(svc, 42)
+        uploaded, downloaded, errors, _conflicts = _do_sync(svc, 42)
         assert len(errors) == 0
-        assert synced == 1  # only ONE download
+        assert uploaded == 0
+        assert downloaded == 1  # only ONE download
 
         # Should download only once (the newest, id=18)
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
@@ -1013,7 +1017,7 @@ class TestOlderVersionSkipping:
             },
         )
 
-        _synced, _errors, _conflicts = _do_sync(svc, 42)
+        _uploaded, _downloaded, _errors, _conflicts = _do_sync(svc, 42)
         # pokemon [old].srm in slot=portable is filtered out — no download
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
         assert len(download_calls) == 0
@@ -1577,9 +1581,10 @@ class TestSyncRomSavesDispatch:
             },
         )
 
-        synced, errors, conflicts = _do_sync(svc, 42)
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
 
-        assert synced == 0
+        assert uploaded == 0
+        assert downloaded == 0
         assert errors == []
         assert conflicts == []
         # No upload/download initiated.
@@ -1592,9 +1597,10 @@ class TestSyncRomSavesDispatch:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"new local")
 
-        synced, errors, conflicts = _do_sync(svc, 42)
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
 
-        assert synced == 1
+        assert uploaded == 1
+        assert downloaded == 0
         assert errors == []
         assert conflicts == []
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
@@ -1633,9 +1639,10 @@ class TestSyncRomSavesDispatch:
             },
         )
 
-        synced, errors, conflicts = _do_sync(svc, 42)
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
 
-        assert synced == 1
+        assert uploaded == 0
+        assert downloaded == 1
         assert errors == []
         assert conflicts == []
         # Download_save_content was called against the server save id.
@@ -1674,9 +1681,10 @@ class TestSyncRomSavesDispatch:
             },
         )
 
-        synced, errors, conflicts = _do_sync(svc, 42)
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
 
-        assert synced == 0
+        assert uploaded == 0
+        assert downloaded == 0
         assert errors == []
         assert len(conflicts) == 1
         c = conflicts[0]
@@ -1704,13 +1712,48 @@ class TestSyncRomSavesDispatch:
         )
         fake.saves[100] = ss
 
-        synced, errors, conflicts = _do_sync(svc, 42)
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
 
-        assert synced == 1
+        assert uploaded == 0
+        assert downloaded == 1
         assert errors == []
         assert conflicts == []
         saves_dir = tmp_path / "saves" / "gba"
         assert (saves_dir / "pokemon.srm").exists()
+
+    def test_sync_rom_saves_mixed_upload_and_download_counts_both(self, tmp_path):
+        """One file uploads and a sibling extension downloads in one run → 1 up, 1 down (#250).
+
+        A local ``.srm`` with no server counterpart is POSTed (upload); a
+        server-only ``.sav`` this device is not current on is pulled (download).
+        The two directions are tallied separately so the completion toast can
+        report the mix.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        # Local .srm with no matching server save → Upload (POST).
+        _create_save(tmp_path, content=b"local srm progress", ext=".srm")
+        # Server-only .sav (different canonical target), not current here → Download.
+        sav = _server_save_with_syncs(
+            save_id=200,
+            filename="pokemon.sav",
+            device_syncs=[{"device_id": "device-1", "is_current": False}],
+        )
+        sav["file_extension"] = "sav"
+        fake.saves[200] = sav
+
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
+
+        assert uploaded == 1
+        assert downloaded == 1
+        assert errors == []
+        assert conflicts == []
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
+        assert [c[1][0] for c in download_calls] == [200]
+        assert (tmp_path / "saves" / "gba" / "pokemon.sav").exists()
 
     def test_sync_rom_saves_upload_posts_when_local_diverged(self, tmp_path):
         """is_current=true + local hash diverges from baseline → Upload, POSTed as a
@@ -1742,9 +1785,10 @@ class TestSyncRomSavesDispatch:
             },
         )
 
-        synced, errors, conflicts = _do_sync(svc, 42)
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
 
-        assert synced == 1
+        assert uploaded == 1
+        assert downloaded == 0
         assert errors == []
         assert conflicts == []
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
@@ -1792,9 +1836,10 @@ class TestSyncRomSavesDispatch:
             },
         )
 
-        synced, errors, conflicts = _do_sync(svc, 42)
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
 
-        assert synced == 0
+        assert uploaded == 0
+        assert downloaded == 0
         assert errors == []
         # NO upload (PUT) was issued — the destructive overwrite was refused.
         assert not any(c[0] == "upload_save" for c in fake.call_log)
@@ -1827,9 +1872,10 @@ class TestSyncRomSavesDispatch:
         # No file_state at all — no baseline yet.
         _seed_save_state(svc, 42, RomSaveState())
 
-        synced, errors, conflicts = _do_sync(svc, 42)
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
 
-        assert synced == 0
+        assert uploaded == 0
+        assert downloaded == 0
         assert errors == []
         assert conflicts == []
         # No I/O initiated.
@@ -1865,9 +1911,10 @@ class TestSyncRomSavesDispatch:
             },
         )
 
-        synced, errors, conflicts = _do_sync(svc, 42)
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
 
-        assert synced == 1
+        assert uploaded == 0
+        assert downloaded == 1
         assert errors == []
         assert conflicts == []
         download_calls = [c for c in fake.call_log if c[0] == "download_save_content"]
@@ -1904,11 +1951,13 @@ class TestSyncRomSavesDispatch:
             },
         )
 
-        synced, errors, conflicts = _do_sync(svc, 42)
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
 
         assert errors == []
         assert conflicts == []
-        assert synced == 1
+        # The 409-downgraded transfer is attributed as a download, not an upload (#250).
+        assert uploaded == 0
+        assert downloaded == 1
         # The POST was attempted overwrite=false (so RomM's 409 could fire)…
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
@@ -1937,9 +1986,10 @@ class TestSyncRomSavesDispatch:
         # No baseline (files empty) — this device has never synced the slot.
         _seed_save_state_dict(svc, 42, {"active_slot": "default", "slot_confirmed": True, "files": {}})
 
-        synced, errors, conflicts = _do_sync(svc, 42)
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
 
-        assert synced == 0
+        assert uploaded == 0
+        assert downloaded == 0
         assert errors == []
         assert len(conflicts) == 1
         c = conflicts[0]
@@ -1980,7 +2030,7 @@ class TestSyncRomSavesDispatch:
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
 
-        assert result is False
+        assert result is None
         assert conflicts == []
         assert len(errors) == 1
         assert "pokemon.srm" in errors[0]
@@ -2063,7 +2113,7 @@ class TestHandleUnexpectedError:
         errors: list[str] = []
         conflicts: list[dict[str, Any]] = []
         action = Download(server_save={"id": 100, "file_name": "pokemon.srm"})
-        synced = svc._sync_engine._matrix._dispatch_sync_action(
+        direction = svc._sync_engine._matrix._dispatch_sync_action(
             action,
             ctx=RomDispatchContext(
                 rom_id=42,
@@ -2083,7 +2133,7 @@ class TestHandleUnexpectedError:
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
 
-        assert synced is False
+        assert direction is None
         assert len(errors) == 1
         assert errors[0].startswith("pokemon.srm:")
         # The .tmp file was removed by the cleanup branch.
@@ -2114,7 +2164,7 @@ class TestDispatchSyncActionErrorBranches:
         errors: list[str] = []
         conflicts: list[dict[str, Any]] = []
         action = Download(server_save={"id": 100, "file_name": "pokemon.srm"})
-        synced = svc._sync_engine._matrix._dispatch_sync_action(
+        direction = svc._sync_engine._matrix._dispatch_sync_action(
             action,
             ctx=RomDispatchContext(
                 rom_id=42,
@@ -2134,7 +2184,7 @@ class TestDispatchSyncActionErrorBranches:
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
 
-        assert synced is False
+        assert direction is None
         assert len(errors) == 1
         assert errors[0].startswith("pokemon.srm:")
         assert any(
@@ -2180,7 +2230,7 @@ class TestDispatchUploadDefensiveBranches:
             sink=DispatchSink(errors=errors, conflicts=conflicts),
         )
 
-        assert result is False
+        assert result is None
         assert len(errors) == 1
         assert "upload requested but no local file" in errors[0]
         # No upload was attempted.

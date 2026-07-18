@@ -365,7 +365,7 @@ class VersionsService:
 
             # Matrix pre-flight: get the tracked save in sync first, or surface
             # a conflict that the user must resolve before any switch can run.
-            _synced, errors, conflicts = await self._loop.run_in_executor(
+            _uploaded, _downloaded, errors, conflicts = await self._loop.run_in_executor(
                 None, self._sync_engine.do_sync_rom_saves, rom_id, save_state, device_id, core_so, default_slot
             )
             if conflicts:

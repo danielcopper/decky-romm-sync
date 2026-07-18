@@ -286,8 +286,12 @@ class SyncEngine:
         core_so: str | None,
         default_slot: str | None = None,
         autocleanup_limit: int | None = None,
-    ) -> tuple[int, list[str], list[dict[str, Any]]]:
-        """Sync saves for a single ROM (delegate to :class:`MatrixExecutor`)."""
+    ) -> tuple[int, int, list[str], list[dict[str, Any]]]:
+        """Sync saves for a single ROM (delegate to :class:`MatrixExecutor`).
+
+        Returns ``(uploaded, downloaded, errors, conflicts)`` — the per-direction
+        transfer counts (#250).
+        """
         return self._matrix.sync_rom_saves(rom_id, save_state, device_id, core_so, default_slot, autocleanup_limit)
 
     def do_download_save(
@@ -541,8 +545,13 @@ class SyncEngine:
         require_confirmed: bool = False,
         session_id: int | None = None,
         session_counts: list[int] | None = None,
-    ) -> tuple[int, list[str], list[dict[str, Any]]]:
+    ) -> tuple[int, int, list[str], list[dict[str, Any]]]:
         """Read inputs → sync in executor → persist, for one ROM under its lock.
+
+        Returns ``(uploaded, downloaded, errors, conflicts)`` — the matrix
+        worker's per-direction transfer counts (#250). The negotiate session
+        close and the bulk-sweep *session_counts* accumulator record the
+        combined ``uploaded + downloaded`` as the session's completed-op count.
 
         The narrow-UoW shape (ADR-0006): a short read UoW loads the aggregate +
         device id, the matrix transfer runs outside any transaction mutating the
@@ -573,11 +582,11 @@ class SyncEngine:
         info = await self._loop.run_in_executor(None, self._rom_info.get_rom_save_info, rom_id)
         if not info:
             self._log_debug(f"_run_rom_sync({rom_id}): ROM not installed, skipping")
-            return 0, [], []
+            return 0, 0, [], []
         save_state, device_id = await self._loop.run_in_executor(None, self._read_sync_inputs, rom_id)
         if require_confirmed and not save_state.slot_confirmed:
             self._log_debug(f"_run_rom_sync({rom_id}): slot not confirmed, skipping bulk sync")
-            return 0, [], []
+            return 0, 0, [], []
         core_so = await self._loop.run_in_executor(None, self.resolve_core, rom_id)
         default_slot = resolve_default_slot(self._settings)
         cleanup_limit = autocleanup_limit(self._settings)
@@ -592,21 +601,23 @@ class SyncEngine:
             if session_id is None and save_state.slot_confirmed and save_state.active_slot:
                 own_session_id = await self._open_negotiate_session(rom_id, device_id)
 
-            synced = 0
+            uploaded = 0
+            downloaded = 0
             errors: list[str] = []
             conflicts: list[dict[str, Any]] = []
             try:
-                synced, errors, conflicts = await self._loop.run_in_executor(
+                uploaded, downloaded, errors, conflicts = await self._loop.run_in_executor(
                     None, self.do_sync_rom_saves, rom_id, save_state, device_id, core_so, default_slot, cleanup_limit
                 )
                 await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
             finally:
+                synced = uploaded + downloaded
                 if own_session_id is not None:
                     await self._close_negotiate_session(own_session_id, synced, len(errors))
                 elif session_counts is not None:
                     session_counts[0] += synced
                     session_counts[1] += len(errors)
-            return synced, errors, conflicts
+            return uploaded, downloaded, errors, conflicts
 
     async def _open_negotiate_session(self, rom_id: int, device_id: str | None) -> int | None:
         """Open a transport-only negotiate session for a confirmed ROM; ``None`` on failure.
@@ -713,7 +724,8 @@ class SyncEngine:
                             "message": DEVICE_NOT_REGISTERED,
                         }
 
-                synced, errors, conflicts = await self._run_rom_sync(rom_id)
+                uploaded, downloaded, errors, conflicts = await self._run_rom_sync(rom_id)
+                synced = uploaded + downloaded
 
                 msg = f"Downloaded {synced} save(s)"
                 if errors:
@@ -722,6 +734,8 @@ class SyncEngine:
                     "success": len(errors) == 0,
                     "message": msg,
                     "synced": synced,
+                    "uploaded": uploaded,
+                    "downloaded": downloaded,
                     "errors": errors,
                     "conflicts": list(conflicts),
                 }
@@ -789,12 +803,14 @@ class SyncEngine:
                             "message": DEVICE_NOT_REGISTERED,
                         }
 
-                synced, errors, conflicts = await self._run_rom_sync(rom_id)
+                uploaded, downloaded, errors, conflicts = await self._run_rom_sync(rom_id)
+                synced = uploaded + downloaded
 
                 self._logger.info(
-                    "post_exit_sync complete for rom_id=%d: synced=%d, errors=%d, conflicts=%d",
+                    "post_exit_sync complete for rom_id=%d: uploaded=%d, downloaded=%d, errors=%d, conflicts=%d",
                     rom_id,
-                    synced,
+                    uploaded,
+                    downloaded,
                     len(errors),
                     len(conflicts),
                 )
@@ -806,6 +822,8 @@ class SyncEngine:
                     "success": len(errors) == 0,
                     "message": msg,
                     "synced": synced,
+                    "uploaded": uploaded,
+                    "downloaded": downloaded,
                     "errors": errors,
                     "conflicts": list(conflicts),
                 }
@@ -855,7 +873,8 @@ class SyncEngine:
                             "message": DEVICE_NOT_REGISTERED,
                         }
 
-                synced, errors, conflicts = await self._run_rom_sync(rom_id)
+                uploaded, downloaded, errors, conflicts = await self._run_rom_sync(rom_id)
+                synced = uploaded + downloaded
 
                 msg = _summarize_sync_result(
                     f"Synced {synced} save(s)", synced=synced, errors=errors, conflicts=len(conflicts)
@@ -864,6 +883,8 @@ class SyncEngine:
                     "success": len(errors) == 0,
                     "message": msg,
                     "synced": synced,
+                    "uploaded": uploaded,
+                    "downloaded": downloaded,
                     "errors": errors,
                     "conflicts": list(conflicts),
                 }
@@ -974,13 +995,13 @@ class SyncEngine:
                         for rom_id_int in rom_ids:
                             rom_count += 1
                             async with self.rom_lock(rom_id_int):
-                                synced, errors, conflicts = await self._run_rom_sync(
+                                uploaded, downloaded, errors, conflicts = await self._run_rom_sync(
                                     rom_id_int,
                                     require_confirmed=True,
                                     session_id=session_id,
                                     session_counts=session_counts if session_id is not None else None,
                                 )
-                            total_synced += synced
+                            total_synced += uploaded + downloaded
                             total_errors.extend(errors)
                             all_conflicts.extend(conflicts)
                     finally:

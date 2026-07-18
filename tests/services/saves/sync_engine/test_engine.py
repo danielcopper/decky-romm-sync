@@ -70,8 +70,9 @@ class TestSyncRomSaves:
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"save data")
 
-        synced, errors, conflicts = _do_sync(svc, 42)
-        assert synced == 1
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
+        assert uploaded == 1
+        assert downloaded == 0
         assert errors == []
         assert conflicts == []
         assert any(c[0] == "upload_save" for c in fake.call_log)
@@ -84,8 +85,9 @@ class TestSyncRomSaves:
         ss = _server_save()
         fake.saves[100] = ss
 
-        synced, errors, _ = _do_sync(svc, 42)
-        assert synced == 1
+        uploaded, downloaded, errors, _ = _do_sync(svc, 42)
+        assert uploaded == 0
+        assert downloaded == 1
         assert errors == []
         # Verify the file was downloaded
         saves_dir = tmp_path / "saves" / "gba"
@@ -93,8 +95,9 @@ class TestSyncRomSaves:
 
     def test_rom_not_installed(self, tmp_path):
         svc, _ = make_service(tmp_path)
-        synced, errors, _ = _do_sync(svc, 999)
-        assert synced == 0
+        uploaded, downloaded, errors, _ = _do_sync(svc, 999)
+        assert uploaded == 0
+        assert downloaded == 0
         assert errors == []
 
     def test_api_error_on_list_saves(self, tmp_path):
@@ -102,8 +105,9 @@ class TestSyncRomSaves:
         _install_rom(svc, tmp_path)
         fake.fail_on_next(RommApiError("Server error"))
 
-        synced, errors, _ = _do_sync(svc, 42)
-        assert synced == 0
+        uploaded, downloaded, errors, _ = _do_sync(svc, 42)
+        assert uploaded == 0
+        assert downloaded == 0
         assert len(errors) == 1
         assert "Failed to fetch saves" in errors[0]
 
@@ -126,9 +130,10 @@ class TestSyncRomSaves:
         ss = _server_save()
         fake.saves[100] = ss
 
-        synced, errors, conflicts = _do_sync(svc, 42)
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
 
-        assert synced == 0
+        assert uploaded == 0
+        assert downloaded == 0
         assert errors == []
         assert conflicts == []
         # No download was initiated.
@@ -147,9 +152,10 @@ class TestSyncRomSaves:
         # Local save at the (previous == current, same layout) location.
         _create_save(tmp_path, content=b"user progress")
 
-        synced, errors, conflicts = _do_sync(svc, 42)
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
 
-        assert synced == 1
+        assert uploaded == 1
+        assert downloaded == 0
         assert errors == []
         assert conflicts == []
         # Upload went through.
@@ -206,7 +212,7 @@ class TestSyncRomSaves:
 
         # Stub do_sync_rom_saves to return 1 conflict, 0 synced, 0 errors
         def stub_sync(rom_id, *args):
-            return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
+            return (0, 0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
 
         svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
@@ -366,7 +372,7 @@ class TestSyncAllSaves:
         # Stub the matrix worker to produce conflicts but no errors (every ROM
         # decides via do_sync_rom_saves now, ADR-0017).
         def stub_sync(rom_id, *args):
-            return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
+            return (0, 0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
 
         svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
@@ -623,7 +629,7 @@ class TestPostExitSync:
         _install_rom(svc, tmp_path)
 
         def stub_sync(rom_id, *args):
-            return (0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
+            return (0, 0, [], [{"type": "newer_in_slot", "rom_id": rom_id}])
 
         svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
@@ -921,7 +927,7 @@ class TestSyncCallableErrorMessages:
         _install_rom(svc, tmp_path)
 
         def stub_sync(rom_id, *args):
-            return (0, ["pokemon.srm: bad gateway"], [])
+            return (0, 0, ["pokemon.srm: bad gateway"], [])
 
         svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
@@ -939,7 +945,7 @@ class TestSyncCallableErrorMessages:
         _install_rom(svc, tmp_path)
 
         def stub_sync(rom_id, *args):
-            return (0, ["pokemon.srm: timeout"], [])
+            return (0, 0, ["pokemon.srm: timeout"], [])
 
         svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
@@ -957,7 +963,7 @@ class TestSyncCallableErrorMessages:
         _install_rom(svc, tmp_path)
 
         def stub_sync(rom_id, *args):
-            return (2, ["pokemon.srm: timeout"], [])
+            return (2, 0, ["pokemon.srm: timeout"], [])
 
         svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
@@ -974,7 +980,7 @@ class TestSyncCallableErrorMessages:
         _install_rom(svc, tmp_path)
 
         def stub_sync(rom_id, *args):
-            return (0, ["a.srm: timeout", "b.srm: timeout", "c.srm: timeout"], [])
+            return (0, 0, ["a.srm: timeout", "b.srm: timeout", "c.srm: timeout"], [])
 
         svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
@@ -990,7 +996,7 @@ class TestSyncCallableErrorMessages:
         _install_rom(svc, tmp_path)
 
         def stub_sync(rom_id, *args):
-            return (0, ["pokemon.srm: 502 bad gateway"], [])
+            return (0, 0, ["pokemon.srm: 502 bad gateway"], [])
 
         svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
 
@@ -998,6 +1004,71 @@ class TestSyncCallableErrorMessages:
 
         assert result["success"] is False
         assert result["message"] == "502 bad gateway"
+
+
+class TestSyncCallablesSurfaceDirectionCounts:
+    """The per-ROM sync callables surface per-direction counts (#250).
+
+    The completion toast names which way saves moved, so each result dict
+    carries ``uploaded`` / ``downloaded`` alongside the ``synced`` total.
+    """
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_reports_download_count(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+
+        def stub_sync(rom_id, *args):
+            return (0, 2, [], [])  # two downloads, no upload
+
+        svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
+
+        result = await svc.pre_launch_sync(42)
+
+        assert result["success"] is True
+        assert result["uploaded"] == 0
+        assert result["downloaded"] == 2
+        assert result["synced"] == 2
+
+    @pytest.mark.asyncio
+    async def test_post_exit_sync_reports_upload_count(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+
+        def stub_sync(rom_id, *args):
+            return (3, 0, [], [])  # three uploads, no download
+
+        svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
+
+        result = await svc.post_exit_sync(42)
+
+        assert result["success"] is True
+        assert result["uploaded"] == 3
+        assert result["downloaded"] == 0
+        assert result["synced"] == 3
+
+    @pytest.mark.asyncio
+    async def test_sync_rom_saves_reports_mixed_counts(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path)
+
+        def stub_sync(rom_id, *args):
+            return (1, 2, [], [])  # one up, two down
+
+        svc._sync_engine.do_sync_rom_saves = stub_sync  # type: ignore[method-assign]
+
+        result = await svc.sync_rom_saves(42)
+
+        assert result["success"] is True
+        assert result["uploaded"] == 1
+        assert result["downloaded"] == 2
+        assert result["synced"] == 3
 
 
 class TestSyncCallablePromotesRealDispatchReason:
@@ -1441,7 +1512,7 @@ class TestSaveSyncDeviceGate:
             time.sleep(0.05)
             with counter_lock:
                 state["active"] -= 1
-            return (1, [], [])
+            return (1, 0, [], [])
 
         # Every ROM decides via the local matrix (ADR-0017); the device-gate
         # serialization is the same, so stub the matrix worker.
@@ -1476,9 +1547,10 @@ class TestRunRomSyncSession:
         _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"local")
         _seed_save_state(svc, 42, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
 
-        synced, errors, conflicts = await svc._sync_engine._run_rom_sync(42)
+        uploaded, downloaded, errors, conflicts = await svc._sync_engine._run_rom_sync(42)
 
-        assert synced == 1  # local-only save → matrix POST upload
+        assert uploaded == 1  # local-only save → matrix POST upload
+        assert downloaded == 0
         assert errors == []
         assert conflicts == []
         # The confirmed ROM opened a transport session AND decided via the matrix.
@@ -1515,14 +1587,15 @@ class TestRunRomSyncSession:
         # The session-open negotiate POST raises; the run proceeds without a session.
         fake.fail_on_next(RommConnectionError("negotiate down"))
 
-        synced, errors, conflicts = await svc._sync_engine._run_rom_sync(42)
+        uploaded, downloaded, errors, conflicts = await svc._sync_engine._run_rom_sync(42)
 
         # Session open was attempted and failed; the matrix still ran and POSTed.
         assert any(c[0] == "negotiate_sync" for c in fake.call_log)
         assert any(c[0] == "list_saves" for c in fake.call_log)
         # No session was opened, so none was completed.
         assert not any(c[0] == "complete_sync_session" for c in fake.call_log)
-        assert synced == 1  # matrix POST upload
+        assert uploaded == 1  # matrix POST upload
+        assert downloaded == 0
         assert errors == []
         assert conflicts == []
 
@@ -1541,11 +1614,12 @@ class TestRunRomSyncSession:
         )
         fake.set_server_save_content(888, b"other device save")
 
-        synced, errors, conflicts = await svc._sync_engine._run_rom_sync(42)
+        uploaded, downloaded, errors, conflicts = await svc._sync_engine._run_rom_sync(42)
 
         # The transport session opened and the matrix drove the download.
         assert any(c[0] == "negotiate_sync" for c in fake.call_log)
-        assert synced == 1
+        assert uploaded == 0
+        assert downloaded == 1
         assert errors == []
         assert conflicts == []
         local = tmp_path / "saves" / "gba" / "pokemon.srm"
@@ -1586,12 +1660,13 @@ class TestRunRomSyncSession:
 
         fake.negotiate_sync = malformed  # type: ignore[method-assign]
 
-        synced, errors, conflicts = await svc._sync_engine._run_rom_sync(42)
+        uploaded, downloaded, errors, conflicts = await svc._sync_engine._run_rom_sync(42)
 
         # The matrix ran and POSTed; no session was completed (none opened).
         assert any(c[0] == "list_saves" for c in fake.call_log)
         assert not any(c[0] == "complete_sync_session" for c in fake.call_log)
-        assert synced == 1
+        assert uploaded == 1
+        assert downloaded == 0
         assert errors == []
         assert conflicts == []
 

@@ -801,7 +801,7 @@ class TestMultiFileSlotConflictAggregation:
         fake.saves[201] = bcr_ss
 
         status_conflicts = {c["filename"] for c in svc._status._get_save_status_io(42, [bkr_ss, bcr_ss])["conflicts"]}
-        _synced, _errors, sync_conflicts = _do_sync(svc, 42)
+        _uploaded, _downloaded, _errors, sync_conflicts = _do_sync(svc, 42)
         sync_conflict_files = {c["filename"] for c in sync_conflicts}
 
         # Both paths agree, and the agreed set is the non-first component.

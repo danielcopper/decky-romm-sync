@@ -264,9 +264,9 @@ class TestFinalizeSyncToasts:
         assert result.sync.toast_title == "RomM Save Sync"
         assert result.sync.toast_body == "Server offline — saves will sync next time"
 
-    def test_success_with_uploads_renders_synced_toast(self, event_loop, logger):
-        """``success=True, synced>0`` → synced toast."""
-        post = FakePostExitSync(payload={"success": True, "synced": 3, "conflicts": []})
+    def test_success_upload_only_renders_uploaded_toast(self, event_loop, logger):
+        """``success=True`` with only uploads → "Saves uploaded to RomM" (#250)."""
+        post = FakePostExitSync(payload={"success": True, "synced": 3, "uploaded": 3, "downloaded": 0, "conflicts": []})
         service = _make_service(
             playtime_recorder=FakePlaytimeRecorder(),
             post_exit_sync=post,
@@ -281,11 +281,45 @@ class TestFinalizeSyncToasts:
         assert result.sync.success is True
         assert result.sync.synced == 3
         assert result.sync.toast_title == "RomM Save Sync"
-        assert result.sync.toast_body == "Saves synced with RomM"
+        assert result.sync.toast_body == "Saves uploaded to RomM"
 
-    def test_success_with_no_uploads_renders_no_toast(self, event_loop, logger):
-        """``success=True, synced=0`` → no toast (frontend still dispatches event)."""
-        post = FakePostExitSync(payload={"success": True, "synced": 0, "conflicts": []})
+    def test_success_download_only_renders_downloaded_toast(self, event_loop, logger):
+        """``success=True`` with only downloads → "Saves downloaded from RomM" (#250)."""
+        post = FakePostExitSync(payload={"success": True, "synced": 2, "uploaded": 0, "downloaded": 2, "conflicts": []})
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=post,
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        result = event_loop.run_until_complete(service.finalize(99))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        assert result.sync.success is True
+        assert result.sync.toast_body == "Saves downloaded from RomM"
+
+    def test_success_both_directions_renders_mixed_toast(self, event_loop, logger):
+        """``success=True`` with both directions → names both counts (#250)."""
+        post = FakePostExitSync(payload={"success": True, "synced": 3, "uploaded": 1, "downloaded": 2, "conflicts": []})
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=post,
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        result = event_loop.run_until_complete(service.finalize(99))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        assert result.sync.success is True
+        assert result.sync.toast_body == "Saves synced with RomM (1 up, 2 down)"
+
+    def test_success_with_no_transfers_renders_no_toast(self, event_loop, logger):
+        """``success=True`` with nothing moved → no toast (frontend still dispatches event)."""
+        post = FakePostExitSync(payload={"success": True, "synced": 0, "uploaded": 0, "downloaded": 0, "conflicts": []})
         service = _make_service(
             playtime_recorder=FakePlaytimeRecorder(),
             post_exit_sync=post,
@@ -421,9 +455,16 @@ class TestFinalizeSyncToasts:
         assert result.sync.toast_body == "Server offline — saves will sync next time"
 
     def test_success_message_does_not_override_synced_body(self, event_loop, logger):
-        """Regression guard: a successful sync keeps the synced body, ignoring ``message``."""
+        """Regression guard: a successful sync keeps the per-direction body, ignoring ``message``."""
         post = FakePostExitSync(
-            payload={"success": True, "synced": 2, "conflicts": [], "message": "Uploaded 2 save(s)"}
+            payload={
+                "success": True,
+                "synced": 2,
+                "uploaded": 2,
+                "downloaded": 0,
+                "conflicts": [],
+                "message": "Uploaded 2 save(s)",
+            }
         )
         service = _make_service(
             playtime_recorder=FakePlaytimeRecorder(),
@@ -437,7 +478,7 @@ class TestFinalizeSyncToasts:
         event_loop.run_until_complete(_drain_background_tasks(service))
 
         assert result.sync.success is True
-        assert result.sync.toast_body == "Saves synced with RomM"
+        assert result.sync.toast_body == "Saves uploaded to RomM"
 
     def test_post_exit_exception_renders_failure_toast(self, event_loop, logger):
         """Post-exit sync raises → failure toast, downstream still runs."""
@@ -487,9 +528,11 @@ class TestFinalizeSyncToasts:
         # The exception text must never leak into the toast body.
         assert "Authentication failed" not in result.sync.toast_body
 
-    def test_synced_field_non_int_treated_as_falsy(self, event_loop, logger):
-        """``synced`` not an int (None, str) → no synced toast even when success=True."""
-        post = FakePostExitSync(payload={"success": True, "synced": None, "conflicts": []})
+    def test_direction_counts_non_int_treated_as_zero(self, event_loop, logger):
+        """``uploaded`` / ``downloaded`` not ints (None, str) → treated as 0 → no toast."""
+        post = FakePostExitSync(
+            payload={"success": True, "synced": None, "uploaded": None, "downloaded": "2", "conflicts": []}
+        )
         service = _make_service(
             playtime_recorder=FakePlaytimeRecorder(),
             post_exit_sync=post,
@@ -501,7 +544,7 @@ class TestFinalizeSyncToasts:
         result = event_loop.run_until_complete(service.finalize(99))
         event_loop.run_until_complete(_drain_background_tasks(service))
 
-        # synced was None → treated as no uploads → no toast
+        # Malformed counts default to 0 → no transfer detected → no toast.
         assert result.sync.synced is None
         assert result.sync.toast_title is None
         assert result.sync.toast_body is None
@@ -820,7 +863,9 @@ class TestFinalizeResultShape:
             {"type": "sync_conflict", "rom_id": 99, "filename": "a.srm", "server_save_id": 1},
         ]
         playtime = FakePlaytimeRecorder(payload={"success": True, "total_seconds": 1234})
-        post = FakePostExitSync(payload={"success": True, "synced": 2, "conflicts": conflicts})
+        post = FakePostExitSync(
+            payload={"success": True, "synced": 2, "uploaded": 2, "downloaded": 0, "conflicts": conflicts}
+        )
         migration = FakeMigrationReader(payload={"retrodeck": {"pending": False}, "save_sort": {"pending": False}})
         service = _make_service(
             playtime_recorder=playtime,
@@ -841,7 +886,7 @@ class TestFinalizeResultShape:
                 synced=2,
                 conflicts=conflicts,
                 toast_title="RomM Save Sync",
-                toast_body="Saves synced with RomM",
+                toast_body="Saves uploaded to RomM",
                 conflicts_toast="1 save conflict need resolution",
             ),
             migration=SessionFinalizeMigration(

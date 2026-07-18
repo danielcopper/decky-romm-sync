@@ -16,6 +16,7 @@ import contextlib
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from domain.emulator_tag import build_emulator_tag
@@ -50,6 +51,22 @@ if TYPE_CHECKING:
 
 
 _BACKUP_RETENTION = 10  # max .romm-backup copies kept per save file (#974)
+
+
+class TransferDirection(Enum):
+    """Which way a dispatched save transfer actually moved (#250).
+
+    Returned by the sync dispatch so ``sync_rom_saves`` can split the total
+    transfer count into per-direction upload / download tallies for the
+    completion toast. Direction reflects what moved on the wire, not the
+    planned :class:`SyncAction`: an ``Upload`` that RomM rejects with a 409 and
+    the backstop downgrades to a fresh-head download is attributed as
+    ``DOWNLOAD``. A skip, a surfaced conflict, or a failed transfer yields no
+    direction (the dispatch returns ``None``).
+    """
+
+    UPLOAD = "upload"
+    DOWNLOAD = "download"
 
 
 @dataclass(frozen=True)
@@ -544,7 +561,7 @@ class MatrixExecutor:
         last_sync_server_hash: str | None,
         options: SyncRunOptions,
         sink: DispatchSink,
-    ) -> bool:
+    ) -> TransferDirection | None:
         """Execute an ``Upload`` action by POSTing a new save, with a 409 backstop.
 
         Every automatic upload POSTs a new save in the slot (``server_save=None``,
@@ -556,14 +573,16 @@ class MatrixExecutor:
         ``resolve_upload_conflict`` decide from hashes alone (download the fresh
         head when local is provably unchanged, else surface a conflict). Any other
         ``RommApiError`` propagates to the generic handler in
-        :meth:`_dispatch_sync_action`. Returns True iff a transfer was issued.
+        :meth:`_dispatch_sync_action`. Returns the transfer direction that was
+        issued (``UPLOAD`` on a clean POST, ``DOWNLOAD`` when the 409 backstop
+        downgrades), or ``None`` when nothing transferred.
         """
         if local_path is None:
             self._logger.warning(
                 f"_dispatch_upload({ctx.rom_id}): {filename}: upload requested but no local file on disk"
             )
             sink.errors.append(f"{filename}: upload requested but no local file")
-            return False
+            return None
         try:
             # POST (create) a new save in the slot. The retention cap is POST-only —
             # RomM stacks versions on create, so the limit is sent here alone.
@@ -580,7 +599,7 @@ class MatrixExecutor:
                 autocleanup_limit=options.autocleanup_limit,
                 overwrite=False,
             )
-            return True
+            return TransferDirection.UPLOAD
         except RommConflictError:
             return self._handle_upload_409(
                 ctx=ctx,
@@ -604,7 +623,7 @@ class MatrixExecutor:
         last_sync_server_hash: str | None,
         options: SyncRunOptions,
         sink: DispatchSink,
-    ) -> bool:
+    ) -> TransferDirection | None:
         """Re-decide an upload rejected by RomM's write-time 409.
 
         The POST proved the slot head moved past our last sync since the
@@ -615,6 +634,8 @@ class MatrixExecutor:
         local downloads the fresh head; anything else is a genuine two-sided
         divergence the user must resolve. An empty regroup (the head vanished
         again between the 409 and the re-fetch) is recorded as a non-fatal error.
+        Returns ``DOWNLOAD`` when the backstop pulled the fresh head, else ``None``
+        (empty regroup or surfaced conflict — nothing transferred).
         """
         server_saves = self._retry.with_retry(lambda: self._romm_api.list_saves(ctx.rom_id, device_id=ctx.device_id))
         server_in_slot = self.filter_server_saves_to_slot(server_saves, ctx.save_state.active_slot)
@@ -624,7 +645,7 @@ class MatrixExecutor:
                 f"_handle_upload_409({ctx.rom_id}): {filename}: 409 on POST but no server save in slot on re-fetch"
             )
             sink.errors.append(f"{filename}: upload rejected by server and no server save found to reconcile")
-            return False
+            return None
         fresh = max(group, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
         if (
             resolve_upload_conflict(local_hash, last_sync_hash, fresh.get("content_hash"), last_sync_server_hash)
@@ -633,9 +654,9 @@ class MatrixExecutor:
             self.do_download_save(
                 fresh, ctx.saves_dir, filename, ctx.save_state, ctx.device_id, ctx.system, options.default_slot
             )
-            return True
+            return TransferDirection.DOWNLOAD
         sink.conflicts.append(self.build_sync_conflict_entry(ctx.rom_id, filename, fresh, local_path, local_hash))
-        return False
+        return None
 
     def _dispatch_sync_action(
         self,
@@ -649,8 +670,8 @@ class MatrixExecutor:
         last_sync_server_hash: str | None,
         options: SyncRunOptions,
         sink: DispatchSink,
-    ) -> bool:
-        """Execute one ``SyncAction`` outcome. Returns True if a transfer happened.
+    ) -> TransferDirection | None:
+        """Execute one ``SyncAction`` outcome and report the transfer direction.
 
         Centralises the I/O dispatch so ``sync_rom_saves`` stays declarative.
         Errors are caught and pushed onto ``sink.errors`` so a single failure
@@ -658,6 +679,8 @@ class MatrixExecutor:
         ``sink.conflicts``. ``ctx.rom_name`` + the stored baseline pair
         (``last_sync_hash`` / ``last_sync_server_hash``) are threaded through for
         the upload 409 backstop (canonical-target regroup + hash re-decision).
+        Returns the :class:`TransferDirection` a transfer moved, or ``None`` for a
+        skip, a surfaced conflict, or a failed transfer.
         """
         try:
             if isinstance(action, Skip):
@@ -668,7 +691,7 @@ class MatrixExecutor:
                     filename=filename,
                     local_hash=local_hash,
                 )
-                return False
+                return None
             if isinstance(action, Upload):
                 return self._dispatch_upload(
                     ctx=ctx,
@@ -690,12 +713,12 @@ class MatrixExecutor:
                     ctx.system,
                     options.default_slot,
                 )
-                return True
+                return TransferDirection.DOWNLOAD
             if isinstance(action, Conflict):
                 sink.conflicts.append(
                     self.build_sync_conflict_entry(ctx.rom_id, filename, action.server_save, local_path, local_hash)
                 )
-                return False
+                return None
         except RommApiError as e:
             _code, _msg = classify_error(e)
             self._logger.warning(f"_dispatch_sync_action({ctx.rom_id}): {filename} failed: {_msg}")
@@ -703,7 +726,7 @@ class MatrixExecutor:
         except Exception as e:
             self._logger.warning(f"_dispatch_sync_action({ctx.rom_id}): {filename} unexpected error: {e}")
             self._handle_unexpected_error(e, filename, ctx.saves_dir, sink.errors)
-        return False
+        return None
 
     def adopt_baseline_hash(self, save_state: RomSaveState, filename: str, local_hash: str) -> None:
         """Record ``local_hash`` as the file's ``last_sync_hash`` baseline.
@@ -819,17 +842,19 @@ class MatrixExecutor:
         core_so: str | None,
         default_slot: str | None = None,
         autocleanup_limit: int | None = None,
-    ) -> tuple[int, list[str], list[dict[str, Any]]]:
+    ) -> tuple[int, int, list[str], list[dict[str, Any]]]:
         """Sync saves for a single ROM, mutating *save_state* in memory.
 
         Drives :meth:`iter_matrix_outcomes` and dispatches each emitted
         outcome through :meth:`_dispatch_sync_action`. Returns
-        ``(synced_count, errors_list, conflicts_list)``. *core_so* is the
-        active core resolved once by the caller (for the upload emulator tag);
-        *default_slot* seeds the active slot when a brand-new ROM's first sync
-        lands; *autocleanup_limit* caps server-retained versions on the POST
-        (create) upload; the operation entry owns the surrounding read/write
-        Unit of Work.
+        ``(uploaded_count, downloaded_count, errors_list, conflicts_list)`` — the
+        two directional counts split out of the old aggregate transfer count so
+        the completion toast can name which way saves moved (#250); a 409-backstop
+        download counts as a download, not an upload. *core_so* is the active core
+        resolved once by the caller (for the upload emulator tag); *default_slot*
+        seeds the active slot when a brand-new ROM's first sync lands;
+        *autocleanup_limit* caps server-retained versions on the POST (create)
+        upload; the operation entry owns the surrounding read/write Unit of Work.
         """
         t_total = self._clock.time()
         rom_id = int(rom_id)
@@ -837,7 +862,7 @@ class MatrixExecutor:
         info = self._rom_info.get_rom_save_info(rom_id)
         if not info:
             self._log_debug(f"do_sync_rom_saves({rom_id}): no save info, skipping")
-            return 0, [], []
+            return 0, 0, [], []
         system = info["system"]
         saves_dir = info["saves_dir"]
 
@@ -847,7 +872,7 @@ class MatrixExecutor:
         except Exception as e:
             self._logger.error(f"do_sync_rom_saves({rom_id}): failed to list saves: {e}")
             _code, _msg = classify_error(e)
-            return 0, [f"Failed to fetch saves: {_msg}"], []
+            return 0, 0, [f"Failed to fetch saves: {_msg}"], []
         self._log_debug(f"[TIMING] do_sync_rom_saves({rom_id}): list_saves {self._clock.time() - t0:.3f}s")
 
         active_slot = save_state.active_slot
@@ -871,7 +896,8 @@ class MatrixExecutor:
             system=system,
             core_so=core_so,
         )
-        synced = 0
+        uploaded = 0
+        downloaded = 0
 
         pending_migration = self._rom_info.is_save_sort_changed()
         for outcome in self.iter_matrix_outcomes(
@@ -886,7 +912,7 @@ class MatrixExecutor:
                     f"do_sync_rom_saves({rom_id}): skipping server_only {outcome.filename} — migration pending"
                 )
                 continue
-            if self._dispatch_sync_action(
+            direction = self._dispatch_sync_action(
                 outcome.action,
                 ctx=ctx,
                 filename=outcome.filename,
@@ -896,17 +922,20 @@ class MatrixExecutor:
                 last_sync_server_hash=outcome.file_state.last_sync_server_hash,
                 options=options,
                 sink=sink,
-            ):
-                synced += 1
+            )
+            if direction is TransferDirection.UPLOAD:
+                uploaded += 1
+            elif direction is TransferDirection.DOWNLOAD:
+                downloaded += 1
 
         # Record when this sync check ran (regardless of whether files transferred)
         save_state.mark_sync_evaluated(self._clock.now().isoformat())
 
         self._log_debug(
             f"[TIMING] do_sync_rom_saves({rom_id}): TOTAL {self._clock.time() - t_total:.3f}s"
-            f" synced={synced} errors={len(errors)}"
+            f" uploaded={uploaded} downloaded={downloaded} errors={len(errors)}"
         )
-        return synced, errors, conflicts
+        return uploaded, downloaded, errors, conflicts
 
 
 def _upload_response_proves_current(response: dict[str, Any], device_id: str) -> bool:

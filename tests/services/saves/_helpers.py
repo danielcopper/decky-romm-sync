@@ -160,8 +160,8 @@ def _do_sync(svc, rom_id: int):
 
     Loads the ``RomSaveState`` + device id from the shared UoW, resolves the
     active core, runs ``do_sync_rom_saves`` (the matrix worker), persists the
-    mutated aggregate, and returns ``(synced, errors, conflicts)``. The
-    direct-worker tests use this in place of the old ``do_sync_rom_saves(rom_id)``
+    mutated aggregate, and returns ``(uploaded, downloaded, errors, conflicts)``.
+    The direct-worker tests use this in place of the old ``do_sync_rom_saves(rom_id)``
     call that reached into a global state dict.
     """
     engine = svc._sync_engine

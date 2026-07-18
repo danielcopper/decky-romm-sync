@@ -32,8 +32,27 @@ if TYPE_CHECKING:
 
 _TOAST_TITLE = "RomM Save Sync"
 _TOAST_BODY_OFFLINE = "Server offline — saves will sync next time"
-_TOAST_BODY_SYNCED = "Saves synced with RomM"
+_TOAST_BODY_UPLOADED = "Saves uploaded to RomM"
+_TOAST_BODY_DOWNLOADED = "Saves downloaded from RomM"
 _TOAST_BODY_FAILED = "Failed to sync saves after exit"
+
+
+def sync_toast_body(uploaded: int, downloaded: int) -> str | None:
+    """Compose the per-direction save-sync completion toast body (#250).
+
+    Mirrors the frontend ``saveSyncToastBody`` (``src/utils/saveSyncToast.ts``)
+    verbatim so the pre-launch (frontend-rendered) and post-exit (this,
+    backend-rendered) toasts read identically. Names the single direction when
+    saves moved only one way, both counts when a run went both ways, and returns
+    ``None`` when nothing transferred so a no-op sync fires no toast.
+    """
+    if uploaded > 0 and downloaded > 0:
+        return f"Saves synced with RomM ({uploaded} up, {downloaded} down)"
+    if uploaded > 0:
+        return _TOAST_BODY_UPLOADED
+    if downloaded > 0:
+        return _TOAST_BODY_DOWNLOADED
+    return None
 
 
 @dataclass(frozen=True)
@@ -112,26 +131,25 @@ class SessionLifecycleServiceConfig:
 
 
 def _render_sync_toast(
-    *, offline: bool, success: bool, synced: int | None, message: str | None = None
+    *, offline: bool, success: bool, uploaded: int, downloaded: int, message: str | None = None
 ) -> tuple[str | None, str | None]:
     """Map the raw post-exit-sync flags onto the (title, body) toast pair.
 
-    Branching: offline wins over success, success-with-uploads renders
-    the synced toast, a successful no-op produces no toast at all, and
-    any non-success/non-offline state falls through to the failure
-    toast. ``message`` is the classified failure cause from the sync
-    result (e.g. "Authentication failed — sign in again", #971); when
-    present it names the cause in the failure body instead of the
-    generic fallback, keeping the post-exit toast consistent with the
-    pre-launch fallback modal. Only the failure body honours it — the
-    offline and success branches are unaffected.
+    Branching: offline wins over success, a successful transfer renders the
+    per-direction body (:func:`sync_toast_body` — "uploaded" / "downloaded" /
+    both counts), a successful no-op produces no toast at all, and any
+    non-success/non-offline state falls through to the failure toast.
+    ``message`` is the classified failure cause from the sync result (e.g.
+    "Authentication failed — sign in again", #971); when present it names the
+    cause in the failure body instead of the generic fallback, keeping the
+    post-exit toast consistent with the pre-launch fallback modal. Only the
+    failure body honours it — the offline and success branches are unaffected.
     """
     if offline:
         return _TOAST_TITLE, _TOAST_BODY_OFFLINE
-    if success and synced is not None and synced > 0:
-        return _TOAST_TITLE, _TOAST_BODY_SYNCED
     if success:
-        return None, None
+        body = sync_toast_body(uploaded, downloaded)
+        return (_TOAST_TITLE, body) if body is not None else (None, None)
     return _TOAST_TITLE, message or _TOAST_BODY_FAILED
 
 
@@ -299,12 +317,18 @@ class SessionLifecycleService:
         success = bool(result.get("success"))
         raw_synced = result.get("synced")
         synced = raw_synced if isinstance(raw_synced, int) else None
+        raw_uploaded = result.get("uploaded")
+        uploaded = raw_uploaded if isinstance(raw_uploaded, int) else 0
+        raw_downloaded = result.get("downloaded")
+        downloaded = raw_downloaded if isinstance(raw_downloaded, int) else 0
         raw_conflicts = result.get("conflicts")
         conflicts: list[dict[str, Any]] = list(raw_conflicts) if isinstance(raw_conflicts, list) else []
         raw_message = result.get("message")
         message = raw_message if isinstance(raw_message, str) else None
 
-        toast_title, toast_body = _render_sync_toast(offline=offline, success=success, synced=synced, message=message)
+        toast_title, toast_body = _render_sync_toast(
+            offline=offline, success=success, uploaded=uploaded, downloaded=downloaded, message=message
+        )
         conflicts_toast = _render_conflicts_toast(conflicts)
 
         return SessionFinalizeSyncResult(

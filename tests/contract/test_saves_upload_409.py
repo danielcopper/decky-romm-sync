@@ -70,6 +70,9 @@ async def test_saves_upload_409_stale_downgrades_to_download(harness):
 
     assert result["success"] is True
     assert result["synced"] == 1
+    # The 409-downgraded transfer is attributed as a download, not an upload (#250).
+    assert result["uploaded"] == 0
+    assert result["downloaded"] == 1
     assert result["conflicts"] == []
     # The POST was attempted overwrite=false so RomM's 409 could fire…
     upload_calls = [c for c in harness.romm.call_log if c[0] == "upload_save"]
