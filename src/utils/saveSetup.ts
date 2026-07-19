@@ -201,8 +201,11 @@ export function applyWizardRetrySetupResult(result: SaveSetupInfo, deps: WizardR
 // Every surface names the target slot; nothing is log-only.
 
 /** Pre-click explainer shown under the legacy group so "Track" reads as a
- *  migration before it is clicked, not only inside the confirm modal. */
-export const LEGACY_TRACK_EXPLAINER = "Tracking copies the legacy save into a named slot so it keeps syncing.";
+ *  migration before it is clicked, not only inside the confirm modal. States that
+ *  the legacy save itself is left untouched (it is copied, never moved) so the
+ *  user isn't surprised to see it still there afterwards (#1498). */
+export const LEGACY_TRACK_EXPLAINER =
+  "Tracking copies the legacy save into a named slot — the legacy save itself is left untouched in the read-only legacy bucket.";
 
 /** Confirm-modal body for migrating the legacy group — names the target slot and
  *  states that a differing local save is asked about, never silently
@@ -220,15 +223,21 @@ export function startFreshHint(slot: string): string {
 }
 
 /** Completion toast after a legacy migration ran — names the target slot and the
- *  migrated / could-not-migrate counts. `null` only when nothing was attempted
- *  (the Track button is gated on a non-empty legacy group, so that is a
- *  defensive fallthrough, not a normal outcome). */
+ *  migrated / could-not-migrate counts. Whenever a save was actually copied it
+ *  appends that the legacy source stays put, pre-empting the "why is the legacy
+ *  save still there?" confusion (the migration copies, never deletes — #1498).
+ *  `null` only when nothing was attempted (the Track button is gated on a
+ *  non-empty legacy group, so that is a defensive fallthrough). */
 export function wizardMigrationOutcomeToastBody(migrated: number, failed: number, slot: string): string | null {
+  const legacyNote =
+    migrated === 1
+      ? " The legacy save stays in the read-only legacy bucket."
+      : " The legacy saves stay in the read-only legacy bucket.";
   if (migrated > 0 && failed > 0) {
-    return `Migrated ${migrated} save${migrated === 1 ? "" : "s"} into ‘${slot}’; ${failed} could not be migrated`;
+    return `Migrated ${migrated} save${migrated === 1 ? "" : "s"} into ‘${slot}’; ${failed} could not be migrated.${legacyNote}`;
   }
   if (migrated > 0) {
-    return `Migrated ${migrated} save${migrated === 1 ? "" : "s"} into ‘${slot}’`;
+    return `Migrated ${migrated} save${migrated === 1 ? "" : "s"} into ‘${slot}’.${legacyNote}`;
   }
   if (failed > 0) {
     return `Could not migrate ${failed} save${failed === 1 ? "" : "s"} into ‘${slot}’`;

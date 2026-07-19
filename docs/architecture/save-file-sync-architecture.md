@@ -309,12 +309,15 @@ local target** (`<rom_name>.<ext>`, the same mapping `switch_slot` uses) the mig
    409-backstopped), adopting the per-file baseline — so the migrated slot is immediately in sync.
 
 The legacy source saves are **never deleted** — a migration copies their content into the slot and leaves the sources in
-the read-only legacy bucket. A per-target download or upload failure is **counted, not fatal**
-(`Could not migrate N
-save(s)`): the slot is still confirmed and the failed source is left in place, so no save that
-lives only in the legacy bucket is ever lost. The wizard names the target slot on **every** surface — the pre-click
-explainer under the legacy entry, the confirm modal, and the completion toast (`Migrated 1 save into 'default'`) — never
-log-only.
+the read-only legacy bucket. Deleting them would reopen the legacy-write door #1478/#1496 just closed and would yank the
+web player's bucket head away from a browser session still on the v1 player. A per-target download or upload failure is
+**counted, not fatal** (`Could not migrate N save(s)`): the slot is still confirmed and the failed source is left in
+place, so no save that lives only in the legacy bucket is ever lost. The wizard names the target slot on **every**
+surface — the pre-click explainer under the legacy entry ("the legacy save itself is left untouched"), the confirm
+modal, and the completion toast
+(`Migrated 1 save into 'default'. The legacy save stays in the read-only legacy
+bucket.`) — never log-only, and the
+completion copy pre-empts the "why is the legacy save still there?" confusion.
 
 #### Addressing legacy saves on the wire (#1061)
 

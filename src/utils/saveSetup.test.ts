@@ -313,8 +313,9 @@ describe("applyWizardRetrySetupResult", () => {
 });
 
 describe("legacy-migration copy (#1498)", () => {
-  it("the Track explainer reads as a migration", () => {
+  it("the Track explainer reads as a migration and says the legacy save is left untouched", () => {
     expect(LEGACY_TRACK_EXPLAINER).toContain("copies the legacy save");
+    expect(LEGACY_TRACK_EXPLAINER).toContain("left untouched");
   });
 
   it("the migrate confirm description names the target slot and flags the differ-ask", () => {
@@ -330,21 +331,25 @@ describe("legacy-migration copy (#1498)", () => {
   });
 
   describe("wizardMigrationOutcomeToastBody", () => {
-    it("names the slot and count when only migrations succeeded (singular)", () => {
-      expect(wizardMigrationOutcomeToastBody(1, 0, "default")).toBe("Migrated 1 save into ‘default’");
-    });
-
-    it("pluralizes when more than one save migrated", () => {
-      expect(wizardMigrationOutcomeToastBody(2, 0, "default")).toBe("Migrated 2 saves into ‘default’");
-    });
-
-    it("reports failures alongside successes", () => {
-      expect(wizardMigrationOutcomeToastBody(1, 1, "slotA")).toBe(
-        "Migrated 1 save into ‘slotA’; 1 could not be migrated",
+    it("names the slot and count and reassures the legacy save stays (singular)", () => {
+      expect(wizardMigrationOutcomeToastBody(1, 0, "default")).toBe(
+        "Migrated 1 save into ‘default’. The legacy save stays in the read-only legacy bucket.",
       );
     });
 
-    it("names the could-not-migrate count when nothing succeeded", () => {
+    it("pluralizes the count and the legacy-stays clause when more than one save migrated", () => {
+      expect(wizardMigrationOutcomeToastBody(2, 0, "default")).toBe(
+        "Migrated 2 saves into ‘default’. The legacy saves stay in the read-only legacy bucket.",
+      );
+    });
+
+    it("reports failures alongside successes and still reassures", () => {
+      expect(wizardMigrationOutcomeToastBody(1, 1, "slotA")).toBe(
+        "Migrated 1 save into ‘slotA’; 1 could not be migrated. The legacy save stays in the read-only legacy bucket.",
+      );
+    });
+
+    it("names the could-not-migrate count when nothing succeeded (no legacy-stays clause needed)", () => {
       expect(wizardMigrationOutcomeToastBody(0, 2, "slotA")).toBe("Could not migrate 2 saves into ‘slotA’");
     });
 
