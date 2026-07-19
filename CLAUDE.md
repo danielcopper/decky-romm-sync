@@ -54,36 +54,27 @@ silent omission. The CI check enforces this.
 - **BIsModOrShortcut bypass DROPPED**: Phase 5.6 removed the bypass counter entirely. Shortcuts return
   `BIsModOrShortcut() = true` (natural state). We own the entire game detail UI via RomMPlaySection + future
   RomMGameInfoPanel.
-- **Shortcut property updates**: Steam **assigns** a shortcut's appId at creation and it is **stable for the shortcut's
-  lifetime** (the plugin never computes it — it records the assigned id in `roms.shortcut_app_id` and detects ownership
-  by the exe path; the old `CRC32(exe + appName)` derivation is disproven on current Steam, see
-  `docs/architecture/steam-non-steam-shortcuts.md` §App IDs). So `launchOptions`/`startDir` changes are **appId-safe**
-  (same shortcut, binding/artwork/collections survive) and `SetAppLaunchOptions`-on-existing is **reliable**
-  (hardware-validated in #827: in-session + restart + churn). Use the fire-then-poll-`AppDetails` confirm
-  (`setLaunchOptionsConfirmed`) since `Set*` returns void. Delete + recreate (re-sync) is still the path for
-  **exe/name** changes (a fresh `AddShortcut` yields a new appId). The real hazard is removal-churn corrupting Steam's
-  in-memory shortcut state (a restart clears it).
-- **Launcher + launch_options model**: `bin/rom-launcher` (renamed from `bin/romm-launcher`, #778) is a pure `exec "$@"`
-  wrapper — no state, no path resolution, no emulator knowledge. The Steam shortcut's `launch_options` carries the FULL
-  launch command (`flatpak run net.retrodeck.retrodeck "<rom-path>"`) for installed ROMs, or `""` (placeholder) for
-  uninstalled. The emulator invocation is a build-time variable (`resolve_emulator_invocation`, RetroDECK today — the
-  #129 seam). The old `romm:<rom_id>` marker is GONE: ownership is detected by the **exe path** (`…/bin/rom-launcher`);
-  rom_id↔appId comes from the backend `get_app_id_rom_id_map()` (`roms.shortcut_app_id`). launch_options is written at
-  sync (installed ROMs), at download-complete, and re-resolved on RetroDECK-home migration (`migration_relaunch_options`
-  event). See [ADR-0009](docs/adr/0009-launcher-pure-exec-wrapper-baked-launch-options.md).
+- **Shortcut property updates**: Steam **assigns** a shortcut's appId at creation; it is **stable for the shortcut's
+  lifetime** (recorded in `roms.shortcut_app_id`, ownership detected by the exe path — never re-derived).
+  `launchOptions`/`startDir` changes are **appId-safe**; use the fire-then-poll confirm (`setLaunchOptionsConfirmed`)
+  since `Set*` returns void. **exe/name** changes still require delete + recreate (fresh appId). Heavy removal-churn can
+  corrupt Steam's in-memory shortcut state (a restart clears it). Evidence + details:
+  [steam-non-steam-shortcuts.md](docs/architecture/steam-non-steam-shortcuts.md) §App IDs.
+- **Launcher + launch_options model**: `bin/rom-launcher` is a pure `exec "$@"` wrapper — no state, no path resolution,
+  no emulator knowledge. `launch_options` carries the FULL launch command for installed ROMs, `""` (placeholder) for
+  uninstalled. Ownership is detected by the **exe path** (`…/bin/rom-launcher`); rom_id↔appId via the backend
+  `get_app_id_rom_id_map()`. Written at sync, at download-complete, and re-resolved on RetroDECK-home migration. See
+  [ADR-0009](docs/adr/0009-launcher-pure-exec-wrapper-baked-launch-options.md).
 - **RomM minimum version**: Requires RomM >= 4.9.0. Hard-rejected in `test_connection()` — plugin is inert until server
   is updated. `_MIN_REQUIRED_VERSION` tuple in `main.py`. The 4.9.0 floor is the release that ships RomM's Device Sync
   (`negotiate`) save-sync transport (#1234 / ADR-0016); bumped from 4.8.1 as a breaking change while still beta.
 - **Save-sync detection is the client's; negotiate is transport**: `compute_sync_action` (via `list_saves`) is the sole
-  save-sync authority for **every** ROM — the `negotiate` session is retained only as transport (per-device
-  serialization + the #1219 play-session hook) and its returned `operations` are discarded (one-kernel model, #1276 /
-  [ADR-0017](docs/adr/0017-client-baseline-detection-authoritative-negotiate-is-transport.md), which supersedes the
-  detection-handoff of ADR-0016). Automatic uploads POST a new version with `overwrite=false`, backstopped by RomM's
-  `add_save` 409 (`resolve_upload_conflict` downgrades to a download when the local is unchanged / byte-identical, else
-  surfaces the conflict modal); `overwrite=true` is set **only** by an explicit `keep_local`. Legacy `slot:null` is
-  **retired as a confirmable target** — `confirm_slot` requires a real name, `resolve_default_slot` never returns `None`
-  (blank → `"default"`), and migration `005` un-confirms any ROM previously confirmed in legacy mode (no data loss, the
-  wizard reappears); `slot:null` survives only as a one-time migration **source**.
+  save-sync authority for **every** ROM — the `negotiate` session is transport only and its returned `operations` are
+  **discarded** (one-kernel model, #1276 /
+  [ADR-0017](docs/adr/0017-client-baseline-detection-authoritative-negotiate-is-transport.md)). Automatic uploads POST
+  `overwrite=false` (backstopped by RomM's `add_save` 409); `overwrite=true` **only** from an explicit `keep_local`.
+  Legacy `slot:null` is retired as a confirmable target and survives only as a one-time migration **source** — see
+  [save-file-sync-architecture.md](docs/architecture/save-file-sync-architecture.md).
 - **Token-host binding**: A Client API Token is bound to the server origin it was minted against
   (`romm_api_token_origin`; `https://h` and `http://h` are different origins). The bearer is attached only when
   `romm_url`'s origin matches — a mismatch raises `TokenHostMismatchError` (non-retryable → `config_error`, "sign in
@@ -93,22 +84,12 @@ silent omission. The CI check enforces this.
   [ConnectionService notes](docs/architecture/backend-architecture.md#connectionservice-notes).
 - **Decky callables must be async**: Even if the method body is synchronous, Decky's callable framework requires
   `async def`. Do not remove `async` from callable methods in main.py.
-- **Settings durability**: `settings.json` is written crash-safe — write-tmp → `fsync(tmp)` → `os.replace()` →
-  `fsync(dir)` (the Steam Deck's ext4 can otherwise leave a truncated file on power loss, and boot rewrites the file
-  every run). A corrupt/unparseable `settings.json` is **never silently factory-reset**: it is logged loudly, backed up
-  to `settings.json.corrupt-<ts>` (`<ts>` from the injected `Clock`), and the adapter sets a transient `corrupt_reset`
-  flag before defaults are written — so the original bytes survive for recovery. Bootstrap reads that flag after
-  migration and folds it into the settings dict as a **persistent** `_settings_reset_notice` marker (set post-migration,
-  pre-save, so it lands in the fresh `settings.json` and survives a plugin reload). The frontend reads it via the
-  non-consuming `get_settings_reset_notice` callable and surfaces a **persistent notice** — a QAM banner
-  (`SettingsResetBanner`, with a **Dismiss** button) plus a game-detail card (`SettingsResetCard`, informational only —
-  its copy points the user to the QAM to dismiss), mirroring the migration-notice pattern, **not a toast** — so the user
-  knows to re-enter the server URL and sign in. The marker is cleared **only by an explicit user ACK in the QAM**: the
-  Dismiss button calls `dismiss_settings_reset_notice` (→ `SettingsService.dismiss_settings_reset_notice`), which pops
-  `_settings_reset_notice` and persists; the frontend then clears the shared `settingsResetStore` so the banner and
-  every game-detail card disappear at once. Sign-in does **not** clear it. The settings `version` is stamped
-  `max(stored, _SETTINGS_VERSION)` on write — a file from a newer plugin is **never down-stamped**. `PersistenceAdapter`
-  takes an injected `clock` (bootstrap threads the shared `SystemClock`).
+- **Settings durability**: `settings.json` is written crash-safe (write-tmp → `fsync(tmp)` → `os.replace()` →
+  `fsync(dir)`). A corrupt/unparseable file is **never silently factory-reset**: it is backed up
+  (`settings.json.corrupt-<ts>`) and surfaced as a **persistent notice** (QAM banner + game-detail card, not a toast)
+  that only an explicit QAM **Dismiss** clears — sign-in does **not** clear it. The settings `version` is stamped
+  `max(stored, _SETTINGS_VERSION)` on write — never down-stamped. Full corrupt-reset/notice flow:
+  [PersistenceAdapter notes](docs/architecture/backend-architecture.md#persistenceadapter-notes).
 
 ## Current State
 
