@@ -543,6 +543,40 @@ class TestListRomsUpdatedAfter:
         assert "with_filter_values=false" in url
 
 
+class TestListCollectionRomsUpdatedAfter:
+    def test_user_collection_uses_collection_id_param(self):
+        api, client = _make_api()
+        client.request.return_value = {"items": [], "total": 0}
+        api.list_collection_roms_updated_after(7, "user", "2024-01-15T10:30:00+00:00")
+        url = client.request.call_args[0][0]
+        assert "collection_id=7" in url
+        assert "smart_collection_id" not in url
+        # Colons and plus sign in the timestamp are encoded.
+        assert "updated_after=2024-01-15T10%3A30%3A00%2B00%3A00" in url
+        # The count probe keeps its limit=1 and the aggregation-off flags.
+        assert "limit=1" in url
+        assert "with_char_index=false" in url
+        assert "with_filter_values=false" in url
+
+    def test_smart_collection_uses_smart_collection_id_param(self):
+        api, client = _make_api()
+        client.request.return_value = {"items": [], "total": 0}
+        api.list_collection_roms_updated_after(9, "smart", "2024-01-01")
+        url = client.request.call_args[0][0]
+        assert "smart_collection_id=9" in url
+        # ``collection_id`` must not appear as a bare param (it is a substring of
+        # ``smart_collection_id``, so anchor the check on the leading ``?``/``&``).
+        assert "?collection_id=" not in url and "&collection_id=" not in url
+
+    def test_includes_pagination(self):
+        api, client = _make_api()
+        client.request.return_value = {"items": [], "total": 0}
+        api.list_collection_roms_updated_after(7, "user", "2024-01-01", limit=10, offset=5)
+        url = client.request.call_args[0][0]
+        assert "limit=10" in url
+        assert "offset=5" in url
+
+
 class TestDownloadRomContent:
     def test_url_encodes_filename(self):
         api, client = _make_api()

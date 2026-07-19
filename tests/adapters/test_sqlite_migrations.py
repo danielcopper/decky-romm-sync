@@ -77,16 +77,18 @@ def _set_user_version(db_path: str, version: int) -> None:
 # + 011_rekey_sibling_group_key + 012_add_platform_sync_state
 # + 013_add_interrupted_sync_run_status + 014_add_paused_sync_run_status
 # + 015_add_applied_launch_options + 016_add_cover_source
-# + 017_add_last_sync_server_hash + 018_rename_rom_save_states).
-_SHIPPED_VERSION = 18
+# + 017_add_last_sync_server_hash + 018_rename_rom_save_states
+# + 019_add_collection_sync_state).
+_SHIPPED_VERSION = 19
 
-# Tables after every shipped migration: the v1 set plus 006's play-session outbox
-# and 012's per-platform completion stamp, with 018 renaming the save-sync scalar
-# table rom_save_states -> rom_save_sync_states.
+# Tables after every shipped migration: the v1 set plus 006's play-session outbox,
+# 012's per-platform completion stamp, and 019's per-collection completion stamp,
+# with 018 renaming the save-sync scalar table rom_save_states -> rom_save_sync_states.
 _SHIPPED_TABLES = (_V1_TABLES - {"rom_save_states"}) | {
     "rom_save_sync_states",
     "rom_playtime_sessions",
     "platform_sync_state",
+    "collection_sync_state",
 }
 
 
@@ -1177,6 +1179,92 @@ class Test018RenameRomSaveStates:
         # Every scalar column survives the rename; the untouched child baseline too.
         assert state_row == (1, "default", 1, "retroarch", "gba")
         assert file_row == ("game.srm", "deadbeef")
+
+
+class Test019CollectionSyncState:
+    """019 — adds the collection_sync_state completion-stamp table (#742 / ADR-0023)."""
+
+    def test_table_exists_after_full_apply(self, tmp_path: Path):
+        db_path = str(tmp_path / "romm_sync.db")
+
+        apply_migrations(db_path)
+
+        assert _user_version(db_path) == _SHIPPED_VERSION
+        assert "collection_sync_state" in _tables(db_path)
+        assert _columns(db_path, "collection_sync_state") == {
+            "collection_id",
+            "collection_kind",
+            "updated_at",
+            "completed_at",
+            "rom_count",
+            "member_rom_ids",
+        }
+
+    def test_table_absent_before_019(self, tmp_path: Path):
+        # The table is added by 019 — a DB at v18 does not yet carry it.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 18)))
+
+        assert _user_version(db_path) == 18
+        assert "collection_sync_state" not in _tables(db_path)
+
+    def test_composite_key_is_primary_key_upsert(self, tmp_path: Path):
+        # (collection_id, collection_kind) is the PK — a same-key write replaces the
+        # row, while the same id under a different kind coexists.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path)
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO collection_sync_state "
+                "(collection_id, collection_kind, updated_at, completed_at, rom_count, member_rom_ids) "
+                "VALUES ('7', 'user', '2026-01-01T00:00:00', '2026-01-01T00:05:00', 2, '[1, 2]')"
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO collection_sync_state "
+                "(collection_id, collection_kind, updated_at, completed_at, rom_count, member_rom_ids) "
+                "VALUES ('7', 'user', '2026-02-01T00:00:00', '2026-02-01T00:05:00', 3, '[1, 2, 3]')"
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO collection_sync_state "
+                "(collection_id, collection_kind, updated_at, completed_at, rom_count, member_rom_ids) "
+                "VALUES ('7', 'smart', '2026-01-01T00:00:00', '2026-01-01T00:05:00', 1, '[9]')"
+            )
+            rows = conn.execute(
+                "SELECT collection_id, collection_kind, rom_count FROM collection_sync_state ORDER BY collection_kind"
+            ).fetchall()
+        finally:
+            conn.close()
+        # The user row was replaced (rom_count 3); the smart row coexists.
+        assert rows == [("7", "smart", 1), ("7", "user", 3)]
+
+    def test_member_rom_ids_rejects_invalid_json(self, tmp_path: Path):
+        # The json_valid CHECK guards the JSON-array column.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path)
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    "INSERT INTO collection_sync_state "
+                    "(collection_id, collection_kind, updated_at, completed_at, rom_count, member_rom_ids) "
+                    "VALUES ('7', 'user', 'x', 'y', 0, 'not-json')"
+                )
+        finally:
+            conn.close()
+
+    def test_survives_full_apply_with_seeded_v18_state(self, tmp_path: Path):
+        # A DB seeded at v18 (before 019) upgrades cleanly and gains the table.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 18)))
+        assert _user_version(db_path) == 18
+
+        final_version = apply_migrations(db_path)
+
+        assert final_version == _SHIPPED_VERSION
+        assert "collection_sync_state" in _tables(db_path)
 
 
 def test_shipped_migrations_dir_resolves_to_real_schema():

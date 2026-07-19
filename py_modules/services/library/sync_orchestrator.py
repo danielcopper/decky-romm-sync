@@ -21,6 +21,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from domain.collection_sync_state import CollectionSyncState
 from domain.cover_refresh import count_cover_refreshes
 from domain.platform_sync_state import PlatformSyncState
 from domain.preview_delta import PreviewDelta
@@ -479,7 +480,7 @@ class SyncOrchestrator:
                 synced_rom_ids.add(rom["id"])
             all_roms.extend(unit_roms)
         else:
-            unit_roms, all_collection_rom_ids = await self._fetcher.fetch_collection_unit(
+            unit_roms, all_collection_rom_ids, _skipped = await self._fetcher.fetch_collection_unit(
                 unit, synced_rom_ids, progress_step=progress_step, progress_total_steps=progress_total_steps
             )
             if all_collection_rom_ids:
@@ -1264,6 +1265,11 @@ class SyncOrchestrator:
             unit_roms=unit_roms,
             new_ids=new_ids,
             cover_refreshes=cover_refreshes,
+            # A collection unit's final chunk stamps a CollectionSyncState over its
+            # full membership (the accumulator just populated by the fetch, #742);
+            # a platform unit passes None. The full set — not just the applied
+            # new_roms — is what a future skip replays to rebuild membership.
+            collection_member_ids=collection_memberships.get(unit.name) if unit.type == "collection" else None,
         )
         return len(skip_ids) + applied_count
 
@@ -1325,6 +1331,7 @@ class SyncOrchestrator:
         unit_roms: list[dict[str, Any]],
         new_ids: set[int],
         cover_refreshes: list[dict[str, int]] | None = None,
+        collection_member_ids: list[int] | None = None,
     ) -> int:
         """Emit → wait → commit the unit's DELTA shortcuts one durable chunk at a time.
 
@@ -1454,6 +1461,7 @@ class SyncOrchestrator:
                 return applied_count
 
             platform_stamp = self._build_final_platform_stamp(unit, chunk_index, chunk_count)
+            collection_stamp = self._build_final_collection_stamp(unit, chunk_index, chunk_count, collection_member_ids)
 
             # Per-chunk commit: the reporter upserts every fetched ROM of this
             # chunk into the ``roms`` aggregate (identity + version metadata,
@@ -1462,9 +1470,11 @@ class SyncOrchestrator:
             # same write UoW (Rom row first, metadata second — FK-safe).
             # ``chunk_rows`` is this chunk's slice of the live RomM fetch — the
             # source of ``metadatum`` — so each committed chunk is a crash-safe
-            # checkpoint. ``platform_stamp`` (final platform chunk only) rides the
-            # same UoW.
-            await self._reporter.get().commit_unit_results(applied, chunk_rows, platform_stamp=platform_stamp)
+            # checkpoint. The final-chunk ``platform_stamp`` / ``collection_stamp``
+            # (whichever the unit type produces) rides the same UoW.
+            await self._reporter.get().commit_unit_results(
+                applied, chunk_rows, platform_stamp=platform_stamp, collection_stamp=collection_stamp
+            )
             applied_count += len(applied)
             # Only a COMMITTED chunk's items count as done (#1383): an emitted chunk
             # whose ack never landed — a cancel or a heartbeat timeout — returns above,
@@ -1635,6 +1645,42 @@ class SyncOrchestrator:
             )
         return None
 
+    def _build_final_collection_stamp(
+        self,
+        unit: WorkUnit,
+        chunk_index: int,
+        chunk_count: int,
+        member_rom_ids: list[int] | None,
+    ) -> CollectionSyncState | None:
+        """Build the completion stamp for a user/smart collection's FINAL chunk, else ``None``.
+
+        The collection sibling of :meth:`_build_final_platform_stamp` (#742). On
+        the final chunk of a user/smart collection unit whose listing carried an
+        ``updated_at``, the stamp rides that chunk's commit UoW so "collection
+        fully synced" ⟺ "stamp exists" is atomic on a crash. ``member_rom_ids`` is
+        the collection's FULL membership (every member id, not just the applied
+        new_roms), which a future skip replays to rebuild the Steam-collection
+        map. Franchise/virtual collections carry no stamp (no stable
+        ``updated_at``), and a cancel or heartbeat timeout mid-unit returns before
+        the final chunk — an incomplete collection is never stamped (ADR-0023).
+        """
+        if (
+            unit.type == "collection"
+            and unit.collection_kind in ("user", "smart")
+            and unit.collection_updated_at
+            and member_rom_ids is not None
+            and chunk_index == chunk_count - 1
+        ):
+            return CollectionSyncState.stamp(
+                collection_id=str(unit.id),
+                collection_kind=unit.collection_kind,
+                updated_at=unit.collection_updated_at,
+                completed_at=self._clock.now().isoformat(),
+                rom_count=unit.rom_count,
+                member_rom_ids=tuple(member_rom_ids),
+            )
+        return None
+
     async def _sync_platform_unit(
         self,
         unit: WorkUnit,
@@ -1671,15 +1717,14 @@ class SyncOrchestrator:
     ) -> tuple[list[dict[str, Any]], bool]:
         """Resolve ROMs for a collection unit and record its membership.
 
-        Returns ``(unit_roms, skipped)`` — ``skipped`` is always
-        ``False`` because collection units have no incremental-skip
-        gate today. ROMs come from a live per-unit fetch that already
-        dedups against ``synced_rom_ids``. ``progress_step`` /
-        ``progress_total_steps`` thread the unit's coarse position into the
-        fetcher's per-page ``fetching`` frames.
+        Returns ``(unit_roms, skipped)`` — ``skipped`` is True when the
+        incremental-skip gate (#742) reconstructed the collection from its
+        completion stamp instead of paginating. ROMs come from a live per-unit
+        fetch (or, on a skip, the registry) that already dedups against
+        ``synced_rom_ids``. ``progress_step`` / ``progress_total_steps`` thread
+        the unit's coarse position into the fetcher's per-page ``fetching`` frames.
         """
-        skipped = False
-        unit_roms, all_collection_rom_ids = await self._fetcher.fetch_collection_unit(
+        unit_roms, all_collection_rom_ids, skipped = await self._fetcher.fetch_collection_unit(
             unit, synced_rom_ids, progress_step=progress_step, progress_total_steps=progress_total_steps
         )
         if all_collection_rom_ids:

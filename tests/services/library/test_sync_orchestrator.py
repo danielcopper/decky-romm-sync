@@ -1301,7 +1301,7 @@ class TestFetchCollectionUnit:
         }
         unit = WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=3, collection_kind="user")
         synced: set[int] = set()
-        new_roms, ids = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
+        new_roms, ids, _skipped = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
         assert [r["id"] for r in new_roms] == [1, 2, 3]
         assert ids == [1, 2, 3]
         assert synced == {1, 2, 3}
@@ -1317,7 +1317,7 @@ class TestFetchCollectionUnit:
 
         # rom_id=1 was already fetched via a platform unit
         synced: set[int] = {1}
-        new_roms, ids = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
+        new_roms, ids, _skipped = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
         assert [r["id"] for r in new_roms] == [2]
         # All collection rom_ids reported back even if not in new_roms
         assert ids == [1, 2]
@@ -3890,7 +3890,7 @@ class TestApplyChunking:
 
         commit_rows: list[list[int]] = []
 
-        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None):
+        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None, collection_stamp=None):
             commit_rows.append([r["id"] for r in chunk_rows])
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
@@ -3982,7 +3982,7 @@ class TestApplyChunking:
 
         commit_rows: list[list[int]] = []
 
-        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None):
+        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None, collection_stamp=None):
             commit_rows.append([r["id"] for r in chunk_rows])
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
@@ -4047,7 +4047,7 @@ class TestApplyChunking:
         commit_rows: list[list[int]] = []
         box = plugin._sync_service._box
 
-        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None):
+        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None, collection_stamp=None):
             commit_rows.append([r["id"] for r in chunk_rows])
             # Cancel lands the instant chunk 0's commit resolves — before the loop
             # returns to the top to emit chunk 1.
@@ -4159,9 +4159,11 @@ class TestPerUnitMetadataStamping:
         commit_calls: list[tuple[Any, Any]] = []
         original_commit = plugin._sync_service._reporter.commit_unit_results
 
-        async def tracked_commit(rid_to_aid, acked_roms, platform_stamp=None):
+        async def tracked_commit(rid_to_aid, acked_roms, platform_stamp=None, collection_stamp=None):
             commit_calls.append((rid_to_aid, acked_roms))
-            await original_commit(rid_to_aid, acked_roms, platform_stamp=platform_stamp)
+            await original_commit(
+                rid_to_aid, acked_roms, platform_stamp=platform_stamp, collection_stamp=collection_stamp
+            )
 
         plugin._sync_service._reporter.commit_unit_results = tracked_commit  # type: ignore[method-assign]
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
@@ -4259,7 +4261,7 @@ class TestPerUnitMetadataStamping:
 
         commit_calls: list[tuple[Any, Any]] = []
 
-        async def capture_commit(rid_to_aid, unit_roms, platform_stamp=None):
+        async def capture_commit(rid_to_aid, unit_roms, platform_stamp=None, collection_stamp=None):
             commit_calls.append((rid_to_aid, unit_roms))
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
@@ -4361,7 +4363,7 @@ class TestPlatformCompletionStamp:
 
         stamps: list[Any] = []
 
-        async def capture_commit(_rid_to_aid, _chunk_rows, platform_stamp=None):
+        async def capture_commit(_rid_to_aid, _chunk_rows, platform_stamp=None, collection_stamp=None):
             stamps.append(platform_stamp)
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
@@ -4485,7 +4487,7 @@ class TestPlatformCompletionStamp:
 
         stamps: list[Any] = []
 
-        async def capture_commit(_rid_to_aid, _chunk_rows, platform_stamp=None):
+        async def capture_commit(_rid_to_aid, _chunk_rows, platform_stamp=None, collection_stamp=None):
             stamps.append(platform_stamp)
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]

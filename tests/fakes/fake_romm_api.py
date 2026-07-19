@@ -145,6 +145,7 @@ class FakeRommApi:
         self.list_virtual_collections_side_effect: Exception | None = None
         self.list_smart_collections_side_effect: Exception | None = None
         self.list_roms_by_collection_side_effect: Exception | None = None
+        self.list_collection_roms_updated_after_side_effect: Exception | None = None
         self.list_roms_by_virtual_collection_side_effect: Exception | None = None
         self.list_roms_by_smart_collection_side_effect: Exception | None = None
         self.download_rom_content_side_effect: Exception | None = None
@@ -314,6 +315,28 @@ class FakeRommApi:
         )
         self._check_fail(self.list_roms_by_collection_side_effect)
         items = [r for r in self.roms.values() if collection_id in (r.get("collection_ids") or [])]
+        return self._paginate(items, limit, offset)
+
+    def list_collection_roms_updated_after(
+        self,
+        collection_id: int,
+        kind: str,
+        updated_after: str,
+        limit: int = 1,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        self._log(
+            "list_collection_roms_updated_after",
+            (collection_id, kind, updated_after),
+            {"limit": limit, "offset": offset},
+        )
+        self._check_fail(self.list_collection_roms_updated_after_side_effect)
+        membership_key = "smart_collection_ids" if kind == "smart" else "collection_ids"
+        items = [
+            r
+            for r in self.roms.values()
+            if collection_id in (r.get(membership_key) or []) and (r.get("updated_at") or "") > updated_after
+        ]
         return self._paginate(items, limit, offset)
 
     def list_roms_by_virtual_collection(

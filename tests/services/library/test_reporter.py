@@ -576,6 +576,52 @@ class TestCommitUnitResults:
         with uow:
             assert uow.platform_sync_state.get("n64") is None
 
+    def test_commit_persists_collection_stamp_atomically(self, plugin):
+        """A passed ``collection_stamp`` lands in the SAME committed UoW as the rom
+        upsert — the per-collection completion stamp is atomic with the chunk (#742)."""
+        from domain.collection_sync_state import CollectionSyncState
+
+        uow = plugin._uow
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {"name": "Game", "fs_name": "game.z64", "platform_slug": "n64", "cover_path": ""},
+        )
+        stamp = CollectionSyncState.stamp(
+            collection_id="7",
+            collection_kind="user",
+            updated_at="2026-01-01T00:00:00+00:00",
+            completed_at="2026-01-01T00:05:00+00:00",
+            rom_count=1,
+            member_rom_ids=(42,),
+        )
+
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}], None, stamp)
+
+        assert uow.committed is True
+        with uow:
+            assert uow.roms.get(42) is not None  # chunk rom upserted
+            loaded = uow.collection_sync_state.get("7", "user")
+        assert loaded is not None
+        assert loaded.rom_count == 1
+        assert loaded.member_rom_ids == (42,)
+        assert loaded.completed_at == "2026-01-01T00:05:00+00:00"
+
+    def test_commit_without_collection_stamp_writes_no_collection_state(self, plugin):
+        """The default ``collection_stamp=None`` (platform / non-final / late-ack path)
+        leaves ``collection_sync_state`` untouched."""
+        uow = plugin._uow
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {"name": "Game", "fs_name": "game.z64", "platform_slug": "n64", "cover_path": ""},
+        )
+
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}])
+
+        with uow:
+            assert uow.collection_sync_state.get("7", "user") is None
+
     def test_commit_persists_version_metadata_from_pending(self, plugin):
         """The sibling-group key + version dimensions ride the pending entry onto
         the upserted ``Rom`` (#1295)."""
@@ -1162,6 +1208,44 @@ class TestClearSyncCache:
         with uow:
             assert uow.platform_sync_state.get("n64") is None
             assert uow.platform_sync_state.get("snes") is None
+
+    def test_clears_collection_completion_stamps(self, plugin):
+        """Force Full Sync also drops the per-collection completion stamps (#742).
+
+        Each collection stamp is its own effective ``last_sync``; leaving them would
+        let an unchanged collection still skip after the user asked for a full
+        re-fetch.
+        """
+        from domain.collection_sync_state import CollectionSyncState
+
+        uow = plugin._uow
+        with uow:
+            uow.collection_sync_state.save(
+                CollectionSyncState.stamp(
+                    collection_id="7",
+                    collection_kind="user",
+                    updated_at="2025-01-01T00:00:00",
+                    completed_at="2025-01-01T00:05:00",
+                    rom_count=2,
+                    member_rom_ids=(1, 2),
+                )
+            )
+            uow.collection_sync_state.save(
+                CollectionSyncState.stamp(
+                    collection_id="9",
+                    collection_kind="smart",
+                    updated_at="2025-01-01T00:00:00",
+                    completed_at="2025-01-01T00:05:00",
+                    rom_count=1,
+                    member_rom_ids=(3,),
+                )
+            )
+
+        plugin._sync_service.clear_sync_cache()
+
+        with uow:
+            assert uow.collection_sync_state.get("7", "user") is None
+            assert uow.collection_sync_state.get("9", "smart") is None
 
 
 class TestFinalizePerUnitRun:

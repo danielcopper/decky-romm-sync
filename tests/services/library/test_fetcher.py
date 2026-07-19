@@ -734,8 +734,11 @@ class TestFetchCollectionUnit:
         rom_count = LIST_PAGE_SIZE + 1
         unit = WorkUnit(type="collection", id=7, name="Coll", slug="", rom_count=rom_count, collection_kind="user")
         synced: set[int] = set()
-        new_roms, all_collection_rom_ids = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
+        new_roms, all_collection_rom_ids, skipped = await plugin._sync_service._fetcher.fetch_collection_unit(
+            unit, synced
+        )
 
+        assert skipped is False
         assert len(new_roms) == rom_count
         assert len(all_collection_rom_ids) == rom_count
         assert 999 in synced
@@ -751,7 +754,7 @@ class TestFetchCollectionUnit:
 
         unit = WorkUnit(type="collection", id=9, name="Smart Filter", slug="", rom_count=2, collection_kind="smart")
         synced: set[int] = set()
-        new_roms, ids = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
+        new_roms, ids, _skipped = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
 
         assert [r["id"] for r in new_roms] == [1, 2]
         assert ids == [1, 2]
@@ -771,12 +774,345 @@ class TestFetchCollectionUnit:
 
         unit = WorkUnit(type="collection", id="100", name="Mario", slug="", rom_count=1, collection_kind="franchise")
         synced: set[int] = set()
-        new_roms, _ids = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
+        new_roms, _ids, _skipped = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
 
         assert [r["id"] for r in new_roms] == [1]
         method_calls = [c[0] for c in fake_romm_api.call_log]
         assert "list_roms_by_virtual_collection" in method_calls
         assert "list_roms_by_smart_collection" not in method_calls
+
+
+def _seed_collection_stamp(uow, cid, kind, *, updated_at, completed_at, rom_count, member_rom_ids):
+    """Persist a per-collection completion stamp (#742) so the skip can honor it."""
+    from domain.collection_sync_state import CollectionSyncState
+
+    with uow:
+        uow.collection_sync_state.save(
+            CollectionSyncState.stamp(
+                collection_id=cid,
+                collection_kind=kind,
+                updated_at=updated_at,
+                completed_at=completed_at,
+                rom_count=rom_count,
+                member_rom_ids=member_rom_ids,
+            )
+        )
+
+
+def _user_collection_unit(cid="7", *, rom_count=2, updated_at: str | None = "2026-01-01T00:00:00"):
+    return WorkUnit(
+        type="collection",
+        id=cid,
+        name="Faves",
+        slug="",
+        rom_count=rom_count,
+        collection_kind="user",
+        collection_updated_at=updated_at,
+    )
+
+
+class TestTryCollectionIncrementalSkip:
+    """Decision tests for _try_collection_incremental_skip() — the #742 collection skip gate."""
+
+    @pytest.mark.asyncio
+    async def test_skips_when_unchanged(self, plugin, fake_romm_api):
+        """Stamp present, updated_at equal, scoped updated_after 0, counts equal → skip."""
+        _wire_fake(plugin, fake_romm_api)
+        _seed_collection_stamp(
+            plugin._uow,
+            "7",
+            "user",
+            updated_at="2026-01-01T00:00:00",
+            completed_at="2026-06-01T00:00:00",
+            rom_count=2,
+            member_rom_ids=(10, 11),
+        )
+        # Members exist but none updated after the stamp's completed_at → probe total 0.
+        fake_romm_api.roms = {
+            10: {"id": 10, "collection_ids": [7], "updated_at": "2026-01-01T00:00:00"},
+            11: {"id": 11, "collection_ids": [7], "updated_at": "2026-01-01T00:00:00"},
+        }
+        unit = _user_collection_unit(rom_count=2)
+
+        result = await plugin._sync_service._fetcher._try_collection_incremental_skip(unit)
+
+        assert result == [10, 11]
+        # The scoped probe ran with the stamp's completed_at as the reference.
+        probe = [c for c in fake_romm_api.call_log if c[0] == "list_collection_roms_updated_after"]
+        assert probe, "the scoped updated_after probe must have run"
+        assert probe[-1][1] == (7, "user", "2026-06-01T00:00:00")
+
+    @pytest.mark.asyncio
+    async def test_no_skip_when_no_stamp(self, plugin, fake_romm_api):
+        """First-ever sync: no stamp → full fetch, no probe."""
+        _wire_fake(plugin, fake_romm_api)
+        result = await plugin._sync_service._fetcher._try_collection_incremental_skip(_user_collection_unit())
+        assert result is None
+        assert not [c for c in fake_romm_api.call_log if c[0] == "list_collection_roms_updated_after"]
+
+    @pytest.mark.asyncio
+    async def test_no_skip_when_updated_at_changed(self, plugin, fake_romm_api):
+        """A membership add/remove bumps the collection's updated_at → full fetch, no probe."""
+        _wire_fake(plugin, fake_romm_api)
+        _seed_collection_stamp(
+            plugin._uow,
+            "7",
+            "user",
+            updated_at="2026-01-01T00:00:00",
+            completed_at="2026-06-01T00:00:00",
+            rom_count=2,
+            member_rom_ids=(10, 11),
+        )
+        unit = _user_collection_unit(rom_count=2, updated_at="2026-02-02T00:00:00")  # changed
+
+        result = await plugin._sync_service._fetcher._try_collection_incremental_skip(unit)
+
+        assert result is None
+        assert not [c for c in fake_romm_api.call_log if c[0] == "list_collection_roms_updated_after"]
+
+    @pytest.mark.asyncio
+    async def test_no_skip_when_member_content_changed(self, plugin, fake_romm_api):
+        """A member ROM updated after the stamp (scoped probe > 0) → full fetch."""
+        _wire_fake(plugin, fake_romm_api)
+        _seed_collection_stamp(
+            plugin._uow,
+            "7",
+            "user",
+            updated_at="2026-01-01T00:00:00",
+            completed_at="2026-06-01T00:00:00",
+            rom_count=2,
+            member_rom_ids=(10, 11),
+        )
+        fake_romm_api.roms = {
+            10: {"id": 10, "collection_ids": [7], "updated_at": "2026-01-01T00:00:00"},
+            11: {"id": 11, "collection_ids": [7], "updated_at": "2026-07-01T00:00:00"},  # after completed_at
+        }
+        result = await plugin._sync_service._fetcher._try_collection_incremental_skip(
+            _user_collection_unit(rom_count=2)
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_no_skip_when_server_count_differs(self, plugin, fake_romm_api):
+        """Stamped rom_count != live listing rom_count → full fetch, no probe."""
+        _wire_fake(plugin, fake_romm_api)
+        _seed_collection_stamp(
+            plugin._uow,
+            "7",
+            "user",
+            updated_at="2026-01-01T00:00:00",
+            completed_at="2026-06-01T00:00:00",
+            rom_count=2,
+            member_rom_ids=(10, 11),
+        )
+        unit = _user_collection_unit(rom_count=3)  # server now reports 3
+
+        result = await plugin._sync_service._fetcher._try_collection_incremental_skip(unit)
+
+        assert result is None
+        assert not [c for c in fake_romm_api.call_log if c[0] == "list_collection_roms_updated_after"]
+
+    @pytest.mark.asyncio
+    async def test_no_skip_when_member_set_incomplete(self, plugin, fake_romm_api):
+        """A stamp whose stored member set count != rom_count is not trusted → full fetch."""
+        _wire_fake(plugin, fake_romm_api)
+        _seed_collection_stamp(
+            plugin._uow,
+            "7",
+            "user",
+            updated_at="2026-01-01T00:00:00",
+            completed_at="2026-06-01T00:00:00",
+            rom_count=2,
+            member_rom_ids=(10,),  # only 1 stored, rom_count says 2
+        )
+        result = await plugin._sync_service._fetcher._try_collection_incremental_skip(
+            _user_collection_unit(rom_count=2)
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_no_skip_when_no_updated_at_on_unit(self, plugin, fake_romm_api):
+        """A listing that carried no updated_at (None) can't be compared → full fetch."""
+        _wire_fake(plugin, fake_romm_api)
+        _seed_collection_stamp(
+            plugin._uow,
+            "7",
+            "user",
+            updated_at="2026-01-01T00:00:00",
+            completed_at="2026-06-01T00:00:00",
+            rom_count=2,
+            member_rom_ids=(10, 11),
+        )
+        unit = _user_collection_unit(rom_count=2, updated_at=None)
+        result = await plugin._sync_service._fetcher._try_collection_incremental_skip(unit)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_franchise_never_skips(self, plugin, fake_romm_api):
+        """A franchise/virtual collection has no stamp and never probes."""
+        _wire_fake(plugin, fake_romm_api)
+        unit = WorkUnit(
+            type="collection",
+            id="100",
+            name="Mario",
+            slug="",
+            rom_count=1,
+            collection_kind="franchise",
+            collection_updated_at="2026-01-01T00:00:00",
+        )
+        result = await plugin._sync_service._fetcher._try_collection_incremental_skip(unit)
+        assert result is None
+        assert not [c for c in fake_romm_api.call_log if c[0] == "list_collection_roms_updated_after"]
+
+    @pytest.mark.asyncio
+    async def test_falls_back_on_probe_exception(self, plugin, fake_romm_api):
+        """A scoped-probe server error falls open to a full fetch (warn + None)."""
+        _wire_fake(plugin, fake_romm_api)
+        _seed_collection_stamp(
+            plugin._uow,
+            "7",
+            "user",
+            updated_at="2026-01-01T00:00:00",
+            completed_at="2026-06-01T00:00:00",
+            rom_count=2,
+            member_rom_ids=(10, 11),
+        )
+        fake_romm_api.list_collection_roms_updated_after_side_effect = RuntimeError("probe boom")
+        result = await plugin._sync_service._fetcher._try_collection_incremental_skip(
+            _user_collection_unit(rom_count=2)
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_smart_collection_routes_smart_param(self, plugin, fake_romm_api):
+        """A smart collection probes with kind='smart' and is keyed off smart_collection_ids."""
+        _wire_fake(plugin, fake_romm_api)
+        _seed_collection_stamp(
+            plugin._uow,
+            "9",
+            "smart",
+            updated_at="2026-01-01T00:00:00",
+            completed_at="2026-06-01T00:00:00",
+            rom_count=1,
+            member_rom_ids=(20,),
+        )
+        fake_romm_api.roms = {20: {"id": 20, "smart_collection_ids": [9], "updated_at": "2026-01-01T00:00:00"}}
+        unit = WorkUnit(
+            type="collection",
+            id="9",
+            name="Smart",
+            slug="",
+            rom_count=1,
+            collection_kind="smart",
+            collection_updated_at="2026-01-01T00:00:00",
+        )
+
+        result = await plugin._sync_service._fetcher._try_collection_incremental_skip(unit)
+
+        assert result == [20]
+        probe = [c for c in fake_romm_api.call_log if c[0] == "list_collection_roms_updated_after"]
+        assert probe[-1][1] == (9, "smart", "2026-06-01T00:00:00")
+
+
+class TestFetchCollectionUnitSkip:
+    """End-to-end fetch_collection_unit() over the #742 skip — reconstruction + accounting."""
+
+    @pytest.mark.asyncio
+    async def test_skip_reconstructs_uncovered_members_and_marks_synced(self, plugin, fake_romm_api):
+        """A skipped collection reconstructs its not-yet-covered bound members and adds
+        every member to synced_rom_ids, without paginating."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        _seed_collection_stamp(
+            uow,
+            "7",
+            "user",
+            updated_at="2026-01-01T00:00:00",
+            completed_at="2026-06-01T00:00:00",
+            rom_count=2,
+            member_rom_ids=(10, 11),
+        )
+        # Member 10 is on a platform NOT fetched this run (bound in the registry);
+        # member 11 was already covered by a platform unit (in synced_rom_ids).
+        _seed_persisted_rom(uow, 10, app_id=1010, group_key="igdb:10:1", platform_slug="gba")
+        # No live members updated after the stamp → probe total 0.
+        fake_romm_api.roms = {
+            10: {"id": 10, "collection_ids": [7], "updated_at": "2026-01-01T00:00:00"},
+            11: {"id": 11, "collection_ids": [7], "updated_at": "2026-01-01T00:00:00"},
+        }
+        synced = {11}
+        unit = _user_collection_unit(rom_count=2)
+
+        new_roms, all_ids, skipped = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
+
+        assert skipped is True
+        assert all_ids == [10, 11]
+        assert synced == {10, 11}  # every member marked covered for stale cleanup
+        # Only the not-already-synced bound member is reconstructed as a new row.
+        assert [r["id"] for r in new_roms] == [10]
+        assert new_roms[0]["platform_slug"] == "gba"
+        assert new_roms[0]["sibling_group_key"] == "igdb:10:1"
+        # No pagination endpoint was consulted.
+        assert not [c for c in fake_romm_api.call_log if c[0] == "list_roms_by_collection"]
+
+    @pytest.mark.asyncio
+    async def test_skip_omits_unbound_member_from_reconstruction(self, plugin, fake_romm_api):
+        """An unbound / absent member is not reconstructed (it is a sibling handled at
+        finalize, not a shortcut to rebuild), but is still marked synced."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        _seed_collection_stamp(
+            uow,
+            "7",
+            "user",
+            updated_at="2026-01-01T00:00:00",
+            completed_at="2026-06-01T00:00:00",
+            rom_count=2,
+            member_rom_ids=(10, 12),
+        )
+        _seed_persisted_rom(uow, 10, app_id=1010, group_key="igdb:10:1", platform_slug="gba")
+        _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:10:1", platform_slug="gba")  # unbound sibling
+        fake_romm_api.roms = {
+            10: {"id": 10, "collection_ids": [7], "updated_at": "2026-01-01T00:00:00"},
+            12: {"id": 12, "collection_ids": [7], "updated_at": "2026-01-01T00:00:00"},
+        }
+        synced: set[int] = set()
+
+        new_roms, all_ids, skipped = await plugin._sync_service._fetcher.fetch_collection_unit(
+            unit=_user_collection_unit(rom_count=2), synced_rom_ids=synced
+        )
+
+        assert skipped is True
+        assert [r["id"] for r in new_roms] == [10]  # 12 omitted (unbound)
+        assert all_ids == [10, 12]
+        assert synced == {10, 12}
+
+    @pytest.mark.asyncio
+    async def test_changed_collection_paginates_normally(self, plugin, fake_romm_api):
+        """A changed collection (updated_at differs) falls through to a full fetch."""
+        _wire_fake(plugin, fake_romm_api)
+        _seed_collection_stamp(
+            plugin._uow,
+            "7",
+            "user",
+            updated_at="2026-01-01T00:00:00",
+            completed_at="2026-06-01T00:00:00",
+            rom_count=1,
+            member_rom_ids=(10,),
+        )
+        fake_romm_api.roms = {
+            10: {"id": 10, "collection_ids": [7], "platform_name": "GBA", "platform_slug": "gba"},
+            11: {"id": 11, "collection_ids": [7], "platform_name": "GBA", "platform_slug": "gba"},
+        }
+        unit = _user_collection_unit(rom_count=2, updated_at="2026-05-05T00:00:00")  # changed
+        synced: set[int] = set()
+
+        new_roms, all_ids, skipped = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
+
+        assert skipped is False
+        assert [r["id"] for r in new_roms] == [10, 11]  # full fetch returns the live members
+        assert all_ids == [10, 11]
+        assert [c for c in fake_romm_api.call_log if c[0] == "list_roms_by_collection"]
 
 
 def _fetching_frames(decky):

@@ -44,6 +44,23 @@ def _seed_stamp(uow, slug, *, at="2025-01-01T00:00:00", rom_count=100):
         uow.platform_sync_state.save(PlatformSyncState.stamp(platform_slug=slug, at=at, rom_count=rom_count))
 
 
+def _seed_collection_stamp(uow, cid, kind, *, member_rom_ids):
+    """Persist a per-collection completion stamp (#742) into the fake UoW."""
+    from domain.collection_sync_state import CollectionSyncState
+
+    with uow:
+        uow.collection_sync_state.save(
+            CollectionSyncState.stamp(
+                collection_id=cid,
+                collection_kind=kind,
+                updated_at="2025-01-01T00:00:00",
+                completed_at="2025-01-01T00:05:00",
+                rom_count=len(member_rom_ids),
+                member_rom_ids=member_rom_ids,
+            )
+        )
+
+
 @pytest.fixture
 def uow() -> FakeUnitOfWork:
     return FakeUnitOfWork()
@@ -528,6 +545,70 @@ class TestReconcileInvalidatesStamps:
         assert result["unbound_count"] == 0
         with uow:
             assert uow.platform_sync_state.get("n64") is not None
+
+
+class TestRemovalInvalidatesCollectionStamps:
+    """A removed shortcut that was a collection member must drop that collection's stamp
+    (#742), or the collection's incremental skip rebuilds membership from a stale set and
+    never recreates the removed shortcut. Surgical: only collections that contained a
+    removed ROM lose their stamp."""
+
+    @pytest.mark.asyncio
+    async def test_removal_drops_only_collections_containing_a_removed_member(self, svc, uow):
+        _seed_rom(uow, 10, app_id=1001, platform_slug="n64")
+        _seed_rom(uow, 20, app_id=1002, platform_slug="snes")
+        # Collection A contains removed ROM 10; collection B does not.
+        _seed_collection_stamp(uow, "7", "user", member_rom_ids=(10, 99))
+        _seed_collection_stamp(uow, "8", "smart", member_rom_ids=(20, 30))
+
+        await svc.report_removal_results([10])
+        with uow:
+            assert uow.collection_sync_state.get("7", "user") is None
+            assert uow.collection_sync_state.get("8", "smart") is not None
+
+    @pytest.mark.asyncio
+    async def test_removal_with_no_collection_member_keeps_all_collection_stamps(self, svc, uow):
+        _seed_rom(uow, 10, app_id=1001, platform_slug="n64")
+        _seed_collection_stamp(uow, "7", "user", member_rom_ids=(50, 51))
+
+        await svc.report_removal_results([10])
+        with uow:
+            assert uow.collection_sync_state.get("7", "user") is not None
+
+    @pytest.mark.asyncio
+    async def test_already_unbound_removed_member_still_invalidates_collection_stamp(self, svc, uow):
+        """remove-all reports every rom_id (bound or not); an unbound member of a
+        collection still means that collection lost a shortcut → drop its stamp."""
+        _seed_rom(uow, 10, app_id=None, platform_slug="n64")
+        _seed_collection_stamp(uow, "7", "user", member_rom_ids=(10,))
+
+        await svc.report_removal_results([10])
+        with uow:
+            assert uow.collection_sync_state.get("7", "user") is None
+
+    @pytest.mark.asyncio
+    async def test_reconcile_drops_collection_stamp_of_unbound_member(self, svc, uow):
+        _seed_rom(uow, 10, app_id=100, platform_slug="n64")
+        _seed_rom(uow, 20, app_id=200, platform_slug="snes")
+        _seed_collection_stamp(uow, "7", "user", member_rom_ids=(10,))
+        _seed_collection_stamp(uow, "8", "user", member_rom_ids=(20,))
+
+        # Live set covers snes (200) but not n64 (100) → only ROM 10 is unbound.
+        result = await svc.reconcile_live_shortcuts([200])
+        assert result["unbound_count"] == 1
+        with uow:
+            assert uow.collection_sync_state.get("7", "user") is None
+            assert uow.collection_sync_state.get("8", "user") is not None
+
+    @pytest.mark.asyncio
+    async def test_reconcile_keeps_collection_stamp_when_nothing_unbound(self, svc, uow):
+        _seed_rom(uow, 10, app_id=100, platform_slug="n64")
+        _seed_collection_stamp(uow, "7", "user", member_rom_ids=(10,))
+
+        result = await svc.reconcile_live_shortcuts([100])
+        assert result["unbound_count"] == 0
+        with uow:
+            assert uow.collection_sync_state.get("7", "user") is not None
 
 
 class TestReportRemovalSteamInputCleanup:

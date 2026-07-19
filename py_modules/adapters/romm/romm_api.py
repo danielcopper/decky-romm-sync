@@ -200,6 +200,25 @@ class RommApiAdapter:
             f"/api/roms?collection_id={collection_id}&limit={limit}&offset={offset}{_LIST_AGGREGATIONS_DISABLED}"
         )
 
+    def list_collection_roms_updated_after(
+        self,
+        collection_id: int,
+        kind: str,
+        updated_after: str,
+        limit: int = 1,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        # A smart collection filters on ``smart_collection_id``; a user collection
+        # on ``collection_id`` (RomM's /api/roms accepts either alongside
+        # ``updated_after`` — 5.0.0 endpoints/roms/__init__.py). Only user/smart
+        # kinds ever reach here; the skip gate never probes a franchise collection.
+        param = "smart_collection_id" if kind == "smart" else "collection_id"
+        quoted_after = urllib.parse.quote(updated_after)
+        return self._client.request(
+            f"/api/roms?{param}={collection_id}&limit={limit}&offset={offset}"
+            f"&updated_after={quoted_after}{_LIST_AGGREGATIONS_DISABLED}"
+        )
+
     def list_roms_by_virtual_collection(
         self, virtual_id: str, limit: int = LIST_PAGE_SIZE, offset: int = 0
     ) -> dict[str, Any]:
