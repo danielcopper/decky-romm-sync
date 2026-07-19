@@ -138,3 +138,43 @@ behaviour on our own paths. Decision unchanged: negotiate stays as transport. (R
 [#1458](https://github.com/danielcopper/decky-romm-sync/issues/1458), which skips the redundant post-upload
 `confirm_download` now that `add_save` / `update_save` are confirmed to upsert the uploader's sync row on every
 supported version.)
+
+## Status note — 2026-07-19 (RomM 5.0.0 source, Argosy 2.3.0)
+
+Re-verified the whole decision against the RomM 5.0.0 source tree (tag `5.0.0`, commit `b85ecc5ae`) and against RomM's
+own negotiate-trusting client Argosy (`main` @ 2.3.0) — deliberately against **their** code and git history rather than
+this repo's docstrings ([#1488](https://github.com/danielcopper/decky-romm-sync/issues/1488)). Every load-bearing
+premise holds; several are sharper than what the 2026-07-17 note recorded:
+
+- **The server's three-way comparison is structurally dead for POST-new-version clients.** `compare_save_state`'s
+  three-way branch needs a `DeviceSaveSync` row on the slot's head save, but every slot upload creates a **new**
+  datetime-tagged row (`backend/endpoints/saves.py:193-195`) and negotiate looks the device's sync row up by `save_id`
+  (`backend/endpoints/sync.py:205`). As soon as another device uploads, this device holds no row on the new head and the
+  comparator falls to its no-history branch: pure cross-clock timestamp newest-wins
+  (`backend/handler/sync/comparison.py:60-67`). The classic both-sides-moved case therefore resolves as a **silent**
+  `upload` or `download`, not `conflict` (only an exact timestamp tie with differing hashes conflicts, `:70-71`). The
+  upload direction is still backstopped by the `add_save` 409 gate; the download direction has **no** server gate — the
+  kernel's branch-6 `Conflict` is the only protection for un-pushed local progress.
+- **A `conflict` op still carries no resolution direction** (`backend/endpoints/responses/sync.py:9-45`), and no resolve
+  primitive exists anywhere in the 5.0.0 backend.
+- **Operations are a one-shot snapshot** — computed once at `POST /negotiate`, never re-evaluated; `complete` records
+  counters only (`backend/endpoints/sync.py:294-361`).
+- **The session envelope is bookkeeping only.** `cancel_active_sessions` is a status UPDATE on session rows (no lock, no
+  gate), nothing on the API-mode save paths reads session state, the RomM web frontend does not consume the session
+  endpoints at 5.0.0, and the optional `session_id` on `add_save` / `download_save` only increments counters. Argosy
+  behaves the same way this plugin does: it completes sessions without `play_sessions` and sends no `session_id` on
+  transfers.
+- **Argosy trusts the ops only where they are safe.** Its dispatcher executes `upload` / `download` / `no_op` verbatim,
+  but its history documents re-adding client-side guards after real damage: the upload hash gate (`9591d94b`, "100+
+  orphan records"), local hash anchors plus client-side conflict re-adjudication (`6a56fb99`, "stop phantom conflict
+  prompts"), the unconditional null-slot op skip (`2b7f06dc`), and dismissed-conflict suppression (`ee27429d`). Its
+  `conflict` handling converges on the same anchor architecture this ADR keeps.
+- **One genuine gap on our side:** negotiate is the only API-mode enforcement point of the server-side per-device
+  `device.sync_enabled` switch (`backend/endpoints/sync.py:143-147`; `add_save` / `download_save` never check it), and
+  the transport-only error handling swallowed that 400 like a transient failure — addressed by
+  [#1489](https://github.com/danielcopper/decky-romm-sync/issues/1489) (the sync-disabled 400 becomes a policy stop;
+  every other negotiate failure keeps degrading to a sessionless run).
+
+Decision unchanged: `compute_sync_action` stays the sole authority; negotiate stays transport-only. Reconsider triggers:
+RomM ships hash/baseline-anchored server verdicts, a real server-side resolve primitive, or server features gated on
+sync sessions.
