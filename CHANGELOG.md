@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.28.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.27.0...decky-romm-sync-v0.28.0) (2026-07-19)
+
+
+### Features
+
+* **saves:** per-direction counts on the save-sync completion toast ([#1477](https://github.com/danielcopper/decky-romm-sync/issues/1477)) ([b074b26](https://github.com/danielcopper/decky-romm-sync/commit/b074b26274d423e00cb6250d70122dec2ca2afd7))
+* **saves:** store the server content_hash as the sync baseline; scheme parity becomes the no-history fallback ([#1469](https://github.com/danielcopper/decky-romm-sync/issues/1469)) ([e285014](https://github.com/danielcopper/decky-romm-sync/commit/e28501450a4da3792042e41ebcb334ea5b13bcc9))
+* **ui:** busy-disable danger-zone removals with a spinner and progress counter ([#1451](https://github.com/danielcopper/decky-romm-sync/issues/1451)) ([bb86c86](https://github.com/danielcopper/decky-romm-sync/commit/bb86c867bf4f72598448318e02ba52241b2f60c8))
+
+
+### Bug Fixes
+
+* **artwork:** fall back to url_cover when the RomM cover asset returns 404 ([#1453](https://github.com/danielcopper/decky-romm-sync/issues/1453)) ([ea26da8](https://github.com/danielcopper/decky-romm-sync/commit/ea26da850fabdc332dd47ac639d5a7853242cb9f))
+* **downloads:** keep cleared downloads cleared, and fix cancel-while-paused + lingering cancelled rows ([#1446](https://github.com/danielcopper/decky-romm-sync/issues/1446)) ([6a07017](https://github.com/danielcopper/decky-romm-sync/commit/6a07017d7985406fe3d094c47cd48db8fec641b6))
+* **saves:** adopt instead of conflicting when both sides moved to identical content ([#1483](https://github.com/danielcopper/decky-romm-sync/issues/1483)) ([d97958d](https://github.com/danielcopper/decky-romm-sync/commit/d97958dc604f632e5105a9b2e73d8cf4419e6f91))
+* **saves:** fall back to plain MD5 when a save sniffs as zip but is unreadable ([#1470](https://github.com/danielcopper/decky-romm-sync/issues/1470)) ([#1474](https://github.com/danielcopper/decky-romm-sync/issues/1474)) ([d786e33](https://github.com/danielcopper/decky-romm-sync/commit/d786e33f2c8b166d6f1103491a693c6f1d3e6472))
+* **saves:** feed the kernel RomM's zip-aware content hash, not whole-file MD5 ([#1460](https://github.com/danielcopper/decky-romm-sync/issues/1460)) ([465eff6](https://github.com/danielcopper/decky-romm-sync/commit/465eff69dc7d07aafa11c12536185732463bb86b)), closes [#1457](https://github.com/danielcopper/decky-romm-sync/issues/1457)
+* **saves:** harden null-slot isolation via the shared save_in_slot funnel ([#877](https://github.com/danielcopper/decky-romm-sync/issues/877)) ([#1476](https://github.com/danielcopper/decky-romm-sync/issues/1476)) ([3bcf258](https://github.com/danielcopper/decky-romm-sync/commit/3bcf25808c5b2d6b1bb78764121314919a1eba87))
+* **saves:** keep the device identity across same-server re-sign-ins ([#1438](https://github.com/danielcopper/decky-romm-sync/issues/1438)) ([d1f7301](https://github.com/danielcopper/decky-romm-sync/commit/d1f7301763929b1424b44dfdebe3e6a87c75d467))
+* **saves:** route dedup-to-non-head upload responses to conflict ([#1482](https://github.com/danielcopper/decky-romm-sync/issues/1482)) ([#1485](https://github.com/danielcopper/decky-romm-sync/issues/1485)) ([e707566](https://github.com/danielcopper/decky-romm-sync/commit/e707566c062b9d95b355f9b49d8e4ddf4b15b0fb))
+* **saves:** surface the classified reason for failed post-exit syncs and stop the panel's false synced state ([#1440](https://github.com/danielcopper/decky-romm-sync/issues/1440)) ([2159223](https://github.com/danielcopper/decky-romm-sync/commit/215922330b98d4da1ac57cea2c5ccce125360830))
+* **sync/ui:** keep run history on Force Full Sync so the last-sync display stays truthful ([#1430](https://github.com/danielcopper/decky-romm-sync/issues/1430)) ([b324dd5](https://github.com/danielcopper/decky-romm-sync/commit/b324dd5187bc4c6897e519d61099b84998fbdab9))
+* **sync:** re-apply overview metadata on sync_complete ([#1464](https://github.com/danielcopper/decky-romm-sync/issues/1464)) ([7b60fc9](https://github.com/danielcopper/decky-romm-sync/commit/7b60fc9264cb6c69af818a098a7347aadb5e98f7))
+* **ui:** acknowledge an already-synced manual save-sync click with an up-to-date toast ([#1486](https://github.com/danielcopper/decky-romm-sync/issues/1486)) ([#1487](https://github.com/danielcopper/decky-romm-sync/issues/1487)) ([deb78a1](https://github.com/danielcopper/decky-romm-sync/commit/deb78a15918ddcb3312f7c427e6c50d4fb9650f9))
+* **ui:** correct enable-save-sync modal claim that only .srm files sync ([#1471](https://github.com/danielcopper/decky-romm-sync/issues/1471)) ([5cab3cc](https://github.com/danielcopper/decky-romm-sync/commit/5cab3cc2eb2ca705fb867d2ac7165b9444098b00)), closes [#1189](https://github.com/danielcopper/decky-romm-sync/issues/1189)
+* **ui:** label the legacy/no-slot save bucket "Legacy" instead of "(no slot)" ([#1472](https://github.com/danielcopper/decky-romm-sync/issues/1472)) ([0da0605](https://github.com/danielcopper/decky-romm-sync/commit/0da060518abb106593e300a8403491be0de0d4d1)), closes [#876](https://github.com/danielcopper/decky-romm-sync/issues/876)
+* **ui:** pace mass shortcut removals through a shared paced-loop helper ([#1448](https://github.com/danielcopper/decky-romm-sync/issues/1448)) ([a98f4ee](https://github.com/danielcopper/decky-romm-sync/commit/a98f4ee3a0aeccabfa8fbad9774cf1d3c3ba61bf))
+* **ui:** pin the fine-detail row height and name the next unit at sync boundaries ([#1435](https://github.com/danielcopper/decky-romm-sync/issues/1435)) ([646a352](https://github.com/danielcopper/decky-romm-sync/commit/646a35239e7dd664b10d38542c3481d7a1699909))
+* **ui:** render qam active downloads with the bare progress-bar pattern so titles stop clipping ([#1445](https://github.com/danielcopper/decky-romm-sync/issues/1445)) ([232a02e](https://github.com/danielcopper/decky-romm-sync/commit/232a02ee800363ba86d10c60cba7a065427c4efb))
+* **ui:** render the rehydrated download button with the same colors as the live one ([#1447](https://github.com/danielcopper/decky-romm-sync/issues/1447)) ([8064911](https://github.com/danielcopper/decky-romm-sync/commit/8064911d8305eb7d5261973f61baf320798f5b13))
+* **ui:** reset default save slot instead of a stale legacy-mode promise ([#1475](https://github.com/danielcopper/decky-romm-sync/issues/1475)) ([97bfa60](https://github.com/danielcopper/decky-romm-sync/commit/97bfa60178ccf79bcb088da77f9ce761f5c11474)), closes [#1473](https://github.com/danielcopper/decky-romm-sync/issues/1473)
+* **ui:** show cover-refresh progress instead of a frozen 0/0 ([#1456](https://github.com/danielcopper/decky-romm-sync/issues/1456)) ([#1459](https://github.com/danielcopper/decky-romm-sync/issues/1459)) ([878f19d](https://github.com/danielcopper/decky-romm-sync/commit/878f19dc9ec243f064b83b77e49aad07e328fadb))
+
+
+### Performance Improvements
+
+* **artwork:** revalidate cached covers with a conditional request instead of re-downloading ([#1455](https://github.com/danielcopper/decky-romm-sync/issues/1455)) ([5580aaa](https://github.com/danielcopper/decky-romm-sync/commit/5580aaac30cff4f6bd26a400e9de713a7aaa7512))
+* **saves:** skip the post-upload confirm_download round-trip when the upload response proves is_current ([#1463](https://github.com/danielcopper/decky-romm-sync/issues/1463)) ([66e564a](https://github.com/danielcopper/decky-romm-sync/commit/66e564a720c4011218087efab30475fd715a92ec))
+
 ## [0.27.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.26.1...decky-romm-sync-v0.27.0) (2026-07-16)
 
 
