@@ -111,6 +111,23 @@ mid-unit failure forfeits only the in-flight chunk.**
   silently drop the un-recreated games (the #1025 gap). The server-side stale removal in the reporter is the deliberate
   exception — it does **not** invalidate the stamp, because a ROM the server dropped lowers RomM's platform `rom_count`,
   which the stamp's `rom_count` guard already catches on the next skip.
+- **Collection units get the same fetch-avoiding skip (#742).** A user/smart collection work unit's final chunk stamps a
+  `CollectionSyncState` — the collection sibling of `PlatformSyncState` — in the same write UoW as that chunk's `roms`
+  upserts, so "this collection fully synced" ⟺ "stamp exists" is atomic on a crash, just like a platform. The gate skips
+  a collection only when three verified RomM signals all agree with the stamp: the collection's server `updated_at` is
+  unchanged (RomM bumps it on any membership add/remove, and on a smart-criteria edit — the membership-stable signal); a
+  scoped `updated_after` probe keyed off the stamp's own `completed_at` reports zero rows (catching a member ROM's
+  content change, and a ROM entering a smart collection via its own metadata change); and the `rom_count` still matches
+  both the live listing and the stored member set. Because a collection has no local membership column to reconstruct
+  from (`roms.platform_slug` is per-platform), the stamp additionally stores `member_rom_ids`, which a skipped run
+  replays into the run's `synced_rom_ids` and Steam-collection membership map. The stamp is cleared on the same events
+  as a platform stamp: the local destructive flows (`report_removal_results` / `reconcile_live_shortcuts`) drop any
+  collection stamp whose member set intersects a removed ROM (surgical, since a collection id can't be mapped from a
+  platform slug), and "Force Full Sync" clears every collection stamp wholesale alongside the platform stamps.
+  Franchise/virtual collections have no stable `updated_at` and are never stamped — they always full-fetch. **Known
+  limitation (rommapp/romm#3836):** until that upstream fix lands, every RomM filesystem scan re-stamps all member ROMs'
+  `updated_at`, so the scoped probe fires and the skip yields a full fetch after each nightly scan — the same limitation
+  the platform skip has; the design is correct regardless and becomes fully effective once the fix ships.
 - **More round-trips.** A 3084 unit now runs ~16 emit/ack/commit cycles instead of one. Each cycle adds an event, a
   callable ack, and a short write UoW; the added overhead is roughly 2% of the unit's apply time — negligible against
   the crash-recovery it buys.

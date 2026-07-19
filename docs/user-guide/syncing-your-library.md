@@ -46,8 +46,10 @@ the shortcuts. Only when there is truly nothing to do does the preview read "Eve
 That starting estimate is **skip-aware**: when the run is planned, the plugin already knows which platforms haven't
 changed since their last sync and expects to skip them wholesale, so they don't inflate the number — an incremental
 re-sync of an unchanged library reads seconds, not the minutes a full first import would take. The prediction is only an
-estimate (the actual skip is decided per platform as the run reaches it), so a wrong guess can make the readout run long
-or short for a moment, but it never changes what the sync actually does.
+estimate (the actual skip is decided per platform, and per collection, as the run reaches it), so a wrong guess can make
+the readout run long or short for a moment, but it never changes what the sync actually does. Collections are skipped
+the same way a platform is: if a collection's membership hasn't changed and none of its games did either, the plugin
+skips it without re-listing its contents — so a large, collection-heavy library re-syncs quickly.
 
 Once the sync has been creating shortcuts for a few seconds, that "up to" ceiling is replaced by a **live countdown** —
 "2 min left" — measured from the actual speed on your device and updated as the run proceeds. Both the countdown and the
@@ -117,10 +119,11 @@ complete the job.
   remaining work. This is true whether or not you restart Steam in between. Once a run finishes in full, the button goes
   back to **Sync Library**.
 - **Force Full Sync starts over from scratch.** Under the sync buttons, **Force Full Sync** clears the plugin's record
-  of what it has already synced and re-fetches every platform from RomM on the next run — and that run also rewrites
-  every shortcut instead of skipping the ones that look correct, so it repairs anything that drifted on the Steam side
-  (a manually edited or broken shortcut). Reach for it if you suspect a platform is out of sync or want a clean rebuild;
-  a normal Sync (or Resume Sync) is enough for everyday updates. It appears once you have run at least one sync.
+  of what it has already synced and re-fetches every platform and collection from RomM on the next run — and that run
+  also rewrites every shortcut instead of skipping the ones that look correct, so it repairs anything that drifted on
+  the Steam side (a manually edited or broken shortcut). Reach for it if you suspect a platform is out of sync or want a
+  clean rebuild; a normal Sync (or Resume Sync) is enough for everyday updates. It appears once you have run at least
+  one sync.
   - **Your "Last sync" line is left alone.** Force Full Sync only re-arms the next run — it does **not** wipe your sync
     history, so the **Last sync** line keeps showing when your library last synced (or the last attempt) instead of
     dropping back to "Never". The next preview names the full re-sync explicitly: above the change line it reads **"Full
