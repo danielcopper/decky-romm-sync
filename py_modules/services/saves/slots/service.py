@@ -174,9 +174,12 @@ class SlotsService:
         chosen_slot: str | None,
         migrate: bool = False,
         migrate_from_slot: str | None = None,
+        use_server_on_conflict: bool = False,
     ) -> dict[str, Any]:
         """Confirm which slot to use for a game's save sync."""
-        return await self._setup.confirm_slot_choice(rom_id, chosen_slot, migrate, migrate_from_slot)
+        return await self._setup.confirm_slot_choice(
+            rom_id, chosen_slot, migrate, migrate_from_slot, use_server_on_conflict
+        )
 
     # ------------------------------------------------------------------
     # Slot deletion — delegates to :class:`SlotDeleter`.

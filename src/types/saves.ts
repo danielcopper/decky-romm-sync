@@ -173,6 +173,19 @@ export interface SaveSetupInfo {
   server_query_failed?: boolean;
 }
 
+/** One legacy-vs-local collision surfaced by `confirm_slot_choice` when a
+ *  content-based migration finds a local save file that differs from the legacy
+ *  save it would copy into the chosen slot (#1498). Both sides carry a
+ *  timestamp + size so the wizard's resolution dialog can show them. */
+export interface SlotMigrationConflict {
+  filename: string;
+  server_save_id: number;
+  server_updated_at: string;
+  server_size: number | null;
+  local_mtime: string;
+  local_size: number;
+}
+
 export interface SlotDeleteInfo {
   success: boolean;
   slot?: string;

@@ -284,6 +284,38 @@ backup.
   the server returns `slot: null`) so those saves can be read and deleted on the wire (below), but they are never the
   active slot of a confirmed ROM.
 
+#### Migrating legacy saves into a named slot (content-based, #1498)
+
+When the wizard's **Track** action carries a game's legacy (`slot:null`) saves into a chosen named slot, the migration
+is **content-based**, not filename-based. RomM's web player writes legacy saves under timestamped names (e.g.
+`Game [2026-07-19 13-41-44-611].srm`) that never equal the canonical local name, so the old filename-equality migration
+silently left the target slot empty (the [#1498](https://github.com/danielcopper/decky-romm-sync/issues/1498) defect,
+part of the [#1478](https://github.com/danielcopper/decky-romm-sync/issues/1478) triage). Instead, for each **canonical
+local target** (`<rom_name>.<ext>`, the same mapping `switch_slot` uses) the migration:
+
+1. Groups the legacy saves by the canonical filename each maps to — independent of the legacy row's own name — and picks
+   the **newest** by `updated_at` per target. Two legacy saves that resolve to one target collapse to the newest; the
+   older one is neither carried nor deleted.
+2. Downloads that save's **content** and classifies it against the local file:
+   - **No local file** → the content is written locally under the canonical name and copied into the slot.
+   - **Byte-identical** local file (same zip-aware content hash the sync kernel uses) → migrated silently.
+   - **Differing** local file → the wizard **asks** (a modal shows both sides' size + timestamp). _Use the server save_
+     quarantines the local file into `.romm-backup` (never deleted, #965) then replaces it with the server content;
+     _Keep my local save_ confirms the slot **without** migrating, leaving the legacy save in the read-only bucket — the
+     local file becomes the slot's first save on the next sync. A differing local file holds the whole migration: the
+     slot is **not** confirmed until the user chooses (`needs_conflict_resolution` + a `conflicts` list on the
+     response).
+3. Copies the content into the slot through the normal upload path (`do_upload_save`, `overwrite=false`,
+   409-backstopped), adopting the per-file baseline — so the migrated slot is immediately in sync.
+
+The legacy source saves are **never deleted** — a migration copies their content into the slot and leaves the sources in
+the read-only legacy bucket. A per-target download or upload failure is **counted, not fatal**
+(`Could not migrate N
+save(s)`): the slot is still confirmed and the failed source is left in place, so no save that
+lives only in the legacy bucket is ever lost. The wizard names the target slot on **every** surface — the pre-click
+explainer under the legacy entry, the confirm modal, and the completion toast (`Migrated 1 save into 'default'`) — never
+log-only.
+
 #### Addressing legacy saves on the wire (#1061)
 
 RomM filters the `slot` query param by **exact string match**, and legacy saves are stored as `slot: null` — which **no

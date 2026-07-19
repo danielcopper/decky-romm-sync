@@ -3,7 +3,11 @@ import {
   applyLaunchGateSetupOutcome,
   applyWizardInitialSetupResult,
   applyWizardRetrySetupResult,
+  legacyMigrateConfirmDescription,
   resolveSaveSetupOutcome,
+  startFreshHint,
+  wizardMigrationOutcomeToastBody,
+  LEGACY_TRACK_EXPLAINER,
   SERVER_UNREACHABLE_WIZARD_MESSAGE,
   SERVER_UNREACHABLE_TOAST_BODY,
   type LaunchGateSetupDeps,
@@ -94,7 +98,7 @@ describe("applyLaunchGateSetupOutcome", () => {
     const outcome: SaveSetupOutcome = { kind: "auto_confirm", slot: "main" };
     const result = await applyLaunchGateSetupOutcome(outcome, deps);
     expect(result).toBe("proceed");
-    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(42, "main", false, null);
+    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(42, "main", false, null, false);
     expect(deps.toast).not.toHaveBeenCalled();
     expect(deps.dispatchSavesTab).not.toHaveBeenCalled();
   });
@@ -108,7 +112,7 @@ describe("applyLaunchGateSetupOutcome", () => {
     });
     const result = await applyLaunchGateSetupOutcome({ kind: "auto_confirm", slot: "main" }, deps);
     expect(result).toBe("abort");
-    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(42, "main", false, null);
+    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(42, "main", false, null, false);
     expect(deps.toast).toHaveBeenCalledWith("slot taken");
     expect(deps.dispatchSavesTab).toHaveBeenCalledOnce();
   });
@@ -189,7 +193,7 @@ describe("applyWizardInitialSetupResult", () => {
     const result = makeInfo({ recommended_action: "auto_confirm_default", default_slot: "alpha" });
     await applyWizardInitialSetupResult(result, deps);
     expect(deps.setConfirming).toHaveBeenCalledWith(true);
-    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(7, "alpha", false, null);
+    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(7, "alpha", false, null, false);
     expect(deps.onComplete).toHaveBeenCalledOnce();
     expect(deps.setError).not.toHaveBeenCalled();
     expect(deps.setInfo).not.toHaveBeenCalled();
@@ -305,5 +309,47 @@ describe("applyWizardRetrySetupResult", () => {
     expect(deps.setInfo).toHaveBeenCalledWith(result);
     expect(deps.setLoading).toHaveBeenCalledWith(false);
     expect(deps.setError).not.toHaveBeenCalled();
+  });
+});
+
+describe("legacy-migration copy (#1498)", () => {
+  it("the Track explainer reads as a migration", () => {
+    expect(LEGACY_TRACK_EXPLAINER).toContain("copies the legacy save");
+  });
+
+  it("the migrate confirm description names the target slot and flags the differ-ask", () => {
+    const body = legacyMigrateConfirmDescription("default");
+    expect(body).toContain("‘default’");
+    expect(body).toContain("differs");
+  });
+
+  it("the start-fresh hint names the slot and points at the next sync", () => {
+    const body = startFreshHint("main");
+    expect(body).toContain("‘main’");
+    expect(body).toContain("next sync");
+  });
+
+  describe("wizardMigrationOutcomeToastBody", () => {
+    it("names the slot and count when only migrations succeeded (singular)", () => {
+      expect(wizardMigrationOutcomeToastBody(1, 0, "default")).toBe("Migrated 1 save into ‘default’");
+    });
+
+    it("pluralizes when more than one save migrated", () => {
+      expect(wizardMigrationOutcomeToastBody(2, 0, "default")).toBe("Migrated 2 saves into ‘default’");
+    });
+
+    it("reports failures alongside successes", () => {
+      expect(wizardMigrationOutcomeToastBody(1, 1, "slotA")).toBe(
+        "Migrated 1 save into ‘slotA’; 1 could not be migrated",
+      );
+    });
+
+    it("names the could-not-migrate count when nothing succeeded", () => {
+      expect(wizardMigrationOutcomeToastBody(0, 2, "slotA")).toBe("Could not migrate 2 saves into ‘slotA’");
+    });
+
+    it("returns null when nothing was attempted", () => {
+      expect(wizardMigrationOutcomeToastBody(0, 0, "default")).toBeNull();
+    });
   });
 });

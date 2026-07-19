@@ -669,7 +669,7 @@ describe("launchInterceptor — full funnel watcher", () => {
       handler(77, "1234", "LaunchApp", 0);
       await flush();
 
-      expect(backend.confirmSlotChoice).toHaveBeenCalledWith(42, "slot1", false, null);
+      expect(backend.confirmSlotChoice).toHaveBeenCalledWith(42, "slot1", false, null, false);
       expect(tabSwitch).not.toHaveBeenCalled();
       // The funnel still proceeds to a relaunch.
       expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);

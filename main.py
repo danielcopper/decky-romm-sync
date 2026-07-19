@@ -522,8 +522,12 @@ class Plugin:
         return await self._save_sync_service.get_save_setup_info(rom_id)
 
     @migration_blocked
-    async def confirm_slot_choice(self, rom_id, chosen_slot, migrate=False, migrate_from_slot=None):
-        return await self._save_sync_service.confirm_slot_choice(rom_id, chosen_slot, migrate, migrate_from_slot)
+    async def confirm_slot_choice(
+        self, rom_id, chosen_slot, migrate=False, migrate_from_slot=None, use_server_on_conflict=False
+    ):
+        return await self._save_sync_service.confirm_slot_choice(
+            rom_id, chosen_slot, migrate, migrate_from_slot, use_server_on_conflict
+        )
 
     @migration_blocked
     async def sync_all_saves(self):
