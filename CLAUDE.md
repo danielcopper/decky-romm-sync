@@ -550,6 +550,15 @@ also surfaced inside the pytest run by `tests/contract/test_callable_manifest.py
 functions and asserts live parity — so a renamed/added/removed callable or an arity drift breaks both the lint gate and
 the test run.
 
+### Gavel conformance vectors — vendored contract tier
+
+`tests/domain/test_sync_action_gavel_vectors.py` runs the [romm-gavel](https://github.com/danielcopper/romm-gavel) 409
+ladder conformance vectors against `domain/sync_action.resolve_upload_conflict` — self-conformance of the production
+kernel against the contract that was extracted from it. The vectors are vendored verbatim under
+`tests/domain/gavel_vectors/` (no submodule, no network in CI), so a contract change must land as a reviewable diff.
+Updating means deliberately re-copying the JSON and bumping the commit reference in that folder's `README.md`; never
+edit a vector to match the kernel.
+
 ### Frontend component tests — `@decky/api` event harness
 
 `src/test-utils/decky-api-mock.ts` exposes an in-memory event bus that `addEventListener` / `removeEventListener` route
