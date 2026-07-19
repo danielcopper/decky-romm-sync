@@ -123,6 +123,18 @@ class TokenHostMismatchError(RommApiError):
     """
 
 
+class RommSyncDisabledError(RommApiError):
+    """RomM has save sync disabled for this device (the negotiate 400 policy signal).
+
+    RomM's per-device ``sync_enabled`` switch is enforced only at the
+    ``negotiate`` endpoint, which 400s with detail "Sync is disabled for this
+    device" when the user turned sync off for this device server-side. Distinct
+    from a transport failure so the engine can stop the run with a visible
+    policy reason instead of degrading to a sessionless sync. Non-retryable:
+    replaying it cannot succeed, only re-enabling sync in RomM can.
+    """
+
+
 class PairingCodeInvalidError(RommApiError):
     """Pairing-code exchange rejected: the code is invalid, expired, or already used (404)."""
 
@@ -179,6 +191,11 @@ def classify_error(exc):
         return ErrorCode.UNSUPPORTED.value, f"This feature requires RomM {exc.min_version} or newer"
     if isinstance(exc, TokenHostMismatchError):
         return "config_error", "Your saved RomM login is for a different server. Sign in again to continue."
+    if isinstance(exc, RommSyncDisabledError):
+        return (
+            "device_sync_disabled",
+            "Save sync is disabled for this device on the RomM server — enable it in RomM's device settings",
+        )
     if isinstance(exc, RommApiError):
         return ErrorCode.SERVER_UNREACHABLE.value, str(exc)
     return ErrorCode.UNKNOWN.value, str(exc)

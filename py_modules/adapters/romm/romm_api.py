@@ -15,11 +15,20 @@ from lib.errors import (
     PairingCodeOwnerDisabledError,
     PairingCodeRateLimitedError,
     PairingCodeTokenGoneError,
+    RommApiError,
     RommForbiddenError,
     RommNotFoundError,
     RommServerError,
+    RommSyncDisabledError,
 )
 from lib.romm_paging import LIST_PAGE_SIZE
+
+# RomM 5.0.0 returns a 400 with this exact FastAPI detail from ``negotiate`` when
+# the user disabled sync for this device server-side (the only API-mode
+# enforcement point of the per-device ``sync_enabled`` switch). Matched verbatim:
+# a changed server copy safely degrades to the prior sessionless behavior rather
+# than mistranslating an unrelated 400.
+_SYNC_DISABLED_DETAIL = "Sync is disabled for this device"
 
 if TYPE_CHECKING:
     from models.cover import CoverRevalidation
@@ -309,8 +318,17 @@ class RommApiAdapter:
         ``conflict`` / ``no_op`` operations to execute. It detects but never
         resolves — a ``conflict`` carries no resolution directive. Opening a
         session cancels this device's prior in-flight sessions server-side.
+
+        A 400 carrying the per-device sync-disabled ``detail`` is translated to
+        :class:`RommSyncDisabledError` so the engine can stop the run with a
+        visible policy reason (#1489); every other error propagates unchanged.
         """
-        return self._client.post_json("/api/sync/negotiate", {"device_id": device_id, "saves": saves})
+        try:
+            return self._client.post_json("/api/sync/negotiate", {"device_id": device_id, "saves": saves})
+        except RommApiError as e:
+            if getattr(e, "detail", None) == _SYNC_DISABLED_DETAIL:
+                raise RommSyncDisabledError(_SYNC_DISABLED_DETAIL, url=e.url, method=e.method) from e
+            raise
 
     def complete_sync_session(
         self,

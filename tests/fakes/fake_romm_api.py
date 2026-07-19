@@ -42,7 +42,7 @@ from fakes._romm_save_semantics import (
     tag_filename,
     with_absent_device_placeholder,
 )
-from lib.errors import RommUnprocessableEntityError
+from lib.errors import RommSyncDisabledError, RommUnprocessableEntityError
 from lib.romm_paging import LIST_PAGE_SIZE
 
 if TYPE_CHECKING:
@@ -168,6 +168,10 @@ class FakeRommApi:
         self.mint_client_token_side_effect: Exception | None = None
         self.delete_client_token_side_effect: Exception | None = None
         self.exchange_pairing_code_side_effect: Exception | None = None
+        # When set, ``negotiate_sync`` raises ``RommSyncDisabledError`` to model
+        # RomM's per-device sync-disabled 400 (#1489), independent of the generic
+        # ``_check_fail`` arming.
+        self.negotiate_sync_disabled: bool = False
 
         # Client-token mint: tests stage the response the next mint returns.
         self.mint_client_token_response: dict[str, Any] = {"id": 1, "raw_token": "rmm_faketoken"}
@@ -705,6 +709,8 @@ class FakeRommApi:
     def negotiate_sync(self, device_id: str, saves: list[ClientSaveState]) -> SyncNegotiateResponse:
         self._log("negotiate_sync", (device_id, saves))
         self._check_fail()
+        if self.negotiate_sync_disabled:
+            raise RommSyncDisabledError("Sync is disabled for this device", url="/api/sync/negotiate", method="POST")
         return {
             "session_id": 1,
             "operations": [],

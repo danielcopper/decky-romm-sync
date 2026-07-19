@@ -409,6 +409,34 @@ class TestFinalizeSyncToasts:
 
         assert result.sync.failure_toast == "SSL certificate verification failed"
 
+    def test_device_sync_disabled_renders_dedicated_toast(self, event_loop, logger):
+        """#1489: RomM's per-device sync-disabled stop gets its own toast copy, keyed on the reason."""
+        post = FakePostExitSync(
+            payload={
+                "success": False,
+                "reason": "device_sync_disabled",
+                "message": "Save sync is disabled for this device on the RomM server",
+                "synced": 0,
+                "errors": [],
+                "conflicts": [],
+            }
+        )
+        service = _make_service(
+            playtime_recorder=FakePlaytimeRecorder(),
+            post_exit_sync=post,
+            achievement_sync=FakeAchievementSync(),
+            migration_reader=FakeMigrationReader(),
+            logger=logger,
+        )
+
+        result = event_loop.run_until_complete(service.finalize(99))
+        event_loop.run_until_complete(_drain_background_tasks(service))
+
+        assert result.sync.failure_toast == "Save sync is disabled for this device on the RomM server"
+        # Not offline and not the generic fallback.
+        assert result.sync.offline is False
+        assert result.sync.failure_toast != "Failed to sync saves after exit"
+
     def test_failure_without_message_falls_back_to_generic_body(self, event_loop, logger):
         """A failure with no ``message`` key falls back to the generic failure body."""
         post = FakePostExitSync(payload={"success": False, "synced": 0})

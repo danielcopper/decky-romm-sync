@@ -38,6 +38,13 @@ if TYPE_CHECKING:
 
 _TOAST_BODY_OFFLINE = "Server offline — saves will sync next time"
 _TOAST_BODY_FAILED = "Failed to sync saves after exit"
+_TOAST_BODY_SYNC_DISABLED = "Save sync is disabled for this device on the RomM server"
+
+# Reason slug the saves engine returns when RomM's per-device sync-disabled switch
+# stops the post-exit run (#1489). Mirrored here as a literal — a service must not
+# import another service's module — kept in step with the saves engine's
+# ``DEVICE_SYNC_DISABLED_REASON``.
+_DEVICE_SYNC_DISABLED_REASON = "device_sync_disabled"
 
 
 @dataclass(frozen=True)
@@ -121,21 +128,26 @@ class SessionLifecycleServiceConfig:
     logger: logging.Logger
 
 
-def _render_failure_toast(*, offline: bool, success: bool, message: str | None = None) -> str | None:
+def _render_failure_toast(
+    *, offline: bool, success: bool, message: str | None = None, reason: str | None = None
+) -> str | None:
     """Map the non-success post-exit-sync flags onto the failure/offline toast body.
 
     The directional success toast is presentation the frontend renders from the
     transfer counts (``saveSyncToastBody``), so a successful run returns ``None``
-    here. Offline wins over the generic failure body; a classified ``message``
-    (e.g. "Authentication failed — sign in again", #971) names the cause instead
-    of the generic fallback, keeping the post-exit toast consistent with the
-    pre-launch fallback modal. The #239 content-dir benign skip is suppressed by
-    its caller before this is reached.
+    here. Offline wins over the generic failure body; the per-device
+    sync-disabled policy stop (#1489) gets its own dedicated copy; a classified
+    ``message`` (e.g. "Authentication failed — sign in again", #971) names the
+    cause instead of the generic fallback, keeping the post-exit toast consistent
+    with the pre-launch fallback modal. The #239 content-dir benign skip is
+    suppressed by its caller before this is reached.
     """
     if offline:
         return _TOAST_BODY_OFFLINE
     if success:
         return None
+    if reason == _DEVICE_SYNC_DISABLED_REASON:
+        return _TOAST_BODY_SYNC_DISABLED
     return message or _TOAST_BODY_FAILED
 
 
@@ -319,8 +331,10 @@ class SessionLifecycleService:
         conflicts: list[dict[str, Any]] = list(raw_conflicts) if isinstance(raw_conflicts, list) else []
         raw_message = result.get("message")
         message = raw_message if isinstance(raw_message, str) else None
+        raw_reason = result.get("reason")
+        reason = raw_reason if isinstance(raw_reason, str) else None
 
-        failure_toast = _render_failure_toast(offline=offline, success=success, message=message)
+        failure_toast = _render_failure_toast(offline=offline, success=success, message=message, reason=reason)
         conflicts_toast = _render_conflicts_toast(conflicts)
 
         return SessionFinalizeSyncResult(

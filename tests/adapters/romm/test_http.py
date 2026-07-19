@@ -700,6 +700,35 @@ class TestRommJsonRequest:
         assert req.get_header("Authorization") is None
         assert req.get_header("User-agent") == "decky-romm-sync/9.9.9"
 
+    def test_post_json_attaches_detail_from_400(self, plugin):
+        """A 400 with a JSON ``{"detail": ...}`` body surfaces the detail on the raised error (#1489)."""
+        plugin.settings["romm_url"] = "http://romm.local"
+        plugin.settings["romm_allow_insecure_ssl"] = False
+
+        body = json.dumps({"detail": "Sync is disabled for this device"}).encode()
+        exc = urllib.error.HTTPError(
+            "http://romm.local/api/sync/negotiate", 400, "Bad Request", http.client.HTTPMessage(), io.BytesIO(body)
+        )
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommApiError) as exc_info:
+            plugin._http_adapter.post_json("/api/sync/negotiate", {"device_id": "d"})
+        assert exc_info.value.detail == "Sync is disabled for this device"
+
+    def test_post_json_non_json_body_degrades_detail_to_none(self, plugin):
+        """A 400 whose body is not JSON degrades to ``detail=None`` (no crash, #1489)."""
+        plugin.settings["romm_url"] = "http://romm.local"
+        plugin.settings["romm_allow_insecure_ssl"] = False
+
+        exc = urllib.error.HTTPError(
+            "http://romm.local/api/sync/negotiate",
+            400,
+            "Bad Request",
+            http.client.HTTPMessage(),
+            io.BytesIO(b"<html>nope</html>"),
+        )
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommApiError) as exc_info:
+            plugin._http_adapter.post_json("/api/sync/negotiate", {"device_id": "d"})
+        assert exc_info.value.detail is None
+
 
 class TestRommUploadMultipart:
     def test_upload_sends_multipart(self, plugin, tmp_path):

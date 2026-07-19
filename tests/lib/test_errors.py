@@ -9,6 +9,7 @@ from lib.errors import (
     RommNotFoundError,
     RommServerError,
     RommSSLError,
+    RommSyncDisabledError,
     RommTimeoutError,
     RommUnsupportedError,
     TokenHostMismatchError,
@@ -221,6 +222,14 @@ class TestClassifyError:
         assert code == "config_error"
         assert "different server" in msg
         assert "Sign in again" in msg
+
+    def test_sync_disabled_maps_to_device_sync_disabled(self):
+        """RommSyncDisabledError routes to device_sync_disabled — NOT server_unreachable,
+        even though it subclasses RommApiError — with a re-enable-in-RomM message (#1489)."""
+        code, msg = classify_error(RommSyncDisabledError("Sync is disabled for this device"))
+        assert code == "device_sync_disabled"
+        assert "disabled for this device" in msg
+        assert "RomM's device settings" in msg
 
     def test_conflict_error_is_api_error(self):
         """RommConflictError is a subclass of RommApiError, not specifically handled."""

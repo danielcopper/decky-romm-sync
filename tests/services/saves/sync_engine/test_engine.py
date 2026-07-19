@@ -24,9 +24,11 @@ from lib.errors import (
     RommConnectionError,
     RommForbiddenError,
     RommSSLError,
+    RommSyncDisabledError,
     RommTimeoutError,
 )
 from lib.list_result import ErrorCode
+from services.saves._messages import DEVICE_SYNC_DISABLED, DEVICE_SYNC_DISABLED_REASON
 from services.saves.sync_engine.engine import _first_error_reason, _summarize_sync_result
 from tests.services.saves._helpers import (
     _create_save,
@@ -638,6 +640,161 @@ class TestPostExitSync:
         assert result["success"] is True
         assert "1 conflict(s)" in result["message"]
         assert result["synced"] == 0
+
+
+class TestDeviceSyncDisabled:
+    """RomM's per-device sync-disabled 400 (#1489) stops the run with a policy reason.
+
+    The negotiate ``RommSyncDisabledError`` is re-raised out of the openers and
+    caught at each entry point; every OTHER negotiate failure keeps the existing
+    degrade-to-sessionless behavior, and pre-launch skips silently like the local
+    toggle so the launch always proceeds.
+    """
+
+    @staticmethod
+    def _seed_confirmed_rom(
+        svc,
+        tmp_path,
+        *,
+        rom_id=42,
+        system="gba",
+        rom_name="pokemon",
+        file_name="pokemon.gba",
+        content=b"save data",
+    ):
+        """Install a ROM with a confirmed named slot and a local-only save file."""
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "test-device")
+        _install_rom(svc, tmp_path, rom_id=rom_id, system=system, file_name=file_name)
+        _seed_save_state(
+            svc,
+            rom_id,
+            RomSaveState(system=system, slot_confirmed=True, active_slot="default"),
+            platform_slug=system,
+        )
+        _create_save(tmp_path, system=system, rom_name=rom_name, content=content)
+
+    @pytest.mark.asyncio
+    async def test_open_negotiate_session_degrades_to_none_on_generic_error(self, tmp_path):
+        """A transient negotiate failure still degrades to a sessionless run (None)."""
+        svc, fake = make_service(tmp_path)
+        self._seed_confirmed_rom(svc, tmp_path)
+        fake.fail_on_next(RommConnectionError("transient"))
+        session_id = await svc._sync_engine._open_negotiate_session(42, "test-device")
+        assert session_id is None
+
+    @pytest.mark.asyncio
+    async def test_open_negotiate_session_reraises_policy_error(self, tmp_path):
+        """The per-device sync-disabled 400 is re-raised, not swallowed like transports."""
+        svc, fake = make_service(tmp_path)
+        self._seed_confirmed_rom(svc, tmp_path)
+        fake.negotiate_sync_disabled = True
+        with pytest.raises(RommSyncDisabledError):
+            await svc._sync_engine._open_negotiate_session(42, "test-device")
+
+    @pytest.mark.asyncio
+    async def test_sync_rom_saves_returns_policy_failure(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        self._seed_confirmed_rom(svc, tmp_path)
+        fake.negotiate_sync_disabled = True
+
+        result = await svc.sync_rom_saves(42)
+
+        assert result["success"] is False
+        assert result["reason"] == DEVICE_SYNC_DISABLED_REASON
+        assert result["message"] == DEVICE_SYNC_DISABLED
+        assert result["synced"] == 0
+        assert result["errors"] == []
+        assert result["conflicts"] == []
+        # Aborted before the matrix — no upload happened.
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_post_exit_sync_returns_policy_failure(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        self._seed_confirmed_rom(svc, tmp_path)
+        fake.negotiate_sync_disabled = True
+
+        result = await svc.post_exit_sync(42)
+
+        assert result["success"] is False
+        assert result["reason"] == DEVICE_SYNC_DISABLED_REASON
+        assert result["message"] == DEVICE_SYNC_DISABLED
+        assert result["synced"] == 0
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_silently_skips(self, tmp_path):
+        """Pre-launch mirrors the local toggle-off skip: success shape, no offline/reason routing."""
+        svc, fake = make_service(tmp_path)
+        self._seed_confirmed_rom(svc, tmp_path)
+        fake.negotiate_sync_disabled = True
+
+        result = await svc.pre_launch_sync(42)
+
+        assert result["success"] is True
+        assert result["message"] == DEVICE_SYNC_DISABLED
+        assert result["synced"] == 0
+        # Must NOT route into the offline / launch-gate / failure flow.
+        assert "offline" not in result
+        assert "reason" not in result
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_sync_all_saves_bulk_abort_returns_policy_failure(self, tmp_path):
+        """The whole-device bulk pre-negotiate hits the switch → abort before the sweep."""
+        svc, fake = make_service(tmp_path)
+        self._seed_confirmed_rom(svc, tmp_path, rom_id=1, rom_name="game1", file_name="game1.gba", content=b"s1")
+        self._seed_confirmed_rom(
+            svc, tmp_path, rom_id=2, system="snes", rom_name="game2", file_name="game2.sfc", content=b"s2"
+        )
+        fake.negotiate_sync_disabled = True
+
+        result = await svc.sync_all_saves()
+
+        assert result["success"] is False
+        assert result["reason"] == DEVICE_SYNC_DISABLED_REASON
+        assert result["message"] == DEVICE_SYNC_DISABLED
+        assert result["synced"] == 0
+        assert result["roms_checked"] == 0
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_sync_all_saves_midsweep_abort_reports_partial_totals(self, tmp_path):
+        """When the bulk session degrades and a LATER per-ROM negotiate hits the switch,
+        the sweep aborts reporting the partial totals synced so far (#1489)."""
+        svc, fake = make_service(tmp_path)
+        self._seed_confirmed_rom(svc, tmp_path, rom_id=1, rom_name="game1", file_name="game1.gba", content=b"s1")
+        self._seed_confirmed_rom(
+            svc, tmp_path, rom_id=2, system="snes", rom_name="game2", file_name="game2.sfc", content=b"s2"
+        )
+
+        empty = {"operations": [], "total_upload": 0, "total_download": 0, "total_conflict": 0, "total_no_op": 0}
+        calls = {"n": 0}
+
+        def negotiate(device_id, saves):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # Bulk pre-negotiate degrades (no session_id) → per-ROM sessions.
+                return {"session_id": None, **empty}
+            if calls["n"] == 2:
+                # ROM 1's per-ROM session opens fine → it syncs and uploads.
+                return {"session_id": 100, **empty}
+            # ROM 2's per-ROM negotiate hits the per-device switch mid-sweep.
+            raise RommSyncDisabledError("Sync is disabled for this device", url="/api/sync/negotiate", method="POST")
+
+        fake.negotiate_sync = negotiate  # type: ignore[method-assign]
+
+        result = await svc.sync_all_saves()
+
+        assert result["success"] is False
+        assert result["reason"] == DEVICE_SYNC_DISABLED_REASON
+        assert result["synced"] == 1
+        assert "after syncing 1 save(s)" in result["message"]
+        assert result["roms_checked"] == 2
+        # ROM 1 uploaded before the abort; ROM 2 never did.
+        uploaded = {c[1][0] for c in fake.call_log if c[0] == "upload_save"}
+        assert uploaded == {1}
 
 
 class TestCheckSaveStatusBackground:

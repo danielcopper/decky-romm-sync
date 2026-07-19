@@ -35,11 +35,13 @@ from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_state import RomSaveState
 from domain.save_layout import ContentDir
-from lib.errors import RommConnectionError, RommTimeoutError, classify_error
+from lib.errors import RommConnectionError, RommSyncDisabledError, RommTimeoutError, classify_error
 from lib.list_result import ErrorCode
 from services.saves._messages import (
     DEVICE_NOT_REGISTERED,
     DEVICE_NOT_REGISTERED_REASON,
+    DEVICE_SYNC_DISABLED,
+    DEVICE_SYNC_DISABLED_REASON,
     SAVE_SYNC_DISABLED,
     SAVE_SYNC_DISABLED_REASON,
     SAVE_SYNC_IN_CONTENT_DIR,
@@ -625,11 +627,12 @@ class SyncEngine:
         POSTs the ROM-scoped inventory to ``negotiate`` and keeps only the
         ``session_id`` — the planned ``operations`` are intentionally discarded
         because the local ``compute_sync_action`` matrix is the sole detection
-        authority (ADR-0017). Any failure (transport error, or a 200 body missing
-        ``session_id``) degrades to ``None``: the sync run proceeds without a
-        session envelope rather than aborting. An unclosed session lingers
-        harmlessly until this device's next ``negotiate`` cancels it, so a missed
-        close is harmless.
+        authority (ADR-0017). Any failure degrades to ``None`` — the sync run
+        proceeds without a session envelope rather than aborting — EXCEPT the
+        server-side sync-disabled 400 (:class:`RommSyncDisabledError`), which is
+        re-raised so the run aborts with a visible policy reason (#1489). An
+        unclosed session lingers harmlessly until this device's next
+        ``negotiate`` cancels it, so a missed close is harmless.
         """
         try:
             inventory = await self._loop.run_in_executor(None, self._build_inventory, rom_id)
@@ -638,6 +641,8 @@ class SyncEngine:
                 lambda: self._retry.with_retry(lambda: self._romm_api.negotiate_sync(device_id or "", inventory)),
             )
             return response["session_id"]
+        except RommSyncDisabledError:
+            raise
         except Exception as e:
             self._log_debug(f"_run_rom_sync({rom_id}): negotiate session open failed ({e}) — syncing without a session")
             return None
@@ -750,6 +755,12 @@ class SyncEngine:
                 "synced": 0,
                 "offline": True,
             }
+        except RommSyncDisabledError:
+            # RomM has save sync disabled for this device server-side. Mirror the
+            # LOCAL toggle-off silent skip (a success-shaped result, no ``offline``
+            # and no failure ``reason``) so the launch proceeds and the result
+            # never routes into the offline/launch-gate flow (#1489).
+            return {"success": True, "message": DEVICE_SYNC_DISABLED, "synced": 0}
 
     async def post_exit_sync(self, rom_id: int) -> dict[str, Any]:
         """Upload changed saves after game exit."""
@@ -838,6 +849,19 @@ class SyncEngine:
                 "synced": 0,
                 "offline": True,
             }
+        except RommSyncDisabledError:
+            # RomM has save sync disabled for this device server-side — stop with
+            # a visible policy reason. The session-end toast reads the dedicated
+            # copy via ``_render_failure_toast`` keyed on this reason (#1489).
+            self._logger.info("post_exit_sync stopped: sync disabled for this device on the server")
+            return {
+                "success": False,
+                "reason": DEVICE_SYNC_DISABLED_REASON,
+                "message": DEVICE_SYNC_DISABLED,
+                "synced": 0,
+                "errors": [],
+                "conflicts": [],
+            }
 
     async def sync_rom_saves(self, rom_id: int) -> dict[str, Any]:
         """Bidirectional sync for a single ROM (manual trigger from game detail)."""
@@ -898,6 +922,17 @@ class SyncEngine:
                 "errors": [],
                 "conflicts": [],
             }
+        except RommSyncDisabledError:
+            # RomM has save sync disabled for this device server-side — surface it
+            # as a policy stop; the game-detail toast renders ``message`` (#1489).
+            return {
+                "success": False,
+                "reason": DEVICE_SYNC_DISABLED_REASON,
+                "message": DEVICE_SYNC_DISABLED,
+                "synced": 0,
+                "errors": [],
+                "conflicts": [],
+            }
 
     def _installed_rom_ids(self) -> list[int]:
         """Read the installed-ROM ids from the rom_installs aggregate (WS3)."""
@@ -915,7 +950,9 @@ class SyncEngine:
         any negotiate failure. When ``None``, each confirmed non-legacy ROM opens
         its own per-ROM session inside ``_run_rom_sync`` — the sweep degrades,
         never aborts. The sync verdicts are unaffected either way; only the
-        session envelope (one shared vs. per-ROM) differs.
+        session envelope (one shared vs. per-ROM) differs. The one exception is
+        the server-side sync-disabled 400 (:class:`RommSyncDisabledError`), which
+        is re-raised so the whole sweep aborts with a visible policy reason (#1489).
         """
         full_inventory = await self._loop.run_in_executor(None, self._build_inventory, None)
         if not full_inventory:
@@ -929,6 +966,8 @@ class SyncEngine:
             # degrade like a failure (session_id None → per-ROM sessions), not
             # abort the whole sweep.
             return response["session_id"]
+        except RommSyncDisabledError:
+            raise
         except Exception as e:
             self._logger.warning("sync_all_saves: negotiate session open failed (%s) — per-ROM sessions", e)
             return None
@@ -1004,6 +1043,21 @@ class SyncEngine:
                             total_synced += uploaded + downloaded
                             total_errors.extend(errors)
                             all_conflicts.extend(conflicts)
+                    except RommSyncDisabledError:
+                        # A per-ROM negotiate hit RomM's per-device sync-disabled
+                        # switch mid-sweep (the bulk session had degraded to None).
+                        # Abort the loop and report the partial totals accrued so
+                        # far (#1489). The finally still closes any bulk session.
+                        return {
+                            "success": False,
+                            "reason": DEVICE_SYNC_DISABLED_REASON,
+                            "message": f"{DEVICE_SYNC_DISABLED} — stopped after syncing {total_synced} save(s)",
+                            "synced": total_synced,
+                            "conflicts": len(all_conflicts),
+                            "conflicts_list": list(all_conflicts),
+                            "roms_checked": rom_count,
+                            "errors": total_errors,
+                        }
                     finally:
                         if session_id is not None:
                             await self._close_negotiate_session(session_id, session_counts[0], session_counts[1])
@@ -1030,6 +1084,20 @@ class SyncEngine:
                 "success": False,
                 "reason": "sync_busy",
                 "message": "Another save-sync run is in progress",
+                "synced": 0,
+                "conflicts": 0,
+                "conflicts_list": [],
+                "roms_checked": 0,
+                "errors": [],
+            }
+        except RommSyncDisabledError:
+            # The whole-device bulk pre-negotiate hit RomM's per-device
+            # sync-disabled switch before the sweep began — abort with the policy
+            # reason and no partial totals (nothing was synced yet, #1489).
+            return {
+                "success": False,
+                "reason": DEVICE_SYNC_DISABLED_REASON,
+                "message": DEVICE_SYNC_DISABLED,
                 "synced": 0,
                 "conflicts": 0,
                 "conflicts_list": [],

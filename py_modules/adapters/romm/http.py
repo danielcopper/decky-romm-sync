@@ -685,6 +685,11 @@ class RommHttpAdapter:
                     return json.loads(resp.read().decode())
             except RommApiError:
                 raise
+            except urllib.error.HTTPError as exc:
+                # Attach the FastAPI ``detail`` so a caller can branch on two
+                # responses that share a status code (the negotiate 400 that
+                # carries the per-device sync-disabled detail, #1489).
+                raise self._translate_with_detail(exc, url, method) from exc
             except Exception as exc:
                 raise self.translate_http_error(exc, url, method) from exc
 

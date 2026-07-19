@@ -12,6 +12,7 @@ from fakes._romm_save_semantics import (
     tag_filename,
     with_absent_device_placeholder,
 )
+from lib.errors import RommSyncDisabledError
 
 if TYPE_CHECKING:
     from models.cover import CoverRevalidation
@@ -80,6 +81,10 @@ class FakeSaveApi:
         # drive the negotiate path stage ops via ``stage_negotiate``.
         self._negotiate_operations: list[SyncOperation] = []
         self._negotiate_session_id = 1
+        # When set, negotiate_sync raises ``RommSyncDisabledError`` to model RomM's
+        # per-device sync-disabled 400 (#1489) — the policy stop, distinct from the
+        # generic ``fail_on_next`` arming that models a transient degrade.
+        self.negotiate_sync_disabled: bool = False
         # When set, complete_sync_session raises this AFTER logging the call, to
         # exercise the non-fatal session-close path without failing the run.
         self.complete_raises: Exception | None = None
@@ -370,6 +375,8 @@ class FakeSaveApi:
     def negotiate_sync(self, device_id: str, saves: list[ClientSaveState]) -> SyncNegotiateResponse:
         self.call_log.append(("negotiate_sync", (device_id, saves), {}))
         self._check_fail()
+        if self.negotiate_sync_disabled:
+            raise RommSyncDisabledError("Sync is disabled for this device", url="/api/sync/negotiate", method="POST")
         ops = list(self._negotiate_operations)
         totals = {"upload": 0, "download": 0, "conflict": 0, "no_op": 0}
         for op in ops:

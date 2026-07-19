@@ -13,9 +13,11 @@ from lib.errors import (
     PairingCodeOwnerDisabledError,
     PairingCodeRateLimitedError,
     PairingCodeTokenGoneError,
+    RommApiError,
     RommForbiddenError,
     RommNotFoundError,
     RommServerError,
+    RommSyncDisabledError,
     RommUnprocessableEntityError,
 )
 
@@ -845,6 +847,35 @@ class TestNegotiateSync:
         client.post_json.side_effect = RommServerError("boom", status_code=500)
         with pytest.raises(RommServerError):
             api.negotiate_sync("dev-1", [])
+
+    def test_translates_sync_disabled_400(self):
+        """A 400 carrying the exact per-device sync-disabled detail becomes RommSyncDisabledError (#1489)."""
+        api, client = _make_api()
+        err = RommApiError("HTTP 400: Bad Request", url="/api/sync/negotiate", method="POST")
+        err.detail = "Sync is disabled for this device"
+        client.post_json.side_effect = err
+        with pytest.raises(RommSyncDisabledError) as exc_info:
+            api.negotiate_sync("dev-1", [])
+        # Chains the original so the cause is preserved for logs.
+        assert exc_info.value.__cause__ is err
+
+    def test_generic_400_with_other_detail_stays_plain(self):
+        """A 400 whose detail is NOT the sync-disabled copy propagates unchanged (#1489)."""
+        api, client = _make_api()
+        err = RommApiError("HTTP 400: Bad Request", url="/api/sync/negotiate", method="POST")
+        err.detail = "Some other validation failure"
+        client.post_json.side_effect = err
+        with pytest.raises(RommApiError) as exc_info:
+            api.negotiate_sync("dev-1", [])
+        assert not isinstance(exc_info.value, RommSyncDisabledError)
+
+    def test_400_without_detail_stays_plain(self):
+        """A 400 with no detail at all propagates unchanged (#1489)."""
+        api, client = _make_api()
+        client.post_json.side_effect = RommApiError("HTTP 400: Bad Request", url="/api/sync/negotiate", method="POST")
+        with pytest.raises(RommApiError) as exc_info:
+            api.negotiate_sync("dev-1", [])
+        assert not isinstance(exc_info.value, RommSyncDisabledError)
 
 
 class TestCompleteSyncSession:

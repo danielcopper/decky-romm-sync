@@ -15,6 +15,10 @@ DEVICE_NOT_REGISTERED = "Device not registered"
 # domain-specific skip/guard categories, not server-reachability failures.
 SAVE_SYNC_DISABLED_REASON = "sync_disabled"
 DEVICE_NOT_REGISTERED_REASON = "device_not_registered"
+# RomM's per-device ``sync_enabled`` switch is off server-side (the negotiate 400
+# policy stop, #1489). Distinct from ``sync_disabled``, which is the LOCAL toggle.
+DEVICE_SYNC_DISABLED_REASON = "device_sync_disabled"
+DEVICE_SYNC_DISABLED = "Save sync is disabled for this device on the RomM server"
 # RetroArch ``savefiles_in_content_dir=true``: saves are written next to the
 # ROM, outside the saves tree the plugin syncs, so save sync is unavailable.
 # Neutral phrasing — the frontend treats this as a benign skip, not an error.

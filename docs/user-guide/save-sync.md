@@ -172,6 +172,15 @@ yellow **Local changes** badge (not a green "synced"), and its "Last synced" lin
 _successful_ sync — a green checkmark appears only once a sync actually succeeds. A separate "Checked" line shows when
 the plugin last attempted a sync, so a recent failed attempt and the last good sync are both visible.
 
+## Sync Disabled for This Device on the Server
+
+RomM lets you turn save sync off for a specific device in its own **device settings** (on the RomM web UI). If you
+disable sync for this device there, the plugin stops syncing that device's saves and tells you so — a manual sync
+reports "Save sync is disabled for this device on the RomM server", and the after-exit toast says the same. Your local
+saves are left untouched, and the game still launches normally (before-launch sync just skips). Re-enable sync for the
+device in RomM to resume. This is separate from the plugin's own **Save Sync** toggle in the QAM — either one being off
+stops syncing.
+
 ## Playtime Tracking
 
 The plugin tracks playtime per game. Session start and end times are recorded, and time the device spent suspended
