@@ -600,6 +600,10 @@ export const confirmSlotChoice = callable<
   {
     success: boolean;
     needs_conflict_resolution?: boolean;
+    // Canonical failure slug on a wholesale (pre-apply) migration failure —
+    // e.g. "server_unreachable" / "device_not_registered" / "not_installed".
+    // The wizard surfaces `message`; `reason` is for routing/telemetry parity.
+    reason?: string;
     message: string;
     conflicts?: SlotMigrationConflict[];
     migrated?: number;

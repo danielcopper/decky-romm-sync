@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import os
 
+from lib.errors import RommConnectionError
+from lib.list_result import ErrorCode
+
 from ._seed import enable_save_sync, seed_install, seed_rom, seed_server_save
 
 
@@ -186,6 +189,31 @@ async def test_confirm_legacy_migration_use_server_resolves_conflict(harness):
         state = uow.rom_save_sync_states.get(42)
     assert state is not None
     assert state.slot_confirmed is True
+
+
+async def test_confirm_legacy_migration_server_unreachable_holds_wizard(harness):
+    """A transient server failure before the apply phase returns the canonical failure and confirms nothing.
+
+    The wholesale (pre-apply) failure must NOT silently confirm-and-close — the
+    wizard stays open on the message so the user can retry Track (#1498 review).
+    """
+    enable_save_sync(harness)
+    seed_install(harness, 42, system="gba", file_name="game.gba")
+    _write_local_save(harness, filename="game.srm", content=b"progress")
+    seed_server_save(harness, save_id=703, rom_id=42, slot=None, file_name="game [ts].srm")
+    harness.romm.list_saves_side_effect = RommConnectionError("offline")
+
+    result = await harness.plugin.confirm_slot_choice(42, "default", True, None)
+
+    assert result["success"] is False
+    assert result["reason"] == ErrorCode.SERVER_UNREACHABLE.value
+    assert result["needs_conflict_resolution"] is False
+    assert isinstance(result["message"], str)
+    # Nothing confirmed, nothing uploaded — no half-state.
+    with harness.uow_factory() as uow:
+        state = uow.rom_save_sync_states.get(42)
+    assert state is None
+    assert not any(c[0] == "upload_save" for c in harness.romm.call_log)
 
 
 # ── switch_slot ───────────────────────────────────────────────────────────

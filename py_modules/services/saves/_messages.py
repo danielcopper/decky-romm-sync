@@ -15,6 +15,12 @@ DEVICE_NOT_REGISTERED = "Device not registered"
 # domain-specific skip/guard categories, not server-reachability failures.
 SAVE_SYNC_DISABLED_REASON = "sync_disabled"
 DEVICE_NOT_REGISTERED_REASON = "device_not_registered"
+# Wizard legacy-migration precheck: no device is registered yet, so the migration
+# can't upload into the slot. Refused before any local/server mutation so the
+# wizard just stays open and the user can retry (#1498 review).
+MIGRATION_DEVICE_NOT_REGISTERED = (
+    "This device isn't registered with RomM yet — retry in a moment (it registers automatically on the next save sync)."
+)
 # RomM's per-device ``sync_enabled`` switch is off server-side (the negotiate 400
 # policy stop, #1489). Distinct from ``sync_disabled``, which is the LOCAL toggle.
 DEVICE_SYNC_DISABLED_REASON = "device_sync_disabled"

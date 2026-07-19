@@ -310,13 +310,22 @@ local target** (`<rom_name>.<ext>`, the same mapping `switch_slot` uses) the mig
 
 The legacy source saves are **never deleted** — a migration copies their content into the slot and leaves the sources in
 the read-only legacy bucket. Deleting them would reopen the legacy-write door #1478/#1496 just closed and would yank the
-web player's bucket head away from a browser session still on the v1 player. A per-target download or upload failure is
-**counted, not fatal** (`Could not migrate N save(s)`): the slot is still confirmed and the failed source is left in
-place, so no save that lives only in the legacy bucket is ever lost. The wizard names the target slot on **every**
-surface — the pre-click explainer under the legacy entry ("the legacy save itself is left untouched"), the confirm
-modal, and the completion toast
-(`Migrated 1 save into 'default'. The legacy save stays in the read-only legacy
-bucket.`) — never log-only, and the
+web player's bucket head away from a browser session still on the v1 player.
+
+Failure handling splits on **whether the apply phase began** (#1498 review): the migration first checks its
+preconditions (a registered device — otherwise the #1478 upload guard would only fire _after_ local files were touched —
+and an installed ROM), then downloads every target to a scratch `.tmp` sibling (never the real save files) and
+classifies it. A **wholesale** failure _before_ the apply phase — the device/install precheck, a `list_saves` throw, or
+a phase-1 download throw — returns the **canonical failure** (`{success: false, reason, message}`, the `reason` from
+`classify_error`) and confirms **nothing**: the scratch temps are cleared and the wizard stays open on the message, so
+the user can simply retry Track. Once the apply phase begins, a **per-target** upload failure is **counted, not fatal**
+(`Could not migrate N save(s)`): the slot is still confirmed and the failed source is left in place, so no save that
+lives only in the legacy bucket is ever lost. (A migration whose server had no legacy saves is a no-op that confirms the
+slot silently; a requested migration can never return `success: true` with nothing migrated while legacy saves existed.)
+
+The wizard names the target slot on **every** surface — the pre-click explainer under the legacy entry ("the legacy save
+itself is left untouched"), the confirm modal, and the completion toast
+(`Migrated 1 save into 'default'. The legacy save stays in the read-only legacy bucket.`) — never log-only, and the
 completion copy pre-empts the "why is the legacy save still there?" confusion.
 
 #### Addressing legacy saves on the wire (#1061)

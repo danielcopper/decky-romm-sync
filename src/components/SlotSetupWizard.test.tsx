@@ -618,6 +618,36 @@ describe("SlotSetupWizard", () => {
       expect(onComplete).toHaveBeenCalledOnce();
     });
 
+    it("shows the message and stays open (retryable) on a wholesale migration failure", async () => {
+      // A pre-apply failure (e.g. device not registered / server unreachable)
+      // returns the canonical failure; the wizard must surface it and stay
+      // usable — never confirm-and-close (#1498 review).
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(legacyInfo());
+      });
+      vi.mocked(backend.confirmSlotChoice).mockResolvedValue({
+        success: false,
+        needs_conflict_resolution: false,
+        reason: "device_not_registered",
+        message: "This device isn't registered with RomM yet — retry in a moment.",
+      });
+      const onComplete = vi.fn();
+      const { getByText, container } = render(<SlotSetupWizard {...defaultProps({ romId: 5, onComplete })} />);
+      await flushAsync();
+
+      fireEvent.click(getByText("Track"));
+      const migrateModal = confirmModalPropsAt(0);
+      await act(async () => {
+        await migrateModal?.onOK?.();
+        await Promise.resolve();
+      });
+
+      expect(container.textContent).toContain("This device isn't registered");
+      expect(onComplete).not.toHaveBeenCalled();
+      // Wizard stays usable — the Track button is still rendered for a retry.
+      expect(getByText("Track")).toBeTruthy();
+    });
+
     it("opens the conflict modal on needs_conflict_resolution and does not complete", async () => {
       vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
         deps.setInfo(legacyInfo());
