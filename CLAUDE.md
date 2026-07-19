@@ -384,20 +384,12 @@ Full convention paragraph lives in the `lib/list_result.py` module docstring.
 ## Cosmic Python migration — status & reference pattern
 
 The full Cosmic Python migration (umbrella [#277](https://github.com/danielcopper/decky-romm-sync/issues/277)) is
-**complete**: every backend service has I/O behind Protocol-typed adapters, Clock/UuidGen/Sleeper injected, pure logic
-in `domain/`, and ctors decomposed via frozen `*ServiceConfig` dataclasses. The blow-by-blow (Waves 1–4 + the saves
-vertical) lives in closed issues #294–#340 and the git log; the only deferred item is #259 (SonarCloud arch rules,
-blocked on SonarCloud Python support). The separate SQLite persistence epic (#271) is ongoing — tracked via the
-Aggregates section above + `docs/architecture/database-design.md`.
+**complete**; the blow-by-blow lives in closed issues #294–#340 and the git log. Playbook essence for a future vertical:
+cross-cutting Protocols first, domain extraction next, the biggest service last.
 
-**Why that order** (kept as the playbook for future verticals): cross-cutting Protocols (Clock/UuidGen/Sleeper, #294)
-first, so every later vertical was a mechanical "drop the import, inject the Protocol"; domain extraction (#295) before
-LibraryService, to shrink the scariest service before lifting it; LibraryService last (largest blast radius — by then
-only ctor decomposition remained).
-
-**Canonical reference for any future service-level work**: the Wave 3 sister-PR shape — a Protocol (in
-`services/protocols/`) + an adapter implementing it + a `FakeXxxAdapter` in `conftest` + `*ServiceConfig` ctor
-decomposition. `services/saves/` and `services/library/` are the reference decompositions for shared-state sub-services.
+**Canonical reference for any future service-level work**: the sister-PR shape — a Protocol (in `services/protocols/`) +
+an adapter implementing it + a `FakeXxxAdapter` in `conftest` + `*ServiceConfig` ctor decomposition. `services/saves/`
+and `services/library/` are the reference decompositions for shared-state sub-services.
 
 **Sub-issue policy**: Epic bodies do **not** carry markdown sub-issue lists — open work is tracked via GitHub's native
 Sub-Issues panel on each epic. If a new sub-issue is needed, link it natively (don't add a body bullet).
