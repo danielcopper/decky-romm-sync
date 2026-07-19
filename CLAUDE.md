@@ -85,23 +85,11 @@ silent omission. The CI check enforces this.
   (blank → `"default"`), and migration `005` un-confirms any ROM previously confirmed in legacy mode (no data loss, the
   wizard reappears); `slot:null` survives only as a one-time migration **source**.
 - **Token-host binding**: A Client API Token is bound to the server origin it was minted against
-  (`romm_api_token_origin` — canonical `scheme://host[:port]` via `lib/url_host`; `https://h` and `http://h` are
-  different origins). The bearer is sent only when `romm_url`'s origin matches; a mismatch raises
-  `TokenHostMismatchError` in `RommHttpAdapter.auth_header` (non-retryable → `config_error`, "sign in again"), so a
-  wrong/hostile host never receives the credential. Sign-in (`establish_token`) validates the URL, holds the candidate
-  URL in memory while probing (the old token is cleared in memory first so it never leaks to the candidate host), and
-  persists URL+SSL+token+id+origin in a single atomic save only on success — a failed sign-in restores the previous
-  working state, never clobbering disk. The old-token DELETE on re-auth is fired only when the old origin matches the
-  new one (#1038). A legacy token with origin `None` is un-bound: attached, never blocked, until the next sign-in stamps
-  it. A successful sign-in that **genuinely changes origin** (old and new origins both known and normalizing to
-  different values — `is_origin_change` in `lib/url_host`) **forgets the registered device id**
-  (`kv_config["device_id"]`, via the `DeviceForgetFn` injected into `ConnectionService` → `SaveService.forget_device` →
-  `DeviceRegistry.forget_device`) — the id is bound to its minting origin and would 404 against the new server's
-  `negotiate`; local-only + best-effort, the next save-sync re-registers (#1234 Phase 0a, ADR-0016). A **same-server
-  re-sign-in keeps the device identity**: a token swap on the unchanged URL, URL-formatting variants (trailing slash,
-  default vs explicit port), and a `None`/unstamped old origin are all treated as _not a change_ (an unknown old origin
-  is unknown, not different) — the id survives, so the next post-exit sync attributes uploads as before instead of
-  hitting a spurious conflict (#1437). See
+  (`romm_api_token_origin`; `https://h` and `http://h` are different origins). The bearer is attached only when
+  `romm_url`'s origin matches — a mismatch raises `TokenHostMismatchError` (non-retryable → `config_error`, "sign in
+  again"), so a wrong/hostile host never receives the credential. A sign-in that **genuinely changes origin** forgets
+  the registered device id; a same-server re-sign-in (token swap, URL-formatting variants, unknown old origin) **keeps**
+  it (#1437). Sign-in ordering, DELETE guards, legacy/edge cases:
   [ConnectionService notes](docs/architecture/backend-architecture.md#connectionservice-notes).
 - **Decky callables must be async**: Even if the method body is synchronous, Decky's callable framework requires
   `async def`. Do not remove `async` from callable methods in main.py.
