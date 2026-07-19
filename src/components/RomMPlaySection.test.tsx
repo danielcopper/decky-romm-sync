@@ -2006,7 +2006,7 @@ describe("RomMPlaySection", () => {
       );
     });
 
-    it("success with nothing moved and no conflicts → no toast (zero-case)", async () => {
+    it("success with nothing moved and no conflicts → 'Saves already up to date' acknowledgement (manual surface, #1486)", async () => {
       const items = await setupSavesAction();
       vi.mocked(backend.syncRomSaves).mockResolvedValue({
         success: true,
@@ -2020,9 +2020,13 @@ describe("RomMPlaySection", () => {
       await act(async () => {
         await items[2]!.props.onClick?.();
       });
-      expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
+      // Exactly the up-to-date acknowledgement — no directional toast alongside it.
+      const bodies = vi.mocked(toaster.toast).mock.calls.map((c) => c[0].body);
+      expect(bodies).toEqual(["Saves already up to date"]);
     });
 
+    // Conflicts pending → the "up to date" acknowledgement is gated off (it would
+    // contradict them); only the conflict toast fires (#1486).
     it("success with conflicts but nothing moved → conflict toast only (signal preserved)", async () => {
       const items = await setupSavesAction();
       vi.mocked(backend.syncRomSaves).mockResolvedValue({

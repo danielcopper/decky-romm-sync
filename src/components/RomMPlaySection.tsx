@@ -721,16 +721,22 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       const result = await syncRomSaves(info.romId);
       if (result.success) {
         // Directional completion toast via the shared helper — the single source
-        // of that copy across every save-sync surface (#1481). Nothing moved →
-        // no toast (the uniform zero-case).
+        // of that copy across every save-sync surface (#1481).
         const directionalBody = saveSyncToastBody(result.uploaded, result.downloaded);
+        const c = result.conflicts?.length ?? 0;
         if (directionalBody) {
           toaster.toast({ title: "RomM Save Sync", body: directionalBody });
+        } else if (c === 0) {
+          // Manual surface only (#1486): an explicit per-game "Sync Saves" click
+          // that moved nothing and hit no conflicts gets a short acknowledgement,
+          // so the click doesn't read as a no-op. The automatic surfaces
+          // (pre-launch, post-exit) stay silent on this zero-case.
+          toaster.toast({ title: "RomM Save Sync", body: "Saves already up to date" });
         }
         // Preserve the conflict signal as its own additive toast (mirroring the
         // post-exit conflicts_toast) — it must stay visible even when nothing
-        // transferred.
-        const c = result.conflicts?.length ?? 0;
+        // transferred. Gated above so "up to date" never contradicts pending
+        // conflicts.
         if (c > 0) {
           toaster.toast({ title: "RomM Save Sync", body: `${c} conflict(s) need resolution` });
         }
