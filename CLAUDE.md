@@ -307,17 +307,11 @@ relational state that _does_ live in SQLite:
   `main.py` — if a service needs a Protocol-wrapped persister, the wrapper adapter is built in `bootstrap()` and passed
   through `CallbackBundle`. (Our concrete shape for the composition root.)
 
-**Vendored deps (`_vendor/`)**: `[ours]` Decky Loader has no plugin-level package manager, so third-party runtime deps
-are vendored under `py_modules/_vendor/<package>/` and imported as `from _vendor import <package>`. Only adapters import
-from `_vendor.*`; services/domain/lib stay third-party-free. The whole `_vendor/` namespace is excluded from ruff,
-basedpyright, and Sonar (analysis + coverage) so any future vendored package is automatically out of scope — it's not
-our code, we don't lint or coverage-track it, but we may patch it (e.g. fix self-imports broken by the move into
-`_vendor/`). Ruff's isort lists `_vendor` under `known-third-party` so the imports group alongside other third-party
-deps. `import-linter` enforces a `domain-stdlib-only` contract that forbids `domain` from importing `_vendor.*` (domain
-stays stdlib-only); no other layer forbids `_vendor`, since adapters legitimately import it. Every vendored package
-ships its upstream `LICENSE` (the release zip redistributes `_vendor/`, and MIT/BSD-style licenses require preserving
-the copyright notice on redistribution) and a provenance entry in `_vendor/README.md` — upstream URL, pinned
-version/commit, and the list of local patches — so updating a vendored dep is a deliberate diff, not "diff and pray".
+**Vendored deps (`_vendor/`)**: `[ours]` Third-party runtime deps are vendored under `py_modules/_vendor/<package>/`
+(Decky has no plugin-level package manager) and imported as `from _vendor import <package>`. Only adapters import
+`_vendor.*`; services/domain/lib stay third-party-free (`domain-stdlib-only` contract in `.importlinter`). `_vendor/` is
+excluded from ruff, basedpyright, and Sonar. Every vendored package ships its upstream `LICENSE` and a provenance entry
+(upstream URL, pinned version/commit, local patches) in [`_vendor/README.md`](py_modules/_vendor/README.md).
 
 **Process boundaries — `main.py` vs `bootstrap.py`**: `[ours]` `main.py` owns the Decky lifecycle (`_main`, `_unload`)
 and the callable surface (one `async def` method per `@callable` exposed to the frontend). `bootstrap.py` owns adapter
