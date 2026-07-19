@@ -254,18 +254,18 @@ class TestRemoveRom:
         Playtime, the save-sync state, and the ``roms`` identity row all survive.
         """
         from domain.playtime import Playtime
-        from domain.rom_save_state import RomSaveState
+        from domain.rom_save_sync_state import RomSaveSyncState
 
         rom_path = f"{_ROMS_BASE}/n64/zelda.z64"
         rom_files.files[rom_path] = b"\x00" * 100
 
         playtime = Playtime(total_seconds=3600, session_count=2)
-        save_state = RomSaveState(active_slot="default", slot_confirmed=True)
+        save_state = RomSaveSyncState(active_slot="default", slot_confirmed=True)
         with uow:
             uow.roms.save(_make_rom(42))
             uow.rom_installs.save(_make_install(42, file_path=rom_path))
             uow.playtime.save(42, playtime)
-            uow.rom_save_states.save(42, save_state)
+            uow.rom_save_sync_states.save(42, save_state)
 
         result = await service.remove_rom(42)
 
@@ -277,7 +277,7 @@ class TestRemoveRom:
         surviving_playtime = uow.playtime.get(42)
         assert surviving_playtime is not None
         assert surviving_playtime.total_seconds == 3600
-        surviving_save = uow.rom_save_states.get(42)
+        surviving_save = uow.rom_save_sync_states.get(42)
         assert surviving_save is not None
         assert surviving_save.active_slot == "default"
         assert uow.committed is True

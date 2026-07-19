@@ -28,7 +28,7 @@ from adapters.steam_config import SteamConfigAdapter
 from domain.playtime import Playtime
 from domain.rom import Rom
 from domain.rom_install import RomInstall
-from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_layout import InSaveDir
 from services.library import LibraryService, LibraryServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
@@ -183,10 +183,10 @@ def _seed_rom(plugin, rom_id, *, platform_slug="gba"):
 
 
 def _seed_save_state(plugin, rom_id, state, *, platform_slug="gba"):
-    """Seed a ``RomSaveState`` for *rom_id* (seeding its ``Rom`` FK first)."""
+    """Seed a ``RomSaveSyncState`` for *rom_id* (seeding its ``Rom`` FK first)."""
     _seed_rom(plugin, rom_id, platform_slug=platform_slug)
     with _uow(plugin) as uow:
-        uow.rom_save_states.save(rom_id, state)
+        uow.rom_save_sync_states.save(rom_id, state)
 
 
 def _seed_playtime(plugin, rom_id, playtime, *, platform_slug="gba"):
@@ -203,9 +203,9 @@ def _get_playtime(plugin, rom_id):
 
 
 def _get_save_state(plugin, rom_id):
-    """Read back the persisted ``RomSaveState`` for *rom_id*, or ``None``."""
+    """Read back the persisted ``RomSaveSyncState`` for *rom_id*, or ``None``."""
     with _uow(plugin) as uow:
-        return uow.rom_save_states.get(rom_id)
+        return uow.rom_save_sync_states.get(rom_id)
 
 
 def _set_device_id(plugin, device_id):
@@ -940,7 +940,7 @@ async def test_delete_local_saves_happy_path(plugin, tmp_path):
     _seed_save_state(
         plugin,
         100,
-        RomSaveState(
+        RomSaveSyncState(
             files={
                 f"{rom_name}.srm": FileSyncState(last_sync_hash="abc123"),
                 f"{rom_name}.rtc": FileSyncState(last_sync_hash="def456"),
@@ -979,7 +979,7 @@ async def test_delete_local_saves_preserves_slot_config(plugin, tmp_path):
     _seed_save_state(
         plugin,
         101,
-        RomSaveState(
+        RomSaveSyncState(
             files={f"{rom_name}.srm": FileSyncState(last_sync_hash="hash")},
             active_slot="desktop",
             slot_confirmed=True,
@@ -1050,13 +1050,13 @@ async def test_delete_platform_saves(plugin, tmp_path):
     _seed_save_state(
         plugin,
         10,
-        RomSaveState(files={"Game1.srm": FileSyncState(last_sync_hash="h")}, system="snes"),
+        RomSaveSyncState(files={"Game1.srm": FileSyncState(last_sync_hash="h")}, system="snes"),
         platform_slug="snes",
     )
     _seed_save_state(
         plugin,
         20,
-        RomSaveState(files={"Game2.srm": FileSyncState(last_sync_hash="h")}, system="snes"),
+        RomSaveSyncState(files={"Game2.srm": FileSyncState(last_sync_hash="h")}, system="snes"),
         platform_slug="snes",
     )
 
@@ -1090,7 +1090,7 @@ class TestSavesVersionHistoryCallables:
         _seed_save_state(
             plugin,
             42,
-            RomSaveState(
+            RomSaveSyncState(
                 system="gba",
                 active_slot="default",
                 files={"pokemon.srm": FileSyncState(tracked_save_id=100, last_sync_hash="h")},
@@ -1140,7 +1140,7 @@ class TestSavesVersionHistoryCallables:
         _seed_save_state(
             plugin,
             42,
-            RomSaveState(
+            RomSaveSyncState(
                 system="gba",
                 active_slot="default",
                 files={"pokemon.srm": FileSyncState(tracked_save_id=100, last_sync_hash=local_hash)},

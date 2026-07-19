@@ -15,7 +15,7 @@ from fakes.fake_save_api import FakeSaveApi
 from fakes.fake_settings_persister import FakeSettingsPersister
 
 from domain.iso_time import epoch_to_iso
-from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from lib.errors import RommConnectionError
 from services.saves._settings import resolve_default_slot, sanitize_setting
 from tests.services.saves._helpers import (
@@ -529,7 +529,7 @@ class TestDeleteSaves:
         assert save_path.exists()
 
         _seed_save_state(
-            svc, 42, RomSaveState(files={"pokemon.srm": FileSyncState(tracked_save_id=1, last_sync_hash="abc")})
+            svc, 42, RomSaveSyncState(files={"pokemon.srm": FileSyncState(tracked_save_id=1, last_sync_hash="abc")})
         )
 
         result = svc.delete_local_saves(42)
@@ -552,7 +552,7 @@ class TestDeleteSaves:
         _seed_save_state(
             svc,
             42,
-            RomSaveState(
+            RomSaveSyncState(
                 files={"pokemon.srm": FileSyncState(last_sync_hash="abc")},
                 active_slot="desktop",
                 slot_confirmed=True,
@@ -624,7 +624,7 @@ class TestEmulatorTag:
             42,
             str(tmp_path / "saves" / "gba" / "pokemon.srm"),
             "pokemon.srm",
-            RomSaveState(),
+            RomSaveSyncState(),
             "dev-1",
             "gba",
             "mgba_libretro",
@@ -646,7 +646,7 @@ class TestEmulatorTag:
             42,
             str(tmp_path / "saves" / "gba" / "pokemon.srm"),
             "pokemon.srm",
-            RomSaveState(),
+            RomSaveSyncState(),
             "dev-1",
             "gba",
             None,
@@ -701,7 +701,7 @@ class TestEmulatorTag:
         _seed_save_state(
             svc,
             1,
-            RomSaveState(
+            RomSaveSyncState(
                 files={"game1.srm": FileSyncState(last_sync_hash="h")},
                 active_slot="desktop",
                 slot_confirmed=True,
@@ -712,7 +712,7 @@ class TestEmulatorTag:
         _seed_save_state(
             svc,
             2,
-            RomSaveState(
+            RomSaveSyncState(
                 files={"game2.srm": FileSyncState(last_sync_hash="h")},
                 active_slot="default",
                 slot_confirmed=True,
@@ -750,7 +750,7 @@ class TestEmulatorTag:
         _seed_save_state(
             svc,
             2,
-            RomSaveState(
+            RomSaveSyncState(
                 files={"game2.srm": FileSyncState(last_sync_hash="h")},
                 active_slot="default",
                 slot_confirmed=True,
@@ -854,9 +854,9 @@ class TestCheckCoreChange:
         system="snes",
         last_synced_core: str | None = "snes9x_libretro",
         active_slot="default",
-    ) -> RomSaveState:
+    ) -> RomSaveSyncState:
         """Return a minimal save state entry for rom_id 42."""
-        return RomSaveState(
+        return RomSaveSyncState(
             system=system,
             last_synced_core=last_synced_core,
             active_slot=active_slot,
@@ -1183,9 +1183,9 @@ class TestHasTrackedSave:
         assert svc.has_tracked_save(42) is False
 
     def test_returns_false_for_empty_entry(self, tmp_path):
-        """ROM with an empty RomSaveState (no files, no slots) → False."""
+        """ROM with an empty RomSaveSyncState (no files, no slots) → False."""
         svc, _ = make_service(tmp_path)
-        _seed_save_state(svc, 42, RomSaveState())
+        _seed_save_state(svc, 42, RomSaveSyncState())
         assert svc.has_tracked_save(42) is False
 
     def test_returns_true_when_files_tracked(self, tmp_path):
@@ -1194,20 +1194,22 @@ class TestHasTrackedSave:
         _seed_save_state(
             svc,
             42,
-            RomSaveState(files={"pokemon.srm": FileSyncState(tracked_save_id=7, last_sync_hash="abc")}),
+            RomSaveSyncState(files={"pokemon.srm": FileSyncState(tracked_save_id=7, last_sync_hash="abc")}),
         )
         assert svc.has_tracked_save(42) is True
 
     def test_returns_true_when_slots_configured(self, tmp_path):
         """ROM with at least one slot configured (no files yet) → True."""
         svc, _ = make_service(tmp_path)
-        _seed_save_state(svc, 42, RomSaveState(slots={"default": {"label": "Default"}}))
+        _seed_save_state(svc, 42, RomSaveSyncState(slots={"default": {"label": "Default"}}))
         assert svc.has_tracked_save(42) is True
 
     def test_accepts_int_rom_id_casting_to_str_key(self, tmp_path):
         """``rom_id`` is int on the wire; the aggregate is keyed by int rom_id."""
         svc, _ = make_service(tmp_path)
-        _seed_save_state(svc, 99, RomSaveState(files={"a.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h")}))
+        _seed_save_state(
+            svc, 99, RomSaveSyncState(files={"a.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h")})
+        )
         assert svc.has_tracked_save(99) is True
         # Wrong rom_id misses cleanly.
         assert svc.has_tracked_save(100) is False
@@ -1320,7 +1322,7 @@ class TestBuildSaveInventory:
         os.utime(save_path, (1705320000.0, 1705320000.0))
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
 
-        state = RomSaveState(emulator="retroarch-mgba", system="gba")
+        state = RomSaveSyncState(emulator="retroarch-mgba", system="gba")
         state.confirm_slot("A")
         _seed_save_state(svc, 42, state)
 
@@ -1345,7 +1347,7 @@ class TestBuildSaveInventory:
         _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"bb", ext=".rtc")
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
 
-        state = RomSaveState(system="gba")
+        state = RomSaveSyncState(system="gba")
         state.confirm_slot("A")
         _seed_save_state(svc, 42, state)
 
@@ -1366,7 +1368,7 @@ class TestBuildSaveInventory:
         # rejected now (#1276), but a pre-#1276 DB row (or one mid-migration
         # before 005 un-confirms it) can still carry active_slot=None +
         # slot_confirmed=True, and build_save_inventory must still exclude it.
-        state = RomSaveState(system="gba", slot_confirmed=True, active_slot=None)
+        state = RomSaveSyncState(system="gba", slot_confirmed=True, active_slot=None)
         assert state.slot_confirmed is True
         assert state.active_slot is None
         _seed_save_state(svc, 42, state)
@@ -1379,7 +1381,7 @@ class TestBuildSaveInventory:
         _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"data")
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
 
-        state = RomSaveState(system="gba")
+        state = RomSaveSyncState(system="gba")
         state.switch_active_slot("A")  # active_slot="A", slot_confirmed stays False
         assert state.active_slot == "A"
         assert state.slot_confirmed is False
@@ -1393,7 +1395,7 @@ class TestBuildSaveInventory:
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
         # No _create_save — the saves directory has no matching files.
 
-        state = RomSaveState(system="gba")
+        state = RomSaveSyncState(system="gba")
         state.confirm_slot("A")
         _seed_save_state(svc, 42, state)
 
@@ -1416,10 +1418,10 @@ class TestBuildSaveInventory:
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
         _install_rom(svc, tmp_path, rom_id=99, system="snes", file_name="mario.sfc")
 
-        state42 = RomSaveState(system="gba")
+        state42 = RomSaveSyncState(system="gba")
         state42.confirm_slot("A")
         _seed_save_state(svc, 42, state42)
-        state99 = RomSaveState(system="snes")
+        state99 = RomSaveSyncState(system="snes")
         state99.confirm_slot("A")
         _seed_save_state(svc, 99, state99, platform_slug="snes")
 
@@ -1439,7 +1441,7 @@ class TestBuildSaveInventory:
         _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"a")
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
 
-        state = RomSaveState(system="gba")
+        state = RomSaveSyncState(system="gba")
         state.switch_active_slot("A")  # not confirmed
         _seed_save_state(svc, 42, state)
 

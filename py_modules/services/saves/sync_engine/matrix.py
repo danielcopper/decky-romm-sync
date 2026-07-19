@@ -3,7 +3,7 @@
 The decision layer for "which side wins for this file" plus the I/O
 helpers that actually move bytes between the local saves directory and
 the RomM server. Read-only matrix consumption (status reporting) lives
-in StatusService; the loaded :class:`RomSaveState` aggregate is threaded
+in StatusService; the loaded :class:`RomSaveSyncState` aggregate is threaded
 in by the operation entry, which owns the Unit-of-Work read/write
 bracketing this executor's in-memory mutations (ADR-0006). Rom-level
 lock coordination and public callable orchestration live on
@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.emulator_tag import build_emulator_tag
 from domain.iso_time import parse_iso_to_epoch
-from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_backup import backup_name, select_backups_to_prune
 from domain.save_slot import save_in_slot
 from domain.sync_action import (
@@ -132,7 +132,7 @@ class RomDispatchContext:
     """
 
     rom_id: int
-    save_state: RomSaveState
+    save_state: RomSaveSyncState
     device_id: str | None
     rom_name: str
     saves_dir: str
@@ -146,7 +146,7 @@ class MatrixExecutor:
     Owns every code path that reads the server save list, runs
     ``compute_sync_action`` against per-filename inputs, and dispatches
     the resulting :class:`SyncAction` to disk / server I/O. The loaded
-    :class:`RomSaveState` aggregate is threaded in by the public rom-level
+    :class:`RomSaveSyncState` aggregate is threaded in by the public rom-level
     orchestration callables on :class:`SyncEngine`; this executor mutates
     it in memory via the aggregate's verb methods and never persists —
     the operation entry owns the single write Unit of Work.
@@ -206,7 +206,7 @@ class MatrixExecutor:
 
     def update_file_sync_state(
         self,
-        save_state: RomSaveState,
+        save_state: RomSaveSyncState,
         filename: str,
         server_response: dict[str, Any],
         local_path: str,
@@ -223,7 +223,7 @@ class MatrixExecutor:
         aggregate is brand new (no active slot, default emulator) it seeds the
         active slot from *default_slot* so the first sync lands in the
         configured slot. The per-file baseline is recorded via
-        :meth:`RomSaveState.adopt_baseline` — the server response always
+        :meth:`RomSaveSyncState.adopt_baseline` — the server response always
         carries the tracked save id. Its ``content_hash`` (RomM's own digest of
         the bytes: the save it holds after a download, the bytes it received
         after an upload) is stored as ``last_sync_server_hash`` so the next sync's
@@ -279,7 +279,7 @@ class MatrixExecutor:
         server_save: dict[str, Any],
         saves_dir: str,
         filename: str,
-        save_state: RomSaveState,
+        save_state: RomSaveSyncState,
         device_id: str | None,
         system: str,
         default_slot: str | None = None,
@@ -345,7 +345,7 @@ class MatrixExecutor:
         return True
 
     @staticmethod
-    def _resolve_upload_slot(save_state: RomSaveState, default_slot: str | None = None) -> str | None:
+    def _resolve_upload_slot(save_state: RomSaveSyncState, default_slot: str | None = None) -> str | None:
         """The slot field to send with an upload; ``None`` only for an explicit-legacy save.
 
         Reached only once :meth:`do_upload_save` has confirmed a registered
@@ -400,7 +400,7 @@ class MatrixExecutor:
         rom_id: int,
         file_path: str,
         filename: str,
-        save_state: RomSaveState,
+        save_state: RomSaveSyncState,
         device_id: str | None,
         system: str,
         core_so: str | None,
@@ -572,7 +572,7 @@ class MatrixExecutor:
         action: Skip,
         *,
         rom_id: int,
-        save_state: RomSaveState,
+        save_state: RomSaveSyncState,
         filename: str,
         local_hash: str | None,
     ) -> None:
@@ -785,7 +785,7 @@ class MatrixExecutor:
             self._handle_unexpected_error(e, filename, ctx.saves_dir, sink.errors)
         return None
 
-    def adopt_baseline_hash(self, save_state: RomSaveState, filename: str, local_hash: str) -> None:
+    def adopt_baseline_hash(self, save_state: RomSaveSyncState, filename: str, local_hash: str) -> None:
         """Record ``local_hash`` as the file's ``last_sync_hash`` baseline.
 
         Used by Skip(adopt_baseline=True) — the algorithm has detected that
@@ -801,7 +801,7 @@ class MatrixExecutor:
         rom_id: int,
         server_in_slot: list[dict[str, Any]],
         *,
-        save_state: RomSaveState | None,
+        save_state: RomSaveSyncState | None,
         device_id: str | None,
         info: dict[str, Any],
     ) -> Iterator[MatrixOutcome]:
@@ -894,7 +894,7 @@ class MatrixExecutor:
     def sync_rom_saves(
         self,
         rom_id: int,
-        save_state: RomSaveState,
+        save_state: RomSaveSyncState,
         device_id: str | None,
         core_so: str | None,
         default_slot: str | None = None,

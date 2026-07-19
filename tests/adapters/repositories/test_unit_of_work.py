@@ -113,7 +113,7 @@ class TestRepositoryWiring:
             "rom_installs",
             "rom_metadata",
             "playtime",
-            "rom_save_states",
+            "rom_save_sync_states",
             "bios_files",
             "firmware_cache",
             "sync_runs",

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.iso_time import parse_iso_to_epoch
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 from domain.save_slot import save_in_slot, slot_query_param
 from domain.save_status import compute_multi_file_slot
@@ -87,14 +87,14 @@ class VersionsService:
     # Narrow-UoW read/write helpers (ADR-0006)
     # ------------------------------------------------------------------
 
-    def _read_inputs(self, rom_id: int) -> tuple[RomSaveState, str | None]:
+    def _read_inputs(self, rom_id: int) -> tuple[RomSaveSyncState, str | None]:
         with self._uow_factory() as uow:
-            state = uow.rom_save_states.get(rom_id) or RomSaveState()
+            state = uow.rom_save_sync_states.get(rom_id) or RomSaveSyncState()
         return state, self._device_registry.get_device_id()
 
-    def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
+    def _write_save_state(self, rom_id: int, save_state: RomSaveSyncState) -> None:
         with self._uow_factory() as uow:
-            uow.rom_save_states.save(rom_id, save_state)
+            uow.rom_save_sync_states.save(rom_id, save_state)
 
     def _local_component_filenames(self, rom_id: int) -> list[str]:
         """Distinct local save filenames on disk for the ROM (one per extension).
@@ -187,7 +187,7 @@ class VersionsService:
     def _rollback_to_version_io(
         self,
         rom_id: int,
-        save_state: RomSaveState,
+        save_state: RomSaveSyncState,
         device_id: str | None,
         core_so: str | None,
         save_id: int,

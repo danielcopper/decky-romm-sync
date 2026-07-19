@@ -100,7 +100,7 @@ from services.protocols.repositories import (
     RomInstallRepository,
     RomMetadataRepository,
     RomRepository,
-    RomSaveStateRepository,
+    RomSaveSyncStateRepository,
     SyncRunRepository,
 )
 from services.protocols.transport import (
@@ -177,7 +177,7 @@ __all__ = [
     "RomRelaunchItemReader",
     "RomRemoverProvider",
     "RomRepository",
-    "RomSaveStateRepository",
+    "RomSaveSyncStateRepository",
     "RommAchievementsApi",
     "RommApi",
     "RommConnectionApi",

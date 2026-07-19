@@ -30,7 +30,7 @@ async def test_confirm_named_slot_no_migration(harness):
     assert isinstance(result["message"], str)
     # Post-state: the slot is confirmed and active.
     with harness.uow_factory() as uow:
-        state = uow.rom_save_states.get(42)
+        state = uow.rom_save_sync_states.get(42)
     assert state is not None
     assert state.slot_confirmed is True
     assert state.active_slot == "main"
@@ -55,8 +55,8 @@ async def test_confirm_legacy_slot_none_rejected(harness):
     assert result["reason"] == "invalid_slot_name"
     assert isinstance(result["message"], str)
     with harness.uow_factory() as uow:
-        state = uow.rom_save_states.get(42)
-    # Nothing confirmed — no rom_save_states row written.
+        state = uow.rom_save_sync_states.get(42)
+    # Nothing confirmed — no rom_save_sync_states row written.
     assert state is None
     # No migration delete fired.
     assert not any(c[0] == "delete_server_saves" for c in harness.romm.call_log)
@@ -82,5 +82,5 @@ async def test_switch_slot_empty_rejected(harness):
     assert isinstance(result["message"], str)
     # No state written — the ROM is not switched into legacy mode.
     with harness.uow_factory() as uow:
-        state = uow.rom_save_states.get(42)
+        state = uow.rom_save_sync_states.get(42)
     assert state is None

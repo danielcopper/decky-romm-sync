@@ -9,7 +9,7 @@ positional JSON-shaped args (the Steam appId, the target rom_id, and the
 The group is resolved over the REAL SQLite ``roms`` table (migration-010 index)
 and the FakeRommApi's ``sibling_roms`` view; only the RomM transport is faked.
 Save drift is exercised through the REAL ``check_local_drift`` (real save-file
-store + ``rom_save_states``); reachability through the REAL
+store + ``rom_save_sync_states``); reachability through the REAL
 ``probe_reachability`` over the FakeRommApi heartbeat.
 """
 
@@ -20,7 +20,7 @@ import os
 
 from domain.rom import Rom
 from domain.rom_install import RomInstall
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 
 from ._seed import seed_group_member
 
@@ -248,10 +248,10 @@ def _seed_bound_drift(harness, bound_id: int, *, baseline: str) -> None:
     os.makedirs(saves_dir, exist_ok=True)
     with open(os.path.join(saves_dir, "game.srm"), "wb") as fh:
         fh.write(_DRIFT_CONTENT)
-    state = RomSaveState()
+    state = RomSaveSyncState()
     state.adopt_baseline("game.srm", tracked_save_id=1, last_sync_hash=baseline)
     with harness.uow_factory() as uow:
-        uow.rom_save_states.save(bound_id, state)
+        uow.rom_save_sync_states.save(bound_id, state)
 
 
 async def test_switch_version_happy_moves_binding(harness):

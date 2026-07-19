@@ -1,11 +1,11 @@
-"""Tests for ``SqliteRomSaveStateRepository`` — the two-table save-state aggregate."""
+"""Tests for ``SqliteRomSaveSyncStateRepository`` — the two-table save-state aggregate."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 from domain.rom import Rom
-from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 
 if TYPE_CHECKING:
     from adapters.repositories.unit_of_work import SqliteUnitOfWork
@@ -27,7 +27,7 @@ def _seed_rom(uow: SqliteUnitOfWork, rom_id: int) -> None:
 class TestRoundTrip:
     def test_scalars_and_multiple_file_children_preserved(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 5)
-        state = RomSaveState(
+        state = RomSaveSyncState(
             active_slot="slot1",
             slot_confirmed=True,
             emulator="retroarch",
@@ -53,9 +53,9 @@ class TestRoundTrip:
             },
             last_sync_check_at="2026-04-04T02:00:00Z",
         )
-        uow.rom_save_states.save(5, state)
+        uow.rom_save_sync_states.save(5, state)
 
-        loaded = uow.rom_save_states.get(5)
+        loaded = uow.rom_save_sync_states.get(5)
         assert loaded is not None
         assert loaded == state
         assert set(loaded.files) == {"save.srm", "save.state"}
@@ -64,39 +64,39 @@ class TestRoundTrip:
         # #1468 — the provenance anchor persists as a value and as NULL (parity
         # fallback) across the rom_save_files column.
         _seed_rom(uow, 5)
-        state = RomSaveState(
+        state = RomSaveSyncState(
             files={
                 "with.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h1", last_sync_server_hash="srv-h1"),
                 "without.srm": FileSyncState(tracked_save_id=2, last_sync_hash="h2"),  # no stored server hash
             },
         )
-        uow.rom_save_states.save(5, state)
+        uow.rom_save_sync_states.save(5, state)
 
-        loaded = uow.rom_save_states.get(5)
+        loaded = uow.rom_save_sync_states.get(5)
         assert loaded is not None
         assert loaded.files["with.srm"].last_sync_server_hash == "srv-h1"
         assert loaded.files["without.srm"].last_sync_server_hash is None
 
     def test_slot_confirmed_bool_round_trips(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 5)
-        uow.rom_save_states.save(5, RomSaveState(slot_confirmed=False))
-        loaded = uow.rom_save_states.get(5)
+        uow.rom_save_sync_states.save(5, RomSaveSyncState(slot_confirmed=False))
+        loaded = uow.rom_save_sync_states.get(5)
         assert loaded is not None
         assert loaded.slot_confirmed is False
 
-        uow.rom_save_states.save(5, RomSaveState(slot_confirmed=True))
-        loaded = uow.rom_save_states.get(5)
+        uow.rom_save_sync_states.save(5, RomSaveSyncState(slot_confirmed=True))
+        loaded = uow.rom_save_sync_states.get(5)
         assert loaded is not None
         assert loaded.slot_confirmed is True
 
     def test_never_synced_sentinel_is_empty_string_not_null(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 5)
-        state = RomSaveState(
+        state = RomSaveSyncState(
             files={"s.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h")},
         )
-        uow.rom_save_states.save(5, state)
+        uow.rom_save_sync_states.save(5, state)
 
-        loaded = uow.rom_save_states.get(5)
+        loaded = uow.rom_save_sync_states.get(5)
         assert loaded is not None
         file = loaded.files["s.srm"]
         assert file.last_sync_at == ""
@@ -108,23 +108,23 @@ class TestOwnUploadIdsNullVsEmpty:
 
     def test_none_round_trips_as_none(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 5)
-        uow.rom_save_states.save(5, RomSaveState(own_upload_ids=None))
-        loaded = uow.rom_save_states.get(5)
+        uow.rom_save_sync_states.save(5, RomSaveSyncState(own_upload_ids=None))
+        loaded = uow.rom_save_sync_states.get(5)
         assert loaded is not None
         assert loaded.own_upload_ids is None
 
     def test_empty_list_round_trips_as_empty_list_not_none(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 5)
-        uow.rom_save_states.save(5, RomSaveState(own_upload_ids=[]))
-        loaded = uow.rom_save_states.get(5)
+        uow.rom_save_sync_states.save(5, RomSaveSyncState(own_upload_ids=[]))
+        loaded = uow.rom_save_sync_states.get(5)
         assert loaded is not None
         assert loaded.own_upload_ids == []
         assert loaded.own_upload_ids is not None
 
     def test_populated_list_round_trips(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 5)
-        uow.rom_save_states.save(5, RomSaveState(own_upload_ids=[7, 8, 9]))
-        loaded = uow.rom_save_states.get(5)
+        uow.rom_save_sync_states.save(5, RomSaveSyncState(own_upload_ids=[7, 8, 9]))
+        loaded = uow.rom_save_sync_states.get(5)
         assert loaded is not None
         assert loaded.own_upload_ids == [7, 8, 9]
 
@@ -132,32 +132,32 @@ class TestOwnUploadIdsNullVsEmpty:
 class TestFilesReplacedOnReSave:
     def test_re_save_replaces_child_file_rows(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 5)
-        first = RomSaveState(
+        first = RomSaveSyncState(
             files={
                 "old1.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h1"),
                 "old2.srm": FileSyncState(tracked_save_id=2, last_sync_hash="h2"),
             },
         )
-        uow.rom_save_states.save(5, first)
+        uow.rom_save_sync_states.save(5, first)
 
-        second = RomSaveState(
+        second = RomSaveSyncState(
             files={"new.srm": FileSyncState(tracked_save_id=3, last_sync_hash="h3")},
         )
-        uow.rom_save_states.save(5, second)
+        uow.rom_save_sync_states.save(5, second)
 
-        loaded = uow.rom_save_states.get(5)
+        loaded = uow.rom_save_sync_states.get(5)
         assert loaded is not None
         assert set(loaded.files) == {"new.srm"}
 
     def test_re_save_with_no_files_clears_children(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 5)
-        uow.rom_save_states.save(
+        uow.rom_save_sync_states.save(
             5,
-            RomSaveState(files={"a.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h")}),
+            RomSaveSyncState(files={"a.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h")}),
         )
-        uow.rom_save_states.save(5, RomSaveState())
+        uow.rom_save_sync_states.save(5, RomSaveSyncState())
 
-        loaded = uow.rom_save_states.get(5)
+        loaded = uow.rom_save_sync_states.get(5)
         assert loaded is not None
         assert loaded.files == {}
 
@@ -165,10 +165,10 @@ class TestFilesReplacedOnReSave:
         # The skip-adopt path (update_baseline_hash) persists a hash with no server
         # save id; tracked_save_id is nullable so this no longer crashes the whole save.
         _seed_rom(uow, 5)
-        state = RomSaveState(files={"save.srm": FileSyncState(last_sync_hash="hashOnly")})
-        uow.rom_save_states.save(5, state)
+        state = RomSaveSyncState(files={"save.srm": FileSyncState(last_sync_hash="hashOnly")})
+        uow.rom_save_sync_states.save(5, state)
 
-        loaded = uow.rom_save_states.get(5)
+        loaded = uow.rom_save_sync_states.get(5)
         assert loaded is not None
         assert loaded.files["save.srm"].tracked_save_id is None
         assert loaded.files["save.srm"].last_sync_hash == "hashOnly"
@@ -177,41 +177,41 @@ class TestFilesReplacedOnReSave:
 
 class TestMiss:
     def test_get_absent_returns_none(self, uow: SqliteUnitOfWork):
-        assert uow.rom_save_states.get(999) is None
+        assert uow.rom_save_sync_states.get(999) is None
 
 
 class TestDelete:
     def test_delete_removes_state_and_files(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 5)
-        uow.rom_save_states.save(
+        uow.rom_save_sync_states.save(
             5,
-            RomSaveState(files={"a.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h")}),
+            RomSaveSyncState(files={"a.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h")}),
         )
-        uow.rom_save_states.delete(5)
+        uow.rom_save_sync_states.delete(5)
 
-        assert uow.rom_save_states.get(5) is None
+        assert uow.rom_save_sync_states.get(5) is None
         # The child rows are gone too, so a fresh save under the same id starts clean.
-        uow.rom_save_states.save(5, RomSaveState())
-        reloaded = uow.rom_save_states.get(5)
+        uow.rom_save_sync_states.save(5, RomSaveSyncState())
+        reloaded = uow.rom_save_sync_states.get(5)
         assert reloaded is not None
         assert reloaded.files == {}
 
     def test_delete_absent_is_idempotent(self, uow: SqliteUnitOfWork):
-        uow.rom_save_states.delete(404)
-        assert uow.rom_save_states.get(404) is None
+        uow.rom_save_sync_states.delete(404)
+        assert uow.rom_save_sync_states.get(404) is None
 
 
 class TestIteration:
     def test_iter_all_yields_rom_id_state_pairs(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 1)
         _seed_rom(uow, 2)
-        uow.rom_save_states.save(1, RomSaveState(active_slot="a"))
-        uow.rom_save_states.save(
+        uow.rom_save_sync_states.save(1, RomSaveSyncState(active_slot="a"))
+        uow.rom_save_sync_states.save(
             2,
-            RomSaveState(files={"x.srm": FileSyncState(tracked_save_id=9, last_sync_hash="h")}),
+            RomSaveSyncState(files={"x.srm": FileSyncState(tracked_save_id=9, last_sync_hash="h")}),
         )
 
-        by_id = dict(uow.rom_save_states.iter_all())
+        by_id = dict(uow.rom_save_sync_states.iter_all())
         assert set(by_id) == {1, 2}
         assert by_id[1].active_slot == "a"
         assert set(by_id[2].files) == {"x.srm"}

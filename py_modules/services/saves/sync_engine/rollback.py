@@ -22,7 +22,7 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from domain.iso_time import parse_iso_to_epoch
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_path import sanitize_save_filename
 from lib.errors import DeviceNotRegisteredError, classify_error
 from lib.list_result import ErrorCode
@@ -86,16 +86,16 @@ class RollbackOrchestrator:
         self._log_debug = log_debug
         self._resolve_core = resolve_core
 
-    def _read_inputs(self, rom_id: int) -> tuple[RomSaveState, str | None]:
+    def _read_inputs(self, rom_id: int) -> tuple[RomSaveSyncState, str | None]:
         """Short read UoW: load the ROM's save state + device id."""
         with self._uow_factory() as uow:
-            state = uow.rom_save_states.get(rom_id) or RomSaveState()
+            state = uow.rom_save_sync_states.get(rom_id) or RomSaveSyncState()
         return state, self._device_registry.get_device_id()
 
-    def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
+    def _write_save_state(self, rom_id: int, save_state: RomSaveSyncState) -> None:
         """Short write UoW: persist the mutated save state for *rom_id*."""
         with self._uow_factory() as uow:
-            uow.rom_save_states.save(rom_id, save_state)
+            uow.rom_save_sync_states.save(rom_id, save_state)
 
     async def resolve(
         self,
@@ -250,7 +250,7 @@ class RollbackOrchestrator:
 
     def _resolve_conflict_use_server(
         self,
-        save_state: RomSaveState,
+        save_state: RomSaveSyncState,
         device_id: str | None,
         server: dict[str, Any],
         saves_dir: str,
@@ -270,7 +270,7 @@ class RollbackOrchestrator:
     def _resolve_conflict_keep_local(
         self,
         rom_id: int,
-        save_state: RomSaveState,
+        save_state: RomSaveSyncState,
         device_id: str | None,
         core_so: str | None,
         server: dict[str, Any],

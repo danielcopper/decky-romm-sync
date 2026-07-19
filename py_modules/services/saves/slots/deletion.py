@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     import asyncio
     import logging
 
-    from domain.rom_save_state import RomSaveState
+    from domain.rom_save_sync_state import RomSaveSyncState
     from services.protocols import (
         DebugLogger,
         RetryStrategy,
@@ -60,17 +60,17 @@ class SlotDeleter:
         self._log_debug = log_debug
         self._sync_engine = sync_engine
 
-    def _read_save_state(self, rom_id: int) -> RomSaveState | None:
+    def _read_save_state(self, rom_id: int) -> RomSaveSyncState | None:
         with self._uow_factory() as uow:
-            return uow.rom_save_states.get(rom_id)
+            return uow.rom_save_sync_states.get(rom_id)
 
-    def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
+    def _write_save_state(self, rom_id: int, save_state: RomSaveSyncState) -> None:
         with self._uow_factory() as uow:
-            uow.rom_save_states.save(rom_id, save_state)
+            uow.rom_save_sync_states.save(rom_id, save_state)
 
     def _validate_slot_operation(
         self, rom_id: int, slot: str
-    ) -> dict[str, Any] | tuple[RomSaveState, dict[str, dict[str, Any]]]:
+    ) -> dict[str, Any] | tuple[RomSaveSyncState, dict[str, dict[str, Any]]]:
         """Shared validation for slot delete operations.
 
         Returns an error dict on failure, or a (rom_state, slots_dict) tuple on
@@ -189,7 +189,7 @@ class SlotDeleter:
         rom_id = int(rom_id)
         slot = str(slot).strip() if slot else ""
 
-        # The read→delete-server→mutate→write of the RomSaveState aggregate must
+        # The read→delete-server→mutate→write of the RomSaveSyncState aggregate must
         # serialise against every other path that touches this ROM's state.
         # _delete_server_slot_saves does NOT acquire rom_lock, so calling it
         # inside the held lock is safe (no re-entry). There is no tail status

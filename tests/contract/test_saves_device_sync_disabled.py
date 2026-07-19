@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 
 from ._seed import enable_save_sync, seed_install, seed_save_state
 
@@ -33,7 +33,7 @@ async def test_sync_rom_saves_device_sync_disabled_returns_policy_failure(harnes
     _write_local_save(harness, system="gba", content=b"local save bytes", filename="game.srm")
     # A confirmed named slot makes the run open a real negotiate session, which the
     # server rejects with the per-device sync-disabled 400.
-    seed_save_state(harness, 42, RomSaveState(active_slot="default", slot_confirmed=True, system="gba"))
+    seed_save_state(harness, 42, RomSaveSyncState(active_slot="default", slot_confirmed=True, system="gba"))
     harness.romm.negotiate_sync_disabled = True
 
     result = await harness.plugin.sync_rom_saves(42)

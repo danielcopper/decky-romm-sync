@@ -551,7 +551,7 @@ class VersionSwitchService:
         ``allow_stranded`` is unset — otherwise there is nothing to strand, or the
         user chose "Switch anyway". The drift probe is a purely-local content-hash
         read (its own short-lived read, run before any write UoW opens — the
-        rom_save_states baseline it reads must not be touched while this service's
+        rom_save_sync_states baseline it reads must not be touched while this service's
         write UoW is open). The reachability probe is fired only on the blocking
         branch so the free switch paths (synced saves, uninstalled, offline
         override) make no server contact. Returns the ``unsynced_saves`` refusal

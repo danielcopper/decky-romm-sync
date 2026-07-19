@@ -6,7 +6,7 @@ from typing import cast
 
 import pytest
 
-from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_layout import ContentDir
 from lib.errors import RommApiError
 from tests.services.saves._helpers import (
@@ -120,7 +120,7 @@ class TestSaveSlots:
         _seed_save_state(
             svc,
             123,
-            RomSaveState(
+            RomSaveSyncState(
                 active_slot="default",
                 slot_confirmed=True,
                 slots=dict(original_slots),
@@ -155,7 +155,7 @@ class TestSaveSlots:
         _seed_save_state(
             svc,
             123,
-            RomSaveState(
+            RomSaveSyncState(
                 active_slot="default",
                 slot_confirmed=True,
                 slots={"default": {"source": "server", "count": 1, "latest_updated_at": None}},
@@ -176,7 +176,7 @@ class TestSaveSlots:
     async def test_set_active_slot(self, tmp_path):
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        _seed_save_state(svc, 123, RomSaveState(system="gba", active_slot="default"))
+        _seed_save_state(svc, 123, RomSaveSyncState(system="gba", active_slot="default"))
         result = await svc._slots.set_active_slot(123, "desktop")
         assert result["success"] is True
         assert _require_save_state(svc, 123).active_slot == "desktop"
@@ -583,7 +583,7 @@ class TestConfirmSlotChoice:
         svc, _ = make_service(tmp_path)
         _seed_rom(svc, 42)
         await svc.confirm_slot_choice(42, "default")
-        # State persisted to the rom_save_states aggregate.
+        # State persisted to the rom_save_sync_states aggregate.
         state = _get_save_state(svc, 42)
         assert state is not None
         assert state.slot_confirmed is True
@@ -852,9 +852,9 @@ class TestGetSlotSaves:
 class TestSwitchSlot:
     """Tests for SaveService.switch_slot — guarded slot switch with immediate download."""
 
-    def _synced_state(self, local_hash: str, save_id: int = 100) -> RomSaveState:
+    def _synced_state(self, local_hash: str, save_id: int = 100) -> RomSaveSyncState:
         """Return a save state where the file appears fully synced."""
-        return RomSaveState(
+        return RomSaveSyncState(
             active_slot="default",
             slot_confirmed=True,
             files={
@@ -1114,7 +1114,7 @@ class TestSwitchSlot:
         """
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        _seed_save_state(svc, 42, RomSaveState(active_slot="default", slot_confirmed=True))
+        _seed_save_state(svc, 42, RomSaveSyncState(active_slot="default", slot_confirmed=True))
 
         result = await svc.switch_slot(42, "")
 
@@ -1130,7 +1130,7 @@ class TestSwitchSlot:
         """A whitespace-only target slot normalises to empty and is rejected."""
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        _seed_save_state(svc, 42, RomSaveState(active_slot="default", slot_confirmed=True))
+        _seed_save_state(svc, 42, RomSaveSyncState(active_slot="default", slot_confirmed=True))
 
         result = await svc.switch_slot(42, "  \t ")
 
@@ -1143,7 +1143,7 @@ class TestSwitchSlot:
         """A None target slot hits the defensive fallback and is rejected the same way."""
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        _seed_save_state(svc, 42, RomSaveState(active_slot="default", slot_confirmed=True))
+        _seed_save_state(svc, 42, RomSaveSyncState(active_slot="default", slot_confirmed=True))
 
         result = await svc.switch_slot(42, cast("str", None))
 
@@ -1226,7 +1226,7 @@ class TestSwitchSlot:
         _seed_save_state(
             svc,
             42,
-            RomSaveState(
+            RomSaveSyncState(
                 active_slot="default",
                 slot_confirmed=True,
                 files={
@@ -1410,7 +1410,7 @@ class TestSwitchSlot:
         _seed_save_state(
             svc,
             42,
-            RomSaveState(
+            RomSaveSyncState(
                 active_slot="default",
                 slot_confirmed=True,
                 files={
@@ -1465,7 +1465,7 @@ class TestSwitchSlot:
         _seed_save_state(
             svc,
             42,
-            RomSaveState(
+            RomSaveSyncState(
                 system="gba",
                 active_slot=None,
                 slot_confirmed=True,
@@ -1509,7 +1509,7 @@ class TestSlotsContentDirGate:
         _seed_save_state(
             svc,
             42,
-            RomSaveState(
+            RomSaveSyncState(
                 active_slot="default",
                 slot_confirmed=True,
                 files={
@@ -1545,7 +1545,7 @@ class TestSlotsContentDirGate:
         _seed_save_state(
             svc,
             42,
-            RomSaveState(
+            RomSaveSyncState(
                 active_slot="default",
                 slot_confirmed=True,
                 files={
@@ -1974,7 +1974,7 @@ class TestDeleteSlot:
 class TestSlotMutationLocking:
     """The slot-mutation RMW critical sections serialise on the per-ROM lock.
 
-    Every slot mutation that does a read→mutate→write on the ``RomSaveState``
+    Every slot mutation that does a read→mutate→write on the ``RomSaveSyncState``
     aggregate must hold ``SyncEngine.rom_lock(rom_id)`` across the critical
     section, the same lock every sync path and ``get_save_status`` hold. Each
     test below holds the lock externally, starts the mutation, and proves it
@@ -1983,9 +1983,9 @@ class TestSlotMutationLocking:
     cross-slot PUT (#1057).
     """
 
-    def _synced_state(self, local_hash: str, save_id: int = 100) -> RomSaveState:
+    def _synced_state(self, local_hash: str, save_id: int = 100) -> RomSaveSyncState:
         """A save state where ``pokemon.srm`` appears fully synced to ``default``."""
-        return RomSaveState(
+        return RomSaveSyncState(
             active_slot="default",
             slot_confirmed=True,
             files={
@@ -2079,7 +2079,7 @@ class TestSlotMutationLocking:
         """set_active_slot blocks while the per-ROM lock is held, then completes on release."""
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        _seed_save_state(svc, 123, RomSaveState(system="gba", active_slot="default"))
+        _seed_save_state(svc, 123, RomSaveSyncState(system="gba", active_slot="default"))
 
         lock = svc._sync_engine.rom_lock(123)
         await lock.acquire()

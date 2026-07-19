@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_layout import ContentDir, InSaveDir
 from tests.services.saves._helpers import (
     _create_save,
@@ -98,7 +98,7 @@ class TestSaveStatus:
         # Server save in slot "default", but active_slot is "other"
         ss = _server_save(slot="default")
         fake.saves[100] = ss
-        _seed_save_state(svc, 42, RomSaveState(active_slot="other"))
+        _seed_save_state(svc, 42, RomSaveSyncState(active_slot="other"))
 
         result = await svc.get_save_status(42)
         # Local file exists → should show as upload (local-only), not synced against wrong slot
@@ -348,7 +348,7 @@ class TestGetSaveStatusComputeAction:
 
         # ---------- Upload ----------
         # Reset state for next case: no server saves
-        _seed_save_state(svc, 42, RomSaveState())
+        _seed_save_state(svc, 42, RomSaveSyncState())
         result_upload = svc._status._get_save_status_io(42, [])
         assert result_upload["files"][0]["status"] == "upload"
 
@@ -413,7 +413,7 @@ class TestGetSaveStatusComputeAction:
         fake.saves[200] = ss_old
         fake.saves[201] = ss_new
 
-        _seed_save_state(svc, 42, RomSaveState())
+        _seed_save_state(svc, 42, RomSaveSyncState())
 
         result = svc._status._get_save_status_io(42, [ss_old, ss_new])
 
@@ -429,7 +429,7 @@ class TestGetSaveStatusComputeAction:
         _enable_sync_with_device(svc)
         _install_rom(svc, tmp_path)
 
-        _seed_save_state(svc, 42, RomSaveState())
+        _seed_save_state(svc, 42, RomSaveSyncState())
 
         result = svc._status._get_save_status_io(42, [])
 
@@ -500,7 +500,7 @@ class TestSaveSyncDisplayEnrichment:
         svc, _ = make_service(tmp_path)
         _enable_sync_with_device(svc)
         _install_rom(svc, tmp_path)
-        _seed_save_state(svc, 42, RomSaveState())
+        _seed_save_state(svc, 42, RomSaveSyncState())
 
         result = svc._status._get_save_status_io(42, [])
 
@@ -891,7 +891,7 @@ class TestMultiFileSlotConflictAggregation:
         )
         fake.saves[200] = ss_old
         fake.saves[201] = ss_new
-        _seed_save_state(svc, 42, RomSaveState())
+        _seed_save_state(svc, 42, RomSaveSyncState())
 
         result = svc._status._get_save_status_io(42, [ss_old, ss_new])
 
@@ -1000,7 +1000,7 @@ def _seed_baseline_adopt_scenario(svc, fake, tmp_path) -> str:
     ``is_current=True``, but no baseline is adopted yet (the file is absent
     from ``state.files``) — so the matrix returns ``Skip(adopt_baseline=True)``
     and the status RMW records the local hash as the new baseline (an
-    observable ``rom_save_states.save``). Returns the local file's md5.
+    observable ``rom_save_sync_states.save``). Returns the local file's md5.
     """
     _enable_sync_with_device(svc)
     _install_rom(svc, tmp_path)
@@ -1046,7 +1046,7 @@ async def _drain_until(predicate, *, attempts: int = 200, step: float = 0.005) -
 class TestGetSaveStatusRomLockSerialization:
     """The status RMW (baseline adopt) must serialize under ``rom_lock``.
 
-    ``get_save_status`` does a get→mutate→save of ``rom_save_states``. Held
+    ``get_save_status`` does a get→mutate→save of ``rom_save_sync_states``. Held
     under ``SyncEngine.rom_lock(rom_id)``, it cannot interleave with a
     concurrent ``do_sync_rom_saves`` and clobber that sync's write (#871).
     """

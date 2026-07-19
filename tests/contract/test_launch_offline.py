@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import os
 
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 
 from ._seed import seed_install, seed_save_state
 
@@ -60,7 +60,7 @@ async def test_check_local_drift_matching_hash_not_drifted(harness):
     import hashlib
 
     baseline = hashlib.md5(b"save-bytes").hexdigest()
-    state = RomSaveState()
+    state = RomSaveSyncState()
     state.adopt_baseline("game.srm", tracked_save_id=10, last_sync_hash=baseline)
     seed_save_state(harness, 1, state, platform_slug="gba")
 
@@ -73,7 +73,7 @@ async def test_check_local_drift_changed_content_drifted(harness):
     """Local file whose content diverges from its baseline → drifted True."""
     seed_install(harness, 2, system="gba", file_name="game.gba")
     _write_local_save(harness, system="gba", content=b"new-bytes-on-disk")
-    state = RomSaveState()
+    state = RomSaveSyncState()
     state.adopt_baseline("game.srm", tracked_save_id=11, last_sync_hash="stale-baseline-hash")
     seed_save_state(harness, 2, state, platform_slug="gba")
 

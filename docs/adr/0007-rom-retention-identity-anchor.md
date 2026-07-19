@@ -8,9 +8,9 @@ fixing the _retention_ policy #780 deferred — specifically that the cascade FK
 ## Context
 
 The schema (`db/migrations/001_initial.sql`) gives every per-ROM child table (`rom_installs`, `rom_metadata`,
-`rom_playtime`, `rom_save_states`, `rom_save_files`) an `ON DELETE CASCADE` foreign key onto `roms`, with a comment that
-`roms` rows are "deleted ONLY on a deliberate library prune (ROM genuinely gone from RomM)." But "genuinely gone from
-RomM" is exactly what the **automatic** library sync detects (its `stale_rom_ids` pass) — so reading the comment
+`rom_playtime`, `rom_save_sync_states`, `rom_save_files`) an `ON DELETE CASCADE` foreign key onto `roms`, with a comment
+that `roms` rows are "deleted ONLY on a deliberate library prune (ROM genuinely gone from RomM)." But "genuinely gone
+from RomM" is exactly what the **automatic** library sync detects (its `stale_rom_ids` pass) — so reading the comment
 literally would make the cascade fire automatically and destroy a ROM's local **playtime and saves** on any transient
 server blip, collection-visibility change, or reversible RomM edit. The confirmed domain priority is that local playtime
 and save history **survive a ROM leaving RomM**.

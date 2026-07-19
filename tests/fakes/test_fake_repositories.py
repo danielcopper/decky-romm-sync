@@ -19,7 +19,7 @@ from domain.playtime import Playtime
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.rom_metadata import RomMetadata
-from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.sync_run import SyncRun
 from fakes.fake_bios_file_repository import FakeBiosFileRepository
 from fakes.fake_firmware_cache_repository import FakeFirmwareCacheRepository
@@ -29,7 +29,7 @@ from fakes.fake_playtime_repository import FakePlaytimeRepository
 from fakes.fake_rom_install_repository import FakeRomInstallRepository
 from fakes.fake_rom_metadata_repository import FakeRomMetadataRepository
 from fakes.fake_rom_repository import FakeRomRepository
-from fakes.fake_rom_save_state_repository import FakeRomSaveStateRepository
+from fakes.fake_rom_save_sync_state_repository import FakeRomSaveSyncStateRepository
 from fakes.fake_sync_run_repository import FakeSyncRunRepository
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 
@@ -43,7 +43,7 @@ if TYPE_CHECKING:
         RomInstallRepository,
         RomMetadataRepository,
         RomRepository,
-        RomSaveStateRepository,
+        RomSaveSyncStateRepository,
         SyncRunRepository,
         UnitOfWork,
         UnitOfWorkFactory,
@@ -69,7 +69,7 @@ class TestProtocolSatisfaction:
         installs: RomInstallRepository = FakeRomInstallRepository()
         metadata: RomMetadataRepository = FakeRomMetadataRepository()
         playtime: PlaytimeRepository = FakePlaytimeRepository()
-        save_states: RomSaveStateRepository = FakeRomSaveStateRepository()
+        save_states: RomSaveSyncStateRepository = FakeRomSaveSyncStateRepository()
         bios: BiosFileRepository = FakeBiosFileRepository()
         firmware: FirmwareCacheRepository = FakeFirmwareCacheRepository()
         runs: SyncRunRepository = FakeSyncRunRepository()
@@ -235,10 +235,10 @@ class TestFakePlaytimeRepository:
         assert repo.get(1) is None
 
 
-class TestFakeRomSaveStateRepository:
+class TestFakeRomSaveSyncStateRepository:
     def test_round_trip_iter_delete(self):
-        repo = FakeRomSaveStateRepository()
-        state = RomSaveState(files={"a.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h")})
+        repo = FakeRomSaveSyncStateRepository()
+        state = RomSaveSyncState(files={"a.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h")})
         repo.save(1, state)
         assert repo.get(1) == state
         assert repo.get(2) is None
@@ -247,8 +247,8 @@ class TestFakeRomSaveStateRepository:
         assert repo.get(1) is None
 
     def test_get_returns_deep_copy_so_nested_list_mutations_dont_leak(self):
-        repo = FakeRomSaveStateRepository()
-        repo.save(1, RomSaveState(own_upload_ids=[7]))
+        repo = FakeRomSaveSyncStateRepository()
+        repo.save(1, RomSaveSyncState(own_upload_ids=[7]))
         loaded = repo.get(1)
         assert loaded is not None
         loaded.track_own_upload(99)  # mutate the nested list, no save()
@@ -494,8 +494,8 @@ def _save_playtime(uow: FakeUnitOfWork, rom_id: int) -> None:
 
 
 def _save_save_state(uow: FakeUnitOfWork, rom_id: int) -> None:
-    uow.rom_save_states.save(
-        rom_id, RomSaveState(files={"a.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h")})
+    uow.rom_save_sync_states.save(
+        rom_id, RomSaveSyncState(files={"a.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h")})
     )
 
 
@@ -504,7 +504,7 @@ _PER_ROM_FK_SAVERS = [
     ("rom_installs", _save_rom_install),
     ("rom_metadata", _save_rom_metadata),
     ("playtime", _save_playtime),
-    ("rom_save_states", _save_save_state),
+    ("rom_save_sync_states", _save_save_state),
 ]
 
 

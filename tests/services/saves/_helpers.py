@@ -20,7 +20,7 @@ from fakes.system_time import FakeClock
 from adapters.save_file import SaveFileAdapter
 from domain.rom import Rom
 from domain.rom_install import RomInstall
-from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_layout import InSaveDir
 from services.saves import SaveService, SaveServiceConfig
 
@@ -91,21 +91,21 @@ def _seed_rom(svc, rom_id: int, *, platform_slug: str = "gba") -> None:
         )
 
 
-def _seed_save_state(svc, rom_id: int, state: RomSaveState, *, platform_slug: str = "gba") -> None:
-    """Seed a ``RomSaveState`` aggregate for *rom_id*, seeding its ``Rom`` FK first."""
+def _seed_save_state(svc, rom_id: int, state: RomSaveSyncState, *, platform_slug: str = "gba") -> None:
+    """Seed a ``RomSaveSyncState`` aggregate for *rom_id*, seeding its ``Rom`` FK first."""
     _seed_rom(svc, rom_id, platform_slug=platform_slug)
     with _uow(svc) as uow:
-        uow.rom_save_states.save(rom_id, state)
+        uow.rom_save_sync_states.save(rom_id, state)
 
 
-def _get_save_state(svc, rom_id: int) -> RomSaveState | None:
-    """Read back the persisted ``RomSaveState`` for *rom_id*, or ``None``."""
+def _get_save_state(svc, rom_id: int) -> RomSaveSyncState | None:
+    """Read back the persisted ``RomSaveSyncState`` for *rom_id*, or ``None``."""
     with _uow(svc) as uow:
-        return uow.rom_save_states.get(rom_id)
+        return uow.rom_save_sync_states.get(rom_id)
 
 
-def _require_save_state(svc, rom_id: int) -> RomSaveState:
-    """Read back the persisted ``RomSaveState`` for *rom_id*, asserting it exists.
+def _require_save_state(svc, rom_id: int) -> RomSaveSyncState:
+    """Read back the persisted ``RomSaveSyncState`` for *rom_id*, asserting it exists.
 
     Member-access narrowing twin of :func:`_get_save_state` for the common
     case where a test has just seeded/run a flow and the state is known to be
@@ -116,8 +116,8 @@ def _require_save_state(svc, rom_id: int) -> RomSaveState:
     return state
 
 
-def rom_save_state_from_dict(data: dict[str, Any]) -> RomSaveState:
-    """Build a ``RomSaveState`` from the legacy dict shape used across saves tests.
+def rom_save_sync_state_from_dict(data: dict[str, Any]) -> RomSaveSyncState:
+    """Build a ``RomSaveSyncState`` from the legacy dict shape used across saves tests.
 
     The SQLite aggregate has no ``from_dict``; this test helper preserves the
     ergonomic ``{"files": {fn: {...}}, "active_slot": ...}`` literal the old
@@ -137,7 +137,7 @@ def rom_save_state_from_dict(data: dict[str, Any]) -> RomSaveState:
     }
     raw_files = data.get("files", {})
     files = {fn: FileSyncState(**{k: v for k, v in fs.items() if k in _FILE_FIELDS}) for fn, fs in raw_files.items()}
-    return RomSaveState(
+    return RomSaveSyncState(
         active_slot=data.get("active_slot"),
         slot_confirmed=bool(data.get("slot_confirmed", False)),
         emulator=str(data.get("emulator", "retroarch")),
@@ -151,14 +151,14 @@ def rom_save_state_from_dict(data: dict[str, Any]) -> RomSaveState:
 
 
 def _seed_save_state_dict(svc, rom_id: int, data: dict[str, Any], *, platform_slug: str = "gba") -> None:
-    """Seed a ``RomSaveState`` from the legacy dict shape (seeds the ``Rom`` FK)."""
-    _seed_save_state(svc, rom_id, rom_save_state_from_dict(data), platform_slug=platform_slug)
+    """Seed a ``RomSaveSyncState`` from the legacy dict shape (seeds the ``Rom`` FK)."""
+    _seed_save_state(svc, rom_id, rom_save_sync_state_from_dict(data), platform_slug=platform_slug)
 
 
 def _do_sync(svc, rom_id: int):
     """Run the matrix sync worker for *rom_id* the way the op-entry does.
 
-    Loads the ``RomSaveState`` + device id from the shared UoW, resolves the
+    Loads the ``RomSaveSyncState`` + device id from the shared UoW, resolves the
     active core, runs ``do_sync_rom_saves`` (the matrix worker), persists the
     mutated aggregate, and returns ``(uploaded, downloaded, errors, conflicts)``.
     The direct-worker tests use this in place of the old ``do_sync_rom_saves(rom_id)``
@@ -167,7 +167,7 @@ def _do_sync(svc, rom_id: int):
     engine = svc._sync_engine
     if engine._rom_info.get_rom_save_info(rom_id) is None:
         # Not installed → nothing to sync and no roms row to anchor a write.
-        return engine.do_sync_rom_saves(rom_id, RomSaveState(), None, None, _default_slot(svc))
+        return engine.do_sync_rom_saves(rom_id, RomSaveSyncState(), None, None, _default_slot(svc))
     save_state, device_id = engine._read_sync_inputs(rom_id)
     core_so = engine.resolve_core(rom_id)
     default_slot = _default_slot(svc)
@@ -186,7 +186,7 @@ def _default_slot(svc):
 def _do_upload(svc, rom_id, file_path, filename, system, *, server_save=None, core_so=None):
     """Run the upload worker the way the op-entry does and return the mutated state.
 
-    Loads the ``RomSaveState`` + device id from the shared UoW, calls
+    Loads the ``RomSaveSyncState`` + device id from the shared UoW, calls
     ``do_upload_save`` (which mutates the aggregate in memory), persists it, and
     returns the in-memory state so the test can assert on the same object.
     """

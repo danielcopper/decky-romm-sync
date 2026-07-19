@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import os
 
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 from lib.errors import RommConnectionError
 from lib.list_result import ErrorCode
 
@@ -90,7 +90,7 @@ async def test_get_save_status_pending_upload_display(harness):
     enable_save_sync(harness)
     seed_install(harness, 42, system="gba", file_name="game.gba")
     _write_local_save(harness, system="gba", filename="game.srm", content=b"local progress")
-    seed_save_state(harness, 42, RomSaveState(active_slot="default", slot_confirmed=True, system="gba"))
+    seed_save_state(harness, 42, RomSaveSyncState(active_slot="default", slot_confirmed=True, system="gba"))
 
     result = await harness.plugin.get_save_status(42)
 
@@ -108,7 +108,7 @@ async def test_get_save_status_pending_upload_display(harness):
 
 async def test_get_save_slots_happy_shape(harness):
     enable_save_sync(harness)
-    # get_save_slots persists the merged slot listing → its rom_save_states write
+    # get_save_slots persists the merged slot listing → its rom_save_sync_states write
     # needs the roms FK parent (a synced ROM always has one in production).
     seed_rom(harness, 42)
     seed_server_save(harness, save_id=500, rom_id=42, slot="main")
@@ -190,7 +190,7 @@ async def test_null_slot_save_isolated_from_named_slot_but_visible_in_legacy_buc
     """
     enable_save_sync(harness)
     seed_install(harness, 42, system="gba", file_name="game.gba")
-    seed_save_state(harness, 42, RomSaveState(active_slot="default", slot_confirmed=True, system="gba"))
+    seed_save_state(harness, 42, RomSaveSyncState(active_slot="default", slot_confirmed=True, system="gba"))
     seed_server_save(
         harness, save_id=500, rom_id=42, slot="default", file_name="game.srm", updated_at="2026-02-17T06:00:00Z"
     )

@@ -248,7 +248,7 @@ py_modules/
     steam_config.py / steamgriddb.py / sgdb_artwork_cache.py / cover_art_file_store.py
     persistence.py                   # settings.json read/write + one-time legacy save_sync_state fold
     repositories/                    # SqliteUnitOfWork (unit_of_work.py) + 9 repos (8 aggregate + kv_config)
-                                     #   (rom, rom_install, rom_metadata, playtime, rom_save_state,
+                                     #   (rom, rom_install, rom_metadata, playtime, rom_save_sync_state,
                                      #    bios_file, firmware_cache, sync_run, kv_config)
     sqlite_migrations.py / machine_id.py  # schema migration runner (PRAGMA user_version) + machine-id reader
     download_file.py / firmware_file.py / migration_file.py / rom_files.py / save_file.py
@@ -259,7 +259,7 @@ py_modules/
   domain/                            # Pure compute — no I/O, no service/adapter imports
     _aggregate.py                    # the @cosmic_aggregate decorator
     rom.py / rom_install.py / rom_metadata.py / rom_metadata_mapping.py / playtime.py
-    rom_save_state.py / bios_file.py / firmware_cache.py / sync_run.py
+    rom_save_sync_state.py / bios_file.py / firmware_cache.py / sync_run.py
     sync_action.py / sync_diff.py / preview_delta.py / work_unit.py
     save_path.py / save_status*.py / save_attribution.py / save_extensions.py
     firmware_paths.py / bios.py / achievements.py / shortcut_data.py / steam_categories.py

@@ -9,7 +9,7 @@ Accepted
 Epic [#271](https://github.com/danielcopper/decky-romm-sync/issues/271) proposed a "hybrid 5-table" layout with **one
 `roms` mega-table** holding all per-ROM state, as a _starting point_ — it explicitly deferred the final layout to the
 schema sub-issue (#780). The aggregate set locked in #788 has five per-ROM aggregates: `Rom`, `RomInstall`,
-`RomMetadata`, `Playtime`, `RomSaveState` (plus the `FileSyncState` 1:N child). #780 had to choose how they sit in
+`RomMetadata`, `Playtime`, `RomSaveSyncState` (plus the `FileSyncState` 1:N child). #780 had to choose how they sit in
 tables.
 
 Two options for the per-ROM cluster:
@@ -17,7 +17,7 @@ Two options for the per-ROM cluster:
 1. **Mega-table.** One `roms` row carries identity + install + metadata + playtime + save-state scalars. `RomRepository`
    inserts the row; the four secondary repositories `UPDATE` their own column slices.
 2. **Table-per-aggregate.** Each per-ROM aggregate gets its own table keyed by `rom_id` (`roms`, `rom_installs`,
-   `rom_metadata`, `rom_playtime`, `rom_save_states`), with `rom_save_files` as the save child.
+   `rom_metadata`, `rom_playtime`, `rom_save_sync_states`), with `rom_save_files` as the save child.
 
 The foreign-key policy is entangled with this choice. The epic locked "**selective FK only** — one FK,
 `rom_save_files → roms ON DELETE CASCADE`, no others." That rule was written for the mega-table world, where the only FK
@@ -43,7 +43,7 @@ Secondary factors:
   repositories writing column slices of a shared row, and no implicit "the `roms` row must exist before any secondary
   write" ordering baked into the persistence layer.
 - **Legibility / AI-navigability** — "where is `RomMetadata` persisted?" answers itself (`rom_metadata`). The mega-table
-  would need column-name disambiguation (`system` appears on both `RomInstall` and `RomSaveState`).
+  would need column-name disambiguation (`system` appears on both `RomInstall` and `RomSaveSyncState`).
 
 On foreign keys: the split introduces a category that did not exist when the "one FK only" rule was written — **per-ROM
 child tables that are true parent-child** (per-ROM state is owned by the ROM and meaningless without it). They take
@@ -76,5 +76,5 @@ a deliberate full prune does, and cascading per-ROM state when the ROM is genuin
   representable) and turns `roms` into a wide grab-bag. The integrity cost outweighs a read-speed win that is irrelevant
   at single-user scale.
 - **Middle-ground hybrid** — keep the light, always-present state (identity, playtime) in `roms` and split out only the
-  bulky/independent `rom_metadata` and `rom_save_states`. Rejected: it has no clean rule ("which fields live where?")
-  and is less legible than the uniform full split.
+  bulky/independent `rom_metadata` and `rom_save_sync_states`. Rejected: it has no clean rule ("which fields live
+  where?") and is less legible than the uniform full split.

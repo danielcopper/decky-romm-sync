@@ -22,8 +22,8 @@ models this natively (verified against 4.9.2, API + server source):
 - A per-user default version exists: `rom_user.is_main_sibling` (RomM's "SET DEFAULT" checkbox). It is optional, and
   RomM's own grouped views fall back to alphabetical `fs_name_no_ext` when unset.
 - Server-side saves are strictly per ROM id — sibling versions have independent save universes. This matches both the
-  plugin's per-rom_id `RomSaveState` keying and RetroArch's per-content save naming (the `.srm` is named after the ROM
-  basename, so two dumps never share a save file on disk either).
+  plugin's per-rom_id `RomSaveSyncState` keying and RetroArch's per-content save naming (the `.srm` is named after the
+  ROM basename, so two dumps never share a save file on disk either).
 
 The plugin is sibling-blind today: the fetch receives all of these fields and persistence drops every one. That is not
 merely a missing feature — it produces wrong behavior. The Steam appId is `CRC32(exe + appName)` and the launcher exe is
@@ -141,7 +141,7 @@ lets the user set in its own UI.
 
 ### 4. Saves stay per rom_id; a version switch never migrates saves
 
-Save-sync keying is untouched: each sibling keeps its own `RomSaveState`, slots, baselines and server save universe.
+Save-sync keying is untouched: each sibling keeps its own `RomSaveSyncState`, slots, baselines and server save universe.
 After a version switch the game plays the target version's saves — matching what RomM itself does and what RetroArch's
 per-content `.srm` naming produces on disk anyway. No automatic carry-over, ever (a foreign-looking save appearing on a
 different dump is exactly the ambiguity the save-sync design refuses to auto-resolve). The save-status UI must make

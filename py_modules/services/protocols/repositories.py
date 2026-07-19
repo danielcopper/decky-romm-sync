@@ -5,12 +5,12 @@ adapter classes. Adapters implement them; the composition root wires them. This
 keeps the dependency direction clean (adapters → Protocols, never services →
 adapters) and makes each repository swappable in tests with a fake.
 
-One Repository per aggregate root, not per table. ``RomSaveStateRepository``
-spans two tables (``rom_save_states`` + ``rom_save_files``); that is an adapter
+One Repository per aggregate root, not per table. ``RomSaveSyncStateRepository``
+spans two tables (``rom_save_sync_states`` + ``rom_save_files``); that is an adapter
 concern — services see a single aggregate.
 
 The Protocols match the aggregate roots settled in ADR-0003 — ``Rom``,
-``RomInstall``, ``RomMetadata``, ``Playtime``, ``RomSaveState``, ``BiosFile``,
+``RomInstall``, ``RomMetadata``, ``Playtime``, ``RomSaveSyncState``, ``BiosFile``,
 ``FirmwareCacheEntry``, ``SyncRun`` — plus ``PlatformSyncState`` (the per-platform
 completion stamp, ADR-0023) and the ``kv_config`` key-value surface.
 ``SyncSettings``/``Platform``/``Device`` are NOT repositories — ADR-0003 dropped
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from domain.rom import Rom
     from domain.rom_install import RomInstall
     from domain.rom_metadata import RomMetadata
-    from domain.rom_save_state import RomSaveState
+    from domain.rom_save_sync_state import RomSaveSyncState
     from domain.sync_run import SyncRun
 
 
@@ -214,19 +214,19 @@ class PlaytimeRepository(Protocol):
         ...
 
 
-class RomSaveStateRepository(Protocol):
-    """Persistence seam for the ``RomSaveState`` aggregate (per-ROM save-sync state).
+class RomSaveSyncStateRepository(Protocol):
+    """Persistence seam for the ``RomSaveSyncState`` aggregate (per-ROM save-sync state).
 
     Keyed by *rom_id*. The aggregate spans two tables — the adapter reconstructs
     the per-file ``files{}`` mapping from ``rom_save_files``; services see one
     aggregate.
     """
 
-    def get(self, rom_id: int) -> RomSaveState | None:
+    def get(self, rom_id: int) -> RomSaveSyncState | None:
         """Return the save-sync state for *rom_id*, or ``None``. (saves/state.py, saves/sync_engine)"""
         ...
 
-    def save(self, rom_id: int, state: RomSaveState) -> None:
+    def save(self, rom_id: int, state: RomSaveSyncState) -> None:
         """Upsert *state* under *rom_id*, replacing its child file rows. (saves/state.py, saves/sync_engine)"""
         ...
 
@@ -234,7 +234,7 @@ class RomSaveStateRepository(Protocol):
         """Remove the save-sync state for *rom_id*. Idempotent. (saves/state.py orphan prune)"""
         ...
 
-    def iter_all(self) -> Iterator[tuple[int, RomSaveState]]:
+    def iter_all(self) -> Iterator[tuple[int, RomSaveSyncState]]:
         """Iterate ``(rom_id, state)`` for every ROM. (saves/state.py orphan scan)"""
         ...
 

@@ -34,7 +34,7 @@ from adapters.repositories.playtime import SqlitePlaytimeRepository
 from adapters.repositories.rom import SqliteRomRepository
 from adapters.repositories.rom_install import SqliteRomInstallRepository
 from adapters.repositories.rom_metadata import SqliteRomMetadataRepository
-from adapters.repositories.rom_save_state import SqliteRomSaveStateRepository
+from adapters.repositories.rom_save_sync_state import SqliteRomSaveSyncStateRepository
 from adapters.repositories.sync_run import SqliteSyncRunRepository
 
 if TYPE_CHECKING:
@@ -59,7 +59,7 @@ class SqliteUnitOfWork:
     rom_installs: SqliteRomInstallRepository
     rom_metadata: SqliteRomMetadataRepository
     playtime: SqlitePlaytimeRepository
-    rom_save_states: SqliteRomSaveStateRepository
+    rom_save_sync_states: SqliteRomSaveSyncStateRepository
     bios_files: SqliteBiosFileRepository
     firmware_cache: SqliteFirmwareCacheRepository
     sync_runs: SqliteSyncRunRepository
@@ -93,7 +93,7 @@ class SqliteUnitOfWork:
         self.rom_installs = SqliteRomInstallRepository(conn)
         self.rom_metadata = SqliteRomMetadataRepository(conn)
         self.playtime = SqlitePlaytimeRepository(conn)
-        self.rom_save_states = SqliteRomSaveStateRepository(conn)
+        self.rom_save_sync_states = SqliteRomSaveSyncStateRepository(conn)
         self.bios_files = SqliteBiosFileRepository(conn)
         self.firmware_cache = SqliteFirmwareCacheRepository(conn)
         self.sync_runs = SqliteSyncRunRepository(conn)

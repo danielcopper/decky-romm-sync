@@ -34,17 +34,17 @@ are documented in `CLAUDE.md`. The concrete aggregate set, its tables, and the e
 
 An immutable member of an aggregate, built whole and never mutated in place — a `@dataclass(frozen=True, slots=True)`,
 not a `@cosmic_aggregate` root. It has no identity of its own and no mutation surface to police, so it carries neither
-the decorator nor the verb-method discipline an aggregate root does. `FileSyncState` (inside `RomSaveState`) is the
+the decorator nor the verb-method discipline an aggregate root does. `FileSyncState` (inside `RomSaveSyncState`) is the
 canonical example. The foil to **Aggregate**: a root has identity and methods; a value object has neither.
 
 ### Repository
 
 The single persistence seam for one **Aggregate** — "give me this aggregate by id, save this aggregate." Exactly one
 Repository per aggregate root (Protocol in `services/protocols/`, SQLite adapter behind it). It may touch several tables
-to reconstruct or persist the aggregate — the `RomSaveState` repository spans `rom_save_states` + `rom_save_files` — but
-callers see only `get(id)` / `save(id, aggregate)`. It _is_ the load/save layer; the service layer never wraps it in a
-second one (no `StateService`-style holder between service and repository). Reached only through the **Unit of Work**
-(`uow.rom_save_states`, `uow.rom_installs`, …), never constructed directly.
+to reconstruct or persist the aggregate — the `RomSaveSyncState` repository spans `rom_save_sync_states` +
+`rom_save_files` — but callers see only `get(id)` / `save(id, aggregate)`. It _is_ the load/save layer; the service
+layer never wraps it in a second one (no `StateService`-style holder between service and repository). Reached only
+through the **Unit of Work** (`uow.rom_save_sync_states`, `uow.rom_installs`, …), never constructed directly.
 
 ### Unit of Work
 
@@ -236,7 +236,7 @@ disc no longer present) degrades to the default with a WARNING, never fatal.
 ### Save-sync slot
 
 A named channel for a ROM's saves (e.g. `default`). **Every slot is a real, addressable name** — the active slot for a
-ROM is recorded on its `RomSaveState`, and `default_slot` (a `settings.json` config value, per #822) is the slot a
+ROM is recorded on its `RomSaveSyncState`, and `default_slot` (a `settings.json` config value, per #822) is the slot a
 newly-tracked ROM starts on. Slots let the same ROM carry distinct save sets without clobbering one another. Confirming
 a slot (`confirm_slot(...)`) is an explicit user/flow decision that requires a real slot name — the plugin never
 silently adopts a foreign slot, and it never confirms a ROM onto the legacy `slot:null`. The legacy `slot:null` is

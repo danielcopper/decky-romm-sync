@@ -1,15 +1,15 @@
-"""Unit tests for the ``RomSaveState`` aggregate and its ``FileSyncState`` VO."""
+"""Unit tests for the ``RomSaveSyncState`` aggregate and its ``FileSyncState`` VO."""
 
 from __future__ import annotations
 
 import pytest
 
-from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 
 
 class TestDefaults:
     def test_default_construction_sets_expected_defaults(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         assert state.active_slot is None
         assert state.slot_confirmed is False
         assert state.emulator == "retroarch"
@@ -21,8 +21,8 @@ class TestDefaults:
         assert state.last_sync_check_at is None
 
     def test_slots_and_files_are_independent_per_instance(self):
-        a = RomSaveState()
-        b = RomSaveState()
+        a = RomSaveSyncState()
+        b = RomSaveSyncState()
         a.slots["default"] = {"source": "local"}
         a.files["x.srm"] = FileSyncState()
         assert b.slots == {}
@@ -50,7 +50,7 @@ class TestFileSyncState:
 
 class TestAdoptBaseline:
     def test_minimal_required_anchors_create_entry(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.adopt_baseline("game.srm", tracked_save_id=11, last_sync_hash="deadbeef")
         fs = state.files["game.srm"]
         assert fs.tracked_save_id == 11
@@ -65,7 +65,7 @@ class TestAdoptBaseline:
         assert fs.last_sync_local_size is None
 
     def test_all_fields_are_recorded(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.adopt_baseline(
             "game.srm",
             tracked_save_id=11,
@@ -90,7 +90,7 @@ class TestAdoptBaseline:
         assert fs.last_sync_local_size == 2048
 
     def test_re_adopt_replaces_existing_baseline(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.adopt_baseline("game.srm", tracked_save_id=11, last_sync_hash="old")
         state.adopt_baseline(
             "game.srm",
@@ -105,13 +105,13 @@ class TestAdoptBaseline:
 
     @pytest.mark.parametrize("bad_id", [0, -1])
     def test_non_positive_tracked_save_id_raises(self, bad_id: int):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         with pytest.raises(ValueError, match="tracked_save_id must be positive"):
             state.adopt_baseline("game.srm", tracked_save_id=bad_id, last_sync_hash="x")
         assert state.files == {}
 
     def test_empty_hash_raises(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         with pytest.raises(ValueError, match="last_sync_hash is required"):
             state.adopt_baseline("game.srm", tracked_save_id=11, last_sync_hash="")
         assert state.files == {}
@@ -119,7 +119,7 @@ class TestAdoptBaseline:
 
 class TestUpdateBaselineHash:
     def test_creates_minimal_entry_when_untracked(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.update_baseline_hash("game.srm", "abc123")
         fs = state.files["game.srm"]
         assert fs.last_sync_hash == "abc123"
@@ -129,7 +129,7 @@ class TestUpdateBaselineHash:
         assert fs.last_sync_at == ""
 
     def test_updates_hash_in_place_preserving_other_anchors(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.adopt_baseline(
             "game.srm",
             tracked_save_id=11,
@@ -151,7 +151,7 @@ class TestUpdateBaselineHash:
         # A changed local hash has no server hash for the new content; a kept
         # stale one would pair a fresh last_sync_hash with an unrelated server
         # hash, which the provenance identity check would misread (#1468).
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.adopt_baseline(
             "game.srm",
             tracked_save_id=11,
@@ -168,7 +168,7 @@ class TestUpdateBaselineHash:
         # unchanged file) keeps the stored server hash — it still pairs with the
         # unchanged last_sync_hash, so provenance survives repeated evaluation
         # (#1468).
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.adopt_baseline(
             "game.srm",
             tracked_save_id=11,
@@ -181,19 +181,19 @@ class TestUpdateBaselineHash:
         assert fs.last_sync_server_hash == "srv-same"
 
     def test_minimal_entry_has_no_server_hash(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.update_baseline_hash("game.srm", "abc123")
         assert state.files["game.srm"].last_sync_server_hash is None
 
     def test_does_not_add_a_second_entry_on_update(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.update_baseline_hash("game.srm", "a")
         state.update_baseline_hash("game.srm", "b")
         assert list(state.files) == ["game.srm"]
         assert state.files["game.srm"].last_sync_hash == "b"
 
     def test_empty_hash_raises(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         with pytest.raises(ValueError, match="last_sync_hash is required"):
             state.update_baseline_hash("game.srm", "")
         assert state.files == {}
@@ -201,25 +201,25 @@ class TestUpdateBaselineHash:
 
 class TestTrackOwnUpload:
     def test_starts_list_when_unknown(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         assert state.own_upload_ids is None
         state.track_own_upload(5)
         assert state.own_upload_ids == [5]
 
     def test_appends_new_id(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.track_own_upload(5)
         state.track_own_upload(6)
         assert state.own_upload_ids == [5, 6]
 
     def test_idempotent_on_existing_id(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.track_own_upload(5)
         state.track_own_upload(5)
         assert state.own_upload_ids == [5]
 
     def test_appends_to_explicitly_empty_list(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.own_upload_ids = []
         state.track_own_upload(7)
         assert state.own_upload_ids == [7]
@@ -227,7 +227,7 @@ class TestTrackOwnUpload:
 
 class TestConfirmSlot:
     def test_named_slot_sets_active_confirmed_and_key(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.confirm_slot("manual")
         assert state.active_slot == "manual"
         assert state.slot_confirmed is True
@@ -236,20 +236,20 @@ class TestConfirmSlot:
     def test_none_raises_legacy_retired(self):
         # Legacy slot:null confirmation is retired (#1276): confirm_slot rejects
         # None outright rather than confirming the no-slot mode.
-        state = RomSaveState()
+        state = RomSaveSyncState()
         with pytest.raises(ValueError, match="non-empty slot name"):
             state.confirm_slot(None)  # type: ignore[arg-type]
         assert state.slot_confirmed is False
         assert state.active_slot is None
 
     def test_empty_string_raises_legacy_retired(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         with pytest.raises(ValueError, match="non-empty slot name"):
             state.confirm_slot("")
         assert state.slot_confirmed is False
 
     def test_does_not_overwrite_existing_slot_entry(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.slots["manual"] = {"source": "server", "count": 3, "latest_updated_at": "2026-05-28T10:00:00"}
         state.confirm_slot("manual")
         assert state.slots["manual"] == {
@@ -261,14 +261,14 @@ class TestConfirmSlot:
 
 class TestSwitchActiveSlot:
     def test_named_slot_sets_active_and_key_without_confirming(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.switch_active_slot("manual")
         assert state.active_slot == "manual"
         assert state.slot_confirmed is False
         assert state.slots["manual"] == {"source": "local", "count": 0, "latest_updated_at": None}
 
     def test_does_not_clear_existing_confirmation(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.confirm_slot("a")
         assert state.slot_confirmed is True
         state.switch_active_slot("b")
@@ -276,19 +276,19 @@ class TestSwitchActiveSlot:
         assert state.slot_confirmed is True
 
     def test_none_uses_empty_string_key(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.switch_active_slot(None)
         assert state.active_slot is None
         assert state.slots[""] == {"source": "local", "count": 0, "latest_updated_at": None}
 
     def test_empty_string_normalizes_to_none(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.switch_active_slot("")
         assert state.active_slot is None
         assert "" in state.slots
 
     def test_does_not_overwrite_existing_slot_entry(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.slots["manual"] = {"source": "server", "count": 3, "latest_updated_at": None}
         state.switch_active_slot("manual")
         assert state.slots["manual"]["source"] == "server"
@@ -296,25 +296,25 @@ class TestSwitchActiveSlot:
 
 class TestMarkSyncEvaluated:
     def test_sets_last_sync_check_at(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.mark_sync_evaluated("2026-05-28T12:00:00")
         assert state.last_sync_check_at == "2026-05-28T12:00:00"
 
 
 class TestRecordSyncedCore:
     def test_sets_core_and_emulator(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.record_synced_core("snes9x", "retroarch")
         assert state.last_synced_core == "snes9x"
         assert state.emulator == "retroarch"
 
     def test_overwrites_default_emulator(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.record_synced_core("dolphin_core", "dolphin")
         assert state.emulator == "dolphin"
 
     def test_none_core_records_emulator_without_clobbering_core(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.record_synced_core("snes9x", "retroarch")
         state.record_synced_core(None, "dolphin")
         # Emulator updated; the previously-known core survives the None.
@@ -322,13 +322,13 @@ class TestRecordSyncedCore:
         assert state.last_synced_core == "snes9x"
 
     def test_none_core_on_fresh_state_leaves_core_none(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.record_synced_core(None, "retroarch")
         assert state.emulator == "retroarch"
         assert state.last_synced_core is None
 
     def test_empty_emulator_raises(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         with pytest.raises(ValueError, match="emulator is required"):
             state.record_synced_core("snes9x", "")
         # Nothing recorded on rejection.
@@ -338,14 +338,14 @@ class TestRecordSyncedCore:
 
 class TestPromoteSlotToServer:
     def test_flips_local_slot_to_server_and_seeds_count(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.slots["manual"] = {"source": "local", "count": 0, "latest_updated_at": None}
         state.promote_slot_to_server("manual")
         assert state.slots["manual"]["source"] == "server"
         assert state.slots["manual"]["count"] == 1
 
     def test_noop_when_slot_already_server(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.slots["manual"] = {"source": "server", "count": 5, "latest_updated_at": "2026-05-28T10:00:00"}
         state.promote_slot_to_server("manual")
         # Untouched — no double-count on a re-run.
@@ -356,32 +356,32 @@ class TestPromoteSlotToServer:
         }
 
     def test_noop_when_slot_untracked(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.promote_slot_to_server("ghost")
         assert "ghost" not in state.slots
 
     def test_empty_slot_raises(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         with pytest.raises(ValueError, match="slot is required"):
             state.promote_slot_to_server("")
 
 
 class TestDeleteFileTracking:
     def test_removes_tracked_file(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.adopt_baseline("game.srm", tracked_save_id=1, last_sync_hash="abc")
         state.delete_file_tracking("game.srm")
         assert "game.srm" not in state.files
 
     def test_only_removes_named_file(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.adopt_baseline("a.srm", tracked_save_id=1, last_sync_hash="abc")
         state.adopt_baseline("b.srm", tracked_save_id=2, last_sync_hash="def")
         state.delete_file_tracking("a.srm")
         assert list(state.files) == ["b.srm"]
 
     def test_noop_when_file_untracked(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.adopt_baseline("a.srm", tracked_save_id=1, last_sync_hash="abc")
         state.delete_file_tracking("missing.srm")
         assert list(state.files) == ["a.srm"]
@@ -389,20 +389,20 @@ class TestDeleteFileTracking:
 
 class TestDeleteSlotTracking:
     def test_removes_slot(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.slots["manual"] = {"source": "server", "count": 1, "latest_updated_at": None}
         state.delete_slot_tracking("manual")
         assert "manual" not in state.slots
 
     def test_only_removes_named_slot(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.slots["a"] = {"source": "local", "count": 0, "latest_updated_at": None}
         state.slots["b"] = {"source": "server", "count": 2, "latest_updated_at": None}
         state.delete_slot_tracking("a")
         assert list(state.slots) == ["b"]
 
     def test_noop_when_slot_untracked(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.slots["a"] = {"source": "local", "count": 0, "latest_updated_at": None}
         state.delete_slot_tracking("ghost")
         assert list(state.slots) == ["a"]
@@ -410,7 +410,7 @@ class TestDeleteSlotTracking:
 
 class TestRefreshSlotListing:
     def test_replaces_slots(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.slots = {"old": {"source": "local"}}
         merged = {"a": {"source": "server", "count": 1, "latest_updated_at": None}}
         state.refresh_slot_listing(merged)
@@ -420,7 +420,7 @@ class TestRefreshSlotListing:
 
 class TestClearBaselines:
     def test_resets_files_to_empty(self):
-        state = RomSaveState()
+        state = RomSaveSyncState()
         state.adopt_baseline("game.srm", tracked_save_id=1, last_sync_hash="abc")
         assert state.files
         state.clear_baselines()

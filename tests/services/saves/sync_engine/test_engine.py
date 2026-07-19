@@ -16,7 +16,7 @@ import zipfile
 
 import pytest
 
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_layout import ContentDir, InSaveDir
 from lib.errors import (
     RommApiError,
@@ -237,9 +237,9 @@ class TestSyncAllSaves:
 
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
-        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         _seed_save_state(
-            svc, 2, RomSaveState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
+            svc, 2, RomSaveSyncState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
         )
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
         _create_save(tmp_path, system="snes", rom_name="game2", content=b"save2")
@@ -267,9 +267,9 @@ class TestSyncAllSaves:
 
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
-        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         _seed_save_state(
-            svc, 2, RomSaveState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
+            svc, 2, RomSaveSyncState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
         )
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"good-save")
         # ROM 2's save is the poison: it sniffs as a zip but cannot be read as one.
@@ -301,9 +301,9 @@ class TestSyncAllSaves:
 
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
-        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         _seed_save_state(
-            svc, 2, RomSaveState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
+            svc, 2, RomSaveSyncState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
         )
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
         _create_save(tmp_path, system="snes", rom_name="game2", content=b"save2")
@@ -339,7 +339,7 @@ class TestSyncAllSaves:
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
-        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
 
         # Every ROM decides via the local matrix now (ADR-0017) — the worker is
@@ -371,7 +371,7 @@ class TestSyncAllSaves:
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
-        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
 
         # Stub the matrix worker to produce conflicts but no errors (every ROM
         # decides via do_sync_rom_saves now, ADR-0017).
@@ -399,7 +399,7 @@ class TestSyncAllSaves:
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
-        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
         # Confirmed non-legacy → the matrix POSTs the local-only save.
 
@@ -439,7 +439,7 @@ class TestSyncAllSaves:
         _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
-        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         # rom 2 left unconfirmed (no save state seeded).
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
         _create_save(tmp_path, system="snes", rom_name="game2", content=b"save2")
@@ -671,7 +671,7 @@ class TestDeviceSyncDisabled:
         _seed_save_state(
             svc,
             rom_id,
-            RomSaveState(system=system, slot_confirmed=True, active_slot="default"),
+            RomSaveSyncState(system=system, slot_confirmed=True, active_slot="default"),
             platform_slug=system,
         )
         _create_save(tmp_path, system=system, rom_name=rom_name, content=content)
@@ -1333,11 +1333,11 @@ class TestSyncEngineDelegates:
 
     def test_adopt_baseline_hash_delegates_to_matrix(self, tmp_path):
         """SyncEngine.adopt_baseline_hash records the hash on the passed aggregate."""
-        from domain.rom_save_state import RomSaveState
+        from domain.rom_save_sync_state import RomSaveSyncState
 
         svc, _ = make_service(tmp_path)
 
-        state = RomSaveState()
+        state = RomSaveSyncState()
         svc._sync_engine.adopt_baseline_hash(state, "pokemon.srm", "deadbeef" * 4)
 
         assert state.files["pokemon.srm"].last_sync_hash == "deadbeef" * 4
@@ -1621,7 +1621,7 @@ class TestSaveSyncDeviceGate:
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
-        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"save1")
 
         await self._assert_timeout_fallthrough(
@@ -1656,9 +1656,9 @@ class TestSaveSyncDeviceGate:
         _set_device_id(svc, "test-device")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
-        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         _seed_save_state(
-            svc, 2, RomSaveState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
+            svc, 2, RomSaveSyncState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
         )
 
         counter_lock = threading.Lock()
@@ -1704,7 +1704,7 @@ class TestRunRomSyncSession:
         _enable_sync_with_device(svc, device_id="device-1")
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
         _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"local")
-        _seed_save_state(svc, 42, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 42, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
 
         uploaded, downloaded, errors, conflicts = await svc._sync_engine._run_rom_sync(42)
 
@@ -1724,7 +1724,7 @@ class TestRunRomSyncSession:
         _enable_sync_with_device(svc, device_id="device-1")
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
         _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"local")
-        st = RomSaveState(system="gba")
+        st = RomSaveSyncState(system="gba")
         st.switch_active_slot("default")  # active_slot set, slot_confirmed stays False
         _seed_save_state(svc, 42, st)
 
@@ -1742,7 +1742,7 @@ class TestRunRomSyncSession:
         _enable_sync_with_device(svc, device_id="device-1")
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
         _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"local")
-        _seed_save_state(svc, 42, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 42, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         # The session-open negotiate POST raises; the run proceeds without a session.
         fake.fail_on_next(RommConnectionError("negotiate down"))
 
@@ -1766,7 +1766,7 @@ class TestRunRomSyncSession:
         _enable_sync_with_device(svc, device_id="device-1")
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
         # No local save created.
-        _seed_save_state(svc, 42, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 42, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         # A server save in the slot this device has never synced (no device_syncs).
         fake.saves[888] = _server_save_with_syncs(
             save_id=888, rom_id=42, filename="pokemon.srm", slot="default", device_syncs=[]
@@ -1791,7 +1791,7 @@ class TestRunRomSyncSession:
         _enable_sync_with_device(svc, device_id="device-1")
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
         _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"local")
-        _seed_save_state(svc, 42, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 42, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         # Only the session id is consumed from negotiate — its operations are ignored.
         fake.stage_negotiate([], session_id=77)
 
@@ -1812,7 +1812,7 @@ class TestRunRomSyncSession:
         _enable_sync_with_device(svc, device_id="device-1")
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
         _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"local")
-        _seed_save_state(svc, 42, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 42, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
 
         def malformed(device_id, saves):
             return {}  # 200 body missing session_id
@@ -1832,12 +1832,12 @@ class TestRunRomSyncSession:
     @pytest.mark.asyncio
     async def test_confirmed_upload_persists_baseline(self, tmp_path):
         """A confirmed-ROM matrix upload writes the per-file baseline to the PERSISTED
-        RomSaveState (launch-gate + slot-switch read it back, not the in-memory ref)."""
+        RomSaveSyncState (launch-gate + slot-switch read it back, not the in-memory ref)."""
         svc, _ = make_service(tmp_path)
         _enable_sync_with_device(svc, device_id="device-1")
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
         _create_save(tmp_path, system="gba", rom_name="pokemon", content=b"local save")
-        _seed_save_state(svc, 42, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 42, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
 
         await svc._sync_engine._run_rom_sync(42)
 
@@ -1848,11 +1848,11 @@ class TestRunRomSyncSession:
     @pytest.mark.asyncio
     async def test_confirmed_download_persists_baseline(self, tmp_path):
         """A confirmed-ROM matrix download writes the per-file baseline (server save
-        id + hash) to the PERSISTED RomSaveState."""
+        id + hash) to the PERSISTED RomSaveSyncState."""
         svc, fake = make_service(tmp_path)
         _enable_sync_with_device(svc, device_id="device-1")
         _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="pokemon.gba")
-        _seed_save_state(svc, 42, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 42, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         # Server-only save this device has never synced (no device_syncs) → download.
         fake.saves[888] = _server_save_with_syncs(
             save_id=888, rom_id=42, filename="pokemon.srm", slot="default", device_syncs=[]
@@ -1882,9 +1882,9 @@ class TestSyncAllSavesNegotiate:
         _set_device_id(svc, "device-1")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
-        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         _seed_save_state(
-            svc, 2, RomSaveState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
+            svc, 2, RomSaveSyncState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
         )
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"s1")
         _create_save(tmp_path, system="snes", rom_name="game2", content=b"s2")
@@ -1911,11 +1911,11 @@ class TestSyncAllSavesNegotiate:
         _set_device_id(svc, "device-1")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
-        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         _seed_save_state(
             svc,
             2,
-            RomSaveState(
+            RomSaveSyncState(
                 system="snes",
                 slot_confirmed=True,
                 active_slot=None,
@@ -1942,9 +1942,9 @@ class TestSyncAllSavesNegotiate:
         _set_device_id(svc, "device-1")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
         _install_rom(svc, tmp_path, rom_id=2, system="snes", file_name="game2.sfc")
-        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         _seed_save_state(
-            svc, 2, RomSaveState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
+            svc, 2, RomSaveSyncState(system="snes", slot_confirmed=True, active_slot="default"), platform_slug="snes"
         )
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"s1")  # rom1 local → uploads
         # rom2 has no local file but a server save it has never synced → download.
@@ -1971,7 +1971,7 @@ class TestSyncAllSavesNegotiate:
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "device-1")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
-        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"s1")
 
         def always_fail(device_id, saves):
@@ -1997,7 +1997,7 @@ class TestSyncAllSavesNegotiate:
         _seed_save_state(
             svc,
             1,
-            RomSaveState(
+            RomSaveSyncState(
                 system="gba",
                 slot_confirmed=True,
                 active_slot=None,
@@ -2020,7 +2020,7 @@ class TestSyncAllSavesNegotiate:
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "device-1")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
-        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"s1")
         fake.complete_raises = RommApiError("complete failed")
 
@@ -2038,7 +2038,7 @@ class TestSyncAllSavesNegotiate:
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "device-1")
         _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
-        _seed_save_state(svc, 1, RomSaveState(system="gba", slot_confirmed=True, active_slot="default"))
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
         _create_save(tmp_path, system="gba", rom_name="game1", content=b"s1")
 
         def malformed(device_id, saves):

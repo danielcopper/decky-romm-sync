@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_layout import ContentDir
 from lib.errors import RommApiError
 from tests.services.saves._helpers import (
@@ -160,7 +160,7 @@ class TestResolveSyncConflict:
         svc, fake = make_service(tmp_path)
         # No device registered — get_device_id() returns None.
         _install_rom(svc, tmp_path)
-        _seed_save_state(svc, 42, RomSaveState(system="gba", active_slot="default", slot_confirmed=True))
+        _seed_save_state(svc, 42, RomSaveSyncState(system="gba", active_slot="default", slot_confirmed=True))
         _create_save(tmp_path, content=b"local-edited")  # on-disk local save keep_local reads
 
         ss = _server_save_with_syncs(
@@ -320,7 +320,7 @@ class TestResolveSyncConflict:
         _create_save(tmp_path, content=b"x")
 
         # Pre-populate state to assert it stays untouched.
-        original_state = RomSaveState(
+        original_state = RomSaveSyncState(
             files={"pokemon.srm": FileSyncState(tracked_save_id=100, last_sync_hash="abc")},
         )
         _seed_save_state(svc, 42, original_state)
@@ -621,7 +621,7 @@ class TestResolveSyncConflictContentDirGate:
         _seed_save_state(
             svc,
             42,
-            RomSaveState(
+            RomSaveSyncState(
                 active_slot="default",
                 files={
                     "pokemon.srm": FileSyncState(

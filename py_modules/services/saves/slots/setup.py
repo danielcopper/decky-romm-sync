@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.emulator_tag import build_emulator_tag
 from domain.iso_time import parse_iso_to_epoch
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 from domain.save_slot import save_in_slot, slot_query_param
 from services.saves._messages import SAVE_SYNC_IN_CONTENT_DIR
@@ -69,13 +69,13 @@ class SetupWizard:
         self._log_debug = log_debug
         self._sync_engine = sync_engine
 
-    def _read_save_state(self, rom_id: int) -> RomSaveState | None:
+    def _read_save_state(self, rom_id: int) -> RomSaveSyncState | None:
         with self._uow_factory() as uow:
-            return uow.rom_save_states.get(rom_id)
+            return uow.rom_save_sync_states.get(rom_id)
 
-    def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
+    def _write_save_state(self, rom_id: int, save_state: RomSaveSyncState) -> None:
         with self._uow_factory() as uow:
-            uow.rom_save_states.save(rom_id, save_state)
+            uow.rom_save_sync_states.save(rom_id, save_state)
 
     def is_save_tracking_configured(self, rom_id: int) -> dict[str, Any]:
         """Check if save slot tracking is configured for a game.
@@ -191,9 +191,9 @@ class SetupWizard:
             "server_query_failed": False,
         }
 
-    def _read_setup_inputs(self, rom_id: int) -> tuple[RomSaveState | None, str | None]:
+    def _read_setup_inputs(self, rom_id: int) -> tuple[RomSaveSyncState | None, str | None]:
         with self._uow_factory() as uow:
-            state = uow.rom_save_states.get(rom_id)
+            state = uow.rom_save_sync_states.get(rom_id)
         return state, self._device_registry.get_device_id()
 
     async def confirm_slot_choice(
@@ -246,13 +246,13 @@ class SetupWizard:
                 "message": "Slot name cannot be empty",
             }
 
-        # The read→confirm→(migrate)→write of the RomSaveState aggregate must
+        # The read→confirm→(migrate)→write of the RomSaveSyncState aggregate must
         # serialise against every other path that touches this ROM's state.
         # content_dir_blocked and _migrate_slot_saves do NOT acquire rom_lock,
         # so calling them inside the held lock is safe (no re-entry).
         async with self._sync_engine.rom_lock(rom_id):
             # Load → confirm in memory; migration I/O runs outside the txn.
-            save_state = await self._loop.run_in_executor(None, self._read_save_state, rom_id) or RomSaveState()
+            save_state = await self._loop.run_in_executor(None, self._read_save_state, rom_id) or RomSaveSyncState()
             save_state.confirm_slot(normalized_slot)
 
             # Migration: re-upload local files to new slot, delete old server saves

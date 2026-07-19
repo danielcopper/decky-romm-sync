@@ -5,7 +5,7 @@ sequencing rules every public save-sync callable must follow (save-sync
 enabled check, retrodeck migration gate, save-sort detect, device-
 registration fallback, dispatch into the matrix executor, persistence).
 Each public callable owns a narrow Unit of Work (ADR-0006): it reads the
-``RomSaveState`` aggregate + ``device_id`` at the start, performs all
+``RomSaveSyncState`` aggregate + ``device_id`` at the start, performs all
 server/file I/O outside any transaction, and writes the mutated
 aggregate back in a short write UoW at the end. The implementation of
 the actual file/server transfers lives in
@@ -33,7 +33,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_layout import ContentDir
 from lib.errors import RommConnectionError, RommSyncDisabledError, RommTimeoutError, classify_error
 from lib.list_result import ErrorCode
@@ -283,7 +283,7 @@ class SyncEngine:
     def do_sync_rom_saves(
         self,
         rom_id: int,
-        save_state: RomSaveState,
+        save_state: RomSaveSyncState,
         device_id: str | None,
         core_so: str | None,
         default_slot: str | None = None,
@@ -301,7 +301,7 @@ class SyncEngine:
         server_save: dict[str, Any],
         saves_dir: str,
         filename: str,
-        save_state: RomSaveState,
+        save_state: RomSaveSyncState,
         device_id: str | None,
         system: str,
         default_slot: str | None = None,
@@ -318,7 +318,7 @@ class SyncEngine:
         rom_id: int,
         file_path: str,
         filename: str,
-        save_state: RomSaveState,
+        save_state: RomSaveSyncState,
         device_id: str | None,
         system: str,
         core_so: str | None,
@@ -347,7 +347,7 @@ class SyncEngine:
         rom_id: int,
         server_in_slot: list[dict[str, Any]],
         *,
-        save_state: RomSaveState | None,
+        save_state: RomSaveSyncState | None,
         device_id: str | None,
         info: dict[str, Any],
     ) -> Iterator[MatrixOutcome]:
@@ -356,7 +356,7 @@ class SyncEngine:
             rom_id, server_in_slot, save_state=save_state, device_id=device_id, info=info
         )
 
-    def adopt_baseline_hash(self, save_state: RomSaveState, filename: str, local_hash: str) -> None:
+    def adopt_baseline_hash(self, save_state: RomSaveSyncState, filename: str, local_hash: str) -> None:
         """Record ``local_hash`` as the file's ``last_sync_hash`` baseline."""
         self._matrix.adopt_baseline_hash(save_state, filename, local_hash)
 
@@ -402,23 +402,23 @@ class SyncEngine:
     # Narrow-UoW read/write helpers (ADR-0006)
     # ------------------------------------------------------------------
 
-    def _read_sync_inputs(self, rom_id: int) -> tuple[RomSaveState, str | None]:
+    def _read_sync_inputs(self, rom_id: int) -> tuple[RomSaveSyncState, str | None]:
         """Short read UoW: load the ROM's save state + device id.
 
-        Returns the loaded :class:`RomSaveState` (a fresh default when absent)
+        Returns the loaded :class:`RomSaveSyncState` (a fresh default when absent)
         and the server device id (read through the shared
         :class:`DeviceRegistry`, the single device-id owner). The aggregate is
         mutated outside the transaction by the matrix worker;
         :meth:`_write_save_state` persists it.
         """
         with self._uow_factory() as uow:
-            state = uow.rom_save_states.get(rom_id) or RomSaveState()
+            state = uow.rom_save_sync_states.get(rom_id) or RomSaveSyncState()
         return state, self._devices.get_device_id()
 
-    def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
+    def _write_save_state(self, rom_id: int, save_state: RomSaveSyncState) -> None:
         """Short write UoW: persist the mutated save state for *rom_id*."""
         with self._uow_factory() as uow:
-            uow.rom_save_states.save(rom_id, save_state)
+            uow.rom_save_sync_states.save(rom_id, save_state)
 
     # ------------------------------------------------------------------
     # Public sync orchestration callables
@@ -560,7 +560,7 @@ class SyncEngine:
         aggregate in memory, then a short write UoW persists it.
 
         A ROM with no install record has nothing to sync — and no ``roms`` row
-        to anchor a ``rom_save_states`` write against (ADR-0007 FK) — so we
+        to anchor a ``rom_save_sync_states`` write against (ADR-0007 FK) — so we
         short-circuit before touching the aggregate.
 
         When *require_confirmed* is set (the bulk ``sync_all_saves`` sweep), a ROM

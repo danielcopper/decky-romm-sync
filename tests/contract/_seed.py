@@ -5,7 +5,7 @@ same one the wired services read) and onto the *real* settings dict, so a
 contract test seeds state the way production accumulates it. The server
 side is seeded directly on the :class:`FakeRommApi` public attributes.
 
-The real ``rom_save_states`` / ``rom_installs`` tables carry a ``rom_id``
+The real ``rom_save_sync_states`` / ``rom_installs`` tables carry a ``rom_id``
 foreign key to ``roms`` (``PRAGMA foreign_keys=ON``), so any per-ROM child
 seed must seed the parent ``Rom`` row first — :func:`seed_rom` does that and
 is called by the child seeders.
@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from domain.platform_sync_state import PlatformSyncState
 from domain.rom import Rom
 from domain.rom_install import RomInstall
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 
 if TYPE_CHECKING:
     from tests.contract._harness import ContractHarness
@@ -162,14 +162,14 @@ def seed_group_member(
 def seed_save_state(
     harness: ContractHarness,
     rom_id: int,
-    state: RomSaveState,
+    state: RomSaveSyncState,
     *,
     platform_slug: str = "gba",
 ) -> None:
-    """Seed a ``RomSaveState`` aggregate (seeds the ``Rom`` FK first)."""
+    """Seed a ``RomSaveSyncState`` aggregate (seeds the ``Rom`` FK first)."""
     seed_rom(harness, rom_id, platform_slug=platform_slug)
     with harness.uow_factory() as uow:
-        uow.rom_save_states.save(rom_id, state)
+        uow.rom_save_sync_states.save(rom_id, state)
 
 
 def seed_confirmed_slot(
@@ -186,7 +186,7 @@ def seed_confirmed_slot(
     present in the persisted slots map (the shape ``get_slot_delete_info``
     and ``is_save_tracking_configured`` read).
     """
-    state = RomSaveState()
+    state = RomSaveSyncState()
     state.confirm_slot(slot)
     state.refresh_slot_listing({slot: {"source": source, "count": 1, "latest_updated_at": "2026-01-01T00:00:00Z"}})
     seed_save_state(harness, rom_id, state, platform_slug=platform_slug)

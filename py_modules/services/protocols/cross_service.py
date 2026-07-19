@@ -288,7 +288,7 @@ class LaunchGateDriftReader(Protocol):
 
     The composition root satisfies this with a thin shim over the same
     ``RomInfoService.find_save_files`` discovery the sync/status path uses
-    and the ``rom_save_states`` aggregate's per-file ``last_sync_hash``
+    and the ``rom_save_sync_states`` aggregate's per-file ``last_sync_hash``
     baselines — so the launch-gate drift check sees exactly the files a
     real sync would, never a divergent file-discovery path.
 

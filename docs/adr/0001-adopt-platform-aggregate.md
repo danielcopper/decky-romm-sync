@@ -41,8 +41,8 @@ Other rationale:
 
 ## Consequences
 
-- `Rom`, `RomInstall`, `BiosFile`, `RomSaveState` carry `platform_slug` as a reference into the `platforms` table — not
-  a free-floating string. This is a **logical / join reference, not a DB-enforced `FOREIGN KEY` constraint**: the
+- `Rom`, `RomInstall`, `BiosFile`, `RomSaveSyncState` carry `platform_slug` as a reference into the `platforms` table —
+  not a free-floating string. This is a **logical / join reference, not a DB-enforced `FOREIGN KEY` constraint**: the
   selective-FK rule (epic #271, finalized in [ADR-0002](0002-per-rom-table-per-aggregate-split.md)) deliberately keeps
   no FK on `platform_slug`, because an enforced constraint would force insert ordering and block platform pruning while
   ROMs exist — fighting the disk-truth-pruning model.

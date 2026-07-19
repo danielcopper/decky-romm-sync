@@ -47,8 +47,8 @@ different decision sources — the op list for sync, the kernel for status — i
 transport.**
 
 - **One kernel, every ROM.** `SyncEngine._run_rom_sync` runs the same path for confirmed non-legacy and legacy
-  `slot:null` ROMs alike: load the `RomSaveState`, fetch server saves with `list_saves`, run `compute_sync_action` per
-  file, dispatch through the unchanged `_dispatch_sync_action`. The op→action fork (`dispatch_negotiate_ops` and its
+  `slot:null` ROMs alike: load the `RomSaveSyncState`, fetch server saves with `list_saves`, run `compute_sync_action`
+  per file, dispatch through the unchanged `_dispatch_sync_action`. The op→action fork (`dispatch_negotiate_ops` and its
   helpers) is deleted. `StatusService` was already kernel-driven and is untouched, so the sync run and the SAVES tab now
   provably share the one decision.
 - **`negotiate` stays, transport-only.** When a ROM has a confirmed non-legacy slot the run still opens a negotiate

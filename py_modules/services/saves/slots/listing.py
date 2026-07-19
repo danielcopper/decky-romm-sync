@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_slot import save_in_slot, slot_query_param
 from lib.list_result import ErrorCode
 from services.saves._messages import SAVE_SYNC_DISABLED
@@ -50,9 +50,9 @@ class SlotListing:
         self._loop = loop
         self._log_debug = log_debug
 
-    def _read_inputs(self, rom_id: int) -> tuple[RomSaveState | None, str | None]:
+    def _read_inputs(self, rom_id: int) -> tuple[RomSaveSyncState | None, str | None]:
         with self._uow_factory() as uow:
-            state = uow.rom_save_states.get(rom_id)
+            state = uow.rom_save_sync_states.get(rom_id)
         return state, self._device_registry.get_device_id()
 
     async def get_save_slots(self, rom_id: int) -> dict[str, Any]:
@@ -123,7 +123,7 @@ class SlotListing:
         # Persist merged slots in state. The aggregate may not exist yet (ROM
         # never synced) — start a fresh default and seed its active slot.
         if rom_state is None:
-            game_entry = RomSaveState()
+            game_entry = RomSaveSyncState()
             game_entry.switch_active_slot(active_slot)
         else:
             game_entry = rom_state
@@ -143,9 +143,9 @@ class SlotListing:
 
         return {"success": True, "slots": result_slots, "active_slot": active_slot}
 
-    def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
+    def _write_save_state(self, rom_id: int, save_state: RomSaveSyncState) -> None:
         with self._uow_factory() as uow:
-            uow.rom_save_states.save(rom_id, save_state)
+            uow.rom_save_sync_states.save(rom_id, save_state)
 
     @staticmethod
     def _merge_persisted_slots(

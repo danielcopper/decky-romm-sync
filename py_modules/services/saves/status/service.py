@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.emulator_tag import detect_core_change
 from domain.iso_time import parse_iso_to_epoch
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_attribution import compute_uploaded_by_us
 from domain.save_layout import ContentDir
 from domain.save_status import compute_multi_file_slot, compute_save_sync_display
@@ -127,7 +127,7 @@ class StatusService:
     def _partition_outcomes(
         self,
         rom_id: int,
-        save_state: RomSaveState,
+        save_state: RomSaveSyncState,
         device_id: str | None,
         server_in_slot: list[dict[str, Any]],
         info: dict[str, Any],
@@ -216,7 +216,7 @@ class StatusService:
         info = None if savefiles_in_content_dir else self._rom_info.get_rom_save_info(rom_id)
 
         with self._uow_factory() as uow:
-            save_state = uow.rom_save_states.get(rom_id)
+            save_state = uow.rom_save_sync_states.get(rom_id)
             playtime = uow.playtime.get(rom_id)
         device_id = self._device_registry.get_device_id()
 
@@ -232,14 +232,14 @@ class StatusService:
         if info is not None:
             # The baseline-adopt path mutates a working copy; an absent aggregate
             # starts from a fresh default so the matrix can evaluate against it.
-            working_state = save_state if save_state is not None else RomSaveState()
+            working_state = save_state if save_state is not None else RomSaveSyncState()
             local_outcomes, server_only_outcomes, baseline_adopted, all_filenames = self._partition_outcomes(
                 rom_id, working_state, device_id, server_in_slot, info
             )
             multi_file = compute_multi_file_slot(all_filenames)
             if baseline_adopted:
                 with self._uow_factory() as uow:
-                    uow.rom_save_states.save(rom_id, working_state)
+                    uow.rom_save_sync_states.save(rom_id, working_state)
                 save_state = working_state
                 own_upload_ids = working_state.own_upload_ids
 
@@ -342,7 +342,7 @@ class StatusService:
         local probing is skipped and the display reads "Save sync off",
         while playtime / device_id stay intact (#239).
 
-        The ``rom_save_states`` read-modify-write (the baseline-adopt
+        The ``rom_save_sync_states`` read-modify-write (the baseline-adopt
         write in ``_get_save_status_io``) runs under the per-ROM sync lock
         (``SyncEngine.rom_lock(rom_id)``), so it cannot interleave with a
         concurrent ``do_sync_rom_saves`` and lose that sync's update. The
@@ -387,7 +387,7 @@ class StatusService:
             return {"changed": False}
 
         with self._uow_factory() as uow:
-            save_entry = uow.rom_save_states.get(rom_id)
+            save_entry = uow.rom_save_sync_states.get(rom_id)
         if not save_entry:
             return {"changed": False}  # Never synced
 

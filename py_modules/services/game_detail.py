@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
     from domain.rom import Rom
     from domain.rom_install import RomInstall
-    from domain.rom_save_state import RomSaveState
+    from domain.rom_save_sync_state import RomSaveSyncState
     from services.protocols import (
         AchievementsReader,
         ActiveCoreReader,
@@ -54,7 +54,7 @@ class GameDetailServiceConfig:
 
     Holds the live settings dict, runtime infrastructure, the clock seam, the
     SQLite Unit-of-Work factory (the read seam over the ``roms`` /
-    ``rom_installs`` / ``rom_save_states`` / ``rom_metadata`` / ``kv_config``
+    ``rom_installs`` / ``rom_save_sync_states`` / ``rom_metadata`` / ``kv_config``
     aggregates), and the Protocol-typed reader adapters (``BiosChecker``,
     ``AchievementsReader``, ``ActiveCoreReader``) GameDetailService consults to
     assemble the game-detail payload. The active-core resolver answers "which
@@ -91,12 +91,12 @@ class GameDetailService:
         return rom.fs_name
 
     @staticmethod
-    def _build_save_status(save_state: RomSaveState | None) -> dict[str, Any] | None:
+    def _build_save_status(save_state: RomSaveSyncState | None) -> dict[str, Any] | None:
         """Build cached save-sync status from the ROM's save state, or None."""
         if save_state is None:
             return None
         # Every persisted file row carries a non-empty last_sync_hash (NOT NULL in
-        # rom_save_files; both RomSaveState writers reject an empty hash), so a
+        # rom_save_files; both RomSaveSyncState writers reject an empty hash), so a
         # tracked file is always "synced" here.
         files_list = [
             {
@@ -201,7 +201,7 @@ class GameDetailService:
                 return {"found": False}
             rom_id = rom.rom_id
             install = uow.rom_installs.get(rom_id)
-            save_state = uow.rom_save_states.get(rom_id)
+            save_state = uow.rom_save_sync_states.get(rom_id)
             metadata_raw = uow.rom_metadata.get(rom_id)
             platform_names = decode_platform_names(uow.kv_config.get(_PLATFORM_NAMES_KEY))
 

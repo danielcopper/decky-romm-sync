@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from domain.iso_time import parse_iso_to_epoch
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 from domain.save_slot import save_in_slot
 from lib.list_result import ErrorCode
@@ -76,14 +76,14 @@ class SlotSwitcher:
         self._save_file_store = save_file_store
         self._log_debug = log_debug
 
-    def _read_inputs(self, rom_id: int) -> tuple[RomSaveState, str | None]:
+    def _read_inputs(self, rom_id: int) -> tuple[RomSaveSyncState, str | None]:
         with self._uow_factory() as uow:
-            state = uow.rom_save_states.get(rom_id) or RomSaveState()
+            state = uow.rom_save_sync_states.get(rom_id) or RomSaveSyncState()
         return state, self._device_registry.get_device_id()
 
-    def _write_save_state(self, rom_id: int, save_state: RomSaveState) -> None:
+    def _write_save_state(self, rom_id: int, save_state: RomSaveSyncState) -> None:
         with self._uow_factory() as uow:
-            uow.rom_save_states.save(rom_id, save_state)
+            uow.rom_save_sync_states.save(rom_id, save_state)
 
     async def set_active_slot(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Set the active save slot for a specific game.
@@ -105,16 +105,16 @@ class SlotSwitcher:
 
         async with self._sync_engine.rom_lock(rom_id):
             with self._uow_factory() as uow:
-                rom_state = uow.rom_save_states.get(rom_id) or RomSaveState()
+                rom_state = uow.rom_save_sync_states.get(rom_id) or RomSaveSyncState()
                 rom_state.switch_active_slot(slot_str)
-                uow.rom_save_states.save(rom_id, rom_state)
+                uow.rom_save_sync_states.save(rom_id, rom_state)
 
         # The background check re-acquires rom_lock when it runs later, so it
         # must be scheduled outside the held lock above.
         self._loop.create_task(self._status_service.check_save_status_background(rom_id))
         return {"success": True, "active_slot": slot_str}
 
-    def _check_slot_switch_readiness(self, rom_id: int, save_state: RomSaveState) -> dict[str, Any]:
+    def _check_slot_switch_readiness(self, rom_id: int, save_state: RomSaveSyncState) -> dict[str, Any]:
         """Check whether it is safe to switch slots for this ROM.
 
         A switch is unsafe if local files have changed since the last sync
@@ -205,7 +205,7 @@ class SlotSwitcher:
         saves_dir = info["saves_dir"]
         system = info["system"]
 
-        # The read→mutate→write of the RomSaveState aggregate must serialise
+        # The read→mutate→write of the RomSaveSyncState aggregate must serialise
         # against every other path that touches this ROM's state (sync, status,
         # the other slot mutations). Hold the per-ROM lock across the whole
         # critical section — never around the tail ``get_save_status`` below,
@@ -311,7 +311,7 @@ class SlotSwitcher:
         rom_id: int,
         saves_dir: str,
         system: str,
-        save_state: RomSaveState,
+        save_state: RomSaveSyncState,
         device_id: str | None,
         targets: dict[str, dict[str, Any]],
         default_slot: str | None,

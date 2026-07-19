@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 import os
 
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 
 from ._seed import enable_save_sync, seed_install, seed_save_state, seed_server_save
 
@@ -39,7 +39,7 @@ def _write_local_save(harness, *, system: str, content: bytes, filename: str) ->
 
 def _read_persisted_baseline(harness, rom_id: int, filename: str) -> str | None:
     with harness.uow_factory() as uow:
-        state = uow.rom_save_states.get(rom_id)
+        state = uow.rom_save_sync_states.get(rom_id)
     assert state is not None
     file_state = state.files.get(filename)
     return file_state.last_sync_hash if file_state else None
@@ -53,7 +53,7 @@ async def test_get_save_status_and_sync_share_kernel(harness):
     local_hash = hashlib.md5(content).hexdigest()
 
     # Confirmed non-legacy slot, no per-file baseline yet (never synced this file).
-    seed_save_state(harness, 42, RomSaveState(active_slot="default", slot_confirmed=True, system="gba"))
+    seed_save_state(harness, 42, RomSaveSyncState(active_slot="default", slot_confirmed=True, system="gba"))
 
     # A server save in the slot with content_hash == local_hash and NO device_syncs
     # entry for this device (no ledger row) → branch 6 adopt case.

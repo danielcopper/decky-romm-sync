@@ -1,6 +1,6 @@
-"""SQLite adapter for the ``RomSaveState`` aggregate.
+"""SQLite adapter for the ``RomSaveSyncState`` aggregate.
 
-Spans two tables: the per-ROM scalars live in ``rom_save_states`` and the
+Spans two tables: the per-ROM scalars live in ``rom_save_sync_states`` and the
 per-file ``FileSyncState`` baselines in ``rom_save_files``. ``get`` rebuilds the
 aggregate from both; ``save`` writes the scalar row and replaces the child file
 rows inside the unit-of-work's open transaction.
@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from adapters.repositories._base import BaseRepository
-from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 
 if TYPE_CHECKING:
     import sqlite3
@@ -49,11 +49,11 @@ def _row_to_file(row: sqlite3.Row) -> FileSyncState:
     )
 
 
-class SqliteRomSaveStateRepository(BaseRepository):
-    """Per-ROM save-sync state spanning rom_save_states + rom_save_files."""
+class SqliteRomSaveSyncStateRepository(BaseRepository):
+    """Per-ROM save-sync state spanning rom_save_sync_states + rom_save_files."""
 
-    def _row_to_state(self, row: sqlite3.Row, files: dict[str, FileSyncState]) -> RomSaveState:
-        return RomSaveState(
+    def _row_to_state(self, row: sqlite3.Row, files: dict[str, FileSyncState]) -> RomSaveSyncState:
+        return RomSaveSyncState(
             active_slot=row["active_slot"],
             slot_confirmed=self._to_bool(row["slot_confirmed"]),
             emulator=row["emulator"],
@@ -65,9 +65,9 @@ class SqliteRomSaveStateRepository(BaseRepository):
             last_sync_check_at=row["last_sync_check_at"],
         )
 
-    def get(self, rom_id: int) -> RomSaveState | None:
+    def get(self, rom_id: int) -> RomSaveSyncState | None:
         row = self._conn.execute(
-            f"SELECT {_STATE_COLUMNS} FROM rom_save_states WHERE rom_id = ?",
+            f"SELECT {_STATE_COLUMNS} FROM rom_save_sync_states WHERE rom_id = ?",
             (rom_id,),
         ).fetchone()
         if row is None:
@@ -81,9 +81,9 @@ class SqliteRomSaveStateRepository(BaseRepository):
         }
         return self._row_to_state(row, files)
 
-    def save(self, rom_id: int, state: RomSaveState) -> None:
+    def save(self, rom_id: int, state: RomSaveSyncState) -> None:
         self._conn.execute(
-            f"INSERT OR REPLACE INTO rom_save_states ({_STATE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            f"INSERT OR REPLACE INTO rom_save_sync_states ({_STATE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 rom_id,
                 state.active_slot,
@@ -119,10 +119,10 @@ class SqliteRomSaveStateRepository(BaseRepository):
 
     def delete(self, rom_id: int) -> None:
         self._conn.execute("DELETE FROM rom_save_files WHERE rom_id = ?", (rom_id,))
-        self._conn.execute("DELETE FROM rom_save_states WHERE rom_id = ?", (rom_id,))
+        self._conn.execute("DELETE FROM rom_save_sync_states WHERE rom_id = ?", (rom_id,))
 
-    def iter_all(self) -> Iterator[tuple[int, RomSaveState]]:
-        rom_ids = [row["rom_id"] for row in self._conn.execute("SELECT rom_id FROM rom_save_states")]
+    def iter_all(self) -> Iterator[tuple[int, RomSaveSyncState]]:
+        rom_ids = [row["rom_id"] for row in self._conn.execute("SELECT rom_id FROM rom_save_sync_states")]
         for rom_id in rom_ids:
             state = self.get(rom_id)
             if state is not None:

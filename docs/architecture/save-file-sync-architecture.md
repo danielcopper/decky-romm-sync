@@ -116,14 +116,14 @@ that run and discarded on exit.
 ### Negotiate inventory builder (`SaveService.build_save_inventory`)
 
 The negotiate POST sends this device's local save inventory; `SaveService.build_save_inventory()` assembles it as a
-`list[ClientSaveState]`. It walks the `rom_save_states` aggregate and keeps only ROMs **in scope** — `slot_confirmed` is
-true **and** `active_slot` is a real (truthy) slot, which excludes both the unset `None` and the legacy `""` slot. For
-each in-scope ROM it enumerates the local save files via `RomInfoService.find_save_files` and emits **one
-`ClientSaveState` per file** (per-file granularity): a confirmed ROM with no local files contributes nothing, and a ROM
-with several local files yields one entry each. Per entry, `content_hash` is always set via `SaveFileStore.content_hash`
-— the zip-aware RomM-parity hash above, never the single-file `checksum_md5` — and `updated_at` is the local file's
-mtime rendered as a UTC ISO-8601 string (`domain.iso_time.epoch_to_iso`, the round-trip inverse of
-`parse_iso_to_epoch`).
+`list[ClientSaveState]`. It walks the `rom_save_sync_states` aggregate and keeps only ROMs **in scope** —
+`slot_confirmed` is true **and** `active_slot` is a real (truthy) slot, which excludes both the unset `None` and the
+legacy `""` slot. For each in-scope ROM it enumerates the local save files via `RomInfoService.find_save_files` and
+emits **one `ClientSaveState` per file** (per-file granularity): a confirmed ROM with no local files contributes
+nothing, and a ROM with several local files yields one entry each. Per entry, `content_hash` is always set via
+`SaveFileStore.content_hash` — the zip-aware RomM-parity hash above, never the single-file `checksum_md5` — and
+`updated_at` is the local file's mtime rendered as a UTC ISO-8601 string (`domain.iso_time.epoch_to_iso`, the round-trip
+inverse of `parse_iso_to_epoch`).
 
 `build_save_inventory(rom_id=None)` builds the whole-device inventory (the bulk `sync_all_saves` pre-negotiate); a
 concrete `rom_id` scopes it to that one ROM (the single-ROM negotiate trigger). The in-scope predicate is identical
@@ -136,7 +136,7 @@ multi-file-per-slot collision case (several local files mapping to one slot) is 
 ([ADR-0017](../adr/0017-client-baseline-detection-authoritative-negotiate-is-transport.md), superseding the
 detection-handoff of [ADR-0016](../adr/0016-save-sync-hands-detection-to-romm-negotiate.md)):
 
-1. Load the ROM's `RomSaveState`.
+1. Load the ROM's `RomSaveSyncState`.
 2. Fetch the slot's server saves with `list_saves`.
 3. Run `compute_sync_action` per file (the decision matrix below).
 4. Dispatch each outcome through `_dispatch_sync_action` — POST / PUT / GET plus the `.romm-backup` quarantine, the
@@ -273,7 +273,8 @@ backup.
   legacy mode keeps syncing until migration `005` re-opens the wizard
   ([#1478](https://github.com/danielcopper/decky-romm-sync/issues/1478)).
 - **Migration `005`** (`005_unconfirm_legacy_slot_confirmations.sql`) un-confirms any ROM previously confirmed in legacy
-  mode — `UPDATE rom_save_states SET slot_confirmed=0 WHERE active_slot IS NULL AND slot_confirmed=1`. No save data is
+  mode — `UPDATE rom_save_states SET slot_confirmed=0 WHERE active_slot IS NULL AND slot_confirmed=1` (the pre-rename
+  table name migration `005` targets; migration `018` later renames it to `rom_save_sync_states`). No save data is
   touched; the wizard simply reappears for that ROM and the user re-picks a named slot (optionally migrating the legacy
   saves in). `resolve_default_slot` never returns `None` — a blank/unset default coerces to `"default"`.
 - Legacy `slot:null` survives **only** as a migration **source**. `domain/save_slot.py` (`normalize_slot`) still defines
@@ -401,7 +402,7 @@ unit-tested.
   filename.
 - **`server_saves_in_slot`** — RomM save dicts already filtered to the active slot.
 - **`files_state`** — the per-filename baseline from the ROM's save state — the `FileSyncState` value object on the
-  `RomSaveState` aggregate (persisted in the `rom_save_files` table), may be empty for a never-synced file. Carries
+  `RomSaveSyncState` aggregate (persisted in the `rom_save_files` table), may be empty for a never-synced file. Carries
   `tracked_save_id`, `last_sync_hash` (our own hash of the local file at the last sync — the drift baseline),
   `last_sync_server_hash` (the server's own `content_hash` for that same sync — the provenance anchor for the identity
   check, `None` before this field existed or for a hash-only skip-adopt), `last_sync_server_updated_at`,
@@ -1029,15 +1030,15 @@ input.
 `SyncEngine._rom_sync_locks: dict[int, asyncio.Lock]` (`services/saves/sync_engine/engine.py`) serializes
 `pre_launch_sync`, `post_exit_sync`, `sync_rom_saves`, `sync_all_saves`, and `resolve_sync_conflict` for the same
 `rom_id`. `StatusService.get_save_status` also takes the lock — not for the read, but for its one write: the executor
-body adopts a baseline hash (`Skip(adopt_baseline=True)`) and persists it through a `rom_save_states` read-modify-write,
-which would otherwise race a concurrent sync and clobber that sync's update. The four **slot mutations** —
-`SlotSwitcher.switch_slot` / `set_active_slot`, `SetupWizard.confirm_slot_choice`, and `SlotDeleter.delete_slot` — take
-the lock too: each loads the `RomSaveState` aggregate, mutates it (active-slot flip, slot-confirm, slot/file tracking
-teardown, switch downloads/deletes), and persists, so without the lock a slot op racing an in-flight sync on the same
-ROM loses updates or PUTs the wrong slot's content into the tracked server save (#1057). The lock-free server-saves
-network fetch stays outside the lock; only the local RMW is the critical section. Different rom_ids have independent
-locks, so cross-game concurrency (e.g. Sync All Saves running concurrently with a resolve on one specific rom) is
-unaffected. The lock is created lazily on first access (`SyncEngine.rom_lock(rom_id)`).
+body adopts a baseline hash (`Skip(adopt_baseline=True)`) and persists it through a `rom_save_sync_states`
+read-modify-write, which would otherwise race a concurrent sync and clobber that sync's update. The four **slot
+mutations** — `SlotSwitcher.switch_slot` / `set_active_slot`, `SetupWizard.confirm_slot_choice`, and
+`SlotDeleter.delete_slot` — take the lock too: each loads the `RomSaveSyncState` aggregate, mutates it (active-slot
+flip, slot-confirm, slot/file tracking teardown, switch downloads/deletes), and persists, so without the lock a slot op
+racing an in-flight sync on the same ROM loses updates or PUTs the wrong slot's content into the tracked server save
+(#1057). The lock-free server-saves network fetch stays outside the lock; only the local RMW is the critical section.
+Different rom_ids have independent locks, so cross-game concurrency (e.g. Sync All Saves running concurrently with a
+resolve on one specific rom) is unaffected. The lock is created lazily on first access (`SyncEngine.rom_lock(rom_id)`).
 
 The lock is **not reentrant** (plain `asyncio.Lock`), so a critical section must never call a peer that re-acquires the
 same lock. `switch_slot` is the live instance: its tail `get_save_status` re-takes `rom_lock(rom_id)`, so the lock is
@@ -1048,9 +1049,9 @@ holding the lock across their server/file I/O is safe and is the intended serial
 
 The realistic race the lock prevents: user clicks Keep Local → executor runs the POST (`overwrite=true`) + state
 mutation → in parallel, `post_exit_sync` for a game that just stopped runs and mutates the same per-file state →
-last-writer-wins on the `rom_save_states` aggregate, dropping one set of fields. The same lost-update window applies to
-`get_save_status`'s baseline-adopt write versus a concurrent pre-launch / post-exit / manual sync. The lock makes each
-read-modify-write-and-persist sequence atomic relative to the others.
+last-writer-wins on the `rom_save_sync_states` aggregate, dropping one set of fields. The same lost-update window
+applies to `get_save_status`'s baseline-adopt write versus a concurrent pre-launch / post-exit / manual sync. The lock
+makes each read-modify-write-and-persist sequence atomic relative to the others.
 
 ## Local Save File Naming
 
@@ -1480,12 +1481,12 @@ the truthful one. When `last_played` is `null` (the server has no session for th
 local-only) the display falls back to Steam's value, so there is no regression before any server data exists. This is
 display-only — the plugin does not write the restored value back into Steam's `rt_last_time_played` (#1294).
 
-## Save-Sync State — the `RomSaveState` aggregate
+## Save-Sync State — the `RomSaveSyncState` aggregate
 
-Per-ROM save-sync state lives in SQLite — there is no JSON file. The per-ROM scalars are the `RomSaveState` aggregate
-(`domain/rom_save_state.py`), backed by the `rom_save_states` table; the per-file baselines are `FileSyncState` value
-objects (one per filename), backed by the `rom_save_files` table. Both are reached through the Unit of Work as
-`uow.rom_save_states`, which spans the two tables (sync sqlite3 run via `run_in_executor`, per
+Per-ROM save-sync state lives in SQLite — there is no JSON file. The per-ROM scalars are the `RomSaveSyncState`
+aggregate (`domain/rom_save_sync_state.py`), backed by the `rom_save_sync_states` table; the per-file baselines are
+`FileSyncState` value objects (one per filename), backed by the `rom_save_files` table. Both are reached through the
+Unit of Work as `uow.rom_save_sync_states`, which spans the two tables (sync sqlite3 run via `run_in_executor`, per
 [ADR-0004](../adr/0004-sync-sqlite-unit-of-work.md)).
 
 The canonical source for the table DDL, columns, and aggregate invariants is [database-design.md](database-design.md).
@@ -1496,8 +1497,8 @@ The save-sync **feature toggles** (`save_sync_enabled`, `sync_before_launch`, `s
 user-intent config, not synced relational state (ADR-0003). Device identity is `kv_config['device_id']` (see the
 [Device Registration](#device-registration) section above), not a field on the per-ROM aggregate.
 
-The logical shape of a single ROM's save state — the scalars as a `rom_save_states` row plus its child `rom_save_files`
-rows — looks like this:
+The logical shape of a single ROM's save state — the scalars as a `rom_save_sync_states` row plus its child
+`rom_save_files` rows — looks like this:
 
 ```json
 {
@@ -1529,10 +1530,10 @@ Per-ROM playtime is a separate aggregate (`Playtime`, `rom_playtime` table) — 
 
 ### Field reference
 
-The `saves.<id>.*` fields are columns on the `rom_save_states` table (one row per ROM); the `saves.<id>.files.<fn>.*`
-fields are columns on the `rom_save_files` table (one row per `(rom_id, filename)`). The `saves.<id>` / `files.<fn>`
-notation here mirrors the logical shape above — see [database-design.md](database-design.md) for the physical column
-names and constraints.
+The `saves.<id>.*` fields are columns on the `rom_save_sync_states` table (one row per ROM); the
+`saves.<id>.files.<fn>.*` fields are columns on the `rom_save_files` table (one row per `(rom_id, filename)`). The
+`saves.<id>` / `files.<fn>` notation here mirrors the logical shape above — see [database-design.md](database-design.md)
+for the physical column names and constraints.
 
 | Field                                               | Type                    | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | --------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

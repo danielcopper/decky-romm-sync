@@ -1,0 +1,22 @@
+-- =============================================================================
+-- 018_rename_rom_save_states.sql — rename the RomSaveSyncState scalar table
+-- Pure terminology rename: rom_save_states -> rom_save_sync_states
+-- =============================================================================
+--
+-- The per-ROM save-FILE-sync scalar table backing the RomSaveSyncState aggregate
+-- was named ``rom_save_states``, which reads like an emulator savestate table.
+-- The aggregate tracks save FILES (SRAM — RomM /api/saves), never emulator
+-- savestates (RomM /api/states). This rename removes the collision so a future
+-- savestate-sync aggregate (RomSavestateSyncState, table rom_savestate_sync_states)
+-- has an unambiguous name. See docs/architecture/database-design.md,
+-- "Reserved naming — savestate sync".
+--
+-- Data-preserving: ALTER TABLE ... RENAME TO keeps every row, column, and the
+-- PRIMARY KEY / CASCADE FK onto roms(rom_id) intact. The 1:N child table
+-- ``rom_save_files`` is untouched — its FK anchors on roms(rom_id), not on this
+-- table, so nothing else references the old name (no index, trigger, or view).
+--
+-- Transaction-safe DDL only — the runner (adapters/sqlite_migrations.py) wraps
+-- BEGIN/COMMIT and stamps PRAGMA user_version = 18.
+-- -----------------------------------------------------------------------------
+ALTER TABLE rom_save_states RENAME TO rom_save_sync_states;

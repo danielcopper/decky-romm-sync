@@ -25,7 +25,7 @@ from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 from adapters.firmware_file import FirmwareFileAdapter
 from adapters.save_file import SaveFileAdapter
 from adapters.steam_config import SteamConfigAdapter
-from domain.rom_save_state import FileSyncState
+from domain.rom_save_sync_state import FileSyncState
 from domain.save_layout import InSaveDir
 from services.achievements import AchievementsService, AchievementsServiceConfig
 from services.firmware import FirmwareService, FirmwareServiceConfig
@@ -233,13 +233,13 @@ def _seed_platform_names(plugin, mapping):
 
 
 def _seed_save_state(plugin, rom_id, *, files, last_sync_check_at):
-    """Seed a ``RomSaveState`` for *rom_id* (Rom must already exist for the FK)."""
-    from domain.rom_save_state import RomSaveState
+    """Seed a ``RomSaveSyncState`` for *rom_id* (Rom must already exist for the FK)."""
+    from domain.rom_save_sync_state import RomSaveSyncState
 
     with plugin._uow:
-        plugin._uow.rom_save_states.save(
+        plugin._uow.rom_save_sync_states.save(
             rom_id,
-            RomSaveState(files=files, last_sync_check_at=last_sync_check_at),
+            RomSaveSyncState(files=files, last_sync_check_at=last_sync_check_at),
         )
 
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import os
 
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 
 from ._seed import enable_save_sync, seed_install, seed_save_state, seed_server_save
 
@@ -34,14 +34,14 @@ def _write_local_save(harness, *, system: str, content: bytes, filename: str) ->
     return path
 
 
-def _tracked_slot_state(*, baseline: str | None) -> RomSaveState:
+def _tracked_slot_state(*, baseline: str | None) -> RomSaveSyncState:
     """A detected-but-unconfirmed ``default`` slot (keeps sync on the legacy matrix).
 
     ``baseline`` (when given) records the file's ``last_sync_hash`` so
     ``compute_sync_action`` treats local as unchanged; ``None`` leaves the slot
     without a baseline (never synced).
     """
-    state = RomSaveState(active_slot="default", slot_confirmed=False, system="gba")
+    state = RomSaveSyncState(active_slot="default", slot_confirmed=False, system="gba")
     if baseline is not None:
         state.adopt_baseline("game.srm", tracked_save_id=10, last_sync_hash=baseline)
     return state
@@ -173,7 +173,7 @@ async def test_saves_resolve_conflict_keep_local_reposts_with_overwrite(harness)
     # Server content differs from local so the adopt-without-upload short-circuit
     # cannot fire — the keep_local upload path runs.
     harness.romm.set_server_save_content(100, b"server content")
-    seed_save_state(harness, 42, RomSaveState(active_slot="default", system="gba"))
+    seed_save_state(harness, 42, RomSaveSyncState(active_slot="default", system="gba"))
 
     result = await harness.plugin.resolve_sync_conflict(42, "game.srm", 100, "keep_local")
 

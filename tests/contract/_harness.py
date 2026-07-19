@@ -109,7 +109,7 @@ class ContractHarness:
     clock: FakeClock
     tmp_path: Any
     # The real SQLite Unit-of-Work factory the wired services use. Tests open it
-    # to seed relational state (roms / rom_installs / rom_save_states / kv_config)
+    # to seed relational state (roms / rom_installs / rom_save_sync_states / kv_config)
     # exactly as the services read it — same database, same connection contract.
     uow_factory: Any
     # The real RetroDECK paths provider bound onto the plugin. A migration test

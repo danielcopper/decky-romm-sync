@@ -31,7 +31,7 @@ if TYPE_CHECKING:
         RomInstallRepository,
         RomMetadataRepository,
         RomRepository,
-        RomSaveStateRepository,
+        RomSaveSyncStateRepository,
         SyncRunRepository,
     )
 
@@ -58,7 +58,7 @@ class UnitOfWork(Protocol):
     @property
     def playtime(self) -> PlaytimeRepository: ...
     @property
-    def rom_save_states(self) -> RomSaveStateRepository: ...
+    def rom_save_sync_states(self) -> RomSaveSyncStateRepository: ...
     @property
     def bios_files(self) -> BiosFileRepository: ...
     @property

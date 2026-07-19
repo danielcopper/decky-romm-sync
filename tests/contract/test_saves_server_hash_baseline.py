@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import os
 
-from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 
 from ._seed import enable_save_sync, seed_install, seed_save_state, seed_server_save
 
@@ -53,7 +53,7 @@ async def test_provenance_syncs_cleanly_under_scheme_drift(harness):
 
     # Sync history: our baseline matches the current local (unchanged) and stores
     # the server's own hash from that sync.
-    state = RomSaveState(
+    state = RomSaveSyncState(
         active_slot="default",
         slot_confirmed=True,
         system="gba",
@@ -102,7 +102,7 @@ async def test_parity_fallback_adopts_fresh_install(harness):
     local_hash = hashlib.md5(content).hexdigest()
 
     # Confirmed slot, but no per-file baseline (never synced this device).
-    seed_save_state(harness, 42, RomSaveState(active_slot="default", slot_confirmed=True, system="gba"))
+    seed_save_state(harness, 42, RomSaveSyncState(active_slot="default", slot_confirmed=True, system="gba"))
 
     entry = seed_server_save(harness, save_id=100, rom_id=42, slot="default", file_name="game.srm")
     entry["content_hash"] = local_hash  # byte-identical → parity route

@@ -1,7 +1,7 @@
 """Save-sync aggregate root and facade for the Decky callable surface.
 
 Composes the save-sync sub-services (sync_engine, status, versions,
-slots, rom_info) over the SQLite ``rom_save_states`` aggregate (reached
+slots, rom_info) over the SQLite ``rom_save_sync_states`` aggregate (reached
 through the injected Unit-of-Work factory) and exposes the public
 methods the frontend reaches through callables. The five save-sync
 feature toggles and the device label live in ``settings.json`` and are
@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from domain.iso_time import epoch_to_iso
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 from lib.list_result import ErrorCode
 from services.saves._config import SaveServiceConfig
 from services.saves._settings import (
@@ -41,12 +41,12 @@ class SaveService:
     """Aggregate root for bidirectional save file sync between RetroDECK and RomM.
 
     Composes the save-sync sub-services (sync_engine, status, versions, slots,
-    rom_info) over the SQLite ``rom_save_states`` aggregate. Exposes the callable
+    rom_info) over the SQLite ``rom_save_sync_states`` aggregate. Exposes the callable
     surface consumed by the Decky entrypoints — every public method delegates to
     a sub-service or reads ``settings.json``. Bulk local-save deletion is the
     only flow whose orchestration lives directly on the aggregate root because it
     spans :class:`RomInfoService` (file discovery), the on-disk save files (via
-    the injected ``SaveFileStore``), and the ``rom_save_states`` repository
+    the injected ``SaveFileStore``), and the ``rom_save_sync_states`` repository
     (file-tracking state hygiene) without belonging to any single sub-service.
 
     Parameters
@@ -200,7 +200,7 @@ class SaveService:
     def has_tracked_save(self, rom_id: int) -> bool:
         """Return True when this ROM has at least one tracked save (slot or file).
 
-        Reads the ``rom_save_states`` aggregate through its own narrow read
+        Reads the ``rom_save_sync_states`` aggregate through its own narrow read
         UoW — no network. Used by the launch gate to decide whether a
         ``get_save_status`` failure should surface as a soft ``warn`` verdict
         (tracked saves exist — silent allow would risk data loss on an unseen
@@ -208,7 +208,7 @@ class SaveService:
         corrupt).
         """
         with self._uow_factory() as uow:
-            save_entry = uow.rom_save_states.get(int(rom_id))
+            save_entry = uow.rom_save_sync_states.get(int(rom_id))
         if save_entry is None:
             return False
         return bool(save_entry.files) or bool(save_entry.slots)
@@ -227,14 +227,14 @@ class SaveService:
     def last_sync_hashes(self, rom_id: int) -> dict[str, str | None]:
         """Return the per-file ``last_sync_hash`` baselines for a ROM.
 
-        Reads the ``rom_save_states`` aggregate through a narrow read UoW —
+        Reads the ``rom_save_sync_states`` aggregate through a narrow read UoW —
         no network — and projects each tracked file's baseline hash onto a
         ``{filename: last_sync_hash}`` map (``None`` for a file with no
         baseline yet). An untracked ROM yields ``{}``. Satisfies the
         ``LaunchGateDriftReader`` seam.
         """
         with self._uow_factory() as uow:
-            save_entry = uow.rom_save_states.get(int(rom_id))
+            save_entry = uow.rom_save_sync_states.get(int(rom_id))
         if save_entry is None:
             return {}
         return {filename: state.last_sync_hash for filename, state in save_entry.files.items()}
@@ -429,7 +429,7 @@ class SaveService:
         with self._uow_factory() as uow:
             confirmed = [
                 (rid, state)
-                for rid, state in uow.rom_save_states.iter_all()
+                for rid, state in uow.rom_save_sync_states.iter_all()
                 if state.slot_confirmed and state.active_slot and (rom_id is None or rid == rom_id)
             ]
 
@@ -477,16 +477,16 @@ class SaveService:
                 except Exception as e:
                     errors.append(f"{f['filename']}: {e}")
             with self._uow_factory() as uow:
-                save_state = uow.rom_save_states.get(rom_id)
+                save_state = uow.rom_save_sync_states.get(rom_id)
                 # Nothing to clear when the ROM has neither tracked save state
                 # nor any local save files (e.g. a non-installed ROM with no
                 # roms row — persisting an empty aggregate would violate the FK).
                 if save_state is None and not files:
                     continue
                 if save_state is None:
-                    save_state = RomSaveState()
+                    save_state = RomSaveSyncState()
                 save_state.clear_baselines()
-                uow.rom_save_states.save(rom_id, save_state)
+                uow.rom_save_sync_states.save(rom_id, save_state)
 
         return total_deleted, errors
 

@@ -77,12 +77,17 @@ def _set_user_version(db_path: str, version: int) -> None:
 # + 011_rekey_sibling_group_key + 012_add_platform_sync_state
 # + 013_add_interrupted_sync_run_status + 014_add_paused_sync_run_status
 # + 015_add_applied_launch_options + 016_add_cover_source
-# + 017_add_last_sync_server_hash).
-_SHIPPED_VERSION = 17
+# + 017_add_last_sync_server_hash + 018_rename_rom_save_states).
+_SHIPPED_VERSION = 18
 
 # Tables after every shipped migration: the v1 set plus 006's play-session outbox
-# and 012's per-platform completion stamp.
-_SHIPPED_TABLES = _V1_TABLES | {"rom_playtime_sessions", "platform_sync_state"}
+# and 012's per-platform completion stamp, with 018 renaming the save-sync scalar
+# table rom_save_states -> rom_save_sync_states.
+_SHIPPED_TABLES = (_V1_TABLES - {"rom_save_states"}) | {
+    "rom_save_sync_states",
+    "rom_playtime_sessions",
+    "platform_sync_state",
+}
 
 
 class TestEmptyDatabase:
@@ -462,8 +467,10 @@ class Test005UnconfirmLegacySlotConfirmations:
 
         conn = sqlite3.connect(db_path)
         try:
+            # The full apply includes 018, which renamed the seeded rom_save_states
+            # table to rom_save_sync_states — read the confirmations back from it.
             confirmations = dict(
-                conn.execute("SELECT rom_id, slot_confirmed FROM rom_save_states ORDER BY rom_id").fetchall()
+                conn.execute("SELECT rom_id, slot_confirmed FROM rom_save_sync_states ORDER BY rom_id").fetchall()
             )
             file_rows = conn.execute("SELECT filename, last_sync_hash FROM rom_save_files WHERE rom_id = 1").fetchall()
         finally:
@@ -1058,14 +1065,15 @@ class Test017LastSyncServerHash:
     """017 — adds the nullable last_sync_server_hash column to rom_save_files only (#1468)."""
 
     def test_adds_last_sync_server_hash_to_rom_save_files_only(self, tmp_path: Path):
-        # 017 ALTERs only rom_save_files; rom_save_states (and every other table) is untouched.
+        # 017 ALTERs only rom_save_files; the save-sync scalar table (renamed to
+        # rom_save_sync_states by 018) and every other table is untouched by 017.
         db_path = str(tmp_path / "romm_sync.db")
 
         apply_migrations(db_path)
 
         assert _user_version(db_path) == _SHIPPED_VERSION
         assert "last_sync_server_hash" in _columns(db_path, "rom_save_files")
-        assert "last_sync_server_hash" not in _columns(db_path, "rom_save_states")
+        assert "last_sync_server_hash" not in _columns(db_path, "rom_save_sync_states")
 
     def test_existing_row_reads_null_across_the_migration(self, tmp_path: Path):
         # A file baseline seeded before 017 reads NULL for the new column (no
@@ -1103,6 +1111,72 @@ class Test017LastSyncServerHash:
         db_path = str(tmp_path / "romm_sync.db")
         apply_migrations(db_path, str(_only_migrations_through(tmp_path, 16)))
         assert "last_sync_server_hash" not in _columns(db_path, "rom_save_files")
+
+
+class Test018RenameRomSaveStates:
+    """018 — renames the save-sync scalar table rom_save_states -> rom_save_sync_states (#1478 terminology)."""
+
+    def test_table_renamed_after_full_apply(self, tmp_path: Path):
+        # After the full apply the scalar table carries the new name; the old name
+        # is gone. The rom_save_files child is anchored on roms, not renamed.
+        db_path = str(tmp_path / "romm_sync.db")
+
+        apply_migrations(db_path)
+
+        assert _user_version(db_path) == _SHIPPED_VERSION
+        tables = _tables(db_path)
+        assert "rom_save_sync_states" in tables
+        assert "rom_save_states" not in tables
+        assert "rom_save_files" in tables
+
+    def test_table_named_rom_save_states_before_018(self, tmp_path: Path):
+        # At v17 the scalar table still carries the pre-rename name.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 17)))
+
+        assert _user_version(db_path) == 17
+        tables = _tables(db_path)
+        assert "rom_save_states" in tables
+        assert "rom_save_sync_states" not in tables
+
+    def test_seeded_row_and_child_baseline_survive_the_rename(self, tmp_path: Path):
+        # A scalar row + its rom_save_files child seeded at v17 (pre-rename table
+        # name) survive 018 intact and read back from the renamed table — the
+        # data-preserving ALTER TABLE ... RENAME TO contract.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 17)))
+        assert _user_version(db_path) == 17
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+            _insert_rom(conn, 1, 5000)
+            # Seeded under the pre-018 table name (its name at v17).
+            conn.execute(
+                "INSERT INTO rom_save_states (rom_id, active_slot, slot_confirmed, emulator, system) "
+                "VALUES (1, 'default', 1, 'retroarch', 'gba')"
+            )
+            conn.execute(
+                "INSERT INTO rom_save_files (rom_id, filename, last_sync_hash) VALUES (1, 'game.srm', 'deadbeef')"
+            )
+        finally:
+            conn.close()
+
+        final_version = apply_migrations(db_path)
+        assert final_version == _SHIPPED_VERSION
+
+        conn = sqlite3.connect(db_path)
+        try:
+            state_row = conn.execute(
+                "SELECT rom_id, active_slot, slot_confirmed, emulator, system "
+                "FROM rom_save_sync_states WHERE rom_id = 1"
+            ).fetchone()
+            file_row = conn.execute("SELECT filename, last_sync_hash FROM rom_save_files WHERE rom_id = 1").fetchone()
+        finally:
+            conn.close()
+        # Every scalar column survives the rename; the untouched child baseline too.
+        assert state_row == (1, "default", 1, "retroarch", "gba")
+        assert file_row == ("game.srm", "deadbeef")
 
 
 def test_shipped_migrations_dir_resolves_to_real_schema():

@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import os
 
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 
 from ._seed import enable_save_sync, seed_install, seed_save_state, seed_server_save
 
@@ -43,7 +43,7 @@ async def test_normal_upload_skips_confirm_download(harness):
     enable_save_sync(harness)
     seed_install(harness, 42, system="gba", file_name="game.gba")
     _write_local_save(harness, system="gba", content=b"first save", filename="game.srm")
-    seed_save_state(harness, 42, RomSaveState(active_slot="default", system="gba"))
+    seed_save_state(harness, 42, RomSaveSyncState(active_slot="default", system="gba"))
 
     result = await harness.plugin.sync_rom_saves(42)
 
@@ -84,7 +84,7 @@ async def test_dedup_to_non_head_surfaces_conflict(harness):
         harness, save_id=400, rom_id=42, slot="default", file_name="game.srm", updated_at="2026-03-01T00:00:00Z"
     )
 
-    state = RomSaveState(active_slot="default", system="gba")
+    state = RomSaveSyncState(active_slot="default", system="gba")
     state.adopt_baseline("game.srm", tracked_save_id=500, last_sync_hash=hashlib.md5(b"head content").hexdigest())
     seed_save_state(harness, 42, state)
 
@@ -103,6 +103,6 @@ async def test_dedup_to_non_head_surfaces_conflict(harness):
     assert not any(c[0] == "confirm_download" for c in harness.romm.call_log)
     # …and the DB baseline was never rewritten onto the dedup response (400).
     with harness.uow_factory() as uow:
-        reloaded = uow.rom_save_states.get(42)
+        reloaded = uow.rom_save_sync_states.get(42)
     assert reloaded is not None
     assert reloaded.files["game.srm"].tracked_save_id == 500

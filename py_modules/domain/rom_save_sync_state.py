@@ -1,11 +1,13 @@
-"""RomSaveState — per-ROM save-sync state for one tracked ROM.
+"""RomSaveSyncState — per-ROM save-sync state for one tracked ROM.
 
 The active slot and whether the user confirmed it, the emulator/system the ROM
 runs under, the last core synced, our upload attribution, the merged slot
 listing the UI reads, and the per-file sync baselines the newest-wins matrix
 uses to detect drift. References its Rom by id (the registry key). The merge
 logic that produces the slot listing lives in a service; this aggregate accepts
-the result and guards the slot/file invariants.
+the result and guards the slot/file invariants. Tracks save *files* (SRAM) only
+— the savestate twin, if ever built, is RomSavestateSyncState (see
+docs/architecture/database-design.md, "Reserved naming").
 
 Invariants enforced here:
 
@@ -34,8 +36,8 @@ from domain._aggregate import cosmic_aggregate
 class FileSyncState:
     """Per-file sync baseline — last-observed hashes, sizes, and timestamps.
 
-    Immutable value object owned by :class:`RomSaveState`; the aggregate builds
-    one whole on :meth:`RomSaveState.adopt_baseline` so the newest-wins matrix
+    Immutable value object owned by :class:`RomSaveSyncState`; the aggregate builds
+    one whole on :meth:`RomSaveSyncState.adopt_baseline` so the newest-wins matrix
     can detect drift against it on the next sync.
 
     ``last_sync_hash`` is our own content hash of the local file at the last
@@ -62,7 +64,7 @@ class FileSyncState:
 
 
 @cosmic_aggregate
-class RomSaveState:
+class RomSaveSyncState:
     """Save-sync state for one ROM — slot config, attribution, per-file baselines."""
 
     active_slot: str | None = None

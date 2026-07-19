@@ -8,7 +8,7 @@ from domain.playtime import Playtime
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.rom_metadata import RomMetadata
-from domain.rom_save_state import RomSaveState
+from domain.rom_save_sync_state import RomSaveSyncState
 
 if TYPE_CHECKING:
     from adapters.repositories.unit_of_work import SqliteUnitOfWork
@@ -188,7 +188,7 @@ class TestShortcutAppIdCollision:
         assert uow.rom_installs.get(1) is not None
         assert uow.rom_metadata.get(1) is not None
         assert uow.playtime.get(1) is not None
-        assert uow.rom_save_states.get(1) is not None
+        assert uow.rom_save_sync_states.get(1) is not None
 
 
 class TestDelete:
@@ -605,7 +605,7 @@ class TestAppliedLaunchOptions:
 def _seed_children(uow: SqliteUnitOfWork, rom_id: int) -> None:
     """Seed a row in all five ``ON DELETE CASCADE`` children of ``roms``.
 
-    ``rom_save_states`` is a two-table aggregate, so the ``RomSaveState`` with a
+    ``rom_save_sync_states`` is a two-table aggregate, so the ``RomSaveSyncState`` with a
     tracked file also seeds a ``rom_save_files`` row.
     """
     uow.rom_installs.save(
@@ -633,13 +633,13 @@ def _seed_children(uow: SqliteUnitOfWork, rom_id: int) -> None:
         ),
     )
     uow.playtime.save(rom_id, Playtime(total_seconds=3600, session_count=2))
-    state = RomSaveState(system="snes")
+    state = RomSaveSyncState(system="snes")
     state.adopt_baseline(
         "battery.srm",
         tracked_save_id=99,
         last_sync_hash="abc123",
     )
-    uow.rom_save_states.save(rom_id, state)
+    uow.rom_save_sync_states.save(rom_id, state)
 
 
 class TestReSaveDoesNotCascade:
@@ -667,7 +667,7 @@ class TestReSaveDoesNotCascade:
         assert uow.rom_installs.get(rom_id) is not None
         assert uow.rom_metadata.get(rom_id) is not None
         assert uow.playtime.get(rom_id) is not None
-        save_state = uow.rom_save_states.get(rom_id)
+        save_state = uow.rom_save_sync_states.get(rom_id)
         assert save_state is not None
         assert "battery.srm" in save_state.files
         assert uow._conn is not None
@@ -688,7 +688,7 @@ class TestReSaveDoesNotCascade:
         assert uow.rom_installs.get(rom_id) is None
         assert uow.rom_metadata.get(rom_id) is None
         assert uow.playtime.get(rom_id) is None
-        assert uow.rom_save_states.get(rom_id) is None
+        assert uow.rom_save_sync_states.get(rom_id) is None
         assert uow._conn is not None
         file_count = uow._conn.execute(
             "SELECT COUNT(*) FROM rom_save_files WHERE rom_id = ?",

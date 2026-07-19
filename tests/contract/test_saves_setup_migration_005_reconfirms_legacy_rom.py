@@ -13,7 +13,7 @@ from __future__ import annotations
 import sqlite3
 
 from adapters.sqlite_migrations import apply_migrations
-from domain.rom_save_state import FileSyncState, RomSaveState
+from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 
 from ._seed import enable_save_sync, seed_save_state
 
@@ -28,14 +28,15 @@ def _rewind_to_v4(db_path: str) -> None:
 
     Bootstrap stamps the DB at the latest version with the full schema. To replay
     the real 005 upgrade path the runner must see a genuine v4 database: the
-    version stamp AND the pre-006/007/008/009/010/011/015/016/017 schema (006's
-    play-session outbox table absent and ``note_id`` present, 007's
+    version stamp AND the pre-006/007/008/009/010/011/015/016/017/018 schema
+    (006's play-session outbox table absent and ``note_id`` present, 007's
     ``last_played`` column absent, 008's version-metadata columns absent, 009's
     ``last_session_start_monotonic`` column absent, 010's sibling_group_key index
     absent, 011's platform_sync_state table absent, 015's
     ``applied_launch_options`` column absent, 016's ``cover_source`` column
-    absent, and 017's ``last_sync_server_hash`` column absent) so the sequential
-    005→…→017 re-run applies cleanly.
+    absent, 017's ``last_sync_server_hash`` column absent, and 018's save-sync
+    scalar table under its pre-rename name ``rom_save_states``) so the sequential
+    005→…→018 re-run applies cleanly.
     """
     conn = sqlite3.connect(db_path, isolation_level=None)
     try:
@@ -58,6 +59,9 @@ def _rewind_to_v4(db_path: str) -> None:
         conn.execute("ALTER TABLE roms DROP COLUMN cover_source")
         # Reverse 017 so its ADD COLUMN re-applies instead of duplicating.
         conn.execute("ALTER TABLE rom_save_files DROP COLUMN last_sync_server_hash")
+        # Reverse 018 so 005's `UPDATE rom_save_states` finds the table under its
+        # pre-rename name and 018 re-applies the rename cleanly.
+        conn.execute("ALTER TABLE rom_save_sync_states RENAME TO rom_save_states")
         conn.execute("PRAGMA user_version = 4")
     finally:
         conn.close()
@@ -69,7 +73,7 @@ async def test_migration_005_reconfirms_legacy_rom(harness):
     # A pre-#1276 legacy-confirmed ROM: active_slot=None + slot_confirmed=True,
     # with a per-file baseline and a slots read-model entry that must survive.
     legacy_slots = {"": {"source": "server", "count": 1, "latest_updated_at": "2026-01-01T00:00:00Z"}}
-    legacy_state = RomSaveState(
+    legacy_state = RomSaveSyncState(
         system="gba",
         slot_confirmed=True,
         active_slot=None,
@@ -90,7 +94,7 @@ async def test_migration_005_reconfirms_legacy_rom(harness):
 
     # The legacy confirmation is flipped back; files + slots are untouched.
     with harness.uow_factory() as uow:
-        state = uow.rom_save_states.get(42)
+        state = uow.rom_save_sync_states.get(42)
     assert state is not None
     assert state.slot_confirmed is False
     assert state.active_slot is None

@@ -36,7 +36,7 @@ from fakes.fake_playtime_repository import FakePlaytimeRepository
 from fakes.fake_rom_install_repository import FakeRomInstallRepository
 from fakes.fake_rom_metadata_repository import FakeRomMetadataRepository
 from fakes.fake_rom_repository import FakeRomRepository
-from fakes.fake_rom_save_state_repository import FakeRomSaveStateRepository
+from fakes.fake_rom_save_sync_state_repository import FakeRomSaveSyncStateRepository
 from fakes.fake_sync_run_repository import FakeSyncRunRepository
 
 if TYPE_CHECKING:
@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from domain.rom import Rom
     from domain.rom_install import RomInstall
     from domain.rom_metadata import RomMetadata
-    from domain.rom_save_state import RomSaveState
+    from domain.rom_save_sync_state import RomSaveSyncState
     from domain.sync_run import SyncRun
 
 
@@ -61,7 +61,7 @@ class _Snapshot:
     rom_installs: dict[int, RomInstall]
     rom_metadata: dict[int, RomMetadata]
     playtime: dict[int, Playtime]
-    rom_save_states: dict[int, RomSaveState]
+    rom_save_sync_states: dict[int, RomSaveSyncState]
     bios_files: dict[tuple[str, str], BiosFile]
     firmware_cache: dict[tuple[str, str], FirmwareCacheEntry]
     sync_runs: dict[str, SyncRun]
@@ -73,19 +73,19 @@ class FakeUnitOfWork:
     """In-memory unit of work over ten fake repositories with commit/rollback flags."""
 
     # Child repos whose aggregate carries a ``rom_id`` foreign key onto ``roms``
-    # (schema: rom_installs / rom_metadata / rom_playtime / rom_save_states +
-    # rom_save_files, the last two backing the one ``rom_save_states`` repo).
+    # (schema: rom_installs / rom_metadata / rom_playtime / rom_save_sync_states +
+    # rom_save_files, the last two backing the one ``rom_save_sync_states`` repo).
     # Each is keyed by ``rom_id``, so ``repo._snapshot().keys()`` are the FK
     # values the commit check validates against ``roms``. Adding a new per-rom
     # vertical means adding its repo attr name here — nothing else.
-    _PER_ROM_FK_CHILD_REPOS = ("rom_installs", "rom_metadata", "playtime", "rom_save_states")
+    _PER_ROM_FK_CHILD_REPOS = ("rom_installs", "rom_metadata", "playtime", "rom_save_sync_states")
 
     def __init__(self) -> None:
         self.roms = FakeRomRepository()
         self.rom_installs = FakeRomInstallRepository()
         self.rom_metadata = FakeRomMetadataRepository()
         self.playtime = FakePlaytimeRepository()
-        self.rom_save_states = FakeRomSaveStateRepository()
+        self.rom_save_sync_states = FakeRomSaveSyncStateRepository()
         self.bios_files = FakeBiosFileRepository()
         self.firmware_cache = FakeFirmwareCacheRepository()
         self.sync_runs = FakeSyncRunRepository()
@@ -105,7 +105,7 @@ class FakeUnitOfWork:
             rom_installs=self.rom_installs._snapshot(),
             rom_metadata=self.rom_metadata._snapshot(),
             playtime=self.playtime._snapshot(),
-            rom_save_states=self.rom_save_states._snapshot(),
+            rom_save_sync_states=self.rom_save_sync_states._snapshot(),
             bios_files=self.bios_files._snapshot(),
             firmware_cache=self.firmware_cache._snapshot(),
             sync_runs=self.sync_runs._snapshot(),
@@ -147,7 +147,7 @@ class FakeUnitOfWork:
         self.rom_installs._restore(snapshot.rom_installs)
         self.rom_metadata._restore(snapshot.rom_metadata)
         self.playtime._restore(snapshot.playtime)
-        self.rom_save_states._restore(snapshot.rom_save_states)
+        self.rom_save_sync_states._restore(snapshot.rom_save_sync_states)
         self.bios_files._restore(snapshot.bios_files)
         self.firmware_cache._restore(snapshot.firmware_cache)
         self.sync_runs._restore(snapshot.sync_runs)
