@@ -276,7 +276,17 @@ export const SlotPanel: FC<SlotPanelProps> = ({
 
   const fileCount = isActive ? (saveStatus?.files.length ?? 0) : (slotFiles?.length ?? slot.count);
 
-  const panelClasses = ["romm-slot-panel", isActive ? "romm-slot-panel-active" : ""].filter(Boolean).join(" ");
+  // The slot-less legacy (web-player) bucket is read-only (#1276, #1478) and
+  // demoted: muted styling + a read-only note; it sorts last (in SavesTab).
+  const isLegacy = slotName === "";
+
+  const panelClasses = [
+    "romm-slot-panel",
+    isActive ? "romm-slot-panel-active" : "",
+    isLegacy ? "romm-slot-panel-legacy" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   // --- Source badge ---
   const sourceBadge =
@@ -340,6 +350,18 @@ export const SlotPanel: FC<SlotPanelProps> = ({
         )
       : null;
 
+  // --- Read-only note (legacy bucket only, always visible) ---
+  const legacyNoteEl = isLegacy
+    ? createElement(
+        "div",
+        {
+          key: "legacy-note",
+          className: "romm-slot-legacy-note",
+        },
+        "Used by the RomM web player. Read-only here — manage in the RomM web app.",
+      )
+    : null;
+
   // --- Slot body ---
   let bodyEl: ReturnType<typeof createElement> | null = null;
   if (expanded) {
@@ -357,8 +379,8 @@ export const SlotPanel: FC<SlotPanelProps> = ({
           switching,
           switchError,
           isOffline,
-          // The slot-less legacy bucket is view-only (#1276) — no Activate.
-          canActivate: slotName !== "",
+          // Legacy bucket is read-only (#1276 / #1478) — no Activate/Delete.
+          isLegacy,
           deleting,
           handleActivate: () => {
             detach(handleActivate());
@@ -369,5 +391,12 @@ export const SlotPanel: FC<SlotPanelProps> = ({
         });
   }
 
-  return createElement("div", { key: `slot-${slotName}`, className: panelClasses }, headerEl, syncSummaryEl, bodyEl);
+  return createElement(
+    "div",
+    { key: `slot-${slotName}`, className: panelClasses },
+    headerEl,
+    syncSummaryEl,
+    legacyNoteEl,
+    bodyEl,
+  );
 };

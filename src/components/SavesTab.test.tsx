@@ -278,6 +278,25 @@ describe("SavesTab", () => {
       expect(order).toEqual(["b", "a", "c"]);
     });
 
+    it("sorts the legacy '' bucket last, below every named slot (#1478)", () => {
+      render(
+        <SavesTab
+          {...defaultProps({
+            activeSlot: "b",
+            availableSlots: [
+              makeSlot({ slot: "c" }),
+              makeSlot({ slot: "" }),
+              makeSlot({ slot: "a" }),
+              makeSlot({ slot: "b" }),
+            ],
+          })}
+        />,
+      );
+      const order = capturedSlotPanelProps.map((p) => p.slot.slot);
+      // active first, then named alphabetically, legacy "" demoted to the end.
+      expect(order).toEqual(["b", "a", "c", ""]);
+    });
+
     it("marks the active slot with isActive=true and forwards saveStatus/conflicts only to it", () => {
       const status = makeSaveStatus();
       const conflicts = [

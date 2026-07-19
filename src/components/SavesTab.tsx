@@ -201,11 +201,15 @@ export const SavesTab: FC<SavesTabProps> = ({
     );
   }
 
-  // --- Sort slots: active first, then alphabetically ---
+  // --- Sort: active first, named alphabetically, legacy "" bucket last (#1478) ---
+  const slotRank = (s: SaveSlotSummary): number => {
+    if (s.slot === activeSlot) return 0;
+    if (s.slot === "") return 2;
+    return 1;
+  };
   const sorted = [...availableSlots].sort((a, b) => {
-    const aActive = a.slot === activeSlot ? 0 : 1;
-    const bActive = b.slot === activeSlot ? 0 : 1;
-    if (aActive !== bActive) return aActive - bActive;
+    const rankDiff = slotRank(a) - slotRank(b);
+    if (rankDiff !== 0) return rankDiff;
     return a.slot.localeCompare(b.slot);
   });
 

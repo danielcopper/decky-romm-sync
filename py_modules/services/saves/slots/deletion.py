@@ -185,9 +185,27 @@ class SlotDeleter:
             }
 
     async def delete_slot(self, rom_id: int, slot: str) -> dict[str, Any]:
-        """Delete a save slot and all its saves (local state + server if applicable)."""
+        """Delete a save slot and all its saves (local state + server if applicable).
+
+        The slot-less legacy bucket is read-only (#1478): an empty /
+        whitespace-only / ``None`` slot name is the web-player bucket, which is
+        managed in the RomM web app and must never be torn down from here.
+        It is rejected up front with the canonical ``invalid_slot_name`` failure
+        — before any lock acquisition, server I/O, or state change — mirroring
+        the switch-target refusal in :class:`SlotSwitcher` (#1276).
+        """
         rom_id = int(rom_id)
         slot = str(slot).strip() if slot else ""
+
+        # Refuse the legacy bucket before touching the lock or the wire (#1478):
+        # deleting "" would wipe the game's entire web-player bucket. Named slots
+        # fall through to the normal delete flow.
+        if not slot:
+            return {
+                "success": False,
+                "reason": "invalid_slot_name",
+                "message": "The legacy bucket is read-only and cannot be deleted",
+            }
 
         # The read→delete-server→mutate→write of the RomSaveSyncState aggregate must
         # serialise against every other path that touches this ROM's state.

@@ -1,14 +1,16 @@
-"""Contract tests for the slot-choice mutations — ``confirm_slot_choice`` and
-``switch_slot`` — where they reject the retired legacy slot.
+"""Contract tests for the legacy-bucket refusals — ``confirm_slot_choice``,
+``switch_slot``, and ``delete_slot`` — where they reject the retired,
+read-only legacy slot.
 
 ``confirm_slot_choice`` is driven frontend-shaped per ``src/api/backend.ts``:
 positional ``(rom_id, chosen_slot, migrate, migrate_from_slot)`` with the TS arg
 types (``string | null`` for the slot, ``boolean`` for migrate, ``string | null``
 for the source). These pin the explicit-contract fix: ``migrate`` is a real bool
 (no ``"__no_migration__"`` sentinel string) and the default call runs no
-migration. Both callables share one rule: the slot-less legacy bucket is no
-longer a confirmable / switchable target (#1276), so an empty / ``None`` slot
-name returns the canonical ``invalid_slot_name`` failure and never mutates state.
+migration. All three callables share one rule: the slot-less legacy bucket is no
+longer a confirmable / switchable target (#1276) and is read-only — never
+deletable — from the plugin (#1478), so an empty / ``None`` slot name returns the
+canonical ``invalid_slot_name`` failure and never mutates state or hits the wire.
 """
 
 from __future__ import annotations
@@ -84,3 +86,27 @@ async def test_switch_slot_empty_rejected(harness):
     with harness.uow_factory() as uow:
         state = uow.rom_save_sync_states.get(42)
     assert state is None
+
+
+# ── delete_slot ───────────────────────────────────────────────────────────
+
+
+async def test_delete_slot_legacy_rejected(harness):
+    """delete_slot("") is refused — the legacy bucket is read-only (#1478).
+
+    Driven frontend-shaped per ``src/api/backend.ts`` (``deleteSlot`` is
+    ``callable<[number, string], …>``). The callable returns the canonical
+    ``invalid_slot_name`` failure before any server I/O, so the game's
+    web-player bucket can never be torn down from the plugin.
+    """
+    enable_save_sync(harness)
+    seed_rom(harness, 42)
+
+    result = await harness.plugin.delete_slot(42, "")
+
+    assert result["success"] is False
+    assert result["reason"] == "invalid_slot_name"
+    assert isinstance(result["message"], str)
+    # No wire traffic — not even a read to inspect the bucket.
+    assert not any(c[0] == "delete_server_saves" for c in harness.romm.call_log)
+    assert not any(c[0] == "list_saves" for c in harness.romm.call_log)

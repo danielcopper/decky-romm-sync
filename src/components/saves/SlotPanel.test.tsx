@@ -730,18 +730,30 @@ describe("SlotPanel", () => {
     expect(container.textContent).not.toContain("(no slot)");
   });
 
-  it("the legacy '' slot is view-only: no Activate button, files still shown (#1478)", async () => {
-    // Switching into the slot-less legacy bucket is retired (#1276) — the panel
-    // may be expanded to view its saves, but never activated.
+  it("the legacy '' slot is read-only: no Activate/Delete, note + muted styling, files shown (#1478)", async () => {
+    // The slot-less legacy bucket is the RomM web-player bucket — read-only
+    // (#1276 retired switching in; #1478 removed deletion). It may be expanded
+    // to view its saves, but carries neither control.
     const files: SlotSaveFile[] = [{ id: 1, filename: "legacy.srm", size: 512, updated_at: "", emulator: "mgba" }];
     vi.mocked(backend.getSlotSaves).mockResolvedValue({ success: true, slot: "", saves: files });
     const { container, queryByText } = render(<SlotPanel {...defaultProps({ slot: makeSummary({ slot: "" }) })} />);
+    // Muted styling + the read-only note are visible without expanding.
+    expect(container.querySelector(".romm-slot-panel-legacy")).not.toBeNull();
+    expect(container.textContent).toContain(
+      "Used by the RomM web player. Read-only here — manage in the RomM web app.",
+    );
     fireEvent.click(container.querySelector("button")!); // expand
     await flushAsync();
     expect(container.textContent).toContain("legacy.srm");
+    // Both controls are gone — the panel is fully read-only.
     expect(queryByText("Activate Slot")).toBeNull();
-    // Named slots keep the Activate button — the suppression is legacy-only.
-    expect(queryByText("Delete Slot")).not.toBeNull();
+    expect(queryByText("Delete Slot")).toBeNull();
+  });
+
+  it("a named slot carries neither the legacy note nor the muted class (#1478)", () => {
+    const { container } = render(<SlotPanel {...defaultProps({ slot: makeSummary({ slot: "speedrun" }) })} />);
+    expect(container.querySelector(".romm-slot-panel-legacy")).toBeNull();
+    expect(container.textContent).not.toContain("Used by the RomM web player");
   });
 
   it("loads and renders inactive slot files when expanded", async () => {

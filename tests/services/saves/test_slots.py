@@ -1810,19 +1810,20 @@ class TestDeleteSlot:
         assert set(delete_calls[0][1][0]) == {10, 11}
 
     @pytest.mark.asyncio
-    async def test_delete_legacy_slot_is_surgical(self, tmp_path):
-        """#1061: deleting the legacy slot ("") removes ONLY the null-slot saves.
+    async def test_delete_legacy_slot_rejected(self, tmp_path):
+        """#1478: deleting the legacy bucket ("") is refused — it is read-only.
 
-        The foolproof proof — a legacy delete must omit ``slot=`` and filter
-        client-side, so named-slot saves on the same ROM are left untouched.
-        Before the fix, ``slot=""`` was sent literally (matching nothing → 0
-        deletes) or, worse, the unfiltered list deleted everything.
+        The web-player bucket is managed in the RomM web app; an accidental tap
+        must not wipe it. The refusal returns the canonical ``invalid_slot_name``
+        failure before any lock, server I/O, or state change — no ``list_saves``,
+        no ``delete_server_saves``, and every slot (including "") left intact.
         """
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "server-dev-1")
         _install_rom(svc, tmp_path)
-        # active_slot is a NAMED slot so the legacy "" slot is deletable.
+        # active_slot is a NAMED slot so the legacy "" slot would otherwise be a
+        # deletion target — the refusal must fire regardless.
         _seed_save_state_dict(
             svc,
             42,
@@ -1836,31 +1837,39 @@ class TestDeleteSlot:
                 },
             },
         )
-        # Null-slot (legacy) save + two named-slot saves.
         fake.saves[10] = _server_save(save_id=10, rom_id=42, filename="legacy.srm", slot=None)
         fake.saves[11] = _server_save(save_id=11, rom_id=42, filename="named.srm", slot="default")
-        fake.saves[12] = _server_save(save_id=12, rom_id=42, filename="other.srm", slot="desktop")
 
         result = await svc.delete_slot(42, "")
 
-        assert result["success"] is True
-        # ONLY the legacy null-slot save was deleted.
-        assert result["deleted_server_saves"] == 1
-        delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
-        assert len(delete_calls) == 1
-        assert delete_calls[0][1][0] == [10]
-        # The list_saves for the legacy slot omitted the param (slot None).
-        list_calls = [c for c in fake.call_log if c[0] == "list_saves"]
-        assert list_calls
-        assert all(c[2].get("slot") is None for c in list_calls)
-        # Named-slot saves survive on the server.
-        assert 11 in fake.saves
-        assert 12 in fake.saves
-        # Legacy slot key removed from state; named slots remain.
+        assert result == {
+            "success": False,
+            "reason": "invalid_slot_name",
+            "message": "The legacy bucket is read-only and cannot be deleted",
+        }
+        # No server I/O of any kind — not even a read to inspect the bucket.
+        assert not any(c[0] == "list_saves" for c in fake.call_log)
+        assert not any(c[0] == "delete_server_saves" for c in fake.call_log)
+        # Every slot key survives, including "".
         slots_after = _require_save_state(svc, 42).slots
-        assert "" not in slots_after
+        assert "" in slots_after
         assert "default" in slots_after
         assert "desktop" in slots_after
+        # Server saves untouched.
+        assert 10 in fake.saves
+        assert 11 in fake.saves
+
+    @pytest.mark.asyncio
+    async def test_delete_slot_whitespace_rejected(self, tmp_path):
+        """A whitespace-only target normalises to the legacy bucket and is refused."""
+        svc, fake = make_service(tmp_path)
+        self._setup_state_with_slots(svc, tmp_path, active_slot="default")
+
+        result = await svc.delete_slot(42, "   ")
+
+        assert result["success"] is False
+        assert result["reason"] == "invalid_slot_name"
+        assert not any(c[0] == "delete_server_saves" for c in fake.call_log)
 
     @pytest.mark.asyncio
     async def test_delete_slot_local_only_success(self, tmp_path):

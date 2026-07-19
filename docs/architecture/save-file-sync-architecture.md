@@ -265,13 +265,15 @@ backup.
   [ADR-0017](../adr/0017-client-baseline-detection-authoritative-negotiate-is-transport.md)): a ROM can no longer be
   confirmed onto the legacy slot. Every confirmed slot is now a real, addressable name. The Slot Setup Wizard detects
   legacy saves and offers to **migrate them into a named slot**, never to "track legacy in place."
-- **`switch_slot` and `set_active_slot` reject the legacy bucket too** — not just `confirm_slot_choice`. An empty /
-  whitespace / `None` slot name returns `{success: false, reason: "invalid_slot_name", …}` before any lock or I/O, so a
-  ROM can never be switched _into_ legacy mode through the slot switcher. The SAVES-tab UI matches this: it no longer
-  offers a "Use Legacy Mode?" action, and the legacy bucket's panel is **view-only** (its saves stay listable and
-  expandable, but it has no "Activate Slot" button). Only the _entry_ is closed, not existing state — a ROM already in
-  legacy mode keeps syncing until migration `005` re-opens the wizard
-  ([#1478](https://github.com/danielcopper/decky-romm-sync/issues/1478)).
+- **`switch_slot`, `set_active_slot`, and `delete_slot` reject the legacy bucket too** — not just `confirm_slot_choice`.
+  An empty / whitespace / `None` slot name returns `{success: false, reason: "invalid_slot_name", …}` before any lock or
+  I/O, so a ROM can never be switched _into_ legacy mode through the slot switcher, and the web-player bucket can never
+  be torn down from the plugin ([#1478](https://github.com/danielcopper/decky-romm-sync/issues/1478)). The SAVES-tab UI
+  matches this: it no longer offers a "Use Legacy Mode?" action, and the legacy bucket's panel is **fully read-only** —
+  its saves stay listable and expandable, but it has neither an "Activate Slot" nor a "Delete Slot" button. The panel is
+  also visually **demoted**: muted styling, sorted last (below every named slot, just above "+ New Slot"), and a note
+  reading "Used by the RomM web player. Read-only here — manage in the RomM web app." Only the _entry_ is closed, not
+  existing state — a ROM already in legacy mode keeps syncing until migration `005` re-opens the wizard.
 - **Migration `005`** (`005_unconfirm_legacy_slot_confirmations.sql`) un-confirms any ROM previously confirmed in legacy
   mode — `UPDATE rom_save_states SET slot_confirmed=0 WHERE active_slot IS NULL AND slot_confirmed=1` (the pre-rename
   table name migration `005` targets; migration `018` later renames it to `rom_save_sync_states`). No save data is
@@ -289,12 +291,13 @@ param value can address** (`&slot=` matches only `slot==""`; `&slot=null` matche
 return `[]`). The **only** way to retrieve legacy saves is to **omit the `slot` param** (the server then returns every
 save for the ROM) and **filter client-side** for `slot ∈ {null, ""}`.
 
-This is the core invariant for every per-slot server read/delete (`get_slot_saves`, `get_slot_delete_info`,
-`delete_slot`): legacy → `slot_query_param(...) == None` (param omitted) + `save_in_slot(...)` client filter; a named
-slot → `&slot=<name>` (server filters) **and** the same client re-filter (defence in depth). A legacy `delete_slot`
-therefore deletes **only** the `slot: null` saves and never touches named slots. Sending `&slot=` (empty) for a legacy
-op was the bug: the server returned `[]`, the local tracking was cleared, and the slot resurrected on the next merge
-(zombie slot).
+This is the core invariant for every per-slot server read that can target legacy (`get_slot_saves`,
+`get_slot_delete_info`): legacy → `slot_query_param(...) == None` (param omitted) + `save_in_slot(...)` client filter; a
+named slot → `&slot=<name>` (server filters) **and** the same client re-filter (defence in depth). `delete_slot` uses
+the same named-slot addressing but **refuses the legacy bucket outright** (#1478): an empty slot name is rejected before
+any I/O, so `delete_slot` never reaches the wire for `""` and the web-player bucket is never torn down from here.
+Sending `&slot=` (empty) for a legacy read was the bug: the server returned `[]`, the local tracking was cleared, and
+the slot resurrected on the next merge (zombie slot).
 
 The **active-slot matching filter** applies the same funnel from the other direction. The matrix sync run,
 `get_save_status`, and rollback narrow the fetched saves through `MatrixExecutor.filter_server_saves_to_slot`, and
@@ -1748,8 +1751,10 @@ emulator-version-specific, and not portable between different RetroArch core ver
 
 ### Save slot migration between slots not yet implemented
 
-Moving saves between slots (copy from slot A to slot B) is not supported. Users can delete slots (which removes all
-saves in the slot from the server) and create new ones, but there is no "move saves from slot X to slot Y" operation.
+Moving saves between slots (copy from slot A to slot B) is not supported. Users can delete named slots (which removes
+all saves in the slot from the server) and create new ones, but there is no "move saves from slot X to slot Y"
+operation. The legacy (web-player) bucket is the one exception — it is read-only and cannot be deleted from the plugin
+(#1478).
 
 ### Cross-device save browsing limited
 

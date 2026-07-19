@@ -21,6 +21,8 @@ export const NewSlotModal: FC<{
       },
       strTitle: "New Save Slot",
       bDisableBackgroundDismiss: true,
+      // Disable confirm on an empty/whitespace name (parent's no-op is the backstop).
+      bOKDisabled: value.trim() === "",
     },
     createElement(TextField, {
       focusOnMount: true,

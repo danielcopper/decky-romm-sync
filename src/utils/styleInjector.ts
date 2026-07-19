@@ -385,6 +385,16 @@ export function hideNativePlaySection(playSectionClass: string) {
 .romm-slot-panel-active {
   border-color: rgba(91,163,43,0.3);
 }
+/* Legacy (RomM web-player) bucket — read-only, visually demoted */
+.romm-slot-panel-legacy {
+  opacity: 0.6;
+}
+.romm-slot-legacy-note {
+  font-size: 11px;
+  color: #8f98a0;
+  font-style: italic;
+  padding: 4px 12px 0;
+}
 .romm-slot-header {
   display: flex;
   align-items: center;

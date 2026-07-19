@@ -41,7 +41,7 @@ function defaultProps(overrides: Partial<InactiveSlotBodyProps> = {}): InactiveS
     switching: false,
     switchError: null,
     isOffline: false,
-    canActivate: true,
+    isLegacy: false,
     handleActivate: vi.fn(),
     handleDelete: vi.fn(),
     deleting: false,
@@ -165,34 +165,33 @@ describe("InactiveSlotBody", () => {
     expect(errorTextNodes.length).toBe(0);
   });
 
-  // The slot-less legacy bucket is view-only (#1276): switching into it is
-  // retired, so the panel drops Activate + the switch-only hints while keeping
-  // the file list and Delete control.
-  describe("view-only (canActivate=false)", () => {
-    it("hides the Activate button but keeps the Delete button", () => {
-      const { queryByText } = render(<InactiveSlotBody {...defaultProps({ canActivate: false })} />);
+  // The slot-less legacy bucket is fully read-only (#1276 retired switching in;
+  // #1478 removed deletion): the panel drops BOTH the Activate and Delete
+  // controls and the switch-only hints while keeping the file list.
+  describe("read-only legacy bucket (isLegacy=true)", () => {
+    it("hides both the Activate and Delete buttons", () => {
+      const { queryByText } = render(<InactiveSlotBody {...defaultProps({ isLegacy: true })} />);
       expect(queryByText("Activate Slot")).toBeNull();
       expect(queryByText("Switching...")).toBeNull();
-      expect(queryByText("Delete Slot")).not.toBeNull();
+      expect(queryByText("Delete Slot")).toBeNull();
+      expect(queryByText("Deleting...")).toBeNull();
     });
 
     it("still lists the slot's save files", () => {
       const { container } = render(
-        <InactiveSlotBody
-          {...defaultProps({ canActivate: false, slotFiles: [makeFile({ filename: "legacy.srm" })] })}
-        />,
+        <InactiveSlotBody {...defaultProps({ isLegacy: true, slotFiles: [makeFile({ filename: "legacy.srm" })] })} />,
       );
       expect(container.textContent).toContain("legacy.srm");
     });
 
     it("hides the offline switching hint even when offline", () => {
-      const { container } = render(<InactiveSlotBody {...defaultProps({ canActivate: false, isOffline: true })} />);
+      const { container } = render(<InactiveSlotBody {...defaultProps({ isLegacy: true, isOffline: true })} />);
       expect(container.textContent).not.toContain("Offline — slot switching unavailable");
     });
 
     it("hides the switchError line", () => {
       const { container } = render(
-        <InactiveSlotBody {...defaultProps({ canActivate: false, switchError: "Something went wrong" })} />,
+        <InactiveSlotBody {...defaultProps({ isLegacy: true, switchError: "Something went wrong" })} />,
       );
       expect(container.textContent).not.toContain("Something went wrong");
     });

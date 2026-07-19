@@ -10,6 +10,7 @@ type AnyProps = Record<string, unknown> & { children?: unknown };
 const captured: {
   onOK?: (() => void) | undefined;
   bDisableBackgroundDismiss?: boolean | undefined;
+  bOKDisabled?: boolean | undefined;
   closeModal?: unknown;
   strTitle?: string | undefined;
 } = {};
@@ -19,12 +20,14 @@ vi.mock("@decky/ui", () => ({
     p: AnyProps & {
       onOK?: () => void;
       bDisableBackgroundDismiss?: boolean;
+      bOKDisabled?: boolean;
       closeModal?: unknown;
       strTitle?: string;
     },
   ) => {
     captured.onOK = p.onOK;
     captured.bDisableBackgroundDismiss = p.bDisableBackgroundDismiss;
+    captured.bOKDisabled = p.bOKDisabled;
     captured.closeModal = p.closeModal;
     captured.strTitle = p.strTitle;
     return createElement("div", { "data-testid": "confirm-modal" }, p.children as never);
@@ -48,6 +51,25 @@ describe("NewSlotModal", () => {
   it("disables background dismiss", () => {
     render(<NewSlotModal onSubmit={vi.fn()} />);
     expect(captured.bDisableBackgroundDismiss).toBe(true);
+  });
+
+  it("disables the OK button while the input is empty", () => {
+    render(<NewSlotModal onSubmit={vi.fn()} />);
+    expect(captured.bOKDisabled).toBe(true);
+  });
+
+  it("keeps OK disabled while the input is whitespace-only", () => {
+    render(<NewSlotModal onSubmit={vi.fn()} />);
+    const input = document.querySelector("input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "   " } });
+    expect(captured.bOKDisabled).toBe(true);
+  });
+
+  it("enables OK once a non-empty name is entered", () => {
+    render(<NewSlotModal onSubmit={vi.fn()} />);
+    const input = document.querySelector("input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "speedrun" } });
+    expect(captured.bOKDisabled).toBe(false);
   });
 
   it("controls the input value via React state", () => {
