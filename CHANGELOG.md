@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.28.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.28.0...decky-romm-sync-v0.28.1) (2026-07-19)
+
+
+### Bug Fixes
+
+* **saves:** honor RomM's per-device sync-disabled switch as a policy stop ([#1489](https://github.com/danielcopper/decky-romm-sync/issues/1489)) ([#1492](https://github.com/danielcopper/decky-romm-sync/issues/1492)) ([ea38b0b](https://github.com/danielcopper/decky-romm-sync/commit/ea38b0b8d3ba730e164a3424f1791aa8fa6fbb06))
+* **saves:** make the legacy bucket fully read-only in the saves tab ([#1478](https://github.com/danielcopper/decky-romm-sync/issues/1478)) ([#1496](https://github.com/danielcopper/decky-romm-sync/issues/1496)) ([8bd01c7](https://github.com/danielcopper/decky-romm-sync/commit/8bd01c7db5acb02a09477eef0e9e4d87f5c39829))
+* **saves:** refuse save upload when no device is registered ([#1494](https://github.com/danielcopper/decky-romm-sync/issues/1494)) ([5dacb2a](https://github.com/danielcopper/decky-romm-sync/commit/5dacb2add8972ce030f57244665ab937289a032c))
+* **saves:** reject the legacy bucket as a slot switch target ([#1478](https://github.com/danielcopper/decky-romm-sync/issues/1478)) ([#1491](https://github.com/danielcopper/decky-romm-sync/issues/1491)) ([1d84df7](https://github.com/danielcopper/decky-romm-sync/commit/1d84df796473559d85ccdaa1c13f7ad57eea2af7))
+
 ## [0.28.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.27.0...decky-romm-sync-v0.28.0) (2026-07-19)
 
 
