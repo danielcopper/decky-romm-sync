@@ -24,9 +24,10 @@ from typing import TYPE_CHECKING, Any
 from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_state import RomSaveState
 from domain.save_path import sanitize_save_filename
-from lib.errors import classify_error
+from lib.errors import DeviceNotRegisteredError, classify_error
 from lib.list_result import ErrorCode
 from services.saves._helpers import local_save_target
+from services.saves._messages import DEVICE_NOT_REGISTERED, DEVICE_NOT_REGISTERED_REASON
 
 if TYPE_CHECKING:
     import asyncio
@@ -206,6 +207,16 @@ class RollbackOrchestrator:
                 action,
             )
             return {"success": True, "action": action}
+        except DeviceNotRegisteredError:
+            # keep_local's POST hit the do_upload_save device-registration guard
+            # (#1478): carry the device-not-registered reason slug + message the
+            # automatic pre-flight uses, not the generic UNKNOWN.
+            self._logger.warning(
+                "resolve_sync_conflict(rom_id=%d, action=%s): no registered device — refusing keep_local upload",
+                rom_id,
+                action,
+            )
+            return {"success": False, "reason": DEVICE_NOT_REGISTERED_REASON, "message": DEVICE_NOT_REGISTERED}
         except Exception as e:
             self._logger.error(f"resolve_sync_conflict({rom_id}, {filename}, {action}) failed: {e}")
             return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": str(e)}

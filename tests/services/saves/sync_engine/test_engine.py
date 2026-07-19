@@ -69,6 +69,7 @@ class TestSyncRomSaves:
     def test_local_only_uploads(self, tmp_path):
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
         _install_rom(svc, tmp_path)
         _create_save(tmp_path, content=b"save data")
 
@@ -148,6 +149,7 @@ class TestSyncRomSaves:
         """local_only matches must still upload during pending migration (#238)."""
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
         _install_rom(svc, tmp_path)
         _set_sort_settings(svc, {"sort_by_content": True, "sort_by_core": False})
         _set_sort_settings_previous(svc, {"sort_by_content": True, "sort_by_core": False})

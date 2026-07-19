@@ -1125,6 +1125,7 @@ class TestSavesVersionHistoryCallables:
     async def test_saves_rollback_to_version_happy_path(self, plugin, tmp_path):
         """saves_rollback_to_version downloads the target save on success."""
         _install_rom(plugin, tmp_path)
+        _set_device_id(plugin, "dev-1")
 
         # Create local save file with content matching last_sync_hash
         saves_dir = tmp_path / "retrodeck" / "saves" / "gba"

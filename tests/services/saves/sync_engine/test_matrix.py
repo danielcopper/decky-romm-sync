@@ -15,7 +15,7 @@ import pytest
 
 from domain.rom_save_state import RomSaveState
 from domain.sync_action import Conflict, Skip, compute_sync_action
-from lib.errors import RommApiError, RommConflictError
+from lib.errors import DeviceNotRegisteredError, RommApiError, RommConflictError
 from services.saves.sync_engine.matrix import (
     DispatchSink,
     RomDispatchContext,
@@ -323,20 +323,50 @@ class TestV47SyncFlow:
         assert len(upload_calls) == 1
         assert upload_calls[0][2]["slot"] is None  # legacy → slot:null, NOT "default"
 
+    def test_named_slot_upload_without_device_refused_in_sync(self, tmp_path):
+        """#1478: a named-slot Upload with no registered device is refused, not misfiled.
+
+        The buggy path dropped the slot field and POSTed the named-slot save into
+        the legacy (slot:null) bucket with an emulator tag — a migration-005
+        retirement violation. Now the dispatch's error funnel records the file with
+        a clear message and ``upload_save`` is never called.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        # No device registered — server_device_id stays None.
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)  # local only → Upload
+        _seed_save_state(
+            svc,
+            42,
+            RomSaveState(system="gba", active_slot="default", slot_confirmed=True),
+        )
+
+        uploaded, downloaded, errors, conflicts = _do_sync(svc, 42)
+
+        assert (uploaded, downloaded, conflicts) == (0, 0, [])
+        # Message aligned to the pre-flight's canonical constant (the per-file sync
+        # error carries no reason-slug field — the list is message-only).
+        assert errors == ["pokemon.srm: Device not registered"]
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+
     def test_resolve_upload_slot_branches(self):
-        """_resolve_upload_slot maps each (active_slot, slots, device) case correctly."""
+        """_resolve_upload_slot maps each (active_slot, slots) case correctly.
+
+        Device presence is no longer a branch here: ``do_upload_save`` refuses a
+        slot-less upload when the device id is missing (#1478), so by the time this
+        resolver runs a registered device is guaranteed.
+        """
         from services.saves.sync_engine.matrix import MatrixExecutor as M
 
-        # No device sync → always None.
-        assert M._resolve_upload_slot(RomSaveState(active_slot="desktop"), None, "default") is None
         # Named active slot → that slot.
-        assert M._resolve_upload_slot(RomSaveState(active_slot="desktop"), "dev", "default") == "desktop"
+        assert M._resolve_upload_slot(RomSaveState(active_slot="desktop"), "default") == "desktop"
         # Brand-new ROM (active None, no slots) → the configured default slot.
-        assert M._resolve_upload_slot(RomSaveState(), "dev", "main") == "main"
+        assert M._resolve_upload_slot(RomSaveState(), "main") == "main"
         # Explicit legacy (active None, slots populated) → None (slot:null), not default.
         legacy = RomSaveState()
         legacy.switch_active_slot(None)  # active=None, adds the "" slots key
-        assert M._resolve_upload_slot(legacy, "dev", "default") is None
+        assert M._resolve_upload_slot(legacy, "default") is None
 
     def test_filter_server_saves_to_slot_isolates_legacy(self):
         """#1061: a legacy (slot:null) save belongs ONLY to the legacy slot.
@@ -573,17 +603,25 @@ class TestConfirmDownloadAfterSync:
         assert len(confirm_calls) == 1
         assert confirm_calls[0][1] == (100, "dev-1")
 
-    def test_do_upload_save_skips_confirm_when_no_device_id(self, tmp_path):
-        """No registered device → confirm_download is not called (no-op)."""
+    def test_do_upload_save_refuses_without_device_id(self, tmp_path):
+        """No registered device → upload is refused before any server call (#1478).
+
+        A missing device_id can no longer disable device sync (RomM >= 4.9 makes
+        registration the norm). Uploading without it would drop the slot field and
+        misfile a named-slot save into the legacy (slot:null) bucket, so
+        ``do_upload_save`` raises ``DeviceNotRegisteredError`` before
+        ``upload_save`` — neither the upload nor the confirm round-trip is issued.
+        """
         svc, fake = make_service(tmp_path)
         # server_device_id stays None — device not registered
         _install_rom(svc, tmp_path)
-        save_path = _create_save(tmp_path)
+        save_path = str(_create_save(tmp_path))
 
-        _do_upload(svc, 42, str(save_path), "pokemon.srm", "gba")
+        with pytest.raises(DeviceNotRegisteredError, match="Device not registered"):
+            _do_upload(svc, 42, save_path, "pokemon.srm", "gba")
 
-        confirm_calls = [c for c in fake.call_log if c[0] == "confirm_download"]
-        assert confirm_calls == []
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+        assert not any(c[0] == "confirm_download" for c in fake.call_log)
 
     def test_do_upload_save_swallows_confirm_download_error(self, tmp_path):
         """confirm_download failure must NOT bubble — upload is reported successful.
@@ -1409,6 +1447,7 @@ class TestOwnUploadIds:
     async def test_post_upload_idempotent_in_own_list(self, tmp_path):
         """Calling do_upload_save twice with the same resulting save_id does not duplicate."""
         svc, fake = make_service(tmp_path)
+        _set_device_id(svc, "dev-1")
         _install_rom(svc, tmp_path)
         save_file = _create_save(tmp_path)
 
@@ -1438,6 +1477,7 @@ class TestOwnUploadIds:
     async def test_put_upload_appends_own_upload_id(self, tmp_path):
         """A PUT upload (existing save id) records that id in own_upload_ids."""
         svc, fake = make_service(tmp_path)
+        _set_device_id(svc, "dev-1")
         _install_rom(svc, tmp_path)
         save_file = _create_save(tmp_path)
 
@@ -1465,6 +1505,7 @@ class TestOwnUploadIds:
     async def test_put_upload_idempotent_in_own_list(self, tmp_path):
         """Two PUT uploads to the same save id record it only once (dedup)."""
         svc, fake = make_service(tmp_path)
+        _set_device_id(svc, "dev-1")
         _install_rom(svc, tmp_path)
         save_file = _create_save(tmp_path)
 
@@ -1519,6 +1560,7 @@ class TestOwnUploadIds:
     async def test_rollback_to_foreign_version_records_target_id(self, tmp_path):
         """Rolling back PUTs the target's content back, so this device now owns that id."""
         svc, fake = make_service(tmp_path)
+        _set_device_id(svc, "dev-1")
         _install_rom(svc, tmp_path)
 
         save_file = _create_save(tmp_path)

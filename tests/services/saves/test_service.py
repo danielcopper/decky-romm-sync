@@ -625,7 +625,7 @@ class TestEmulatorTag:
             str(tmp_path / "saves" / "gba" / "pokemon.srm"),
             "pokemon.srm",
             RomSaveState(),
-            None,
+            "dev-1",
             "gba",
             "mgba_libretro",
         )
@@ -647,7 +647,7 @@ class TestEmulatorTag:
             str(tmp_path / "saves" / "gba" / "pokemon.srm"),
             "pokemon.srm",
             RomSaveState(),
-            None,
+            "dev-1",
             "gba",
             None,
         )

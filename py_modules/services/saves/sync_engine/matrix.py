@@ -33,8 +33,9 @@ from domain.sync_action import (
     compute_sync_action,
     resolve_upload_conflict,
 )
-from lib.errors import RommApiError, RommConflictError, classify_error
+from lib.errors import DeviceNotRegisteredError, RommApiError, RommConflictError, classify_error
 from services.saves._helpers import local_save_target
+from services.saves._messages import DEVICE_NOT_REGISTERED
 
 if TYPE_CHECKING:
     import logging
@@ -344,15 +345,15 @@ class MatrixExecutor:
         return True
 
     @staticmethod
-    def _resolve_upload_slot(
-        save_state: RomSaveState, device_id: str | None, default_slot: str | None = None
-    ) -> str | None:
-        """The slot field to send with an upload; ``None`` when device sync is off.
+    def _resolve_upload_slot(save_state: RomSaveState, default_slot: str | None = None) -> str | None:
+        """The slot field to send with an upload; ``None`` only for an explicit-legacy save.
 
-        With device sync on, a named ``active_slot`` uploads to that slot. An
-        ``active_slot`` of ``None`` is ambiguous and must be disambiguated by the
-        ``slots`` map (the same signal :meth:`update_file_sync_state` uses to seed
-        the active slot):
+        Reached only once :meth:`do_upload_save` has confirmed a registered
+        ``device_id`` (a missing one refuses the upload outright, #1478), so the
+        slot resolves purely from the aggregate's slot state. A named
+        ``active_slot`` uploads to that slot; an ``active_slot`` of ``None`` is
+        ambiguous and is disambiguated by the ``slots`` map (the same signal
+        :meth:`update_file_sync_state` uses to seed the active slot):
 
         - **Explicit legacy** (``active_slot`` None but ``slots`` populated — the
           state after switching to / confirming the legacy slot) → ``None`` so the
@@ -362,8 +363,6 @@ class MatrixExecutor:
           configured) → the configured ``default_slot`` so its first sync lands in
           the default slot, matching the active-slot seeding.
         """
-        if not device_id:
-            return None
         if save_state.active_slot is not None:
             return save_state.active_slot
         if save_state.slots:
@@ -433,12 +432,24 @@ class MatrixExecutor:
         the same 409 backstop that catches a write-time stale-current race
         surfaces the true state — no false "synced", no currency stamped on the
         non-head response.
+
+        A missing *device_id* refuses the upload outright (raises
+        :class:`DeviceNotRegisteredError` before any server call, #1478): the
+        RomM >= 4.9 floor makes device registration the norm, so a falsy id no
+        longer means "device sync off" — uploading without it would drop the slot
+        field and land a named-slot save in the legacy (``slot:null``) bucket, the
+        migration-005 retirement violation that seeds the #1478 corruption. The
+        raise reaches every caller's error funnel (the sync dispatch's per-file
+        errors, rollback / version-switch surfaced failures) so the file is
+        reported, not silently misfiled.
         """
+        if not device_id:
+            raise DeviceNotRegisteredError(DEVICE_NOT_REGISTERED)
+
         save_id = server_save.get("id") if server_save else None
         emulator = build_emulator_tag(core_so)
 
-        # v4.7: pass device_id and slot
-        slot = self._resolve_upload_slot(save_state, device_id, default_slot)
+        slot = self._resolve_upload_slot(save_state, default_slot)
 
         result = self._retry.with_retry(
             lambda: self._romm_api.upload_save(
@@ -757,6 +768,14 @@ class MatrixExecutor:
                     self.build_sync_conflict_entry(ctx.rom_id, filename, action.server_save, local_path, local_hash)
                 )
                 return None
+        except DeviceNotRegisteredError:
+            # Precondition refusal, not a transfer error: surface the same
+            # device-not-registered message the automatic pre-flight uses so the
+            # per-file error reads consistently (#1478). No slug field exists on a
+            # per-file sync error (the list is message-only); the reason slug is
+            # carried where a failure dict has one — the keep_local resolve path.
+            self._logger.warning(f"_dispatch_sync_action({ctx.rom_id}): {filename}: {DEVICE_NOT_REGISTERED}")
+            sink.errors.append(f"{filename}: {DEVICE_NOT_REGISTERED}")
         except RommApiError as e:
             _code, _msg = classify_error(e)
             self._logger.warning(f"_dispatch_sync_action({ctx.rom_id}): {filename} failed: {_msg}")
