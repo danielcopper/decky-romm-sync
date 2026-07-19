@@ -41,6 +41,7 @@ function defaultProps(overrides: Partial<InactiveSlotBodyProps> = {}): InactiveS
     switching: false,
     switchError: null,
     isOffline: false,
+    canActivate: true,
     handleActivate: vi.fn(),
     handleDelete: vi.fn(),
     deleting: false,
@@ -162,5 +163,38 @@ describe("InactiveSlotBody", () => {
       (el) => el.style.color === "rgb(217, 65, 38)" || el.style.color === "#d94126",
     );
     expect(errorTextNodes.length).toBe(0);
+  });
+
+  // The slot-less legacy bucket is view-only (#1276): switching into it is
+  // retired, so the panel drops Activate + the switch-only hints while keeping
+  // the file list and Delete control.
+  describe("view-only (canActivate=false)", () => {
+    it("hides the Activate button but keeps the Delete button", () => {
+      const { queryByText } = render(<InactiveSlotBody {...defaultProps({ canActivate: false })} />);
+      expect(queryByText("Activate Slot")).toBeNull();
+      expect(queryByText("Switching...")).toBeNull();
+      expect(queryByText("Delete Slot")).not.toBeNull();
+    });
+
+    it("still lists the slot's save files", () => {
+      const { container } = render(
+        <InactiveSlotBody
+          {...defaultProps({ canActivate: false, slotFiles: [makeFile({ filename: "legacy.srm" })] })}
+        />,
+      );
+      expect(container.textContent).toContain("legacy.srm");
+    });
+
+    it("hides the offline switching hint even when offline", () => {
+      const { container } = render(<InactiveSlotBody {...defaultProps({ canActivate: false, isOffline: true })} />);
+      expect(container.textContent).not.toContain("Offline — slot switching unavailable");
+    });
+
+    it("hides the switchError line", () => {
+      const { container } = render(
+        <InactiveSlotBody {...defaultProps({ canActivate: false, switchError: "Something went wrong" })} />,
+      );
+      expect(container.textContent).not.toContain("Something went wrong");
+    });
   });
 });

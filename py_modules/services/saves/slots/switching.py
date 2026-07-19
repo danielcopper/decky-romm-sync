@@ -88,27 +88,31 @@ class SlotSwitcher:
     async def set_active_slot(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Set the active save slot for a specific game.
 
-        If the slot doesn't exist yet (not on server), it is persisted
-        as a local slot. It will be promoted to server once a save is
-        uploaded to it. Owns its own read→mutate→write Unit of Work, held
-        under the per-ROM lock so the flip serialises against any in-flight
-        sync/status on the same ROM (see SyncEngine.rom_lock).
+        The slot name must be a real, non-empty value: switching a ROM into the
+        slot-less legacy bucket is retired (#1276), so an empty / whitespace-only
+        / ``None`` name is rejected up front with the canonical
+        ``invalid_slot_name`` failure — before any state change or lock
+        acquisition. If the (named) slot doesn't exist yet on the server, it is
+        persisted as a local slot and promoted to server once a save is uploaded
+        to it. Owns its own read→mutate→write Unit of Work, held under the
+        per-ROM lock so the flip serialises against any in-flight sync/status on
+        the same ROM (see SyncEngine.rom_lock).
         """
         rom_id = int(rom_id)
         slot_str = str(slot).strip() if slot else ""
-        # Empty string = legacy mode (None slot)
-        resolved_slot: str | None = slot_str if slot_str else None
+        if not slot_str:
+            return {"success": False, "reason": "invalid_slot_name", "message": "Slot name cannot be empty"}
 
         async with self._sync_engine.rom_lock(rom_id):
             with self._uow_factory() as uow:
                 rom_state = uow.rom_save_states.get(rom_id) or RomSaveState()
-                rom_state.switch_active_slot(resolved_slot)
+                rom_state.switch_active_slot(slot_str)
                 uow.rom_save_states.save(rom_id, rom_state)
 
         # The background check re-acquires rom_lock when it runs later, so it
         # must be scheduled outside the held lock above.
         self._loop.create_task(self._status_service.check_save_status_background(rom_id))
-        return {"success": True, "active_slot": resolved_slot}
+        return {"success": True, "active_slot": slot_str}
 
     def _check_slot_switch_readiness(self, rom_id: int, save_state: RomSaveState) -> dict[str, Any]:
         """Check whether it is safe to switch slots for this ROM.
@@ -147,12 +151,16 @@ class SlotSwitcher:
 
         Pre-checks (all must pass):
         1. Save sync must be enabled.
-        2. ROM must be installed.
-        3. RetroArch must not write saves to the content dir — otherwise the
+        2. The target slot name must be real (non-empty). Switching into the
+           slot-less legacy bucket is retired (#1276): an empty / whitespace-only
+           / ``None`` name is rejected with ``reason="invalid_slot_name"`` before
+           any lock acquisition or I/O.
+        3. ROM must be installed.
+        4. RetroArch must not write saves to the content dir — otherwise the
            switch's ``saves_dir`` writes are ignored by RetroArch (#239). The
            refusal carries ``reason="savefiles_in_content_dir"``.
-        4. No local files with pending changes (changed since last sync to current slot).
-        5. Server must be reachable.
+        5. No local files with pending changes (changed since last sync to current slot).
+        6. Server must be reachable.
 
         On success the local saves dir and per-file tracking are made coherent
         with the new slot: every local file the new slot does not provide is
@@ -168,9 +176,14 @@ class SlotSwitcher:
         if not save_sync_enabled(self._settings):
             return {"success": False, "reason": "sync_disabled", "message": "Save sync is disabled"}
 
-        # 2. Slot normalisation (empty → None for legacy mode)
+        # 2. Reject the slot-less legacy bucket as a switch target (#1276): an
+        #    empty / whitespace-only / None slot name is rejected before any lock
+        #    acquisition or I/O. Legacy saves stay readable via the legacy
+        #    bucket, but a ROM is never switched into legacy mode.
         slot_str = str(new_slot).strip() if new_slot else ""
-        resolved_slot: str | None = slot_str if slot_str else None
+        if not slot_str:
+            return {"success": False, "reason": "invalid_slot_name", "message": "Slot name cannot be empty"}
+        resolved_slot = slot_str
 
         # 3. ROM must be installed
         info = self._rom_info.get_rom_save_info(rom_id)

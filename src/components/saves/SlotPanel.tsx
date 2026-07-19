@@ -357,6 +357,8 @@ export const SlotPanel: FC<SlotPanelProps> = ({
           switching,
           switchError,
           isOffline,
+          // The slot-less legacy bucket is view-only (#1276) — no Activate.
+          canActivate: slotName !== "",
           deleting,
           handleActivate: () => {
             detach(handleActivate());

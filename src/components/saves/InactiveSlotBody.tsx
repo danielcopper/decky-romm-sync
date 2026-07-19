@@ -17,6 +17,13 @@ export interface InactiveSlotBodyProps {
   switching: boolean;
   switchError: string | null;
   isOffline: boolean;
+  /**
+   * Whether this slot may be activated. The slot-less legacy bucket is
+   * view-only (#1276): switching into it is retired, so its panel drops the
+   * Activate button and the switch-only hints while keeping the file list and
+   * Delete control.
+   */
+  canActivate: boolean;
   handleActivate: () => void;
   handleDelete: () => void;
   deleting: boolean;
@@ -28,6 +35,7 @@ export const InactiveSlotBody: FC<InactiveSlotBodyProps> = ({
   switching,
   switchError,
   isOffline,
+  canActivate,
   handleActivate,
   handleDelete,
   deleting,
@@ -55,15 +63,8 @@ export const InactiveSlotBody: FC<InactiveSlotBodyProps> = ({
   const activateLabel = switching ? "Switching..." : "Activate Slot";
   const deleteLabel = deleting ? "Deleting..." : "Delete Slot";
 
-  children.push(
-    createElement(
-      Focusable as never,
-      {
-        key: "activate-row",
-        "flow-children": "right",
-        style: { marginTop: "10px", display: "flex", gap: "8px", alignItems: "center" },
-      },
-      createElement(
+  const activateButton = canActivate
+    ? createElement(
         DialogButton,
         {
           key: "activate-btn",
@@ -74,7 +75,18 @@ export const InactiveSlotBody: FC<InactiveSlotBodyProps> = ({
           onClick: handleActivate,
         },
         activateLabel,
-      ),
+      )
+    : null;
+
+  children.push(
+    createElement(
+      Focusable as never,
+      {
+        key: "activate-row",
+        "flow-children": "right",
+        style: { marginTop: "10px", display: "flex", gap: "8px", alignItems: "center" },
+      },
+      activateButton,
       createElement(
         DialogButton,
         {
@@ -88,7 +100,9 @@ export const InactiveSlotBody: FC<InactiveSlotBodyProps> = ({
         deleteLabel,
       ),
     ),
-    isOffline
+    // Offline hint + switch error relate to the activate flow, so a view-only
+    // legacy panel (canActivate === false) drops them.
+    canActivate && isOffline
       ? createElement(
           "div",
           {
@@ -98,7 +112,7 @@ export const InactiveSlotBody: FC<InactiveSlotBodyProps> = ({
           "Offline — slot switching unavailable",
         )
       : null,
-    switchError
+    canActivate && switchError
       ? createElement(
           "div",
           {

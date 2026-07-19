@@ -11,7 +11,7 @@
  */
 
 import { useState, useEffect, useRef, createElement, FC } from "react";
-import { ConfirmModal, DialogButton, Focusable, showModal } from "@decky/ui";
+import { DialogButton, Focusable, showModal } from "@decky/ui";
 import { switchSlot, getVersionList, checkLocalDrift, debugLog, logWarn } from "../api/backend";
 import { getRommConnectionState, onRommConnectionChange, reportServerReachable } from "../utils/connectionState";
 import type { SaveStatus, SyncConflict, SaveSlotSummary } from "../types";
@@ -220,35 +220,13 @@ export const SavesTab: FC<SavesTabProps> = ({
     showModal(
       createElement(NewSlotModal, {
         onSubmit: (name: string) => {
+          // Switching into the slot-less legacy bucket is retired (#1276): an
+          // empty name is not a valid slot target, so ignore it rather than
+          // offering legacy mode. Legacy saves stay viewable in their own panel.
+          if (!name) return;
           detach(
             (async () => {
-              if (!name) {
-                // Empty = legacy mode — show warning
-                showModal(
-                  createElement(ConfirmModal, {
-                    strTitle: "Use Legacy Mode?",
-                    strDescription: "Legacy mode (no slot) limits saves to one version per game. Are you sure?",
-                    onOK: () => {
-                      detach(
-                        (async () => {
-                          try {
-                            const result = await switchSlot(romId, "");
-                            if (result.success && result.save_status) {
-                              onSlotSwitched("", result.save_status);
-                            } else {
-                              detach(debugLog(`SavesTab: legacy switch failed: ${result.reason}`));
-                            }
-                          } catch (e) {
-                            detach(debugLog(`SavesTab: legacy switch error: ${e}`));
-                          }
-                        })(),
-                      );
-                    },
-                  }),
-                );
-                return;
-              }
-              // Named slot — also use switchSlot to do pre-checks + immediate download
+              // Named slot — use switchSlot to do pre-checks + immediate download
               try {
                 const result = await switchSlot(romId, name);
                 if (result.success && result.save_status) {

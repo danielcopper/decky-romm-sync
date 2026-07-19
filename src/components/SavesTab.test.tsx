@@ -14,16 +14,10 @@ import type { SlotPanel } from "./saves/SlotPanel";
 import { installDomEventListenerSpy, uninstallDomEventListenerSpy } from "../test-utils/dom-event-listener-spy";
 
 // showModal from the global @decky/ui mock receives a React element created via
-// createElement(NewSlotModal, props) or createElement(ConfirmModal, props).
-// Tests pull `props.onSubmit` / `props.onOK` off the captured element to drive
-// the new-slot + legacy-confirm flows.
+// createElement(NewSlotModal, props). Tests pull `props.onSubmit` off the
+// captured element to drive the new-slot flow.
 interface NewSlotModalProps {
   onSubmit?: (name: string) => void | Promise<void>;
-}
-interface ConfirmModalProps {
-  onOK?: () => void | Promise<void>;
-  strTitle?: string;
-  strDescription?: string;
 }
 
 // The real in-memory connection store is driven directly (setRommConnectionState)
@@ -124,19 +118,11 @@ function defaultProps(
 }
 
 // Helper: pull the onSubmit prop off the NewSlotModal element passed to
-// showModal at call index `idx`. Mirrors SlotPanel.test's
-// `lastConfirmModalProps()` helper but for the named-arg flow we own here.
+// showModal at call index `idx`, for the named-arg flow we own here.
 function newSlotModalSubmit(idx = 0): ((name: string) => Promise<void>) | undefined {
   const calls = vi.mocked(showModal).mock.calls;
   const el = calls[idx]?.[0] as ReactElement<NewSlotModalProps> | undefined;
   return el?.props.onSubmit as ((name: string) => Promise<void>) | undefined;
-}
-
-function lastConfirmModalProps(): ConfirmModalProps | null {
-  const calls = vi.mocked(showModal).mock.calls;
-  if (calls.length === 0) return null;
-  const el = calls[calls.length - 1]?.[0] as ReactElement<ConfirmModalProps> | undefined;
-  return el?.props ?? null;
 }
 
 describe("SavesTab", () => {
@@ -378,70 +364,21 @@ describe("SavesTab", () => {
     });
   });
 
-  describe("new-slot submit — empty name (legacy mode)", () => {
-    it("opens a ConfirmModal with the legacy-mode warning", async () => {
-      const { getByText } = render(<SavesTab {...defaultProps()} />);
-      fireEvent.click(getByText("+ New Slot"));
-      const submit = newSlotModalSubmit();
-      await act(async () => {
-        await submit?.("");
-      });
-      // Two showModal calls now: 1) NewSlotModal, 2) ConfirmModal legacy warning.
-      expect(vi.mocked(showModal).mock.calls.length).toBe(2);
-      const confirmProps = lastConfirmModalProps();
-      expect(confirmProps?.strTitle).toBe("Use Legacy Mode?");
-      expect(confirmProps?.strDescription).toContain("Legacy mode");
-    });
-
-    it("calls switchSlot('') and onSlotSwitched when the legacy confirm is OK'd", async () => {
-      const newStatus = makeSaveStatus();
-      vi.mocked(backend.switchSlot).mockResolvedValue({
-        success: true,
-        save_status: newStatus,
-      });
-      const onSlotSwitched = vi.fn();
-      const { getByText } = render(<SavesTab {...defaultProps({ onSlotSwitched })} />);
-      fireEvent.click(getByText("+ New Slot"));
-      const submit = newSlotModalSubmit();
-      await act(async () => {
-        await submit?.("");
-      });
-      await act(async () => {
-        await lastConfirmModalProps()?.onOK?.();
-      });
-      expect(vi.mocked(backend.switchSlot)).toHaveBeenCalledWith(1, "");
-      expect(onSlotSwitched).toHaveBeenCalledWith("", newStatus);
-    });
-
-    it("logs but does not throw when the legacy switch returns success=false", async () => {
-      vi.mocked(backend.switchSlot).mockResolvedValue({
-        success: false,
-        reason: "sync_disabled",
-      });
+  describe("new-slot submit — empty name", () => {
+    it("is a no-op: no legacy-mode confirm modal and no switchSlot call (#1478)", async () => {
+      // Switching into the slot-less legacy bucket is retired (#1276): an empty
+      // slot name is ignored — it must not open a "Use Legacy Mode?" confirm or
+      // call switchSlot("").
       const onSlotSwitched = vi.fn();
       const { getByText } = render(<SavesTab {...defaultProps({ onSlotSwitched })} />);
       fireEvent.click(getByText("+ New Slot"));
       await act(async () => {
         await newSlotModalSubmit()?.("");
       });
-      await act(async () => {
-        await lastConfirmModalProps()?.onOK?.();
-      });
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("legacy switch failed"));
+      // Only the NewSlotModal opened — no second (legacy-confirm) modal.
+      expect(vi.mocked(showModal).mock.calls).toHaveLength(1);
+      expect(vi.mocked(backend.switchSlot)).not.toHaveBeenCalled();
       expect(onSlotSwitched).not.toHaveBeenCalled();
-    });
-
-    it("logs but does not throw when the legacy switch throws", async () => {
-      vi.mocked(backend.switchSlot).mockRejectedValue(new Error("boom"));
-      const { getByText } = render(<SavesTab {...defaultProps()} />);
-      fireEvent.click(getByText("+ New Slot"));
-      await act(async () => {
-        await newSlotModalSubmit()?.("");
-      });
-      await act(async () => {
-        await lastConfirmModalProps()?.onOK?.();
-      });
-      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("legacy switch error"));
     });
   });
 

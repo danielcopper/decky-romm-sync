@@ -223,8 +223,8 @@ different save states per device).
 
 `switch_slot` makes the active slot, the local saves directory, and per-file tracking coherent with the chosen slot in
 one locked critical section (the per-rom `asyncio.Lock` — see the "Per-rom asyncio.Lock" section). After the pre-checks
-pass (sync enabled, ROM installed, not a content-dir layout, no un-uploaded local changes on tracked files, server
-reachable):
+pass (sync enabled, a real non-empty target slot name, ROM installed, not a content-dir layout, no un-uploaded local
+changes on tracked files, server reachable):
 
 1. The active slot is flipped in memory.
 2. Every local save file the target slot does **not** provide is quarantined into `.romm-backup` (never deleted
@@ -239,8 +239,10 @@ reachable):
    are already correct, and a failed target re-resolves as `Download` on the next sync. Saves are never carried between
    slots; the switch only downloads or quarantines, never uploads.
 
-An empty target slot is just the case where step 3 is a no-op: every local file is quarantined, tracking is cleared, and
-the slot starts fresh — with every prior save recoverable under `.romm-backup`.
+A **named** target slot with no server saves is just the case where step 3 is a no-op: every local file is quarantined,
+tracking is cleared, and the slot starts fresh — with every prior save recoverable under `.romm-backup`. (An empty /
+whitespace / `None` slot **name** is a different thing entirely: it is rejected up front with
+`reason="invalid_slot_name"` — the slot-less legacy bucket is no longer a switch target, see below.)
 
 #### Inside `.romm-backup` — naming and retention
 
@@ -263,6 +265,13 @@ backup.
   [ADR-0017](../adr/0017-client-baseline-detection-authoritative-negotiate-is-transport.md)): a ROM can no longer be
   confirmed onto the legacy slot. Every confirmed slot is now a real, addressable name. The Slot Setup Wizard detects
   legacy saves and offers to **migrate them into a named slot**, never to "track legacy in place."
+- **`switch_slot` and `set_active_slot` reject the legacy bucket too** — not just `confirm_slot_choice`. An empty /
+  whitespace / `None` slot name returns `{success: false, reason: "invalid_slot_name", …}` before any lock or I/O, so a
+  ROM can never be switched _into_ legacy mode through the slot switcher. The SAVES-tab UI matches this: it no longer
+  offers a "Use Legacy Mode?" action, and the legacy bucket's panel is **view-only** (its saves stay listable and
+  expandable, but it has no "Activate Slot" button). Only the _entry_ is closed, not existing state — a ROM already in
+  legacy mode keeps syncing until migration `005` re-opens the wizard
+  ([#1478](https://github.com/danielcopper/decky-romm-sync/issues/1478)).
 - **Migration `005`** (`005_unconfirm_legacy_slot_confirmations.sql`) un-confirms any ROM previously confirmed in legacy
   mode — `UPDATE rom_save_states SET slot_confirmed=0 WHERE active_slot IS NULL AND slot_confirmed=1`. No save data is
   touched; the wizard simply reappears for that ROM and the user re-picks a named slot (optionally migrating the legacy

@@ -730,6 +730,20 @@ describe("SlotPanel", () => {
     expect(container.textContent).not.toContain("(no slot)");
   });
 
+  it("the legacy '' slot is view-only: no Activate button, files still shown (#1478)", async () => {
+    // Switching into the slot-less legacy bucket is retired (#1276) — the panel
+    // may be expanded to view its saves, but never activated.
+    const files: SlotSaveFile[] = [{ id: 1, filename: "legacy.srm", size: 512, updated_at: "", emulator: "mgba" }];
+    vi.mocked(backend.getSlotSaves).mockResolvedValue({ success: true, slot: "", saves: files });
+    const { container, queryByText } = render(<SlotPanel {...defaultProps({ slot: makeSummary({ slot: "" }) })} />);
+    fireEvent.click(container.querySelector("button")!); // expand
+    await flushAsync();
+    expect(container.textContent).toContain("legacy.srm");
+    expect(queryByText("Activate Slot")).toBeNull();
+    // Named slots keep the Activate button — the suppression is legacy-only.
+    expect(queryByText("Delete Slot")).not.toBeNull();
+  });
+
   it("loads and renders inactive slot files when expanded", async () => {
     const files: SlotSaveFile[] = [{ id: 1, filename: "remote-a.srm", size: 1024, updated_at: "", emulator: "mgba" }];
     vi.mocked(backend.getSlotSaves).mockResolvedValue({

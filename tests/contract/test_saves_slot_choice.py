@@ -1,11 +1,14 @@
-"""Contract tests for ``confirm_slot_choice`` — the #1004/#1008 wire contract.
+"""Contract tests for the slot-choice mutations — ``confirm_slot_choice`` and
+``switch_slot`` — where they reject the retired legacy slot.
 
-Driven frontend-shaped per ``src/api/backend.ts``: positional
-``(rom_id, chosen_slot, migrate, migrate_from_slot)`` with the TS arg types
-(``string | null`` for the slot, ``boolean`` for migrate, ``string | null``
-for the source). These pin the explicit-contract fix: ``migrate`` is a real
-bool (no ``"__no_migration__"`` sentinel string), ``chosen_slot=None`` confirms
-the legacy slot, and the default call runs no migration.
+``confirm_slot_choice`` is driven frontend-shaped per ``src/api/backend.ts``:
+positional ``(rom_id, chosen_slot, migrate, migrate_from_slot)`` with the TS arg
+types (``string | null`` for the slot, ``boolean`` for migrate, ``string | null``
+for the source). These pin the explicit-contract fix: ``migrate`` is a real bool
+(no ``"__no_migration__"`` sentinel string) and the default call runs no
+migration. Both callables share one rule: the slot-less legacy bucket is no
+longer a confirmable / switchable target (#1276), so an empty / ``None`` slot
+name returns the canonical ``invalid_slot_name`` failure and never mutates state.
 """
 
 from __future__ import annotations
@@ -57,3 +60,27 @@ async def test_confirm_legacy_slot_none_rejected(harness):
     assert state is None
     # No migration delete fired.
     assert not any(c[0] == "delete_server_saves" for c in harness.romm.call_log)
+
+
+# ── switch_slot ───────────────────────────────────────────────────────────
+
+
+async def test_switch_slot_empty_rejected(harness):
+    """switch_slot("") is rejected — the legacy bucket is not a switch target (#1276).
+
+    Driven frontend-shaped per ``src/api/backend.ts`` (``switchSlot`` is
+    ``callable<[number, string], …>``). The callable returns the canonical
+    ``invalid_slot_name`` failure and never switches the ROM into legacy mode.
+    """
+    enable_save_sync(harness)
+    seed_rom(harness, 42)
+
+    result = await harness.plugin.switch_slot(42, "")
+
+    assert result["success"] is False
+    assert result["reason"] == "invalid_slot_name"
+    assert isinstance(result["message"], str)
+    # No state written — the ROM is not switched into legacy mode.
+    with harness.uow_factory() as uow:
+        state = uow.rom_save_states.get(42)
+    assert state is None

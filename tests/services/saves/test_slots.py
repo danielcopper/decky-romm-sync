@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+from typing import cast
 
 import pytest
 
@@ -190,14 +191,38 @@ class TestSaveSlots:
         assert _require_save_state(svc, 456).active_slot == "my-slot"
 
     @pytest.mark.asyncio
-    async def test_set_active_slot_empty_sets_none(self, tmp_path):
-        """Empty string sets active_slot to None (legacy mode)."""
+    async def test_set_active_slot_empty_rejected(self, tmp_path):
+        """An empty slot name is rejected — legacy is no longer a switch target (#1276)."""
         svc, _ = make_service(tmp_path)
         _seed_rom(svc, 123)
         result = await svc._slots.set_active_slot(123, "")
-        assert result["success"] is True
-        assert result["active_slot"] is None
-        assert _require_save_state(svc, 123).active_slot is None
+        assert result == {
+            "success": False,
+            "reason": "invalid_slot_name",
+            "message": "Slot name cannot be empty",
+        }
+        # No state mutation — the ROM is never switched into legacy mode.
+        assert _get_save_state(svc, 123) is None
+
+    @pytest.mark.asyncio
+    async def test_set_active_slot_whitespace_rejected(self, tmp_path):
+        """A whitespace-only slot name normalises to empty and is rejected."""
+        svc, _ = make_service(tmp_path)
+        _seed_rom(svc, 123)
+        result = await svc._slots.set_active_slot(123, "   ")
+        assert result["success"] is False
+        assert result["reason"] == "invalid_slot_name"
+        assert _get_save_state(svc, 123) is None
+
+    @pytest.mark.asyncio
+    async def test_set_active_slot_none_rejected(self, tmp_path):
+        """A None slot name hits the defensive fallback and is rejected the same way."""
+        svc, _ = make_service(tmp_path)
+        _seed_rom(svc, 123)
+        result = await svc._slots.set_active_slot(123, cast("str", None))
+        assert result["success"] is False
+        assert result["reason"] == "invalid_slot_name"
+        assert _get_save_state(svc, 123) is None
 
     @pytest.mark.asyncio
     async def test_set_active_slot_triggers_background_check(self, tmp_path):
@@ -1081,29 +1106,50 @@ class TestSwitchSlot:
         assert _require_save_state(svc, 42).active_slot == "desktop"
 
     @pytest.mark.asyncio
-    async def test_switch_to_legacy_slot(self, tmp_path):
-        """switch_slot("") sets active_slot=None, persists "" in slots dict, returns success."""
-        svc, fake = make_service(tmp_path)
+    async def test_switch_slot_empty_rejected(self, tmp_path):
+        """switch_slot("") is rejected — the legacy bucket is not a switch target (#1276).
+
+        The refusal fires before any lock or server I/O, so the active slot is
+        left untouched (no switch into legacy mode).
+        """
+        svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
-        _install_rom(svc, tmp_path)
-        save_path = _create_save(tmp_path)
-        local_hash = _file_md5(str(save_path))
-
-        # Start in a named slot, fully synced (active_slot="default")
-        _seed_save_state(svc, 42, self._synced_state(local_hash))
-
-        # Server has a legacy save (slot=None)
-        fake.saves[200] = _server_save(save_id=200, slot=None)
+        _seed_save_state(svc, 42, RomSaveState(active_slot="default", slot_confirmed=True))
 
         result = await svc.switch_slot(42, "")
 
-        assert result["success"] is True
-        assert "save_status" in result
-        # active_slot in state is None (legacy)
-        assert _require_save_state(svc, 42).active_slot is None
-        # Legacy slot "" appears in the slots dict
-        slots_dict = _require_save_state(svc, 42).slots
-        assert "" in slots_dict
+        assert result == {
+            "success": False,
+            "reason": "invalid_slot_name",
+            "message": "Slot name cannot be empty",
+        }
+        assert _require_save_state(svc, 42).active_slot == "default"
+
+    @pytest.mark.asyncio
+    async def test_switch_slot_whitespace_rejected(self, tmp_path):
+        """A whitespace-only target slot normalises to empty and is rejected."""
+        svc, _ = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _seed_save_state(svc, 42, RomSaveState(active_slot="default", slot_confirmed=True))
+
+        result = await svc.switch_slot(42, "  \t ")
+
+        assert result["success"] is False
+        assert result["reason"] == "invalid_slot_name"
+        assert _require_save_state(svc, 42).active_slot == "default"
+
+    @pytest.mark.asyncio
+    async def test_switch_slot_none_rejected(self, tmp_path):
+        """A None target slot hits the defensive fallback and is rejected the same way."""
+        svc, _ = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _seed_save_state(svc, 42, RomSaveState(active_slot="default", slot_confirmed=True))
+
+        result = await svc.switch_slot(42, cast("str", None))
+
+        assert result["success"] is False
+        assert result["reason"] == "invalid_slot_name"
+        assert _require_save_state(svc, 42).active_slot == "default"
 
     @pytest.mark.asyncio
     async def test_legacy_slot_persisted_in_get_save_slots(self, tmp_path):
