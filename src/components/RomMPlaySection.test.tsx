@@ -1538,6 +1538,53 @@ describe("RomMPlaySection", () => {
       expect(container.textContent).toContain("0/3");
     });
 
+    it("core_changed: an unmanaged platform does NOT surface a play-section BIOS row (#1520)", async () => {
+      // A platform with server firmware but no registry coverage reports
+      // bios_level "unmanaged". That state is non-actionable on the play section
+      // (it lives in the BIOS tab), so the row must stay suppressed even though
+      // biosNeeded is true — mirroring how "ok" is suppressed here.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 61,
+        platform_slug: "psvita",
+      });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).not.toContain("BIOS");
+
+      vi.mocked(backend.getBiosStatus).mockResolvedValue({
+        bios_status: {
+          platform_slug: "psvita",
+          server_count: 2,
+          local_count: 0,
+          all_downloaded: false,
+        },
+        bios_level: "unmanaged",
+        bios_label: "Not managed",
+      });
+      // biosNeeded is true (server firmware exists) — the suppression is driven
+      // purely by the "unmanaged" level, not by biosNeeded being false. If the
+      // gate regressed, "Not managed" would render.
+      vi.mocked(playSectionUtils.extractBiosInfo).mockReturnValue({
+        biosNeeded: true,
+        biosStatus: "unmanaged",
+        biosLabel: "Not managed",
+      });
+
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "core_changed", platform_slug: "psvita" },
+          }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).not.toContain("Not managed");
+      expect(container.textContent).not.toContain("BIOS");
+    });
+
     it("core_changed: skips when no romId", async () => {
       // cached.found=false → no romId
       render(<RomMPlaySection appId={testAppId} />);

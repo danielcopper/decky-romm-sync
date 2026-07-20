@@ -857,7 +857,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       getPlatformCoreInfo(romId),
       getBiosStatus(romId).catch(() => ({
         bios_status: null as BiosStatus | null,
-        bios_level: null as "ok" | "partial" | "missing" | null,
+        bios_level: null as "ok" | "partial" | "missing" | "unmanaged" | null,
         bios_label: null as string | null,
       })),
     ]);
@@ -1186,8 +1186,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     );
   }
 
-  // BIOS warning (only when files are missing — OK status moved to tab)
-  if (info.biosNeeded && info.biosStatus && info.biosStatus !== "ok") {
+  // BIOS warning (only when files are actually missing — "ok" and "unmanaged"
+  // are non-actionable here and live in the BIOS tab, not on the play section)
+  if (info.biosNeeded && info.biosStatus && info.biosStatus !== "ok" && info.biosStatus !== "unmanaged") {
     const biosColor = biosColorForLevel(info.biosStatus);
     infoItems.push(
       createElement(
