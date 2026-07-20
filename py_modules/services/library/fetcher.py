@@ -48,6 +48,19 @@ if TYPE_CHECKING:
 _SYNC_CANCELLED = "Sync cancelled"
 
 
+class _PlanEstimate(NamedTuple):
+    """One platform's plan-time estimate riders for the ``sync_plan`` payload.
+
+    Estimate-ONLY (ADR-0023) — these price the frontend's time readout and
+    never feed the actual skip decision. ``None`` counts mean "unknown" and
+    ride the payload absent.
+    """
+
+    predicted_skip: bool
+    collapsed_count: int | None
+    bound_count: int | None
+
+
 class _SkipBaseline(NamedTuple):
     """One platform's locally persisted inputs to the incremental-skip gate."""
 
@@ -501,13 +514,18 @@ class LibraryFetcher:
             self._logger.warning(f"Plan-time skip-estimate read failed, using raw ROM counts: {e}")
             return platform_units
         return [
-            replace(unit, predicted_skip=estimates[unit.slug][0], collapsed_count=estimates[unit.slug][1])
+            replace(
+                unit,
+                predicted_skip=estimates[unit.slug].predicted_skip,
+                collapsed_count=estimates[unit.slug].collapsed_count,
+                bound_count=estimates[unit.slug].bound_count,
+            )
             if unit.slug in estimates
             else unit
             for unit in platform_units
         ]
 
-    def _read_plan_estimates(self, units: list[WorkUnit]) -> dict[str, tuple[bool, int | None]]:
+    def _read_plan_estimates(self, units: list[WorkUnit]) -> dict[str, _PlanEstimate]:
         """Read the plan-time estimate baseline for platform units (#1382).
 
         Per unit slug: replay the wholesale-skip gate's LOCAL conditions
@@ -523,9 +541,15 @@ class LibraryFetcher:
         (cross-platform collection siblings, ADR-0021) would mis-weight the ETA
         below the true work. ``None`` (no stamp, or no persisted rows) rides the
         payload absent, so the frontend weights the unit at its raw ``rom_count``
-        (``predicted_skip ? 0 : collapsed_count ?? rom_count``). The gate's
-        server-delta check (``list_roms_updated_after``) is deliberately NOT
-        replayed — no network at plan time. A Force Full Sync clears every
+        (``predicted_skip ? 0 : collapsed_count ?? rom_count``). Also count the
+        unit's BOUND rows — those already carrying a ``shortcut_app_id`` — which
+        the frontend prices at the cheap update rate rather than the create rate,
+        so a re-sync of an already-mirrored platform stops reading as a fresh
+        import. Unlike the collapsed count this needs no stamp gate: a bound row
+        genuinely has a Steam shortcut whether or not the platform's mirror is
+        complete, and zero persisted rows honestly means "every item is a
+        create". The gate's server-delta check (``list_roms_updated_after``) is
+        deliberately NOT replayed — no network at plan time. A Force Full Sync clears every
         stamp before the run, so its plan predicts no skips AND drops every
         collapsed count (the forced re-apply is priced at the full ``rom_count``)
         without a special case. One short read UoW for the whole plan.
@@ -535,11 +559,12 @@ class LibraryFetcher:
         ``_try_unit_incremental_skip`` at fetch time remains the sole skip
         authority.
         """
-        estimates: dict[str, tuple[bool, int | None]] = {}
+        estimates: dict[str, _PlanEstimate] = {}
         with self._uow_factory() as uow:
             for unit in units:
                 stamp = uow.platform_sync_state.get(unit.slug)
                 all_rows = list(uow.roms.iter_by_platform(unit.slug))
+                bound_count = sum(1 for rom in all_rows if rom.shortcut_app_id is not None)
                 predicted = predict_unit_skip(
                     stamp_completed_at=stamp.completed_at if stamp is not None else None,
                     stamp_rom_count=stamp.rom_count if stamp is not None else None,
@@ -547,7 +572,7 @@ class LibraryFetcher:
                     # The same fetch-generation count the real gate uses (#1504),
                     # so the estimate keeps replaying the gate's local conditions.
                     fetched_count=count_rows_for_skip(all_rows, stamp.fetch_id if stamp is not None else None),
-                    registry_count=sum(1 for rom in all_rows if rom.shortcut_app_id is not None),
+                    registry_count=bound_count,
                     needs_backfill=any(rom.sibling_group_key is None for rom in all_rows),
                 )
                 collapsed = (
@@ -557,7 +582,7 @@ class LibraryFetcher:
                     if stamp is not None and all_rows
                     else None
                 )
-                estimates[unit.slug] = (predicted, collapsed)
+                estimates[unit.slug] = _PlanEstimate(predicted, collapsed, bound_count)
         return estimates
 
     def _read_collapsed_counts(self) -> dict[str, int]:

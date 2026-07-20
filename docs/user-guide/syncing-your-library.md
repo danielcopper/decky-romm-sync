@@ -51,15 +51,25 @@ the readout run long or short for a moment, but it never changes what the sync a
 the same way a platform is: if a collection's membership hasn't changed and none of its games did either, the plugin
 skips it without re-listing its contents — so a large, collection-heavy library re-syncs quickly.
 
+The estimate also knows the **difference between adding a game and updating one**. Creating a shortcut is roughly three
+times the work of refreshing one that already exists, and it also has to pull down a cover; updating an existing
+shortcut does neither. So a run over games your library already has — any re-sync, and in particular a **Force Full
+Sync**, which re-applies everything but keeps your existing shortcuts — is estimated at the cheaper update rate rather
+than as though it were building your library from scratch. Cover updates are counted on their own, so a run that only
+refreshes cover art is estimated from how many covers changed instead of falling back to a fixed number.
+
 Once the sync has been creating shortcuts for a few seconds, that "up to" ceiling is replaced by a **live countdown** —
-"2 min left" — measured from the actual speed on your device and updated as the run proceeds. Both the countdown and the
-progress counter show **net** progress: they count the games this run actually needs to add or update (say "100/801"),
-not every game in your library. It holds steady across the short pauses where the sync fetches the next platform's game
-list, rather than jumping around. The main progress bar apportions its width the same way — a platform expected to skip
-takes no space, and a huge platform fills the bar in proportion to its real work instead of an equal slice per platform.
-The one exception is a run that _opens_ with platforms that have nothing to add: those still refresh cover art, so they
-would leave the bar sitting at empty for as long as they work. Each of them therefore claims an ordinary equal slice,
-and the platforms that do have games to add fill the rest of the bar between them.
+"2 min left" — measured from the actual speed on your device and updated as the run proceeds. The countdown waits until
+it has genuinely measured the apply speed before it appears: at the very start of a run the plugin takes a one-off look
+at the shortcuts already in Steam, which can take ten seconds or so on a large library, and readings taken across that
+pause would make the first countdown read several times too long. Both the countdown and the progress counter show
+**net** progress: they count the games this run actually needs to add or update (say "100/801"), not every game in your
+library. It holds steady across the short pauses where the sync fetches the next platform's game list, rather than
+jumping around. The main progress bar apportions its width the same way — a platform expected to skip takes no space,
+and a huge platform fills the bar in proportion to its real work instead of an equal slice per platform. The one
+exception is a run that _opens_ with platforms that have nothing to add: those still refresh cover art, so they would
+leave the bar sitting at empty for as long as they work. Each of them therefore claims an ordinary equal slice, and the
+platforms that do have games to add fill the rest of the bar between them.
 
 A few things worth knowing for a large library:
 

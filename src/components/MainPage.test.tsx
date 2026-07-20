@@ -51,7 +51,7 @@ import {
 } from "../utils/syncProgress";
 import { beginEtaRun, resetEta, liveEtaSeconds } from "../utils/syncEta";
 import * as syncEta from "../utils/syncEta";
-import { NEW_ITEM_SEC, UPDATED_ITEM_SEC } from "../utils/syncEstimate";
+import { NEW_ITEM_SEC, UPDATED_ITEM_SEC, COVER_DOWNLOAD_SEC, FETCH_ALLOWANCE_SEC } from "../utils/syncEstimate";
 import { setDownloads } from "../utils/downloadStore";
 import { showModal } from "@decky/ui";
 import * as syncManager from "../utils/syncManager";
@@ -1210,12 +1210,12 @@ describe("MainPage", () => {
 
     // Coverage and duration each own a label-less line under the "Changes"
     // block ("Scope" and "Preview" as competing labels read as duplicate info).
-    // These summaries have one new item, so the estimate is the fetch allowance
-    // rounding to "2 min".
+    // These summaries have one new item, so the estimate is essentially the flat
+    // fixed-overhead allowance (45s) and reads "< 1 min".
     it("reads 'Syncing N platforms · M collections' with both counts", async () => {
       const c = await renderPreviewScope(3, 2);
       expect(c.querySelector('[data-testid="sync-scope"]')?.textContent).toBe("Syncing 3 platforms · 2 collections");
-      expect(c.querySelector('[data-testid="sync-estimate"]')?.textContent).toBe("Estimated duration: 2 min");
+      expect(c.querySelector('[data-testid="sync-estimate"]')?.textContent).toBe("Estimated duration: < 1 min");
     });
 
     it("omits the collections part when the run syncs none, and singularizes", async () => {
@@ -1231,7 +1231,7 @@ describe("MainPage", () => {
     it("shows the duration alone when the backend omits both scope counts (empty scope)", async () => {
       const c = await renderPreviewScope(0, 0);
       expect(c.querySelector('[data-testid="sync-scope"]')).toBeNull();
-      expect(c.querySelector('[data-testid="sync-estimate"]')?.textContent).toBe("Estimated duration: 2 min");
+      expect(c.querySelector('[data-testid="sync-estimate"]')?.textContent).toBe("Estimated duration: < 1 min");
     });
 
     it("hides the scope line and the progress hint on an empty delta (nothing to apply)", async () => {
@@ -2380,7 +2380,9 @@ describe("MainPage", () => {
   });
 
   describe("always-on sync estimate (#1025 UX)", () => {
-    function previewWithCounts(newCount: number, changedCount: number): SyncPreview {
+    // ``coverRefreshCount`` is left OFF the summary when zero, so the default
+    // fixtures keep exercising the absent-field (older backend) path.
+    function previewWithCounts(newCount: number, changedCount: number, coverRefreshCount = 0): SyncPreview {
       return {
         success: true,
         summary: {
@@ -2389,6 +2391,7 @@ describe("MainPage", () => {
           unchanged_count: 0,
           remove_count: 0,
           disabled_platform_remove_count: 0,
+          ...(coverRefreshCount > 0 ? { cover_refresh_count: coverRefreshCount } : {}),
         },
         new_names: [],
         changed_names: [],
@@ -2396,8 +2399,12 @@ describe("MainPage", () => {
       };
     }
 
-    async function renderPreviewWithCounts(newCount: number, changedCount: number): Promise<HTMLElement> {
-      vi.mocked(backend.syncPreview).mockResolvedValue(previewWithCounts(newCount, changedCount));
+    async function renderPreviewWithCounts(
+      newCount: number,
+      changedCount: number,
+      coverRefreshCount = 0,
+    ): Promise<HTMLElement> {
+      vi.mocked(backend.syncPreview).mockResolvedValue(previewWithCounts(newCount, changedCount, coverRefreshCount));
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
       const sync = buttonByExactText(container, "Sync Library");
@@ -2422,21 +2429,30 @@ describe("MainPage", () => {
     }
 
     it("renders an estimate on its own line for a small preview", async () => {
-      // 3 new * 0.45s + 90s fetch allowance = 91.35s → ~2 min (small libraries
-      // overshoot; the allowance covers the fetch/prep phase).
+      // 3 new * (0.36s walk + 0.15s cover) + 45s allowance = 46.53s → "< 1 min".
+      // A handful of creates really is dominated by the run's fixed overhead.
       const c = await renderPreviewWithCounts(3, 0);
-      expect(estimateLine(c)).toBe("Estimated duration: 2 min");
+      expect(estimateLine(c)).toBe("Estimated duration: < 1 min");
     });
 
     it("renders an estimate on its own line for a large preview", async () => {
-      // 1000 new * 0.45s + 90s = 540s → ~9 min.
+      // 1000 new * (0.36s walk + 0.15s cover) + 45s = 555s → ~9 min.
       const c = await renderPreviewWithCounts(1000, 0);
       expect(estimateLine(c)).toBe("Estimated duration: 9 min");
     });
 
     it("prices updated items into the preview estimate", async () => {
-      // 100 updated * 0.20s + 90s = 110s → ~2 min.
+      // 100 updated * 0.13s + 45s = 58s → "< 1 min". Updates carry no cover
+      // download — the apply loop applies artwork only to created shortcuts.
       const c = await renderPreviewWithCounts(0, 100);
+      expect(estimateLine(c)).toBe("Estimated duration: < 1 min");
+    });
+
+    it("prices cover refreshes, so a cover-only preview no longer reads the flat allowance (#1511)", async () => {
+      // No shortcut delta at all, 400 covers changed server-side: 400 * 0.15s +
+      // 45s = 105s → ~2 min. Under the old model this read a flat 90s ("2 min")
+      // whether one cover or four thousand had changed.
+      const c = await renderPreviewWithCounts(0, 0, 400);
       expect(estimateLine(c)).toBe("Estimated duration: 2 min");
     });
 
@@ -2448,7 +2464,9 @@ describe("MainPage", () => {
     });
 
     it("appends the sleep-pause caveat only when the estimate is ≥ 10 min", async () => {
-      // 1200 new * 0.45s + 90s = 630s ≥ 600s (10 min) → the caveat sentence appears.
+      // 1200 new * (0.36s walk + 0.15s cover) + 45s = 657s ≥ 600s (10 min) → the
+      // caveat sentence appears. Pricing cover downloads separately is what keeps
+      // this fixture above the threshold after the walk rate came down (#1511).
       const c = await renderPreviewWithCounts(1200, 0);
       expect(c.textContent).toContain("Progress is saved about every 200 games — cancelling is safe.");
       expect(c.textContent).toContain("Long syncs pause during sleep; keep the Deck powered.");
@@ -2458,8 +2476,8 @@ describe("MainPage", () => {
       // Resume-shaped: 153 real creates and ~3000 content-unchanged items. The
       // delta-restricted apply (#1383) skips the unchanged entirely (no Set* walk,
       // no confirm poll), so they cost nothing and no longer inflate the estimate:
-      // 153*NEW_ITEM_SEC + 90s fetch allowance = 158.85s → ~3 min. The 3000
-      // unchanged priced the old walk model at ~13 min; that overshoot is gone.
+      // 153*(NEW_ITEM_SEC + COVER_DOWNLOAD_SEC) + 45s allowance = 123s → ~2 min.
+      // The 3000 unchanged priced the old walk model at ~13 min; that overshoot is gone.
       vi.mocked(backend.syncPreview).mockResolvedValue({
         success: true,
         summary: {
@@ -2480,7 +2498,7 @@ describe("MainPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(estimateLine(container)).toBe("Estimated duration: 3 min");
+      expect(estimateLine(container)).toBe("Estimated duration: 2 min");
       // The 3000 unchanged items must NOT be priced — the walk-model overshoot is gone.
       expect(estimateLine(container)).not.toBe("Estimated duration: 13 min");
     });
@@ -2545,25 +2563,29 @@ describe("MainPage", () => {
     }
 
     it("handleApply seeds the apply ETA from the DELTA (new + changed), unchanged priced at zero", async () => {
-      // The delta apply touches only new + changed — creates at the new rate,
-      // changed at the update rate — and skips unchanged entirely (#1383). new=100,
-      // changed=200, unchanged=600 → 100*NEW_ITEM_SEC + 200*UPDATED_ITEM_SEC + 90s
-      // allowance = 175s; the 600 unchanged add nothing.
+      // The delta apply touches only new + changed — creates at the new rate plus
+      // their cover download, changed at the bare update rate — and skips unchanged
+      // entirely (#1383). new=100, changed=200, unchanged=600 → 36 + 26 + 15 + 45 =
+      // 122s; the 600 unchanged add nothing.
       const container = await applyPreviewSummary({ new_count: 100, changed_count: 200, unchanged_count: 600 });
-      expect(getSyncProgress().etaSeconds).toBe(100 * NEW_ITEM_SEC + 200 * UPDATED_ITEM_SEC + 90 /* fetch allowance */);
-      // Surfaced as the "up to ~X" upper bound (175s → ~3 min) until the live
+      expect(getSyncProgress().etaSeconds).toBeCloseTo(
+        100 * NEW_ITEM_SEC + 200 * UPDATED_ITEM_SEC + 100 * COVER_DOWNLOAD_SEC + FETCH_ALLOWANCE_SEC,
+      );
+      // Surfaced as the "up to ~X" upper bound (122s → ~2 min) until the live
       // countdown takes over.
-      expect(container.querySelector('[data-testid="estimate-time"]')?.textContent).toBe("up to 3 min");
+      expect(container.querySelector('[data-testid="estimate-time"]')?.textContent).toBe("up to 2 min");
     });
 
     it("prices a resume-shaped preview (few creates, many unchanged) by its DELTA — unchanged skipped", async () => {
       // The #1382-M3 fix: a resume with ~90 real creates and ~3000 content-unchanged
       // items now SKIPS the 3000 (delta-restricted apply), so the seed prices only
-      // the 90 creates: 90*NEW_ITEM_SEC + 90s allowance = 130.5s → ~2 min. The old
-      // walk model priced the 3000 unchanged at ~12 min; that overshoot is gone, and
-      // the small delta is the true, fast cost.
+      // the 90 creates: 90*(NEW_ITEM_SEC + COVER_DOWNLOAD_SEC) + 45s allowance =
+      // 90.9s → ~2 min. The old walk model priced the 3000 unchanged at ~12 min;
+      // that overshoot is gone, and the small delta is the true, fast cost.
       const container = await applyPreviewSummary({ new_count: 90, changed_count: 0, unchanged_count: 3000 });
-      expect(getSyncProgress().etaSeconds).toBe(90 * NEW_ITEM_SEC + 90 /* fetch allowance */);
+      expect(getSyncProgress().etaSeconds).toBeCloseTo(
+        90 * NEW_ITEM_SEC + 90 * COVER_DOWNLOAD_SEC + FETCH_ALLOWANCE_SEC,
+      );
       const text = container.querySelector('[data-testid="estimate-time"]')?.textContent;
       expect(text).toBe("up to 2 min");
       // The 3000 unchanged items must NOT be priced — the walk-model overshoot is gone.

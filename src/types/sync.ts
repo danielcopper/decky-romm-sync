@@ -224,7 +224,7 @@ export interface SyncPreview {
   pause_likely?: boolean;
 }
 
-interface SyncPlanUnit {
+export interface SyncPlanUnit {
   type: "platform" | "collection";
   id: number | string;
   name: string;
@@ -246,6 +246,15 @@ interface SyncPlanUnit {
    * raw `rom_count`.
    */
   collapsed_count?: number;
+  /**
+   * Persisted rows for this platform that already carry a Steam shortcut
+   * (#1511). Those items take the cheap UPDATE path in the apply loop, so the
+   * seed prices them at `UPDATED_ITEM_SEC` and only the remainder at the create
+   * rate — without it a re-sync (and every Force Full Sync, which unbinds
+   * nothing) is priced as a fresh import. Absent on collections and older
+   * backends; the seed then prices every item as a create, as before.
+   */
+  bound_count?: number;
 }
 
 export interface SyncPlanData {

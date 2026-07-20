@@ -1,29 +1,110 @@
 import { describe, it, expect } from "vitest";
-import { NEW_ITEM_SEC, UPDATED_ITEM_SEC, estimateApplySeconds, formatDuration } from "./syncEstimate";
+import {
+  NEW_ITEM_SEC,
+  UPDATED_ITEM_SEC,
+  COVER_DOWNLOAD_SEC,
+  FETCH_ALLOWANCE_SEC,
+  estimateApplySeconds,
+  estimatePlanSeconds,
+  formatDuration,
+} from "./syncEstimate";
+import type { SyncPlanUnit } from "../types/sync";
 
-// The flat fetch allowance folded into every estimate (see FETCH_ALLOWANCE_SEC
-// in syncEstimate.ts). Not exported — the constant is internal to
-// estimateApplySeconds — so the tests pin it as a literal.
-const FETCH_ALLOWANCE = 90;
+/** A platform plan unit; every estimate rider is opt-in per test. */
+function unit(overrides: Partial<SyncPlanUnit> = {}): SyncPlanUnit {
+  return { type: "platform", id: 1, name: "Platform", slug: "platform", rom_count: 0, ...overrides };
+}
 
 describe("estimateApplySeconds", () => {
-  it("prices new and updated items with their per-item costs plus the fetch allowance", () => {
-    expect(estimateApplySeconds(10, 0)).toBe(10 * NEW_ITEM_SEC + FETCH_ALLOWANCE);
-    expect(estimateApplySeconds(0, 10)).toBe(10 * UPDATED_ITEM_SEC + FETCH_ALLOWANCE);
-    expect(estimateApplySeconds(4, 6)).toBe(4 * NEW_ITEM_SEC + 6 * UPDATED_ITEM_SEC + FETCH_ALLOWANCE);
+  it("prices new and updated items with their per-item costs plus the fixed-overhead allowance", () => {
+    // A create carries its own cover download; an update never does.
+    expect(estimateApplySeconds(10, 0)).toBeCloseTo(10 * NEW_ITEM_SEC + 10 * COVER_DOWNLOAD_SEC + FETCH_ALLOWANCE_SEC);
+    expect(estimateApplySeconds(0, 10)).toBeCloseTo(10 * UPDATED_ITEM_SEC + FETCH_ALLOWANCE_SEC);
+    expect(estimateApplySeconds(4, 6)).toBeCloseTo(
+      4 * NEW_ITEM_SEC + 6 * UPDATED_ITEM_SEC + 4 * COVER_DOWNLOAD_SEC + FETCH_ALLOWANCE_SEC,
+    );
   });
 
-  it("returns the flat fetch allowance for zero counts (fetch/prep still runs)", () => {
-    expect(estimateApplySeconds(0, 0)).toBe(FETCH_ALLOWANCE);
+  it("prices cover refreshes as their own term, so a cover-only run is no longer a flat allowance", () => {
+    expect(estimateApplySeconds(0, 0, 140)).toBeCloseTo(140 * COVER_DOWNLOAD_SEC + FETCH_ALLOWANCE_SEC);
+    // The refresh term is additive to the creates' own downloads.
+    expect(estimateApplySeconds(10, 0, 5)).toBeCloseTo(
+      10 * NEW_ITEM_SEC + 15 * COVER_DOWNLOAD_SEC + FETCH_ALLOWANCE_SEC,
+    );
+  });
+
+  it("defaults the cover count to zero, so an older backend's preview prices as before", () => {
+    expect(estimateApplySeconds(7, 3)).toBe(estimateApplySeconds(7, 3, 0));
+  });
+
+  it("returns the flat allowance for zero counts (fixed overhead still runs)", () => {
+    expect(estimateApplySeconds(0, 0)).toBe(FETCH_ALLOWANCE_SEC);
   });
 
   it("clamps negative counts to zero, but the allowance still applies (never below the allowance)", () => {
-    expect(estimateApplySeconds(-5, -3)).toBe(FETCH_ALLOWANCE);
-    expect(estimateApplySeconds(-5, 2)).toBe(2 * UPDATED_ITEM_SEC + FETCH_ALLOWANCE);
+    expect(estimateApplySeconds(-5, -3, -2)).toBe(FETCH_ALLOWANCE_SEC);
+    expect(estimateApplySeconds(-5, 2)).toBeCloseTo(2 * UPDATED_ITEM_SEC + FETCH_ALLOWANCE_SEC);
   });
 
   it("prices a new item higher than an updated one (create is dearer than update)", () => {
     expect(NEW_ITEM_SEC).toBeGreaterThan(UPDATED_ITEM_SEC);
+  });
+
+  // Calibration guards against the on-device measurements (2026-07, #1511). These
+  // pin the model's OUTPUT at the shapes that were actually timed, so a future
+  // constant tweak cannot silently drift the readout away from reality.
+  it("reads close to the measured runs it was calibrated against", () => {
+    // 684 creates with cold covers — measured 323 s (5.4 min).
+    expect(formatDuration(estimateApplySeconds(684, 0))).toBe("7 min");
+    // 1315 updates, warm covers (a Force Full Sync) — measured ~174 s (2.9 min).
+    expect(formatDuration(estimateApplySeconds(0, 1315))).toBe("4 min");
+  });
+});
+
+describe("estimatePlanSeconds", () => {
+  it("prices already-bound rows as updates and the remainder as creates", () => {
+    const seconds = estimatePlanSeconds([unit({ rom_count: 100, collapsed_count: 100, bound_count: 40 })]);
+    expect(seconds).toBeCloseTo(estimateApplySeconds(60, 40));
+  });
+
+  it("prices every item as a create when the backend omits bound_count (older backend)", () => {
+    const seconds = estimatePlanSeconds([unit({ rom_count: 100, collapsed_count: 100 })]);
+    expect(seconds).toBeCloseTo(estimateApplySeconds(100, 0));
+  });
+
+  it("skips predicted-skip units entirely, however large", () => {
+    const seconds = estimatePlanSeconds([
+      unit({ rom_count: 5000, collapsed_count: 5000, bound_count: 5000, predicted_skip: true }),
+      unit({ id: 2, slug: "b", rom_count: 10, collapsed_count: 10, bound_count: 4 }),
+    ]);
+    expect(seconds).toBeCloseTo(estimateApplySeconds(6, 4));
+  });
+
+  it("weighs a unit by rom_count when no collapsed count is known", () => {
+    const seconds = estimatePlanSeconds([unit({ rom_count: 30, bound_count: 10 })]);
+    expect(seconds).toBeCloseTo(estimateApplySeconds(20, 10));
+  });
+
+  it("clamps bound rows to the unit's item total (pre-collapse rows can exceed it)", () => {
+    const seconds = estimatePlanSeconds([unit({ rom_count: 10, collapsed_count: 10, bound_count: 40 })]);
+    expect(seconds).toBeCloseTo(estimateApplySeconds(0, 10));
+  });
+
+  it("sums across units and reads the flat allowance for an empty plan", () => {
+    expect(estimatePlanSeconds([])).toBe(FETCH_ALLOWANCE_SEC);
+    const seconds = estimatePlanSeconds([
+      unit({ rom_count: 10, collapsed_count: 10, bound_count: 10 }),
+      unit({ id: 2, slug: "b", rom_count: 20, collapsed_count: 20 }),
+    ]);
+    expect(seconds).toBeCloseTo(estimateApplySeconds(20, 10));
+  });
+
+  // The seed shape #1511 was opened for: a fully-mirrored library re-syncing.
+  // Every row is bound, so the whole plan is cheap updates — it used to be
+  // priced as 2000 fresh creates and read 16 min.
+  it("reads minutes, not a fresh-import ceiling, for an all-bound re-sync", () => {
+    const seconds = estimatePlanSeconds([unit({ rom_count: 2000, collapsed_count: 2000, bound_count: 2000 })]);
+    expect(formatDuration(seconds)).toBe("5 min");
   });
 });
 

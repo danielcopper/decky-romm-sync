@@ -1385,9 +1385,9 @@ class TestFetchProgressNarration:
 class TestPlanEstimates:
     """build_work_queue's plan-time estimate riders (#1382).
 
-    ``predicted_skip`` / ``collapsed_count`` are estimate-only fields that
-    price the ``sync_plan`` payload — the fetch-time gate
-    (``_try_unit_incremental_skip``) stays the sole skip authority
+    ``predicted_skip`` / ``collapsed_count`` / ``bound_count`` are
+    estimate-only fields that price the ``sync_plan`` payload — the fetch-time
+    gate (``_try_unit_incremental_skip``) stays the sole skip authority
     (ADR-0023); see :class:`TestPredictionNeverFeedsSkipGate` for the guard.
     """
 
@@ -1458,6 +1458,60 @@ class TestPlanEstimates:
 
         assert units[0].predicted_skip is False
         assert units[0].collapsed_count is None
+        # bound_count is NOT stamp-gated: those two favorited siblings really do
+        # have Steam shortcuts, so they are genuinely updates, not creates.
+        assert units[0].bound_count == 2
+
+    @pytest.mark.asyncio
+    async def test_bound_count_counts_rows_carrying_a_shortcut(self, plugin, fake_romm_api):
+        """#1511: the count of rows already bound to a Steam shortcut, which the
+        frontend prices at the cheap update rate instead of the create rate."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=3)
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=1002, group_key="igdb:101:1")
+        _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:102:1")
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert units[0].bound_count == 2
+
+    @pytest.mark.asyncio
+    async def test_bound_count_is_zero_for_a_platform_with_no_persisted_rows(self, plugin, fake_romm_api):
+        """Zero is knowledge, not absence: a never-synced platform mirrors
+        nothing, so every planned item really is a create."""
+        _wire_fake(plugin, fake_romm_api)
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert units[0].bound_count == 0
+
+    @pytest.mark.asyncio
+    async def test_force_full_sync_shape_keeps_bound_count_so_the_re_apply_prices_as_updates(
+        self, plugin, fake_romm_api
+    ):
+        """The #1511 over-read: a Force Full Sync clears every completion stamp
+        but unbinds nothing, so the run is all cheap updates. Without
+        bound_count the plan prices it as a fresh import (~4x the real cost)."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 2}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+        # No stamp — exactly what clear_sync_cache leaves behind — but the rows
+        # keep their shortcut_app_id.
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=1002, group_key="igdb:101:1")
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert units[0].predicted_skip is False
+        assert units[0].collapsed_count is None
+        assert units[0].bound_count == 2
 
     @pytest.mark.asyncio
     async def test_stamp_count_mismatch_predicts_no_skip_but_keeps_collapsed_count(self, plugin, fake_romm_api):
@@ -1522,6 +1576,7 @@ class TestPlanEstimates:
         assert [u.type for u in units] == ["collection"]
         assert units[0].predicted_skip is None
         assert units[0].collapsed_count is None
+        assert units[0].bound_count is None
 
     @pytest.mark.asyncio
     async def test_force_full_sync_clears_stamps_so_plan_predicts_no_skips(self, plugin, fake_romm_api):
@@ -1546,6 +1601,9 @@ class TestPlanEstimates:
         # server rom_count, not the (now stale) persisted collapse. The rows
         # survive the clear, but without a stamp the count is not emitted.
         assert after[0].collapsed_count is None
+        # The BINDING survives the clear, though — so the re-apply is a walk of
+        # cheap updates and the seed prices it as such (#1511).
+        assert after[0].bound_count == 1
 
     @pytest.mark.asyncio
     async def test_estimate_read_failure_leaves_fields_none_and_plan_intact(self, plugin, fake_romm_api):
@@ -1564,6 +1622,7 @@ class TestPlanEstimates:
         assert len(units) == 1
         assert units[0].predicted_skip is None
         assert units[0].collapsed_count is None
+        assert units[0].bound_count is None
 
 
 class TestGetPlatformsCollapsedCount:

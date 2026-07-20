@@ -40,7 +40,10 @@ class WorkUnit:
     collection_updated_at: str | None = None
     # Plan-time estimate riders (#1382), platform-only. ``predicted_skip`` is
     # the plan's local-conditions guess at the fetch-time wholesale-skip gate's
-    # outcome; ``collapsed_count`` the persisted post-collapse shortcut count.
+    # outcome; ``collapsed_count`` the persisted post-collapse shortcut count;
+    # ``bound_count`` how many of the unit's persisted rows already carry a
+    # Steam shortcut, which is what lets the frontend price them at the cheap
+    # UPDATE rate instead of the create rate.
     # Estimate-ONLY: they price the ``sync_plan`` payload and must never feed
     # the actual skip decision — ``_try_unit_incremental_skip`` remains the
     # sole skip authority (ADR-0023). ``None`` means unknown (collections,
@@ -48,6 +51,7 @@ class WorkUnit:
     # event payload.
     predicted_skip: bool | None = None
     collapsed_count: int | None = None
+    bound_count: int | None = None
 
     def estimated_items(self) -> int:
         """This unit's weight in the plan's skip-aware estimate total.
@@ -76,4 +80,6 @@ class WorkUnit:
             payload["predicted_skip"] = self.predicted_skip
         if self.collapsed_count is not None:
             payload["collapsed_count"] = self.collapsed_count
+        if self.bound_count is not None:
+            payload["bound_count"] = self.bound_count
         return payload
