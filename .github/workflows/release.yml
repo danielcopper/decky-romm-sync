@@ -106,9 +106,12 @@ jobs:
           # bios_registry.json (no defaults/ prefix) — which is exactly where the
           # runtime reads it (firmware.py). Emulator resolution now reads the live
           # es_systems.xml directly (#1210), so no core snapshot ships.
+          # py_modules/native/libgavel-x86_64-linux.so is the compiled save-sync 409 kernel;
+          # bootstrap RAISES (no Python fallback) if it's missing, so a Decky CLI
+          # packaging change that drops it must fail the release here.
           for required in main.py plugin.json package.json dist/index.js py_modules/bootstrap.py bin/rom-launcher \
               py_modules/db/migrations/001_initial.sql py_modules/db/migrations/002_add_emulator_override.sql \
-              bios_registry.json; do
+              bios_registry.json py_modules/native/libgavel-x86_64-linux.so; do
             if ! unzip -l "$BUILT_ZIP" | grep -qE "/$required\b"; then
               echo "ERROR: release zip is missing $required"
               unzip -l "$BUILT_ZIP"

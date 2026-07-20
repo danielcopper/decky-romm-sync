@@ -39,6 +39,7 @@ from adapters.romm.http import RommHttpAdapter
 from adapters.romm.romm_api import RommApiAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.save_layout import InSaveDir
+from domain.sync_action import resolve_upload_conflict
 from services.achievements import AchievementsService
 from services.cores import CoreService
 from services.disc import DiscService
@@ -245,6 +246,7 @@ class TestWireServices:
             "path_probe": FakePathExistsReader(),
             "renderer_rss": FakeRendererRss(),
             "renderer_gc": FakeRendererGc(),
+            "resolve_upload_conflict": resolve_upload_conflict,
             "settings": settings,
             "loop": asyncio.new_event_loop(),
             "logger": logger,
@@ -296,6 +298,7 @@ class TestWireServices:
                 core_info_provider=deps["core_info_provider"],
                 renderer_rss=deps["renderer_rss"],
                 renderer_gc=deps["renderer_gc"],
+                resolve_upload_conflict=deps["resolve_upload_conflict"],
             ),
             stores=StateBundle(
                 settings=deps["settings"],

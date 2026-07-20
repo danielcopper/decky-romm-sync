@@ -24,6 +24,7 @@ if TYPE_CHECKING:
         MachineIdReader,
         MigrationPendingFn,
         PluginMetadataReader,
+        ResolveUploadConflictFn,
         RetroArchSaveLayoutProvider,
         RetroDeckPaths,
         RetryStrategy,
@@ -45,6 +46,11 @@ class SaveServiceConfig:
         Protocol adapter for all RomM save/notes HTTP operations.
     retry:
         Retry strategy — provides ``with_retry`` and ``is_retryable``.
+    resolve_upload_conflict:
+        ``ResolveUploadConflictFn`` seam — the upload-409 resolution kernel,
+        backed at runtime by the compiled gavel native core. Threaded down to
+        the ``MatrixExecutor`` where the upload-409 backstop calls it to decide
+        ``"download"`` vs ``"conflict"`` purely from hashes.
     settings:
         Live reference to the main plugin settings dict.
     settings_persister:
@@ -139,6 +145,7 @@ class SaveServiceConfig:
 
     romm_api: RommSyncApi
     retry: RetryStrategy
+    resolve_upload_conflict: ResolveUploadConflictFn
     settings: dict[str, Any]
     settings_persister: SettingsPersister
     save_file_store: SaveFileStore

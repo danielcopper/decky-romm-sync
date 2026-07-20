@@ -2,7 +2,7 @@
 
 import pytest
 
-from domain.skip_prediction import collapsed_shortcut_count, predict_unit_skip
+from domain.skip_prediction import collapsed_shortcut_count, new_shortcut_count, predict_unit_skip
 
 
 def _kwargs(**overrides):
@@ -108,3 +108,63 @@ class TestCollapsedShortcutCount:
         # rows (1 each, bound or not).
         rows = [("g:a", True), ("g:a", True), ("g:b", False), ("g:b", False), (None, True), (None, False)]
         assert collapsed_shortcut_count(rows) == 5
+
+
+class TestNewShortcutCount:
+    """A group with any binding owns its shortcut; everything else is a create.
+
+    Rows are ``(sibling_group_key, is_bound)`` and *unit_rom_count* is the
+    server's count for the platform, so ROMs the mirror holds no row for count
+    as creates too.
+    """
+
+    def test_nothing_known_and_nothing_on_the_server_creates_nothing(self):
+        assert new_shortcut_count([], unit_rom_count=0) == 0
+
+    def test_never_synced_platform_creates_every_server_rom(self):
+        assert new_shortcut_count([], unit_rom_count=25) == 25
+
+    def test_group_with_a_bound_sibling_creates_nothing(self):
+        # The duplicates collapse away — they are not new shortcuts.
+        rows = [("g:a", True), ("g:a", False), ("g:a", False)]
+        assert new_shortcut_count(rows, unit_rom_count=3) == 0
+
+    def test_grandfathered_group_creates_nothing(self):
+        # Two independently-bound duplicates (ADR-0021 §5) keep both shortcuts;
+        # neither is new.
+        rows = [("g:a", True), ("g:a", True), ("g:a", False)]
+        assert new_shortcut_count(rows, unit_rom_count=3) == 0
+
+    def test_group_with_no_binding_anywhere_creates_one_representative(self):
+        rows = [("g:a", False), ("g:a", False), ("g:b", False)]
+        assert new_shortcut_count(rows, unit_rom_count=3) == 2
+
+    def test_keyless_rows_create_only_while_unbound(self):
+        # A keyless row's real group is unknown until the backfill fetch, so an
+        # unbound one must be assumed to be its own creation.
+        assert new_shortcut_count([(None, False), (None, False), (None, True)], unit_rom_count=3) == 2
+
+    def test_partial_mirror_creates_the_unmirrored_remainder_too(self):
+        """The safety-critical shape: a never-synced platform holding only a
+        few collection-sibling rows (ADR-0021). Counting the known rows alone
+        would price the run at a handful of items instead of the whole
+        platform — a short read, the one direction this estimate may not err in.
+        """
+        rows = [("g:a", True), ("g:b", True), ("g:c", False)]
+        # 1 unbound group + the 97 server ROMs no row is held for.
+        assert new_shortcut_count(rows, unit_rom_count=100) == 98
+
+    def test_mirror_ahead_of_the_server_never_goes_negative(self):
+        # Retained rows for rom_ids the server dropped (ADR-0007) leave more
+        # rows than the server reports; the unmirrored term clamps at zero.
+        rows = [("g:a", True), ("g:b", True), ("g:c", True)]
+        assert new_shortcut_count(rows, unit_rom_count=1) == 0
+
+    def test_creates_and_bound_rows_partition_the_collapsed_count(self):
+        """The two terms the seed prices are disjoint and complete: over a fully
+        mirrored platform, creates + bound rows is exactly the shortcut count
+        the collapse emits — no item priced twice, none dropped.
+        """
+        rows = [("g:a", True), ("g:a", False), ("g:b", False), ("g:b", False), (None, True), (None, False)]
+        bound_rows = sum(1 for _key, is_bound in rows if is_bound)
+        assert new_shortcut_count(rows, unit_rom_count=len(rows)) + bound_rows == collapsed_shortcut_count(rows)

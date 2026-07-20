@@ -31,7 +31,6 @@ from domain.sync_action import (
     SyncAction,
     Upload,
     compute_sync_action,
-    resolve_upload_conflict,
 )
 from lib.errors import DeviceNotRegisteredError, RommApiError, RommConflictError, classify_error
 from services.saves._helpers import local_save_target
@@ -44,6 +43,7 @@ if TYPE_CHECKING:
     from services.protocols import (
         Clock,
         DebugLogger,
+        ResolveUploadConflictFn,
         RetryStrategy,
         RommSyncApi,
         SaveFileStore,
@@ -158,6 +158,7 @@ class MatrixExecutor:
         rom_info: RomInfoService,
         romm_api: RommSyncApi,
         retry: RetryStrategy,
+        resolve_upload_conflict: ResolveUploadConflictFn,
         logger: logging.Logger,
         clock: Clock,
         save_file_store: SaveFileStore,
@@ -166,6 +167,7 @@ class MatrixExecutor:
         self._rom_info = rom_info
         self._romm_api = romm_api
         self._retry = retry
+        self._resolve_upload_conflict = resolve_upload_conflict
         self._logger = logger
         self._clock = clock
         self._save_file_store = save_file_store
@@ -693,7 +695,7 @@ class MatrixExecutor:
             return None
         fresh = max(group, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)
         if (
-            resolve_upload_conflict(local_hash, last_sync_hash, fresh.get("content_hash"), last_sync_server_hash)
+            self._resolve_upload_conflict(local_hash, last_sync_hash, fresh.get("content_hash"), last_sync_server_hash)
             == "download"
         ):
             self.do_download_save(

@@ -18,13 +18,17 @@ class TestToEventPayload:
         assert "predicted_skip" not in payload
         assert "collapsed_count" not in payload
         assert "bound_count" not in payload
+        assert "new_shortcut_count" not in payload
         assert "collection_kind" not in payload
 
     def test_platform_payload_carries_estimate_fields_when_set(self):
-        payload = _platform_unit(predicted_skip=True, collapsed_count=3, bound_count=2).to_event_payload()
+        payload = _platform_unit(
+            predicted_skip=True, collapsed_count=3, bound_count=2, new_shortcut_count=1
+        ).to_event_payload()
         assert payload["predicted_skip"] is True
         assert payload["collapsed_count"] == 3
         assert payload["bound_count"] == 2
+        assert payload["new_shortcut_count"] == 1
 
     def test_zero_bound_count_is_still_emitted(self):
         """0 is knowledge ("nothing mirrored yet, price it all as creates"),
@@ -32,12 +36,20 @@ class TestToEventPayload:
         payload = _platform_unit(bound_count=0).to_event_payload()
         assert payload["bound_count"] == 0
 
+    def test_zero_new_shortcut_count_is_still_emitted(self):
+        """0 is knowledge ("nothing left to mint, price it all as updates") —
+        exactly the Force Full Sync shape. Absent means "unknown", which prices
+        creates by subtraction instead and over-reads a sibling-heavy platform."""
+        payload = _platform_unit(new_shortcut_count=0).to_event_payload()
+        assert payload["new_shortcut_count"] == 0
+
     def test_predicted_skip_false_is_still_emitted(self):
         """False is knowledge ("will not skip"), distinct from absent ("unknown")."""
         payload = _platform_unit(predicted_skip=False).to_event_payload()
         assert payload["predicted_skip"] is False
         assert "collapsed_count" not in payload
         assert "bound_count" not in payload
+        assert "new_shortcut_count" not in payload
 
     def test_collection_payload_carries_kind_but_no_estimate_fields(self):
         unit = WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=4, collection_kind="user")
@@ -46,6 +58,7 @@ class TestToEventPayload:
         assert "predicted_skip" not in payload
         assert "collapsed_count" not in payload
         assert "bound_count" not in payload
+        assert "new_shortcut_count" not in payload
 
 
 class TestEstimatedItems:

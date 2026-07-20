@@ -1,10 +1,11 @@
 """Plan-time estimate kernels for the skip-aware sync time estimate.
 
 Pure predictions derived from locally persisted state: whether the
-fetch-time wholesale-skip gate is expected to skip a platform unit, and
-how many Steam shortcuts a platform's persisted rows collapse into.
-Both exist ONLY to price the ``sync_plan`` estimate payload
-(``predicted_skip`` / ``collapsed_count`` / ``total_estimated_items``).
+fetch-time wholesale-skip gate is expected to skip a platform unit, how
+many Steam shortcuts a platform's persisted rows collapse into, and how
+many of those shortcuts do not exist yet. They exist ONLY to price the
+``sync_plan`` estimate payload (``predicted_skip`` / ``collapsed_count``
+/ ``new_shortcut_count`` / ``total_estimated_items``).
 
 Hard constraint (ADR-0023): the fetch-time gate
 (``LibraryFetcher._try_unit_incremental_skip``) remains the SOLE skip
@@ -86,3 +87,41 @@ def collapsed_shortcut_count(rows: Iterable[tuple[str | None, bool]]) -> int:
         else:
             bound_by_key[key] = bound_by_key.get(key, 0) + (1 if is_bound else 0)
     return sum(max(1, bound) for bound in bound_by_key.values()) + singletons
+
+
+def new_shortcut_count(rows: Iterable[tuple[str | None, bool]], *, unit_rom_count: int) -> int:
+    """Shortcuts a platform's next apply is expected to CREATE rather than update.
+
+    The complement of :func:`collapsed_shortcut_count`: that one counts the
+    shortcuts a platform ends up with, this one the subset of them that has
+    to be minted. A sibling group (ADR-0021) with any bound row already owns
+    its shortcut — every further row in it is a duplicate the collapse drops,
+    never a create — so only a group with no binding anywhere counts, plus
+    each unbound keyless row (its real group is unknown until the backfill
+    fetch computes the key, so it must be assumed to be its own creation).
+
+    *unit_rom_count* is the server's ROM count for the platform. Rows the
+    local mirror does not hold yet — ``unit_rom_count`` beyond the number of
+    persisted rows — each count as a create, which is what keeps a
+    never-synced platform honest: it may hold PARTIAL rows (cross-platform
+    collection siblings persist per ADR-0021) whose groups say nothing about
+    the ROMs never fetched. Without that term the estimate would read short
+    by the entire unfetched remainder, and reading short is the one direction
+    this estimate may not err in. A local mirror that is ahead of the server
+    (retained rows for dropped rom_ids, ADR-0007) clamps the term at zero.
+
+    Estimate-only (ADR-0023): the result prices the ``sync_plan`` payload's
+    create term and must never feed the actual skip decision.
+    """
+    bound_by_key: dict[str, bool] = {}
+    unbound_singletons = 0
+    row_count = 0
+    for key, is_bound in rows:
+        row_count += 1
+        if key is None:
+            if not is_bound:
+                unbound_singletons += 1
+        else:
+            bound_by_key[key] = bound_by_key.get(key, False) or is_bound
+    unmirrored = max(0, unit_rom_count - row_count)
+    return sum(1 for bound in bound_by_key.values() if not bound) + unbound_singletons + unmirrored

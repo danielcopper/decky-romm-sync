@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from domain.fetch_generation import count_rows_for_skip
 from domain.platform_prefs import materialize_enabled_platforms, resolve_sync_enabled
-from domain.skip_prediction import collapsed_shortcut_count, predict_unit_skip
+from domain.skip_prediction import collapsed_shortcut_count, new_shortcut_count, predict_unit_skip
 from domain.sync_stage import SyncStage
 from domain.sync_state import SyncCancelled, SyncState
 from domain.work_unit import CollectionKind, WorkUnit
@@ -59,6 +59,7 @@ class _PlanEstimate(NamedTuple):
     predicted_skip: bool
     collapsed_count: int | None
     bound_count: int | None
+    new_shortcut_count: int | None
 
 
 class _SkipBaseline(NamedTuple):
@@ -435,9 +436,9 @@ class LibraryFetcher:
         endpoints. No ROMs are fetched here — the queue is a dispatch
         plan, not a payload. Units additionally carry the plan-time estimate
         riders for the ``sync_plan`` payload — ``predicted_skip`` /
-        ``collapsed_count`` on platform units (#1382), ``bound_count`` on both
-        kinds (#1511). Estimate-only: they never feed the actual skip decision
-        (ADR-0023).
+        ``collapsed_count`` (#1382) and ``new_shortcut_count`` (#1517) on
+        platform units, ``bound_count`` on both kinds (#1511). Estimate-only:
+        they never feed the actual skip decision (ADR-0023).
         """
         units: list[WorkUnit] = []
 
@@ -524,6 +525,7 @@ class LibraryFetcher:
                 predicted_skip=estimates[unit.slug].predicted_skip,
                 collapsed_count=estimates[unit.slug].collapsed_count,
                 bound_count=estimates[unit.slug].bound_count,
+                new_shortcut_count=estimates[unit.slug].new_shortcut_count,
             )
             if unit.slug in estimates
             else unit
@@ -611,19 +613,32 @@ class LibraryFetcher:
         (cross-platform collection siblings, ADR-0021) would mis-weight the ETA
         below the true work. ``None`` (no stamp, or no persisted rows) rides the
         payload absent, so the frontend weights the unit at its raw ``rom_count``
-        (``predicted_skip ? 0 : collapsed_count ?? rom_count``). Also count the
-        unit's BOUND rows — those already carrying a ``shortcut_app_id`` — which
-        the frontend prices at the cheap update rate rather than the create rate,
+        (``predicted_skip ? 0 : collapsed_count ?? rom_count``). Also split the
+        unit by what the apply will actually do to it: count its BOUND rows —
+        those already carrying a ``shortcut_app_id`` — which the frontend
+        prices at the cheap update rate rather than the create rate,
         so a re-sync of an already-mirrored platform stops reading as a fresh
-        import. Unlike the collapsed count this needs no stamp gate: a bound row
-        genuinely has a Steam shortcut whether or not the platform's mirror is
-        complete, and zero persisted rows honestly means "every item is a
-        create". The gate's server-delta check (``list_roms_updated_after``) is
-        deliberately NOT replayed — no network at plan time. A Force Full Sync clears every
-        stamp before the run, so its plan predicts no skips AND drops every
-        collapsed count — the forced re-apply is WEIGHED at the full ``rom_count``,
-        though the bound count survives the clear and still splits those items
-        between the update and create rates. One short read UoW for the whole plan.
+        import, and count the shortcuts still to be MINTED
+        (``new_shortcut_count``), which the frontend takes as its create term
+        directly instead of subtracting the bound rows from the unit's weight.
+        Neither is stamp-gated, unlike the collapsed count: both describe the
+        rows and the server count as they stand, not the completeness of the
+        mirror: a bound row genuinely has a Steam shortcut whether or not the
+        platform's mirror is complete, and a ROM the mirror holds no row for
+        genuinely has to be created. The gate's server-delta check (``list_roms_updated_after``) is
+        deliberately NOT replayed — no network at plan time.
+
+        A Force Full Sync clears every stamp before the run, so its plan predicts
+        no skips AND drops every collapsed count, leaving the unit WEIGHED at the
+        full pre-collapse ``rom_count``. Both composition counts survive that
+        clear, which is what keeps the forced re-apply priced honestly: on a
+        platform carrying sibling groups (ADR-0021) the raw ``rom_count`` exceeds
+        the real shortcut count, so deriving creates by subtracting the bound rows
+        from it would price every collapsed duplicate as a phantom new shortcut —
+        at the dear create rate, plus a cover download it will never perform.
+        ``new_shortcut_count`` reports no creates there instead, because the clear
+        takes away the stamps and not the bindings, so no sibling group is left
+        without one (#1517). One short read UoW for the whole plan.
 
         Estimate-ONLY (ADR-0023): the result rides the ``sync_plan`` payload
         and must never feed the actual skip decision —
@@ -653,7 +668,11 @@ class LibraryFetcher:
                     if stamp is not None and all_rows
                     else None
                 )
-                estimates[unit.slug] = _PlanEstimate(predicted, collapsed, bound_count)
+                new_shortcuts = new_shortcut_count(
+                    ((rom.sibling_group_key, rom.shortcut_app_id is not None) for rom in all_rows),
+                    unit_rom_count=unit.rom_count,
+                )
+                estimates[unit.slug] = _PlanEstimate(predicted, collapsed, bound_count, new_shortcuts)
         return estimates
 
     def _read_collapsed_counts(self) -> dict[str, int]:

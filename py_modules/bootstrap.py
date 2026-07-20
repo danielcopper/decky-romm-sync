@@ -21,6 +21,7 @@ from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.download_file import DownloadFileAdapter
 from adapters.es_de_config import CoreResolver
 from adapters.firmware_file import FirmwareFileAdapter
+from adapters.gavel_native import GavelNativeAdapter
 from adapters.hostname import HostnameAdapter
 from adapters.machine_id import MachineIdAdapter
 from adapters.migration_file import MigrationFileAdapter
@@ -98,6 +99,7 @@ if TYPE_CHECKING:
         PluginMetadataReader,
         RendererGcFn,
         RendererRssFn,
+        ResolveUploadConflictFn,
         RetroArchSaveLayoutProvider,
         RetroDeckPaths,
         RomFileStore,
@@ -137,6 +139,7 @@ class AdapterBundle:
     core_info_provider: CoreInfoProvider
     renderer_rss: RendererRssFn
     renderer_gc: RendererGcFn
+    resolve_upload_conflict: ResolveUploadConflictFn
 
 
 @dataclass(frozen=True)
@@ -356,6 +359,11 @@ def bootstrap(
     path_probe = PathProbeAdapter()
     renderer_rss = RendererRssAdapter()
     renderer_gc = RendererGcAdapter(logger=logger)
+    # The compiled gavel core owns the save-sync upload-409 resolution. Loaded
+    # eagerly so a missing / wrong-architecture artifact is fatal here (like the
+    # SQLite migration gate above) rather than surfacing mid-sync — there is no
+    # Python fallback (GavelNativeLoadError propagates, plugin stays inert).
+    resolve_upload_conflict = GavelNativeAdapter()
     uuid_gen = SystemUuidGen()
     sleeper = AsyncioSleeper()
     hostname_provider = HostnameAdapter()
@@ -378,6 +386,7 @@ def bootstrap(
         core_info_provider=core_resolver,
         renderer_rss=renderer_rss,
         renderer_gc=renderer_gc,
+        resolve_upload_conflict=resolve_upload_conflict,
     )
     stores = StateBundle(
         settings=settings,
@@ -521,6 +530,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
     save_service_config = SaveServiceConfig(
         romm_api=cfg.adapters.romm_api,
         retry=cfg.adapters.http_adapter,
+        resolve_upload_conflict=cfg.adapters.resolve_upload_conflict,
         settings=cfg.stores.settings,
         settings_persister=cfg.callbacks.settings_persister,
         save_file_store=cfg.adapters.save_file_store,

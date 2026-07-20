@@ -1,4 +1,6 @@
-"""Property-based tests for ``domain.skip_prediction.collapsed_shortcut_count``.
+"""Property-based tests for the plan-time collapse kernels in
+``domain.skip_prediction`` — ``collapsed_shortcut_count`` and its
+create-side complement ``new_shortcut_count``.
 
 The plan-time estimate kernel must mirror the LANE SELECTION of the real
 collapse (``domain.sync_diff.collapse_sibling_groups``, ADR-0021) — a group
@@ -22,7 +24,7 @@ from typing import Any
 from hypothesis import given
 from hypothesis import strategies as st
 
-from domain.skip_prediction import collapsed_shortcut_count
+from domain.skip_prediction import collapsed_shortcut_count, new_shortcut_count
 from domain.sync_diff import collapse_sibling_groups
 
 # One persisted row: (group key, bound?, installed?). A handful of key values
@@ -80,3 +82,26 @@ def test_keyless_rows_add_one_singleton_each(rows, keyless):
     base = [(key, bound) for key, bound, _installed in rows]
     with_keyless = base + [(None, bound) for bound in keyless]
     assert collapsed_shortcut_count(with_keyless) == collapsed_shortcut_count(base) + len(keyless)
+
+
+@given(rows=_rows, keyless=st.lists(st.booleans(), max_size=5), rom_count=st.integers(min_value=0, max_value=40))
+def test_creates_and_bound_rows_price_every_shortcut_exactly_once(rows, keyless, rom_count):
+    """The seed's two terms partition the work: ``new_shortcut_count`` (creates)
+    plus the bound rows (updates) is exactly the shortcut count the persisted
+    rows collapse into, plus one create per server ROM no row is held for.
+
+    This is what makes the seed safe in both directions at once. It cannot read
+    SHORT — an unmirrored remainder is priced, so a never-synced platform
+    holding partial collection-sibling rows (ADR-0021) is still priced at the
+    whole platform. And it cannot read LONG on a sibling-heavy platform — a
+    collapsed duplicate lands in neither term, whereas deriving creates by
+    subtracting the bound rows from a pre-collapse ``rom_count`` prices every
+    one of them as a phantom new shortcut (#1517).
+    """
+    all_rows = [(key, bound) for key, bound, _installed in rows] + [(None, bound) for bound in keyless]
+    bound_rows = sum(1 for _key, is_bound in all_rows if is_bound)
+    unmirrored = max(0, rom_count - len(all_rows))
+
+    creates = new_shortcut_count(all_rows, unit_rom_count=rom_count)
+
+    assert creates + bound_rows == collapsed_shortcut_count(all_rows) + unmirrored

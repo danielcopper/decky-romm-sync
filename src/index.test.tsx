@@ -1271,6 +1271,38 @@ describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estima
     plugin.onDismount();
   });
 
+  it("prices a Force Full Sync's sibling duplicates as nothing, not as phantom creates (#1517)", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", {
+        run_id: "run-eta",
+        units: [
+          // A Force Full Sync clears the completion stamps, so collapsed_count is
+          // absent and the unit weighs its pre-collapse rom_count — sibling
+          // duplicates included. Only new_shortcut_count knows those duplicates
+          // are not new shortcuts; the bound-row subtraction would price 400 of
+          // them as creates, each with a cover download it never performs.
+          {
+            type: "platform",
+            id: 1,
+            name: "N64",
+            slug: "n64",
+            rom_count: 1000,
+            bound_count: 600,
+            new_shortcut_count: 0,
+          },
+        ],
+        total_units: 1,
+        total_roms: 1000,
+      });
+    });
+
+    expect(getSyncProgress().etaSeconds).toBeCloseTo(estimateApplySeconds(0, 600));
+    resetEta();
+    plugin.onDismount();
+  });
+
   it("preserves etaSeconds across a subsequent backend sync_progress frame", async () => {
     const plugin = pluginFactory();
 

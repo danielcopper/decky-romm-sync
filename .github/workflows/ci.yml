@@ -163,6 +163,12 @@ jobs:
 
       - name: Check local markdown links resolve (file + anchor)
         run: python scripts/check_markdown_links.py
+      # The compiled gavel core ships in the plugin zip and has no source in
+      # this repo — a silently swapped binary must fail CI. Verify the vendored
+      # .so against its checksum (bumped only by a deliberate native/README.md
+      # update when pulling a newer romm-gavel release).
+      - name: Check vendored gavel native core checksum
+        run: cd py_modules/native && sha256sum -c libgavel-x86_64-linux.so.sha256
 
   # Skipped when SONAR_TOKEN is structurally unavailable: Dependabot PRs and
   # PRs from forks (GitHub withholds secrets from `pull_request` runs whose head

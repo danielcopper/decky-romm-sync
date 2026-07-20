@@ -129,6 +129,55 @@ describe("estimatePlanSeconds", () => {
     expect(estimatePlanSeconds([collection])).toBeCloseTo(estimateApplySeconds(40, 0));
   });
 
+  it("takes new_shortcut_count as the create term instead of subtracting the bound rows", () => {
+    // The unit weighs 100 pre-collapse, but only 25 shortcuts are actually new.
+    const seconds = estimatePlanSeconds([unit({ rom_count: 100, bound_count: 60, new_shortcut_count: 25 })]);
+    expect(seconds).toBeCloseTo(estimateApplySeconds(25, 60));
+  });
+
+  // The seed shape #1517 was opened for. A Force Full Sync clears the completion
+  // stamps, so collapsed_count is absent and the unit weighs its PRE-COLLAPSE
+  // rom_count — every sibling duplicate included. Subtracting the bound rows
+  // from that weight prices each duplicate as a phantom create plus a cover
+  // download, which is where the ~2.5x over-read came from.
+  it("prices a Force Full Sync of a sibling-heavy platform entirely at the update rate", () => {
+    const forced = unit({ rom_count: 100, bound_count: 60, new_shortcut_count: 0 });
+
+    expect(estimatePlanSeconds([forced])).toBeCloseTo(estimateApplySeconds(0, 60));
+    // Guard the regression directly: the subtraction reading is far dearer.
+    expect(estimatePlanSeconds([forced])).toBeLessThan(estimateApplySeconds(40, 60));
+  });
+
+  // The safety-critical shape: a never-synced platform holding only partial
+  // collection-sibling rows (ADR-0021). Its create count covers the server ROMs
+  // the mirror knows nothing about, so the seed must NOT collapse to the
+  // handful of known rows — reading short is the one direction it may not err in.
+  it("does not read short for a never-synced platform holding partial rows", () => {
+    const partial = unit({ rom_count: 100, bound_count: 2, new_shortcut_count: 98 });
+
+    expect(estimatePlanSeconds([partial])).toBeCloseTo(estimateApplySeconds(98, 2));
+    // A rows-only create count would have priced 1 create + 2 updates here.
+    expect(estimatePlanSeconds([partial])).toBeGreaterThan(estimateApplySeconds(1, 2));
+    // Still at least as dear as pricing the whole platform at the update rate.
+    expect(estimatePlanSeconds([partial])).toBeGreaterThan(estimateApplySeconds(0, 100));
+  });
+
+  it("prices a first-ever platform sync as all creates", () => {
+    const seconds = estimatePlanSeconds([unit({ rom_count: 40, bound_count: 0, new_shortcut_count: 40 })]);
+    expect(seconds).toBeCloseTo(estimateApplySeconds(40, 0));
+  });
+
+  it("falls back to the bound-row subtraction when the backend omits new_shortcut_count", () => {
+    // Collections never carry the rider, and neither does an older backend.
+    const seconds = estimatePlanSeconds([unit({ rom_count: 100, collapsed_count: 100, bound_count: 40 })]);
+    expect(seconds).toBeCloseTo(estimateApplySeconds(60, 40));
+  });
+
+  it("prices a zero create count as knowledge, not as a missing rider", () => {
+    const allBound = unit({ rom_count: 50, bound_count: 50, new_shortcut_count: 0 });
+    expect(estimatePlanSeconds([allBound])).toBeCloseTo(estimateApplySeconds(0, 50));
+  });
+
   // The seed shape #1511 was opened for: a fully-mirrored library re-syncing.
   // Every row is bound, so the whole plan is cheap updates — pricing it as fresh
   // creates (0.36 + 0.15 each) is the ceiling the over-read came from.
