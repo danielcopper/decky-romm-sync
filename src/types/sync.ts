@@ -247,12 +247,15 @@ export interface SyncPlanUnit {
    */
   collapsed_count?: number;
   /**
-   * Persisted rows for this platform that already carry a Steam shortcut
-   * (#1511). Those items take the cheap UPDATE path in the apply loop, so the
-   * seed prices them at `UPDATED_ITEM_SEC` and only the remainder at the create
-   * rate — without it a re-sync (and every Force Full Sync, which unbinds
-   * nothing) is priced as a fresh import. Absent on collections and older
-   * backends; the seed then prices every item as a create, as before.
+   * This unit's known ROMs that already carry a Steam shortcut (#1511) — a
+   * platform's persisted rows, or a collection's stamped member set. Those
+   * items take the cheap UPDATE path in the apply loop, so the seed prices them
+   * at `UPDATED_ITEM_SEC` and only the remainder at the create rate — without it
+   * a re-sync (and every Force Full Sync, which unbinds nothing) is priced as a
+   * fresh import. Unlike its sibling riders this rides BOTH unit kinds. Absent
+   * on older backends, on never-stamped collections (a collection's membership
+   * is known only from its stamp), and on franchise collections (never
+   * stampable); the seed then prices every item as a create, as before.
    */
   bound_count?: number;
 }

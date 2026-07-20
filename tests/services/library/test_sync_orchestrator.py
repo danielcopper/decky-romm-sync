@@ -1395,8 +1395,10 @@ class TestDoSyncPerUnit:
         _seed_platform_stamp(plugin, "n64", at="2025-01-01T00:00:00", rom_count=2)
         _seed_rom_row(plugin, 10, app_id=1001, platform_slug="n64", sibling_group_key="igdb:100:1")
         _seed_rom_row(plugin, 11, app_id=None, platform_slug="n64", sibling_group_key="igdb:100:1")
-        # A collection unit: membership isn't locally derivable, so it carries
-        # neither estimate field and weighs its raw rom_count.
+        # A collection unit, left UNSTAMPED here: its membership is knowable only
+        # from a completion stamp, so it carries no estimate field at all and
+        # weighs its raw rom_count. (A stamped collection does ride bound_count,
+        # #1511 — covered in test_fetcher.)
         _seed_collection(fake_romm_api, collection_id=7, name="Faves", rom_ids=[20, 21, 22])
         plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "franchise": {}}
 
@@ -1421,6 +1423,7 @@ class TestDoSyncPerUnit:
         assert "collapsed_count" not in units["GBA"]
         assert "predicted_skip" not in units["Faves"]
         assert "collapsed_count" not in units["Faves"]
+        assert "bound_count" not in units["Faves"]
 
     @pytest.mark.asyncio
     async def test_unstamped_zero_delta_platform_restamps_and_records_run(self, plugin, fake_romm_api):

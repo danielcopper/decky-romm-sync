@@ -99,6 +99,36 @@ describe("estimatePlanSeconds", () => {
     expect(seconds).toBeCloseTo(estimateApplySeconds(20, 10));
   });
 
+  it("prices a collection unit's bound members as updates, same as a platform's", () => {
+    // Collections carry no collapsed_count, so items come from rom_count. A
+    // stamped collection whose members are already bound is an all-updates unit;
+    // pricing it as creates over-read it ~4x for collection-heavy libraries.
+    const collection: SyncPlanUnit = {
+      type: "collection",
+      id: "7",
+      name: "Faves",
+      slug: "",
+      rom_count: 300,
+      collection_kind: "user",
+      bound_count: 300,
+    };
+    expect(estimatePlanSeconds([collection])).toBeCloseTo(estimateApplySeconds(0, 300));
+    // Guard the regression directly: the all-creates reading is far dearer.
+    expect(estimatePlanSeconds([collection])).toBeLessThan(estimateApplySeconds(300, 0));
+  });
+
+  it("prices an unstamped or franchise collection as all creates (bound_count absent)", () => {
+    const collection: SyncPlanUnit = {
+      type: "collection",
+      id: "fr-1",
+      name: "Zelda",
+      slug: "zelda",
+      rom_count: 40,
+      collection_kind: "franchise",
+    };
+    expect(estimatePlanSeconds([collection])).toBeCloseTo(estimateApplySeconds(40, 0));
+  });
+
   // The seed shape #1511 was opened for: a fully-mirrored library re-syncing.
   // Every row is bound, so the whole plan is cheap updates — it used to be
   // priced as 2000 fresh creates and read 16 min.

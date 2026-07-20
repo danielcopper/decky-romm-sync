@@ -38,17 +38,18 @@ class WorkUnit:
     # membership-stable signal. ``None`` when the listing omits it (e.g. a
     # franchise collection, which is never stamped) — skip-internal, off the wire.
     collection_updated_at: str | None = None
-    # Plan-time estimate riders (#1382), platform-only. ``predicted_skip`` is
-    # the plan's local-conditions guess at the fetch-time wholesale-skip gate's
-    # outcome; ``collapsed_count`` the persisted post-collapse shortcut count;
-    # ``bound_count`` how many of the unit's persisted rows already carry a
-    # Steam shortcut, which is what lets the frontend price them at the cheap
-    # UPDATE rate instead of the create rate.
+    # Plan-time estimate riders (#1382 / #1511). ``predicted_skip`` is the
+    # plan's local-conditions guess at the fetch-time wholesale-skip gate's
+    # outcome and ``collapsed_count`` the persisted post-collapse shortcut
+    # count — both platform-only. ``bound_count`` carries on BOTH unit types:
+    # how many of the unit's known ROMs already hold a Steam shortcut, which is
+    # what lets the frontend price them at the cheap UPDATE rate instead of the
+    # create rate (a platform reads its persisted rows; a collection reads its
+    # stamped member set).
     # Estimate-ONLY: they price the ``sync_plan`` payload and must never feed
     # the actual skip decision — ``_try_unit_incremental_skip`` remains the
-    # sole skip authority (ADR-0023). ``None`` means unknown (collections,
-    # never-synced platforms, failed estimate read) and is omitted from the
-    # event payload.
+    # sole skip authority (ADR-0023). ``None`` means unknown and is omitted
+    # from the event payload.
     predicted_skip: bool | None = None
     collapsed_count: int | None = None
     bound_count: int | None = None

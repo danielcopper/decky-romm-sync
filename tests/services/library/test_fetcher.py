@@ -1563,8 +1563,9 @@ class TestPlanEstimates:
         assert units[0].predicted_skip is False
 
     @pytest.mark.asyncio
-    async def test_collection_units_carry_no_estimate_fields(self, plugin, fake_romm_api):
-        """Collection membership isn't locally derivable — the scope guard leaves both fields None."""
+    async def test_unstamped_collection_carries_no_estimate_fields(self, plugin, fake_romm_api):
+        """Without a stamp a collection's membership is unknown — every rider
+        stays None, and the seed prices the unit exactly as it did pre-#1511."""
         _wire_fake(plugin, fake_romm_api)
         fake_romm_api.platforms = []
         fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 4}]
@@ -1576,6 +1577,100 @@ class TestPlanEstimates:
         assert [u.type for u in units] == ["collection"]
         assert units[0].predicted_skip is None
         assert units[0].collapsed_count is None
+        # None, NOT 0 — the platform side reports 0 for "nothing mirrored", but a
+        # collection with no stamp has no member set to count at all (#1511).
+        assert units[0].bound_count is None
+
+    @pytest.mark.asyncio
+    async def test_stamped_collection_counts_its_bound_members(self, plugin, fake_romm_api):
+        """#1511: a stamped collection's member set comes from the stamp (no ROM
+        fetch), so its already-bound members price at the cheap update rate."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = []
+        fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 3}]
+        plugin.settings["enabled_platforms"] = {}
+        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "franchise": {}}
+        # Three members; two already hold a Steam shortcut.
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=1002, group_key="igdb:101:1")
+        _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:102:1")
+        _seed_collection_stamp(
+            uow,
+            "7",
+            "user",
+            updated_at="2026-01-01T00:00:00",
+            completed_at="2026-01-01T00:00:00",
+            rom_count=3,
+            member_rom_ids=(10, 11, 12),
+        )
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert units[0].bound_count == 2
+
+    @pytest.mark.asyncio
+    async def test_stamped_collection_ignores_members_with_no_persisted_row(self, plugin, fake_romm_api):
+        """A stale member set can name ROMs no longer persisted locally; those
+        are not bound and must not be counted (estimate-only, no freshness probe)."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = []
+        fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 2}]
+        plugin.settings["enabled_platforms"] = {}
+        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "franchise": {}}
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        _seed_collection_stamp(
+            uow,
+            "7",
+            "user",
+            updated_at="2026-01-01T00:00:00",
+            completed_at="2026-01-01T00:00:00",
+            rom_count=2,
+            member_rom_ids=(10, 999),
+        )
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert units[0].bound_count == 1
+
+    @pytest.mark.asyncio
+    async def test_franchise_collection_never_carries_a_bound_count(self, plugin, fake_romm_api):
+        """Franchise collections are never stampable (CollectionSyncState.stamp
+        takes only user/smart), so they have no member set — the field stays absent."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = []
+        fake_romm_api.virtual_collections = {
+            "franchise": [{"id": "fr-1", "name": "Zelda", "slug": "zelda", "rom_count": 5}]
+        }
+        plugin.settings["enabled_platforms"] = {}
+        plugin.settings["enabled_collections"] = {"user": {}, "smart": {}, "franchise": {"fr-1": True}}
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert [u.collection_kind for u in units] == ["franchise"]
+        assert units[0].bound_count is None
+
+    @pytest.mark.asyncio
+    async def test_collection_bound_count_read_failure_leaves_the_field_none(self, plugin, fake_romm_api):
+        """Fail-open, like the platform sibling: a DB failure degrades the
+        estimate to its pre-#1511 reading, never the plan."""
+        _wire_fake(plugin, fake_romm_api)
+        fake_romm_api.platforms = []
+        fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 3}]
+        plugin.settings["enabled_platforms"] = {}
+        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "franchise": {}}
+
+        def _boom():
+            raise RuntimeError("db down")
+
+        plugin._sync_service._fetcher._uow_factory = _boom
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert len(units) == 1
         assert units[0].bound_count is None
 
     @pytest.mark.asyncio

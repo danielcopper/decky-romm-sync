@@ -579,28 +579,37 @@ weights + planned totals, via `sync_plan`) and the applying frames.
   `list_roms_updated_after` server check is deliberately not replayed — no network at plan time) — and
   `collapsed_count`, the persisted post-collapse shortcut count, mirroring the collapse's lane selection (ADR-0021):
   `max(1, bound rows)` per sibling group — so a grandfathered legacy group with multiple independently-bound duplicates
-  (§5) prices one shortcut per bound sibling, not one per group — plus one per keyless row. Both ride the `sync_plan`
-  payload conditionally-present (absent on collections, never-synced platforms, and failed reads); `collapsed_count` is
-  additionally **gated on the platform's completion stamp** (#1412, mirroring the `get_platforms` garnish below) — a
-  never-synced platform holds only PARTIAL collection-sibling rows (ADR-0021), so an ungated count would weight the ETA
-  below the true work, and without a stamp the frontend falls back to the raw `rom_count`. The payload's `total_roms`
-  stays the raw pre-collapse total (backward compat); an additive `total_estimated_items` sums `0` for predicted skips,
-  else `collapsed_count ?? rom_count`. A third rider, `bound_count` (#1511), counts the unit's rows that already carry a
-  `shortcut_app_id` — read in the same short UoW, since the skip prediction already needed that count. Unlike
-  `collapsed_count` it is **not** stamp-gated: a bound row genuinely has a Steam shortcut whether or not the platform's
-  mirror is complete, and zero persisted rows honestly means "every planned item is a create". **Hard constraint
-  (ADR-0023): the prediction never feeds the actual skip decision** — `_try_unit_incremental_skip` at fetch time remains
-  the sole skip authority, so a mis-prediction can only make the estimate read long or short, never mis-apply. A Force
-  Full Sync needs no special case: `clear_sync_cache` deletes every stamp before the run, so a forced plan predicts no
-  skips and drops every `collapsed_count` (the forced re-apply is priced at the full `rom_count`). The same collapsed
-  counts also garnish `get_platforms` (an optional per-platform `collapsed_count`), so the platform toggles show the
-  number of games a synced platform actually produces rather than the raw server file count. That garnish is **gated on
-  the platform's completion stamp** (`_read_collapsed_counts`, #1412): the count is emitted only for slugs that
-  currently carry a `PlatformSyncState` stamp — the stamp exists iff the local mirror is complete, which is exactly when
-  a post-collapse count is meaningful. A never-synced platform legitimately holds only PARTIAL rows (cross-platform
-  collection siblings persist per ADR-0021), so an ungated count would shadow the true server total; with no stamp the
-  field is absent and the toggle label falls back to the raw `rom_count`. Clearing the stamp (local removal / Force Full
-  Sync) reverts the label to the server total until the next completed sync re-stamps.
+  (§5) prices one shortcut per bound sibling, not one per group — plus one per keyless row. Both of **those two** ride
+  the `sync_plan` payload conditionally-present (absent on collections, never-synced platforms, and failed reads);
+  `collapsed_count` is additionally **gated on the platform's completion stamp** (#1412, mirroring the `get_platforms`
+  garnish below) — a never-synced platform holds only PARTIAL collection-sibling rows (ADR-0021), so an ungated count
+  would weight the ETA below the true work, and without a stamp the frontend falls back to the raw `rom_count`. The
+  payload's `total_roms` stays the raw pre-collapse total (backward compat); an additive `total_estimated_items` sums
+  `0` for predicted skips, else `collapsed_count ?? rom_count`. A third rider, `bound_count` (#1511), counts the unit's
+  known ROMs that already carry a `shortcut_app_id`, and is the one rider that rides **both** unit kinds. On a
+  **platform** it counts the persisted rows, read in the same short UoW the skip prediction already needed that count
+  for, and is **not** stamp-gated: a bound row genuinely has a Steam shortcut whether or not the mirror is complete, and
+  zero persisted rows honestly means "every planned item is a create". On a **collection** it counts the bound members
+  of the completion stamp's stored `member_rom_ids` (the same member set the skip replays), in one short read UoW
+  covering every collection unit — no ROM fetch. The two sides are deliberately **asymmetric** on the empty case: a
+  platform reports `0`, an unstamped or franchise collection is **omitted**. A collection's membership exists only in
+  its stamp, and franchise collections are never stampable (`CollectionSyncState.stamp` accepts only `user`/`smart`), so
+  `0` there would claim knowledge that does not exist. Absent and `0` price identically today; the distinction keeps the
+  field honest for later consumers, so do not collapse it into consistency. A collection's stored member set may be
+  **stale** if membership changed since the stamp — accepted and bounded, since this is estimate-only and a freshness
+  probe would mean network I/O at plan time. **Hard constraint (ADR-0023): the prediction never feeds the actual skip
+  decision** — `_try_unit_incremental_skip` at fetch time remains the sole skip authority, so a mis-prediction can only
+  make the estimate read long or short, never mis-apply. A Force Full Sync needs no special case: `clear_sync_cache`
+  deletes every stamp before the run, so a forced plan predicts no skips and drops every `collapsed_count` (the forced
+  re-apply is priced at the full `rom_count`). The same collapsed counts also garnish `get_platforms` (an optional
+  per-platform `collapsed_count`), so the platform toggles show the number of games a synced platform actually produces
+  rather than the raw server file count. That garnish is **gated on the platform's completion stamp**
+  (`_read_collapsed_counts`, #1412): the count is emitted only for slugs that currently carry a `PlatformSyncState`
+  stamp — the stamp exists iff the local mirror is complete, which is exactly when a post-collapse count is meaningful.
+  A never-synced platform legitimately holds only PARTIAL rows (cross-platform collection siblings persist per
+  ADR-0021), so an ungated count would shadow the true server total; with no stamp the field is absent and the toggle
+  label falls back to the raw `rom_count`. Clearing the stamp (local removal / Force Full Sync) reverts the label to the
+  server total until the next completed sync re-stamps.
 - **Static walk-cost ceiling (pre-run seed).** Before a run — in the preview, and again as the initial "up to X min" the
   instant a skip-preview run starts — the estimate is a pure cost model over **three independent terms** (#1511),
   because a run is three independent phases and one blended per-item rate cannot describe a mix of them:
@@ -617,9 +626,11 @@ weights + planned totals, via `sync_plan`) and the applying frames.
   blended item count (#1511): a predicted-skip unit costs nothing, and of the remainder's items
   (`collapsed_count ?? rom_count`) the ones already bound (`bound_count`) take the update rate, the rest the create
   rate. Pricing every planned item as a create over-read by ~4x on the common case — any re-sync, and **every Force Full
-  Sync**, which clears the completion stamps but unbinds nothing and is therefore an all-updates run. A unit from a
-  backend that omits `bound_count` still prices as all creates, the pre-#1511 behaviour. The live-countdown weights are
-  unaffected and stay `predicted_skip ? 0 : (collapsed_count ?? rom_count)`.
+  Sync**, which clears the completion stamps but unbinds nothing and is therefore an all-updates run. Platform and
+  collection units are priced the same way, so a collection-heavy library does not reinstate the over-read through its
+  collections. A unit whose `bound_count` is absent (older backend, unstamped or franchise collection) still prices as
+  all creates, the pre-#1511 behaviour. The live-countdown weights are unaffected and stay
+  `predicted_skip ? 0 : (collapsed_count ?? rom_count)`.
 - **Measured live countdown (takes over within seconds).** Once the apply is underway, `syncEta.ts` measures the
   **real** rate from the applying frames — one throttled sample per second over a ~30 s sliding window — and projects
   `remaining = (planned_total − processed) / rate`, rendered rounded **up** ("9 min left") so it never promises less

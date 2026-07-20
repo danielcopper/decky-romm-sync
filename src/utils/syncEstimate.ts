@@ -85,10 +85,12 @@ export function estimateApplySeconds(newCount: number, changedCount: number, cov
  * (``collapsed_count ?? rom_count``) the ones already bound to a Steam shortcut
  * (``bound_count``) take the cheap update path. This is what stops a re-sync —
  * and every Force Full Sync, which clears the completion stamps but unbinds
- * nothing — from being seeded at fresh-import prices. A unit whose backend
- * omits ``bound_count`` prices all of its items as creates, the pre-#1511
- * behaviour. Cover downloads ride the create term; the plan carries no
- * cover-refresh count, and a refresh-only unit's covers are the cheap warm case.
+ * nothing — from being seeded at fresh-import prices. Applies to platform AND
+ * collection units alike; a unit whose backend omits ``bound_count`` (an older
+ * backend, or a collection with no stamped member set) prices all of its items
+ * as creates, the pre-#1511 behaviour. Cover downloads ride the create term; the
+ * plan carries no cover-refresh count, and a refresh-only unit's covers are the
+ * cheap warm case.
  */
 export function estimatePlanSeconds(units: readonly SyncPlanUnit[]): number {
   let created = 0;

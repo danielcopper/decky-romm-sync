@@ -433,10 +433,11 @@ class LibraryFetcher:
         first, then user collections, then smart collections, then
         franchise collections) with ROM counts pulled from the listing
         endpoints. No ROMs are fetched here — the queue is a dispatch
-        plan, not a payload. Platform units additionally carry the
-        plan-time estimate riders (``predicted_skip`` / ``collapsed_count``,
-        #1382) — estimate-only fields for the ``sync_plan`` payload that
-        never feed the actual skip decision (ADR-0023).
+        plan, not a payload. Units additionally carry the plan-time estimate
+        riders for the ``sync_plan`` payload — ``predicted_skip`` /
+        ``collapsed_count`` on platform units (#1382), ``bound_count`` on both
+        kinds (#1511). Estimate-only: they never feed the actual skip decision
+        (ADR-0023).
         """
         units: list[WorkUnit] = []
 
@@ -460,9 +461,13 @@ class LibraryFetcher:
         if not (enabled_user_ids or enabled_smart_ids or enabled_franchise_ids):
             return units
 
-        units.extend(await self._build_user_collection_units(enabled_user_ids))
-        units.extend(await self._build_smart_collection_units(enabled_smart_ids))
-        units.extend(await self._build_franchise_collection_units(enabled_franchise_ids))
+        collection_units: list[WorkUnit] = []
+        collection_units.extend(await self._build_user_collection_units(enabled_user_ids))
+        collection_units.extend(await self._build_smart_collection_units(enabled_smart_ids))
+        collection_units.extend(await self._build_franchise_collection_units(enabled_franchise_ids))
+        # One short read UoW for every collection at once — after the listing
+        # fetches, never across them.
+        units.extend(await self._attach_collection_bound_counts(collection_units))
 
         return units
 
@@ -524,6 +529,64 @@ class LibraryFetcher:
             else unit
             for unit in platform_units
         ]
+
+    async def _attach_collection_bound_counts(self, collection_units: list[WorkUnit]) -> list[WorkUnit]:
+        """Stamp each collection unit with its ``bound_count`` estimate rider (#1511).
+
+        Fail-open like the platform sibling: a failed read leaves the field
+        ``None``, so the frontend prices the unit exactly as it did before the
+        rider existed rather than the plan failing.
+        """
+        if not collection_units:
+            return collection_units
+        try:
+            counts = await self._loop.run_in_executor(None, self._read_collection_bound_counts, collection_units)
+        except Exception as e:
+            self._logger.warning(f"Plan-time collection bound-count read failed, pricing as creates: {e}")
+            return collection_units
+        return [
+            replace(unit, bound_count=counts[key]) if (key := (str(unit.id), unit.collection_kind)) in counts else unit
+            for unit in collection_units
+        ]
+
+    def _read_collection_bound_counts(self, units: list[WorkUnit]) -> dict[tuple[str, str | None], int]:
+        """Bound-member count per stamped collection, keyed ``(id, kind)`` (#1511).
+
+        A collection has no local membership column — membership lives on the
+        server — so the count comes from the completion stamp's
+        ``member_rom_ids`` (the same stored member set the skip replays),
+        counting those whose ``roms`` row carries a ``shortcut_app_id``. No ROM
+        fetch, one short read UoW for every collection unit at once.
+
+        Deliberately ASYMMETRIC with the platform rider: a platform with no
+        persisted rows reports ``0`` (real knowledge — nothing is mirrored, so
+        every item is a create), whereas an unstamped collection is omitted
+        entirely. A collection's member set exists ONLY in its stamp, so without
+        one there is no membership to count; franchise collections are never
+        stampable at all (``CollectionSyncState.stamp`` accepts only
+        ``user``/``smart``). Reporting ``0`` there would claim knowledge we do
+        not have. Absent and ``0`` price identically today — both read as
+        all-creates — but the distinction keeps the field honest for any later
+        consumer. Do not "simplify" this into consistency with the platform side.
+
+        The member set may be STALE (membership can have changed since the
+        stamp). That is accepted and bounded: estimate-only (ADR-0023), and a
+        freshness probe would mean network I/O at plan time.
+        """
+        counts: dict[tuple[str, str | None], int] = {}
+        with self._uow_factory() as uow:
+            for unit in units:
+                if unit.collection_kind is None:
+                    continue
+                stamp = uow.collection_sync_state.get(str(unit.id), unit.collection_kind)
+                if stamp is None:
+                    continue
+                counts[(str(unit.id), unit.collection_kind)] = sum(
+                    1
+                    for rom_id in stamp.member_rom_ids
+                    if (rom := uow.roms.get(rom_id)) is not None and rom.shortcut_app_id is not None
+                )
+        return counts
 
     def _read_plan_estimates(self, units: list[WorkUnit]) -> dict[str, _PlanEstimate]:
         """Read the plan-time estimate baseline for platform units (#1382).
