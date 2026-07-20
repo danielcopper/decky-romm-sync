@@ -27,6 +27,7 @@ from adapters.save_file import SaveFileAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.rom_save_sync_state import FileSyncState
 from domain.save_layout import InSaveDir
+from domain.sync_action import resolve_upload_conflict
 from services.achievements import AchievementsService, AchievementsServiceConfig
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.game_detail import GameDetailService, GameDetailServiceConfig
@@ -89,6 +90,7 @@ def plugin(tmp_path):
         config=SaveServiceConfig(
             romm_api=fake_api,
             retry=_make_retry(),
+            resolve_upload_conflict=resolve_upload_conflict,
             settings={"log_level": "debug"},
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),

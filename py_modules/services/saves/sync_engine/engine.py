@@ -77,6 +77,7 @@ if TYPE_CHECKING:
         HostnameReader,
         MachineIdReader,
         MigrationPendingFn,
+        ResolveUploadConflictFn,
         RetryStrategy,
         RommSyncApi,
         SaveFileStore,
@@ -148,7 +149,8 @@ class SyncEngineConfig:
     toggles), the Unit-of-Work factory (the transactional seam over the
     SQLite repositories), the peer save sub-services (rom_info and the
     shared :class:`DeviceRegistry` that owns the server device id), the
-    Protocol-typed RomM adapter and retry strategy, runtime
+    Protocol-typed RomM adapter and retry strategy, the upload-409
+    resolution kernel (``resolve_upload_conflict``), runtime
     infrastructure (loop, logger, clock), the Protocol-typed filesystem
     adapter, the ``DebugLogger`` seam, the per-ROM active-core resolver,
     the hostname provider + machine-id provider passed through to device
@@ -162,6 +164,7 @@ class SyncEngineConfig:
     device_registry: DeviceRegistry
     romm_api: RommSyncApi
     retry: RetryStrategy
+    resolve_upload_conflict: ResolveUploadConflictFn
     loop: asyncio.AbstractEventLoop
     logger: logging.Logger
     clock: Clock
@@ -210,6 +213,7 @@ class SyncEngine:
             rom_info=config.rom_info,
             romm_api=config.romm_api,
             retry=config.retry,
+            resolve_upload_conflict=config.resolve_upload_conflict,
             logger=config.logger,
             clock=config.clock,
             save_file_store=config.save_file_store,

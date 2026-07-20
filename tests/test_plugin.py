@@ -1008,6 +1008,7 @@ class TestMainStartupOrdering:
                 core_info_provider=MagicMock(),
                 renderer_rss=FakeRendererRss(),
                 renderer_gc=FakeRendererGc(),
+                resolve_upload_conflict=MagicMock(),
             ),
             stores=StateBundle(
                 settings={},

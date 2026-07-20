@@ -982,6 +982,7 @@ Adapters own all I/O and implement the Protocols defined in `services/protocols/
 | `retroarch_config.py`                                                      | `RetroArchConfigAdapter` — reads `retroarch.cfg` save-sort flags                                                                                                                                                                                                                       |
 | `retroarch_core_info.py`                                                   | `RetroArchCoreInfoAdapter` — reads RetroArch `.info` files (`corename`, metadata)                                                                                                                                                                                                      |
 | `es_de_config.py`                                                          | `CoreResolver` — ES-DE `es_systems.xml` (system-layer default core + available cores); the gamelist is no longer read or written                                                                                                                                                       |
+| `gavel_native.py`                                                          | `GavelNativeAdapter` — loads the compiled [romm-gavel](https://github.com/danielcopper/romm-gavel) core (`native/libgavel-x86_64-linux.so`) via `ctypes` and is itself the `ResolveUploadConflictFn` seam for the save-sync upload-409 decision (no Python fallback)                   |
 | `system_clock.py` / `system_uuid_gen.py` / `asyncio_sleeper.py`            | concrete `Clock` / `UuidGen` / `Sleeper` seams                                                                                                                                                                                                                                         |
 | `hostname.py` / `path_probe.py` / `plugin_metadata.py` / `debug_logger.py` | hostname, path-exists probe, `package.json` version reader, settings-aware debug logger                                                                                                                                                                                                |
 | `renderer_rss.py` / `renderer_gc.py`                                       | `RendererRssFn` — max `steamwebhelper` `VmRSS` from `/proc`; `RendererGcFn` (`HeapProfiler.collectGarbage`) over the CEF debugger. The session-budget measure + settle seams (ADR-0024). The "free memory" action is a frontend `SteamClient.User.StartRestart`, not a backend adapter |
@@ -1019,6 +1020,30 @@ Adapters own all I/O and implement the Protocols defined in `services/protocols/
   file written by a **newer** plugin (stored version > current) is preserved as-is rather than down-stamped, so a later
   re-upgrade does not re-run migrations against down-stamped data. An absent or older version is stamped up to the
   current `_SETTINGS_VERSION`.
+
+#### GavelNativeAdapter notes — the compiled save-sync core
+
+The save-sync upload-409 resolution (the decision, on a `409` from RomM's `add_save`, to either `download` the server
+head or surface a `conflict`) runs through the compiled [romm-gavel](https://github.com/danielcopper/romm-gavel) core
+rather than in-tree Python. `GavelNativeAdapter` loads `native/libgavel-x86_64-linux.so` via `ctypes` at construction
+and is itself the `ResolveUploadConflictFn` seam (`services/protocols/infra.py`) injected — through `SaveServiceConfig`
+→ `SyncEngineConfig` → `MatrixExecutor` — into the sole call site, the upload-409 backstop in
+`services/saves/sync_engine/matrix.py`.
+
+- **What ships**: `native/libgavel-x86_64-linux.so` (romm-gavel `v0.2.0`), vendored verbatim from the upstream release
+  with a pinned SHA-256 checksum. Provenance and the update procedure live in
+  [`native/README.md`](https://github.com/danielcopper/decky-romm-sync/blob/main/native/README.md). The checksum is
+  re-verified by CI and the release smoke test asserts the `.so` is present in the plugin zip, so both a swapped binary
+  and a dropped artifact fail the pipeline.
+- **No fallback**: if the library cannot load, `GavelNativeLoadError` propagates so `bootstrap()` aborts and the plugin
+  stays inert — the same "fatal until the environment is fixed" posture as the SQLite migration gate. The in-tree
+  `domain.sync_action.resolve_upload_conflict` kernel is **not** a runtime fallback; it is retained as the differential
+  oracle and the gavel-ladder-vector target in tests (`tests/adapters/test_gavel_native.py`), so the shipped binary is
+  proven to match the same contract the Python kernel is held to.
+- **Path resolution**: the `.so` is resolved relative to the adapter module (`__file__`), mirroring
+  `sqlite_migrations.MIGRATIONS_DIR` — a fatal-load bundled resource must resolve identically in the installed plugin
+  (`<plugin>/native/…` beside `<plugin>/py_modules/`) and in the repo checkout the real-`bootstrap()` test tiers run
+  from, where the plugin dir is a bare `tmp_path`.
 
 ### Domain (`py_modules/domain/`)
 

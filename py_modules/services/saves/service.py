@@ -102,6 +102,7 @@ class SaveService:
                 device_registry=self._device_registry,
                 romm_api=config.romm_api,
                 retry=config.retry,
+                resolve_upload_conflict=config.resolve_upload_conflict,
                 loop=config.loop,
                 logger=config.logger,
                 clock=config.clock,

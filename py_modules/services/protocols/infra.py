@@ -9,13 +9,38 @@ would otherwise require service-to-service concrete imports.
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 
 class EventEmitter(Protocol):
     """Emit named events with a data payload to the frontend."""
 
     async def __call__(self, event: str, /, *args: object) -> None: ...
+
+
+class ResolveUploadConflictFn(Protocol):
+    """Decide the fallback when an upload POST is rejected by RomM's 409.
+
+    Given the four hashes that describe an upload race — the current local
+    content hash, the baseline recorded at the last sync, the server's live
+    content hash, and the server hash stored at the last sync — returns
+    ``"download"`` when the local is provably safe to discard (unchanged
+    since baseline, or byte-identical to the server head) and ``"conflict"``
+    otherwise. ``None`` and ``""`` both read as "unknown" and never yield
+    ``"download"``.
+
+    Backed at runtime by the compiled gavel core (``adapters.gavel_native``);
+    the in-tree ``domain.sync_action.resolve_upload_conflict`` kernel shares
+    the exact contract and stands in as a trivial fake in service tests.
+    """
+
+    def __call__(
+        self,
+        local_hash: str | None,
+        last_sync_hash: str | None,
+        server_content_hash: str | None,
+        last_sync_server_hash: str | None,
+    ) -> Literal["download", "conflict"]: ...
 
 
 class DebugLogger(Protocol):

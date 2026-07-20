@@ -30,6 +30,7 @@ from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_layout import InSaveDir
+from domain.sync_action import resolve_upload_conflict
 from services.library import LibraryService, LibraryServiceConfig
 from services.migration import MigrationService, MigrationServiceConfig
 from services.playtime import PlaytimeService, PlaytimeServiceConfig
@@ -95,6 +96,7 @@ def plugin(tmp_path):
         config=SaveServiceConfig(
             romm_api=fake_api,
             retry=_make_retry(),
+            resolve_upload_conflict=resolve_upload_conflict,
             settings=p._save_settings,
             loop=asyncio.get_event_loop(),
             logger=logging.getLogger("test"),
