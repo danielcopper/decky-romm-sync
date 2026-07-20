@@ -11,6 +11,7 @@ import {
   displayedEtaSeconds,
   resetEta,
   weightedCoarseFraction,
+  trimStalledPrefix,
   type EtaSample,
 } from "./syncEta";
 
@@ -277,6 +278,85 @@ describe("run-scoped estimator", () => {
     observeApplyProgress(1, 700, 6000);
     // totalRoms grew 1000 → 1300; remaining = (1300 - 700) / 100 = 6s.
     expect(liveEtaSeconds()).toBe(6);
+  });
+
+  // #1511: the applying stage is entered — and its first frame emitted — BEFORE
+  // the one-time shortcut scan, which then blocks for ~9s. That frame used to
+  // anchor the slope against the first post-scan sample, so the countdown's very
+  // first reading was ~10x pessimistic and the sticky deadline held it until the
+  // 30s window slid past the scan (the reported "6 min → 2 min" collapse).
+  it("ignores the pre-scan frame that a sub-segment-break stall stranded at the window head (#1511)", () => {
+    beginEtaRun("run-1", [800], 800);
+    // Stage-entry frame at the unit's chunk offset — emitted before the scan.
+    observeApplyProgress(1, 0, 0);
+    // The scan blocks ~8.9s. The apply loop's first frame lands just after it,
+    // one nominal item in: a stall, not throughput.
+    observeApplyProgress(1, 1, 8930);
+    // Nothing measurable yet — the stalled head is trimmed, leaving one sample.
+    // The static seed keeps standing rather than a 10x-slow countdown replacing it.
+    expect(liveEtaSeconds()).toBeNull();
+    expect(displayedEtaSeconds(8930)).toBeNull();
+    // Real apply work now proceeds, staying inside the segment-break threshold.
+    observeApplyProgress(1, 4, 9930);
+    observeApplyProgress(1, 100, 19000);
+    // Measured from post-scan samples only: 99 items over 10.07s = 9.83 items/s,
+    // leaving (800-100)/9.83 ≈ 71s. Had the pre-scan frame survived the slope
+    // would be 100 items / 19s = 5.26 items/s and the readout would nearly double.
+    const seconds = liveEtaSeconds();
+    expect(seconds).not.toBeNull();
+    expect(seconds).toBeCloseTo((800 - 100) / (99 / 10.07), 0);
+    expect(seconds).toBeLessThan((800 - 100) / (100 / 19));
+  });
+
+  it("keeps a wide head gap that carried real throughput (slow work is not a stall, #1511)", () => {
+    beginEtaRun("run-1", [100000], 100000);
+    // 6s between samples is far wider than the sampling cadence, but 600 items
+    // crossed it — that is real apply work being measured, not a parked stream.
+    observeApplyProgress(1, 100, 0);
+    observeApplyProgress(1, 700, 6000);
+    expect(liveEtaSeconds()).toBe(993);
+  });
+});
+
+describe("trimStalledPrefix", () => {
+  it("drops leading samples stranded behind a stall, leaving the post-stall window", () => {
+    const samples: EtaSample[] = [
+      { tMs: 0, processed: 0 },
+      { tMs: 8930, processed: 1 },
+      { tMs: 9930, processed: 4 },
+    ];
+    expect(trimStalledPrefix(samples)).toEqual([
+      { tMs: 8930, processed: 1 },
+      { tMs: 9930, processed: 4 },
+    ]);
+  });
+
+  it("can trim down to the newest sample alone (no measurement is the honest answer)", () => {
+    const samples: EtaSample[] = [
+      { tMs: 0, processed: 0 },
+      { tMs: 8930, processed: 1 },
+    ];
+    expect(trimStalledPrefix(samples)).toEqual([{ tMs: 8930, processed: 1 }]);
+  });
+
+  it("keeps a wide gap that carried throughput, and a narrow gap that carried none", () => {
+    // Wide but productive — real (slow) apply work.
+    const productive: EtaSample[] = [
+      { tMs: 0, processed: 0 },
+      { tMs: 6000, processed: 600 },
+    ];
+    expect(trimStalledPrefix(productive)).toEqual(productive);
+    // Flat but within the cadence — an ordinary throttled sample, not a stall.
+    const brief: EtaSample[] = [
+      { tMs: 0, processed: 500 },
+      { tMs: 1000, processed: 500 },
+    ];
+    expect(trimStalledPrefix(brief)).toEqual(brief);
+  });
+
+  it("leaves a window of fewer than two samples untouched", () => {
+    expect(trimStalledPrefix([])).toEqual([]);
+    expect(trimStalledPrefix([{ tMs: 0, processed: 5 }])).toEqual([{ tMs: 0, processed: 5 }]);
   });
 });
 

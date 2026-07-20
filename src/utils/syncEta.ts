@@ -46,6 +46,15 @@ const WINDOW_MS = 30_000;
 // one is a tiny item delta over a long span, an absurd rate that briefly spikes the
 // countdown before it settles.
 const SEGMENT_BREAK_MS = 10_000;
+// Stall threshold for the WINDOW HEAD. The apply loop emits a frame per item at
+// its ~50ms cadence, so admitted samples sit one throttle interval (~1s) apart
+// while real apply work is running. A leading gap of several cadences is
+// therefore a suspect: it may span a stall (the one-time shortcut scan, a fetch,
+// an ack round-trip) that the head sample predates. Below SEGMENT_BREAK_MS such
+// a stall leaves the whole segment intact, so the stale head would anchor the
+// oldest→newest slope. Suspicion alone does not trim — see trimStalledPrefix,
+// which also requires the interval to carry no real throughput.
+const STALL_GAP_MS = 3_000;
 // Readiness gate: the live countdown replaces the static "up to X" seed only
 // once the window spans enough real time to trust the slope. ~5s of applying
 // (≥2 throttled samples) is well inside the "measured within ~20s" target while
@@ -83,6 +92,42 @@ export function windowedRate(samples: readonly EtaSample[]): number | null {
   const delta = last.processed - first.processed;
   if (spanMs <= 0 || delta <= 0) return null;
   return delta / (spanMs / 1000);
+}
+
+/**
+ * Drop leading samples that sit on the far side of a STALL — a wide head gap
+ * that carried no real throughput. The applying stage is entered, and its first
+ * frame emitted, BEFORE the one-time shortcut scan blocks for ~9–14 s, so that
+ * frame becomes sample #1 and pairs with the first post-scan sample: a couple of
+ * items across the whole scan, a rate ~10x below the real one, which the sticky
+ * deadline then holds until the window slides past the scan.
+ *
+ * A wide gap alone does not qualify — slow-but-real work also spaces samples out,
+ * and discarding it would measure only the fastest stretch. The interval must ALSO
+ * carry less than one item per sampling interval, which is below anything the apply
+ * loop produces (it paces at ~50ms per item, and the slowest measured create rate
+ * is ~3 items/s). Both conditions together isolate "the frame stream was parked",
+ * which is what makes the head sample unfit to anchor the slope.
+ *
+ * Trimming can legitimately leave a SINGLE sample: while a stall is all the window
+ * has seen, "no measurement yet" is the honest answer, so the caller falls back to
+ * the static seed until clean samples accumulate (~5 s of applying). The newest
+ * sample always survives to anchor the next segment. Consistent with the module's
+ * premise — it measures apply throughput, not wall-clock including boundaries,
+ * the same reason ``SEGMENT_BREAK_MS`` discards a segment across a long fetch gap.
+ */
+export function trimStalledPrefix(samples: readonly EtaSample[]): EtaSample[] {
+  let start = 0;
+  while (start + 1 < samples.length) {
+    const head = samples[start];
+    const next = samples[start + 1];
+    if (head === undefined || next === undefined) break;
+    const spanMs = next.tMs - head.tMs;
+    if (spanMs <= STALL_GAP_MS) break;
+    if (next.processed - head.processed >= spanMs / SAMPLE_MIN_INTERVAL_MS) break;
+    start++;
+  }
+  return samples.slice(start);
 }
 
 /** Remaining seconds to process ``totalRoms - processed`` items at *rate* items/sec; clamped to ``≥ 0``. */
@@ -195,9 +240,10 @@ export function observeUnitTotal(unitIndex: number, unitTotal: number): void {
  * samples are discarded and a fresh measurement segment begins (this sample
  * bypasses the throttle), so no slope is ever measured across the gap — pairing a
  * pre-gap sample with a post-gap one yields an absurd rate. The estimator re-arms
- * to ``null`` until the new segment spans the readiness window. A no-op when no run
- * is being measured. Feed ONLY applying frames — fetch frames carry page/cover
- * counters, not item progress.
+ * to ``null`` until the new segment spans the readiness window. A shorter stall
+ * that leaves the segment standing is handled at the window head instead, by
+ * {@link trimStalledPrefix}. A no-op when no run is being measured. Feed ONLY
+ * applying frames — fetch frames carry page/cover counters, not item progress.
  */
 export function observeApplyProgress(step: number, current: number, tMs: number): void {
   if (_run === null) return;
@@ -213,7 +259,9 @@ export function observeApplyProgress(step: number, current: number, tMs: number)
   _run.lastSampleMs = tMs;
   const cutoff = tMs - WINDOW_MS;
   const recent = _run.samples.filter((s) => s.tMs >= cutoff);
-  _run.samples = recent.length >= 2 ? recent : _run.samples.slice(-2);
+  // Trim at admission, not at read time, so the span gate, the slope and the
+  // ``processed`` anchor all see one coherent window.
+  _run.samples = trimStalledPrefix(recent.length >= 2 ? recent : _run.samples.slice(-2));
   // Re-anchor the sticky countdown deadline from the fresh measurement. The
   // readiness gate re-arms liveEtaSeconds() to null ~5s after every inter-unit
   // fetch gap, and a run's tail of small units each applies in <5s and so never

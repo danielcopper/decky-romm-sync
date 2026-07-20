@@ -1222,16 +1222,52 @@ describe("index.tsx — sync_complete toast shows the true delta (#744)", () => 
 });
 
 describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estimate)", () => {
-  it("writes the walk-cost seed (estimateApplySeconds all-as-new) into the sync progress store", async () => {
+  it("writes the composition-priced seed (unbound rows as creates) into the sync progress store", async () => {
     const plugin = pluginFactory();
 
     act(() => {
-      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-eta", units: [], total_units: 3, total_roms: 120 });
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", {
+        run_id: "run-eta",
+        units: [{ type: "platform", id: 1, name: "N64", slug: "n64", rom_count: 120, bound_count: 0 }],
+        total_units: 3,
+        total_roms: 120,
+      });
     });
 
-    // Walk-cost upper bound: every planned ROM priced as a new shortcut, plus the
-    // flat fetch allowance — the same estimateApplySeconds model the preview uses.
-    expect(getSyncProgress().etaSeconds).toBe(estimateApplySeconds(120, 0));
+    // Nothing bound yet, so every planned item is a create — the fresh-import
+    // shape, priced exactly as the preview would price it.
+    expect(getSyncProgress().etaSeconds).toBeCloseTo(estimateApplySeconds(120, 0));
+    plugin.onDismount();
+  });
+
+  it("prices already-bound rows as cheap updates, not as fresh creates (#1511)", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", {
+        run_id: "run-eta",
+        units: [
+          // A fully-mirrored platform re-syncing: every row already carries a
+          // shortcut, so the run is all updates. Pricing it as creates is the
+          // over-read #1511 was opened for; the seed must price it as updates.
+          {
+            type: "platform",
+            id: 1,
+            name: "N64",
+            slug: "n64",
+            rom_count: 1000,
+            collapsed_count: 1000,
+            bound_count: 1000,
+          },
+        ],
+        total_units: 1,
+        total_roms: 1000,
+        total_estimated_items: 1000,
+      });
+    });
+
+    expect(getSyncProgress().etaSeconds).toBeCloseTo(estimateApplySeconds(0, 1000));
+    resetEta();
     plugin.onDismount();
   });
 
@@ -1239,7 +1275,12 @@ describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estima
     const plugin = pluginFactory();
 
     act(() => {
-      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-eta", units: [], total_units: 1, total_roms: 200 });
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", {
+        run_id: "run-eta",
+        units: [{ type: "platform", id: 1, name: "N64", slug: "n64", rom_count: 200, bound_count: 0 }],
+        total_units: 1,
+        total_roms: 200,
+      });
     });
     // A backend frame carries no etaSeconds — the listener must not wipe it.
     act(() => {
@@ -1252,7 +1293,7 @@ describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estima
       });
     });
 
-    expect(getSyncProgress().etaSeconds).toBe(estimateApplySeconds(200, 0));
+    expect(getSyncProgress().etaSeconds).toBeCloseTo(estimateApplySeconds(200, 0));
     expect(getSyncProgress().stage).toBe("applying");
     plugin.onDismount();
   });
@@ -1283,20 +1324,37 @@ describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estima
     // the etaSeconds-undefined gate.
     expect(getSyncProgress().etaSeconds).toBeUndefined();
     act(() => {
-      emitDeckyEvent<[SyncPlanData]>("sync_plan", { run_id: "run-eta", units: [], total_units: 2, total_roms: 80 });
+      emitDeckyEvent<[SyncPlanData]>("sync_plan", {
+        run_id: "run-eta",
+        units: [{ type: "platform", id: 1, name: "N64", slug: "n64", rom_count: 80, bound_count: 0 }],
+        total_units: 2,
+        total_roms: 80,
+      });
     });
 
-    expect(getSyncProgress().etaSeconds).toBe(estimateApplySeconds(80, 0));
+    expect(getSyncProgress().etaSeconds).toBeCloseTo(estimateApplySeconds(80, 0));
     plugin.onDismount();
   });
 
-  it("prefers total_estimated_items over total_roms for the seed (#1382 skip-aware)", async () => {
+  it("excludes predicted-skip units from the seed (#1382 skip-aware)", async () => {
     const plugin = pluginFactory();
 
     act(() => {
       emitDeckyEvent<[SyncPlanData]>("sync_plan", {
         run_id: "run-eta",
-        units: [],
+        units: [
+          {
+            type: "platform",
+            id: 1,
+            name: "N64",
+            slug: "n64",
+            rom_count: 115,
+            collapsed_count: 115,
+            bound_count: 115,
+            predicted_skip: true,
+          },
+          { type: "platform", id: 2, name: "GBA", slug: "gba", rom_count: 5, bound_count: 0 },
+        ],
         total_units: 3,
         total_roms: 120,
         total_estimated_items: 5,
@@ -1304,7 +1362,7 @@ describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estima
     });
 
     // An incremental re-sync prices only the predicted work, not the library.
-    expect(getSyncProgress().etaSeconds).toBe(estimateApplySeconds(5, 0));
+    expect(getSyncProgress().etaSeconds).toBeCloseTo(estimateApplySeconds(5, 0));
     resetEta();
     plugin.onDismount();
   });
@@ -1370,7 +1428,7 @@ describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estima
       });
     });
 
-    expect(getSyncProgress().etaSeconds).toBe(estimateApplySeconds(80, 0));
+    expect(getSyncProgress().etaSeconds).toBeCloseTo(estimateApplySeconds(80, 0));
     // Raw rom_count weights: unit 1 done (60) plus half of unit 2 (10) → 70/80.
     expect(weightedCoarseFraction(1, 0.5, 2)).toBeCloseTo(70 / 80, 10);
     resetEta();

@@ -9,7 +9,7 @@ import { DangerZone } from "./components/DangerZone";
 import { DownloadQueue } from "./components/DownloadQueue";
 import { initUnitSyncManager, resetSyncCancel } from "./utils/syncManager";
 import { setSyncProgress, getSyncProgress, updateSyncProgress } from "./utils/syncProgress";
-import { estimateApplySeconds } from "./utils/syncEstimate";
+import { estimatePlanSeconds } from "./utils/syncEstimate";
 import { beginEtaRun } from "./utils/syncEta";
 import { updateDownload, getDownloadState, removeDownload } from "./utils/downloadStore";
 import { handleGlobalDownloadFailure } from "./utils/downloadFailure";
@@ -553,14 +553,18 @@ export default definePlugin(() => {
     // a Cancel click comes from the backend-fed sync_progress store now (#1202).
     resetSyncCancel();
     // Seed the applying-phase estimate on the walk-cost model (the same
-    // ``estimateApplySeconds`` the preview row uses): an honest upper bound that
-    // prices every planned item as a new shortcut plus the flat fetch allowance.
-    // The plan is skip-aware (#1382): ``total_estimated_items`` zero-weights the
-    // platforms the backend predicts its wholesale-skip gate will skip and prices
-    // the rest at their persisted collapsed (post-sibling-group) shortcut count,
-    // so an incremental re-sync no longer seeds a whole-library ceiling. The raw
-    // ``total_roms`` stays the fallback for an older backend that doesn't send
-    // the field. The delta-restricted apply skips unchanged items and the live
+    // constants the preview row uses), priced per unit by COMPOSITION rather
+    // than as one blended item count (#1511). The plan is skip-aware (#1382):
+    // a predicted-skip unit costs nothing and the rest are weighed at their
+    // persisted collapsed (post-sibling-group) shortcut count — and of those
+    // items, the ones already bound to a Steam shortcut (``bound_count``) take
+    // the cheap update path. Pricing every planned item as a create over-read
+    // by ~4x on the common case: any re-sync, and — for platforms — every Force
+    // Full Sync (which clears the completion stamps but unbinds nothing, so it
+    // is all updates). A unit that omits ``bound_count`` still prices as all
+    // creates: an older backend, or a collection with no stamped member set,
+    // which is every collection on a forced run since that clears the stamps
+    // membership is read from. The delta-restricted apply skips unchanged items and the live
     // rate estimator corrects the readout within seconds of applying (#1382-M3).
     // Merged (not replaced) so the running/stage the click set survives, and the
     // sync_progress listener below preserves it across backend frames. Shown as
@@ -574,7 +578,7 @@ export default definePlugin(() => {
     // seed, never a stale prior-run value. The skip-preview path never sets one,
     // so it still gets this bound.
     if (getSyncProgress().etaSeconds === undefined) {
-      updateSyncProgress({ etaSeconds: estimateApplySeconds(data.total_estimated_items ?? data.total_roms, 0) });
+      updateSyncProgress({ etaSeconds: estimatePlanSeconds(data.units) });
     }
     // Begin the run-scoped live-ETA estimator with the plan's per-unit weights
     // and total. Weights are skip-aware (#1382): 0 for a predicted-skip unit,

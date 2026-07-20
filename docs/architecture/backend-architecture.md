@@ -579,13 +579,25 @@ weights + planned totals, via `sync_plan`) and the applying frames.
   `list_roms_updated_after` server check is deliberately not replayed — no network at plan time) — and
   `collapsed_count`, the persisted post-collapse shortcut count, mirroring the collapse's lane selection (ADR-0021):
   `max(1, bound rows)` per sibling group — so a grandfathered legacy group with multiple independently-bound duplicates
-  (§5) prices one shortcut per bound sibling, not one per group — plus one per keyless row. Both ride the `sync_plan`
-  payload conditionally-present (absent on collections, never-synced platforms, and failed reads); `collapsed_count` is
-  additionally **gated on the platform's completion stamp** (#1412, mirroring the `get_platforms` garnish below) — a
-  never-synced platform holds only PARTIAL collection-sibling rows (ADR-0021), so an ungated count would weight the ETA
-  below the true work, and without a stamp the frontend falls back to the raw `rom_count`. The payload's `total_roms`
-  stays the raw pre-collapse total (backward compat); an additive `total_estimated_items` sums `0` for predicted skips,
-  else `collapsed_count ?? rom_count`. **Hard constraint (ADR-0023): the prediction never feeds the actual skip
+  (§5) prices one shortcut per bound sibling, not one per group — plus one per keyless row. Both of **those two** ride
+  the `sync_plan` payload conditionally-present (absent on collections, never-synced platforms, and failed reads);
+  `collapsed_count` is additionally **gated on the platform's completion stamp** (#1412, mirroring the `get_platforms`
+  garnish below) — a never-synced platform holds only PARTIAL collection-sibling rows (ADR-0021), so an ungated count
+  would weight the ETA below the true work, and without a stamp the frontend falls back to the raw `rom_count`. The
+  payload's `total_roms` stays the raw pre-collapse total (backward compat); an additive `total_estimated_items` sums
+  `0` for predicted skips, else `collapsed_count ?? rom_count`. A third rider, `bound_count` (#1511), counts the unit's
+  known ROMs that already carry a `shortcut_app_id`, and is the one rider that rides **both** unit kinds. On a
+  **platform** it counts the persisted rows, read in the same short UoW the skip prediction already needed that count
+  for, and is **not** stamp-gated: a bound row genuinely has a Steam shortcut whether or not the mirror is complete, and
+  zero persisted rows honestly means "every planned item is a create". On a **collection** it counts the bound members
+  of the completion stamp's stored `member_rom_ids` (the same member set the skip replays), in one short read UoW
+  covering every collection unit — no ROM fetch. The two sides are deliberately **asymmetric** on the empty case: a
+  platform reports `0`, an unstamped or franchise collection is **omitted**. A collection's membership exists only in
+  its stamp, and franchise collections are never stampable (`CollectionSyncState.stamp` accepts only `user`/`smart`), so
+  `0` there would claim knowledge that does not exist. Absent and `0` price identically today; the distinction keeps the
+  field honest for later consumers, so do not collapse it into consistency. A collection's stored member set may be
+  **stale** if membership changed since the stamp — accepted and bounded, since this is estimate-only and a freshness
+  probe would mean network I/O at plan time. **Hard constraint (ADR-0023): the prediction never feeds the actual skip
   decision** — `_try_unit_incremental_skip` at fetch time remains the sole skip authority, so a mis-prediction can only
   make the estimate read long or short, never mis-apply. A Force Full Sync needs no special case: `clear_sync_cache`
   deletes every stamp before the run, so a forced plan predicts no skips and drops every `collapsed_count` (the forced
@@ -599,15 +611,30 @@ weights + planned totals, via `sync_plan`) and the applying frames.
   label falls back to the raw `rom_count`. Clearing the stamp (local removal / Force Full Sync) reverts the label to the
   server total until the next completed sync re-stamps.
 - **Static walk-cost ceiling (pre-run seed).** Before a run — in the preview, and again as the initial "up to X min" the
-  instant a skip-preview run starts — the estimate is a pure cost model: `new_count × NEW_ITEM_SEC` +
-  `changed_count × UPDATED_ITEM_SEC` + a flat fetch allowance. The per-item constants (currently ~0.45 s for a created
-  shortcut, ~0.20 s for an updated one) sit **deliberately above** the measured on-device apply rates and the allowance
-  (~90 s) covers the multi-page ROM/save fetch phases the per-item model ignores, so the seed is an honest **upper
-  bound** that reads long, never short. It is priced at **walk cost** (every unit the run will actually touch), not at
-  the delta only — a resume walks thousands of already-applied games through the cheap update path, so a delta-only
-  price would badly undershoot the real work. The skip-preview seed prices `total_estimated_items ?? total_roms`, so an
-  incremental re-sync whose platforms are all predicted skips seeds near the flat allowance instead of a whole-library
-  ceiling; the live-countdown weights are seeded per unit as `predicted_skip ? 0 : (collapsed_count ?? rom_count)`.
+  instant a skip-preview run starts — the estimate is a pure cost model over **three independent terms** (#1511),
+  because a run is three independent phases and one blended per-item rate cannot describe a mix of them:
+  `created × NEW_ITEM_SEC` + `changed × UPDATED_ITEM_SEC` + `(created + cover_refresh_count) × COVER_DOWNLOAD_SEC` + a
+  flat fixed-overhead allowance. Each constant is calibrated to its own measured mean with a ~15% ceiling margin (0.36 s
+  per created shortcut against a measured 0.314; 0.13 s per update against 0.109; 0.15 s per cover download against
+  0.132 cold), and the allowance (45 s) covers the run's genuinely fixed cost — the one-time shortcut scan, the
+  multi-page ROM/save fetches, the inter-chunk gaps, finalize (measured 17–24 s). So the seed still reads long, never
+  short, but it now reads long by a margin rather than by a factor. Two consequences worth stating: an **update carries
+  no artwork cost** (the apply loop gates cover application on `created`), and a **cached cover is not a term** — warm
+  covers cost 0.0018 s, 73x cheaper than cold, and pricing them would need a backend cache probe in the preview path
+  that is deliberately not added, so every create is priced as needing a cold download.
+- **Composition-priced plan seed.** The skip-preview seed prices the plan **per unit by composition**, not as one
+  blended item count (#1511): a predicted-skip unit costs nothing, and of the remainder's items
+  (`collapsed_count ?? rom_count`) the ones already bound (`bound_count`) take the update rate, the rest the create
+  rate. Pricing every planned item as a create over-read by ~4x on the common case — any re-sync, and **every Force Full
+  Sync**, which clears the completion stamps but unbinds nothing and is therefore an all-updates run. Platform and
+  collection units are priced the same way on an ordinary re-sync, so a collection-heavy library does not reinstate the
+  over-read through its collections. **A Force Full Sync is the exception for collections**: `clear_sync_cache` clears
+  `collection_sync_state` wholesale, and a collection's member set lives _only_ in that stamp, so every collection unit
+  is unstamped for that run and reverts to create pricing. Platforms are unaffected — their `bound_count` is
+  deliberately not stamp-gated. This follows directly from the `None`-not-`0` rule above and errs **long**, the safe
+  direction; correcting it would mean asserting membership the plan does not have. A unit whose `bound_count` is absent
+  (older backend, unstamped or franchise collection) prices as all creates, the pre-#1511 behaviour. The live-countdown
+  weights are unaffected and stay `predicted_skip ? 0 : (collapsed_count ?? rom_count)`.
 - **Measured live countdown (takes over within seconds).** Once the apply is underway, `syncEta.ts` measures the
   **real** rate from the applying frames — one throttled sample per second over a ~30 s sliding window — and projects
   `remaining = (planned_total − processed) / rate`, rendered rounded **up** ("9 min left") so it never promises less
@@ -624,6 +651,16 @@ weights + planned totals, via `sync_plan`) and the applying frames.
   segment** (the prior samples are discarded), so the slope is never measured across the gap — pairing a pre-gap sample
   with a post-gap one would be a tiny item delta over a long span, an absurd rate that would briefly spike the
   countdown.
+- **Stalled-prefix trim (shorter stalls).** A stall too short to break the segment used to poison the window head
+  instead (#1511). The applying stage is entered — and its first frame emitted — **before** the one-time shortcut scan,
+  which then blocks for ~9–14 s (it scales with the existing library, not the delta). That frame became sample #1 and
+  paired with the first post-scan sample: a couple of items across the whole scan, a rate ~10x below the real one, which
+  the sticky deadline then held until the 30 s window slid past — the reported "6 min → 2 min" collapse. Leading samples
+  are therefore dropped when the head gap is both **wide** (> 3 s, several sampling cadences) and **unproductive**
+  (fewer than one item per sampling interval, below anything the 50 ms-paced apply loop produces). Both conditions are
+  required: a wide gap that carried real throughput is slow work, not a stall, and discarding it would measure only the
+  fastest stretch. Trimming can legitimately leave a single sample — "no measurement yet" is the honest answer while a
+  stall is all the window has seen, so the static seed keeps standing until clean samples accumulate.
 
 The coarse QAM progress bar reuses the same run weights (`weightedCoarseFraction`, `syncEta.ts`): each unit's bar width
 is its item-weight share — skip-aware at plan time, corrected to the real delta as units dispatch — with the within-unit

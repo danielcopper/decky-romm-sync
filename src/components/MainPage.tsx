@@ -365,15 +365,19 @@ function formatLibraryLine(stats: SyncStats): string {
  * apply (#1383) touches only new + changed shortcuts; content-unchanged items are
  * skipped entirely (no Set* walk, no confirm poll), so they cost nothing and are
  * no longer priced. Creates run at the new-shortcut rate, changed at the lighter
- * update rate, plus the flat fetch allowance. This is now a tight estimate rather
- * than an inflated upper bound — the old model priced every unchanged item as an
- * update because a resume re-walked them, which the skip has eliminated. Used for
- * BOTH the preview "Estimated time" row and the handleApply seed, so the number
- * the user approves is the number the run starts with; the live countdown still
- * corrects it against the measured apply rate.
+ * update rate, plus the flat fixed-overhead allowance. This is now a tight
+ * estimate rather than an inflated upper bound — the old model priced every
+ * unchanged item as an update because a resume re-walked them, which the skip has
+ * eliminated. Cover refreshes are their own term (#1511): they are backend
+ * downloads on already-bound shortcuts, so they carry no shortcut-walk cost, and
+ * a cover-only preview must price its covers rather than read the flat allowance.
+ * Absent on older backends, where zero is the right reading. Used for BOTH the
+ * preview "Estimated time" row and the handleApply seed, so the number the user
+ * approves is the number the run starts with; the live countdown still corrects
+ * it against the measured apply rate.
  */
 function previewApplySeconds(s: SyncPreviewSummary): number {
-  return estimateApplySeconds(s.new_count, s.changed_count);
+  return estimateApplySeconds(s.new_count, s.changed_count, s.cover_refresh_count ?? 0);
 }
 
 /** Preview apply-time (seconds) at/above which the hint appends the sleep-pause

@@ -224,7 +224,7 @@ export interface SyncPreview {
   pause_likely?: boolean;
 }
 
-interface SyncPlanUnit {
+export interface SyncPlanUnit {
   type: "platform" | "collection";
   id: number | string;
   name: string;
@@ -246,6 +246,22 @@ interface SyncPlanUnit {
    * raw `rom_count`.
    */
   collapsed_count?: number;
+  /**
+   * This unit's known ROMs that already carry a Steam shortcut (#1511) — a
+   * platform's persisted rows, or a collection's stamped member set. Those
+   * items take the cheap UPDATE path in the apply loop, so the seed prices them
+   * at `UPDATED_ITEM_SEC` and only the remainder at the create rate — without it
+   * a re-sync (and every Force Full Sync, which unbinds nothing) is priced as a
+   * fresh import. Unlike its sibling riders this rides BOTH unit kinds. Absent
+   * on older backends, on never-stamped collections (a collection's membership
+   * is known only from its stamp), and on franchise collections (never
+   * stampable); the seed then prices every item as a create, as before.
+   *
+   * Note the asymmetry a Force Full Sync exposes: it clears every stamp, so its
+   * PLATFORM units keep this field (read from the rows, no stamp gate) while its
+   * COLLECTION units lose it and price as creates for that run.
+   */
+  bound_count?: number;
 }
 
 export interface SyncPlanData {

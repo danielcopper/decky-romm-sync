@@ -1,49 +1,115 @@
 /**
  * Sync-time estimate — the pure cost model behind the always-on "Estimated
- * time" readout. Given a count of new and updated shortcuts it returns an
- * expected apply duration; anything that turns item counts into a
+ * time" readout. Given counts of new, updated and cover-refreshed shortcuts it
+ * returns an expected apply duration; anything that turns item counts into a
  * human-readable duration for the sync UI lives here. No I/O, no React.
  *
- * The per-item constants are calibrated to the measured post-poll apply rates
- * (2026-07 on-device, after the AddShortcut overview-poll replaced the blind
- * ~500ms settle wait): a new shortcut runs ~0.30–0.36 s/item, an updated one
- * ~0.15 s/item. The constants sit deliberately above those means so the preview
- * estimate and the skip-preview upper bound never read short. A flat fetch
- * allowance folded into ``estimateApplySeconds`` covers the multi-page
- * fetch/prep phases the per-item model would otherwise ignore.
+ * The model prices three INDEPENDENT terms, because they are three independent
+ * phases of a run and a single blended per-item rate cannot describe a mix of
+ * them: the per-item create walk, the per-item update walk, and the backend's
+ * cover-download pass that runs between a unit's fetch and its first apply
+ * chunk. Each constant is calibrated to its own measured mean with a ceiling
+ * margin, so the estimate reads long rather than short whatever the mix. A flat
+ * allowance covers the run's fixed overhead (the one-time shortcut scan, the
+ * multi-page fetch, inter-chunk gaps, finalize).
  */
 
-/**
- * Seconds per newly created shortcut — calibrated to the measured ~0.30–0.36
- * s/item post-poll create rate (2026-07 on-device), with a deliberate ceiling
- * margin. Covers the AddShortcut + overview poll, the Set* calls, the confirm
- * poll, the inter-op cadence, and amortized artwork fetch/apply.
- */
-export const NEW_ITEM_SEC = 0.45;
+import type { SyncPlanUnit } from "../types/sync";
 
 /**
- * Seconds per updated shortcut — calibrated to the measured ~0.15 s/item update
- * rate (2026-07 on-device), with a deliberate ceiling margin. The update path
- * reuses the existing shortcut (no AddShortcut), so it is just the Set* calls
- * and confirm poll.
+ * Seconds per newly created shortcut — the AddShortcut + overview poll, the
+ * Set* calls, the confirm poll, the inter-op cadence, and the per-item artwork
+ * leg (DB read → file read → base64 → IPC → SetCustomArtworkForApp). Measured
+ * at ~0.314 s/item (2026-07 on-device); carries a ~15% margin.
+ * Excludes the backend cover DOWNLOAD, which is priced separately by
+ * {@link COVER_DOWNLOAD_SEC} — it is a distinct phase, not part of the walk.
  */
-export const UPDATED_ITEM_SEC = 0.2;
+export const NEW_ITEM_SEC = 0.36;
+
+/**
+ * Seconds per updated shortcut — the update path reuses the existing shortcut
+ * (no AddShortcut, no overview poll, and no artwork: the apply loop gates cover
+ * application on ``created``), so it is just the Set* calls and the confirm
+ * poll. Measured at ~0.109 s/item (2026-07 on-device); carries a ~15% margin.
+ */
+export const UPDATED_ITEM_SEC = 0.13;
+
+/**
+ * Seconds per cover the backend must DOWNLOAD, in the per-unit cover pass that
+ * runs before the unit's first apply chunk. Measured 0.132 s/cover cold
+ * (2026-07 on-device). A cover already in the cache costs 0.0018 s — 73x
+ * cheaper, and deliberately NOT a term: pricing warm covers would require a
+ * backend cache probe in the preview path that we are not adding, and treating
+ * every cover as cold is the safe direction.
+ */
+export const COVER_DOWNLOAD_SEC = 0.15;
+
+/**
+ * Flat allowance for the run's FIXED overhead — the one-time shortcut scan
+ * (which scales with the existing library, not the delta), the multi-page ROM +
+ * save fetches, the inter-chunk gaps, and finalize. Measured 17–24 s on-device
+ * across a create-heavy and an update-heavy run; the margin here is wide because
+ * the scan grows with library size.
+ */
+export const FETCH_ALLOWANCE_SEC = 45;
 
 /**
  * Expected apply duration in seconds for *newCount* created and *changedCount*
- * updated shortcuts, plus a flat fetch allowance for the multi-page fetch/prep
- * phases that precede and interleave the apply. Negative counts are clamped to
- * zero (the allowance still applies).
+ * updated shortcuts, plus *coverRefreshCount* covers refreshed on already-bound
+ * shortcuts, plus the flat fixed-overhead allowance.
+ *
+ * Every create is priced as needing a cover download on top of the refreshes —
+ * a deliberate upper bound: a create usually does need one, and the cache state
+ * is not knowable without a backend probe, so over-reading is the safe
+ * direction. Negative counts are clamped to zero (the allowance still applies).
  */
-export function estimateApplySeconds(newCount: number, changedCount: number): number {
-  // Flat allowance for the fetch/prep phases the per-item model ignores (the
-  // multi-page ROM + save fetches a resume re-runs, ~1–1.5 min on-device).
-  // Small libraries overshoot slightly; the "up to X min" wording covers it and the
-  // live countdown corrects downward within seconds of applying.
-  const FETCH_ALLOWANCE_SEC = 90;
+export function estimateApplySeconds(newCount: number, changedCount: number, coverRefreshCount = 0): number {
   const created = Math.max(0, newCount);
   const updated = Math.max(0, changedCount);
-  return created * NEW_ITEM_SEC + updated * UPDATED_ITEM_SEC + FETCH_ALLOWANCE_SEC;
+  const refreshed = Math.max(0, coverRefreshCount);
+  return (
+    created * NEW_ITEM_SEC +
+    updated * UPDATED_ITEM_SEC +
+    (created + refreshed) * COVER_DOWNLOAD_SEC +
+    FETCH_ALLOWANCE_SEC
+  );
+}
+
+/**
+ * Expected apply duration in seconds for a whole ``sync_plan`` — the seed the
+ * skip-preview path shows before any preview delta exists.
+ *
+ * Prices each unit by its COMPOSITION rather than pricing every planned item as
+ * a create: a predicted-skip unit costs nothing, and of the remainder's items
+ * (``collapsed_count ?? rom_count``) the ones already bound to a Steam shortcut
+ * (``bound_count``) take the cheap update path. This is what stops a re-sync —
+ * and, for platforms, every Force Full Sync, which clears the completion stamps
+ * but unbinds nothing — from being seeded at fresh-import prices. Applies to
+ * platform AND collection units alike; a unit whose backend omits
+ * ``bound_count`` prices all of its items as creates, the pre-#1511 behaviour.
+ *
+ * That fallback is not rare for collections: a collection's membership is known
+ * only from its completion stamp, and a Force Full Sync clears every stamp, so a
+ * forced run prices its collections as creates even though their shortcuts
+ * survive. Deliberate — the alternative is asserting membership the plan does
+ * not have — and it errs long, the safe direction.
+ *
+ * Cover downloads ride the create term; the plan carries no cover-refresh count,
+ * and a refresh-only unit's covers are the cheap warm case.
+ */
+export function estimatePlanSeconds(units: readonly SyncPlanUnit[]): number {
+  let created = 0;
+  let updated = 0;
+  for (const unit of units) {
+    if (unit.predicted_skip) continue;
+    const items = Math.max(0, unit.collapsed_count ?? unit.rom_count);
+    // Clamp: bound rows are counted pre-collapse, so a sibling-heavy platform
+    // could report more bound rows than the collapsed item total.
+    const bound = Math.min(items, Math.max(0, unit.bound_count ?? 0));
+    updated += bound;
+    created += items - bound;
+  }
+  return estimateApplySeconds(created, updated);
 }
 
 /**
