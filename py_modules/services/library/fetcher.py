@@ -511,8 +511,9 @@ class LibraryFetcher:
         """Read the plan-time estimate baseline for platform units (#1382).
 
         Per unit slug: replay the wholesale-skip gate's LOCAL conditions
-        (``predict_unit_skip`` — stamp present, stamped/persisted counts match
-        the server count, bound rows exist, no group-key backfill pending) and
+        (``predict_unit_skip`` — stamp present, the stamped count and the count
+        of rows carrying the stamp's fetch generation both match the server
+        count, bound rows exist, no group-key backfill pending) and
         derive the persisted post-collapse shortcut count
         (``collapsed_shortcut_count`` over the rows' sibling-group keys +
         bound flags). The collapsed count is emitted ONLY for slugs that carry
