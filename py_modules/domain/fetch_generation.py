@@ -35,8 +35,11 @@ def count_rows_for_skip(rows: Sequence[Rom], fetch_id: str | None) -> int:
     #1504. That legacy path is deliberately permissive rather than refusing to
     count: a platform with no superseded rows keeps skipping straight through
     the upgrade instead of paying a forced re-fetch, and a platform that DOES
-    carry them already fails the count today, so its next sync full-fetches and
-    re-stamps both sides — self-healing either way, in at most one run.
+    carry them already fails the count today, so it full-fetches until both
+    sides are re-stamped. That re-stamp lands on the next sync that APPLIES
+    something, not simply the next sync — the generation is written by the
+    apply's commit, and a run whose library-wide delta is empty stops at the
+    preview and reaches no commit.
     """
     if not fetch_id:
         return len(rows)

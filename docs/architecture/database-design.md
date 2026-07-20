@@ -560,8 +560,13 @@ the count without deleting it — ADR-0007's retention is unchanged, and the rej
 alternative it records is exactly why a non-destructive marker was chosen. Two `ALTER TABLE … ADD COLUMN`s, nothing
 rewritten. `NULL` = unknown on both columns: a pre-migration stamp cannot say what its fetch returned, so the skip falls
 back to counting every row (the pre-#1504 behavior) — a platform with no superseded rows keeps skipping straight through
-the upgrade, and one that carries them already fails the count today, so its next sync full-fetches and re-stamps both
-sides. Self-healing either way, in at most one run.
+the upgrade, and one that carries them already fails the count today, so it full-fetches until both sides are
+re-stamped. That re-stamp lands on the next sync that **applies** something, not simply the next sync: both columns are
+written by the apply's commit, and a run whose library-wide delta is empty stops at the preview ("Everything is up to
+date", no Apply offered), so it reaches no commit and leaves them unchanged. The wait is nonetheless short — an applying
+run commits every unit that did not wholesale-skip, including a unit whose own delta is empty (it chunks into a single
+leftover chunk), and a platform carrying superseded rows can never wholesale-skip, so it is always among the units such
+a run heals.
 
 ## The runtime Unit of Work
 

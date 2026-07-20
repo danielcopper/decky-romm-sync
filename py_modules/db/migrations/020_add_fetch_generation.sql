@@ -42,9 +42,18 @@
 -- pre-#1504 behavior — rather than refusing to count. That is deliberately the
 -- permissive direction: a platform with no superseded rows keeps skipping
 -- straight through the upgrade instead of paying a forced re-fetch, and one that
--- DOES carry them already fails the count today, so its next sync full-fetches
--- and re-stamps both sides. Self-healing either way, in at most one run. Nothing
--- is deleted or rewritten here.
+-- DOES carry them already fails the count today, so it full-fetches until both
+-- sides are re-stamped.
+--
+-- That re-stamp lands on the next sync that APPLIES something, not simply the
+-- next sync: both columns are written by the apply's commit, and a run whose
+-- library-wide delta is empty stops at the preview ("Everything is up to date",
+-- no Apply offered), so it reaches no commit and leaves both columns as they
+-- were. The wait is nonetheless short — an applying run commits every unit that
+-- did not wholesale-skip, including a unit whose own delta is empty (it chunks
+-- into a single leftover chunk), and a platform carrying superseded rows can
+-- never wholesale-skip, so it is always among the units such a run heals.
+-- Nothing is deleted or rewritten here.
 --
 -- Transaction-safe DDL only — the runner (adapters/sqlite_migrations.py) wraps
 -- BEGIN/COMMIT and stamps PRAGMA user_version = 20.

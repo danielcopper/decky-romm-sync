@@ -132,7 +132,12 @@ mid-unit failure forfeits only the in-flight chunk.**
   platform's skip. A skipped unit returns before any chunk, so neither side is rewritten and the reference point holds
   across consecutive skips. A pre-#1504 stamp carries no generation and cannot say what its fetch returned, so the skip
   falls back to counting every row: a platform with no superseded rows keeps skipping through the upgrade, and one that
-  carries them already fails the count today, so its next sync full-fetches and re-stamps both sides.
+  carries them already fails the count today, so it full-fetches until both sides are re-stamped. That re-stamp lands on
+  the next sync that **applies** something, not simply the next sync — both columns are written by the apply's commit,
+  and a run whose library-wide delta is empty stops at the preview and reaches no commit. The wait is nonetheless short:
+  an applying run commits every unit that did not wholesale-skip, including a unit whose own delta is empty (it chunks
+  into a single leftover chunk), and a platform carrying superseded rows can never wholesale-skip, so it is always among
+  the units such a run heals.
 - **Collection units get the same fetch-avoiding skip (#742).** A user/smart collection work unit's final chunk stamps a
   `CollectionSyncState` — the collection sibling of `PlatformSyncState` — in the same write UoW as that chunk's `roms`
   upserts, so "this collection fully synced" ⟺ "stamp exists" is atomic on a crash, just like a platform. The gate skips
