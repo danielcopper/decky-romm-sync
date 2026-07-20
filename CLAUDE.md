@@ -239,9 +239,10 @@ Protocol-wrapped persister is built in `bootstrap()` and passed through `Callbac
 `_vendor.*`; services/domain/lib stay third-party-free (`domain-stdlib-only` contract in `.importlinter`). `_vendor/` is
 excluded from ruff, basedpyright, and Sonar. Every vendored package ships its upstream `LICENSE` and a provenance entry
 in [`_vendor/README.md`](py_modules/_vendor/README.md). Compiled binaries (no source in this repo) are vendored under
-`native/` instead — downloaded verbatim from an upstream release with a pinned SHA-256 (CI re-verifies it; the release
-smoke test asserts the artifact ships in the zip), loaded by an adapter via `ctypes` with no Python fallback; provenance
-and the update procedure live in [`native/README.md`](native/README.md).
+`py_modules/native/` instead (inside one of the fixed directories the Decky CLI packs into the plugin zip) — downloaded
+verbatim from an upstream release with a pinned SHA-256 (CI re-verifies it; the release smoke test asserts the artifact
+ships in the zip), loaded by an adapter via `ctypes` with no Python fallback; provenance and the update procedure live
+in [`native/README.md`](py_modules/native/README.md).
 
 **Process boundaries — `main.py` vs `bootstrap.py`**: `[ours]` `main.py` owns the Decky lifecycle (`_main`, `_unload`)
 and the callable surface (one `async def` per `@callable`). `bootstrap.py` owns adapter instantiation and service

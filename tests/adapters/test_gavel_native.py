@@ -38,7 +38,7 @@ _LADDER_VECTORS_DIR = Path(__file__).parent.parent / "domain" / "gavel_vectors" 
 
 @pytest.fixture(scope="module")
 def adapter() -> Iterator[GavelNativeAdapter]:
-    """The real adapter over the vendored ``native/libgavel-x86_64-linux.so``."""
+    """The real adapter over the vendored ``py_modules/native/libgavel-x86_64-linux.so``."""
     yield GavelNativeAdapter()
 
 

@@ -166,7 +166,7 @@ jobs:
       # .so against its checksum (bumped only by a deliberate native/README.md
       # update when pulling a newer romm-gavel release).
       - name: Check vendored gavel native core checksum
-        run: cd native && sha256sum -c libgavel-x86_64-linux.so.sha256
+        run: cd py_modules/native && sha256sum -c libgavel-x86_64-linux.so.sha256
 
   # Skipped when SONAR_TOKEN is structurally unavailable: Dependabot PRs and
   # PRs from forks (GitHub withholds secrets from `pull_request` runs whose head
