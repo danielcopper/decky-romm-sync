@@ -331,10 +331,13 @@ describe("legacy-migration copy (#1498)", () => {
     expect(body).toContain("‘default’");
   });
 
-  it("the migrate confirm description names the target slot and flags the differ-ask", () => {
+  it("the migrate confirm description names the slot and promises a confirmation, not a keep-choice", () => {
     const body = legacyMigrateConfirmDescription("default");
     expect(body).toContain("‘default’");
     expect(body).toContain("differs");
+    expect(body).toContain("confirm before anything is replaced");
+    // The dialog is confirm-or-cancel — never promise a choose-which-to-keep.
+    expect(body).not.toContain("which to keep");
   });
 
   it("the start-fresh hint names the slot and points at the next sync", () => {

@@ -219,10 +219,12 @@ export function legacyConflictReplaceNotice(slot: string): string {
 }
 
 /** Confirm-modal body for migrating the legacy group — names the target slot and
- *  states that a differing local save is asked about, never silently
- *  overwritten. */
+ *  promises that a differing local save is surfaced for an explicit confirmation
+ *  first, never silently overwritten. Deliberately does NOT promise a
+ *  choose-which-to-keep: the conflict dialog is confirm-or-cancel, and the
+ *  keep-local outcome is the wizard's own "Use slot" button. */
 export function legacyMigrateConfirmDescription(slot: string): string {
-  return `Copy the legacy save into ‘${slot}’? If a local save differs, you’ll choose which to keep.`;
+  return `Copy the legacy save into ‘${slot}’? If a local save differs, you’ll confirm before anything is replaced.`;
 }
 
 /** Hint under the "start fresh" buttons: a fresh slot holds no save until the

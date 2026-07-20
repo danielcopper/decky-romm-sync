@@ -304,9 +304,10 @@ local target** (`<rom_name>.<ext>`, the same mapping `switch_slot` uses) the mig
      sides' size + timestamp — the comparison that stops a newer local save being buried unnoticed. The dialog offers
      exactly two ways out: _Replace local save_ (the second call, with `use_server_on_conflict`), which quarantines the
      local file into `.romm-backup` (never deleted, #965) before writing the server content, or _Cancel_, which makes no
-     second call at all — nothing changes, the slot stays unconfirmed, and the wizard's start-fresh route ("Use slot
-     '<default>'") is still open. There is deliberately **no** "keep my local save" action: it would produce exactly the
-     same end state as that start-fresh button while re-opening a decision the user already made by clicking Track.
+     second call at all — nothing changes, the slot stays unconfirmed, and the wizard's start-fresh route
+     (`Use slot '<default>'`) is still open. There is deliberately **no** "keep my local save" action: it would produce
+     exactly the same end state as that start-fresh button while re-opening a decision the user already made by clicking
+     Track.
 3. Copies the content into the slot through the normal upload path (`do_upload_save`, `overwrite=false`,
    409-backstopped), adopting the per-file baseline — so the migrated slot is immediately in sync.
 
