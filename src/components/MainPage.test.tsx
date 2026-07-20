@@ -1725,9 +1725,14 @@ describe("MainPage", () => {
       expect(nProgress).toBeCloseTo(((10 + within * 2091) / 2106) * 100, 5);
     });
 
-    it("a predicted-skip unit occupies no bar width (zero plan weight, #1382)", async () => {
-      // Unit 1 was zero-weighted as a predicted wholesale skip; while unit 2
-      // applies, the bar reflects only unit 2's own items.
+    it("a LEADING predicted-skip unit claims its equal index share (#1506)", async () => {
+      // Unit 1 was zero-weighted as a predicted wholesale skip. #1382 gave such
+      // a unit no bar width at all, on the premise that a skip is
+      // instantaneous, so costing it nothing was free. #1506 is the evidence
+      // that the premise is false for a LEADING skip: an empty apply delta
+      // still refreshes covers and occupies real wall-clock time, so a
+      // zero-width leading unit pinned the whole bar to empty while it worked.
+      // It therefore claims an ordinary equal 1/totalUnits slice as a floor.
       beginEtaRun("run-1", [0, 100], 100);
       vi.mocked(backend.getSyncStatus).mockResolvedValue({
         running: true,
@@ -1740,13 +1745,36 @@ describe("MainPage", () => {
       });
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
-      // Weighted: the skipped unit 1 has zero weight, so the bar reflects only
-      // unit 2's own within-unit fill — applying at (F+C) + A*(50/100) of its
-      // 100 weight over the 100 total (#1407). Index-based would wrongly credit
-      // the skipped unit half the bar.
+      // The leading skip floors the bar at its 1/2 slice; unit 2's weighted
+      // fill — applying at (F+C) + A*(50/100) of its 100 weight over the 100
+      // total (#1407) — fills the band above that floor rather than stalling on
+      // it, so the bar keeps moving through the unit that does the real work.
       const within = FETCH_SHARE + COVERS_SHARE + APPLY_SHARE * (50 / 100);
+      const floor = 1 / 2;
       const nProgress = Number(container.querySelector('[data-testid="progress-progress"]')?.textContent);
-      expect(nProgress).toBeCloseTo(within * 100, 5);
+      expect(nProgress).toBeCloseTo((floor + (1 - floor) * within) * 100, 5);
+    });
+
+    it("a mid-plan zero-weight unit still occupies no bar width (#1382)", async () => {
+      // The #1506 floor covers only the plan's LEADING run of zero-weight
+      // units. Unit 2 here follows real work, so the weighting's distribution
+      // intent is untouched: the bar rests on unit 1's completed share and the
+      // skipped unit adds nothing, whatever its within-unit fill reads.
+      beginEtaRun("run-1", [100, 0, 100], 200);
+      vi.mocked(backend.getSyncStatus).mockResolvedValue({
+        running: true,
+        stage: "applying",
+        step: 2,
+        totalSteps: 3,
+        current: 50,
+        total: 100,
+        message: "GBA: 50/100",
+      });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      // Unit 1's 100 of the 200 total, and nothing from the zero-weight unit 2.
+      const nProgress = Number(container.querySelector('[data-testid="progress-progress"]')?.textContent);
+      expect(nProgress).toBeCloseTo(50, 5);
     });
 
     it("falls back to index weighting when the plan's unit count mismatches the run (stale plan)", async () => {

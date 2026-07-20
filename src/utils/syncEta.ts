@@ -241,6 +241,14 @@ export function displayedEtaSeconds(nowMs: number): number | null {
  * predicted-skip unit occupies no bar width and a huge platform occupies its
  * real share instead of ``1/totalUnits``.
  *
+ * A zero-weight unit is not free: an empty delta still refreshes covers, so a
+ * plan whose LEADING units all weigh zero would pin the bar to empty for as
+ * long as they work (#1506). Those units claim an equal ``1/totalUnits`` share
+ * each, and the weighted apportionment is compressed into the band ABOVE that
+ * floor (not maxed against it), so the weight-bearing tail still fills smoothly
+ * instead of stalling. Only the leading run is floored — a zero-weight unit
+ * following real work still takes no width.
+ *
  * Returns ``null`` — the caller falls back to index weighting — when no run is
  * measured (QAM opened mid-run before any plan, old backend), when the plan's
  * unit count doesn't match ``totalUnits`` (a stale plan from another run), or
@@ -265,5 +273,27 @@ export function weightedCoarseFraction(
   const runningWeight =
     completedUnits >= 0 && completedUnits < weights.length ? Math.max(0, weights[completedUnits] ?? 0) : 0;
   const within = Math.max(0, Math.min(1, withinUnitFraction));
-  return Math.min(1, (completedWeight + within * runningWeight) / totalWeight);
+  const weighted = Math.min(1, (completedWeight + within * runningWeight) / totalWeight);
+  const floor = zeroPrefixFloor(weights, completedUnits, within, totalUnits);
+  return Math.min(1, floor + (1 - floor) * weighted);
+}
+
+/**
+ * The bar share owed to the plan's LEADING zero-weight units: an equal
+ * ``1/totalUnits`` each, interpolated by *within* while the running unit is
+ * still inside that run and held at its full share once past it. Non-decreasing
+ * in both inputs, so the bar it floors can never move backwards.
+ */
+function zeroPrefixFloor(
+  weights: readonly number[],
+  completedUnits: number,
+  within: number,
+  totalUnits: number,
+): number {
+  if (totalUnits <= 0) return 0;
+  let zeroPrefix = 0;
+  while (zeroPrefix < weights.length && Math.max(0, weights[zeroPrefix] ?? 0) <= 0) zeroPrefix++;
+  const reached = Math.min(Math.max(0, completedUnits), zeroPrefix);
+  const stillInside = completedUnits < zeroPrefix;
+  return (reached + (stillInside ? within : 0)) / totalUnits;
 }

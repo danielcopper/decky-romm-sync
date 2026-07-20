@@ -332,6 +332,79 @@ describe("weightedCoarseFraction", () => {
   });
 });
 
+describe("weightedCoarseFraction — leading zero-weight units (#1506)", () => {
+  beforeEach(() => resetEta());
+
+  // The live shape: seven empty-delta units that still do cover-refresh work,
+  // then one unit holding all the weight. Every leading unit weighs 0 while a
+  // later unit keeps totalWeight positive, so the run stays on the weighted
+  // path — the bar used to read a literal 0 for all seven.
+  const liveShape = () => beginEtaRun("run-1", [0, 0, 0, 0, 0, 0, 0, 500], 500);
+
+  it("advances with the unit index while the leading zero-weight units work", () => {
+    liveShape();
+    // Unit 3 running, 40% through it: three leading units done + 0.4 of the
+    // fourth, each worth an equal 1/8 slice.
+    expect(weightedCoarseFraction(3, 0.4, 8)).toBeCloseTo(3.4 / 8, 10);
+    expect(weightedCoarseFraction(6, 0.5, 8)).toBeCloseTo(6.5 / 8, 10);
+  });
+
+  it("fills the band above the floor as the weight-bearing tail applies", () => {
+    liveShape();
+    // The seven zero-weight units claimed 7/8; the tail unit fills the rest in
+    // proportion to its own progress rather than stalling at the floor.
+    expect(weightedCoarseFraction(7, 0, 8)).toBeCloseTo(7 / 8, 10);
+    expect(weightedCoarseFraction(7, 0.5, 8)).toBeCloseTo(7 / 8 + (1 / 8) * 0.5, 10);
+    expect(weightedCoarseFraction(7, 1, 8)).toBe(1);
+  });
+
+  it("never moves backwards across unit and phase boundaries", () => {
+    beginEtaRun("run-1", [0, 0, 500], 500);
+    // withinUnit restarts at 0 on every unit boundary and climbs within each
+    // phase sub-slice; the fraction must be non-decreasing throughout.
+    const frames: readonly (readonly [number, number])[] = [
+      [0, 0],
+      [0, 0.33],
+      [0, 0.66],
+      [0, 1],
+      [1, 0],
+      [1, 0.33],
+      [1, 1],
+      [2, 0],
+      [2, 0.25],
+      [2, 0.75],
+      [2, 1],
+    ];
+    const readings = frames.map(([completed, within]) => weightedCoarseFraction(completed, within, 3) ?? -1);
+    for (let i = 1; i < readings.length; i++) {
+      expect(readings[i]).toBeGreaterThanOrEqual(readings[i - 1] ?? 0);
+    }
+    expect(readings[0]).toBe(0);
+    expect(readings[readings.length - 1]).toBe(1);
+  });
+
+  it("leaves an all-weight-bearing plan on the plain weighted shares", () => {
+    beginEtaRun("run-1", [100, 900], 1000);
+    // No leading zero-weight unit → no floor: the small first unit keeps its
+    // honest 10% instead of being lifted to the 50% index share.
+    expect(weightedCoarseFraction(1, 0, 2)).toBeCloseTo(0.1, 10);
+    expect(weightedCoarseFraction(1, 0.5, 2)).toBeCloseTo(0.55, 10);
+  });
+
+  it("gives no width to a zero-weight unit that follows weight-bearing work", () => {
+    beginEtaRun("run-1", [100, 300, 0, 600], 1000);
+    // The floor covers only the LEADING run of zero-weight units; unit 2 is not
+    // one, so the distribution intent (#1382) is untouched here.
+    expect(weightedCoarseFraction(2, 0, 4)).toBeCloseTo(0.4, 10);
+    expect(weightedCoarseFraction(2, 0.7, 4)).toBeCloseTo(0.4, 10);
+  });
+
+  it("stays on the index fallback for an all-skip plan (no weights to apportion)", () => {
+    beginEtaRun("run-1", [0, 0, 0], 0);
+    expect(weightedCoarseFraction(1, 0.5, 3)).toBeNull();
+  });
+});
+
 describe("displayedEtaSeconds (sticky countdown deadline)", () => {
   beforeEach(() => resetEta());
 

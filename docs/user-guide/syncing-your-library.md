@@ -57,6 +57,9 @@ progress counter show **net** progress: they count the games this run actually n
 not every game in your library. It holds steady across the short pauses where the sync fetches the next platform's game
 list, rather than jumping around. The main progress bar apportions its width the same way — a platform expected to skip
 takes no space, and a huge platform fills the bar in proportion to its real work instead of an equal slice per platform.
+The one exception is a run that _opens_ with platforms that have nothing to add: those still refresh cover art, so they
+would leave the bar sitting at empty for as long as they work. Each of them therefore claims an ordinary equal slice,
+and the platforms that do have games to add fill the rest of the bar between them.
 
 A few things worth knowing for a large library:
 

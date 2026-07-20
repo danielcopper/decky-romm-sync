@@ -1346,8 +1346,11 @@ describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estima
     });
 
     // Observable through the weighted coarse fraction over the seeded weights
-    // [0, 40, 30]: units 1+2 done (0 + 40) plus half of SNES (15) → 55/70.
-    expect(weightedCoarseFraction(2, 0.5, 3)).toBeCloseTo(55 / 70, 10);
+    // [0, 40, 30]: units 1+2 done (0 + 40) plus half of SNES (15) → 55/70 of
+    // the weight. The leading predicted-skip unit weighs 0, so it claims an
+    // equal 1/3 index slice as its floor and the weighted share fills the band
+    // above it (#1506): 1/3 + (2/3)·55/70.
+    expect(weightedCoarseFraction(2, 0.5, 3)).toBeCloseTo(1 / 3 + (2 / 3) * (55 / 70), 10);
     resetEta();
     plugin.onDismount();
   });
