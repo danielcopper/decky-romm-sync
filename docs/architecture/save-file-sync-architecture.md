@@ -183,7 +183,7 @@ On the automatic path there is no PUT-in-place to bump, so the #748 "drop the PU
 `add_save` (POST) already upserts this device's `device_save_sync` row (`last_synced_at = updated_at`) and serializes it
 into the response's `device_syncs`, so `is_current` is true for us the moment the POST returns — the follow-up
 `confirm_download` ack is redundant and is **skipped** when the response proves us current (`_confirm_upload_sync`,
-#1458). The one path that still needs the ack is `add_save`'s content-dedup early-return: a POST returns the matching
+\#1458). The one path that still needs the ack is `add_save`'s content-dedup early-return: a POST returns the matching
 save **before** the upsert with `is_current=false`, so the ack is the only writer of our sync row there. On the
 automatic path this only fires for a **benign** dedup where the returned save is the slot head (e.g. the empty-slot
 race) — a dedup to an older, non-head save is guarded away first and routed to a conflict, never acked (see
@@ -366,10 +366,10 @@ hand-rolled site.
 The **upload** side honours the same equivalence (`MatrixExecutor._resolve_upload_slot`): a sync on the legacy slot
 (`active_slot=None` with a populated `slots` map) uploads with the `slot` param **omitted**, so the server stores a
 `slot: null` save. Only a brand-new ROM (no `slots` yet) seeds the configured default slot for its first sync. Since
-#1276 retired legacy as a confirmable target, this `active_slot=None`-confirmed state is no longer newly created — it
+\#1276 retired legacy as a confirmable target, this `active_slot=None`-confirmed state is no longer newly created — it
 lingers only until migration `005` un-confirms the ROM — but the equivalence stays defined so any residual legacy
 tracking still reads and deletes correctly. Returning `"default"` for `active_slot=None` was a sibling of the original
-#1061 bug — a save played on the legacy slot was misfiled into the default slot, so switching back to legacy found
+\#1061 bug — a save played on the legacy slot was misfiled into the default slot, so switching back to legacy found
 nothing on the server.
 
 ### Confirming a slot (`confirm_slot_choice`)
@@ -1666,7 +1666,7 @@ the `Router.RunningApps` / `SteamUIStore.RunningApps` lists — each through a g
 throwing-getter surface degrades to "reported nothing", never a throw), merges them into one de-duped list, and returns
 a per-source `diagnostics` string. No single surface is reliable across builds/timing: after a `plugin_loader` restart
 `Router.MainRunningApp` stays null for several seconds and never repopulates without a fresh lifecycle event (#1054 /
-#1148 round 2), so the adoption path **polls** the reader (every 500ms up to 15s) instead of reading one surface once,
+\#1148 round 2), so the adoption path **polls** the reader (every 500ms up to 15s) instead of reading one surface once,
 and a failed round logs what every candidate reported. The same reader backs the already-running skip on both launch
 surfaces — the interceptor and the Play button ([ADR-0015](../adr/0015-single-launch-gate-cancel-then-relaunch.md)).
 
@@ -1689,7 +1689,7 @@ Detection is **reactive, not polled**: the overlay is seeded synchronously at mo
 `isAppRunning(appId)` (so a page opened mid-session — or after a reload-adoption — shows Resume immediately) and flipped
 live by the `romm_session_changed` DOM event, which `sessionManager` dispatches on game start (`running: true`), game
 stop (`running: false`), and both reload-adoption branches (`running: true`). The already-running guards from #1148 /
-#1308 (the interceptor and the `handlePlay` guard) stay in place as **backstops** for the render→click race, where the
+\#1308 (the interceptor and the `handlePlay` guard) stay in place as **backstops** for the render→click race, where the
 session begins between the button rendering Play and the user pressing it.
 
 ### App ID to ROM ID mapping

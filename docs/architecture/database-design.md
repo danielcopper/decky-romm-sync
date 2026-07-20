@@ -482,7 +482,7 @@ PRIMARY KEY` with a `completed_at TEXT` (ISO-8601, same comparison basis as `syn
 and a `rom_count INTEGER`. It is the per-platform completion stamp the incremental-skip gate reads so a platform that
 fully synced inside a later-cancelled run still skips. A leaf table with no cascade children — the row is upserted with
 `INSERT OR REPLACE` and the whole table is cleared by "Force Full Sync" (which leaves the `sync_runs` history intact,
-#1318). Pure DDL — a single `CREATE TABLE`.
+\#1318). Pure DDL — a single `CREATE TABLE`.
 
 `013_add_interrupted_sync_run_status.sql` (`user_version = 13`) widens the `sync_runs` status CHECK with `'interrupted'`
 ([#1025](https://github.com/danielcopper/decky-romm-sync/issues/1025)): a run ended by an external death — the frontend

@@ -6,7 +6,7 @@ Accepted. **Supersedes [ADR-0005](0005-launcher-resolves-path-from-sqlite.md)**,
 with the cutover. ADR-0005 left the "dumb exec wrapper"
 ([#785](https://github.com/danielcopper/decky-romm-sync/issues/785)) as the intended end state, **gated on**
 [#827](https://github.com/danielcopper/decky-romm-sync/issues/827) proving `SetAppLaunchOptions`-on-existing reliable.
-#827 passed; this ADR records the end state landing.
+\#827 passed; this ADR records the end state landing.
 
 ## Context
 

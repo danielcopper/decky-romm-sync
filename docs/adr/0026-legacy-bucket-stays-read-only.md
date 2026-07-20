@@ -18,7 +18,7 @@ RomM stores a save either in a **named slot** or with no slot at all (`slot: nul
 RomM's own web player (EmulatorJS) writes, and where saves created before slots existed still live. Migration `005`
 retired it as a confirmable sync target; it survived only as a one-time migration source.
 
-#1478 reported that legacy saves were being synced "to the wrong location", with the web player and the plugin
+\#1478 reported that legacy saves were being synced "to the wrong location", with the web player and the plugin
 disagreeing about the current save. Triaging it surfaced three plugin defects (an open back door into legacy mode, a
 wizard migration that silently migrated nothing, and slot-less uploads carrying an emulator tag) — and re-opened the
 larger question the report implied: **should the slot-less bucket come back as an explicit, opt-in sync target so that

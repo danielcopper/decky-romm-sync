@@ -198,7 +198,7 @@ _safely-bakeable_ command in a system's `es_systems.xml` document order**. ES-DE
 preference order, so ES-DE's own preference picks it — the plugin adds no curation. It may be a **RetroArch core** or a
 **standalone emulator** (PCSX2, RPCS3, Dolphin, …), whichever ES-DE lists first that the plugin can bake. Resolved live
 from the sole source (`es_systems.xml`) — there is no bundled snapshot (the curated `core_defaults.json` was deleted in
-#1210). When no command is safely-bakeable (or `es_systems.xml` can't be read) there is no default emulator and the ROM
+\#1210). When no command is safely-bakeable (or `es_systems.xml` can't be read) there is no default emulator and the ROM
 plain-launches, letting RetroDECK resolve its own command
 ([ADR-0020](docs/adr/0020-live-es-systems-emulator-resolution.md)). The foil to **emulator override** (a user deviation
 from this default).
