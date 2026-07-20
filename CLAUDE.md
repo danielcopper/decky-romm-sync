@@ -145,6 +145,8 @@ Format: **invariant** — tier — enforced by.
 - **No bare `# type: ignore` / blanket suppressions** — check — `scripts/check_no_bare_ignores.sh`
 - **Every pinned version in `requirements-*.lock` satisfies its `requirements-*.txt` source constraint** — check —
   `scripts/check_lock_sync.py`
+- **Every local markdown link in tracked docs resolves (file target + heading/attr-list anchor)** — check —
+  `scripts/check_markdown_links.py`
 - **Server-supplied path components pass `safe_join` (`lib/path_safety.py`)** — test + prompt-only — traversal tests per
   path builder; new call sites are prompt-only
 - **No sentinel objects on the wire — explicit JSON-representable tagged values only** — prompt-only — mechanize with

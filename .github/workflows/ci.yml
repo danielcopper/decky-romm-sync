@@ -161,6 +161,9 @@ jobs:
       - name: Check dependency locks satisfy their source constraints
         run: python scripts/check_lock_sync.py
 
+      - name: Check local markdown links resolve (file + anchor)
+        run: python scripts/check_markdown_links.py
+
   # Skipped when SONAR_TOKEN is structurally unavailable: Dependabot PRs and
   # PRs from forks (GitHub withholds secrets from `pull_request` runs whose head
   # is not this repo). SonarSource does not support forked-PR analysis at all, so
