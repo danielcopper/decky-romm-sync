@@ -878,6 +878,43 @@ describe("SystemPage", () => {
       expect(container.textContent).toContain("0 / 1 files");
       expect(container.textContent).toContain("1 missing");
     });
+
+    it("renders 'Not managed by the plugin' + a neutral grey dot for an unmanaged platform (#1520)", async () => {
+      // Server files present but none registry-known → backend ships bios_level
+      // "unmanaged". The System page must render honest neutral text (not a false
+      // all-clear) with the shared grey status dot, and never flag it "BIOS needed".
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({
+            platform_slug: "psvita",
+            bios_level: "unmanaged",
+            files: [
+              {
+                id: 1,
+                file_name: "unknown.bin",
+                size: 100,
+                md5: "x",
+                downloaded: false,
+                required: false,
+                description: "?",
+                hash_valid: null,
+                classification: "unknown",
+              },
+            ],
+          }),
+        ],
+      });
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(container.textContent).toContain("Not managed by the plugin");
+      expect(container.textContent).toContain("1 file(s) on server the plugin doesn't recognise");
+      // Neutral grey dot via the shared helper — never green.
+      expect(container.innerHTML).toContain("#8f98a0");
+      expect(container.innerHTML).not.toContain("#5ba32b");
+      // Not flagged as needing BIOS (title carries no "BIOS needed" suffix).
+      expect(container.textContent).not.toContain("BIOS needed");
+    });
   });
 
   // ------------------------------------------------------------------

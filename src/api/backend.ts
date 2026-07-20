@@ -81,7 +81,7 @@ export interface CachedGameDetail {
   rom_file?: string;
   ra_id?: number | null;
   achievement_summary?: AchievementSummary | null;
-  bios_level?: "ok" | "partial" | "missing" | null;
+  bios_level?: "ok" | "partial" | "missing" | "unmanaged" | null;
   bios_label?: string | null;
   save_sync_display?: SaveSyncDisplay | null;
   stale_fields?: string[];
@@ -293,7 +293,7 @@ export const getBiosStatus = callable<
   [number],
   {
     bios_status: CachedGameDetail["bios_status"];
-    bios_level: "ok" | "partial" | "missing" | null;
+    bios_level: "ok" | "partial" | "missing" | "unmanaged" | null;
     bios_label: string | null;
   }
 >("get_bios_status");

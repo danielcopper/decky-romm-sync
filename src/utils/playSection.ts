@@ -16,7 +16,7 @@ import { formatTimeAgo } from "./formatters";
  *  `get_platform_core_info` path — it no longer rides the BIOS payload (#923). */
 export interface BiosInfoFields {
   biosNeeded: boolean;
-  biosStatus: "ok" | "partial" | "missing" | null;
+  biosStatus: "ok" | "partial" | "missing" | "unmanaged" | null;
   biosLabel: string;
 }
 
@@ -68,7 +68,10 @@ export function applySaveSyncDisplay(
  *  backend reported a BIOS need (a truthy `bios_status`), so `biosNeeded` is
  *  always `true` here. Core data is sourced separately via `extractCoreInfo`
  *  (the BIOS payload no longer carries it, #923). */
-export function extractBiosInfo(level: "ok" | "partial" | "missing" | null, label: string | null): BiosInfoFields {
+export function extractBiosInfo(
+  level: "ok" | "partial" | "missing" | "unmanaged" | null,
+  label: string | null,
+): BiosInfoFields {
   return {
     biosNeeded: true,
     biosStatus: level,

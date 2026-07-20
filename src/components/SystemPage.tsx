@@ -20,6 +20,7 @@ import {
 } from "../api/backend";
 import type { FirmwarePlatformExt } from "../types";
 import { scrollToTop } from "../utils/scrollHelpers";
+import { biosColorForLevel } from "../utils/biosColor";
 import { detach } from "../utils/detach";
 import { getEventTarget } from "../utils/events";
 import { buildEmulatorMenu } from "../utils/emulatorMenu";
@@ -271,16 +272,19 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
     // local count comparison only when the level is absent from the payload.
     const requiredReady = platform.bios_level == null ? requiredDone === requiredCount : platform.bios_level === "ok";
 
+    // "unmanaged": the platform has server files but none map to a registry
+    // entry, so the plugin makes no readiness claim. Render neutral grey + honest
+    // text instead of a false all-clear. requiredCount is always 0 here (no
+    // registry-known files), so it is never counted as a "BIOS needed" platform.
+    const isUnmanaged = platform.bios_level === "unmanaged";
+
     const needsAttention = platform.has_games && requiredCount > 0 && !requiredReady;
-    const { summaryLabel, summaryDescription } = getBiosSummary(
-      requiredCount,
-      requiredDone,
-      requiredReady,
-      optionalMissing,
-      done,
-      total,
-      allDone,
-    );
+    const { summaryLabel, summaryDescription } = isUnmanaged
+      ? {
+          summaryLabel: "Not managed by the plugin",
+          summaryDescription: `${total} file(s) on server the plugin doesn't recognise`,
+        }
+      : getBiosSummary(requiredCount, requiredDone, requiredReady, optionalMissing, done, total, allDone);
     const hasRequiredMissing = requiredCount > 0 && !requiredReady;
     const hasOptionalMissing = optionalMissing > 0;
 
@@ -309,7 +313,28 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
           </PanelSectionRow>
         )}
         <PanelSectionRow>
-          <Field label={summaryLabel} description={summaryDescription} />
+          <Field
+            label={
+              isUnmanaged ? (
+                <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: "8px",
+                      height: "8px",
+                      borderRadius: "50%",
+                      backgroundColor: biosColorForLevel(platform.bios_level ?? null),
+                      flexShrink: 0,
+                    }}
+                  />
+                  {summaryLabel}
+                </span>
+              ) : (
+                summaryLabel
+              )
+            }
+            description={summaryDescription}
+          />
         </PanelSectionRow>
         <PanelSectionRow>
           <ButtonItem

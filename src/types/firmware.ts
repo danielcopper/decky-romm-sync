@@ -74,7 +74,7 @@ export interface FirmwarePlatformExt extends FirmwarePlatform {
   // the ok/partial/missing decision and display counts off the payload instead
   // of re-deriving the threshold logic. The optional-missing breakdown stays a
   // local file-level computation (a richer axis the 3-state level doesn't model).
-  bios_level?: "ok" | "partial" | "missing" | null;
+  bios_level?: "ok" | "partial" | "missing" | "unmanaged" | null;
   required_count?: number;
   required_downloaded?: number;
   server_count?: number;
@@ -108,10 +108,12 @@ export interface BiosStatus {
   required_downloaded?: number;
   unknown_count?: number;
   files?: BiosFileStatus[];
-  // ok/partial/missing trichotomy computed by the backend (compute_bios_level)
+  // unmanaged/ok/partial/missing state computed by the backend (compute_bios_level)
   // so the frontend reads the classification off the payload instead of
-  // re-deriving the threshold logic. Present only when needs_bios is true.
-  bios_level?: "ok" | "partial" | "missing" | null;
+  // re-deriving the threshold logic. "unmanaged" means the platform has server
+  // files but none map to a registry entry (no coverage). Present only when
+  // needs_bios is true.
+  bios_level?: "ok" | "partial" | "missing" | "unmanaged" | null;
 }
 
 export interface FirmwareDownloadResult {

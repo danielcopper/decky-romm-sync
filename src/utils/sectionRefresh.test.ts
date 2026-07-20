@@ -17,7 +17,7 @@ interface ActiveSlotState {
 
 interface BiosState {
   biosNeeded: boolean;
-  biosStatus: "ok" | "partial" | "missing" | null;
+  biosStatus: "ok" | "partial" | "missing" | "unmanaged" | null;
   biosLabel: string;
   unrelated: string;
 }

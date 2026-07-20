@@ -117,7 +117,7 @@ interface InfoState {
    *  "Save sync off" WarningCard. */
   savefilesInContentDir: boolean;
   biosNeeded: boolean;
-  biosStatus: "ok" | "partial" | "missing" | null; // NOSONAR(typescript:S4323) — inline union inside InfoState; extracting an alias adds indirection for no reuse benefit.
+  biosStatus: "ok" | "partial" | "missing" | "unmanaged" | null; // NOSONAR(typescript:S4323) — inline union inside InfoState; extracting an alias adds indirection for no reuse benefit.
   biosLabel: string;
   activeCoreLabel: string | null;
   activeCoreIsDefault: boolean;
@@ -769,7 +769,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         if (info.romId) {
           const refreshed = await getBiosStatus(info.romId).catch(() => ({
             bios_status: null as BiosStatus | null,
-            bios_level: null as "ok" | "partial" | "missing" | null,
+            bios_level: null as "ok" | "partial" | "missing" | "unmanaged" | null,
             bios_label: null as string | null,
           }));
           if (refreshed.bios_status) {

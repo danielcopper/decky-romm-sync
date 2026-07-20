@@ -2759,6 +2759,67 @@ describe("RomMGameInfoPanel", () => {
         expect(container.textContent).toContain("All ready");
       }
     });
+
+    it("unmanaged: grey header dot + honest text, and the 'files on server' note survives all-unknown (#1520)", async () => {
+      // Every server file is unknown (no registry coverage) → backend ships
+      // bios_level "unmanaged". The panel must render the neutral grey dot + honest
+      // header text (never a false "All ready"), and the "files on server" note —
+      // previously swallowed when knownFiles is empty — must still render.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1,
+        bios_status: {
+          needs_bios: true,
+          platform_slug: "psvita",
+          server_count: 2,
+          local_count: 0,
+          all_downloaded: false,
+          required_count: 0,
+          required_downloaded: 0,
+          unknown_count: 2,
+          known_count: 0,
+          files: [
+            {
+              file_name: "a.bin",
+              downloaded: false,
+              local_path: "",
+              required: false,
+              description: "",
+              classification: "unknown",
+              cores: {},
+              used_by_active: true,
+            },
+            {
+              file_name: "b.bin",
+              downloaded: false,
+              local_path: "",
+              required: false,
+              description: "",
+              classification: "unknown",
+              cores: {},
+              used_by_active: true,
+            },
+          ],
+        } as never,
+        bios_level: "unmanaged",
+        metadata: makeMetadata(),
+        stale_fields: [],
+      });
+      const { container } = render(<RomMGameInfoPanel appId={testAppId} />);
+      await flushAsync();
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "bios" } }));
+        await Promise.resolve();
+      });
+      // Neutral grey dot via the shared helper — never the green "all ready" dot.
+      expect(container.innerHTML).toContain("#8f98a0");
+      expect(container.innerHTML).not.toContain("#5ba32b");
+      // Honest header text, not "All ready".
+      expect(container.textContent).toContain("Not managed by the plugin");
+      expect(container.textContent).not.toContain("All ready");
+      // Swallowed-note fix: the note renders even though every file is unknown.
+      expect(container.textContent).toContain("2 files on server the plugin doesn't recognise");
+    });
   });
 
   describe("biosStatusFromCache + saveStatusFromCache (cache-first rendering)", () => {

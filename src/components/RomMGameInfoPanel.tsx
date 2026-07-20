@@ -84,12 +84,13 @@ interface PanelState {
   metadata: RomMetadata | null;
   coverBase64: string | null;
   biosStatus: BiosStatus | null;
-  // ok/partial/missing classification — single source of truth is the backend
-  // (`compute_bios_level`); both the cache path and the bios-change refresh path
-  // thread `bios_level` straight off their respective payloads, never re-deriving
-  // it. Drives the BIOS status-dot color via `biosColorForLevel`. null when no
-  // BIOS need.
-  biosLevel: "ok" | "partial" | "missing" | null;
+  // unmanaged/ok/partial/missing classification — single source of truth is the
+  // backend (`compute_bios_level`); both the cache path and the bios-change refresh
+  // path thread `bios_level` straight off their respective payloads, never
+  // re-deriving it. Drives the BIOS status-dot color via `biosColorForLevel`.
+  // "unmanaged" (server files present, none registry-known) renders neutral grey.
+  // null when no BIOS need.
+  biosLevel: "ok" | "partial" | "missing" | "unmanaged" | null;
   // Core info comes from the dedicated get_platform_core_info path (#923), not
   // from biosStatus — the two concerns are decoupled.
   coreInfo: CoreInfo | null;
@@ -1026,7 +1027,11 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     // below stays the panel's own concern (per-surface wording).
     const biosColor = biosColorForLevel(state.biosLevel);
     let biosLabel: string;
-    if (reqCount != null && reqDone != null) {
+    if (state.biosLevel === "unmanaged") {
+      // No registry coverage — the plugin makes no readiness claim. Honest text
+      // over the neutral grey dot, never a false "All ready".
+      biosLabel = "Not managed by the plugin";
+    } else if (reqCount != null && reqDone != null) {
       biosLabel =
         reqDone >= reqCount
           ? `All required ready (${localCount}/${serverCount})`
@@ -1072,71 +1077,78 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     const knownFiles = (bios.files ?? []).filter((f) => f.classification !== "unknown");
     const unknownCount = (bios.files ?? []).length - knownFiles.length;
 
-    if (knownFiles.length > 0) {
-      const fileElements = knownFiles.map((f) => {
-        // Dot color logic:
-        // Green: downloaded
-        // Red: missing + required by current core
-        // Orange: missing + required by another core (not current)
-        // Grey: optional for current core or not used by any known core
-        let dotColor: string;
-        if (f.downloaded) {
-          dotColor = "#5ba32b";
-        } else if (f.used_by_active !== false && f.classification === "required") {
-          dotColor = "#d94126";
-        } else if (!f.used_by_active && f.cores) {
-          const requiredByOther = Object.values(f.cores).some((c) => c.required);
-          dotColor = requiredByOther ? "#d4a72c" : "#8f98a0";
-        } else {
-          dotColor = "#8f98a0";
-        }
-
-        // Build per-core lines
-        const coreLines = f.cores ? buildBiosCoreLines(f.cores, coreLabelMap, state.coreInfo?.active_core) : [];
-
-        return createElement(
-          "div",
-          { key: f.file_name, className: "romm-panel-file-row" },
-          createElement("span", {
-            key: "dot",
-            className: "romm-status-dot",
-            style: { backgroundColor: dotColor },
-          }),
-          createElement("span", { key: "name", className: "romm-panel-file-name" }, f.description || f.file_name),
-          coreLines.length > 0
-            ? createElement(
-                "div",
-                {
-                  key: "cores",
-                  style: {
-                    flexBasis: "100%",
-                    display: "flex",
-                    flexDirection: "column" as const,
-                    gap: "2px",
-                    marginLeft: "18px",
-                  },
-                },
-                ...coreLines,
-              )
-            : null,
-        );
-      });
-
-      // Add unknown count note if any
-      if (unknownCount > 0) {
-        fileElements.push(
-          createElement(
-            "div",
-            {
-              key: "unknown-note",
-              className: "romm-panel-file-row",
-              style: { color: "rgba(255, 255, 255, 0.4)", fontSize: "12px", marginTop: "8px" },
-            },
-            `+ ${unknownCount} other file${unknownCount === 1 ? "" : "s"} on server (not required by any known core)`,
-          ),
-        );
+    const fileElements = knownFiles.map((f) => {
+      // Dot color logic:
+      // Green: downloaded
+      // Red: missing + required by current core
+      // Orange: missing + required by another core (not current)
+      // Grey: optional for current core or not used by any known core
+      let dotColor: string;
+      if (f.downloaded) {
+        dotColor = "#5ba32b";
+      } else if (f.used_by_active !== false && f.classification === "required") {
+        dotColor = "#d94126";
+      } else if (!f.used_by_active && f.cores) {
+        const requiredByOther = Object.values(f.cores).some((c) => c.required);
+        dotColor = requiredByOther ? "#d4a72c" : "#8f98a0";
+      } else {
+        dotColor = "#8f98a0";
       }
 
+      // Build per-core lines
+      const coreLines = f.cores ? buildBiosCoreLines(f.cores, coreLabelMap, state.coreInfo?.active_core) : [];
+
+      return createElement(
+        "div",
+        { key: f.file_name, className: "romm-panel-file-row" },
+        createElement("span", {
+          key: "dot",
+          className: "romm-status-dot",
+          style: { backgroundColor: dotColor },
+        }),
+        createElement("span", { key: "name", className: "romm-panel-file-name" }, f.description || f.file_name),
+        coreLines.length > 0
+          ? createElement(
+              "div",
+              {
+                key: "cores",
+                style: {
+                  flexBasis: "100%",
+                  display: "flex",
+                  flexDirection: "column" as const,
+                  gap: "2px",
+                  marginLeft: "18px",
+                },
+              },
+              ...coreLines,
+            )
+          : null,
+      );
+    });
+
+    // The "files on server" note is independent of knownFiles.length so it
+    // survives the unmanaged case (every file unknown → no known files); there it
+    // is the honest signal about what the server holds. When there are known
+    // files it reads as a "+ N other files" footnote.
+    if (unknownCount > 0) {
+      const unknownNote =
+        knownFiles.length > 0
+          ? `+ ${unknownCount} other file${unknownCount === 1 ? "" : "s"} on server (not required by any known core)`
+          : `${unknownCount} file${unknownCount === 1 ? "" : "s"} on server the plugin doesn't recognise`;
+      fileElements.push(
+        createElement(
+          "div",
+          {
+            key: "unknown-note",
+            className: "romm-panel-file-row",
+            style: { color: "rgba(255, 255, 255, 0.4)", fontSize: "12px", marginTop: "8px" },
+          },
+          unknownNote,
+        ),
+      );
+    }
+
+    if (fileElements.length > 0) {
       biosColumn.push(
         createElement("div", { key: "bios-file-list", className: "romm-panel-file-list" }, ...fileElements),
       );
