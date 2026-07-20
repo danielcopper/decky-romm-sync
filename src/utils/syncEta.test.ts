@@ -11,6 +11,7 @@ import {
   displayedEtaSeconds,
   resetEta,
   weightedCoarseFraction,
+  latchedCoarseFraction,
   trimStalledPrefix,
   type EtaSample,
 } from "./syncEta";
@@ -580,5 +581,93 @@ describe("displayedEtaSeconds (sticky countdown deadline)", () => {
     expect(displayedEtaSeconds(6000)).not.toBeNull();
     resetEta();
     expect(displayedEtaSeconds(6000)).toBeNull();
+  });
+});
+
+describe("latchedCoarseFraction — monotonic high-water bar latch (#1509)", () => {
+  beforeEach(() => resetEta());
+
+  // The confirmed repro, driven through a correction BETWEEN two reads — a single
+  // read cannot catch this class, which is how the dip survived #1506's first
+  // review. Same test proves the HARD scope boundary: the correction that holds
+  // the bar still grows totalRoms for the countdown.
+  it("holds the bar on an upward weight correction while the countdown still grows totalRoms", () => {
+    beginEtaRun("run-1", [100, 0], 100);
+    // Unit 0's 100 over the whole 100-weight plan → the bar reads full.
+    const before = latchedCoarseFraction(1, 0, 2);
+    expect(before).toBe(1);
+
+    // The trailing unit the plan zero-weighted actually dispatches: 0 → 400. That
+    // grows totalRoms 100 → 500 (correct — real work lengthens the countdown),
+    // which would drop the pure fraction to 100/500 = 0.2.
+    observeUnitTotal(1, 400);
+
+    // BAR: the latch floors it at the high-water mark instead of retracting.
+    const after = latchedCoarseFraction(1, 0, 2);
+    expect(after).toBe(1);
+    expect(after).toBeGreaterThanOrEqual(before ?? 0);
+
+    // COUNTDOWN: the very same correction is visible to the live ETA. Measure unit
+    // 1 at 25 items/s over a 6s window; remaining reads against the grown total 500.
+    observeApplyProgress(2, 50, 0); // processed = 100 (unit 0) + 50 = 150
+    observeApplyProgress(2, 200, 6000); // processed = 300, rate = (300-150)/6s = 25/s
+    // remaining = (500 - 300) / 25 = 8s. With the un-grown total of 100 the
+    // countdown would have clamped to 0 — proof totalRoms still grew.
+    expect(liveEtaSeconds()).toBe(8);
+  });
+
+  // Non-vacuous guard: the un-latched pure reader DOES dip across the exact same
+  // correction, so reverting MainPage to it (the pre-#1509 state) reintroduces the
+  // bug and the test above would fail. The latch is load-bearing.
+  it("the un-latched reader dips on the same upward correction (latch is load-bearing)", () => {
+    beginEtaRun("run-1", [100, 0], 100);
+    const before = weightedCoarseFraction(1, 0, 2) ?? -1;
+    expect(before).toBe(1);
+    observeUnitTotal(1, 400);
+    const after = weightedCoarseFraction(1, 0, 2) ?? -1;
+    expect(after).toBeCloseTo(0.2, 10);
+    expect(after).toBeLessThan(before);
+  });
+
+  // The latch is a floor, not a freeze: a DOWNWARD correction (raw rom_count seeded
+  // high, corrected to a smaller real delta) must still let the bar climb.
+  it("a downward weight correction still lets the bar climb", () => {
+    beginEtaRun("run-1", [100, 900], 1000);
+    const start = latchedCoarseFraction(1, 0, 2) ?? -1; // 100 / 1000 = 0.1
+    expect(start).toBeCloseTo(0.1, 10);
+    observeUnitTotal(1, 100); // total shrinks 1000 → 200, weights [100, 100]
+    // The bar keeps RISING as unit 1 progresses — never pinned at the 0.1 start.
+    const readings = [0, 0.25, 0.5, 0.75, 1].map((w) => latchedCoarseFraction(1, w, 2) ?? -1);
+    for (let i = 1; i < readings.length; i++) {
+      expect(readings[i]).toBeGreaterThanOrEqual(readings[i - 1] ?? 0);
+    }
+    expect(readings[0]).toBeGreaterThanOrEqual(start); // 0.5 ≥ 0.1, moved forward
+    expect(readings[readings.length - 1]).toBe(1);
+  });
+
+  it("passes the reader's null fallbacks through untouched", () => {
+    // no run
+    expect(latchedCoarseFraction(1, 0.5, 2)).toBeNull();
+    // unit-count mismatch (stale plan)
+    beginEtaRun("run-1", [100, 300], 400);
+    expect(latchedCoarseFraction(1, 0.5, 4)).toBeNull();
+    // zero total weight (all-predicted-skip plan)
+    beginEtaRun("run-2", [0, 0], 0);
+    expect(latchedCoarseFraction(1, 0.5, 2)).toBeNull();
+  });
+
+  it("does not leak the latched value into a following null fallback", () => {
+    beginEtaRun("run-1", [100, 300], 400);
+    expect(latchedCoarseFraction(2, 0, 2)).toBe(1); // real read latches high-water = 1
+    // A stale-plan read (unit-count mismatch) must return null, not the latched 1.
+    expect(latchedCoarseFraction(1, 0.5, 4)).toBeNull();
+  });
+
+  it("starts a fresh latch per run — a second run does not inherit the first's high-water", () => {
+    beginEtaRun("run-1", [100, 300], 400);
+    expect(latchedCoarseFraction(2, 0, 2)).toBe(1); // run 1 latches to full
+    // Run 2's honest 10% must not be floored to 1 by run 1's high-water.
+    beginEtaRun("run-2", [100, 900], 1000);
+    expect(latchedCoarseFraction(1, 0, 2)).toBeCloseTo(0.1, 10);
   });
 });

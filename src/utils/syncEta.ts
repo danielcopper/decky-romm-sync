@@ -164,6 +164,15 @@ interface EtaRunState {
   // because observeUnitTotal can raise a mispredicted skip's weight off zero
   // mid-run, which would shorten the live prefix and march the bar backwards.
   zeroPrefix: number;
+  // The highest coarse-bar fraction shown this run, LATCHED at its high-water
+  // mark (#1509). observeUnitTotal grows totalRoms when a mispredicted TRAILING
+  // skip actually dispatches — correct for the countdown (real work lengthens
+  // it), but it grows weightedCoarseFraction's denominator while the completed
+  // numerator stands, so an upward weight correction would retract bar width
+  // already shown. latchedCoarseFraction floors the bar at this mark so it only
+  // ever moves forward; the countdown still sees the grown total. The zeroPrefix
+  // floor covers only LEADING zero-weight units, so it can't guard a tail one.
+  coarseHighWater: number;
 }
 
 let _run: EtaRunState | null = null;
@@ -191,6 +200,7 @@ export function beginEtaRun(runId: string, unitWeights: number[], totalRoms: num
     lastSampleMs: 0,
     deadlineMs: null,
     zeroPrefix: countZeroPrefix(unitWeights),
+    coarseHighWater: 0,
   };
 }
 
@@ -328,6 +338,10 @@ export function displayedEtaSeconds(nowMs: number): number | null {
  * unit count doesn't match ``totalUnits`` (a stale plan from another run), or
  * when the total weight is zero (an all-predicted-skip plan has no widths to
  * apportion).
+ *
+ * A pure reader of the run snapshot. The monotonic bar latch that keeps an
+ * upward weight correction from retracting shown width lives in
+ * {@link latchedCoarseFraction}, the wrapper MainPage actually calls.
  */
 export function weightedCoarseFraction(
   completedUnits: number,
@@ -350,6 +364,35 @@ export function weightedCoarseFraction(
   const weighted = Math.min(1, (completedWeight + within * runningWeight) / totalWeight);
   const floor = zeroPrefixFloor(_run.zeroPrefix, completedUnits, within, totalUnits);
   return Math.min(1, floor + (1 - floor) * weighted);
+}
+
+/**
+ * {@link weightedCoarseFraction} with a run-scoped monotonic high-water latch —
+ * the fraction MainPage renders, never below the highest it has already shown
+ * this run (#1509). The pure reader can dip when {@link observeUnitTotal}
+ * corrects a mispredicted TRAILING skip UP: totalRoms grows (correct — the
+ * countdown must lengthen for the real work) while the completed numerator
+ * stands, shrinking the ratio, so the bar would retract width it already showed.
+ * Flooring at the high-water mark holds the bar there instead; the countdown
+ * still reads the grown total, since the latch touches only this output. Composes
+ * ON TOP of the value the reader returns (the #1506 leading-zero floor included).
+ *
+ * The latch fires ONLY on a real numeric fraction. The reader's three ``null``
+ * fallbacks (no run, unit-count mismatch, zero total weight) pass through
+ * untouched — ``null`` means "fall back to index weighting", and latching across
+ * it would leak a stale value into the fallback. The high-water lives in ``_run``
+ * and is reset per run by {@link beginEtaRun} / {@link resetEta}.
+ */
+export function latchedCoarseFraction(
+  completedUnits: number,
+  withinUnitFraction: number,
+  totalUnits: number,
+): number | null {
+  const fraction = weightedCoarseFraction(completedUnits, withinUnitFraction, totalUnits);
+  if (fraction === null || _run === null) return fraction;
+  const latched = Math.max(fraction, _run.coarseHighWater);
+  _run.coarseHighWater = latched;
+  return latched;
 }
 
 /**

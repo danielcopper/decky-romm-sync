@@ -692,6 +692,17 @@ bar in proportion to its real work. It falls back to the old equal-per-unit inde
 (QAM opened mid-run before any `sync_plan`, an older backend) or the plan can't apportion (unit-count mismatch, all-zero
 weights).
 
+Two run-scoped latches keep the coarse fraction monotonic so the bar only ever moves forward. A run's **leading**
+zero-weight units still refresh covers, so rather than pinning the bar to zero they each claim an equal `1/totalUnits`
+slice as a floor, with the weighted shares compressed into the band above it (#1506); that floor is held at its
+high-water mark, so raising a mispredicted skip off zero can't shorten the prefix and retract it. On top of that, the
+returned fraction itself is latched at the run's high-water mark by `latchedCoarseFraction` — the wrapper MainPage
+actually calls, keeping `weightedCoarseFraction` a pure reader (#1509): when `observeUnitTotal` corrects a mispredicted
+**trailing** skip up (0 → its real delta) it correctly grows the countdown's `totalRoms` (the run really is longer), but
+that shrinks the bar's completed/total ratio and would retract width already shown, so the bar holds while the countdown
+lengthens. Both latches touch only the bar output; the live ETA still reads the corrected total. The `null` fallbacks
+(no run, unit-count mismatch, zero total weight) pass through the wrapper un-latched.
+
 The **within-unit fill is itself split into three monotonic sub-slices** (#1407, `withinUnitFraction` in
 `src/utils/syncProgress.ts`): fetch (`FETCH_SHARE` 15%) → covers (`COVERS_SHARE` 25%) → apply (`APPLY_SHARE` 60%). A
 unit is worked in that order — paginate the ROM list, download/refresh cover art, then create the shortcuts — and each
