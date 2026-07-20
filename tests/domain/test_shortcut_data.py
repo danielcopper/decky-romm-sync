@@ -347,6 +347,18 @@ class TestBuildShortcutsData:
         assert result[0]["igdb_id"] is None
         assert result[0]["sgdb_id"] is None
 
+    def test_carries_fs_size_bytes_from_raw_rom(self):
+        # The server-reported size (#1395) rides the built dict onto the commit.
+        roms = [{"id": 1, "name": "Game A", "fs_size_bytes": 3_145_728}]
+        result = build_shortcuts_data(roms, "/plugin", {}, {})
+        assert result[0]["fs_size_bytes"] == 3_145_728
+
+    def test_missing_fs_size_bytes_is_none(self):
+        # A raw ROM without the key builds None — "size unknown".
+        roms = [{"id": 1, "name": "Game A"}]
+        result = build_shortcuts_data(roms, "/plugin", {}, {})
+        assert result[0]["fs_size_bytes"] is None
+
     def test_exe_path_contains_rom_launcher(self):
         plugin_dir = "/home/deck/homebrew/plugins/decky-romm-sync"
         roms = [{"id": 1, "name": "Game"}]

@@ -230,6 +230,10 @@ def build_shortcuts_data(
             "igdb_id": rom.get("igdb_id"),
             "sgdb_id": rom.get("sgdb_id"),
             "ra_id": rom.get("ra_id"),
+            # Server-reported ROM size in bytes (#1395), carried through so the
+            # commit persists it on the Rom aggregate (it rides the sync UPSERT
+            # like the version dimensions). Absent/None → "size unknown".
+            "fs_size_bytes": rom.get("fs_size_bytes"),
             "cover_path": "",
             # The sibling-group key + version dimensions (ADR-0021), extracted by
             # the shared helper so the sync build and the version-switch persist

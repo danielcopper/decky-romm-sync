@@ -280,6 +280,9 @@ class GameDetailService:
             "revision": rom.revision,
             "tags": list(rom.tags),
             "is_main_sibling": rom.is_main_sibling,
+            # Server-reported ROM size in bytes (#1395), surfaced read-only so the
+            # frontend can show the space a download needs. NULL = size unknown.
+            "fs_size_bytes": rom.fs_size_bytes,
         }
 
     async def get_bios_status(self, rom_id) -> dict[str, Any]:

@@ -40,6 +40,29 @@ class TestSynced:
         assert rom.sgdb_id is None
         assert rom.ra_id is None
 
+    def test_carries_fs_size_bytes(self):
+        rom = Rom.synced(
+            rom_id=42,
+            platform_slug="snes",
+            name="Super Metroid",
+            fs_name="Super Metroid.sfc",
+            shortcut_app_id=123456789,
+            synced_at="2026-05-28T10:00:00",
+            fs_size_bytes=3_145_728,
+        )
+        assert rom.fs_size_bytes == 3_145_728
+
+    def test_fs_size_bytes_defaults_to_none_when_omitted(self):
+        rom = Rom.synced(
+            rom_id=7,
+            platform_slug="gba",
+            name="Metroid Fusion",
+            fs_name="Metroid Fusion.gba",
+            shortcut_app_id=987654321,
+            synced_at="2026-05-28T11:00:00",
+        )
+        assert rom.fs_size_bytes is None
+
     def test_non_positive_rom_id_raises(self):
         with pytest.raises(ValueError, match="rom_id must be positive"):
             Rom.synced(

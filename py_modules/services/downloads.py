@@ -514,6 +514,13 @@ class DownloadService:
 
         with self._uow_factory() as uow:
             uow.rom_installs.save(install)
+            # Download write-back (#1395): top up the ROM's size from the detail
+            # we already fetched, so the game-detail UI shows it without waiting
+            # for the next sync. Guarded on truthiness — a missing/zero size must
+            # never overwrite a good persisted value.
+            size = rom_detail.get("fs_size_bytes")
+            if size:
+                uow.roms.set_fs_size_bytes(int(rom_id), size)
         return file_path, None
 
     def _resolve_safe_extract_dir_name(self, rom_detail: dict[str, Any]) -> str:

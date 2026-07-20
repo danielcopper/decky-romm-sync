@@ -514,6 +514,7 @@ class SyncReporter:
                 revision=built.get("revision") or "",
                 tags=tuple(built.get("tags") or ()),
                 is_main_sibling=bool(built.get("is_main_sibling", False)),
+                fs_size_bytes=built.get("fs_size_bytes"),
             )
         except ValueError as e:
             self._logger.warning(f"Skipping invalid ROM {rom_id} during commit: {e}")

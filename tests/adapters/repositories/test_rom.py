@@ -416,6 +416,66 @@ class TestVersionMetadata:
         assert after.sibling_group_key == "igdb:99:5"
 
 
+class TestFsSizeBytes:
+    """``fs_size_bytes`` is a sync column (#1395): the server-reported ROM size
+    rides the UPSERT and refreshes on every sync (like the version dimensions),
+    and ``set_fs_size_bytes`` is the between-syncs download write-back."""
+
+    def test_round_trips_via_get(self, uow: SqliteUnitOfWork):
+        rom = _rom(1)
+        rom.fs_size_bytes = 3_145_728
+        uow.roms.save(rom)
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.fs_size_bytes == 3_145_728
+
+    def test_none_round_trips_as_null(self, uow: SqliteUnitOfWork):
+        # A fresh Rom (no size) reads back NULL — the "unknown" state the frontend
+        # hides on.
+        uow.roms.save(_rom(1))
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.fs_size_bytes is None
+        assert uow._conn is not None
+        stored = uow._conn.execute("SELECT fs_size_bytes FROM roms WHERE rom_id = 1").fetchone()[0]
+        assert stored is None
+
+    def test_set_fs_size_bytes_updates_persisted_row(self, uow: SqliteUnitOfWork):
+        # The download write-back: a persisted row's size is topped up in place.
+        uow.roms.save(_rom(1))
+        uow.roms.set_fs_size_bytes(1, 8_388_608)
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.fs_size_bytes == 8_388_608
+
+    def test_set_fs_size_bytes_none_writes_sql_null(self, uow: SqliteUnitOfWork):
+        rom = _rom(1)
+        rom.fs_size_bytes = 1234
+        uow.roms.save(rom)
+        uow.roms.set_fs_size_bytes(1, None)
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.fs_size_bytes is None
+
+    def test_rides_the_upsert_and_refreshes_on_resync(self, uow: SqliteUnitOfWork):
+        # Unlike the pin columns, fs_size_bytes rides the sync UPSERT: a re-sync
+        # with a new server size OVERWRITES the prior value.
+        first = _rom(1)
+        first.fs_size_bytes = 1_000_000
+        uow.roms.save(first)
+
+        resaved = _rom(1)
+        resaved.fs_size_bytes = 2_000_000
+        uow.roms.save(resaved)
+
+        loaded = uow.roms.get(1)
+        assert loaded is not None
+        assert loaded.fs_size_bytes == 2_000_000
+
+
 class TestEmulatorOverride:
     def test_round_trips_via_get(self, uow: SqliteUnitOfWork):
         uow.roms.save(_rom(1))

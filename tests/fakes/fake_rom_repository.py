@@ -99,6 +99,11 @@ class FakeRomRepository:
         for rom in self._roms.values():
             rom.applied_launch_options = None
 
+    def set_fs_size_bytes(self, rom_id: int, size: int | None) -> None:
+        rom = self._roms.get(rom_id)
+        if rom is not None:
+            rom.fs_size_bytes = size
+
     def _snapshot(self) -> dict[int, Rom]:
         return copy.deepcopy(self._roms)
 

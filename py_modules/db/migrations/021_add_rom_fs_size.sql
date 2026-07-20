@@ -1,0 +1,34 @@
+-- =============================================================================
+-- 021_add_rom_fs_size.sql — persist a ROM's server-reported byte size
+-- #1395 (show download size / space required before a ROM is downloaded)
+-- =============================================================================
+--
+-- RomM returns ``fs_size_bytes`` — the total on-server size of a ROM's file(s)
+-- — on both its list and detail responses, the same value in each. The plugin
+-- needs it at the frontend before a download so the game-detail UI can show how
+-- much space the download will take. This column carries that fact locally.
+--
+--   * roms.fs_size_bytes — the server-reported ROM size in bytes.
+--
+-- Nullable because the value is not always known:
+--
+--   * A pre-migration row has no size until the next sync re-writes it.
+--   * A platform the current session wholesale-skipped is not re-applied, so a
+--     row it never touched keeps whatever it had (NULL for a fresh row).
+--
+-- ``NULL`` = unknown; the frontend treats it as "size unknown, hide it".
+--
+-- Backfill needs no data-migration pass. The size is a server-derived fact, so
+-- it rides the sync UPSERT exactly like the version-metadata columns (regions /
+-- sibling_group_key / …, migration 008) — set directly from the fetched dict,
+-- no confirmed-else-preserved merge — and every applying sync re-writes the
+-- authoritative server value onto each row it touches. Between syncs a completed
+-- download also tops the value up (the download write-back reads the ROM detail
+-- it already fetched), so a freshly downloaded ROM shows its size without waiting
+-- for the next sync. The two paths never conflict: both write the same
+-- server-reported number.
+--
+-- Transaction-safe DDL only — the runner (adapters/sqlite_migrations.py) wraps
+-- BEGIN/COMMIT and stamps PRAGMA user_version = 21.
+-- -----------------------------------------------------------------------------
+ALTER TABLE roms ADD COLUMN fs_size_bytes INTEGER;  -- server-reported ROM size in bytes; NULL = unknown

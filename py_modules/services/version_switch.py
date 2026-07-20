@@ -738,6 +738,11 @@ class VersionSwitchService:
                 revision=meta["revision"],
                 tags=tuple(meta["tags"]),
                 is_main_sibling=meta["is_main_sibling"],
+                # Carry the server-reported size like the other available
+                # server-derived facts above (#1395) so a switch to a server-only
+                # sibling shows its download size immediately, not only after the
+                # next sync backfills it.
+                fs_size_bytes=target_dict.get("fs_size_bytes"),
             )
         except (ValueError, KeyError) as e:
             self._logger.warning(f"Version switch: could not build target row: {e}")

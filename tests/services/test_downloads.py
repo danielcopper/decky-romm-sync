@@ -560,6 +560,91 @@ class TestRomInstallForeignKey:
         assert uow.committed is False
 
 
+class TestRecordInstallFsSizeWriteBack:
+    """A completed install tops up ``roms.fs_size_bytes`` from the ROM detail (#1395).
+
+    The between-syncs freshness write-back: guarded on truthiness so a
+    missing/zero server size never clobbers a good persisted value.
+    """
+
+    def test_successful_install_stamps_server_size(self, plugin):
+        uow = plugin._uow
+        _seed_rom(uow, 42)
+
+        file_path, error = plugin._download_service._record_install_io(
+            rom_id=42,
+            rom_detail={"platform_slug": "n64", "fs_size_bytes": 3_145_728},
+            file_path="/roms/n64/game_42.z64",
+            rom_dir=None,
+            system="n64",
+            cleanup=lambda: None,
+        )
+
+        assert error is None
+        assert file_path == "/roms/n64/game_42.z64"
+        rom = uow.roms.get(42)
+        assert rom is not None
+        assert rom.fs_size_bytes == 3_145_728
+        # The install itself still persisted in the same UoW.
+        assert uow.rom_installs.get(42) is not None
+
+    def test_missing_fs_size_bytes_does_not_overwrite(self, plugin):
+        # The guard protects a good persisted value when the detail omits the size.
+        uow = plugin._uow
+        seeded = Rom.synced(
+            rom_id=42,
+            platform_slug="n64",
+            name="Game 42",
+            fs_name="game_42.z64",
+            shortcut_app_id=1042,
+            synced_at="2026-01-01T00:00:00+00:00",
+            fs_size_bytes=999_000,
+        )
+        uow.roms.save(seeded)
+
+        _, error = plugin._download_service._record_install_io(
+            rom_id=42,
+            rom_detail={"platform_slug": "n64"},  # no fs_size_bytes key
+            file_path="/roms/n64/game_42.z64",
+            rom_dir=None,
+            system="n64",
+            cleanup=lambda: None,
+        )
+
+        assert error is None
+        rom = uow.roms.get(42)
+        assert rom is not None
+        assert rom.fs_size_bytes == 999_000
+
+    def test_zero_fs_size_bytes_does_not_overwrite(self, plugin):
+        # A zero size is falsy — the guard skips the write, preserving the value.
+        uow = plugin._uow
+        seeded = Rom.synced(
+            rom_id=42,
+            platform_slug="n64",
+            name="Game 42",
+            fs_name="game_42.z64",
+            shortcut_app_id=1042,
+            synced_at="2026-01-01T00:00:00+00:00",
+            fs_size_bytes=999_000,
+        )
+        uow.roms.save(seeded)
+
+        _, error = plugin._download_service._record_install_io(
+            rom_id=42,
+            rom_detail={"platform_slug": "n64", "fs_size_bytes": 0},
+            file_path="/roms/n64/game_42.z64",
+            rom_dir=None,
+            system="n64",
+            cleanup=lambda: None,
+        )
+
+        assert error is None
+        rom = uow.roms.get(42)
+        assert rom is not None
+        assert rom.fs_size_bytes == 999_000
+
+
 class TestRemoveRom:
     @pytest.mark.asyncio
     async def test_deletes_file_and_clears_state(self, plugin, tmp_path):

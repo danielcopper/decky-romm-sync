@@ -78,8 +78,9 @@ def _set_user_version(db_path: str, version: int) -> None:
 # + 013_add_interrupted_sync_run_status + 014_add_paused_sync_run_status
 # + 015_add_applied_launch_options + 016_add_cover_source
 # + 017_add_last_sync_server_hash + 018_rename_rom_save_states
-# + 019_add_collection_sync_state + 020_add_fetch_generation).
-_SHIPPED_VERSION = 20
+# + 019_add_collection_sync_state + 020_add_fetch_generation
+# + 021_add_rom_fs_size).
+_SHIPPED_VERSION = 21
 
 # Tables after every shipped migration: the v1 set plus 006's play-session outbox,
 # 012's per-platform completion stamp, and 019's per-collection completion stamp,
@@ -1339,6 +1340,66 @@ class Test020FetchGeneration:
         finally:
             conn.close()
         assert stored == "run-abc"
+
+
+class Test021AddRomFsSize:
+    """021 — adds the nullable fs_size_bytes column to roms only (#1395)."""
+
+    def test_adds_fs_size_bytes_to_roms_only(self, tmp_path: Path):
+        # 021 ALTERs only roms; rom_installs (and every other table) is untouched.
+        db_path = str(tmp_path / "romm_sync.db")
+
+        apply_migrations(db_path)
+
+        assert _user_version(db_path) == _SHIPPED_VERSION
+        assert "fs_size_bytes" in _columns(db_path, "roms")
+        assert "fs_size_bytes" not in _columns(db_path, "rom_installs")
+
+    def test_fs_size_bytes_absent_before_021(self, tmp_path: Path):
+        # At v20 the column does not yet exist.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 20)))
+
+        assert _user_version(db_path) == 20
+        assert "fs_size_bytes" not in _columns(db_path, "roms")
+
+    def test_existing_row_reads_null_across_the_migration(self, tmp_path: Path):
+        # A row seeded before 021 keeps its data and reads NULL for the new column
+        # (unknown size), backfilled by the next sync's UPSERT.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 20)))
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute(
+                "INSERT INTO roms (rom_id, platform_slug, name, fs_name, last_synced_at) "
+                "VALUES (1, 'snes', 'Game', 'game.sfc', '2026-07-20T10:00:00')"
+            )
+        finally:
+            conn.close()
+
+        assert apply_migrations(db_path) == _SHIPPED_VERSION
+
+        conn = sqlite3.connect(db_path)
+        try:
+            value = conn.execute("SELECT fs_size_bytes FROM roms WHERE rom_id = 1").fetchone()[0]
+        finally:
+            conn.close()
+        assert value is None
+
+    def test_fs_size_bytes_round_trips(self, tmp_path: Path):
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path)
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute(
+                "INSERT INTO roms (rom_id, platform_slug, name, fs_name, last_synced_at, fs_size_bytes) "
+                "VALUES (25135, 'dc', 'Game', 'game.gdi', '2026-07-20T06:27:12', 3145728)"
+            )
+            stored = conn.execute("SELECT fs_size_bytes FROM roms WHERE rom_id = 25135").fetchone()[0]
+        finally:
+            conn.close()
+        assert stored == 3_145_728
 
 
 def test_shipped_migrations_dir_resolves_to_real_schema():

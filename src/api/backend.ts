@@ -93,6 +93,11 @@ export interface CachedGameDetail {
   revision?: string;
   tags?: string[];
   is_main_sibling?: boolean;
+  // Server-reported ROM size in bytes (#1395), surfaced so the game-detail UI
+  // can show the space a download needs. Optional/null when the size is unknown
+  // (a pre-migration row or a not-yet-re-applied platform); the frontend hides
+  // the size in that case.
+  fs_size_bytes?: number | null;
 }
 
 // get_cached_game_detail wiring lives in utils/cachedGameDetailStore.ts so the

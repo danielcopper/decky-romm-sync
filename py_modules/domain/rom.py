@@ -17,10 +17,11 @@ class Rom:
     """One ROM as the plugin tracks it locally (identity + shortcut binding).
 
     ``sibling_group_key`` and the version dimensions (``regions`` / ``languages``
-    / ``revision`` / ``tags`` / ``is_main_sibling``) are server-derived facts
-    RomM supplies per ROM — the sibling group this dump belongs to and how it
-    differs from its siblings (region/language/revision variants). They are set
-    at construction from the fetch and refreshed on every sync (they ride the
+    / ``revision`` / ``tags`` / ``is_main_sibling``), plus ``fs_size_bytes`` (the
+    server-reported ROM size, #1395), are server-derived facts RomM supplies per
+    ROM — the sibling group this dump belongs to, how it differs from its
+    siblings (region/language/revision variants), and how large it is. They are
+    set at construction from the fetch and refreshed on every sync (they ride the
     sync UPSERT, unlike the user-pin ``emulator_override`` / ``selected_disc``);
     no mutation verbs, as no local flow changes them independently of a sync.
     """
@@ -46,6 +47,7 @@ class Rom:
     revision: str = ""
     tags: tuple[str, ...] = ()
     is_main_sibling: bool = False
+    fs_size_bytes: int | None = None
 
     @classmethod
     def synced(
@@ -64,6 +66,7 @@ class Rom:
         revision: str = "",
         tags: tuple[str, ...] = (),
         is_main_sibling: bool = False,
+        fs_size_bytes: int | None = None,
     ) -> Rom:
         """Build a Rom synced from RomM at ISO timestamp ``synced_at``.
 
@@ -89,6 +92,7 @@ class Rom:
             revision=revision,
             tags=tags,
             is_main_sibling=is_main_sibling,
+            fs_size_bytes=fs_size_bytes,
         )
 
     def record_fetch_generation(self, fetch_id: str) -> None:

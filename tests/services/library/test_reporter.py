@@ -748,6 +748,50 @@ class TestCommitUnitResults:
         assert rom.revision == ""
         assert rom.is_main_sibling is False
 
+    def test_commit_persists_fs_size_bytes_from_pending(self, plugin):
+        """The server-reported ROM size (#1395) rides the pending entry onto the
+        upserted ``Rom``, refreshed every sync like the version dimensions."""
+        uow = plugin._uow
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {
+                "name": "Game",
+                "fs_name": "game.z64",
+                "platform_slug": "gb",
+                "cover_path": "",
+                "fs_size_bytes": 3_145_728,
+            },
+        )
+
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}])
+
+        with uow:
+            rom = uow.roms.get(42)
+        assert rom is not None
+        assert rom.fs_size_bytes == 3_145_728
+
+    def test_commit_defaults_fs_size_bytes_when_pending_omits_it(self, plugin):
+        """A pending entry with no size upserts a Rom carrying NULL (size unknown)."""
+        uow = plugin._uow
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {
+                "name": "Game",
+                "fs_name": "game.z64",
+                "platform_slug": "gb",
+                "cover_path": "",
+            },
+        )
+
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}])
+
+        with uow:
+            rom = uow.roms.get(42)
+        assert rom is not None
+        assert rom.fs_size_bytes is None
+
     def test_commit_stamps_cover_path_when_present(self, plugin):
         """A finalized cover path is recorded on the upserted ROM row."""
         uow = plugin._uow

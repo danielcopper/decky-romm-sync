@@ -638,6 +638,7 @@ class TestSwitchVersion:
             "platform_slug": "snes",
             "igdb_id": 100,
             "regions": ["Japan"],
+            "fs_size_bytes": 4_194_304,
             "sibling_roms": [{"id": 1}],
         }
 
@@ -649,6 +650,9 @@ class TestSwitchVersion:
             assert persisted.shortcut_app_id == _APP_ID
             assert persisted.regions == ("Japan",)
             assert persisted.sibling_group_key == "igdb:100:57"
+            # The server-reported size rides the switch persist (#1395) so a
+            # server-only sibling shows its download size without a resync.
+            assert persisted.fs_size_bytes == 4_194_304
             assert u.roms.get(1).shortcut_app_id is None
 
     def test_uneven_coverage_server_only_switchable_and_adopts_bound_key(self, event_loop, service, uow, romm):

@@ -42,6 +42,11 @@ _SYNC_COLUMNS = (
     "revision",
     "tags",
     "is_main_sibling",
+    # The server-reported ROM size in bytes (#1395). Like the version dimensions
+    # above (and unlike the user pins), it is a server-derived fact that rides
+    # the UPSERT and refreshes every sync — set directly from the fetched dict,
+    # no confirmed-else-preserved merge. NULL = unknown.
+    "fs_size_bytes",
     # The fetch generation that last saw this row (#1504). Server-independent
     # like the pins, but it rides the UPSERT: the reporter merges it
     # confirmed-else-preserved before save(), so a platform apply advances it
@@ -84,6 +89,7 @@ def _row_to_rom(row: sqlite3.Row) -> Rom:
         revision=row["revision"],
         tags=tuple(json.loads(row["tags"])),
         is_main_sibling=bool(row["is_main_sibling"]),
+        fs_size_bytes=row["fs_size_bytes"],
         last_fetch_id=row["last_fetch_id"],
     )
 
@@ -155,6 +161,7 @@ class SqliteRomRepository(BaseRepository):
                 rom.revision,
                 json.dumps(list(rom.tags)),
                 int(rom.is_main_sibling),
+                rom.fs_size_bytes,
                 rom.last_fetch_id,
             ),
         )
@@ -217,6 +224,22 @@ class SqliteRomRepository(BaseRepository):
         (e.g. a manually edited shortcut).
         """
         self._conn.execute("UPDATE roms SET applied_launch_options = NULL")
+
+    def set_fs_size_bytes(self, rom_id: int, size: int | None) -> None:
+        """Write the server-reported ROM size for ``rom_id`` — the download write-back (#1395).
+
+        A between-syncs freshness top-up: a completed download stamps the size
+        from the ROM detail it already fetched, so the game-detail UI shows the
+        downloaded ROM's size without waiting for the next sync. Unlike the pin
+        columns (``emulator_override`` / ``selected_disc`` / ``applied_launch_options``),
+        ``fs_size_bytes`` ALSO rides the sync UPSERT in :meth:`save`, so a later
+        re-sync re-writes the same authoritative server value — the two write
+        paths never conflict. ``size`` is the byte count, or ``None`` for SQL NULL.
+        """
+        self._conn.execute(
+            "UPDATE roms SET fs_size_bytes = ? WHERE rom_id = ?",
+            (size, rom_id),
+        )
 
     def delete(self, rom_id: int) -> None:
         self._conn.execute("DELETE FROM roms WHERE rom_id = ?", (rom_id,))
