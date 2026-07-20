@@ -1,0 +1,1517 @@
+{
+  "family": "upload-409-ladder",
+  "spec": "SPEC.md \u2014 The 409 resolution ladder (normative)",
+  "description": "Exhaustive equivalence classes over the four ladder inputs. Each slot is absent (null), empty (\"\"), or one of up to four distinct hash values; equality patterns are canonicalized by first occurrence, so this set covers every distinguishable input shape the ladder can see. Hash strings are placeholders \u2014 only presence and equality carry meaning.",
+  "vectors": [
+    {
+      "name": "none-none-none-none",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": null,
+        "server_content_hash": null,
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-none-none-empty",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": null,
+        "server_content_hash": null,
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-none-none-a",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": null,
+        "server_content_hash": null,
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-none-empty-none",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": null,
+        "server_content_hash": "",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-none-empty-empty",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": null,
+        "server_content_hash": "",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-none-empty-a",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": null,
+        "server_content_hash": "",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-none-a-none",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": null,
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-none-a-empty",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": null,
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-none-a-a",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": null,
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-none-a-b",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": null,
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-empty-none-none",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "",
+        "server_content_hash": null,
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-empty-none-empty",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "",
+        "server_content_hash": null,
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-empty-none-a",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "",
+        "server_content_hash": null,
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-empty-empty-none",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "",
+        "server_content_hash": "",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-empty-empty-empty",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "",
+        "server_content_hash": "",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-empty-empty-a",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "",
+        "server_content_hash": "",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-empty-a-none",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-empty-a-empty",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-empty-a-a",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-empty-a-b",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-none-none",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": null,
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-none-empty",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": null,
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-none-a",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": null,
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-none-b",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": null,
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-empty-none",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-empty-empty",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-empty-a",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-empty-b",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-a-none",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-a-empty",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-a-a",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-a-b",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-b-none",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-b-empty",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-b-a",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-b-b",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "none-a-b-c",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-none-none-none",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": null,
+        "server_content_hash": null,
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-none-none-empty",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": null,
+        "server_content_hash": null,
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-none-none-a",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": null,
+        "server_content_hash": null,
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-none-empty-none",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": null,
+        "server_content_hash": "",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-none-empty-empty",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": null,
+        "server_content_hash": "",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-none-empty-a",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": null,
+        "server_content_hash": "",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-none-a-none",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": null,
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-none-a-empty",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": null,
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-none-a-a",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": null,
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-none-a-b",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": null,
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-empty-none-none",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "",
+        "server_content_hash": null,
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-empty-none-empty",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "",
+        "server_content_hash": null,
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-empty-none-a",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "",
+        "server_content_hash": null,
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-empty-empty-none",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "",
+        "server_content_hash": "",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-empty-empty-empty",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "",
+        "server_content_hash": "",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-empty-empty-a",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "",
+        "server_content_hash": "",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-empty-a-none",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-empty-a-empty",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-empty-a-a",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-empty-a-b",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-none-none",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": null,
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-none-empty",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": null,
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-none-a",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": null,
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-none-b",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": null,
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-empty-none",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-empty-empty",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-empty-a",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-empty-b",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-a-none",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-a-empty",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-a-a",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-a-b",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-b-none",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-b-empty",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-b-a",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-b-b",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-a-b-c",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-none-none-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": null,
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-none-none-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": null,
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-none-none-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": null,
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-none-none-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": null,
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-none-empty-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": "",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-none-empty-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": "",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-none-empty-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": "",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-none-empty-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": "",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-none-a-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": null
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-none-a-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": ""
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-none-a-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-none-a-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-none-b-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-none-b-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-none-b-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-none-b-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-none-b-c",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-empty-none-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": null,
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-empty-none-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": null,
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-empty-none-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": null,
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-empty-none-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": null,
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-empty-empty-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": "",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-empty-empty-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": "",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-empty-empty-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": "",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-empty-empty-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": "",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-empty-a-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": null
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-empty-a-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": ""
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-empty-a-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-empty-a-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-empty-b-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-empty-b-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-empty-b-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-empty-b-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-empty-b-c",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-a-none-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": null,
+        "last_sync_server_hash": null
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-none-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": null,
+        "last_sync_server_hash": ""
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-none-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": null,
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-none-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": null,
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-empty-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "",
+        "last_sync_server_hash": null
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-empty-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "",
+        "last_sync_server_hash": ""
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-empty-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-empty-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-a-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": null
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-a-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": ""
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-a-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-a-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-b-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": null
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-b-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": ""
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-b-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-b-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-a-b-c",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-b-none-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": null,
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-none-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": null,
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-none-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": null,
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-none-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": null,
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-none-c",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": null,
+        "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-empty-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-empty-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-empty-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-empty-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-empty-c",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "",
+        "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-a-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": null
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-b-a-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": ""
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-b-a-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-b-a-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-b-a-c",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "a-b-b-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-b-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-b-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-b-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-b-c",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-c-none",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "cccccccccccccccccccccccccccccccc",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-c-empty",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "cccccccccccccccccccccccccccccccc",
+        "last_sync_server_hash": ""
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-c-a",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "cccccccccccccccccccccccccccccccc",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-c-b",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "cccccccccccccccccccccccccccccccc",
+        "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-c-c",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "cccccccccccccccccccccccccccccccc",
+        "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "a-b-c-d",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "cccccccccccccccccccccccccccccccc",
+        "last_sync_server_hash": "dddddddddddddddddddddddddddddddd"
+      },
+      "expected": "conflict"
+    }
+  ]
+}

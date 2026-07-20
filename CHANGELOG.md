@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.29.0](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.28.1...decky-romm-sync-v0.29.0) (2026-07-20)
+
+
+### Features
+
+* **library:** skip unchanged collections via a completion stamp ([#1502](https://github.com/danielcopper/decky-romm-sync/issues/1502)) ([c25906e](https://github.com/danielcopper/decky-romm-sync/commit/c25906e187e769bc8ddb716a7f9e78c7b89a8304))
+
+
+### Bug Fixes
+
+* **library:** count skip rows by fetch generation so superseded rows stop blocking ([#1513](https://github.com/danielcopper/decky-romm-sync/issues/1513)) ([ce567c8](https://github.com/danielcopper/decky-romm-sync/commit/ce567c826c79a7f88e422011d37b90e9513648c0))
+* **saves:** make wizard legacy migration content-based with a local-save collision decision ([#1498](https://github.com/danielcopper/decky-romm-sync/issues/1498)) ([#1507](https://github.com/danielcopper/decky-romm-sync/issues/1507)) ([0575930](https://github.com/danielcopper/decky-romm-sync/commit/05759306d69abf2c5208cc6828f62100d5002d89))
+* **ui:** floor the coarse progress bar at the leading zero-weight units' index share ([#1508](https://github.com/danielcopper/decky-romm-sync/issues/1508)) ([33fb3a7](https://github.com/danielcopper/decky-romm-sync/commit/33fb3a7d1c297b154bb7b58f221fa6b21a3ba475))
+
 ## [0.28.1](https://github.com/danielcopper/decky-romm-sync/compare/decky-romm-sync-v0.28.0...decky-romm-sync-v0.28.1) (2026-07-19)
 
 

@@ -1,0 +1,1038 @@
+{
+  "family": "decision-table",
+  "spec": "SPEC.md \u2014 Decision table (informative)",
+  "description": "Named cases for the full per-(rom, filename, slot) decision of the reference model: branch selection (newest head by updated_at), the three device_syncs branches, the corrupt-local guard, both identity routes (parity AND provenance), and the timestamp fall-through. Curated, not exhaustive \u2014 the input space is unbounded. Hash strings and timestamps are placeholders; only presence, equality, and relative order carry meaning. Timestamps always carry an explicit UTC offset so parsing is environment-independent.",
+  "vectors": [
+    {
+      "name": "no-server-saves-local-present",
+      "rationale": "Nothing on the server side of the slot: a present local file is the only content \u2014 upload it as the first save.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [],
+        "files_state": {},
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "upload",
+        "target_save_id": null
+      }
+    },
+    {
+      "name": "no-server-saves-no-local",
+      "rationale": "Neither side has anything for this file \u2014 nothing to sync.",
+      "input": {
+        "local_file": null,
+        "server_saves_in_slot": [],
+        "files_state": {},
+        "device_id": "device-a",
+        "local_hash": null
+      },
+      "expected": {
+        "action": "skip",
+        "reason": "nothing_to_sync",
+        "adopt_baseline": false
+      }
+    },
+    {
+      "name": "entries-on-older-save-dont-count",
+      "rationale": "This device is current on an OLDER save, but the decision branches on the NEWEST save's device_syncs only \u2014 no entry there, local absent, adopt the head.",
+      "input": {
+        "local_file": null,
+        "server_saves_in_slot": [
+          {
+            "id": 100,
+            "updated_at": "2026-06-01T12:00:00Z",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "device_syncs": [
+              {
+                "device_id": "device-a",
+                "is_current": true
+              }
+            ]
+          },
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "last_sync_server_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "device_id": "device-a",
+        "local_hash": null
+      },
+      "expected": {
+        "action": "download",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "unparseable-timestamp-loses",
+      "rationale": "A save whose updated_at cannot be parsed never beats a parseable one, whatever the list order.",
+      "input": {
+        "local_file": null,
+        "server_saves_in_slot": [
+          {
+            "id": 102,
+            "updated_at": "not-a-timestamp",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          },
+          {
+            "id": 101,
+            "updated_at": "2026-06-01T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {},
+        "device_id": "device-a",
+        "local_hash": null
+      },
+      "expected": {
+        "action": "download",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "current-local-gone-recovery",
+      "rationale": "The server still tracks this device's last upload but the local copy disappeared \u2014 download to recover the canonical content.",
+      "input": {
+        "local_file": null,
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-a",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+        },
+        "device_id": "device-a",
+        "local_hash": null
+      },
+      "expected": {
+        "action": "download",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "current-no-baseline-adopts",
+      "rationale": "Current on the head, local present, but no baseline recorded yet \u2014 adopt one so future runs can detect drift. Pure bookkeeping, no transfer.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-a",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {},
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "skip",
+        "reason": "synced",
+        "adopt_baseline": true
+      }
+    },
+    {
+      "name": "current-unchanged",
+      "rationale": "Current on the head and local matches the recorded baseline \u2014 in sync, nothing to do.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-a",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+        },
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "skip",
+        "reason": "synced",
+        "adopt_baseline": false
+      }
+    },
+    {
+      "name": "current-diverged-uploads",
+      "rationale": "Current on the head and local diverged from the baseline: an offline edit. Push it (overwrite=false \u2014 a stale-current race turns into a 409, resolved by the ladder).",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-a",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "last_sync_server_hash": "cccccccccccccccccccccccccccccccc",
+          "last_sync_local_size": 8192
+        },
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "upload",
+        "target_save_id": 101
+      }
+    },
+    {
+      "name": "current-diverged-shrunken",
+      "rationale": "Local diverged AND shrank below half its recorded size \u2014 a truncated/corrupt write, not a plausible edit. Never auto-upload it; the user decides.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 1024,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-a",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "last_sync_server_hash": "cccccccccccccccccccccccccccccccc",
+          "last_sync_local_size": 8192
+        },
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "conflict",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "current-diverged-zero-byte",
+      "rationale": "A 0-byte local is never a plausible edit, even without a recorded size \u2014 the corrupt-local guard fires unconditionally on empty files.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 0,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-a",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+        },
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "conflict",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "current-hash-unknown",
+      "rationale": "Current on the head but the local hash could not be computed: without it drift cannot be claimed \u2014 treat as in sync rather than guessing.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-a",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+        },
+        "device_id": "device-a",
+        "local_hash": null
+      },
+      "expected": {
+        "action": "skip",
+        "reason": "synced",
+        "adopt_baseline": false
+      }
+    },
+    {
+      "name": "moved-past-local-gone",
+      "rationale": "The head moved past this device and there is no local file to protect \u2014 adopt the head.",
+      "input": {
+        "local_file": null,
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-a",
+                "is_current": false
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "last_sync_server_hash": "dddddddddddddddddddddddddddddddd"
+        },
+        "device_id": "device-a",
+        "local_hash": null
+      },
+      "expected": {
+        "action": "download",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "moved-past-no-baseline-parity",
+      "rationale": "Head moved past, local present without a baseline, but byte-identical to the head (parity \u2014 the only identity route without history): adopting loses nothing and re-anchors the baseline.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-a",
+                "is_current": false
+              }
+            ]
+          }
+        ],
+        "files_state": {},
+        "device_id": "device-a",
+        "local_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": {
+        "action": "download",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "moved-past-no-baseline-different",
+      "rationale": "Head moved past, local present without a baseline and NOT identical to the head: unknown provenance colliding with a moved head \u2014 the user decides.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-a",
+                "is_current": false
+              }
+            ]
+          }
+        ],
+        "files_state": {},
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "conflict",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "moved-past-unchanged",
+      "rationale": "Head moved past but local is unchanged since the baseline: this device holds no un-synced work \u2014 adopt the head.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-a",
+                "is_current": false
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "last_sync_server_hash": "dddddddddddddddddddddddddddddddd"
+        },
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "download",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "moved-past-diverged-identical",
+      "rationale": "Both sides moved independently but landed on the SAME bytes: nothing to reconcile \u2014 adopt, which re-establishes baseline and currency.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-a",
+                "is_current": false
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "last_sync_server_hash": "dddddddddddddddddddddddddddddddd"
+        },
+        "device_id": "device-a",
+        "local_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": {
+        "action": "download",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "moved-past-diverged-different",
+      "rationale": "Both sides moved independently to DIFFERENT content \u2014 the genuine two-sided conflict.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-a",
+                "is_current": false
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "last_sync_server_hash": "dddddddddddddddddddddddddddddddd"
+        },
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "conflict",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "moved-past-hash-unknown",
+      "rationale": "Head moved past and the local hash is unknown: drift cannot be proven, and the server copy is the safe read \u2014 download.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-a",
+                "is_current": false
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "last_sync_server_hash": "dddddddddddddddddddddddddddddddd"
+        },
+        "device_id": "device-a",
+        "local_hash": null
+      },
+      "expected": {
+        "action": "download",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "never-synced-local-gone",
+      "rationale": "Never synced this head and no local file \u2014 adopt the head.",
+      "input": {
+        "local_file": null,
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {},
+        "device_id": "device-a",
+        "local_hash": null
+      },
+      "expected": {
+        "action": "download",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "never-synced-parity-dedup",
+      "rationale": "Local content is byte-identical to a head this device never synced (parity route): adopt it as the baseline instead of POSTing a duplicate.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {},
+        "device_id": "device-a",
+        "local_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": {
+        "action": "skip",
+        "reason": "synced",
+        "adopt_baseline": true
+      }
+    },
+    {
+      "name": "never-synced-provenance-dedup",
+      "rationale": "PROVENANCE route: local unchanged since baseline AND the stored server hash equals the head's content_hash \u2014 identity proven by two server-produced hashes even though the local hash differs from the head's (a local-hashing scheme drift). Adopt as baseline, no duplicate POST.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "last_sync_server_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "skip",
+        "reason": "synced",
+        "adopt_baseline": true
+      }
+    },
+    {
+      "name": "never-synced-baseline-diverged",
+      "rationale": "Local diverged from its baseline while the chosen head is one this device never synced: both sides moved \u2014 conflict.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "last_sync_server_hash": "dddddddddddddddddddddddddddddddd"
+        },
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "conflict",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "never-synced-no-baseline-mtime-newer-still-conflicts",
+      "rationale": "No baseline, local hash known and NOT identical to the never-synced head: unknown provenance \u2014 conflict, even though the local mtime is newer. mtime never rescues this case.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780405200.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {},
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "conflict",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "never-synced-unchanged-mtime-newer",
+      "rationale": "Local provably unchanged since its baseline, head never synced and not identical (stored hash differs): fall through to the timestamp comparison \u2014 local at-or-after the head uploads as a new save.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780405200.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "last_sync_server_hash": "dddddddddddddddddddddddddddddddd"
+        },
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "upload",
+        "target_save_id": null
+      }
+    },
+    {
+      "name": "never-synced-unchanged-mtime-equal",
+      "rationale": "Timestamp tie on the fall-through path counts as local-newer \u2014 upload (at-or-after, not strictly-after).",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780401600.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "last_sync_server_hash": "dddddddddddddddddddddddddddddddd"
+        },
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "upload",
+        "target_save_id": null
+      }
+    },
+    {
+      "name": "never-synced-unchanged-mtime-older",
+      "rationale": "Local provably unchanged and older than the never-synced head \u2014 adopt the head.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "last_sync_server_hash": "dddddddddddddddddddddddddddddddd"
+        },
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "download",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "never-synced-hash-unknown-mtime-newer",
+      "rationale": "Local hash unknown: identity and drift are both unprovable, so the timestamp fallback decides \u2014 local newer uploads.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780405200.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {},
+        "device_id": "device-a",
+        "local_hash": null
+      },
+      "expected": {
+        "action": "upload",
+        "target_save_id": null
+      }
+    },
+    {
+      "name": "never-synced-hash-unknown-mtime-older",
+      "rationale": "Local hash unknown, local older than the head \u2014 the safe read wins: download.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780398000.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {},
+        "device_id": "device-a",
+        "local_hash": null
+      },
+      "expected": {
+        "action": "download",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "never-synced-mtime-missing",
+      "rationale": "On the timestamp fallback path a missing local mtime cannot prove local-newer \u2014 the server wins: download.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": null
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {},
+        "device_id": "device-a",
+        "local_hash": null
+      },
+      "expected": {
+        "action": "download",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "never-synced-head-timestamp-garbage",
+      "rationale": "On the timestamp fallback path an unparseable head updated_at cannot prove local-newer either \u2014 download the known-good server copy rather than trust broken metadata.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780405200.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "garbage",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "last_sync_server_hash": "dddddddddddddddddddddddddddddddd"
+        },
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "download",
+        "server_save_id": 101
+      }
+    },
+    {
+      "name": "never-synced-empty-hash-behaves-unknown",
+      "rationale": "An empty-string local hash proves nothing (same as unknown): no identity, no provenance claim \u2014 the timestamp fallback decides.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780405200.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": "cccccccccccccccccccccccccccccccc",
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {},
+        "device_id": "device-a",
+        "local_hash": ""
+      },
+      "expected": {
+        "action": "upload",
+        "target_save_id": null
+      }
+    },
+    {
+      "name": "missing-content-hash-dedup-gap",
+      "rationale": "Known gap, pinned deliberately: the head carries no content_hash (older/migrated save), local is unchanged and mtime-newer \u2014 the dedup check cannot run and the fall-through POSTs what may be a byte-identical duplicate. Harmless (a new version, no overwrite), but documented.",
+      "input": {
+        "local_file": {
+          "filename": "game.srm",
+          "size": 8192,
+          "mtime": 1780405200.0
+        },
+        "server_saves_in_slot": [
+          {
+            "id": 101,
+            "updated_at": "2026-06-02T12:00:00Z",
+            "content_hash": null,
+            "device_syncs": [
+              {
+                "device_id": "device-b",
+                "is_current": true
+              }
+            ]
+          }
+        ],
+        "files_state": {
+          "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "last_sync_server_hash": "dddddddddddddddddddddddddddddddd"
+        },
+        "device_id": "device-a",
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "action": "upload",
+        "target_save_id": null
+      }
+    }
+  ]
+}

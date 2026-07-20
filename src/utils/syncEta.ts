@@ -114,9 +114,21 @@ interface EtaRunState {
   // observeApplyProgress / displayedEtaSeconds). ``null`` until the first ready
   // measurement.
   deadlineMs: number | null;
+  // How many of the plan's leading units weigh zero, LATCHED at its high-water
+  // mark for the run — the width the coarse bar owes them (#1506). Latched
+  // because observeUnitTotal can raise a mispredicted skip's weight off zero
+  // mid-run, which would shorten the live prefix and march the bar backwards.
+  zeroPrefix: number;
 }
 
 let _run: EtaRunState | null = null;
+
+/** How many leading units weigh zero (a non-positive weight counts as zero). */
+function countZeroPrefix(weights: readonly number[]): number {
+  let n = 0;
+  while (n < weights.length && Math.max(0, weights[n] ?? 0) <= 0) n++;
+  return n;
+}
 
 /**
  * Begin measuring a fresh run, discarding any prior samples — a new run's rate
@@ -126,7 +138,15 @@ let _run: EtaRunState | null = null;
  * planned item total.
  */
 export function beginEtaRun(runId: string, unitWeights: number[], totalRoms: number): void {
-  _run = { runId, unitWeights: [...unitWeights], totalRoms, samples: [], lastSampleMs: 0, deadlineMs: null };
+  _run = {
+    runId,
+    unitWeights: [...unitWeights],
+    totalRoms,
+    samples: [],
+    lastSampleMs: 0,
+    deadlineMs: null,
+    zeroPrefix: countZeroPrefix(unitWeights),
+  };
 }
 
 /** Drop all ETA state — call at a terminal stage or when no run is in flight. */
@@ -160,6 +180,12 @@ export function observeUnitTotal(unitIndex: number, unitTotal: number): void {
   if (corrected === previous) return;
   _run.totalRoms = Math.max(0, _run.totalRoms + (corrected - previous));
   _run.unitWeights[unitIndex] = corrected;
+  // Keep the bar's leading-zero-unit width at its high-water mark. Correcting a
+  // mispredicted skip UP off zero shortens the live prefix; honouring that would
+  // retract width the bar already showed and freeze every later zero-weight unit
+  // at the truncated floor. A correction DOWN to zero only lengthens the prefix,
+  // which the max adopts (#1506).
+  _run.zeroPrefix = Math.max(_run.zeroPrefix, countZeroPrefix(_run.unitWeights));
 }
 
 /**
@@ -241,6 +267,14 @@ export function displayedEtaSeconds(nowMs: number): number | null {
  * predicted-skip unit occupies no bar width and a huge platform occupies its
  * real share instead of ``1/totalUnits``.
  *
+ * A zero-weight unit is not free: an empty delta still refreshes covers, so a
+ * plan whose LEADING units all weigh zero would pin the bar to empty for as
+ * long as they work (#1506). Those units claim an equal ``1/totalUnits`` share
+ * each, and the weighted apportionment is compressed into the band ABOVE that
+ * floor (not maxed against it), so the weight-bearing tail still fills smoothly
+ * instead of stalling. Only the leading run is floored — a zero-weight unit
+ * following real work still takes no width.
+ *
  * Returns ``null`` — the caller falls back to index weighting — when no run is
  * measured (QAM opened mid-run before any plan, old backend), when the plan's
  * unit count doesn't match ``totalUnits`` (a stale plan from another run), or
@@ -265,5 +299,21 @@ export function weightedCoarseFraction(
   const runningWeight =
     completedUnits >= 0 && completedUnits < weights.length ? Math.max(0, weights[completedUnits] ?? 0) : 0;
   const within = Math.max(0, Math.min(1, withinUnitFraction));
-  return Math.min(1, (completedWeight + within * runningWeight) / totalWeight);
+  const weighted = Math.min(1, (completedWeight + within * runningWeight) / totalWeight);
+  const floor = zeroPrefixFloor(_run.zeroPrefix, completedUnits, within, totalUnits);
+  return Math.min(1, floor + (1 - floor) * weighted);
+}
+
+/**
+ * The bar share owed to the plan's LEADING zero-weight units: an equal
+ * ``1/totalUnits`` each, interpolated by *within* while the running unit is
+ * still inside that run and held at its full share once past it. Takes the
+ * LATCHED ``zeroPrefix`` (never a live weight scan) and is non-decreasing in
+ * every input, so the bar it floors can never move backwards.
+ */
+function zeroPrefixFloor(zeroPrefix: number, completedUnits: number, within: number, totalUnits: number): number {
+  if (totalUnits <= 0) return 0;
+  const reached = Math.min(Math.max(0, completedUnits), zeroPrefix);
+  const stillInside = completedUnits < zeroPrefix;
+  return (reached + (stillInside ? within : 0)) / totalUnits;
 }

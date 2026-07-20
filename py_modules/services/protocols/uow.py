@@ -1,12 +1,12 @@
-"""Unit-of-Work Protocols — the transactional seam over the ten repositories.
+"""Unit-of-Work Protocols — the transactional seam over the eleven repositories.
 
 A Unit of Work is the atomic boundary services work inside: open it, touch any
-of the ten repositories, and on a clean exit every change commits as one
+of the eleven repositories, and on a clean exit every change commits as one
 transaction; on an exception everything rolls back. Services depend on these
 Protocols, never on the concrete ``SqliteUnitOfWork`` — the composition root
 wires the factory.
 
-``UnitOfWork`` exposes the ten repositories as typed properties. ``UnitOfWorkFactory``
+``UnitOfWork`` exposes the eleven repositories as typed properties. ``UnitOfWorkFactory``
 is the call-shaped seam services hold to open a fresh unit per operation; the
 concrete factory (``functools.partial(SqliteUnitOfWork, db_path)``) structurally
 satisfies it. The concrete ``SqliteUnitOfWork`` returns concrete
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
     from services.protocols.repositories import (
         BiosFileRepository,
+        CollectionSyncStateRepository,
         FirmwareCacheRepository,
         KvConfigRepository,
         PlatformSyncStateRepository,
@@ -37,13 +38,13 @@ if TYPE_CHECKING:
 
 
 class UnitOfWork(Protocol):
-    """Atomic transaction boundary exposing the ten repositories.
+    """Atomic transaction boundary exposing the eleven repositories.
 
     Used as a synchronous context manager: a clean ``__exit__`` commits, an
     exceptional one rolls back. The repositories share the unit's open
     connection, so writes across several of them are one transaction.
 
-    The ten repositories are read-only properties (not mutable attributes) so
+    The eleven repositories are read-only properties (not mutable attributes) so
     they are covariant: a concrete unit may expose a concrete ``SqliteXxxRepository``
     that satisfies the repository Protocol without being exactly it. A mutable
     attribute would be invariant and reject the concrete adapter types.
@@ -67,6 +68,8 @@ class UnitOfWork(Protocol):
     def sync_runs(self) -> SyncRunRepository: ...
     @property
     def platform_sync_state(self) -> PlatformSyncStateRepository: ...
+    @property
+    def collection_sync_state(self) -> CollectionSyncStateRepository: ...
     @property
     def kv_config(self) -> KvConfigRepository: ...
 

@@ -10,14 +10,21 @@ operation's own narrow Unit of Work (ADR-0006).
 
 from __future__ import annotations
 
+import contextlib
+import os
 from typing import TYPE_CHECKING, Any
 
-from domain.emulator_tag import build_emulator_tag
-from domain.iso_time import parse_iso_to_epoch
+from domain.iso_time import epoch_to_iso, parse_iso_to_epoch
 from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
-from domain.save_slot import save_in_slot, slot_query_param
-from services.saves._messages import SAVE_SYNC_IN_CONTENT_DIR
+from domain.save_slot import save_in_slot
+from lib.errors import classify_error
+from services.saves._helpers import newest_server_saves_by_target
+from services.saves._messages import (
+    DEVICE_NOT_REGISTERED_REASON,
+    MIGRATION_DEVICE_NOT_REGISTERED,
+    SAVE_SYNC_IN_CONTENT_DIR,
+)
 from services.saves._settings import autocleanup_limit, resolve_default_slot
 
 if TYPE_CHECKING:
@@ -202,6 +209,7 @@ class SetupWizard:
         chosen_slot: str | None,
         migrate: bool = False,
         migrate_from_slot: str | None = None,
+        use_server_on_conflict: bool = False,
     ) -> dict[str, Any]:
         """Confirm which slot to use for a game's save sync.
 
@@ -212,17 +220,30 @@ class SetupWizard:
         legacy no-slot mode can no longer be confirmed as a target (#1276) — it
         survives only as a migration *source*.
 
-        When ``migrate`` is true, migrates saves from ``migrate_from_slot``
-        (``None`` = the legacy no-slot source) into ``chosen_slot``: upload local
-        files to ``chosen_slot``, then delete the old server saves. ``migrate``
-        defaults to false (no migration).
+        When ``migrate`` is true, the newest legacy (``migrate_from_slot``,
+        ``None`` = the legacy no-slot source) server save per canonical local
+        target is downloaded and copied into ``chosen_slot`` under the canonical
+        name — content-based, independent of the legacy row's own filename or of
+        any local file (#1498). The per-target collision matrix:
+
+        - **No local file** or a **byte-identical** local file → migrated
+          silently (content copied into the slot, baseline adopted).
+        - A **differing** local file → held for the user's decision unless
+          ``use_server_on_conflict`` is set. Without it, the slot is *not*
+          confirmed and the response carries ``needs_conflict_resolution=True`` +
+          a ``conflicts`` list (both sides' timestamp/size) so the wizard can ask.
+          With it, the differing local file is quarantined into ``.romm-backup``
+          (never deleted, #965) before the server content replaces it.
+
+        The legacy source saves are never deleted — a migration copies their
+        content into the slot and leaves the sources in the read-only legacy
+        bucket (#1478).
 
         When a migration is requested but RetroArch writes saves to the content
-        dir (#239), the migration is refused before any upload/delete (the local
-        files it would carry are not under ``saves_dir``); the response carries
-        ``success=False`` with ``reason="savefiles_in_content_dir"``. The slot
+        dir (#239), the migration is refused before any download; the slot
         confirmation itself — a non-destructive metadata flip — is still
-        persisted. The non-migration path is never gated (no file write).
+        persisted (``reason="savefiles_in_content_dir"``). The non-migration path
+        is never gated (no file write).
         """
         rom_id = int(rom_id)
         # Legacy ``slot:null`` confirmation is retired (#1276): a slot must carry
@@ -248,130 +269,286 @@ class SetupWizard:
 
         # The read→confirm→(migrate)→write of the RomSaveSyncState aggregate must
         # serialise against every other path that touches this ROM's state.
-        # content_dir_blocked and _migrate_slot_saves do NOT acquire rom_lock,
+        # content_dir_blocked and _migrate_slot_saves_io do NOT acquire rom_lock,
         # so calling them inside the held lock is safe (no re-entry).
         async with self._sync_engine.rom_lock(rom_id):
-            # Load → confirm in memory; migration I/O runs outside the txn.
             save_state = await self._loop.run_in_executor(None, self._read_save_state, rom_id) or RomSaveSyncState()
+
+            # Non-migration path: a plain, non-destructive metadata flip.
+            if not migrate:
+                save_state.confirm_slot(normalized_slot)
+                await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
+                return {"success": True, "needs_conflict_resolution": False, "message": "Slot confirmed"}
+
+            # #239: RetroArch writes saves to the content dir — the migration
+            # would write into ``saves_dir``, which RetroArch ignores in that
+            # layout. Refuse before any download; the slot itself is still
+            # confirmed (a non-destructive metadata flip).
+            if await self._sync_engine.content_dir_blocked("confirm_slot_choice"):
+                self._log_debug(f"confirm_slot_choice: content-dir layout for rom {rom_id}; skipping migration")
+                save_state.confirm_slot(normalized_slot)
+                await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
+                return {
+                    "success": False,
+                    "reason": SAVE_SYNC_CONTENT_DIR_REASON,
+                    "needs_conflict_resolution": False,
+                    "message": SAVE_SYNC_IN_CONTENT_DIR,
+                }
+
+            # Migration preconditions, checked BEFORE any confirm or mutation so
+            # a precondition failure holds the wizard open (no half-state) and the
+            # user can retry Track (#1498 review). A missing device would only
+            # surface as the #1478 upload guard AFTER local files were already
+            # touched, so it must be caught here first.
+            device_id = await self._loop.run_in_executor(None, self._device_registry.get_device_id)
+            if not device_id:
+                return {
+                    "success": False,
+                    "reason": DEVICE_NOT_REGISTERED_REASON,
+                    "needs_conflict_resolution": False,
+                    "message": MIGRATION_DEVICE_NOT_REGISTERED,
+                }
+            info = await self._loop.run_in_executor(None, self._rom_info.get_rom_save_info, rom_id)
+            if not info:
+                return {
+                    "success": False,
+                    "reason": "not_installed",
+                    "needs_conflict_resolution": False,
+                    "message": "ROM is not installed",
+                }
+
+            # Confirm in memory so the migration uploads resolve to the chosen
+            # slot, but persist only once the migration reaches the apply phase
+            # without an unanswered local-file conflict.
             save_state.confirm_slot(normalized_slot)
+            try:
+                outcome = await self._loop.run_in_executor(
+                    None,
+                    self._migrate_slot_saves_io,
+                    rom_id,
+                    migrate_from_slot,
+                    use_server_on_conflict,
+                    save_state,
+                    device_id,
+                    info,
+                )
+            except Exception as e:
+                # Wholesale failure BEFORE the apply phase (list_saves or a phase-1
+                # download threw) — nothing durable was mutated (only scratch
+                # temps, cleaned up). Do NOT confirm: return the canonical failure
+                # so the wizard stays open on the message and Track can be retried.
+                reason, message = classify_error(e)
+                self._logger.warning(f"confirm_slot_choice({rom_id}): migration failed before apply: {e}")
+                return {
+                    "success": False,
+                    "reason": reason,
+                    "needs_conflict_resolution": False,
+                    "message": message,
+                }
 
-            # Migration: re-upload local files to new slot, delete old server saves
-            if migrate:
-                # #239: RetroArch writes saves to the content dir — the migration
-                # uploads local files read from ``saves_dir``, which holds nothing
-                # in content-dir mode, so the migration could not carry real saves.
-                # Refuse the migration before any upload/delete; the slot itself is
-                # still confirmed in state (a non-destructive metadata flip).
-                if await self._sync_engine.content_dir_blocked("confirm_slot_choice"):
-                    self._log_debug(f"confirm_slot_choice: content-dir layout for rom {rom_id}; skipping migration")
-                    await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
-                    return {
-                        "success": False,
-                        "reason": SAVE_SYNC_CONTENT_DIR_REASON,
-                        "needs_conflict_resolution": False,
-                        "message": SAVE_SYNC_IN_CONTENT_DIR,
-                    }
-                # normalized_slot is always a non-empty named target now (#1276);
-                # migrate_from_slot can be None (legacy no-slot source) or a named slot.
-                try:
-                    await self._migrate_slot_saves(rom_id, normalized_slot, migrate_from_slot)
-                except Exception as e:
-                    self._logger.warning(f"confirm_slot_choice({rom_id}): migration failed: {e}")
-                    await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
-                    return {
-                        "success": True,
-                        "needs_conflict_resolution": False,
-                        "message": f"Slot confirmed but migration failed: {e}",
-                    }
+            if outcome["status"] == "conflict":
+                # A local save differs — hold for the user. Do NOT persist the
+                # confirm; the wizard re-calls (keep-local → migrate=false;
+                # use-server → use_server_on_conflict=true).
+                return {
+                    "success": False,
+                    "needs_conflict_resolution": True,
+                    "reason": "local_conflict",
+                    "message": f"A local save differs from the legacy save for slot '{normalized_slot}'",
+                    "conflicts": outcome["conflicts"],
+                }
 
+            # ``no_op`` (server had no legacy saves) and ``migrated`` (the apply
+            # phase ran) both confirm the slot. A partial per-target failure in
+            # the apply phase is counted, not fatal (confirm-with-warning).
             await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
-            return {"success": True, "needs_conflict_resolution": False, "message": "Slot confirmed"}
+            if outcome["status"] == "no_op":
+                return {
+                    "success": True,
+                    "needs_conflict_resolution": False,
+                    "message": f"Slot '{normalized_slot}' confirmed",
+                    "migrated": 0,
+                    "failed": 0,
+                }
+            return {
+                "success": True,
+                "needs_conflict_resolution": False,
+                "message": f"Migrated {outcome['migrated']} save(s) into '{normalized_slot}'",
+                "migrated": outcome["migrated"],
+                "failed": outcome["failed"],
+            }
 
-    async def _migrate_slot_saves(
+    def _migrate_slot_saves_io(
         self,
         rom_id: int,
-        chosen_slot: str | None,
         migrate_from_slot: str | None,
-    ) -> None:
-        """Migrate server saves from one slot to another.
+        use_server_on_conflict: bool,
+        save_state: RomSaveSyncState,
+        device_id: str,
+        info: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Copy the newest legacy save per canonical target into the confirmed slot.
 
-        Only saves that were actually re-uploaded (a local file matched the
-        save's ``file_name`` AND the upload succeeded) are deleted from the old
-        slot — #1005-safe: a save with no local counterpart is left untouched so
-        the migration never destroys data that exists nowhere else. Saves that
-        could not be carried over are collected and reported. Safe order for the
-        carried-over saves: POST first, DELETE after.
+        Synchronous worker (run via ``run_in_executor``) — acquires no
+        ``rom_lock``, so it is safe under the lock ``confirm_slot_choice`` holds.
+        ``device_id`` and ``info`` are the caller's already-validated
+        preconditions. Content-based: for each canonical target it downloads the
+        newest legacy save's content to a sibling temp, classifies it against the
+        local file (``no_local`` / ``identical`` / ``differs``), and either copies
+        it into the slot — adopting the per-file baseline via
+        :meth:`SyncEngine.do_upload_save`, which uploads to the slot *save_state*
+        was just confirmed with — or, for a differing local file with
+        ``use_server_on_conflict`` unset, records a conflict for the wizard. The
+        legacy source saves are never deleted; they stay in the read-only legacy
+        bucket (#1478).
+
+        Returns a discriminated result: ``{"status": "no_op"}`` (server had no
+        legacy saves), ``{"status": "conflict", "conflicts": [...]}`` (a differing
+        local save needs the user's decision), or ``{"status": "migrated",
+        "migrated": int, "failed": int}`` (the apply phase ran). The **wholesale**
+        pre-apply failures — a ``list_saves`` throw or a phase-1 download throw —
+        **propagate** so the caller returns a canonical failure without
+        confirming: phase 1 writes only scratch ``.tmp`` files (never the real
+        save files) and the ``finally`` clears them, so nothing durable is
+        mutated before the apply phase begins.
         """
-        device_id = await self._loop.run_in_executor(None, self._device_registry.get_device_id)
+        rom_name = info["rom_name"]
+        saves_dir = info["saves_dir"]
+        system = info["system"]
 
-        # Find server saves in the old slot. The legacy source (None/"") can't be
-        # addressed by ``slot=`` (RomM stores it as null), so list ALL saves and
-        # filter client-side via save_in_slot (#1061).
-        all_saves = await self._loop.run_in_executor(
-            None,
-            lambda: self._retry.with_retry(
-                lambda: self._romm_api.list_saves(rom_id, device_id=device_id),
-            ),
+        # The legacy source (None/"") can't be addressed by ``slot=`` (RomM
+        # stores it as null), so list ALL saves and filter client-side via
+        # save_in_slot (#1061). A throw here propagates → wholesale failure.
+        all_saves = self._retry.with_retry(
+            lambda: self._romm_api.list_saves(rom_id, device_id=device_id),
         )
-        old_slot_saves = [s for s in all_saves if save_in_slot(s, migrate_from_slot)]
-        if not old_slot_saves:
-            return
+        legacy_saves = [s for s in all_saves if save_in_slot(s, migrate_from_slot)]
+        if not legacy_saves:
+            return {"status": "no_op"}
 
-        # Get local files for re-upload
-        local_files = self._rom_info.find_save_files(rom_id)
-        local_by_name = {lf["filename"]: lf for lf in local_files}
-
-        # Resolve emulator tag
-        core_so = await self._loop.run_in_executor(None, self._resolve_core, rom_id)
-        emulator = build_emulator_tag(core_so)
-
-        # Carry-over uploads POST a new entry into the chosen slot, so the user's
-        # retention cap applies here too (RomM autocleanup defaults off → without
-        # it, repeated migrations stack uncapped).
+        targets = newest_server_saves_by_target(legacy_saves, rom_name)
+        core_so = self._resolve_core(rom_id)
+        default_slot = resolve_default_slot(self._settings)
         cleanup_limit = autocleanup_limit(self._settings)
+        self._save_file_store.make_dirs(saves_dir)
 
-        ids_to_delete: list[int] = []
-        not_carried: list[str] = []
+        # Every ``.tmp`` created below is scratch cleaned up on ANY exit: a
+        # mid-phase-1 download throw, a conflict hold, or the apply phase (whose
+        # rename/remove already consumes each temp, leaving the cleanup a no-op).
+        created_temps: list[str] = []
+        try:
+            # Phase 1 — download + classify every target before touching any local
+            # file, so an unanswered conflict (or a download throw) holds without
+            # having migrated anything.
+            plans: list[dict[str, Any]] = []
+            conflicts: list[dict[str, Any]] = []
+            for target, server_save in targets.items():
+                local_path = os.path.join(saves_dir, target)
+                tmp_path = local_path + ".tmp"
+                created_temps.append(tmp_path)
+                self._retry.with_retry(
+                    lambda sid=server_save["id"], tp=tmp_path: self._romm_api.download_save(sid, tp),
+                )
+                server_hash = self._save_file_store.content_hash(tmp_path)
+                if not self._save_file_store.is_file(local_path):
+                    kind = "no_local"
+                elif self._save_file_store.content_hash(local_path) == server_hash:
+                    kind = "identical"
+                else:
+                    kind = "differs"
+                plans.append({"target": target, "local_path": local_path, "tmp_path": tmp_path, "kind": kind})
+                if kind == "differs" and not use_server_on_conflict:
+                    conflicts.append(self._build_migration_conflict(target, server_save, local_path))
 
-        for old_save in old_slot_saves:
-            fname = old_save.get("file_name", "")
-            local_file = local_by_name.get(fname)
-            old_id = old_save.get("id")
-            if not (local_file and self._save_file_store.is_file(local_file["path"])):
-                # No local counterpart → cannot carry it over. Do NOT delete it
-                # (it would vanish from the server with no re-upload, #1005).
-                not_carried.append(fname)
-                continue
-            # Upload to new slot, then mark the old id for deletion. Only on a
-            # successful upload — a failed upload propagates and aborts the loop
-            # before its old id is queued, so nothing un-carried is deleted.
-            await self._loop.run_in_executor(
-                None,
-                lambda lf=local_file, em=emulator: self._retry.with_retry(
-                    lambda: self._romm_api.upload_save(
-                        rom_id,
-                        lf["path"],
-                        em,
-                        device_id=device_id,
-                        slot=slot_query_param(chosen_slot),
-                        autocleanup_limit=cleanup_limit,
-                    ),
-                ),
-            )
-            if old_id is not None:
-                ids_to_delete.append(old_id)
+            if conflicts:
+                # Hold for the user — migrate nothing (temps cleared in finally).
+                return {"status": "conflict", "conflicts": conflicts}
 
-        if not_carried:
-            self._logger.warning(
-                f"_migrate_slot_saves({rom_id}): {len(not_carried)} old save(s) had no local file to carry "
-                f"over and were left in place: {not_carried}",
-            )
+            # Phase 2 — apply. From here mutations begin; a per-target failure is
+            # counted, not fatal: the slot is still confirmed by the caller and the
+            # failed legacy source is left in place (never deleted), so no data
+            # that lives only there is lost.
+            migrated = 0
+            failed = 0
+            for plan in plans:
+                try:
+                    self._apply_migration_plan(
+                        plan, rom_id, save_state, device_id, saves_dir, system, core_so, default_slot, cleanup_limit
+                    )
+                    migrated += 1
+                except Exception as e:
+                    self._logger.warning(
+                        f"_migrate_slot_saves_io({rom_id}): failed to migrate {plan['target']}: {e}",
+                    )
+                    failed += 1
+            return {"status": "migrated", "migrated": migrated, "failed": failed}
+        finally:
+            for tmp_path in created_temps:
+                with contextlib.suppress(OSError):
+                    self._save_file_store.remove_file(tmp_path)
 
-        # Delete only the carried-over saves
-        if ids_to_delete:
-            await self._loop.run_in_executor(
-                None,
-                lambda: self._retry.with_retry(
-                    lambda: self._romm_api.delete_server_saves(ids_to_delete),
-                ),
-            )
+    def _apply_migration_plan(
+        self,
+        plan: dict[str, Any],
+        rom_id: int,
+        save_state: RomSaveSyncState,
+        device_id: str | None,
+        saves_dir: str,
+        system: str,
+        core_so: str | None,
+        default_slot: str | None,
+        cleanup_limit: int | None,
+    ) -> None:
+        """Place one target's server content locally and upload it into the slot.
+
+        ``identical`` keeps the local file (the temp is redundant); ``no_local``
+        moves the downloaded content into place; ``differs`` — reached only with
+        ``use_server_on_conflict`` — quarantines the local file first (#965) then
+        replaces it. The final upload copies the local file into the confirmed
+        slot and adopts the per-file baseline (:meth:`SyncEngine.do_upload_save`).
+        """
+        target = plan["target"]
+        local_path = plan["local_path"]
+        tmp_path = plan["tmp_path"]
+        kind = plan["kind"]
+
+        if kind == "identical":
+            with contextlib.suppress(OSError):
+                self._save_file_store.remove_file(tmp_path)
+        else:
+            if kind == "differs":
+                self._sync_engine.quarantine_local_file(saves_dir, target)
+            self._save_file_store.rename(tmp_path, local_path)
+
+        self._sync_engine.do_upload_save(
+            rom_id,
+            local_path,
+            target,
+            save_state,
+            device_id,
+            system,
+            core_so,
+            default_slot=default_slot,
+            autocleanup_limit=cleanup_limit,
+        )
+
+    def _build_migration_conflict(
+        self,
+        target: str,
+        server_save: dict[str, Any],
+        local_path: str,
+    ) -> dict[str, Any]:
+        """Describe a legacy-vs-local collision for the wizard's resolution dialog.
+
+        Carries both sides' timestamp/size so the wizard can render them: the
+        server side from the legacy save row, the local side from the on-disk
+        file.
+        """
+        return {
+            "filename": target,
+            "server_save_id": server_save.get("id"),
+            "server_updated_at": server_save.get("updated_at", ""),
+            "server_size": server_save.get("file_size_bytes"),
+            "local_mtime": epoch_to_iso(self._save_file_store.get_mtime(local_path)),
+            "local_size": self._save_file_store.get_size(local_path),
+        }

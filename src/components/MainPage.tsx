@@ -888,9 +888,11 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   // Weight the bar by the plan's per-unit item weights (#1382) — the same
   // skip-aware, delta-corrected weights the countdown uses — so a
   // predicted-skip unit takes no width and a huge platform takes its real
-  // share. Falls back to equal-per-unit index weighting when no plan is
-  // measured (QAM opened mid-run before any sync_plan, old backend) or the
-  // plan can't apportion (unit-count mismatch, all-zero weights).
+  // share — except a run's LEADING zero-weight units, which still refresh
+  // covers and so claim an equal index slice rather than pinning the bar to
+  // empty (#1506). Falls back to equal-per-unit index weighting when no plan is
+  // measured (QAM opened mid-run before any sync_plan, old backend) or the plan
+  // can't apportion (unit-count mismatch, all-zero weights).
   const weightedFraction = syncProgress?.totalSteps
     ? weightedCoarseFraction(completedSteps, withinUnit, syncProgress.totalSteps)
     : null;

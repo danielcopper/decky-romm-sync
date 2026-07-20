@@ -32,6 +32,7 @@ import type {
   SwitchSlotResponse,
   LaunchVerdict,
   SlotDeleteInfo,
+  SlotMigrationConflict,
   DeleteSlotResult,
   MigrationStatus,
   MigrationResult,
@@ -583,15 +584,31 @@ export const isSaveTrackingConfigured = callable<[number], { configured: boolean
   "is_save_tracking_configured",
 );
 export const getSaveSetupInfo = callable<[number], SaveSetupInfo>("get_save_setup_info");
-// confirm_slot_choice(rom_id, chosen_slot, migrate, migrate_from_slot):
+// confirm_slot_choice(rom_id, chosen_slot, migrate, migrate_from_slot, use_server_on_conflict):
 // `chosen_slot` must be a non-empty named slot — legacy `slot:null` confirmation
 // is retired (#1276), so an empty/`null` target is rejected by the backend's
 // `invalid_slot_name` guard. `migrate` is an explicit boolean — the
 // non-destructive paths pass `false`; `migrate_from_slot` is `null` unless
 // migrating (then the source slot, with `null` meaning the legacy no-slot source).
+// A content-based migration (#1498) that finds a differing local save returns
+// `needs_conflict_resolution: true` + `conflicts` and confirms nothing — the
+// wizard asks; `use_server_on_conflict: true` resolves in the server's favour
+// (quarantine local, replace with the server content). On success the response
+// carries `migrated`/`failed` counts for the completion copy.
 export const confirmSlotChoice = callable<
-  [number, string, boolean, string | null],
-  { success: boolean; needs_conflict_resolution?: boolean; message: string }
+  [number, string, boolean, string | null, boolean],
+  {
+    success: boolean;
+    needs_conflict_resolution?: boolean;
+    // Canonical failure slug on a wholesale (pre-apply) migration failure —
+    // e.g. "server_unreachable" / "device_not_registered" / "not_installed".
+    // The wizard surfaces `message`; `reason` is for routing/telemetry parity.
+    reason?: string;
+    message: string;
+    conflicts?: SlotMigrationConflict[];
+    migrated?: number;
+    failed?: number;
+  }
 >("confirm_slot_choice");
 export const checkCoreChange = callable<
   [number],

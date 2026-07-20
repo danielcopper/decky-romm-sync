@@ -31,6 +31,13 @@ class WorkUnit:
     # Collection-only: dispatches the correct list-roms endpoint at fetch time.
     # ``None`` is only valid when ``type == "platform"``.
     collection_kind: CollectionKind | None = None
+    # Collection-only: the collection's server ``updated_at`` from the listing,
+    # threaded so the incremental-skip gate can compare it against the stored
+    # ``CollectionSyncState`` stamp (#742). RomM bumps this on any membership
+    # add/remove (and a smart-criteria edit), so an equal value is the
+    # membership-stable signal. ``None`` when the listing omits it (e.g. a
+    # franchise collection, which is never stamped) — skip-internal, off the wire.
+    collection_updated_at: str | None = None
     # Plan-time estimate riders (#1382), platform-only. ``predicted_skip`` is
     # the plan's local-conditions guess at the fetch-time wholesale-skip gate's
     # outcome; ``collapsed_count`` the persisted post-collapse shortcut count.

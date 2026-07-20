@@ -167,6 +167,25 @@ class RommRomReader(Protocol):
         """
         ...
 
+    def list_collection_roms_updated_after(
+        self,
+        collection_id: int,
+        kind: str,
+        updated_after: str,
+        limit: int = 1,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """List a collection's ROMs updated after a given timestamp.
+
+        The collection sibling of :meth:`list_roms_updated_after` (#742):
+        combines the kind-routed collection filter (``smart_collection_id`` when
+        ``kind == "smart"``, else ``collection_id``) with ``updated_after``, so
+        the incremental-skip gate can detect a member ROM's content change with a
+        single ``limit=1`` probe. Only user/smart kinds are queried this way.
+        Returns paginated response filtered by both parameters.
+        """
+        ...
+
     def list_roms_by_collection(
         self, collection_id: int, limit: int = LIST_PAGE_SIZE, offset: int = 0
     ) -> dict[str, Any]:

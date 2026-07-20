@@ -1,7 +1,7 @@
 """The synchronous SQLite Unit of Work — the transactional boundary for one operation.
 
 Opens one ``sqlite3`` connection per operation, applies the runtime
-per-connection PRAGMAs, issues an explicit ``BEGIN IMMEDIATE``, exposes the ten
+per-connection PRAGMAs, issues an explicit ``BEGIN IMMEDIATE``, exposes the eleven
 repositories over that shared connection, and commits / rolls back on exit. Used
 as a synchronous context manager from a service's ``run_in_executor`` worker so
 the connection never escapes its worker thread (ADR-0004 — sync ``sqlite3`` over
@@ -27,6 +27,7 @@ import sqlite3
 from typing import TYPE_CHECKING
 
 from adapters.repositories.bios_file import SqliteBiosFileRepository
+from adapters.repositories.collection_sync_state import SqliteCollectionSyncStateRepository
 from adapters.repositories.firmware_cache import SqliteFirmwareCacheRepository
 from adapters.repositories.kv_config import SqliteKvConfigRepository
 from adapters.repositories.platform_sync_state import SqlitePlatformSyncStateRepository
@@ -42,13 +43,13 @@ if TYPE_CHECKING:
 
 
 class SqliteUnitOfWork:
-    """Atomic transaction boundary over one SQLite connection and the ten repositories.
+    """Atomic transaction boundary over one SQLite connection and the eleven repositories.
 
     A clean ``__exit__`` commits; an exceptional one rolls back and re-raises.
     The connection is opened in ``__enter__`` and closed in ``__exit__`` so it
     lives entirely on the executor thread that drives the ``with`` block.
 
-    The ten repositories are bound in ``__enter__`` (they need the open
+    The eleven repositories are bound in ``__enter__`` (they need the open
     connection). Declaring them here as instance attributes makes the structural
     match against the ``UnitOfWork`` Protocol explicit: the concrete repository
     types each satisfy their repository Protocol, so this class satisfies
@@ -64,6 +65,7 @@ class SqliteUnitOfWork:
     firmware_cache: SqliteFirmwareCacheRepository
     sync_runs: SqliteSyncRunRepository
     platform_sync_state: SqlitePlatformSyncStateRepository
+    collection_sync_state: SqliteCollectionSyncStateRepository
     kv_config: SqliteKvConfigRepository
 
     def __init__(self, db_path: str) -> None:
@@ -98,6 +100,7 @@ class SqliteUnitOfWork:
         self.firmware_cache = SqliteFirmwareCacheRepository(conn)
         self.sync_runs = SqliteSyncRunRepository(conn)
         self.platform_sync_state = SqlitePlatformSyncStateRepository(conn)
+        self.collection_sync_state = SqliteCollectionSyncStateRepository(conn)
         self.kv_config = SqliteKvConfigRepository(conn)
         return self
 

@@ -1,0 +1,62 @@
+-- =============================================================================
+-- 020_add_fetch_generation.sql — mark which fetch generation last saw each ROM
+-- #1504 (superseded rows permanently block the platform incremental skip)
+-- =============================================================================
+--
+-- The platform incremental skip requires the server's platform ``rom_count`` to
+-- equal the number of persisted rows. That count included rows for rom_ids the
+-- server no longer has: when RomM re-creates a ROM under a new id (re-import,
+-- file move, library rebuild) the rebind lane moves the shortcut onto the new
+-- row and UNBINDS the old one, which is then kept forever as an identity anchor
+-- (ADR-0007 — rows are never deleted, and the rejected "auto-delete on
+-- sync-stale" alternative is exactly why). The stale row inflated the count, so
+-- such a platform could never satisfy the condition again and full-fetched on
+-- every single sync.
+--
+-- The fix counts only the rows the platform's last COMPLETE fetch actually
+-- returned, which needs a way to ask "did this fetch see this row?". These two
+-- columns carry that generation marker:
+--
+--   * roms.last_fetch_id — the fetch generation that last saw this row, written
+--     on every chunk of a PLATFORM unit's apply (the run id, unique per
+--     platform fetch since a platform is fetched at most once per run). A
+--     COLLECTION unit deliberately does NOT write it: a collection spans
+--     platforms and would otherwise re-mark a foreign platform's row with a
+--     generation that platform's stamp never saw, dropping its count.
+--   * platform_sync_state.fetch_id — the generation the completion stamp was
+--     written for. The skip counts rows whose last_fetch_id equals it.
+--
+-- Why a marker instead of comparing ``last_synced_at`` against the stamp's
+-- ``completed_at``: the apply is CHUNKED (ADR-0023, 200 items per chunk) and
+-- each chunk commits with its own clock reading, while the stamp is built at
+-- the FINAL chunk. On any platform whose delta exceeds one chunk — every large
+-- platform's first sync — the earlier chunks' rows carry a ``last_synced_at``
+-- strictly BEFORE ``completed_at``, so a timestamp comparison would silently
+-- count only the last chunk and wedge the skip off permanently. An opaque
+-- generation id shared by every chunk of the unit has no such ordering (or
+-- microsecond-precision) hazard.
+--
+-- NULL = unknown, on both columns. A pre-migration row reads NULL, and a
+-- pre-migration stamp reads NULL. An unknown stamp generation cannot say what
+-- its fetch returned, so the skip falls back to counting EVERY row — the
+-- pre-#1504 behavior — rather than refusing to count. That is deliberately the
+-- permissive direction: a platform with no superseded rows keeps skipping
+-- straight through the upgrade instead of paying a forced re-fetch, and one that
+-- DOES carry them already fails the count today, so it full-fetches until both
+-- sides are re-stamped.
+--
+-- That re-stamp lands on the next sync that APPLIES something, not simply the
+-- next sync: both columns are written by the apply's commit, and a run whose
+-- library-wide delta is empty stops at the preview ("Everything is up to date",
+-- no Apply offered), so it reaches no commit and leaves both columns as they
+-- were. The wait is nonetheless short — an applying run commits every unit that
+-- did not wholesale-skip, including a unit whose own delta is empty (it chunks
+-- into a single leftover chunk), and a platform carrying superseded rows can
+-- never wholesale-skip, so it is always among the units such a run heals.
+-- Nothing is deleted or rewritten here.
+--
+-- Transaction-safe DDL only — the runner (adapters/sqlite_migrations.py) wraps
+-- BEGIN/COMMIT and stamps PRAGMA user_version = 20.
+-- -----------------------------------------------------------------------------
+ALTER TABLE roms ADD COLUMN last_fetch_id TEXT;  -- fetch generation that last saw this row; NULL = unknown
+ALTER TABLE platform_sync_state ADD COLUMN fetch_id TEXT;  -- generation this stamp was written for; NULL = unknown

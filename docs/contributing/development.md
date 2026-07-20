@@ -104,6 +104,26 @@ python -m pytest tests/contract/ -q
 A `backend.ts` manifest gate (Phase 2) that pins the frontend and backend to one parsed artifact is a forthcoming
 separate change. See the CLAUDE.md "Testing" section for the full contract-tier rules.
 
+### Gavel conformance vectors
+
+The save-sync decision kernels are also published as a standalone client contract,
+[romm-gavel](https://github.com/danielcopper/romm-gavel), with two vector families run against the production kernel so
+it and the published spec can't silently drift apart. `tests/domain/test_sync_action_gavel_vectors.py` runs the
+**ladder** family (the 409 resolution ladder, `domain/sync_action.resolve_upload_conflict`);
+`tests/domain/test_sync_action_gavel_table_vectors.py` runs the **decision-table** family (the full
+per-`(rom, filename,
+slot)` decision, `domain/sync_action.compute_sync_action`). The vectors are vendored verbatim under
+`tests/domain/gavel_vectors/`, one subdirectory per family mirroring upstream `vectors/` (`ladder/` — a curated
+named-case set plus the exhaustive equivalence classes; `decision-table/` — curated named cases) — there is no submodule
+and no network in CI, so every contract change lands as a reviewable diff. Run them like any other test:
+
+```bash
+python -m pytest tests/domain/test_sync_action_gavel_vectors.py tests/domain/test_sync_action_gavel_table_vectors.py -q
+```
+
+Updating the vectors means deliberately re-copying the JSON from the matching upstream `vectors/<family>/` directory and
+bumping the commit reference in `tests/domain/gavel_vectors/README.md`; never edit a vector to match the kernel.
+
 Every backend feature or callable where testing makes sense should have unit tests covering:
 
 - **Happy path** — normal successful operation

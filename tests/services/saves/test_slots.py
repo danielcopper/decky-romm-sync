@@ -8,7 +8,8 @@ import pytest
 
 from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_layout import ContentDir
-from lib.errors import RommApiError
+from lib.errors import RommApiError, RommConnectionError
+from lib.list_result import ErrorCode
 from tests.services.saves._helpers import (
     _create_save,
     _file_md5,
@@ -624,34 +625,115 @@ class TestConfirmSlotChoice:
         assert _require_save_state(svc, 42).slot_confirmed is True
 
     @pytest.mark.asyncio
-    async def test_confirm_with_legacy_no_slot_migration(self, tmp_path):
-        """Migrate from the legacy slot: re-upload to new slot, delete old.
+    async def test_confirm_legacy_migration_copies_content_into_slot(self, tmp_path):
+        """Content-based legacy migration: copy the newest legacy save into the slot.
 
-        ``migrate=True`` with ``migrate_from_slot=None`` migrates the legacy
-        no-slot server saves into ``chosen_slot``.
+        ``migrate=True`` with ``migrate_from_slot=None`` copies the newest legacy
+        (slot:null) save's *content* into ``chosen_slot`` under the canonical name
+        — independent of the legacy row's own (web-player timestamped) filename
+        (#1498). The legacy source is never deleted (#1478).
         """
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         svc._config.settings["autocleanup_limit"] = 7
         _set_device_id(svc, "dev-1")
         _install_rom(svc, tmp_path)
-        _create_save(tmp_path)
-        # Old save on server with slot=None (legacy)
-        fake.saves[1] = _server_save(save_id=1, slot=None)
+        _create_save(tmp_path, content=b"S" * 1024)  # local pokemon.srm
+        # Legacy save with a web-player timestamped filename that never equals the
+        # canonical local name — the old filename-equality migration left it in
+        # place; the content-based one carries it (#1498).
+        fake.saves[1] = _server_save(save_id=1, filename="pokemon [2026-07-19 13-41-44-611].srm", slot=None)
+        fake.set_server_save_content(1, b"S" * 1024)  # byte-identical to local
 
         result = await svc.confirm_slot_choice(42, "default", True, None)
         assert result["success"] is True
-        # New save should have been uploaded
+        assert result["migrated"] == 1
+        assert result["failed"] == 0
+        # Uploaded into the named slot, retention cap riding along on the POST.
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
-        assert len(upload_calls) >= 1
-        # Check it was uploaded with the new slot
+        assert len(upload_calls) == 1
         assert upload_calls[0][2].get("slot") == "default"
-        # Carry-over POST creates a new entry, so the user's retention cap rides along.
         assert upload_calls[0][2].get("autocleanup_limit") == 7
-        # Old save should have been deleted
-        delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
-        assert len(delete_calls) == 1
-        assert 1 in delete_calls[0][1][0]  # save_id 1 in the list
+        # The legacy source is never deleted — it stays in the read-only bucket.
+        assert not any(c[0] == "delete_server_saves" for c in fake.call_log)
+        assert 1 in fake.saves
+        assert _require_save_state(svc, 42).slot_confirmed is True
+
+    @pytest.mark.asyncio
+    async def test_confirm_migration_no_local_file_writes_content(self, tmp_path):
+        """No local file → server content is written to disk and copied into the slot."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        # No local save file on disk.
+        fake.saves[1] = _server_save(save_id=1, filename="pokemon [ts].srm", slot=None)
+        fake.set_server_save_content(1, b"SERVER-CONTENT")
+
+        result = await svc.confirm_slot_choice(42, "default", True, None)
+        assert result["success"] is True
+        assert result["migrated"] == 1
+        # The content landed on disk under the canonical name.
+        assert (tmp_path / "saves" / "gba" / "pokemon.srm").read_bytes() == b"SERVER-CONTENT"
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        assert upload_calls[0][2].get("slot") == "default"
+        assert not any(c[0] == "delete_server_saves" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_confirm_migration_differing_local_holds_for_conflict(self, tmp_path):
+        """A differing local file holds the migration for the user's decision.
+
+        The response carries ``needs_conflict_resolution=True`` + a conflict
+        entry, nothing is uploaded/deleted, the local file is untouched, and the
+        slot is NOT confirmed (#1498).
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"LOCAL" * 10)
+        fake.saves[1] = _server_save(save_id=1, filename="pokemon [ts].srm", slot=None)
+        fake.set_server_save_content(1, b"SERVER" * 10)
+
+        result = await svc.confirm_slot_choice(42, "default", True, None)
+        assert result["success"] is False
+        assert result["needs_conflict_resolution"] is True
+        assert result["reason"] == "local_conflict"
+        conflicts = result["conflicts"]
+        assert len(conflicts) == 1
+        assert conflicts[0]["filename"] == "pokemon.srm"
+        assert conflicts[0]["server_save_id"] == 1
+        # Nothing migrated, nothing deleted, local untouched, slot unconfirmed.
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+        assert not any(c[0] == "delete_server_saves" for c in fake.call_log)
+        assert (tmp_path / "saves" / "gba" / "pokemon.srm").read_bytes() == b"LOCAL" * 10
+        assert _get_save_state(svc, 42) is None
+
+    @pytest.mark.asyncio
+    async def test_confirm_migration_use_server_quarantines_local(self, tmp_path):
+        """ "Use the server save": the differing local file is quarantined, then replaced."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"LOCAL" * 10)
+        fake.saves[1] = _server_save(save_id=1, filename="pokemon [ts].srm", slot=None)
+        fake.set_server_save_content(1, b"SERVER" * 10)
+
+        result = await svc.confirm_slot_choice(42, "default", True, None, True)
+        assert result["success"] is True
+        assert result["migrated"] == 1
+        local_dir = tmp_path / "saves" / "gba"
+        # Local replaced with server content; the original backed up (never deleted).
+        assert (local_dir / "pokemon.srm").read_bytes() == b"SERVER" * 10
+        backups = list((local_dir / ".romm-backup").glob("pokemon*"))
+        assert len(backups) == 1
+        assert backups[0].read_bytes() == b"LOCAL" * 10
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        assert upload_calls[0][2].get("slot") == "default"
+        assert _require_save_state(svc, 42).slot_confirmed is True
 
     @pytest.mark.asyncio
     async def test_confirm_migration_no_old_saves(self, tmp_path):
@@ -673,16 +755,16 @@ class TestConfirmSlotChoice:
         assert len(delete_calls) == 0
 
     @pytest.mark.asyncio
-    async def test_confirm_migration_failure_still_confirms_slot(self, tmp_path):
-        """Migration failure should still confirm the slot but report the issue."""
+    async def test_confirm_migration_upload_failure_counts_and_confirms(self, tmp_path):
+        """An upload failure during migration is counted (not fatal); the slot is still confirmed."""
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "dev-1")
         _install_rom(svc, tmp_path)
-        _create_save(tmp_path)
-        fake.saves[1] = _server_save(save_id=1, slot=None)
+        _create_save(tmp_path, content=b"X" * 512)
+        fake.saves[1] = _server_save(save_id=1, filename="pokemon [ts].srm", slot=None)
+        fake.set_server_save_content(1, b"X" * 512)  # identical → migrate path
 
-        # Make upload_save fail during migration
         def failing_upload(*args, **kwargs):
             raise RommApiError(500, "Server error")
 
@@ -690,39 +772,185 @@ class TestConfirmSlotChoice:
 
         result = await svc.confirm_slot_choice(42, "default", True, None)
         assert result["success"] is True
-        assert "migration failed" in result["message"].lower()
-        # Slot is still confirmed despite migration failure
+        assert result["migrated"] == 0
+        assert result["failed"] == 1
+        # Slot is still confirmed despite the migration failure.
         assert _require_save_state(svc, 42).slot_confirmed is True
 
     @pytest.mark.asyncio
-    async def test_confirm_migration_skips_delete_for_save_without_local_file(self, tmp_path):
-        """#1005: an old-slot save with NO matching local file is NOT deleted.
+    async def test_confirm_migration_download_failure_holds_wizard(self, tmp_path):
+        """A phase-1 download failure is wholesale (pre-apply): canonical failure, slot NOT confirmed.
 
-        One old save has a local counterpart (re-uploaded, then its old id
-        deleted); the other has none (left in place, excluded from the delete).
+        No durable state was mutated (only scratch temps, which are cleaned up),
+        so the migration must not silently confirm-and-close — it returns the
+        canonical failure and the wizard stays open for a retry (#1498 review).
         """
         svc, fake = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         _set_device_id(svc, "dev-1")
         _install_rom(svc, tmp_path)
-        # Local file matches "pokemon.srm" only.
-        _create_save(tmp_path)
-        # Two legacy server saves: one with a local match, one orphaned.
-        fake.saves[1] = _server_save(save_id=1, filename="pokemon.srm", slot=None)
-        fake.saves[2] = _server_save(save_id=2, filename="orphan.srm", slot=None)
+        _create_save(tmp_path, content=b"L" * 100)
+        fake.saves[1] = _server_save(save_id=1, filename="pokemon [ts].srm", slot=None)
+
+        def failing_download(save_id, dest_path):
+            raise RommConnectionError("offline")
+
+        fake.download_save = failing_download
+
+        result = await svc.confirm_slot_choice(42, "default", True, None)
+        assert result["success"] is False
+        assert result["reason"] == ErrorCode.SERVER_UNREACHABLE.value
+        assert result["needs_conflict_resolution"] is False
+        # Slot NOT confirmed, local file untouched, no scratch temp left behind.
+        assert _get_save_state(svc, 42) is None
+        assert (tmp_path / "saves" / "gba" / "pokemon.srm").read_bytes() == b"L" * 100
+        assert not (tmp_path / "saves" / "gba" / "pokemon.srm.tmp").exists()
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+        assert not any(c[0] == "delete_server_saves" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_confirm_migration_list_saves_failure_holds_then_retry_works(self, tmp_path):
+        """The reviewer's scenario: a transient list_saves throw holds the wizard; a retry migrates.
+
+        First attempt: list_saves throws → canonical failure, slot NOT confirmed,
+        no local mutation (migrated=0/failed=0 must NEVER be a silent success).
+        Second attempt (server back): the migration runs and the slot is confirmed.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"L" * 100)
+        fake.saves[1] = _server_save(save_id=1, filename="pokemon [ts].srm", slot=None)
+        fake.set_server_save_content(1, b"L" * 100)  # identical → the retry migrates silently
+
+        orig_list = fake.list_saves
+        calls = {"n": 0}
+
+        def flaky_list(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RommConnectionError("offline")
+            return orig_list(*args, **kwargs)
+
+        fake.list_saves = flaky_list
+
+        result = await svc.confirm_slot_choice(42, "default", True, None)
+        assert result["success"] is False
+        assert result["reason"] == ErrorCode.SERVER_UNREACHABLE.value
+        assert result["needs_conflict_resolution"] is False
+        # Nothing confirmed, nothing uploaded, local untouched.
+        assert _get_save_state(svc, 42) is None
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+        assert (tmp_path / "saves" / "gba" / "pokemon.srm").read_bytes() == b"L" * 100
+
+        # Retry: server is back → the migration runs and the slot is confirmed.
+        result2 = await svc.confirm_slot_choice(42, "default", True, None)
+        assert result2["success"] is True
+        assert result2["migrated"] == 1
+        assert _require_save_state(svc, 42).slot_confirmed is True
+
+    @pytest.mark.asyncio
+    async def test_confirm_migration_phase1_throw_cleans_earlier_temp(self, tmp_path):
+        """A mid-phase-1 download throw removes the earlier target's .tmp (no scratch residue)."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        # Two legacy saves mapping to two distinct canonical targets (different
+        # extensions) so phase 1 downloads two temps before the second throws.
+        fake.saves[1] = _server_save(save_id=1, filename="a [ts].srm", slot=None)
+        fake.saves[1]["file_extension"] = "srm"
+        fake.saves[2] = _server_save(save_id=2, filename="b [ts].rtc", slot=None)
+        fake.saves[2]["file_extension"] = "rtc"
+
+        orig_download = fake.download_save
+
+        def selective_download(save_id, dest_path):
+            if save_id == 2:
+                raise RommConnectionError("offline")
+            return orig_download(save_id, dest_path)
+
+        fake.download_save = selective_download
+
+        result = await svc.confirm_slot_choice(42, "default", True, None)
+        assert result["success"] is False
+        assert result["reason"] == ErrorCode.SERVER_UNREACHABLE.value
+        # The first target's downloaded temp was cleaned up by the finally.
+        saves_dir = tmp_path / "saves" / "gba"
+        assert not (saves_dir / "pokemon.srm.tmp").exists()
+        assert not (saves_dir / "pokemon.rtc.tmp").exists()
+        assert _get_save_state(svc, 42) is None
+
+    @pytest.mark.asyncio
+    async def test_confirm_migration_no_device_holds_wizard(self, tmp_path):
+        """No registered device → the migration is refused before any mutation (#1494/#1498).
+
+        The #1478 upload guard would otherwise fire only AFTER local files were
+        touched; prechecking the device at the top keeps the wizard clean.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        # No device registered (no _set_device_id).
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"L" * 100)
+        fake.saves[1] = _server_save(save_id=1, slot=None)
+
+        result = await svc.confirm_slot_choice(42, "default", True, None)
+        assert result["success"] is False
+        assert result["reason"] == "device_not_registered"
+        assert result["needs_conflict_resolution"] is False
+        # No mutation, no server traffic (the precheck runs before list_saves).
+        assert _get_save_state(svc, 42) is None
+        assert (tmp_path / "saves" / "gba" / "pokemon.srm").read_bytes() == b"L" * 100
+        assert not any(c[0] == "list_saves" for c in fake.call_log)
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_confirm_migration_not_installed_holds_wizard(self, tmp_path):
+        """ROM not installed → canonical failure, slot NOT confirmed (never a silent 0/0 success)."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        # No _install_rom — the ROM has no install row.
+        fake.saves[1] = _server_save(save_id=1, slot=None)
+
+        result = await svc.confirm_slot_choice(42, "default", True, None)
+        assert result["success"] is False
+        assert result["reason"] == "not_installed"
+        assert result["needs_conflict_resolution"] is False
+        assert _get_save_state(svc, 42) is None
+        assert not any(c[0] == "upload_save" for c in fake.call_log)
+
+    @pytest.mark.asyncio
+    async def test_confirm_migration_collapses_duplicate_targets_no_delete(self, tmp_path):
+        """Two legacy saves mapping to one canonical target collapse to the newest; neither is deleted.
+
+        The content-based grouping keys by the canonical local target, so two
+        legacy saves that both resolve to ``pokemon.srm`` collapse to the newest
+        by ``updated_at`` — the older one is neither carried nor deleted, so no
+        data that lives only in the legacy bucket is lost (#1005/#1498).
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"NEW" * 100)
+        fake.saves[1] = _server_save(save_id=1, filename="old [ts1].srm", slot=None, updated_at="2026-01-01T00:00:00Z")
+        fake.saves[2] = _server_save(save_id=2, filename="new [ts2].srm", slot=None, updated_at="2026-06-01T00:00:00Z")
+        fake.set_server_save_content(1, b"OLD" * 100)
+        fake.set_server_save_content(2, b"NEW" * 100)  # newest == local → identical
 
         result = await svc.confirm_slot_choice(42, "default", True, None)
         assert result["success"] is True
-        # Only the matched save was re-uploaded.
+        assert result["migrated"] == 1
+        # Only the newest was carried — exactly one upload.
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
-        # Only the carried-over save id (1) is deleted; the orphan (2) survives.
-        delete_calls = [c for c in fake.call_log if c[0] == "delete_server_saves"]
-        assert len(delete_calls) == 1
-        deleted_ids = delete_calls[0][1][0]
-        assert 1 in deleted_ids
-        assert 2 not in deleted_ids
-        assert 2 in fake.saves  # orphan still on the server
+        # Neither legacy source is deleted.
+        assert not any(c[0] == "delete_server_saves" for c in fake.call_log)
+        assert 1 in fake.saves
+        assert 2 in fake.saves
 
     @pytest.mark.asyncio
     async def test_is_configured_after_confirm(self, tmp_path):

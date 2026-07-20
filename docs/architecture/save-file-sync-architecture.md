@@ -279,10 +279,62 @@ backup.
   table name migration `005` targets; migration `018` later renames it to `rom_save_sync_states`). No save data is
   touched; the wizard simply reappears for that ROM and the user re-picks a named slot (optionally migrating the legacy
   saves in). `resolve_default_slot` never returns `None` — a blank/unset default coerces to `"default"`.
+- **Why the bucket is not coming back as an opt-in write target** —
+  [ADR-0026](../adr/0026-legacy-bucket-stays-read-only.md) records the decision and what was measured against a live
+  RomM 5.0.0 server to reach it (the web player can continue a **named**-slot save, so interop does not require
+  slot-less writes; the slot-less bucket has no server-side write-currency gate; the stray-creating player behavior and
+  the server-side row/file desync are being fixed upstream).
 - Legacy `slot:null` survives **only** as a migration **source**. `domain/save_slot.py` (`normalize_slot`) still defines
   the equivalence class `slot ∈ {null, ""}` (state stores `active_slot=None`, the persisted slots map keys it `""`, and
   the server returns `slot: null`) so those saves can be read and deleted on the wire (below), but they are never the
   active slot of a confirmed ROM.
+
+#### Migrating legacy saves into a named slot (content-based, #1498)
+
+When the wizard's **Track** action carries a game's legacy (`slot:null`) saves into a chosen named slot, the migration
+is **content-based**, not filename-based. RomM's web player writes legacy saves under timestamped names (e.g.
+`Game [2026-07-19 13-41-44-611].srm`) that never equal the canonical local name, so the old filename-equality migration
+silently left the target slot empty (the [#1498](https://github.com/danielcopper/decky-romm-sync/issues/1498) defect,
+part of the [#1478](https://github.com/danielcopper/decky-romm-sync/issues/1478) triage). Instead, for each **canonical
+local target** (`<rom_name>.<ext>`, the same mapping `switch_slot` uses) the migration:
+
+1. Groups the legacy saves by the canonical filename each maps to — independent of the legacy row's own name — and picks
+   the **newest** by `updated_at` per target. Two legacy saves that resolve to one target collapse to the newest; the
+   older one is neither carried nor deleted.
+2. Downloads that save's **content** and classifies it against the local file:
+   - **No local file** → the content is written locally under the canonical name and copied into the slot.
+   - **Byte-identical** local file (same zip-aware content hash the sync kernel uses) → migrated silently.
+   - **Differing** local file → the migration **holds** for an informed confirmation: nothing is migrated and the slot
+     is **not** confirmed (`needs_conflict_resolution` + a `conflicts` list on the response), and the wizard shows both
+     sides' size + timestamp — the comparison that stops a newer local save being buried unnoticed. The dialog offers
+     exactly two ways out: _Replace local save_ (the second call, with `use_server_on_conflict`), which quarantines the
+     local file into `.romm-backup` (never deleted, #965) before writing the server content, or _Cancel_, which makes no
+     second call at all — nothing changes, the slot stays unconfirmed, and the wizard's start-fresh route
+     (`Use slot '<default>'`) is still open. There is deliberately **no** "keep my local save" action: it would produce
+     exactly the same end state as that start-fresh button while re-opening a decision the user already made by clicking
+     Track.
+3. Copies the content into the slot through the normal upload path (`do_upload_save`, `overwrite=false`,
+   409-backstopped), adopting the per-file baseline — so the migrated slot is immediately in sync.
+
+The legacy source saves are **never deleted** — a migration copies their content into the slot and leaves the sources in
+the read-only legacy bucket. Deleting them would reopen the legacy-write door #1478/#1496 just closed and would yank the
+web player's bucket head away from a browser session still on the v1 player.
+
+Failure handling splits on **whether the apply phase began** (#1498 review): the migration first checks its
+preconditions (a registered device — otherwise the #1478 upload guard would only fire _after_ local files were touched —
+and an installed ROM), then downloads every target to a scratch `.tmp` sibling (never the real save files) and
+classifies it. A **wholesale** failure _before_ the apply phase — the device/install precheck, a `list_saves` throw, or
+a phase-1 download throw — returns the **canonical failure** (`{success: false, reason, message}`, the `reason` from
+`classify_error`) and confirms **nothing**: the scratch temps are cleared and the wizard stays open on the message, so
+the user can simply retry Track. Once the apply phase begins, a **per-target** upload failure is **counted, not fatal**
+(`Could not migrate N save(s)`): the slot is still confirmed and the failed source is left in place, so no save that
+lives only in the legacy bucket is ever lost. (A migration whose server had no legacy saves is a no-op that confirms the
+slot silently; a requested migration can never return `success: true` with nothing migrated while legacy saves existed.)
+
+The wizard names the target slot on **every** surface — the pre-click explainer under the legacy entry ("the legacy save
+itself is left untouched"), the confirm modal, and the completion toast
+(`Migrated 1 save into 'default'. The legacy save stays in the read-only legacy bucket.`) — never log-only, and the
+completion copy pre-empts the "why is the legacy save still there?" confusion.
 
 #### Addressing legacy saves on the wire (#1061)
 

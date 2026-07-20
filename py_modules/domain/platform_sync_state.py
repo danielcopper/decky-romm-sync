@@ -35,17 +35,28 @@ class PlatformSyncState:
     platform_slug: str
     completed_at: str
     rom_count: int
+    fetch_id: str | None = None
 
     @classmethod
-    def stamp(cls, *, platform_slug: str, at: str, rom_count: int) -> PlatformSyncState:
+    def stamp(cls, *, platform_slug: str, at: str, rom_count: int, fetch_id: str | None = None) -> PlatformSyncState:
         """Record that ``platform_slug`` fully synced at ISO timestamp ``at``.
 
         ``rom_count`` is the server's platform ROM count as of completion — the
         skip re-checks it against the live count and invalidates the stamp on any
         change.
+
+        ``fetch_id`` is the generation marker every row of that completing fetch
+        carries (``Rom.record_fetch_generation``), so the skip can count exactly
+        the rows the fetch returned rather than every row of the platform — a row
+        for a rom_id the server dropped keeps an older generation and stops
+        counting, while staying on disk (ADR-0007, #1504). ``None`` is "unknown"
+        (a stamp written before this contract): it cannot say what its fetch
+        returned, so the skip counts every row (the pre-#1504 behavior) until an
+        apply commit re-stamps both sides — a preview-only run (empty
+        library-wide delta) reaches no commit and leaves them unchanged.
         """
         if not platform_slug:
             raise ValueError("platform_slug is required")
         if rom_count < 0:
             raise ValueError("rom_count must be non-negative")
-        return cls(platform_slug=platform_slug, completed_at=at, rom_count=rom_count)
+        return cls(platform_slug=platform_slug, completed_at=at, rom_count=rom_count, fetch_id=fetch_id)

@@ -110,7 +110,13 @@ aside into the `.romm-backup` folder next to your saves first, so nothing is los
 certain the small/empty local file is the one you want to keep — that uploads it and replaces the server copy.
 
 If you need to recover a save by hand, look in the `.romm-backup` folder inside your saves directory (e.g.
-`<saves_path>/gba/.romm-backup/`): every file the plugin moves aside is timestamped there.
+`<saves_path>/gba/.romm-backup/`): every file the plugin moves aside is timestamped there. The plugin moves a save aside
+whenever it is about to be overwritten or removed — not just when resolving a conflict with **Use Server**, but also
+when you switch save slots and when the setup wizard migrates a legacy save into a slot.
+
+Backups are **not** kept forever. The folder keeps the **newest 10 backups per save file**; older ones are pruned the
+next time that same save is moved aside. Backups of a different save file are never pruned to make room. If you want to
+keep a particular recovery copy long-term, move it out of `.romm-backup` yourself.
 
 ## Artwork Missing
 

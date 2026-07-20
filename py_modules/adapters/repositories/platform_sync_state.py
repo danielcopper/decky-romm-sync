@@ -17,7 +17,7 @@ from domain.platform_sync_state import PlatformSyncState
 if TYPE_CHECKING:
     import sqlite3
 
-_COLUMNS = "platform_slug, completed_at, rom_count"
+_COLUMNS = "platform_slug, completed_at, rom_count, fetch_id"
 
 
 def _row_to_state(row: sqlite3.Row) -> PlatformSyncState:
@@ -25,6 +25,7 @@ def _row_to_state(row: sqlite3.Row) -> PlatformSyncState:
         platform_slug=row["platform_slug"],
         completed_at=row["completed_at"],
         rom_count=row["rom_count"],
+        fetch_id=row["fetch_id"],
     )
 
 
@@ -40,8 +41,8 @@ class SqlitePlatformSyncStateRepository(BaseRepository):
 
     def save(self, state: PlatformSyncState) -> None:
         self._conn.execute(
-            f"INSERT OR REPLACE INTO platform_sync_state ({_COLUMNS}) VALUES (?, ?, ?)",
-            (state.platform_slug, state.completed_at, state.rom_count),
+            f"INSERT OR REPLACE INTO platform_sync_state ({_COLUMNS}) VALUES (?, ?, ?, ?)",
+            (state.platform_slug, state.completed_at, state.rom_count, state.fetch_id),
         )
 
     def delete(self, platform_slug: str) -> None:

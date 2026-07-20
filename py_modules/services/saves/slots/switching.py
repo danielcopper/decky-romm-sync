@@ -12,12 +12,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 from domain.save_slot import save_in_slot
 from lib.list_result import ErrorCode
-from services.saves._helpers import local_save_target
+from services.saves._helpers import newest_server_saves_by_target
 from services.saves._messages import SAVE_SYNC_IN_CONTENT_DIR
 from services.saves._settings import resolve_default_slot, save_sync_enabled
 
@@ -262,7 +261,7 @@ class SlotSwitcher:
 
             # 7. Make the saves dir + tracking coherent with the new slot:
             default_slot = resolve_default_slot(self._settings)
-            targets = self._newest_server_saves_by_target(slot_saves, info["rom_name"])
+            targets = newest_server_saves_by_target(slot_saves, info["rom_name"])
             switch_errors = await self._loop.run_in_executor(
                 None, self._apply_slot_switch, rom_id, saves_dir, system, save_state, device_id, targets, default_slot
             )
@@ -282,29 +281,6 @@ class SlotSwitcher:
         # get_save_status re-acquires rom_lock(rom_id), which would self-deadlock.
         save_status = await self._status_service.get_save_status(rom_id)
         return {"success": True, "save_status": save_status}
-
-    @staticmethod
-    def _newest_server_saves_by_target(slot_saves: list[dict[str, Any]], rom_name: str) -> dict[str, dict[str, Any]]:
-        """Pick the newest server save per canonical local target.
-
-        Two server saves mapping to one local target (e.g. both resolve to
-        ``<rom_name>.srm``) collapse to only the newest by ``updated_at``, so the
-        on-disk result + ``tracked_save_id`` are deterministic rather than
-        server-list-order dependent (#1058). Keyed by the canonical target
-        filename the save downloads into.
-        """
-        newest: dict[str, dict[str, Any]] = {}
-        for ss in slot_saves:
-            target = local_save_target(ss, rom_name)
-            current = newest.get(target)
-            if current is None:
-                newest[target] = ss
-                continue
-            if (parse_iso_to_epoch(ss.get("updated_at")) or 0.0) > (
-                parse_iso_to_epoch(current.get("updated_at")) or 0.0
-            ):
-                newest[target] = ss
-        return newest
 
     def _apply_slot_switch(
         self,

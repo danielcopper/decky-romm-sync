@@ -42,6 +42,11 @@ _SYNC_COLUMNS = (
     "revision",
     "tags",
     "is_main_sibling",
+    # The fetch generation that last saw this row (#1504). Server-independent
+    # like the pins, but it rides the UPSERT: the reporter merges it
+    # confirmed-else-preserved before save(), so a platform apply advances it
+    # while a collection apply carries the existing value forward.
+    "last_fetch_id",
 )
 
 # Read set: the synced columns plus the pin-only emulator_override, selected_disc,
@@ -79,6 +84,7 @@ def _row_to_rom(row: sqlite3.Row) -> Rom:
         revision=row["revision"],
         tags=tuple(json.loads(row["tags"])),
         is_main_sibling=bool(row["is_main_sibling"]),
+        last_fetch_id=row["last_fetch_id"],
     )
 
 
@@ -149,6 +155,7 @@ class SqliteRomRepository(BaseRepository):
                 rom.revision,
                 json.dumps(list(rom.tags)),
                 int(rom.is_main_sibling),
+                rom.last_fetch_id,
             ),
         )
 

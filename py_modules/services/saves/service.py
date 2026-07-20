@@ -299,14 +299,20 @@ class SaveService:
         chosen_slot: str | None,
         migrate: bool = False,
         migrate_from_slot: str | None = None,
+        use_server_on_conflict: bool = False,
     ) -> dict[str, Any]:
         """Confirm which slot to use for a game's save sync.
 
-        ``chosen_slot`` is ``None`` for the legacy slot or the slot name. Migration
-        runs only when ``migrate`` is true, carrying saves from ``migrate_from_slot``
-        (``None`` = the legacy no-slot source) into ``chosen_slot``.
+        ``chosen_slot`` is the slot name. Migration runs only when ``migrate`` is
+        true, copying the newest legacy save per canonical target from
+        ``migrate_from_slot`` (``None`` = the legacy no-slot source) into
+        ``chosen_slot`` (#1498). A differing local save is held for the user's
+        decision unless ``use_server_on_conflict`` resolves it in the server's
+        favour.
         """
-        return await self._slots.confirm_slot_choice(rom_id, chosen_slot, migrate, migrate_from_slot)
+        return await self._slots.confirm_slot_choice(
+            rom_id, chosen_slot, migrate, migrate_from_slot, use_server_on_conflict
+        )
 
     async def get_slot_delete_info(self, rom_id: int, slot: str) -> dict[str, Any]:
         """Return info about what deleting a slot would do, for the confirmation modal."""

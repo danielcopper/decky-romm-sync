@@ -26,7 +26,7 @@ def predict_unit_skip(
     stamp_completed_at: str | None,
     stamp_rom_count: int | None,
     unit_rom_count: int,
-    persisted_count: int,
+    fetched_count: int,
     registry_count: int,
     needs_backfill: bool,
 ) -> bool:
@@ -36,7 +36,11 @@ def predict_unit_skip(
     (truthy ``completed_at``, non-``None`` ``rom_count``), the stamped ROM
     count still matches the server's ``rom_count`` for the unit, rows are
     persisted and at least one is bound, no ``sibling_group_key`` backfill
-    is pending, and the persisted row count matches the server count. The
+    is pending, and the count of rows carrying the stamp's fetch generation
+    matches the server count. ``fetched_count`` is that generation-filtered
+    count (``domain/fetch_generation.count_rows_for_skip``), not every
+    persisted row: a row for a rom_id the server dropped is retained
+    (ADR-0007) but does not count (#1504). The
     gate's server-delta check (``list_roms_updated_after``) is deliberately
     NOT replayed — no network at plan time — so a platform whose rows
     changed server-side since the stamp may be predicted as a skip that the
@@ -53,8 +57,8 @@ def predict_unit_skip(
         bool(stamp_completed_at)
         and stamp_rom_count is not None
         and stamp_rom_count == unit_rom_count
-        and persisted_count > 0
-        and persisted_count == unit_rom_count
+        and fetched_count > 0
+        and fetched_count == unit_rom_count
         and registry_count > 0
         and not needs_backfill
     )

@@ -1,0 +1,117 @@
+{
+  "family": "upload-409-ladder",
+  "spec": "SPEC.md — The 409 resolution ladder (normative)",
+  "description": "Curated, named cases for the 409 resolution ladder. Every case here is also covered by the exhaustive equivalence-class set; this file exists so the load-bearing scenarios carry a name and a rationale. Hash strings are placeholders — only presence and equality carry meaning.",
+  "vectors": [
+    {
+      "name": "unchanged-since-baseline",
+      "rationale": "Local equals the recorded baseline: the client holds no un-synced work, so there is nothing of its own to protect. Adopt the server head.",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "diverged-but-reproduces-head",
+      "rationale": "Local diverged from the baseline, yet is byte-identical to what the server now holds. Adopting identical bytes loses nothing; downloading re-establishes the baseline.",
+      "input": {
+        "local_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": "download"
+    },
+    {
+      "name": "two-sided-divergence",
+      "rationale": "Local carries changes AND the server independently moved (which is exactly what the 409 proves). Genuine divergence — the user decides.",
+      "input": {
+        "local_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "cccccccccccccccccccccccccccccccc",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "no-baseline-no-parity",
+      "rationale": "No recorded baseline, and local does not match the server head: local provenance is unknown, so nothing proves it safe to discard. Uncertainty resolves to conflict, never to a silent overwrite.",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "no-baseline-but-parity",
+      "rationale": "No recorded baseline (fresh reinstall, copied SD card, second device), but local is byte-identical to the server head — the parity route is the only identity route such a client has, and it is sufficient.",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": null,
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": null
+      },
+      "expected": "download"
+    },
+    {
+      "name": "empty-hashes-prove-nothing",
+      "rationale": "Both local hash and baseline are empty strings. They compare equal, but an empty hash cannot read as \"provably unchanged\" — absence of evidence resolves to conflict.",
+      "input": {
+        "local_hash": "",
+        "last_sync_hash": "",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "empty-server-hash-no-match",
+      "rationale": "The server head carries no content hash (older or migrated save). A present local hash cannot match an absent server hash — uncertainty resolves to conflict.",
+      "input": {
+        "local_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "server_content_hash": "",
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "stored-server-hash-alone-proves-nothing",
+      "rationale": "The stored server hash matches the live server head, but local diverged from the baseline. Provenance requires local to be unchanged since the baseline — a matching server-side pair says nothing about un-synced local work.",
+      "input": {
+        "local_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "cccccccccccccccccccccccccccccccc",
+        "last_sync_server_hash": "cccccccccccccccccccccccccccccccc"
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "all-unknown",
+      "rationale": "No information at all. The safe default under uncertainty is conflict — never a silent overwrite in either direction.",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": null,
+        "server_content_hash": null,
+        "last_sync_server_hash": null
+      },
+      "expected": "conflict"
+    },
+    {
+      "name": "local-hash-unknown",
+      "rationale": "The local file's hash could not be computed. Without it neither ladder rule can prove safety, whatever the other inputs say.",
+      "input": {
+        "local_hash": null,
+        "last_sync_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "server_content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "last_sync_server_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": "conflict"
+    }
+  ]
+}

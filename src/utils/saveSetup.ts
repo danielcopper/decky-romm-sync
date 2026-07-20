@@ -56,12 +56,15 @@ export interface LaunchGateSetupDeps {
   /** ROM id passed to `confirmSlotChoice` on the auto-confirm branch. */
   rid: number;
   /** Resolves the user's chosen save slot on the backend. `slot` is a non-empty
-   *  named slot — legacy `slot:null` confirmation is retired (#1276). */
+   *  named slot — legacy `slot:null` confirmation is retired (#1276). The launch
+   *  gate only ever auto-confirms (`migrate: false`), so `useServerOnConflict` is
+   *  always `false` here; it exists to match the callable's shape (#1498). */
   confirmSlotChoice: (
     rid: number,
     slot: string,
     migrate: boolean,
     migrateFrom: string | null,
+    useServerOnConflict: boolean,
   ) => Promise<{ success?: boolean; message?: string } | undefined>;
   /** Shows a Decky toast — wrapped as a callback so the helper is dispatch-agnostic. */
   toast: (body: string) => void;
@@ -83,8 +86,8 @@ export async function applyLaunchGateSetupOutcome(
     return "abort";
   }
   if (outcome.kind === "auto_confirm") {
-    // Auto-confirm of a named/default slot — never migrate.
-    const result = await deps.confirmSlotChoice(deps.rid, outcome.slot, false, null);
+    // Auto-confirm of a named/default slot — never migrate (so no conflict).
+    const result = await deps.confirmSlotChoice(deps.rid, outcome.slot, false, null, false);
     if (result?.success === false) {
       // A resolved failure (not a throw) must not let the launch proceed with
       // save tracking unconfigured — route to the Saves tab like the other
@@ -107,12 +110,15 @@ export async function applyLaunchGateSetupOutcome(
 export interface WizardSetupDeps {
   romId: number;
   /** `slot` is a non-empty named slot — legacy `slot:null` confirmation is
-   *  retired (#1276). */
+   *  retired (#1276). The wizard's auto-confirm path never migrates, so
+   *  `useServerOnConflict` is `false`; the interactive migration paths pass their
+   *  own value (#1498). */
   confirmSlotChoice: (
     rid: number,
     slot: string,
     migrate: boolean,
     migrateFrom: string | null,
+    useServerOnConflict: boolean,
   ) => Promise<{ success?: boolean; message?: string } | undefined>;
   setError: (message: string | null) => void;
   setConfirming: (confirming: boolean) => void;
@@ -140,8 +146,8 @@ export async function applyWizardInitialSetupResult(result: SaveSetupInfo, deps:
   if (result.recommended_action === "auto_confirm_default") {
     deps.setConfirming(true);
     try {
-      // Auto-confirm of the default slot — never migrate.
-      const confirmResult = await deps.confirmSlotChoice(deps.romId, result.default_slot, false, null);
+      // Auto-confirm of the default slot — never migrate (so no conflict).
+      const confirmResult = await deps.confirmSlotChoice(deps.romId, result.default_slot, false, null, false);
       if (deps.isCancelled()) return;
       if (confirmResult?.success === false) {
         // Resolved failure (not a throw): mirror the catch branch — surface the
@@ -187,4 +193,74 @@ export function applyWizardRetrySetupResult(result: SaveSetupInfo, deps: WizardR
   }
   deps.setInfo(result);
   deps.setLoading(false);
+}
+
+// ── First-sync wizard: legacy-migration copy (#1498) ─────────────────────────
+// The legacy "Track" action copies the newest legacy save per canonical target
+// into a named slot (content-based, independent of the legacy row's filename).
+// Every surface names the target slot; nothing is log-only.
+
+/** Pre-click explainer shown under the legacy group so "Track" reads as a
+ *  migration before it is clicked, not only inside the confirm modal. Names the
+ *  concrete target slot (the same one the confirm modal uses) so the target never
+ *  reads as still-open, and states that the legacy save itself is left untouched
+ *  (it is copied, never moved) so the user isn't surprised to see it afterwards. */
+export function legacyTrackExplainer(slot: string): string {
+  return `Tracking copies the legacy save into ‘${slot}’ — the legacy save itself is left untouched in the read-only legacy bucket.`;
+}
+
+/** What the legacy-migration conflict dialog promises before the user confirms:
+ *  the local save is backed up and replaced, and cancelling changes nothing so the
+ *  start-fresh route stays open. "Keep my local save" is deliberately NOT offered —
+ *  it would produce the same end state as the wizard's own "Use slot" button and
+ *  re-open a decision already made by clicking Track. */
+export function legacyConflictReplaceNotice(slot: string): string {
+  return `Your local save is moved to .romm-backup and replaced with the legacy save. Cancel to go back — nothing changes, and you can start fresh with ‘${slot}’ instead.`;
+}
+
+/** Confirm-modal body for migrating the legacy group — names the target slot and
+ *  promises that a differing local save is surfaced for an explicit confirmation
+ *  first, never silently overwritten. Deliberately does NOT promise a
+ *  choose-which-to-keep: the conflict dialog is confirm-or-cancel, and the
+ *  keep-local outcome is the wizard's own "Use slot" button. */
+export function legacyMigrateConfirmDescription(slot: string): string {
+  return `Copy the legacy save into ‘${slot}’? If a local save differs, you’ll confirm before anything is replaced.`;
+}
+
+/** Hint under the "start fresh" buttons: a fresh slot holds no save until the
+ *  local one is uploaded — it becomes the slot's first save on the next sync,
+ *  not the moment the slot is chosen (the misleading "empty slot" moment #1478
+ *  reporters saw). */
+export function startFreshHint(slot: string): string {
+  return `Your local save becomes the first save in ‘${slot}’ on the next sync.`;
+}
+
+/** The same expectation for the "Custom slot…" route, where the slot name isn't
+ *  known until the user submits it — so the sentence stays slot-agnostic rather
+ *  than naming the default slot the user is not choosing. */
+export function startFreshHintNewSlot(): string {
+  return "Your local save becomes the first save in the new slot on the next sync.";
+}
+
+/** Completion toast after a legacy migration ran — names the target slot and the
+ *  migrated / could-not-migrate counts. Whenever a save was actually copied it
+ *  appends that the legacy source stays put, pre-empting the "why is the legacy
+ *  save still there?" confusion (the migration copies, never deletes — #1498).
+ *  `null` only when nothing was attempted (the Track button is gated on a
+ *  non-empty legacy group, so that is a defensive fallthrough). */
+export function wizardMigrationOutcomeToastBody(migrated: number, failed: number, slot: string): string | null {
+  const legacyNote =
+    migrated === 1
+      ? " The legacy save stays in the read-only legacy bucket."
+      : " The legacy saves stay in the read-only legacy bucket.";
+  if (migrated > 0 && failed > 0) {
+    return `Migrated ${migrated} save${migrated === 1 ? "" : "s"} into ‘${slot}’; ${failed} could not be migrated.${legacyNote}`;
+  }
+  if (migrated > 0) {
+    return `Migrated ${migrated} save${migrated === 1 ? "" : "s"} into ‘${slot}’.${legacyNote}`;
+  }
+  if (failed > 0) {
+    return `Could not migrate ${failed} save${failed === 1 ? "" : "s"} into ‘${slot}’`;
+  }
+  return null;
 }

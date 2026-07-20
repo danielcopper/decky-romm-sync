@@ -607,8 +607,8 @@ class TestSavesCallableDelegation:
     @pytest.mark.asyncio
     async def test_confirm_slot_choice_delegates(self, plugin):
         plugin._save_sync_service.confirm_slot_choice = AsyncMock(return_value={"ok": True})
-        result = await plugin.confirm_slot_choice(42, "default", True, "slot_1")
-        plugin._save_sync_service.confirm_slot_choice.assert_awaited_once_with(42, "default", True, "slot_1")
+        result = await plugin.confirm_slot_choice(42, "default", True, "slot_1", True)
+        plugin._save_sync_service.confirm_slot_choice.assert_awaited_once_with(42, "default", True, "slot_1", True)
         assert result == {"ok": True}
 
     @pytest.mark.asyncio

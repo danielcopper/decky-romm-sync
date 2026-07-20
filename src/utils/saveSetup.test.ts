@@ -3,7 +3,13 @@ import {
   applyLaunchGateSetupOutcome,
   applyWizardInitialSetupResult,
   applyWizardRetrySetupResult,
+  legacyConflictReplaceNotice,
+  legacyMigrateConfirmDescription,
+  legacyTrackExplainer,
   resolveSaveSetupOutcome,
+  startFreshHint,
+  startFreshHintNewSlot,
+  wizardMigrationOutcomeToastBody,
   SERVER_UNREACHABLE_WIZARD_MESSAGE,
   SERVER_UNREACHABLE_TOAST_BODY,
   type LaunchGateSetupDeps,
@@ -94,7 +100,7 @@ describe("applyLaunchGateSetupOutcome", () => {
     const outcome: SaveSetupOutcome = { kind: "auto_confirm", slot: "main" };
     const result = await applyLaunchGateSetupOutcome(outcome, deps);
     expect(result).toBe("proceed");
-    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(42, "main", false, null);
+    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(42, "main", false, null, false);
     expect(deps.toast).not.toHaveBeenCalled();
     expect(deps.dispatchSavesTab).not.toHaveBeenCalled();
   });
@@ -108,7 +114,7 @@ describe("applyLaunchGateSetupOutcome", () => {
     });
     const result = await applyLaunchGateSetupOutcome({ kind: "auto_confirm", slot: "main" }, deps);
     expect(result).toBe("abort");
-    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(42, "main", false, null);
+    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(42, "main", false, null, false);
     expect(deps.toast).toHaveBeenCalledWith("slot taken");
     expect(deps.dispatchSavesTab).toHaveBeenCalledOnce();
   });
@@ -189,7 +195,7 @@ describe("applyWizardInitialSetupResult", () => {
     const result = makeInfo({ recommended_action: "auto_confirm_default", default_slot: "alpha" });
     await applyWizardInitialSetupResult(result, deps);
     expect(deps.setConfirming).toHaveBeenCalledWith(true);
-    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(7, "alpha", false, null);
+    expect(deps.confirmSlotChoice).toHaveBeenCalledWith(7, "alpha", false, null, false);
     expect(deps.onComplete).toHaveBeenCalledOnce();
     expect(deps.setError).not.toHaveBeenCalled();
     expect(deps.setInfo).not.toHaveBeenCalled();
@@ -305,5 +311,75 @@ describe("applyWizardRetrySetupResult", () => {
     expect(deps.setInfo).toHaveBeenCalledWith(result);
     expect(deps.setLoading).toHaveBeenCalledWith(false);
     expect(deps.setError).not.toHaveBeenCalled();
+  });
+});
+
+describe("legacy-migration copy (#1498)", () => {
+  it("the Track explainer names the concrete target slot and says the legacy save is left untouched", () => {
+    const body = legacyTrackExplainer("default");
+    expect(body).toContain("copies the legacy save");
+    // Names the resolved slot — never "a named slot", which reads as still-open.
+    expect(body).toContain("‘default’");
+    expect(body).not.toContain("a named slot");
+    expect(body).toContain("left untouched");
+  });
+
+  it("the conflict notice states the backup-and-replace and that cancelling changes nothing", () => {
+    const body = legacyConflictReplaceNotice("default");
+    expect(body).toContain(".romm-backup");
+    expect(body).toContain("replaced with the legacy save");
+    expect(body).toContain("nothing changes");
+    expect(body).toContain("‘default’");
+  });
+
+  it("the migrate confirm description names the slot and promises a confirmation, not a keep-choice", () => {
+    const body = legacyMigrateConfirmDescription("default");
+    expect(body).toContain("‘default’");
+    expect(body).toContain("differs");
+    expect(body).toContain("confirm before anything is replaced");
+    // The dialog is confirm-or-cancel — never promise a choose-which-to-keep.
+    expect(body).not.toContain("which to keep");
+  });
+
+  it("the start-fresh hint names the slot and points at the next sync", () => {
+    const body = startFreshHint("main");
+    expect(body).toContain("‘main’");
+    expect(body).toContain("next sync");
+  });
+
+  it("the custom-slot variant makes the same promise without naming a slot", () => {
+    const body = startFreshHintNewSlot();
+    expect(body).toContain("the new slot");
+    expect(body).toContain("next sync");
+    // The custom name isn't known until submit — never name a concrete slot here.
+    expect(body).not.toContain("‘");
+  });
+
+  describe("wizardMigrationOutcomeToastBody", () => {
+    it("names the slot and count and reassures the legacy save stays (singular)", () => {
+      expect(wizardMigrationOutcomeToastBody(1, 0, "default")).toBe(
+        "Migrated 1 save into ‘default’. The legacy save stays in the read-only legacy bucket.",
+      );
+    });
+
+    it("pluralizes the count and the legacy-stays clause when more than one save migrated", () => {
+      expect(wizardMigrationOutcomeToastBody(2, 0, "default")).toBe(
+        "Migrated 2 saves into ‘default’. The legacy saves stay in the read-only legacy bucket.",
+      );
+    });
+
+    it("reports failures alongside successes and still reassures", () => {
+      expect(wizardMigrationOutcomeToastBody(1, 1, "slotA")).toBe(
+        "Migrated 1 save into ‘slotA’; 1 could not be migrated. The legacy save stays in the read-only legacy bucket.",
+      );
+    });
+
+    it("names the could-not-migrate count when nothing succeeded (no legacy-stays clause needed)", () => {
+      expect(wizardMigrationOutcomeToastBody(0, 2, "slotA")).toBe("Could not migrate 2 saves into ‘slotA’");
+    });
+
+    it("returns null when nothing was attempted", () => {
+      expect(wizardMigrationOutcomeToastBody(0, 0, "default")).toBeNull();
+    });
   });
 });

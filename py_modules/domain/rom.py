@@ -39,6 +39,7 @@ class Rom:
     emulator_override: str | None = None
     selected_disc: str | None = None
     applied_launch_options: str | None = None
+    last_fetch_id: str | None = None
     sibling_group_key: str | None = None
     regions: tuple[str, ...] = ()
     languages: tuple[str, ...] = ()
@@ -89,6 +90,21 @@ class Rom:
             tags=tags,
             is_main_sibling=is_main_sibling,
         )
+
+    def record_fetch_generation(self, fetch_id: str) -> None:
+        """Record that the fetch generation *fetch_id* returned this ROM.
+
+        Written for every row a **platform** unit's apply commits, so the
+        platform's completion stamp can later count exactly the rows its last
+        complete fetch saw (#1504) — the count the incremental skip compares
+        against the server's ROM count. A row the server has dropped keeps its
+        older generation and stops counting, without being deleted (ADR-0007).
+
+        A **collection** unit never records one: a collection spans platforms, so
+        stamping a foreign platform's row with a generation that platform never
+        completed would drop it from that platform's count and suppress its skip.
+        """
+        self.last_fetch_id = fetch_id
 
     def update_cover_path(self, path: str) -> None:
         """Record the local cover-art path once artwork has been written."""

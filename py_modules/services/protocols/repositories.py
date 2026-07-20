@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from domain.bios_file import BiosFile
+    from domain.collection_sync_state import CollectionSyncState
     from domain.firmware_cache import FirmwareCacheEntry
     from domain.platform_sync_state import PlatformSyncState
     from domain.playtime import PendingSessionRow, Playtime
@@ -360,6 +361,49 @@ class PlatformSyncStateRepository(Protocol):
         authority, so clearing them forces every platform to full-fetch. The
         ``SyncRun`` history is left intact (it feeds no skip gate and is the
         "Last sync" display source, #1318). (library/reporter.py)
+        """
+        ...
+
+
+class CollectionSyncStateRepository(Protocol):
+    """Persistence seam for the ``CollectionSyncState`` aggregate (per-collection completion stamp).
+
+    Identity is the composite ``(collection_id, collection_kind)``. The collection
+    sibling of ``PlatformSyncStateRepository`` (ADR-0023): backs the incremental-skip
+    gate's honoring of an unchanged user/smart collection so it is not re-paginated
+    (#742).
+    """
+
+    def get(self, collection_id: str, collection_kind: str) -> CollectionSyncState | None:
+        """Return the completion stamp for the collection, or ``None``. (library/fetcher.py skip gate)"""
+        ...
+
+    def save(self, state: CollectionSyncState) -> None:
+        """Upsert the completion stamp. (library/reporter.py final-chunk commit)"""
+        ...
+
+    def delete(self, collection_id: str, collection_kind: str) -> None:
+        """Drop the collection's stamp so it full-fetches next run. A no-op when absent.
+
+        Called by the local destructive flows (services/shortcut_removal.py) for
+        every stamp whose member set intersects a removed ROM (ADR-0023).
+        """
+        ...
+
+    def iter_all(self) -> Iterator[CollectionSyncState]:
+        """Iterate every collection stamp.
+
+        Backs the removal flows' surgical invalidation: they scan the stamps and
+        delete the ones whose ``member_rom_ids`` contain a removed ROM.
+        (services/shortcut_removal.py)
+        """
+        ...
+
+    def clear(self) -> None:
+        """Drop every stamp so no collection skips next run.
+
+        Backs the "Force Full Sync" reset alongside the platform stamps
+        (library/reporter.py).
         """
         ...
 
