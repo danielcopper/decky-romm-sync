@@ -359,6 +359,15 @@ Clock/UuidGen/Sleeper, `emit`, and `http_adapter.with_retry` as a single-attempt
 `src/**/*.ts` and the backend surface from the public `async def` methods on `Plugin`, failing on any name or arity
 divergence. It runs standalone in CI and inside pytest via `tests/contract/test_callable_manifest.py`.
 
+### Gavel conformance vectors — vendored contract tier
+
+Two [romm-gavel](https://github.com/danielcopper/romm-gavel) vector families run against the production save-sync
+kernels: **ladder** against `domain/sync_action.resolve_upload_conflict`, **decision-table** against
+`compute_sync_action`. The vectors are vendored verbatim under `tests/domain/gavel_vectors/` at a pinned upstream commit
+(no submodule, no network in CI), so a contract change lands as a reviewable diff. **Never edit a vector to make the
+kernel pass** — updating means deliberately re-copying the JSON and bumping the commit reference in that folder's
+`README.md`.
+
 ### Frontend component tests — `@decky/api` event harness
 
 `src/test-utils/decky-api-mock.ts` exposes an in-memory event bus that `addEventListener` / `removeEventListener` route
