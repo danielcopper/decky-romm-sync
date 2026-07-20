@@ -1,7 +1,7 @@
 """Pure BIOS-status formatting and the BIOS classification boundary.
 
-Domain owns the ok/partial/missing CLASSIFICATION (``compute_bios_level``) and
-the compact status token (``compute_bios_label``) — the single source of truth
+Domain owns the unmanaged/ok/partial/missing CLASSIFICATION (``compute_bios_level``)
+and the compact status token (``compute_bios_label``) — the single source of truth
 for the BIOS readiness decision that every surface (game-detail panel,
 play-section row, System page) renders. Verbose, per-surface phrasing and the
 status-dot color are UI-layer concerns and deliberately do NOT live here. The
@@ -56,6 +56,11 @@ class BiosStatus:
     active_core: str | None
     active_core_label: str | None
     available_cores: tuple[AvailableCore, ...]
+    # Count of server files the plugin's registry recognises (classification in
+    # "required"/"optional"). ``None`` means the caller did not supply it, so the
+    # "unmanaged" decision is not made; ``0`` with server files present means the
+    # platform has no registry coverage at all.
+    known_count: int | None = None
     cached_at: float = 0.0
 
 
@@ -100,6 +105,7 @@ def format_bios_status(bios: dict[str, Any], platform_slug: str, *, cached_at: f
         active_core=bios.get("active_core"),
         active_core_label=bios.get("active_core_label"),
         available_cores=available_cores,
+        known_count=bios.get("known_count"),
         cached_at=cached_at,
     )
 
@@ -190,7 +196,18 @@ def collect_firmware_status(
 
 
 def compute_bios_level(status: BiosStatus) -> str:
-    """Compute BIOS status level: 'ok', 'partial', or 'missing'."""
+    """Compute BIOS status level: 'unmanaged', 'ok', 'partial', or 'missing'.
+
+    ``'unmanaged'`` means the plugin has no registry coverage for this platform's
+    firmware — the server has files but none map to a registry entry, so no
+    readiness claim can be made. It is checked first, before the required-count
+    logic, and only fires when the caller supplied ``known_count`` (else the
+    decision is deferred to the existing ok/partial/missing logic). Because
+    ``known_count == 0`` implies ``required_count == 0``, it can only ever
+    displace a false ``'ok'`` — never mask a real ``'missing'``.
+    """
+    if status.known_count is not None and status.server_count > 0 and status.known_count == 0:
+        return "unmanaged"
     req_count = status.required_count
     req_done = status.required_downloaded
     if req_count is not None and req_done is not None:
@@ -207,7 +224,9 @@ def compute_bios_level(status: BiosStatus) -> str:
 
 
 def compute_bios_label(status: BiosStatus) -> str:
-    """Compute human-readable BIOS status label."""
+    """Compute the compact BIOS status token (verbose phrasing stays per-surface)."""
+    if status.known_count is not None and status.server_count > 0 and status.known_count == 0:
+        return "Not managed"
     req_count = status.required_count
     req_done = status.required_downloaded
     if req_count is not None and req_done is not None:

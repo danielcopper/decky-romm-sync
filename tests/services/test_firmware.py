@@ -567,6 +567,39 @@ class TestGetFirmwareStatusBiosAggregates:
         assert plat["bios_level"] == "ok"
 
     @pytest.mark.asyncio
+    async def test_uncovered_platform_projects_unmanaged_level(self, fw, tmp_path):
+        """System-page projection: server files but no registry coverage → 'unmanaged'.
+
+        A platform whose server firmware has no ``bios_registry.json`` entry
+        classifies every file ``unknown`` (known_count 0), so the aggregate stamps
+        ``bios_level == "unmanaged"`` instead of the false ``"ok"`` (#1520). It is
+        never flagged as a BIOS-needed platform (required_count is 0).
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        # Registry with no entry for this platform → every server file is unknown.
+        fw._bios_registry = {"platforms": {}}
+        fw._bios_files_index = {}
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "vita.bin",
+                "file_path": "bios/psvita/vita.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        fw._loop = MagicMock()
+        fw._loop.run_in_executor = AsyncMock(side_effect=[firmware_list, set()])
+
+        result = await fw.get_firmware_status()
+
+        plat = next(p for p in result["platforms"] if p["platform_slug"] == "psvita")
+        assert plat["bios_level"] == "unmanaged"
+        assert plat["required_count"] == 0
+        assert plat["server_count"] == 1
+
+    @pytest.mark.asyncio
     async def test_server_offline_fallback_ships_aggregates(self, plugin, fw, tmp_path):
         """Offline registry fallback still stamps bios_level + counts per platform."""
         fw._bios_registry = _BIOS_AGG_REGISTRY
@@ -646,6 +679,62 @@ class TestGetFirmwareStatusBiosAggregates:
         real_bios = os.path.realpath(str(bios_dir))
         for path in checked:
             assert os.path.realpath(path).startswith(real_bios + os.sep)
+
+
+class TestCheckPlatformBiosUnmanaged:
+    """``check_platform_bios`` surfaces the 'unmanaged' state for uncovered platforms.
+
+    A platform whose server firmware has no ``bios_registry.json`` entry has every
+    file classified ``unknown`` (known_count 0), so the per-game BIOS payload ships
+    ``bios_level == "unmanaged"`` instead of a false ``"ok"`` all-clear (#1520).
+    """
+
+    @pytest.mark.asyncio
+    async def test_uncovered_platform_is_unmanaged(self, fw, tmp_path):
+        from unittest.mock import AsyncMock, MagicMock
+
+        # Registry with no entry for this platform → every server file is unknown.
+        fw._bios_registry = {"platforms": {}}
+        fw._bios_files_index = {}
+        firmware_list = [
+            {
+                "id": 1,
+                "file_name": "vita.bin",
+                "file_path": "bios/psvita/vita.bin",
+                "file_size_bytes": 100,
+                "md5_hash": "",
+            },
+        ]
+        fw._loop = MagicMock()
+        fw._loop.run_in_executor = AsyncMock(return_value=firmware_list)
+
+        result = await fw.check_platform_bios("psvita")
+
+        assert result["needs_bios"] is True
+        assert result["server_count"] == 1
+        assert result["known_count"] == 0
+        assert result["unknown_count"] == 1
+        assert result["required_count"] == 0
+        assert result["bios_level"] == "unmanaged"
+
+    @pytest.mark.asyncio
+    async def test_covered_platform_threads_known_count_and_is_not_unmanaged(self, fw, tmp_path):
+        """A registered platform ships known_count > 0 and keeps its ok/partial/missing level."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        fw._bios_registry = _BIOS_AGG_REGISTRY
+        fw._bios_files_index = dict(_BIOS_AGG_INDEX)
+        firmware_list = [
+            {"id": 1, "file_name": "req1.bin", "file_path": "bios/dc/req1.bin", "file_size_bytes": 100, "md5_hash": ""},
+            {"id": 2, "file_name": "opt1.bin", "file_path": "bios/dc/opt1.bin", "file_size_bytes": 100, "md5_hash": ""},
+        ]
+        fw._loop = MagicMock()
+        fw._loop.run_in_executor = AsyncMock(return_value=firmware_list)
+
+        result = await fw.check_platform_bios("dc")
+
+        assert result["known_count"] == 2
+        assert result["bios_level"] != "unmanaged"
 
 
 class TestDownloadFirmware:

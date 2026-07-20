@@ -60,6 +60,17 @@ class TestFormatBiosStatusFullDict:
         result = format_bios_status(bios, "psx")
         assert result.all_downloaded is True
 
+    def test_known_count_carried_through(self):
+        """known_count from the raw dict reaches the dataclass (drives 'unmanaged')."""
+        bios = {"server_count": 3, "known_count": 0}
+        result = format_bios_status(bios, "psvita")
+        assert result.known_count == 0
+
+    def test_known_count_defaults_to_none_when_absent(self):
+        """Absent known_count → None, so the 'unmanaged' decision is deferred."""
+        result = format_bios_status({"server_count": 2}, "gba")
+        assert result.known_count is None
+
 
 class TestFormatBiosStatusMinimalDict:
     """Test with a minimal/empty bios dict — verify defaults."""
@@ -405,6 +416,24 @@ class TestComputeBiosLevel:
     def test_no_required_none_downloaded(self):
         assert compute_bios_level(_make_bios(local_count=0, all_downloaded=False)) == "missing"
 
+    def test_unmanaged_when_server_files_but_none_known(self):
+        """Server files present, zero registry-known → 'unmanaged' (no coverage)."""
+        level = compute_bios_level(_make_bios(server_count=2, known_count=0, required_count=0, required_downloaded=0))
+        assert level == "unmanaged"
+
+    def test_ok_when_no_server_files_even_with_known_count_zero(self):
+        """NES-like: no server files at all → not 'unmanaged' (guard needs server_count > 0)."""
+        assert compute_bios_level(_make_bios(server_count=0, known_count=0, all_downloaded=True)) == "ok"
+
+    def test_not_unmanaged_when_some_files_known(self):
+        """A registered platform (known_count > 0) never resolves to 'unmanaged'."""
+        level = compute_bios_level(_make_bios(server_count=3, known_count=2, required_count=2, required_downloaded=2))
+        assert level == "ok"
+
+    def test_known_count_none_defers_to_required_logic(self):
+        """Absent known_count (None) → 'unmanaged' never fires; existing logic decides."""
+        assert compute_bios_level(_make_bios(server_count=2, known_count=None, all_downloaded=True)) == "ok"
+
 
 class TestComputeBiosLabel:
     def test_required_all_downloaded(self):
@@ -424,6 +453,14 @@ class TestComputeBiosLabel:
 
     def test_no_required_none_downloaded(self):
         assert compute_bios_label(_make_bios(local_count=0, all_downloaded=False)) == "Missing"
+
+    def test_unmanaged_returns_not_managed(self):
+        """Server files present, none registry-known → compact 'Not managed' token."""
+        assert compute_bios_label(_make_bios(server_count=1, known_count=0, required_count=0)) == "Not managed"
+
+    def test_known_count_none_defers_to_required_logic(self):
+        """Absent known_count → 'Not managed' never fires; existing label logic decides."""
+        assert compute_bios_label(_make_bios(server_count=1, known_count=None, all_downloaded=True)) == "OK"
 
 
 class TestAvailableCore:

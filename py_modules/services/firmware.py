@@ -388,6 +388,7 @@ class FirmwareService:
             "required_count": len(required_files),
             "required_downloaded": sum(1 for f in required_files if f.downloaded),
             "unknown_count": sum(1 for f in files if f.classification == "unknown"),
+            "known_count": sum(1 for f in files if f.classification != "unknown"),
             "files": [asdict(f) for f in files],
             "cached_at": self._firmware_cache_epoch,
         }
@@ -506,13 +507,15 @@ class FirmwareService:
         """Stamp the per-platform BIOS aggregates onto a ``get_firmware_status`` entry.
 
         Adds ``server_count`` / ``local_count`` / ``required_count`` /
-        ``required_downloaded`` and the ``bios_level`` trichotomy
-        (``"ok"`` / ``"partial"`` / ``"missing"``) so the System page reads the
-        ok/partial/missing decision and the display counts straight off this
-        payload instead of re-deriving the threshold logic in the frontend. The
+        ``required_downloaded`` and the ``bios_level`` state
+        (``"unmanaged"`` / ``"ok"`` / ``"partial"`` / ``"missing"``) so the System
+        page reads the decision and the display counts straight off this payload
+        instead of re-deriving the threshold logic in the frontend. The
         classification comes from the already-core-aware enriched files, so the
         level matches the per-game game-detail path. Required-file counts key off
-        ``classification == "required"`` (the enriched per-core required flag).
+        ``classification == "required"`` (the enriched per-core required flag);
+        ``known_count`` (registry-recognised files) drives the ``"unmanaged"``
+        state when a platform has server files but none map to a registry entry.
         """
         files = plat["files"]
         server_count = len(files)
@@ -520,6 +523,7 @@ class FirmwareService:
         required_files = [f for f in files if f["classification"] == "required"]
         required_count = len(required_files)
         required_downloaded = sum(1 for f in required_files if f["downloaded"])
+        known_count = sum(1 for f in files if f["classification"] != "unknown")
 
         bios_obj = format_bios_status(
             {
@@ -528,6 +532,7 @@ class FirmwareService:
                 "all_downloaded": local_count >= server_count,
                 "required_count": required_count,
                 "required_downloaded": required_downloaded,
+                "known_count": known_count,
             },
             slug,
         )
@@ -795,11 +800,14 @@ class FirmwareService:
             "required_count": len(required_files),
             "required_downloaded": sum(1 for f in required_files if f.downloaded),
             "unknown_count": sum(1 for f in files if f.classification == "unknown"),
+            "known_count": sum(1 for f in files if f.classification != "unknown"),
             "files": [asdict(f) for f in files],
         }
-        # bios_level trichotomy ("ok" / "partial" / "missing") so the frontend reads
-        # the classification straight off this payload instead of re-deriving the
-        # threshold logic. Matches the System page and per-game game-detail paths.
+        # bios_level state ("unmanaged" / "ok" / "partial" / "missing") so the
+        # frontend reads the classification straight off this payload instead of
+        # re-deriving the threshold logic. "unmanaged" (server files present, none
+        # registry-known) replaces the false "ok" for platforms with no coverage.
+        # Matches the System page and per-game game-detail paths.
         result["bios_level"] = compute_bios_level(format_bios_status(result, platform_slug))
         return result
 
