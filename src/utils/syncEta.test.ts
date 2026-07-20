@@ -358,7 +358,7 @@ describe("weightedCoarseFraction — leading zero-weight units (#1506)", () => {
     expect(weightedCoarseFraction(7, 1, 8)).toBe(1);
   });
 
-  it("never moves backwards across unit and phase boundaries", () => {
+  it("never moves backwards across unit and phase boundaries at fixed plan weights", () => {
     beginEtaRun("run-1", [0, 0, 500], 500);
     // withinUnit restarts at 0 on every unit boundary and climbs within each
     // phase sub-slice; the fraction must be non-decreasing throughout.
@@ -402,6 +402,53 @@ describe("weightedCoarseFraction — leading zero-weight units (#1506)", () => {
   it("stays on the index fallback for an all-skip plan (no weights to apportion)", () => {
     beginEtaRun("run-1", [0, 0, 0], 0);
     expect(weightedCoarseFraction(1, 0.5, 3)).toBeNull();
+  });
+
+  // The plan weights are NOT constant across a run: observeUnitTotal corrects a
+  // dispatched unit's weight mid-run, and raising a mispredicted skip off zero
+  // shortens the leading zero-weight run. The prefix is latched at its
+  // high-water mark precisely so that correction cannot retract bar width.
+  it("does not move backwards when a mispredicted skip dispatches mid-run", () => {
+    liveShape();
+    // Unit 6 is running and the bar has climbed to its 6.2/8 floor.
+    const before = weightedCoarseFraction(6, 0.2, 8) ?? -1;
+    expect(before).toBeCloseTo(6.2 / 8, 10);
+    // It turns out not to be a skip after all: 40 real items dispatch. An
+    // unlatched prefix would truncate to 6 and drop the bar to ~75.4%.
+    observeUnitTotal(6, 40);
+    const after = weightedCoarseFraction(6, 0.2, 8) ?? -1;
+    expect(after).toBeGreaterThanOrEqual(before);
+  });
+
+  it("keeps the later zero-weight units' width after an earlier skip mispredicts", () => {
+    liveShape();
+    const readings: number[] = [weightedCoarseFraction(0, 0, 8) ?? -1, weightedCoarseFraction(1, 0, 8) ?? -1];
+    // Unit 2 dispatches real work partway through the leading run. Without the
+    // latch the prefix truncates to 2 and units 3..7 all freeze at ~30.6%.
+    observeUnitTotal(2, 40);
+    for (let completed = 2; completed <= 7; completed++) {
+      readings.push(weightedCoarseFraction(completed, 0, 8) ?? -1);
+    }
+    for (let i = 1; i < readings.length; i++) {
+      expect(readings[i]).toBeGreaterThanOrEqual(readings[i - 1] ?? 0);
+    }
+    // Still tracking the unit index rather than stalling: the later units keep
+    // their equal slices, so the bar clears each notch as it passes it.
+    expect(readings[readings.length - 2]).toBeGreaterThanOrEqual(6 / 8);
+    expect(readings[readings.length - 1]).toBeGreaterThanOrEqual(7 / 8);
+  });
+
+  it("adopts the longer prefix when a leading unit is corrected down to zero", () => {
+    beginEtaRun("run-1", [10, 0, 500], 510);
+    // Seeded positive, so no floor yet — the bar is on the plain weighted share.
+    const before = weightedCoarseFraction(0, 0.5, 3) ?? -1;
+    expect(before).toBeCloseTo(5 / 510, 10);
+    // The unit dispatches empty: the leading zero-weight run grows to two units,
+    // which the latch adopts because it only ever raises the floor.
+    observeUnitTotal(0, 0);
+    const after = weightedCoarseFraction(0, 0.5, 3) ?? -1;
+    expect(after).toBeCloseTo(0.5 / 3, 10);
+    expect(after).toBeGreaterThanOrEqual(before);
   });
 });
 

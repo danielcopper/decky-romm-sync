@@ -114,9 +114,21 @@ interface EtaRunState {
   // observeApplyProgress / displayedEtaSeconds). ``null`` until the first ready
   // measurement.
   deadlineMs: number | null;
+  // How many of the plan's leading units weigh zero, LATCHED at its high-water
+  // mark for the run — the width the coarse bar owes them (#1506). Latched
+  // because observeUnitTotal can raise a mispredicted skip's weight off zero
+  // mid-run, which would shorten the live prefix and march the bar backwards.
+  zeroPrefix: number;
 }
 
 let _run: EtaRunState | null = null;
+
+/** How many leading units weigh zero (a non-positive weight counts as zero). */
+function countZeroPrefix(weights: readonly number[]): number {
+  let n = 0;
+  while (n < weights.length && Math.max(0, weights[n] ?? 0) <= 0) n++;
+  return n;
+}
 
 /**
  * Begin measuring a fresh run, discarding any prior samples — a new run's rate
@@ -126,7 +138,15 @@ let _run: EtaRunState | null = null;
  * planned item total.
  */
 export function beginEtaRun(runId: string, unitWeights: number[], totalRoms: number): void {
-  _run = { runId, unitWeights: [...unitWeights], totalRoms, samples: [], lastSampleMs: 0, deadlineMs: null };
+  _run = {
+    runId,
+    unitWeights: [...unitWeights],
+    totalRoms,
+    samples: [],
+    lastSampleMs: 0,
+    deadlineMs: null,
+    zeroPrefix: countZeroPrefix(unitWeights),
+  };
 }
 
 /** Drop all ETA state — call at a terminal stage or when no run is in flight. */
@@ -160,6 +180,12 @@ export function observeUnitTotal(unitIndex: number, unitTotal: number): void {
   if (corrected === previous) return;
   _run.totalRoms = Math.max(0, _run.totalRoms + (corrected - previous));
   _run.unitWeights[unitIndex] = corrected;
+  // Keep the bar's leading-zero-unit width at its high-water mark. Correcting a
+  // mispredicted skip UP off zero shortens the live prefix; honouring that would
+  // retract width the bar already showed and freeze every later zero-weight unit
+  // at the truncated floor. A correction DOWN to zero only lengthens the prefix,
+  // which the max adopts (#1506).
+  _run.zeroPrefix = Math.max(_run.zeroPrefix, countZeroPrefix(_run.unitWeights));
 }
 
 /**
@@ -274,25 +300,19 @@ export function weightedCoarseFraction(
     completedUnits >= 0 && completedUnits < weights.length ? Math.max(0, weights[completedUnits] ?? 0) : 0;
   const within = Math.max(0, Math.min(1, withinUnitFraction));
   const weighted = Math.min(1, (completedWeight + within * runningWeight) / totalWeight);
-  const floor = zeroPrefixFloor(weights, completedUnits, within, totalUnits);
+  const floor = zeroPrefixFloor(_run.zeroPrefix, completedUnits, within, totalUnits);
   return Math.min(1, floor + (1 - floor) * weighted);
 }
 
 /**
  * The bar share owed to the plan's LEADING zero-weight units: an equal
  * ``1/totalUnits`` each, interpolated by *within* while the running unit is
- * still inside that run and held at its full share once past it. Non-decreasing
- * in both inputs, so the bar it floors can never move backwards.
+ * still inside that run and held at its full share once past it. Takes the
+ * LATCHED ``zeroPrefix`` (never a live weight scan) and is non-decreasing in
+ * every input, so the bar it floors can never move backwards.
  */
-function zeroPrefixFloor(
-  weights: readonly number[],
-  completedUnits: number,
-  within: number,
-  totalUnits: number,
-): number {
+function zeroPrefixFloor(zeroPrefix: number, completedUnits: number, within: number, totalUnits: number): number {
   if (totalUnits <= 0) return 0;
-  let zeroPrefix = 0;
-  while (zeroPrefix < weights.length && Math.max(0, weights[zeroPrefix] ?? 0) <= 0) zeroPrefix++;
   const reached = Math.min(Math.max(0, completedUnits), zeroPrefix);
   const stillInside = completedUnits < zeroPrefix;
   return (reached + (stillInside ? within : 0)) / totalUnits;
