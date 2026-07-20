@@ -256,6 +256,10 @@ export interface SyncPlanUnit {
    * on older backends, on never-stamped collections (a collection's membership
    * is known only from its stamp), and on franchise collections (never
    * stampable); the seed then prices every item as a create, as before.
+   *
+   * Note the asymmetry a Force Full Sync exposes: it clears every stamp, so its
+   * PLATFORM units keep this field (read from the rows, no stamp gate) while its
+   * COLLECTION units lose it and price as creates for that run.
    */
   bound_count?: number;
 }

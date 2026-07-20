@@ -627,10 +627,14 @@ weights + planned totals, via `sync_plan`) and the applying frames.
   (`collapsed_count ?? rom_count`) the ones already bound (`bound_count`) take the update rate, the rest the create
   rate. Pricing every planned item as a create over-read by ~4x on the common case — any re-sync, and **every Force Full
   Sync**, which clears the completion stamps but unbinds nothing and is therefore an all-updates run. Platform and
-  collection units are priced the same way, so a collection-heavy library does not reinstate the over-read through its
-  collections. A unit whose `bound_count` is absent (older backend, unstamped or franchise collection) still prices as
-  all creates, the pre-#1511 behaviour. The live-countdown weights are unaffected and stay
-  `predicted_skip ? 0 : (collapsed_count ?? rom_count)`.
+  collection units are priced the same way on an ordinary re-sync, so a collection-heavy library does not reinstate the
+  over-read through its collections. **A Force Full Sync is the exception for collections**: `clear_sync_cache` clears
+  `collection_sync_state` wholesale, and a collection's member set lives _only_ in that stamp, so every collection unit
+  is unstamped for that run and reverts to create pricing. Platforms are unaffected — their `bound_count` is
+  deliberately not stamp-gated. This follows directly from the `None`-not-`0` rule above and errs **long**, the safe
+  direction; correcting it would mean asserting membership the plan does not have. A unit whose `bound_count` is absent
+  (older backend, unstamped or franchise collection) prices as all creates, the pre-#1511 behaviour. The live-countdown
+  weights are unaffected and stay `predicted_skip ? 0 : (collapsed_count ?? rom_count)`.
 - **Measured live countdown (takes over within seconds).** Once the apply is underway, `syncEta.ts` measures the
   **real** rate from the applying frames — one throttled sample per second over a ~30 s sliding window — and projects
   `remaining = (planned_total − processed) / rate`, rendered rounded **up** ("9 min left") so it never promises less

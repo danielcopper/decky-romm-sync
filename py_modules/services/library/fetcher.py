@@ -569,6 +569,13 @@ class LibraryFetcher:
         all-creates — but the distinction keeps the field honest for any later
         consumer. Do not "simplify" this into consistency with the platform side.
 
+        Consequence worth knowing before re-tuning the estimate: ``clear_sync_cache``
+        clears ``collection_sync_state`` wholesale, so a **Force Full Sync** leaves
+        every collection unstamped and its units revert to create pricing for that
+        run — even though the shortcuts themselves survive. Platform units are
+        unaffected (their bound count reads the rows directly, no stamp gate). The
+        estimate reads long, never short, which is the safe direction.
+
         The member set may be STALE (membership can have changed since the
         stamp). That is accepted and bounded: estimate-only (ADR-0023), and a
         freshness probe would mean network I/O at plan time.
@@ -614,8 +621,9 @@ class LibraryFetcher:
         create". The gate's server-delta check (``list_roms_updated_after``) is
         deliberately NOT replayed — no network at plan time. A Force Full Sync clears every
         stamp before the run, so its plan predicts no skips AND drops every
-        collapsed count (the forced re-apply is priced at the full ``rom_count``)
-        without a special case. One short read UoW for the whole plan.
+        collapsed count — the forced re-apply is WEIGHED at the full ``rom_count``,
+        though the bound count survives the clear and still splits those items
+        between the update and create rates. One short read UoW for the whole plan.
 
         Estimate-ONLY (ADR-0023): the result rides the ``sync_plan`` payload
         and must never feed the actual skip decision —

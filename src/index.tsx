@@ -559,10 +559,12 @@ export default definePlugin(() => {
     // persisted collapsed (post-sibling-group) shortcut count — and of those
     // items, the ones already bound to a Steam shortcut (``bound_count``) take
     // the cheap update path. Pricing every planned item as a create over-read
-    // by ~4x on the common case: any re-sync, and every Force Full Sync (which
-    // clears the completion stamps but unbinds nothing, so it is all updates).
-    // A unit from a backend that omits ``bound_count`` still prices as all
-    // creates. The delta-restricted apply skips unchanged items and the live
+    // by ~4x on the common case: any re-sync, and — for platforms — every Force
+    // Full Sync (which clears the completion stamps but unbinds nothing, so it
+    // is all updates). A unit that omits ``bound_count`` still prices as all
+    // creates: an older backend, or a collection with no stamped member set,
+    // which is every collection on a forced run since that clears the stamps
+    // membership is read from. The delta-restricted apply skips unchanged items and the live
     // rate estimator corrects the readout within seconds of applying (#1382-M3).
     // Merged (not replaced) so the running/stage the click set survives, and the
     // sync_progress listener below preserves it across backend frames. Shown as
