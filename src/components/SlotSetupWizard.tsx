@@ -183,6 +183,75 @@ const LegacyMigrationConflictModal: FC<{
   );
 };
 
+interface ConfirmHandlerDeps {
+  romId: number;
+  setConfirming: (confirming: boolean) => void;
+  setError: (message: string | null) => void;
+  onComplete: () => void;
+}
+
+/** Build the wizard's slot-confirm handler.
+ *
+ *  Kept at module level rather than inline in the component so the whole confirm
+ *  flow reads as one unit — probe → conflict dialog → failure → outcome toast —
+ *  and so it can re-invoke itself for the "Replace local save" second call. The
+ *  deps are supplied fresh on every render, exactly as the inline closure read
+ *  them.
+ */
+function createConfirmHandler({ romId, setConfirming, setError, onComplete }: ConfirmHandlerDeps) {
+  const handleConfirm = async (
+    slot: string,
+    migrate = false,
+    migrateFrom: string | null = null,
+    useServerOnConflict = false,
+  ): Promise<void> => {
+    setConfirming(true);
+    setError(null);
+    try {
+      // Confirm a non-empty named slot (legacy slot:null is retired, #1276).
+      // Defaults are the non-destructive path (migrate=false, from=null); the
+      // legacy-group Track button passes migrate=true, from=null to copy the
+      // legacy saves into the target slot (#1498).
+      const result = await confirmSlotChoice(romId, slot, migrate, migrateFrom, useServerOnConflict);
+
+      // A content-based migration found a differing local save — nothing was
+      // confirmed. Show the comparison and let the user confirm the replacement;
+      // cancelling makes no second call, so the slot stays unconfirmed and the
+      // wizard's start-fresh route is still open.
+      if (result.needs_conflict_resolution) {
+        setConfirming(false);
+        showModal(
+          createElement(LegacyMigrationConflictModal, {
+            conflicts: result.conflicts ?? [],
+            slot,
+            onConfirm: () => detach(handleConfirm(slot, true, migrateFrom, true)),
+          }),
+        );
+        return;
+      }
+
+      if (!result.success) {
+        setError(result.message || "Slot confirmation failed");
+        setConfirming(false);
+        return;
+      }
+
+      // Surface the migration outcome (names the slot + counts) so the copy is
+      // never log-only. Only a migration reports counts; a plain confirm doesn't.
+      if (migrate) {
+        const body = wizardMigrationOutcomeToastBody(result.migrated ?? 0, result.failed ?? 0, slot);
+        if (body) toaster.toast({ title: "RomM Sync", body });
+      }
+      onComplete();
+    } catch (e) {
+      setError(`Failed to confirm slot: ${e}`);
+      logError(`SlotSetupWizard confirm failed: ${e}`);
+      setConfirming(false);
+    }
+  };
+  return handleConfirm;
+}
+
 export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete }) => {
   const [info, setInfo] = useState<SaveSetupInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -274,56 +343,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
     [],
   );
 
-  const handleConfirm = async (
-    slot: string,
-    migrate = false,
-    migrateFrom: string | null = null,
-    useServerOnConflict = false,
-  ) => {
-    setConfirming(true);
-    setError(null);
-    try {
-      // Confirm a non-empty named slot (legacy slot:null is retired, #1276).
-      // Defaults are the non-destructive path (migrate=false, from=null); the
-      // legacy-group Track button passes migrate=true, from=null to copy the
-      // legacy saves into the target slot (#1498).
-      const result = await confirmSlotChoice(romId, slot, migrate, migrateFrom, useServerOnConflict);
-
-      // A content-based migration found a differing local save — nothing was
-      // confirmed. Show the comparison and let the user confirm the replacement;
-      // cancelling makes no second call, so the slot stays unconfirmed and the
-      // wizard's start-fresh route is still open.
-      if (result.needs_conflict_resolution) {
-        setConfirming(false);
-        showModal(
-          createElement(LegacyMigrationConflictModal, {
-            conflicts: result.conflicts ?? [],
-            slot,
-            onConfirm: () => detach(handleConfirm(slot, true, migrateFrom, true)),
-          }),
-        );
-        return;
-      }
-
-      if (!result.success) {
-        setError(result.message || "Slot confirmation failed");
-        setConfirming(false);
-        return;
-      }
-
-      // Surface the migration outcome (names the slot + counts) so the copy is
-      // never log-only. Only a migration reports counts; a plain confirm doesn't.
-      if (migrate) {
-        const body = wizardMigrationOutcomeToastBody(result.migrated ?? 0, result.failed ?? 0, slot);
-        if (body) toaster.toast({ title: "RomM Sync", body });
-      }
-      onComplete();
-    } catch (e) {
-      setError(`Failed to confirm slot: ${e}`);
-      logError(`SlotSetupWizard confirm failed: ${e}`);
-      setConfirming(false);
-    }
-  };
+  const handleConfirm = createConfirmHandler({ romId, setConfirming, setError, onComplete });
 
   // Loading / confirming — a spinner + live retry progress (#1345) instead of
   // bare italic text, so a load paying the backend retry ladder reads as busy.
