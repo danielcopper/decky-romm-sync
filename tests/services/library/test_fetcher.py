@@ -1675,30 +1675,61 @@ class TestPlanEstimates:
 
     @pytest.mark.asyncio
     async def test_force_full_sync_clears_stamps_so_plan_predicts_no_skips(self, plugin, fake_romm_api):
-        """clear_sync_cache runs BEFORE the run, so a forced plan reads no stamps."""
+        """clear_sync_cache runs BEFORE the run, so a forced plan reads no stamps.
+
+        Pins the PLATFORM-vs-COLLECTION asymmetry the clear exposes (#1511): a
+        platform keeps its ``bound_count`` (read straight from the rows, no stamp
+        gate) while a collection loses its — a collection's membership is knowable
+        only from the stamp the clear just deleted, so its unit reverts to create
+        pricing for that run. The estimate reads long, never short.
+        """
         _wire_fake(plugin, fake_romm_api)
         uow = plugin._uow
         fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
         plugin.settings["enabled_platforms"] = {"1": True}
         _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=1)
         _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        # A stamped collection with one bound member. Its member row sits on
+        # another platform so it cannot perturb the N64 unit's own counts.
+        fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 1}]
+        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "franchise": {}}
+        _seed_persisted_rom(uow, 20, app_id=2001, group_key="igdb:200:1", platform_slug="snes")
+        _seed_collection_stamp(
+            uow,
+            "7",
+            "user",
+            updated_at="2026-01-01T00:00:00",
+            completed_at="2026-01-01T00:00:00",
+            rom_count=1,
+            member_rom_ids=(20,),
+        )
 
-        before = await plugin._sync_service._fetcher.build_work_queue()
-        assert before[0].predicted_skip is True
-        assert before[0].collapsed_count == 1
+        before = {u.name: u for u in await plugin._sync_service._fetcher.build_work_queue()}
+        assert before["N64"].predicted_skip is True
+        assert before["N64"].collapsed_count == 1
+        assert before["Faves"].bound_count == 1
 
         plugin._sync_service.clear_sync_cache()
 
-        after = await plugin._sync_service._fetcher.build_work_queue()
-        assert after[0].predicted_skip is False
+        after = {u.name: u for u in await plugin._sync_service._fetcher.build_work_queue()}
+        assert after["N64"].predicted_skip is False
         # The stamp clear also drops the collapsed count (#1412 gate): the forced
         # re-apply recreates every shortcut, so the ETA is priced at the full
         # server rom_count, not the (now stale) persisted collapse. The rows
         # survive the clear, but without a stamp the count is not emitted.
-        assert after[0].collapsed_count is None
-        # The BINDING survives the clear, though — so the re-apply is a walk of
-        # cheap updates and the seed prices it as such (#1511).
-        assert after[0].bound_count == 1
+        assert after["N64"].collapsed_count is None
+        # The platform's BINDING survives the clear, and so does its bound_count —
+        # it reads the rows directly, so the re-apply is priced as a walk of cheap
+        # updates (#1511).
+        assert after["N64"].bound_count == 1
+        # The collection is the opposite case, and this pairing is the point: its
+        # shortcut is just as intact, but the clear deleted the ONLY record of
+        # which ROMs are members, so the count is absent — not 0, which would
+        # assert a membership the plan can no longer see. Absent means the seed
+        # prices the unit's items as creates for this run.
+        assert after["Faves"].bound_count is None
+        with uow:
+            assert uow.roms.get(20).shortcut_app_id == 2001
 
     @pytest.mark.asyncio
     async def test_estimate_read_failure_leaves_fields_none_and_plan_intact(self, plugin, fake_romm_api):
