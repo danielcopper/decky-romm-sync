@@ -286,7 +286,7 @@ describe("run-scoped estimator", () => {
   // first reading was ~10x pessimistic and the sticky deadline held it until the
   // 30s window slid past the scan (the reported "6 min → 2 min" collapse).
   it("ignores the pre-scan frame that a sub-segment-break stall stranded at the window head (#1511)", () => {
-    beginEtaRun("run-1", [684], 684);
+    beginEtaRun("run-1", [800], 800);
     // Stage-entry frame at the unit's chunk offset — emitted before the scan.
     observeApplyProgress(1, 0, 0);
     // The scan blocks ~8.9s. The apply loop's first frame lands just after it,
@@ -300,12 +300,12 @@ describe("run-scoped estimator", () => {
     observeApplyProgress(1, 4, 9930);
     observeApplyProgress(1, 100, 19000);
     // Measured from post-scan samples only: 99 items over 10.07s = 9.83 items/s,
-    // leaving (684-100)/9.83 ≈ 59s. Had the pre-scan frame survived the slope
+    // leaving (800-100)/9.83 ≈ 71s. Had the pre-scan frame survived the slope
     // would be 100 items / 19s = 5.26 items/s and the readout would nearly double.
     const seconds = liveEtaSeconds();
     expect(seconds).not.toBeNull();
-    expect(seconds).toBeCloseTo((684 - 100) / (99 / 10.07), 0);
-    expect(seconds).toBeLessThan((684 - 100) / (100 / 19));
+    expect(seconds).toBeCloseTo((800 - 100) / (99 / 10.07), 0);
+    expect(seconds).toBeLessThan((800 - 100) / (100 / 19));
   });
 
   it("keeps a wide head gap that carried real throughput (slow work is not a stall, #1511)", () => {

@@ -20,7 +20,7 @@ import type { SyncPlanUnit } from "../types/sync";
  * Seconds per newly created shortcut — the AddShortcut + overview poll, the
  * Set* calls, the confirm poll, the inter-op cadence, and the per-item artwork
  * leg (DB read → file read → base64 → IPC → SetCustomArtworkForApp). Measured
- * 0.314 s/item over 684 creates (2026-07 on-device); carries a ~15% margin.
+ * at ~0.314 s/item (2026-07 on-device); carries a ~15% margin.
  * Excludes the backend cover DOWNLOAD, which is priced separately by
  * {@link COVER_DOWNLOAD_SEC} — it is a distinct phase, not part of the walk.
  */
@@ -30,8 +30,7 @@ export const NEW_ITEM_SEC = 0.36;
  * Seconds per updated shortcut — the update path reuses the existing shortcut
  * (no AddShortcut, no overview poll, and no artwork: the apply loop gates cover
  * application on ``created``), so it is just the Set* calls and the confirm
- * poll. Measured 0.109 s/item over 1315 updates (2026-07 on-device); carries a
- * ~15% margin.
+ * poll. Measured at ~0.109 s/item (2026-07 on-device); carries a ~15% margin.
  */
 export const UPDATED_ITEM_SEC = 0.13;
 
@@ -49,7 +48,7 @@ export const COVER_DOWNLOAD_SEC = 0.15;
  * Flat allowance for the run's FIXED overhead — the one-time shortcut scan
  * (which scales with the existing library, not the delta), the multi-page ROM +
  * save fetches, the inter-chunk gaps, and finalize. Measured 17–24 s on-device
- * across a 684-create and a 1315-update run; the margin here is wide because
+ * across a create-heavy and an update-heavy run; the margin here is wide because
  * the scan grows with library size.
  */
 export const FETCH_ALLOWANCE_SEC = 45;

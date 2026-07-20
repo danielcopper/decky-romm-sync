@@ -50,14 +50,14 @@ describe("estimateApplySeconds", () => {
     expect(NEW_ITEM_SEC).toBeGreaterThan(UPDATED_ITEM_SEC);
   });
 
-  // Calibration guards against the on-device measurements (2026-07, #1511). These
-  // pin the model's OUTPUT at the shapes that were actually timed, so a future
-  // constant tweak cannot silently drift the readout away from reality.
-  it("reads close to the measured runs it was calibrated against", () => {
-    // 684 creates with cold covers — measured 323 s (5.4 min).
-    expect(formatDuration(estimateApplySeconds(684, 0))).toBe("7 min");
-    // 1315 updates, warm covers (a Force Full Sync) — measured ~174 s (2.9 min).
-    expect(formatDuration(estimateApplySeconds(0, 1315))).toBe("4 min");
+  // Calibration guards for the model's OUTPUT at representative run shapes, so a
+  // future constant tweak cannot silently drift the readout away from the
+  // on-device rates the constants were fitted to (2026-07, #1511).
+  it("prices representative create-heavy and update-heavy runs into sane buckets", () => {
+    // A create-heavy run: each item pays the create walk plus a cover download.
+    expect(formatDuration(estimateApplySeconds(700, 0))).toBe("7 min");
+    // An update-heavy run (e.g. a Force Full Sync): cheap Set* walks, no covers.
+    expect(formatDuration(estimateApplySeconds(0, 1300))).toBe("4 min");
   });
 });
 
@@ -130,11 +130,11 @@ describe("estimatePlanSeconds", () => {
   });
 
   // The seed shape #1511 was opened for: a fully-mirrored library re-syncing.
-  // Every row is bound, so the whole plan is cheap updates — it used to be
-  // priced as 2000 fresh creates and read 16 min.
+  // Every row is bound, so the whole plan is cheap updates — pricing it as fresh
+  // creates (0.36 + 0.15 each) is the ceiling the over-read came from.
   it("reads minutes, not a fresh-import ceiling, for an all-bound re-sync", () => {
-    const seconds = estimatePlanSeconds([unit({ rom_count: 2000, collapsed_count: 2000, bound_count: 2000 })]);
-    expect(formatDuration(seconds)).toBe("5 min");
+    const seconds = estimatePlanSeconds([unit({ rom_count: 1000, collapsed_count: 1000, bound_count: 1000 })]);
+    expect(formatDuration(seconds)).toBe("3 min");
   });
 });
 

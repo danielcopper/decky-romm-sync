@@ -1248,25 +1248,25 @@ describe("index.tsx — sync_plan seeds the applying-phase ETA (always-on estima
         run_id: "run-eta",
         units: [
           // A fully-mirrored platform re-syncing: every row already carries a
-          // shortcut, so the run is all updates. Priced as creates this read ~16
-          // min against a real ~4.5 — the over-read #1511 was opened for.
+          // shortcut, so the run is all updates. Pricing it as creates is the
+          // over-read #1511 was opened for; the seed must price it as updates.
           {
             type: "platform",
             id: 1,
             name: "N64",
             slug: "n64",
-            rom_count: 2000,
-            collapsed_count: 2000,
-            bound_count: 2000,
+            rom_count: 1000,
+            collapsed_count: 1000,
+            bound_count: 1000,
           },
         ],
         total_units: 1,
-        total_roms: 2000,
-        total_estimated_items: 2000,
+        total_roms: 1000,
+        total_estimated_items: 1000,
       });
     });
 
-    expect(getSyncProgress().etaSeconds).toBeCloseTo(estimateApplySeconds(0, 2000));
+    expect(getSyncProgress().etaSeconds).toBeCloseTo(estimateApplySeconds(0, 1000));
     resetEta();
     plugin.onDismount();
   });
