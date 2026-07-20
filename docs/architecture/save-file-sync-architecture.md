@@ -279,6 +279,11 @@ backup.
   table name migration `005` targets; migration `018` later renames it to `rom_save_sync_states`). No save data is
   touched; the wizard simply reappears for that ROM and the user re-picks a named slot (optionally migrating the legacy
   saves in). `resolve_default_slot` never returns `None` — a blank/unset default coerces to `"default"`.
+- **Why the bucket is not coming back as an opt-in write target** —
+  [ADR-0026](../adr/0026-legacy-bucket-stays-read-only.md) records the decision and what was measured against a live
+  RomM 5.0.0 server to reach it (the web player can continue a **named**-slot save, so interop does not require
+  slot-less writes; the slot-less bucket has no server-side write-currency gate; the stray-creating player behavior and
+  the server-side row/file desync are being fixed upstream).
 - Legacy `slot:null` survives **only** as a migration **source**. `domain/save_slot.py` (`normalize_slot`) still defines
   the equivalence class `slot ∈ {null, ""}` (state stores `active_slot=None`, the persisted slots map keys it `""`, and
   the server returns `slot: null`) so those saves can be read and deleted on the wire (below), but they are never the
