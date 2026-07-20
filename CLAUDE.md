@@ -552,12 +552,16 @@ the test run.
 
 ### Gavel conformance vectors — vendored contract tier
 
-`tests/domain/test_sync_action_gavel_vectors.py` runs the [romm-gavel](https://github.com/danielcopper/romm-gavel) 409
-ladder conformance vectors against `domain/sync_action.resolve_upload_conflict` — self-conformance of the production
-kernel against the contract that was extracted from it. The vectors are vendored verbatim under
-`tests/domain/gavel_vectors/` (no submodule, no network in CI), so a contract change must land as a reviewable diff.
-Updating means deliberately re-copying the JSON and bumping the commit reference in that folder's `README.md`; never
-edit a vector to match the kernel.
+Two [romm-gavel](https://github.com/danielcopper/romm-gavel) vector families run against the production save-sync
+kernels — self-conformance against the contract that was extracted from them.
+`tests/domain/test_sync_action_gavel_vectors.py` runs the **ladder** family against
+`domain/sync_action.resolve_upload_conflict`; `tests/domain/test_sync_action_gavel_table_vectors.py` runs the
+**decision-table** family against `domain/sync_action.compute_sync_action` (serializing the kernel's
+`Skip`/`Upload`/`Download`/`Conflict` dataclasses into the vector dialect). The vectors are vendored verbatim under
+`tests/domain/gavel_vectors/`, one subdirectory per family mirroring upstream `vectors/` (`ladder/`, `decision-table/`),
+at commit `195e43b` (no submodule, no network in CI), so a contract change must land as a reviewable diff. Updating
+means deliberately re-copying the JSON and bumping the commit reference in that folder's `README.md`; never edit a
+vector to match the kernel.
 
 ### Frontend component tests — `@decky/api` event harness
 

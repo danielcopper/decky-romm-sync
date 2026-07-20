@@ -2,8 +2,8 @@
 
 This tier proves ``domain.sync_action.resolve_upload_conflict`` still conforms to the gavel
 ladder contract — the normative 409-resolution spec that was extracted from this very kernel.
-The vendored JSON vectors under ``gavel_vectors/`` are the contract's normative artifact: each
-one pins a ``(local_hash, last_sync_hash, server_content_hash, last_sync_server_hash)`` input
+The vendored JSON vectors under ``gavel_vectors/ladder/`` are the contract's normative artifact:
+each one pins a ``(local_hash, last_sync_hash, server_content_hash, last_sync_server_hash)`` input
 to the ladder outcome the spec mandates, so any drift between kernel and contract surfaces here
 as a failing vector. Vectors change only by a deliberate re-copy from upstream (see
 ``gavel_vectors/README.md``) — never by editing them to match the kernel.
@@ -19,11 +19,11 @@ import pytest
 
 from domain.sync_action import resolve_upload_conflict
 
-_VECTORS_DIR = Path(__file__).parent / "gavel_vectors"
+_VECTORS_DIR = Path(__file__).parent / "gavel_vectors" / "ladder"
 
 
 def _load_vectors() -> tuple[list[tuple[dict[str, str | None], str, str | None]], list[str]]:
-    """Flatten every ``gavel_vectors/*.json`` file into parametrize argvalues + ids.
+    """Flatten every ``gavel_vectors/ladder/*.json`` file into parametrize argvalues + ids.
 
     Returns a ``(argvalues, ids)`` pair. Each argvalue is
     ``(input, expected, rationale)`` — ``rationale`` is ``None`` for the exhaustive
