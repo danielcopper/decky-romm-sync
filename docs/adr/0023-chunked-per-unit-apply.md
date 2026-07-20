@@ -111,6 +111,28 @@ mid-unit failure forfeits only the in-flight chunk.**
   silently drop the un-recreated games (the #1025 gap). The server-side stale removal in the reporter is the deliberate
   exception — it does **not** invalidate the stamp, because a ROM the server dropped lowers RomM's platform `rom_count`,
   which the stamp's `rom_count` guard already catches on the next skip.
+- **The row-count condition counts by fetch generation, not by every persisted row (#1504).** The skip requires RomM's
+  platform `rom_count` to equal the local row count, and that count originally included every `roms` row for the
+  platform. Rows outlive the server ids they came from: when RomM re-creates a ROM under a new id (re-import, file move,
+  library rebuild) the sibling-group rebind lane moves the shortcut onto the new row and unbinds the old one, which is
+  then retained forever as an identity anchor (ADR-0007). Such a superseded row inflated the count permanently, so the
+  platform could never satisfy the condition again and full-fetched on **every** sync — silently, for exactly the
+  long-lived libraries the skip is worth the most to. The apply therefore marks each row it commits with the **fetch
+  generation** that returned it (`roms.last_fetch_id`), the completion stamp records that same generation
+  (`platform_sync_state.fetch_id`), and the condition counts only rows whose generation matches the stamp's. A
+  superseded row keeps an older generation, so it stops counting while staying on disk — ADR-0007's retention is
+  untouched and nothing is deleted, which is the point: that ADR's rejected "auto-delete on sync-stale" alternative is
+  why the fix is a marker rather than a prune. Three consequences of the chunked apply shape above: (1) the generation
+  is an **opaque id (the run id)**, not a timestamp compared against `completed_at` — each chunk commits with its own
+  clock reading while the stamp is built at the final chunk, so on any platform whose delta exceeds one chunk the
+  earlier chunks' rows would fall before `completed_at` and the skip would count only the last chunk, wedging itself off
+  permanently; (2) it is written on **every** chunk of a platform unit, not only the stamped final one, so the whole
+  unit's rows share the generation its stamp names; (3) a **collection** unit writes none — a collection spans
+  platforms, and re-marking a foreign platform's row would drop it from that platform's counted rows and suppress that
+  platform's skip. A skipped unit returns before any chunk, so neither side is rewritten and the reference point holds
+  across consecutive skips. A pre-#1504 stamp carries no generation and cannot say what its fetch returned, so the skip
+  falls back to counting every row: a platform with no superseded rows keeps skipping through the upgrade, and one that
+  carries them already fails the count today, so its next sync full-fetches and re-stamps both sides.
 - **Collection units get the same fetch-avoiding skip (#742).** A user/smart collection work unit's final chunk stamps a
   `CollectionSyncState` — the collection sibling of `PlatformSyncState` — in the same write UoW as that chunk's `roms`
   upserts, so "this collection fully synced" ⟺ "stamp exists" is atomic on a crash, just like a platform. The gate skips

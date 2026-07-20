@@ -576,6 +576,74 @@ class TestCommitUnitResults:
         with uow:
             assert uow.platform_sync_state.get("n64") is None
 
+    def test_commit_marks_every_upserted_row_with_the_fetch_generation(self, plugin):
+        """A platform unit's commit stamps the generation onto EVERY row it upserts,
+        so the stamp can later count exactly the rows its fetch returned (#1504)."""
+        uow = plugin._uow
+        for rom_id in (10, 11):
+            _stage(
+                plugin._sync_service._box,
+                rom_id,
+                {"name": f"G{rom_id}", "fs_name": f"g{rom_id}.z64", "platform_slug": "n64", "cover_path": ""},
+            )
+
+        plugin._sync_service._reporter._commit_unit_results_io(
+            {"10": 9001}, [{"id": 10}, {"id": 11}], None, None, "run-new"
+        )
+
+        with uow:
+            bound = uow.roms.get(10)
+            unbound = uow.roms.get(11)
+        assert bound is not None
+        assert unbound is not None
+        # The unbound sibling carries it too — it counts toward the platform total.
+        assert bound.last_fetch_id == "run-new"
+        assert unbound.last_fetch_id == "run-new"
+
+    def test_commit_writes_the_same_generation_the_stamp_records(self, plugin):
+        """Row generation and stamp generation come from one value, so the skip's
+        two sides always agree (#1504)."""
+        from domain.platform_sync_state import PlatformSyncState
+
+        uow = plugin._uow
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {"name": "Game", "fs_name": "game.z64", "platform_slug": "n64", "cover_path": ""},
+        )
+        stamp = PlatformSyncState.stamp(
+            platform_slug="n64", at="2026-01-01T00:00:00+00:00", rom_count=1, fetch_id="run-new"
+        )
+
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}], stamp, None, "run-new")
+
+        with uow:
+            rom = uow.roms.get(42)
+            loaded = uow.platform_sync_state.get("n64")
+        assert rom is not None
+        assert loaded is not None
+        assert rom.last_fetch_id == loaded.fetch_id == "run-new"
+
+    def test_collection_commit_preserves_a_foreign_platforms_generation(self, plugin):
+        """A collection spans platforms, so its commit must NOT re-mark a member's
+        row: re-stamping would drop that row from its own platform's counted rows
+        and suppress that platform's skip (#1504)."""
+        uow = plugin._uow
+        _stage(
+            plugin._sync_service._box,
+            42,
+            {"name": "Game", "fs_name": "game.z64", "platform_slug": "n64", "cover_path": ""},
+        )
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}], None, None, "run-new")
+
+        # A later collection unit re-commits the same ROM with no generation.
+        plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}], None, None, None)
+
+        with uow:
+            rom = uow.roms.get(42)
+        assert rom is not None
+        assert rom.last_fetch_id == "run-new"
+
     def test_commit_persists_collection_stamp_atomically(self, plugin):
         """A passed ``collection_stamp`` lands in the SAME committed UoW as the rom
         upsert — the per-collection completion stamp is atomic with the chunk (#742)."""

@@ -28,7 +28,7 @@ def _rewind_to_v4(db_path: str) -> None:
 
     Bootstrap stamps the DB at the latest version with the full schema. To replay
     the real 005 upgrade path the runner must see a genuine v4 database: the
-    version stamp AND the pre-006/007/008/009/010/012/015/016/017/018/019 schema
+    version stamp AND the pre-006/007/008/009/010/012/015/016/017/018/019/020 schema
     (006's play-session outbox table absent and ``note_id`` present, 007's
     ``last_played`` column absent, 008's version-metadata columns absent, 009's
     ``last_session_start_monotonic`` column absent, 010's sibling_group_key index
@@ -36,8 +36,8 @@ def _rewind_to_v4(db_path: str) -> None:
     ``applied_launch_options`` column absent, 016's ``cover_source`` column
     absent, 017's ``last_sync_server_hash`` column absent, 018's save-sync
     scalar table under its pre-rename name ``rom_save_states``, and 019's
-    collection_sync_state table absent) so the sequential 005→…→019 re-run
-    applies cleanly.
+    collection_sync_state table absent, and 020's fetch-generation columns
+    absent) so the sequential 005→…→020 re-run applies cleanly.
     """
     conn = sqlite3.connect(db_path, isolation_level=None)
     try:
@@ -60,6 +60,10 @@ def _rewind_to_v4(db_path: str) -> None:
         conn.execute("ALTER TABLE roms DROP COLUMN applied_launch_options")
         # Reverse 016 so its ADD COLUMN re-applies instead of duplicating.
         conn.execute("ALTER TABLE roms DROP COLUMN cover_source")
+        # Reverse 020 so its ADD COLUMN re-applies instead of duplicating. Its
+        # platform_sync_state column needs no reversal — 012's whole table is
+        # dropped above, so 020 re-adds the column to the re-created table.
+        conn.execute("ALTER TABLE roms DROP COLUMN last_fetch_id")
         # Reverse 017 so its ADD COLUMN re-applies instead of duplicating.
         conn.execute("ALTER TABLE rom_save_files DROP COLUMN last_sync_server_hash")
         # Reverse 018 so 005's `UPDATE rom_save_states` finds the table under its

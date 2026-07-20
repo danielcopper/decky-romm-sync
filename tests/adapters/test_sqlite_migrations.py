@@ -79,7 +79,7 @@ def _set_user_version(db_path: str, version: int) -> None:
 # + 015_add_applied_launch_options + 016_add_cover_source
 # + 017_add_last_sync_server_hash + 018_rename_rom_save_states
 # + 019_add_collection_sync_state).
-_SHIPPED_VERSION = 19
+_SHIPPED_VERSION = 20
 
 # Tables after every shipped migration: the v1 set plus 006's play-session outbox,
 # 012's per-platform completion stamp, and 019's per-collection completion stamp,
@@ -736,7 +736,13 @@ class Test012PlatformSyncState:
 
         assert _user_version(db_path) == _SHIPPED_VERSION
         assert "platform_sync_state" in _tables(db_path)
-        assert _columns(db_path, "platform_sync_state") == {"platform_slug", "completed_at", "rom_count"}
+        # fetch_id is added by 020 (#1504); after a full apply the table carries it.
+        assert _columns(db_path, "platform_sync_state") == {
+            "platform_slug",
+            "completed_at",
+            "rom_count",
+            "fetch_id",
+        }
 
     def test_table_absent_before_012(self, tmp_path: Path):
         # The table is added by 012 — a DB at v11 does not yet carry it.
@@ -1265,6 +1271,74 @@ class Test019CollectionSyncState:
 
         assert final_version == _SHIPPED_VERSION
         assert "collection_sync_state" in _tables(db_path)
+
+
+class Test020FetchGeneration:
+    """020 — adds the fetch-generation marker columns (#1504)."""
+
+    def test_adds_the_marker_to_roms_and_the_platform_stamp(self, tmp_path: Path):
+        db_path = str(tmp_path / "romm_sync.db")
+
+        apply_migrations(db_path)
+
+        assert _user_version(db_path) == _SHIPPED_VERSION
+        assert "last_fetch_id" in _columns(db_path, "roms")
+        assert "fetch_id" in _columns(db_path, "platform_sync_state")
+
+    def test_columns_absent_before_020(self, tmp_path: Path):
+        db_path = str(tmp_path / "romm_sync.db")
+
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 19)))
+
+        assert _user_version(db_path) == 19
+        assert "last_fetch_id" not in _columns(db_path, "roms")
+        assert "fetch_id" not in _columns(db_path, "platform_sync_state")
+
+    def test_existing_rows_read_null_across_the_migration(self, tmp_path: Path):
+        # A pre-020 row keeps its data and reads NULL for the new marker — the
+        # "unknown generation" state the skip falls back to counting every row for.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 19)))
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute(
+                "INSERT INTO roms (rom_id, platform_slug, name, fs_name, last_synced_at) "
+                "VALUES (4375, 'dc', 'Game', 'game.gdi', '2026-07-15T20:56:03')"
+            )
+            conn.execute(
+                "INSERT INTO platform_sync_state (platform_slug, completed_at, rom_count) "
+                "VALUES ('dc', '2026-07-15T20:56:03', 2)"
+            )
+        finally:
+            conn.close()
+
+        apply_migrations(db_path)
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            rom = conn.execute("SELECT name, last_fetch_id FROM roms WHERE rom_id = 4375").fetchone()
+            stamp = conn.execute(
+                "SELECT rom_count, fetch_id FROM platform_sync_state WHERE platform_slug = 'dc'"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert rom == ("Game", None)
+        assert stamp == (2, None)
+
+    def test_marker_round_trips(self, tmp_path: Path):
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path)
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute(
+                "INSERT INTO roms (rom_id, platform_slug, name, fs_name, last_synced_at, last_fetch_id) "
+                "VALUES (25135, 'dc', 'Game', 'game.gdi', '2026-07-20T06:27:12', 'run-abc')"
+            )
+            stored = conn.execute("SELECT last_fetch_id FROM roms WHERE rom_id = 25135").fetchone()[0]
+        finally:
+            conn.close()
+        assert stored == "run-abc"
 
 
 def test_shipped_migrations_dir_resolves_to_real_schema():

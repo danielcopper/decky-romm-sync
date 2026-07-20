@@ -13,8 +13,9 @@ elsewhere (per applied unit) so a fetch never mutates the cache.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
+from domain.fetch_generation import count_rows_for_skip
 from domain.platform_prefs import materialize_enabled_platforms, resolve_sync_enabled
 from domain.skip_prediction import collapsed_shortcut_count, predict_unit_skip
 from domain.sync_stage import SyncStage
@@ -45,6 +46,18 @@ if TYPE_CHECKING:
 
 
 _SYNC_CANCELLED = "Sync cancelled"
+
+
+class _SkipBaseline(NamedTuple):
+    """One platform's locally persisted inputs to the incremental-skip gate."""
+
+    stamp_completed_at: str | None
+    stamp_rom_count: int | None
+    reconstructed_roms: list[dict[str, Any]]
+    fetched_count: int
+    persisted_count: int
+    needs_backfill: bool
+
 
 # Emit a ``fetching`` progress frame on the first page and every Nth page of a
 # paginated unit fetch. At the 500-ROM page size a large platform paginates in
@@ -530,7 +543,9 @@ class LibraryFetcher:
                     stamp_completed_at=stamp.completed_at if stamp is not None else None,
                     stamp_rom_count=stamp.rom_count if stamp is not None else None,
                     unit_rom_count=unit.rom_count,
-                    persisted_count=len(all_rows),
+                    # The same fetch-generation count the real gate uses (#1504),
+                    # so the estimate keeps replaying the gate's local conditions.
+                    persisted_count=count_rows_for_skip(all_rows, stamp.fetch_id if stamp is not None else None),
                     registry_count=sum(1 for rom in all_rows if rom.shortcut_app_id is not None),
                     needs_backfill=any(rom.sibling_group_key is None for rom in all_rows),
                 )
@@ -571,13 +586,8 @@ class LibraryFetcher:
             stamped = {slug for slug in rows_by_slug if uow.platform_sync_state.get(slug) is not None}
         return {slug: collapsed_shortcut_count(rows) for slug, rows in rows_by_slug.items() if slug in stamped}
 
-    def _read_incremental_baseline(
-        self, platform_slug: str
-    ) -> tuple[str | None, int | None, list[dict[str, Any]], int, bool]:
+    def _read_incremental_baseline(self, platform_slug: str) -> _SkipBaseline:
         """Read the incremental-skip baseline for *platform_slug* from SQLite.
-
-        Returns ``(stamp_completed_at, stamp_rom_count, reconstructed_roms,
-        persisted_count, needs_backfill)``:
 
         * ``stamp_completed_at`` / ``stamp_rom_count`` — the platform's
           completion stamp (``PlatformSyncState``), or ``None``/``None`` when
@@ -591,9 +601,16 @@ class LibraryFetcher:
           like a RomM list response (thin — no ``metadatum``, so the skip-guard
           keeps them out of the metadata stamp). This is the shortcut set the
           skip reconstructs as the unit's ROMs.
-        * ``persisted_count`` — **all** persisted rows for the platform (bound +
-          unbound siblings). Group-aware sync persists every sibling (ADR-0021),
-          so this is what RomM's platform ``rom_count`` is compared against.
+        * ``fetched_count`` — the rows the skip may count against RomM's
+          platform ``rom_count`` (``count_rows_for_skip``, #1504): those carrying
+          the stamp's ``fetch_id`` generation, so a row for a rom_id the server
+          dropped stays on disk (ADR-0007) without holding the platform below
+          its server count forever. Bound and unbound rows count alike — only
+          the generation decides. Falls back to every row for a stamp written
+          before the generation contract.
+        * ``persisted_count`` — every persisted row for the platform,
+          superseded ones included. Reporting only: it makes the "N persisted,
+          M from the last fetch" divergence visible in the log.
         * ``needs_backfill`` — any persisted row still carries a NULL
           ``sibling_group_key`` (predates the version-metadata capture), so the
           platform must full-fetch to fill it in.
@@ -603,8 +620,6 @@ class LibraryFetcher:
         with self._uow_factory() as uow:
             stamp = uow.platform_sync_state.get(platform_slug)
             all_rows = list(uow.roms.iter_by_platform(platform_slug))
-        stamp_completed_at = stamp.completed_at if stamp is not None else None
-        stamp_rom_count = stamp.rom_count if stamp is not None else None
         reconstructed = [
             {
                 "id": rom.rom_id,
@@ -619,8 +634,14 @@ class LibraryFetcher:
             for rom in all_rows
             if rom.shortcut_app_id is not None
         ]
-        needs_backfill = any(rom.sibling_group_key is None for rom in all_rows)
-        return stamp_completed_at, stamp_rom_count, reconstructed, len(all_rows), needs_backfill
+        return _SkipBaseline(
+            stamp_completed_at=stamp.completed_at if stamp is not None else None,
+            stamp_rom_count=stamp.rom_count if stamp is not None else None,
+            reconstructed_roms=reconstructed,
+            fetched_count=count_rows_for_skip(all_rows, stamp.fetch_id if stamp is not None else None),
+            persisted_count=len(all_rows),
+            needs_backfill=any(rom.sibling_group_key is None for rom in all_rows),
+        )
 
     @staticmethod
     def _decorate_reconstructed(
@@ -672,19 +693,19 @@ class LibraryFetcher:
         platform_name = unit.name
         platform_slug = unit.slug
 
-        (
-            stamp_completed_at,
-            stamp_rom_count,
-            reconstructed,
-            persisted_count,
-            needs_backfill,
-        ) = await self._loop.run_in_executor(None, self._read_incremental_baseline, platform_slug)
+        baseline = await self._loop.run_in_executor(None, self._read_incremental_baseline, platform_slug)
+        stamp_completed_at = baseline.stamp_completed_at
+        stamp_rom_count = baseline.stamp_rom_count
+        reconstructed = baseline.reconstructed_roms
+        fetched_count = baseline.fetched_count
+        persisted_count = baseline.persisted_count
+        needs_backfill = baseline.needs_backfill
         registry_count = len(reconstructed)
 
         if not stamp_completed_at or stamp_rom_count is None:
             self._logger.info(f"Per-unit fetch {platform_name}: no completion stamp — full fetch")
             return None
-        if persisted_count == 0:
+        if fetched_count == 0:
             return None
 
         # A skip's contract is "the local mirror already matches the server", so
@@ -740,19 +761,36 @@ class LibraryFetcher:
             )
             return None
 
+        # The row-count condition counts only the rows the last COMPLETE fetch
+        # returned (#1504). Rows for rom_ids the server has since dropped stay on
+        # disk as identity anchors (ADR-0007) but carry an older fetch generation,
+        # so they no longer hold the platform below its server count forever.
         server_total = delta_resp.get("total", 0) if isinstance(delta_resp, dict) else 0
-        if server_total == 0 and unit.rom_count == persisted_count:
+        if server_total == 0 and unit.rom_count == fetched_count:
             self._logger.info(
                 f"Per-unit skip: {platform_name} unchanged "
-                f"({persisted_count} ROMs persisted, {registry_count} shortcuts)"
+                f"({fetched_count} ROMs from the last fetch, {registry_count} shortcuts"
+                f"{self._superseded_note(persisted_count, fetched_count)})"
             )
             return self._decorate_reconstructed(reconstructed, platform_name, platform_slug, int(unit.id))
 
         self._logger.info(
             f"Per-unit fetch {platform_name}: {server_total} updated, "
-            f"server={unit.rom_count} persisted={persisted_count} shortcuts={registry_count} — full fetch"
+            f"server={unit.rom_count} from-last-fetch={fetched_count} shortcuts={registry_count}"
+            f"{self._superseded_note(persisted_count, fetched_count)} — full fetch"
         )
         return None
+
+    @staticmethod
+    def _superseded_note(persisted_count: int, fetched_count: int) -> str:
+        """Name the rows the last fetch did not return, so the gap is visible in the log.
+
+        Empty when every persisted row rode the last fetch; otherwise reports the
+        rows the server has dropped, which are retained (ADR-0007) and no longer
+        counted (#1504).
+        """
+        superseded = persisted_count - fetched_count
+        return f", {superseded} superseded row(s) retained but not counted" if superseded > 0 else ""
 
     async def _emit_fetch_page_progress(
         self,

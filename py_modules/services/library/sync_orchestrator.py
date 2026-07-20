@@ -1354,6 +1354,12 @@ class SyncOrchestrator:
         with the chunks committed so far.
         """
         box = self._sync_state
+        # One generation id per platform fetch. The run id serves: a platform is
+        # fetched at most once per run, so it identifies this platform's fetch
+        # uniquely, and every chunk of the unit shares it — unlike a clock reading,
+        # which differs per chunk and would leave the earlier chunks' rows stamped
+        # before the final chunk's completion stamp (#1504).
+        fetch_id = str(box.current_sync_id or "") if unit.type == "platform" else None
         chunks = build_unit_chunks(emitted, shortcuts_data, _APPLY_CHUNK_SIZE)
         roms_by_id = {r["id"]: r for r in unit_roms if "id" in r}
         chunk_count = len(chunks)
@@ -1460,7 +1466,7 @@ class SyncOrchestrator:
                 self._abandon_active_chunk(box, chunk_rows)
                 return applied_count
 
-            platform_stamp = self._build_final_platform_stamp(unit, chunk_index, chunk_count)
+            platform_stamp = self._build_final_platform_stamp(unit, chunk_index, chunk_count, fetch_id)
             collection_stamp = self._build_final_collection_stamp(unit, chunk_index, chunk_count, collection_member_ids)
 
             # Per-chunk commit: the reporter upserts every fetched ROM of this
@@ -1473,7 +1479,16 @@ class SyncOrchestrator:
             # checkpoint. The final-chunk ``platform_stamp`` / ``collection_stamp``
             # (whichever the unit type produces) rides the same UoW.
             await self._reporter.get().commit_unit_results(
-                applied, chunk_rows, platform_stamp=platform_stamp, collection_stamp=collection_stamp
+                applied,
+                chunk_rows,
+                platform_stamp=platform_stamp,
+                collection_stamp=collection_stamp,
+                # The fetch generation for a PLATFORM unit's rows (#1504), passed on
+                # EVERY chunk so the whole unit shares the generation the final
+                # chunk's stamp records. A collection unit passes None — it spans
+                # platforms, and re-marking a foreign platform's row would drop it
+                # from that platform's counted rows.
+                fetch_id=fetch_id,
             )
             applied_count += len(applied)
             # Only a COMMITTED chunk's items count as done (#1383): an emitted chunk
@@ -1624,7 +1639,7 @@ class SyncOrchestrator:
         return cover_refreshes[:allowance]
 
     def _build_final_platform_stamp(
-        self, unit: WorkUnit, chunk_index: int, chunk_count: int
+        self, unit: WorkUnit, chunk_index: int, chunk_count: int, fetch_id: str | None = None
     ) -> PlatformSyncState | None:
         """Build the completion stamp for a platform unit's FINAL chunk, else ``None``.
 
@@ -1642,6 +1657,7 @@ class SyncOrchestrator:
                 platform_slug=unit.slug,
                 at=self._clock.now().isoformat(),
                 rom_count=unit.rom_count,
+                fetch_id=fetch_id,
             )
         return None
 

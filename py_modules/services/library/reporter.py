@@ -406,7 +406,9 @@ class SyncReporter:
 
     # ── Report unit results (per-unit pipeline) ──────────────────
 
-    def _commit_unit_results_io(self, rom_id_to_app_id, unit_roms, platform_stamp=None, collection_stamp=None):
+    def _commit_unit_results_io(
+        self, rom_id_to_app_id, unit_roms, platform_stamp=None, collection_stamp=None, fetch_id=None
+    ):
         """Finalise artwork names, then persist EVERY fetched ROM of the chunk.
 
         Group-aware commit (ADR-0021): this chunk's slice of the live RomM fetch
@@ -434,6 +436,12 @@ class SyncReporter:
         chunk of a user/smart collection unit; it rides the same UoW so a
         collection is stamped complete iff its last chunk is durable. Exactly one
         of the two is ever set per commit (a unit is a platform or a collection).
+
+        ``fetch_id`` is the fetch generation stamped onto every row this commit
+        upserts (#1504). It is set on EVERY chunk of a platform unit — not just
+        the final one — so the whole unit's rows share the generation its
+        completion stamp records, and left ``None`` by collection units and the
+        late-ack path (see :meth:`Rom.record_fetch_generation`).
         """
         grid = self._steam_config.grid_dir()
         box = self._sync_state
@@ -457,7 +465,7 @@ class SyncReporter:
         with self._uow_factory() as uow:
             for raw in unit_roms:
                 if "id" in raw:
-                    self._persist_synced_rom(uow, int(raw["id"]), binding, finalized, roms_by_id)
+                    self._persist_synced_rom(uow, int(raw["id"]), binding, finalized, roms_by_id, fetch_id)
             if platform_stamp is not None:
                 uow.platform_sync_state.save(platform_stamp)
             if collection_stamp is not None:
@@ -470,7 +478,7 @@ class SyncReporter:
             except Exception as e:
                 self._logger.error(f"Failed to set Steam Input config: {e}")
 
-    def _persist_synced_rom(self, uow, rom_id, binding, finalized, roms_by_id) -> None:
+    def _persist_synced_rom(self, uow, rom_id, binding, finalized, roms_by_id, fetch_id=None) -> None:
         """Upsert one fetched ROM + its cached metadata into the open write UoW.
 
         Reads the built identity + version fields from ``pending_all_roms`` (the
@@ -511,6 +519,7 @@ class SyncReporter:
             self._logger.warning(f"Skipping invalid ROM {rom_id} during commit: {e}")
             return
         self._merge_plugin_resolved_fields(rom, rom_id, built, finalized, existing)
+        self._merge_fetch_generation(rom, fetch_id, existing)
         uow.roms.save(rom)
 
         # Record the applied launch command for a binding TARGET this cycle (the
@@ -551,6 +560,22 @@ class SyncReporter:
         ra_id = self._merge_optional_id(built.get("ra_id"), existing.ra_id if existing else None)
         if ra_id is not None:
             rom.assign_ra_id(ra_id)
+
+    @staticmethod
+    def _merge_fetch_generation(rom: Rom, fetch_id: str | None, existing) -> None:
+        """Advance the row's fetch generation, or carry the existing one forward.
+
+        Follows the same "confirmed new wins, else preserve existing, else None"
+        merge as the plugin-resolved fields: a **platform** unit's commit supplies
+        the generation and advances every row it upserts, while a **collection**
+        unit (which supplies none) must leave a foreign platform's row on its own
+        generation — re-marking it would drop it from that platform's counted
+        rows and suppress that platform's skip (#1504). The column rides the sync
+        UPSERT, so preserving here is what keeps the value across a re-save.
+        """
+        carried = fetch_id or (existing.last_fetch_id if existing is not None else None)
+        if carried:
+            rom.record_fetch_generation(carried)
 
     def _stamp_rom_metadata(self, uow, rom_id: int, rom: dict[str, Any] | None) -> None:
         """Stamp the ROM's cached metadata into ``uow.rom_metadata`` for this commit.
@@ -662,6 +687,7 @@ class SyncReporter:
         unit_roms,
         platform_stamp: PlatformSyncState | None = None,
         collection_stamp: CollectionSyncState | None = None,
+        fetch_id: str | None = None,
     ):
         """Per-chunk commit: cover-path finalize then atomic ``roms`` + metadata upsert.
 
@@ -682,12 +708,23 @@ class SyncReporter:
         heartbeat-timeout late-ack path never sets either — a timed-out unit is
         incomplete and must not be stamped.
 
+        ``fetch_id`` rides EVERY chunk of a platform unit (not only the stamped
+        final one), marking each upserted row with the generation that fetch
+        stamp records (#1504). Collection units and the late-ack path pass
+        ``None``, leaving each row's existing generation untouched.
+
         Records every bound appId in the shared box so the stale-removal scan
         excludes appIds this run committed, whichever path drove the commit —
         a new rom_id reusing an old appId must not look stale (#1036).
         """
         await self._loop.run_in_executor(
-            None, self._commit_unit_results_io, rom_id_to_app_id, unit_roms, platform_stamp, collection_stamp
+            None,
+            self._commit_unit_results_io,
+            rom_id_to_app_id,
+            unit_roms,
+            platform_stamp,
+            collection_stamp,
+            fetch_id,
         )
         self._sync_state.committed_app_ids.update(int(aid) for aid in rom_id_to_app_id.values())
 

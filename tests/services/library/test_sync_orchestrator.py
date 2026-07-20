@@ -3890,7 +3890,7 @@ class TestApplyChunking:
 
         commit_rows: list[list[int]] = []
 
-        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None, collection_stamp=None):
+        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None, collection_stamp=None, fetch_id=None):
             commit_rows.append([r["id"] for r in chunk_rows])
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
@@ -3982,7 +3982,7 @@ class TestApplyChunking:
 
         commit_rows: list[list[int]] = []
 
-        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None, collection_stamp=None):
+        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None, collection_stamp=None, fetch_id=None):
             commit_rows.append([r["id"] for r in chunk_rows])
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
@@ -4047,7 +4047,7 @@ class TestApplyChunking:
         commit_rows: list[list[int]] = []
         box = plugin._sync_service._box
 
-        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None, collection_stamp=None):
+        async def capture_commit(_rid_to_aid, chunk_rows, platform_stamp=None, collection_stamp=None, fetch_id=None):
             commit_rows.append([r["id"] for r in chunk_rows])
             # Cancel lands the instant chunk 0's commit resolves — before the loop
             # returns to the top to emit chunk 1.
@@ -4159,7 +4159,7 @@ class TestPerUnitMetadataStamping:
         commit_calls: list[tuple[Any, Any]] = []
         original_commit = plugin._sync_service._reporter.commit_unit_results
 
-        async def tracked_commit(rid_to_aid, acked_roms, platform_stamp=None, collection_stamp=None):
+        async def tracked_commit(rid_to_aid, acked_roms, platform_stamp=None, collection_stamp=None, fetch_id=None):
             commit_calls.append((rid_to_aid, acked_roms))
             await original_commit(
                 rid_to_aid, acked_roms, platform_stamp=platform_stamp, collection_stamp=collection_stamp
@@ -4261,7 +4261,7 @@ class TestPerUnitMetadataStamping:
 
         commit_calls: list[tuple[Any, Any]] = []
 
-        async def capture_commit(rid_to_aid, unit_roms, platform_stamp=None, collection_stamp=None):
+        async def capture_commit(rid_to_aid, unit_roms, platform_stamp=None, collection_stamp=None, fetch_id=None):
             commit_calls.append((rid_to_aid, unit_roms))
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
@@ -4363,7 +4363,7 @@ class TestPlatformCompletionStamp:
 
         stamps: list[Any] = []
 
-        async def capture_commit(_rid_to_aid, _chunk_rows, platform_stamp=None, collection_stamp=None):
+        async def capture_commit(_rid_to_aid, _chunk_rows, platform_stamp=None, collection_stamp=None, fetch_id=None):
             stamps.append(platform_stamp)
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
@@ -4487,7 +4487,7 @@ class TestPlatformCompletionStamp:
 
         stamps: list[Any] = []
 
-        async def capture_commit(_rid_to_aid, _chunk_rows, platform_stamp=None, collection_stamp=None):
+        async def capture_commit(_rid_to_aid, _chunk_rows, platform_stamp=None, collection_stamp=None, fetch_id=None):
             stamps.append(platform_stamp)
 
         plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
@@ -4513,6 +4513,104 @@ class TestPlatformCompletionStamp:
         # The collection committed (non-vacuous) but never carried a stamp.
         assert stamps, "collection unit should have committed at least one chunk"
         assert all(s is None for s in stamps)
+
+    @pytest.mark.asyncio
+    async def test_platform_threads_one_generation_through_every_chunk(self, plugin, fake_romm_api, monkeypatch):
+        """Every chunk of a platform unit carries the SAME generation, and the final
+        chunk's stamp records that same value (#1504).
+
+        A per-chunk value (e.g. a clock reading) would leave the earlier chunks'
+        rows on a generation the stamp never names, so the next skip would count
+        only the last chunk and wedge itself off permanently.
+        """
+        from services.library import sync_orchestrator
+
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+        monkeypatch.setattr(sync_orchestrator, "_APPLY_CHUNK_SIZE", 2)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": i, "name": f"G{i}"} for i in range(1, 6)],
+        )
+
+        seen: list[Any] = []
+
+        async def capture_commit(_rid_to_aid, _chunk_rows, platform_stamp=None, collection_stamp=None, fetch_id=None):
+            seen.append((fetch_id, platform_stamp))
+
+        plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+        plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-abc"
+
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=5)
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        assert len(seen) == 3  # 5 singletons at chunk size 2
+        assert [fetch_id for fetch_id, _ in seen] == ["run-abc"] * 3
+        # The stamp names the generation its own unit's rows all carry.
+        final_stamp = seen[-1][1]
+        assert final_stamp is not None
+        assert final_stamp.fetch_id == "run-abc"
+
+    @pytest.mark.asyncio
+    async def test_collection_unit_writes_no_generation(self, plugin, fake_romm_api):
+        """A collection spans platforms, so its commits pass no generation — marking
+        a foreign platform's row would drop it from that platform's counted rows
+        and suppress that platform's skip (#1504)."""
+        plugin.loop = asyncio.get_event_loop()
+        _use_fake_romm(plugin, fake_romm_api)
+
+        _seed_platform(
+            fake_romm_api,
+            platform_id=1,
+            name="N64",
+            slug="n64",
+            roms=[{"id": 1, "name": "A"}, {"id": 2, "name": "B"}],
+        )
+        _seed_collection(fake_romm_api, collection_id=7, name="Favs", rom_ids=[1, 2])
+
+        seen: list[Any] = []
+
+        async def capture_commit(_rid_to_aid, _chunk_rows, platform_stamp=None, collection_stamp=None, fetch_id=None):
+            seen.append(fetch_id)
+
+        plugin._sync_service._reporter.commit_unit_results = capture_commit  # type: ignore[method-assign]
+        plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
+
+        async def fake_wait(_u, event):
+            event.set()
+            return {"1": 5001, "2": 5002}
+
+        plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
+        plugin._sync_service._box.sync_state = SyncState.RUNNING
+        plugin._sync_service._box.current_sync_id = "run-abc"
+
+        unit = WorkUnit(type="collection", id="7", name="Favs", slug="favs", rom_count=2, collection_kind="user")
+        await plugin._sync_service._orchestrator._sync_one_unit(
+            unit,
+            unit_index=0,
+            total_units=1,
+            synced_rom_ids=set(),
+            collection_memberships={},
+            platform_rom_ids=set(),
+        )
+
+        # Non-vacuous: the collection did commit, and no commit carried a generation.
+        assert seen, "collection unit should have committed at least one chunk"
+        assert all(fetch_id is None for fetch_id in seen)
 
     @pytest.mark.asyncio
     async def test_apply_start_clears_preexisting_stamp_on_cancel_mid_unit(self, plugin, fake_romm_api, monkeypatch):
