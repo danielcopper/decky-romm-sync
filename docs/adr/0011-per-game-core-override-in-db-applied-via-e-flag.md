@@ -134,7 +134,7 @@ is therefore **not built now** — a one-implementation Protocol is indirection 
 - **No migration from the old model.** Per-game overrides previously written to `gamelist.xml` are not imported — there
   is deliberately no gamelist-import migration (it would revive the multi-root parse failure and the folder-collapse
   ambiguity). Users re-apply per-game cores through the plugin UI once. See the user-facing note in
-  [BIOS and Emulator Cores](../user-guide/bios-management.md#per-game-cores-do-not-migrate).
+  [BIOS and Emulator Cores](../user-guide/bios-management.md#core-choices-are-not-migrated-from-es-de).
 - **Multi-emulator stays cheap to reach.** Because `-e` construction is isolated at one domain seam and the per-ROM
   _selection_ is a separate service-layer DB read, #129/#918 changes only the seam's rendering plus net-new per-emulator
   argv — never the launcher binary, the shortcut identity, or the resolver.
