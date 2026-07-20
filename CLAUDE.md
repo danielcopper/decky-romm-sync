@@ -18,9 +18,9 @@ here (CI carries the enforcement); a rule without one needs its full statement h
 
 ## Where the details live
 
-Each page below is the current-truth owner of its area and carries its own ADR trail. Read the page before working in
-the area. **Do not cite ADRs from this file** — an ADR is frozen history (and may be `Proposed` or superseded, which is
-invisible at the citation site), so reach it through the page that owns the topic.
+Each page below is the current-truth owner of its area, and most carry their own ADR trail. Read the page before working
+in the area. **Do not cite ADRs from this file** — an ADR is frozen history (and may be `Proposed` or superseded, which
+is invisible at the citation site), so reach it through the page that owns the topic.
 
 - Steam shortcuts — appIds, artwork, launch-option writes, removal churn —
   [steam-non-steam-shortcuts.md](docs/architecture/steam-non-steam-shortcuts.md)
@@ -33,6 +33,8 @@ invisible at the citation site), so reach it through the page that owns the topi
 - Emulator and core selection — [core-emulator-selection.md](docs/architecture/core-emulator-selection.md)
 - RetroArch/ES-DE config parsing — [config-source-parsers.md](docs/architecture/config-source-parsers.md)
 - Steam Remote Play — [steam-remote-play.md](docs/architecture/steam-remote-play.md)
+- **End-user-facing behavior and UI** — setup, configuration, syncing, save-sync, BIOS, troubleshooting —
+  `docs/user-guide/`
 - Dev setup, dependency management, frontend loop — `docs/contributing/`
 
 ## Documentation
@@ -246,7 +248,8 @@ surface they describe; that is unavoidable density, not god-class. Split `bootst
 
 **Reference shape for new service-level work**: a Protocol (in `services/protocols/`) + an adapter implementing it + a
 `FakeXxxAdapter` in `conftest` + `*ServiceConfig` ctor decomposition. `services/saves/` and `services/library/` are the
-reference decompositions for shared-state sub-services.
+reference decompositions for shared-state sub-services. Sequencing for a new vertical: cross-cutting Protocols first,
+domain extraction next, the biggest service last.
 
 If a refactor breaks a `[CP]` rule, that's an architectural regression — call it out and fix it in the same PR or open a
 follow-up. `[ours]` deviations should be flagged in review but can be debated.
