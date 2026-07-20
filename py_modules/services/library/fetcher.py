@@ -545,7 +545,7 @@ class LibraryFetcher:
                     unit_rom_count=unit.rom_count,
                     # The same fetch-generation count the real gate uses (#1504),
                     # so the estimate keeps replaying the gate's local conditions.
-                    persisted_count=count_rows_for_skip(all_rows, stamp.fetch_id if stamp is not None else None),
+                    fetched_count=count_rows_for_skip(all_rows, stamp.fetch_id if stamp is not None else None),
                     registry_count=sum(1 for rom in all_rows if rom.shortcut_app_id is not None),
                     needs_backfill=any(rom.sibling_group_key is None for rom in all_rows),
                 )
@@ -668,21 +668,23 @@ class LibraryFetcher:
         Returns the roms-reconstructed ROM list (the platform's bound rows =
         its shortcuts) when the platform is unchanged: the server reports zero
         rows updated after the platform's completion stamp AND the unit's
-        ``rom_count`` matches the count of ALL persisted rows for the platform.
-        The stamp (``PlatformSyncState``) is the **sole** skip authority — it
-        exists iff the platform's most recent apply attempt ran to completion
-        (cleared at apply start and by local removals, rewritten by the final
-        chunk; ADR-0023). A completed-run ``last_sync`` is deliberately NOT a
-        fallback: it cannot see a locally-removed-then-partially-reapplied
+        ``rom_count`` matches the count of persisted rows carrying the stamp's
+        fetch generation. The stamp (``PlatformSyncState``) is the **sole** skip
+        authority — it exists iff the platform's most recent apply attempt ran to
+        completion (cleared at apply start and by local removals, rewritten by the
+        final chunk; ADR-0023). A completed-run ``last_sync`` is deliberately NOT
+        a fallback: it cannot see a locally-removed-then-partially-reapplied
         platform, so trusting it can skip a platform with missing shortcuts.
-        Group-aware sync persists every sibling (ADR-0021), so the count compares
-        against all persisted rows — not the bound representatives — restoring
-        skip parity on platforms that hold sibling groups. Returns ``None`` to
-        fall through to a full paginated fetch — no stamp (including every
-        platform's first sync after this contract shipped — a one-time re-walk),
-        no persisted rows, an un-backfilled row, a stamped ROM count that no
-        longer matches the server, the delta check raised, or the server reports
-        changes.
+        Group-aware sync persists every sibling (ADR-0021), so bound and unbound
+        rows count alike — only the generation decides, which keeps skip parity on
+        platforms holding sibling groups while excluding a row for a rom_id the
+        server has since dropped (#1504; such a row is retained per ADR-0007 and
+        would otherwise inflate the count forever). Returns ``None`` to fall
+        through to a full paginated fetch — no stamp (including every platform's
+        first sync after this contract shipped — a one-time re-walk), no rows
+        carrying the stamp's generation, an un-backfilled row, a stamped ROM count
+        that no longer matches the server, the delta check raised, or the server
+        reports changes.
 
         This gate is the SOLE skip authority (ADR-0023). The plan-time
         ``predicted_skip`` rider (``_read_plan_estimates`` /

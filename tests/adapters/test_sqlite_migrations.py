@@ -78,7 +78,7 @@ def _set_user_version(db_path: str, version: int) -> None:
 # + 013_add_interrupted_sync_run_status + 014_add_paused_sync_run_status
 # + 015_add_applied_launch_options + 016_add_cover_source
 # + 017_add_last_sync_server_hash + 018_rename_rom_save_states
-# + 019_add_collection_sync_state).
+# + 019_add_collection_sync_state + 020_add_fetch_generation).
 _SHIPPED_VERSION = 20
 
 # Tables after every shipped migration: the v1 set plus 006's play-session outbox,

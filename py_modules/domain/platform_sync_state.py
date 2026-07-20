@@ -50,8 +50,9 @@ class PlatformSyncState:
         the rows the fetch returned rather than every row of the platform — a row
         for a rom_id the server dropped keeps an older generation and stops
         counting, while staying on disk (ADR-0007, #1504). ``None`` is "unknown"
-        (a stamp written before this contract): the skip refuses to count against
-        an unknown generation, so the platform full-fetches once and re-stamps.
+        (a stamp written before this contract): it cannot say what its fetch
+        returned, so the skip counts every row (the pre-#1504 behavior) until the
+        next complete fetch re-stamps both sides.
         """
         if not platform_slug:
             raise ValueError("platform_slug is required")

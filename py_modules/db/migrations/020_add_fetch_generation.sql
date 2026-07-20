@@ -37,9 +37,13 @@
 -- microsecond-precision) hazard.
 --
 -- NULL = unknown, on both columns. A pre-migration row reads NULL, and a
--- pre-migration stamp reads NULL; the skip treats an unknown stamp generation as
--- "no skip" so each platform full-fetches ONCE after the upgrade and re-stamps
--- both sides — the same one-time re-walk ADR-0023 already established. Nothing
+-- pre-migration stamp reads NULL. An unknown stamp generation cannot say what
+-- its fetch returned, so the skip falls back to counting EVERY row — the
+-- pre-#1504 behavior — rather than refusing to count. That is deliberately the
+-- permissive direction: a platform with no superseded rows keeps skipping
+-- straight through the upgrade instead of paying a forced re-fetch, and one that
+-- DOES carry them already fails the count today, so its next sync full-fetches
+-- and re-stamps both sides. Self-healing either way, in at most one run. Nothing
 -- is deleted or rewritten here.
 --
 -- Transaction-safe DDL only — the runner (adapters/sqlite_migrations.py) wraps

@@ -11,7 +11,7 @@ def _kwargs(**overrides):
         "stamp_completed_at": "2025-01-01T00:00:00",
         "stamp_rom_count": 3,
         "unit_rom_count": 3,
-        "persisted_count": 3,
+        "fetched_count": 3,
         "registry_count": 1,
         "needs_backfill": False,
     }
@@ -38,15 +38,16 @@ class TestPredictUnitSkip:
     def test_stamp_count_mismatch_predicts_full_fetch(self):
         assert predict_unit_skip(**_kwargs(stamp_rom_count=2)) is False
 
-    def test_zero_persisted_rows_predicts_full_fetch(self):
+    def test_zero_countable_rows_predicts_full_fetch(self):
         assert (
-            predict_unit_skip(**_kwargs(persisted_count=0, registry_count=0, stamp_rom_count=0, unit_rom_count=0))
+            predict_unit_skip(**_kwargs(fetched_count=0, registry_count=0, stamp_rom_count=0, unit_rom_count=0))
             is False
         )
 
-    def test_persisted_count_mismatch_predicts_full_fetch(self):
-        """The gate's final line also requires server rom_count == persisted rows."""
-        assert predict_unit_skip(**_kwargs(persisted_count=2)) is False
+    def test_fetched_count_mismatch_predicts_full_fetch(self):
+        """The gate's final line also requires server rom_count == the rows carrying
+        the stamp's fetch generation (#1504), not every persisted row."""
+        assert predict_unit_skip(**_kwargs(fetched_count=2)) is False
 
     def test_zero_bound_rows_predicts_full_fetch(self):
         """Unbind-only rows (mass delete, ADR-0007) mirror nothing — the gate re-fetches."""
