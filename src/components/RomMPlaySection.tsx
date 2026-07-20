@@ -11,7 +11,7 @@
  */
 
 import { useState, useEffect, useRef, FC, createElement } from "react";
-import { toaster } from "@decky/api";
+import { addEventListener, removeEventListener, toaster } from "@decky/api";
 import {
   ConfirmModal,
   DialogButton,
@@ -58,9 +58,9 @@ import {
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import { buildEmulatorMenu } from "../utils/emulatorMenu";
-import type { BiosStatus, EmulatorOption, SaveStatus } from "../types";
+import type { BiosStatus, DownloadCompleteEvent, EmulatorOption, SaveStatus } from "../types";
 import type { RommDataChangedDetail } from "../types/events";
-import { formatLastPlayed, formatPlaytime } from "../utils/formatters";
+import { formatBytes, formatLastPlayed, formatPlaytime } from "../utils/formatters";
 import { biosColorForLevel } from "../utils/biosColor";
 import {
   applySaveSyncDisplay,
@@ -102,6 +102,13 @@ interface InfoState {
   romId: number | null;
   romName: string;
   platformSlug: string;
+  /** Local install state (#1395). Drives the SPACE REQUIRED cell, which shows
+   *  only while the ROM is NOT installed (mirroring Steam hiding the size once
+   *  a game is on disk). */
+  installed: boolean;
+  /** Server-reported ROM size in bytes (#1395), or `null` when unknown. Rendered
+   *  as the SPACE REQUIRED cell for an uninstalled ROM; a null value hides it. */
+  fsSizeBytes: number | null;
   lastPlayed: string;
   /** Restored cross-device `last_played` (ISO-8601) from `reconcile_playtime`,
    *  or `null` until the server yields one. Preferred over Steam's device-local
@@ -168,6 +175,8 @@ async function loadCached(
       romId,
       romName: cached.rom_name || "",
       platformSlug: cached.platform_slug || "",
+      installed: cached.installed ?? false,
+      fsSizeBytes: cached.fs_size_bytes ?? null,
       saveSyncEnabled: cached.save_sync_enabled ?? false,
       saveSyncStatus,
       saveSyncLabel,
@@ -253,6 +262,8 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     romId: null,
     romName: "",
     platformSlug: "",
+    installed: false,
+    fsSizeBytes: null,
     lastPlayed: initialLastPlayed,
     restoredLastPlayed: null,
     playtime: initialPlaytime,
@@ -404,9 +415,35 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     };
     globalThis.addEventListener("romm_data_changed", onDataChanged);
 
+    // Install-state reactivity (#1395) — the SPACE REQUIRED cell is shown only
+    // while the ROM is uninstalled, so a download or an uninstall must re-derive
+    // the cached detail (installed + fs_size_bytes). Mirrors DiscSelector's
+    // download_complete (@decky/api backend event) + romm_rom_uninstalled (DOM
+    // CustomEvent) wiring. Each invalidates the cached detail first so the re-run
+    // reads the fresh install state rather than a stale entry inside the 3s TTL,
+    // then re-runs loadCached so the whole info block stays consistent.
+    const onDownloadComplete = addEventListener<[DownloadCompleteEvent]>(
+      "download_complete",
+      (evt: DownloadCompleteEvent) => {
+        if (evt.rom_id !== romIdRef.current) return;
+        invalidateCachedGameDetail(appId);
+        detach(loadCached(appId, () => cancelled, romIdRef, setInfo));
+      },
+    );
+
+    const onUninstalled = (e: Event) => {
+      const rid = (e as CustomEvent).detail?.rom_id;
+      if (rid !== romIdRef.current) return;
+      invalidateCachedGameDetail(appId);
+      detach(loadCached(appId, () => cancelled, romIdRef, setInfo));
+    };
+    globalThis.addEventListener("romm_rom_uninstalled", onUninstalled);
+
     return () => {
       cancelled = true;
       globalThis.removeEventListener("romm_data_changed", onDataChanged);
+      removeEventListener("download_complete", onDownloadComplete);
+      globalThis.removeEventListener("romm_rom_uninstalled", onUninstalled);
     };
   }, [appId]);
 
@@ -1086,6 +1123,16 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
         ),
       ),
     );
+  }
+
+  // Space Required (#1395) — the download footprint, shown only for an
+  // uninstalled ROM whose size is known. Placed FIRST to match Steam's native
+  // game detail: an uninstalled title leads with "Space Required" ahead of Last
+  // Played / Playtime, and the cell disappears once the ROM is on disk. Being
+  // first also keeps it clear of the romm-info-items nowrap + overflow:hidden
+  // clip, which drops cells from the right edge.
+  if (!info.installed && info.fsSizeBytes != null) {
+    infoItems.push(infoItem("space-required", "SPACE REQUIRED", formatBytes(info.fsSizeBytes)));
   }
 
   // Last Played

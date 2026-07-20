@@ -22,6 +22,8 @@ import {
   uninstallDomEventListenerSpy,
   domListenerCount,
 } from "../test-utils/dom-event-listener-spy";
+import { emitDeckyEvent, deckyEventListenerCount } from "../test-utils/decky-api-mock";
+import type { DownloadCompleteEvent } from "../types";
 import { stubAppStore } from "../test-utils/steamStubs";
 import * as cachedStore from "../utils/cachedGameDetailStore";
 import * as connectionState from "../utils/connectionState";
@@ -69,6 +71,9 @@ vi.mock("../utils/events", () => ({
 vi.mock("../utils/formatters", () => ({
   formatLastPlayed: vi.fn((rt: number) => (rt ? "2024-01-15" : "")),
   formatPlaytime: vi.fn((m: number) => (m ? "1h 30m" : "")),
+  // Deterministic echo so the SPACE REQUIRED cell's rendered value is
+  // recognizable in assertions; null (unknown size) yields "" per the real impl.
+  formatBytes: vi.fn((b: number | null) => (b == null ? "" : `${b}bytes`)),
 }));
 vi.mock("../utils/playSection", () => ({
   applySaveSyncDisplay: vi.fn(() => ({ status: null, label: "" })),
@@ -3421,6 +3426,166 @@ describe("RomMPlaySection", () => {
       await flushAsync();
       expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("content-dir probe error"));
       expect(container.textContent).not.toContain("Write Saves to Content Directory");
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // F. SPACE REQUIRED cell (#1395) — the download footprint, shown next to the
+  //    play/download button only while the ROM is NOT installed and its size is
+  //    known (mirroring Steam hiding "space required" once a game is on disk).
+  //    formatBytes is mocked to the deterministic "<n>bytes" echo above.
+  // ------------------------------------------------------------------
+
+  describe("SPACE REQUIRED cell (#1395)", () => {
+    // Build a DownloadCompleteEvent for the given rom — its non-size fields are
+    // irrelevant to this cell, so they carry filler values.
+    const downloadComplete = (romId: number): DownloadCompleteEvent => ({
+      rom_id: romId,
+      rom_name: "Test ROM",
+      platform_name: "SNES",
+      file_path: "/roms/test.sfc",
+      app_id: null,
+      launch_options: "",
+    });
+
+    it("happy: an uninstalled ROM with a known size renders the SPACE REQUIRED cell with the formatted value", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1395,
+        installed: false,
+        fs_size_bytes: 123456,
+      });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      expect(container.textContent).toContain("SPACE REQUIRED");
+      // Non-vacuous: the cell carries the formatBytes-formatted value, and
+      // formatBytes was handed the raw byte count from the cached detail.
+      expect(container.textContent).toContain("123456bytes");
+      expect(vi.mocked(formatters.formatBytes)).toHaveBeenCalledWith(123456);
+    });
+
+    it("hidden when installed: an installed ROM with a known size does NOT render the cell", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1395,
+        installed: true,
+        fs_size_bytes: 123456,
+      });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      expect(container.textContent).not.toContain("SPACE REQUIRED");
+    });
+
+    it("hidden when size unknown: an uninstalled ROM with a null size does NOT render the cell", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1395,
+        installed: false,
+        fs_size_bytes: null,
+      });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      expect(container.textContent).not.toContain("SPACE REQUIRED");
+    });
+
+    it("hidden when size absent: an uninstalled ROM with no fs_size_bytes field does NOT render the cell", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1395,
+        installed: false,
+      });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      expect(container.textContent).not.toContain("SPACE REQUIRED");
+    });
+
+    it("reactivity: the cell disappears on download_complete and reappears on romm_rom_uninstalled for this ROM", async () => {
+      // Mount not-installed-with-size → the cell is present.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1395,
+        installed: false,
+        fs_size_bytes: 123456,
+      });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).toContain("SPACE REQUIRED");
+
+      // The ROM finishes downloading → now installed. The re-run reads the fresh
+      // cached detail, so the cell must clip out (post-event DOM state, not just
+      // a fired call).
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1395,
+        installed: true,
+        fs_size_bytes: 123456,
+      });
+      await act(async () => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(1395));
+        await Promise.resolve();
+      });
+      await flushAsync();
+      expect(container.textContent).not.toContain("SPACE REQUIRED");
+
+      // The ROM is uninstalled again → back to not-installed-with-size, so the
+      // cell must reappear.
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1395,
+        installed: false,
+        fs_size_bytes: 123456,
+      });
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: 1395 } }));
+        await Promise.resolve();
+      });
+      await flushAsync();
+      expect(container.textContent).toContain("SPACE REQUIRED");
+    });
+
+    it("reactivity: a download_complete for a DIFFERENT rom_id leaves the cell untouched", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 1395,
+        installed: false,
+        fs_size_bytes: 123456,
+      });
+      const { container } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(container.textContent).toContain("SPACE REQUIRED");
+
+      // Event for another ROM → the rom_id guard no-ops; no cache re-read.
+      vi.mocked(cachedStore.getCachedGameDetail).mockClear();
+      await act(async () => {
+        emitDeckyEvent<[DownloadCompleteEvent]>("download_complete", downloadComplete(999999));
+        await Promise.resolve();
+      });
+      await flushAsync();
+      expect(container.textContent).toContain("SPACE REQUIRED");
+      expect(vi.mocked(cachedStore.getCachedGameDetail)).not.toHaveBeenCalled();
+    });
+
+    it("registers + removes the download_complete and romm_rom_uninstalled listeners across mount/unmount", async () => {
+      // The section renders its real DiscSelector / VersionPicker children, which
+      // subscribe to these same events, so the absolute count is > 1. The proof
+      // of the section's own useEffect cleanup is the ROUND-TRIP: the count rises
+      // above the pre-render baseline on mount and returns exactly to it on
+      // unmount — a leaked section listener would leave the count elevated.
+      const uninstallBefore = domListenerCount("romm_rom_uninstalled");
+      const downloadBefore = deckyEventListenerCount("download_complete");
+
+      const { unmount } = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      expect(deckyEventListenerCount("download_complete")).toBeGreaterThan(downloadBefore);
+      expect(domListenerCount("romm_rom_uninstalled")).toBeGreaterThan(uninstallBefore);
+
+      unmount();
+      expect(deckyEventListenerCount("download_complete")).toBe(downloadBefore);
+      expect(domListenerCount("romm_rom_uninstalled")).toBe(uninstallBefore);
     });
   });
 });

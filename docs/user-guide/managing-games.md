@@ -15,6 +15,9 @@ shows:
 - **Region / Languages** — attributes of the active version, shown in the Game Info tab when RomM has them (see below)
 - **BIOS status** — whether required BIOS files are present (see [BIOS Management](bios-management.md))
 - **Save sync status** — last sync time, conflict count, and playtime (see [Save Sync](save-sync.md))
+- **Space required** — for a game that isn't downloaded yet, a "Space Required" cell next to the Play button shows how
+  much disk space the download needs. It disappears once the game is installed (mirroring how Steam hides it for
+  installed games); it's also omitted when RomM doesn't report the size.
 - **Action buttons** — Download, Pause/Resume, Uninstall, Cancel, or Refresh Metadata depending on state
 
 ![Game detail page showing the RomM Sync panel for an installed game](../assets/screenshot-game-detail.jpg)
@@ -84,7 +87,8 @@ versions, and a version with no region/language detail simply omits the rows. Th
 
 ## Downloading ROMs
 
-Games appear as shortcuts in your library even before the ROM file is downloaded. To download:
+Games appear as shortcuts in your library even before the ROM file is downloaded. Before downloading, the panel shows a
+**Space Required** cell next to the Play button so you know how much disk space the ROM needs. To download:
 
 1. Open the game's detail page in the Steam Library
 2. In the RomM Sync panel, tap **Download**
