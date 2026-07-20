@@ -235,6 +235,13 @@ export function startFreshHint(slot: string): string {
   return `Your local save becomes the first save in ‘${slot}’ on the next sync.`;
 }
 
+/** The same expectation for the "Custom slot…" route, where the slot name isn't
+ *  known until the user submits it — so the sentence stays slot-agnostic rather
+ *  than naming the default slot the user is not choosing. */
+export function startFreshHintNewSlot(): string {
+  return "Your local save becomes the first save in the new slot on the next sync.";
+}
+
 /** Completion toast after a legacy migration ran — names the target slot and the
  *  migrated / could-not-migrate counts. Whenever a save was actually copied it
  *  appends that the legacy source stays put, pre-empting the "why is the legacy

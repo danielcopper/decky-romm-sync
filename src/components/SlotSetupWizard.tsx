@@ -10,6 +10,7 @@ import {
   legacyMigrateConfirmDescription,
   legacyTrackExplainer,
   startFreshHint,
+  startFreshHintNewSlot,
   wizardMigrationOutcomeToastBody,
   SERVER_UNREACHABLE_WIZARD_MESSAGE,
 } from "../utils/saveSetup";
@@ -544,6 +545,20 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
       </DialogButton>
     </div>,
   );
+
+  // "Custom slot…" takes the same backend path as "Use slot ‘<default>’", so it
+  // needs the same next-sync expectation. The named hint above already carries it
+  // when the start-fresh block renders; when the default slot already exists on
+  // the server that block (and its hint) is gone and only this route remains, so
+  // render the slot-agnostic variant here instead — never both, and never naming
+  // a slot the user isn't choosing.
+  if (info.has_local_saves && defaultExistsOnServer) {
+    rightChildren.push(
+      <div key="custom-fresh-hint" className="romm-panel-muted" style={{ fontSize: "11px", marginTop: "6px" }}>
+        {startFreshHintNewSlot()}
+      </div>,
+    );
+  }
 
   return (
     <div style={{ padding: "12px 0" }}>

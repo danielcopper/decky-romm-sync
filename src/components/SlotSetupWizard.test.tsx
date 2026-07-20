@@ -580,7 +580,7 @@ describe("SlotSetupWizard", () => {
       expect(container.textContent).not.toContain("into a named slot");
     });
 
-    it("shows the start-fresh hint when there are local saves", async () => {
+    it("shows the start-fresh hint when there are local saves, without duplicating it for the custom route", async () => {
       const info = makeSetupInfo({
         default_slot: "fresh",
         has_local_saves: true,
@@ -593,6 +593,45 @@ describe("SlotSetupWizard", () => {
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
       expect(container.textContent).toContain("becomes the first save in ‘fresh’ on the next sync");
+      // Both start-fresh routes are on screen — the hint must appear once, not twice.
+      expect(container.textContent).not.toContain("in the new slot on the next sync");
+    });
+
+    it("shows the slot-agnostic next-sync hint for the custom route when the start-fresh block is hidden", async () => {
+      // The default slot already exists on the server, so "Use slot ‘…’" (and its
+      // named hint) is gone and "Custom slot..." is the only start-fresh route —
+      // it still has to tell the user the local save uploads on the next sync.
+      const info = makeSetupInfo({
+        default_slot: "alpha",
+        has_local_saves: true,
+        local_files: [{ filename: "game.srm", size: 100 }],
+        server_slots: [{ slot: "alpha", saves: [], count: 1, latest_updated_at: null }],
+      });
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
+      const { container } = render(<SlotSetupWizard {...defaultProps()} />);
+      await flushAsync();
+      expect(container.textContent).not.toContain("Use slot");
+      expect(container.textContent).toContain("Custom slot...");
+      expect(container.textContent).toContain("becomes the first save in the new slot on the next sync");
+      // Never names a slot the user isn't choosing.
+      expect(container.textContent).not.toContain("in ‘alpha’ on the next sync");
+    });
+
+    it("shows no next-sync hint at all when there are no local saves", async () => {
+      const info = makeSetupInfo({
+        default_slot: "alpha",
+        has_local_saves: false,
+        local_files: [],
+        server_slots: [{ slot: "alpha", saves: [], count: 1, latest_updated_at: null }],
+      });
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
+      const { container } = render(<SlotSetupWizard {...defaultProps()} />);
+      await flushAsync();
+      expect(container.textContent).not.toContain("on the next sync");
     });
 
     it("fires the migration outcome toast naming the slot on success", async () => {

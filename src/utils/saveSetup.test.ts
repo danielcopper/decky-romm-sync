@@ -8,6 +8,7 @@ import {
   legacyTrackExplainer,
   resolveSaveSetupOutcome,
   startFreshHint,
+  startFreshHintNewSlot,
   wizardMigrationOutcomeToastBody,
   SERVER_UNREACHABLE_WIZARD_MESSAGE,
   SERVER_UNREACHABLE_TOAST_BODY,
@@ -344,6 +345,14 @@ describe("legacy-migration copy (#1498)", () => {
     const body = startFreshHint("main");
     expect(body).toContain("‘main’");
     expect(body).toContain("next sync");
+  });
+
+  it("the custom-slot variant makes the same promise without naming a slot", () => {
+    const body = startFreshHintNewSlot();
+    expect(body).toContain("the new slot");
+    expect(body).toContain("next sync");
+    // The custom name isn't known until submit — never name a concrete slot here.
+    expect(body).not.toContain("‘");
   });
 
   describe("wizardMigrationOutcomeToastBody", () => {
