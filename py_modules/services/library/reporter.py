@@ -27,6 +27,7 @@ from domain.rom import Rom
 from domain.rom_metadata_mapping import build_rom_metadata
 from domain.sync_diff import BIND_ROM_ID_KEY, should_include_in_platform_collection
 from domain.sync_stage import SyncStage
+from domain.version_metadata import VersionMetadata
 
 if TYPE_CHECKING:
     import asyncio
@@ -508,12 +509,7 @@ class SyncReporter:
                 shortcut_app_id=app_id,
                 synced_at=self._clock.now().isoformat(),
                 igdb_id=built.get("igdb_id"),
-                sibling_group_key=built.get("sibling_group_key"),
-                regions=tuple(built.get("regions") or ()),
-                languages=tuple(built.get("languages") or ()),
-                revision=built.get("revision") or "",
-                tags=tuple(built.get("tags") or ()),
-                is_main_sibling=bool(built.get("is_main_sibling", False)),
+                version=VersionMetadata.from_mapping(built),
                 fs_size_bytes=built.get("fs_size_bytes"),
             )
         except ValueError as e:

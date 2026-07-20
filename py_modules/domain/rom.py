@@ -10,6 +10,11 @@ resolved live from RomM, not carried here.
 from __future__ import annotations
 
 from domain._aggregate import cosmic_aggregate
+from domain.version_metadata import VersionMetadata
+
+# The neutral "no version metadata known" value. Shared as the ``synced`` default
+# because ``VersionMetadata`` is frozen/immutable, so a single instance is safe.
+_EMPTY_VERSION_METADATA = VersionMetadata()
 
 
 @cosmic_aggregate
@@ -60,12 +65,7 @@ class Rom:
         shortcut_app_id: int | None,
         synced_at: str,
         igdb_id: int | None = None,
-        sibling_group_key: str | None = None,
-        regions: tuple[str, ...] = (),
-        languages: tuple[str, ...] = (),
-        revision: str = "",
-        tags: tuple[str, ...] = (),
-        is_main_sibling: bool = False,
+        version: VersionMetadata = _EMPTY_VERSION_METADATA,
         fs_size_bytes: int | None = None,
     ) -> Rom:
         """Build a Rom synced from RomM at ISO timestamp ``synced_at``.
@@ -73,6 +73,11 @@ class Rom:
         ``shortcut_app_id`` is ``None`` for a non-representative sibling — every
         fetched ROM is persisted for identity + version metadata (ADR-0021), but
         only the group's representative carries a Steam-shortcut binding.
+
+        ``version`` bundles the ADR-0021 server-derived version facts (sibling
+        group key + region/language/revision/tag dimensions); it is unpacked into
+        the ROM's flat fields here. The default empty instance is the "no version
+        metadata known" state, so a minimal-arg sync omits it.
         """
         if rom_id <= 0:
             raise ValueError("rom_id must be positive")
@@ -86,12 +91,12 @@ class Rom:
             shortcut_app_id=shortcut_app_id,
             last_synced_at=synced_at,
             igdb_id=igdb_id,
-            sibling_group_key=sibling_group_key,
-            regions=regions,
-            languages=languages,
-            revision=revision,
-            tags=tags,
-            is_main_sibling=is_main_sibling,
+            sibling_group_key=version.sibling_group_key,
+            regions=version.regions,
+            languages=version.languages,
+            revision=version.revision,
+            tags=version.tags,
+            is_main_sibling=version.is_main_sibling,
             fs_size_bytes=fs_size_bytes,
         )
 

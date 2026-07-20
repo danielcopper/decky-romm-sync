@@ -24,6 +24,7 @@ from adapters.rom_files import RomFileAdapter
 from adapters.steam_config import SteamConfigAdapter
 from domain.rom import Rom
 from domain.rom_install import RomInstall
+from domain.version_metadata import VersionMetadata
 from lib.list_result import ErrorCode
 from services.active_core_resolver import ActiveCoreResolver, ActiveCoreResolverConfig
 from services.downloads import DownloadService, DownloadServiceConfig, _DownloadControl
@@ -92,7 +93,7 @@ def _seed_group_member(
                 fs_name=f"game_{rom_id}.z64",
                 shortcut_app_id=app_id,
                 synced_at="2026-01-01T00:00:00+00:00",
-                sibling_group_key=group_key,
+                version=VersionMetadata(sibling_group_key=group_key),
             )
         )
         if installed:

@@ -20,6 +20,7 @@ from domain.platform_sync_state import PlatformSyncState
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.rom_save_sync_state import RomSaveSyncState
+from domain.version_metadata import VersionMetadata
 
 if TYPE_CHECKING:
     from tests.contract._harness import ContractHarness
@@ -137,9 +138,11 @@ def seed_group_member(
                 fs_name=name or f"rom-{rom_id}",
                 shortcut_app_id=shortcut_app_id,
                 synced_at="2026-01-01T00:00:00",
-                sibling_group_key=group_key,
-                regions=regions,
-                is_main_sibling=is_main_sibling,
+                version=VersionMetadata(
+                    sibling_group_key=group_key,
+                    regions=regions,
+                    is_main_sibling=is_main_sibling,
+                ),
             )
         )
     if not installed:

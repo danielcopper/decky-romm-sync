@@ -10,6 +10,7 @@ persisted on the ``Rom`` aggregate and surfaced read-only in the play-section
 from __future__ import annotations
 
 from domain.rom import Rom
+from domain.version_metadata import VersionMetadata
 
 
 def _seed_versioned_rom(harness, **overrides):
@@ -24,12 +25,14 @@ def _seed_versioned_rom(harness, **overrides):
                 fs_name="ct.sfc",
                 shortcut_app_id=app_id,
                 synced_at="2026-01-01T00:00:00Z",
-                sibling_group_key="igdb:3404:57",
-                regions=overrides.get("regions", ("USA", "Europe")),
-                languages=overrides.get("languages", ("En", "Fr")),
-                revision=overrides.get("revision", "1"),
-                tags=overrides.get("tags", ("Demo",)),
-                is_main_sibling=overrides.get("is_main_sibling", True),
+                version=VersionMetadata(
+                    sibling_group_key="igdb:3404:57",
+                    regions=overrides.get("regions", ("USA", "Europe")),
+                    languages=overrides.get("languages", ("En", "Fr")),
+                    revision=overrides.get("revision", "1"),
+                    tags=overrides.get("tags", ("Demo",)),
+                    is_main_sibling=overrides.get("is_main_sibling", True),
+                ),
                 fs_size_bytes=overrides.get("fs_size_bytes", 3_145_728),
             )
         )

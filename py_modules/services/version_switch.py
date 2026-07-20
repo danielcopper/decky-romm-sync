@@ -34,6 +34,7 @@ from domain.rom import Rom
 from domain.shortcut_data import extract_version_metadata
 from domain.sibling_group import compute_sibling_group_key, target_in_sibling_group
 from domain.sibling_resolution import AUTO_REGION, resolve_group_representative
+from domain.version_metadata import VersionMetadata
 from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
@@ -732,12 +733,7 @@ class VersionSwitchService:
                 shortcut_app_id=None,
                 synced_at=self._clock.now().isoformat(),
                 igdb_id=target_dict.get("igdb_id"),
-                sibling_group_key=bound_group_key or meta["sibling_group_key"],
-                regions=tuple(meta["regions"]),
-                languages=tuple(meta["languages"]),
-                revision=meta["revision"],
-                tags=tuple(meta["tags"]),
-                is_main_sibling=meta["is_main_sibling"],
+                version=VersionMetadata.from_mapping(meta, sibling_group_key=bound_group_key),
                 # Carry the server-reported size like the other available
                 # server-derived facts above (#1395) so a switch to a server-only
                 # sibling shows its download size immediately, not only after the
