@@ -86,6 +86,18 @@ This depends on what's uploaded to your RomM server. Common systems that require
 Saturn, Dreamcast, and some arcade systems. The plugin only shows BIOS status for platforms that have firmware files in
 your RomM library.
 
+### Platforms Without Plugin Coverage ("Not managed by the plugin")
+
+The plugin recognises BIOS files through a built-in registry, which covers the common systems above but not every
+platform. When a platform has firmware on your RomM server but none of those files match a registry entry, the plugin
+has no way to tell which files are required — so it makes no readiness claim. Instead of a green all-clear, that
+platform shows a neutral grey status and the text **"Not managed by the plugin"**, along with a note listing how many
+files are on the server that the plugin doesn't recognise.
+
+This is informational, not an error: your files may be perfectly fine, the plugin simply can't verify them. You can
+still download them manually through RomM if your emulator needs them. Genuinely BIOS-free systems (such as the NES) are
+unaffected — they keep showing a normal all-ready status.
+
 ## Per-Platform BIOS Filtering
 
 The plugin only shows BIOS files that belong to the platform you're looking at. For example, a GBA game page shows
