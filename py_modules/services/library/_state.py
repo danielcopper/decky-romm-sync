@@ -43,6 +43,24 @@ def _default_progress() -> dict[str, Any]:
 
 
 @dataclass(frozen=True)
+class CollectionMembership:
+    """One enabled collection's full member rom_ids, tagged with its display name.
+
+    The value type of :attr:`LibrarySyncStateBox.pending_collection_memberships`,
+    whose key is a collision-free ``(collection_kind, collection_id)`` identity so
+    two collections that merely SHARE a display name never overwrite each other's
+    members in the finalize accumulator. The name rides here in the value because
+    Steam's collection namespace is by-name: the reporter groups same-named
+    memberships and UNIONs their resolved appIds into the one
+    ``RomM: [<name>] (host)`` Steam collection (RomM permits same-named collections
+    across kinds/users, so the plugin merges rather than owner-filters, #1503).
+    """
+
+    name: str
+    rom_ids: list[int]
+
+
+@dataclass(frozen=True)
 class AbandonedChunk:
     """A heartbeat-timed-out apply chunk, stashed for a late-ack commit.
 
@@ -98,7 +116,13 @@ class LibrarySyncStateBox:
     # abandon window so a late ack still stamps the confirmed values.
     pending_cover_sources: dict[int, str] = field(default_factory=dict)
     pending_delta: PreviewDelta | None = None
-    pending_collection_memberships: dict[str, list[int]] = field(default_factory=dict)
+    # Per-run collection-membership accumulator, keyed by a collision-free
+    # ``(collection_kind, collection_id)`` identity (never the display name), so
+    # two collections that share a name each keep their own members. The name
+    # travels in the :class:`CollectionMembership` value; the reporter unions
+    # same-named memberships when it builds the by-name Steam-collection map
+    # (#1503).
+    pending_collection_memberships: dict[tuple[str, str], CollectionMembership] = field(default_factory=dict)
     pending_platform_rom_ids: set[int] | None = None
     # Per-unit pipeline coordination. ``unit_complete_event`` is set by
     # :meth:`SyncReporter.report_unit_results` when the frontend acks the

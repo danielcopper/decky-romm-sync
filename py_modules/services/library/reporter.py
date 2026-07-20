@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from domain.collection_sync_state import CollectionSyncState
     from domain.platform_sync_state import PlatformSyncState
     from domain.sync_run import SyncRun
-    from services.library._state import LibrarySyncStateBox
+    from services.library._state import CollectionMembership, LibrarySyncStateBox
     from services.protocols import (
         ArtworkManager,
         Clock,
@@ -116,7 +116,7 @@ class SyncReporter:
         self,
         uow: UnitOfWork,
         pending_platform_rom_ids: set[int] | None,
-        pending_collection_memberships: dict[str, list[int]],
+        pending_collection_memberships: dict[tuple[str, str], CollectionMembership],
         platform_names: dict[str, str],
     ) -> tuple[dict[str, list[int]], dict[str, list[int]]]:
         """Build platform_app_ids and romm_collection_app_ids from ``uow.roms``.
@@ -127,14 +127,17 @@ class SyncReporter:
         resolved from *platform_names* (the work-queue), falling back to
         the slug when absent.
 
-        RomM collections keep the per-run membership accumulator and resolve
-        each member ``rom_id`` to a Steam appId with a **sibling-group
-        fallback** (ADR-0021): a bound member uses its own binding; an unbound
-        member maps to its group's bound sibling's appId, so favouriting /
-        collecting ANY version of a game puts the game's single shortcut into
-        the Steam collection. Per-collection appIds are de-duplicated — several
-        siblings of one group collapse onto the one shortcut. The platform loop
-        still excludes rows whose ``shortcut_app_id`` is ``None``.
+        RomM collections keep the per-run membership accumulator (keyed by a
+        collision-free ``(collection_kind, collection_id)`` identity, name in the
+        value) and resolve each member ``rom_id`` to a Steam appId with a
+        **sibling-group fallback** (ADR-0021): a bound member uses its own
+        binding; an unbound member maps to its group's bound sibling's appId, so
+        favouriting / collecting ANY version of a game puts the game's single
+        shortcut into the Steam collection. Per-collection appIds are
+        de-duplicated — several siblings of one group collapse onto the one
+        shortcut — and same-named collections UNION into the one by-name Steam
+        collection (#1503). The platform loop still excludes rows whose
+        ``shortcut_app_id`` is ``None``.
         """
         platform_app_ids, group_bound_app_id = self._scan_bound_rows(uow, pending_platform_rom_ids, platform_names)
         romm_collection_app_ids = self._resolve_collection_memberships(
@@ -178,27 +181,33 @@ class SyncReporter:
     def _resolve_collection_memberships(
         self,
         uow: UnitOfWork,
-        pending_collection_memberships: dict[str, list[int]],
+        pending_collection_memberships: dict[tuple[str, str], CollectionMembership],
         group_bound_app_id: dict[str, int],
     ) -> dict[str, list[int]]:
-        """Resolve each collection's member rom_ids to de-duplicated appIds.
+        """Resolve each collection's member rom_ids to de-duplicated appIds, UNION by name.
 
-        A bound member uses its own binding; an unbound member falls back to
-        its sibling group's bound appId (ADR-0021). Collections that resolve
-        to no appId are omitted.
+        A bound member uses its own binding; an unbound member falls back to its
+        sibling group's bound appId (ADR-0021). Steam's collection namespace is
+        by-name, so same-named RomM collections (permitted across kinds/users,
+        #1503) merge into one entry: their resolved appIds are UNIONed,
+        order-preserving and de-duplicated ACROSS collections (each collection's
+        own resolution already dedups within). The accumulator is keyed by a
+        collision-free identity, so a same-named pair never overwrote either
+        member set upstream. Names that resolve to no appId are omitted; the
+        common single-collection case unions a set of one and is byte-for-byte
+        identical to the pre-#1503 output.
         """
         romm_collection_app_ids: dict[str, list[int]] = {}
-        for coll_name, rom_ids in pending_collection_memberships.items():
-            seen: set[int] = set()
-            app_ids: list[int] = []
-            for rid in rom_ids:
+        seen_by_name: dict[str, set[int]] = {}
+        for membership in pending_collection_memberships.values():
+            app_ids = romm_collection_app_ids.setdefault(membership.name, [])
+            seen = seen_by_name.setdefault(membership.name, set())
+            for rid in membership.rom_ids:
                 app_id = self._member_app_id(uow, rid, group_bound_app_id)
                 if app_id is not None and app_id not in seen:
                     seen.add(app_id)
                     app_ids.append(app_id)
-            if app_ids:
-                romm_collection_app_ids[coll_name] = app_ids
-        return romm_collection_app_ids
+        return {name: app_ids for name, app_ids in romm_collection_app_ids.items() if app_ids}
 
     @staticmethod
     def _member_app_id(uow: UnitOfWork, rid: int, group_bound_app_id: dict[str, int]) -> int | None:
@@ -216,7 +225,7 @@ class SyncReporter:
 
     def _finalize_per_unit_run_io(
         self,
-        pending_collection_memberships: dict[str, list[int]],
+        pending_collection_memberships: dict[tuple[str, str], CollectionMembership],
         pending_platform_rom_ids: set[int] | None,
         platform_names: dict[str, str],
         stale_rom_ids: list[int] | None = None,
@@ -262,7 +271,7 @@ class SyncReporter:
 
     async def finalize_per_unit_run(
         self,
-        pending_collection_memberships: dict[str, list[int]],
+        pending_collection_memberships: dict[tuple[str, str], CollectionMembership],
         pending_platform_rom_ids: set[int] | None,
         platform_names: dict[str, str] | None = None,
         stale_rom_ids: list[int] | None = None,

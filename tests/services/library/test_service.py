@@ -8,6 +8,7 @@ from fakes.fake_settings_persister import FakeSettingsPersister
 
 from domain.rom import Rom
 from domain.sync_diff import classify_roms
+from services.library._state import CollectionMembership
 
 # conftest.py patches decky before this import
 from tests.services.library._helpers import (
@@ -1149,7 +1150,7 @@ class TestCollectionSyncEdgeCases:
 
         with plugin._uow as uow:
             platform_app_ids, _ = svc._reporter._build_collection_app_ids(
-                uow, platform_rom_ids, {"Favorites": [1, 2]}, names
+                uow, platform_rom_ids, {("user", "3"): CollectionMembership(name="Favorites", rom_ids=[1, 2])}, names
             )
 
         assert "Game Boy Advance" in platform_app_ids
@@ -1186,7 +1187,7 @@ class TestCollectionSyncEdgeCases:
         _seed_rom(plugin._uow, 1, app_id=1001, platform_slug="gba", name="ROM A")
         names = {"gba": "Game Boy Advance"}
         platform_rom_ids = {1}
-        collection_memberships = {"Favorites": [1]}
+        collection_memberships = {("user", "3"): CollectionMembership(name="Favorites", rom_ids=[1])}
 
         with plugin._uow as uow:
             platform_app_ids, romm_collection_app_ids = svc._reporter._build_collection_app_ids(
@@ -1250,7 +1251,7 @@ class TestCollectionSyncEdgeCases:
 
         with plugin._uow as uow:
             _platform_app_ids, romm_collection_app_ids = svc._reporter._build_collection_app_ids(
-                uow, {1}, {"Favorites": [1, 99]}, {"gba": "GBA"}
+                uow, {1}, {("user", "3"): CollectionMembership(name="Favorites", rom_ids=[1, 99])}, {"gba": "GBA"}
             )
 
         assert "Favorites" in romm_collection_app_ids

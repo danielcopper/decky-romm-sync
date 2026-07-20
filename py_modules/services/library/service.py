@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from lib.late_binding import LateBinding
-from services.library._state import LibrarySyncStateBox
+from services.library._state import CollectionMembership, LibrarySyncStateBox
 from services.library.fetcher import LibraryFetcher, LibraryFetcherConfig
 from services.library.reporter import SyncReporter, SyncReporterConfig
 from services.library.sync_orchestrator import SyncOrchestrator, SyncOrchestratorConfig
@@ -228,11 +228,11 @@ class LibraryService:
         self._box.pending_delta = value
 
     @property
-    def _pending_collection_memberships(self) -> dict[str, list[int]]:
+    def _pending_collection_memberships(self) -> dict[tuple[str, str], CollectionMembership]:
         return self._box.pending_collection_memberships
 
     @_pending_collection_memberships.setter
-    def _pending_collection_memberships(self, value: dict[str, list[int]]) -> None:
+    def _pending_collection_memberships(self, value: dict[tuple[str, str], CollectionMembership]) -> None:
         self._box.pending_collection_memberships = value
 
     @property

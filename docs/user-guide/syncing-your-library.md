@@ -229,6 +229,11 @@ collections, or use the paired **Enable All** / **Disable All** buttons to bulk-
 **Show collection games in platform groups** toggle controls whether games pulled in via a collection also get added to
 their platform's Steam group.
 
+If two enabled collections share the same name — for example a personal collection and a smart or franchise collection
+called the same thing, or (on a shared server) another account's public collection — they **merge into a single Steam
+collection** carrying the combined set of games. RomM allows collections to share a name, but Steam identifies a
+collection by its name, so the plugin unions their members rather than dropping one.
+
 ## Artwork
 
 Each synced game gets up to five types of artwork:

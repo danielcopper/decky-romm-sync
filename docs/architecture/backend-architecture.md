@@ -500,6 +500,20 @@ sibling row holding `shortcut_app_id` is the group's **active version**.
   to its group's bound sibling's appId — so collecting or favouriting any version puts the game's single shortcut in the
   collection.
 
+**Same-named collections union into one Steam collection (#1503).** RomM enforces name uniqueness only per-table and
+per-`(name, user_id)`, so two enabled collections can share a display name — a user collection and a smart/franchise
+collection, or (multi-user) another account's public collection the list endpoints return. Steam's collection namespace
+is **by-name** (`RomM: [<name>] (host)`), so both must resolve to the one Steam collection. The finalize accumulator
+(`_state.py` `pending_collection_memberships`) is therefore keyed by a collision-free `(collection_kind, collection_id)`
+identity — the same identity the #742 completion stamp uses — with the display name carried in the
+`CollectionMembership` value; the real-sync and preview write paths share one key builder so they cannot drift. The
+reporter (`_resolve_collection_memberships`) then groups the accumulator's entries by name and **unions** their resolved
+appId sets (order-preserving, de-duplicated across collections; each collection's own resolution already dedups within),
+emitting the unchanged by-name `romm_collection_app_ids: {name → [appId]}` contract — a single-collection name unions a
+set of one and is byte-for-byte the pre-#1503 output. The plugin **unions rather than owner-filters** here: RomM
+deliberately exposes public collections across accounts, so syncing them unfiltered is the established behaviour (an
+own/all QAM toggle is a separate concern).
+
 **Incremental skip — the per-platform completion stamp is the sole authority.** A platform unit skips only when its
 `PlatformSyncState` stamp exists
 ([ADR-0023](https://github.com/danielcopper/decky-romm-sync/blob/main/docs/adr/0023-chunked-per-unit-apply.md)); the

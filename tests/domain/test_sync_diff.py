@@ -303,43 +303,54 @@ class TestComputeCollectionDiff:
     """compute_collection_diff() — diff enabled collections vs last-synced set."""
 
     def test_first_sync_with_collections_has_changes(self):
-        result = compute_collection_diff({"Favorites": [1, 2]}, [])
+        result = compute_collection_diff({"Alpha"}, [])
         assert result["has_changes"] is True
-        assert result["added"] == ["Favorites"]
+        assert result["added"] == ["Alpha"]
         assert result["removed"] == []
 
     def test_empty_current_and_previous_no_changes(self):
-        result = compute_collection_diff({}, [])
+        result = compute_collection_diff(set(), [])
         assert result["has_changes"] is False
         assert result["added"] == []
         assert result["removed"] == []
 
     def test_added_collection_detected(self):
-        result = compute_collection_diff({"Favorites": [1], "RPG": [2]}, ["Favorites"])
+        result = compute_collection_diff({"Alpha", "Beta"}, ["Alpha"])
         assert result["has_changes"] is True
-        assert result["added"] == ["RPG"]
+        assert result["added"] == ["Beta"]
         assert result["removed"] == []
 
     def test_removed_collection_detected(self):
-        result = compute_collection_diff({"Favorites": [1]}, ["Favorites", "RPG"])
+        result = compute_collection_diff({"Alpha"}, ["Alpha", "Beta"])
         assert result["has_changes"] is True
         assert result["added"] == []
-        assert result["removed"] == ["RPG"]
+        assert result["removed"] == ["Beta"]
 
     def test_unchanged_collections_still_has_changes_when_current_nonempty(self):
         """has_changes is True even with no add/remove if current is non-empty."""
-        result = compute_collection_diff({"Favorites": [1]}, ["Favorites"])
+        result = compute_collection_diff({"Alpha"}, ["Alpha"])
         assert result["has_changes"] is True
         assert result["added"] == []
         assert result["removed"] == []
 
     def test_added_and_removed_sorted(self):
         result = compute_collection_diff(
-            {"Zelda": [1], "Mario": [2], "Pokemon": [3]},
-            ["Sonic", "Kirby"],
+            {"Gamma", "Beta", "Delta"},
+            ["Sigma", "Kappa"],
         )
-        assert result["added"] == ["Mario", "Pokemon", "Zelda"]
-        assert result["removed"] == ["Kirby", "Sonic"]
+        assert result["added"] == ["Beta", "Delta", "Gamma"]
+        assert result["removed"] == ["Kappa", "Sigma"]
+
+    def test_same_named_collections_collapse_to_one_present_name(self):
+        """A name is present once no matter how many collections carry it (#1503).
+
+        The caller derives the name set from the accumulator, so two same-named
+        collections yield a single set member — matching the by-name Steam
+        collection they merge into. Diffing that set is unchanged for the run.
+        """
+        result = compute_collection_diff({"X"}, [])
+        assert result["added"] == ["X"]
+        assert result["removed"] == []
 
 
 class TestShouldIncludeInPlatformCollection:

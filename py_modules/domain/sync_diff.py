@@ -270,16 +270,21 @@ def select_stale_removals(
 
 
 def compute_collection_diff(
-    collection_memberships: dict[str, list[int]],
+    current_collection_names: set[str],
     last_synced_collections: list[str],
 ) -> dict[str, Any]:
     """Diff enabled collections (by name) against the last-synced set.
 
-    Returns ``{"has_changes": bool, "added": [...], "removed": [...]}``.
-    ``has_changes`` is True if there are any added/removed collections, or
-    if there are any current collections at all (covers first-sync case).
+    ``current_collection_names`` is the set of DISTINCT display names present in
+    this run's collection accumulator — a name counts as present iff at least one
+    collection carries it, so two same-named collections (RomM permits them across
+    kinds/users, #1503) collapse to one entry, matching the by-name Steam
+    collection they merge into. Returns
+    ``{"has_changes": bool, "added": [...], "removed": [...]}``; ``has_changes`` is
+    True if there are any added/removed collections, or if there are any current
+    collections at all (covers first-sync case).
     """
-    current = set(collection_memberships.keys())
+    current = current_collection_names
     previous = set(last_synced_collections)
     added = sorted(current - previous)
     removed = sorted(previous - current)

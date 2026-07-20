@@ -56,6 +56,7 @@ from domain.sync_stage import SyncStage
 from domain.sync_state import SyncCancelled
 from lib.errors import classify_error
 from lib.list_result import ErrorCode
+from services.library._state import CollectionMembership
 
 if TYPE_CHECKING:
     import logging
@@ -117,6 +118,18 @@ _APPLY_CHUNK_SIZE = 200
 # prices each planned CREATE at it; a CHANGED item stays at the lighter
 # ``UPDATE_TOUCH_KB`` (an update reuses its existing grid file, no cover applied).
 _CREATE_WITH_COVER_KB = WORST_CASE_CREATE_KB + COVER_TRANSIENT_KB
+
+
+def _collection_membership_key(unit: WorkUnit) -> tuple[str, str]:
+    """The collision-free accumulator key for a collection unit.
+
+    ``(collection_kind, collection_id)`` — the same per-collection identity the
+    #742 ``CollectionSyncState`` stamp keys off — so two collections that share a
+    display NAME never collide in the finalize accumulator. The single builder
+    keeps the real-sync and preview write paths (and the stamp read-back) on one
+    key so they cannot drift (#1503).
+    """
+    return (str(unit.collection_kind), str(unit.id))
 
 
 @dataclass(frozen=True)
@@ -270,7 +283,7 @@ class SyncOrchestrator:
 
             all_roms: list[dict[str, Any]] = []
             platform_rom_ids: set[int] = set()
-            collection_memberships: dict[str, list[int]] = {}
+            collection_memberships: dict[tuple[str, str], CollectionMembership] = {}
             synced_rom_ids: set[int] = set()
 
             total_units = len(work_queue)
@@ -414,7 +427,7 @@ class SyncOrchestrator:
                     "sync_platform_count": platforms_count,
                     "sync_collection_count": collections_count,
                     "collection_diff": compute_collection_diff(
-                        collection_memberships,
+                        {m.name for m in collection_memberships.values()},
                         last_synced_collections,
                     ),
                     "platform_collection_diff": compute_platform_collection_diff(
@@ -456,7 +469,7 @@ class SyncOrchestrator:
         all_roms: list[dict[str, Any]],
         platform_rom_ids: set[int],
         synced_rom_ids: set[int],
-        collection_memberships: dict[str, list[int]],
+        collection_memberships: dict[tuple[str, str], CollectionMembership],
         *,
         progress_step: int = 0,
         progress_total_steps: int = 0,
@@ -465,7 +478,9 @@ class SyncOrchestrator:
 
         Platform units add every ROM to ``platform_rom_ids`` and
         ``synced_rom_ids``; collection units record their full membership
-        list under the unit name. ``all_roms`` is extended in both cases.
+        under a collision-free ``(collection_kind, collection_id)`` key (with the
+        name in the value), so same-named collections never overwrite each other
+        (#1503). ``all_roms`` is extended in both cases.
         Mutates the passed-in accumulators in place. ``progress_step`` /
         ``progress_total_steps`` thread the unit's coarse position into the
         fetcher's per-page ``fetching`` frames (on top of the per-unit frame
@@ -484,7 +499,9 @@ class SyncOrchestrator:
                 unit, synced_rom_ids, progress_step=progress_step, progress_total_steps=progress_total_steps
             )
             if all_collection_rom_ids:
-                collection_memberships[unit.name] = all_collection_rom_ids
+                collection_memberships[_collection_membership_key(unit)] = CollectionMembership(
+                    name=unit.name, rom_ids=all_collection_rom_ids
+                )
             all_roms.extend(unit_roms)
 
     async def sync_apply_delta(self, preview_id):
@@ -665,7 +682,7 @@ class SyncOrchestrator:
         # applies alike — surfaced as ``total_games`` (the terminal frame's
         # "N of M games processed" numerator).
         synced_rom_ids: set[int] = set()
-        collection_memberships: dict[str, list[int]] = {}
+        collection_memberships: dict[tuple[str, str], CollectionMembership] = {}
         platform_rom_ids: set[int] = set()
         total_games_applied = 0
         cancelled = False
@@ -1060,7 +1077,7 @@ class SyncOrchestrator:
         unit_index: int,
         total_units: int,
         synced_rom_ids: set[int],
-        collection_memberships: dict[str, list[int]],
+        collection_memberships: dict[tuple[str, str], CollectionMembership],
         platform_rom_ids: set[int],
     ) -> int:
         """Process one work unit start-to-finish; return its processed-ROM count.
@@ -1256,6 +1273,17 @@ class SyncOrchestrator:
         box.pending_all_roms = {sd["rom_id"]: sd for sd in shortcuts_data}
         box.pending_cover_sources = confirmed_cover_sources
 
+        # A collection unit's final chunk stamps a CollectionSyncState over its
+        # full membership (the accumulator just populated by the fetch, #742); a
+        # platform unit passes None. The full set — not just the applied new_roms —
+        # is what a future skip replays to rebuild membership. Read back by the
+        # collision-free ``(collection_kind, collection_id)`` key, not the name, so
+        # a same-named sibling collection can't shadow this unit's members (#1503).
+        collection_member_ids = None
+        if unit.type == "collection":
+            membership = collection_memberships.get(_collection_membership_key(unit))
+            collection_member_ids = membership.rom_ids if membership is not None else None
+
         applied_count = await self._apply_unit_in_chunks(
             unit,
             unit_index=unit_index,
@@ -1265,11 +1293,7 @@ class SyncOrchestrator:
             unit_roms=unit_roms,
             new_ids=new_ids,
             cover_refreshes=cover_refreshes,
-            # A collection unit's final chunk stamps a CollectionSyncState over its
-            # full membership (the accumulator just populated by the fetch, #742);
-            # a platform unit passes None. The full set — not just the applied
-            # new_roms — is what a future skip replays to rebuild membership.
-            collection_member_ids=collection_memberships.get(unit.name) if unit.type == "collection" else None,
+            collection_member_ids=collection_member_ids,
         )
         return len(skip_ids) + applied_count
 
@@ -1727,7 +1751,7 @@ class SyncOrchestrator:
         unit: WorkUnit,
         *,
         synced_rom_ids: set[int],
-        collection_memberships: dict[str, list[int]],
+        collection_memberships: dict[tuple[str, str], CollectionMembership],
         progress_step: int = 0,
         progress_total_steps: int = 0,
     ) -> tuple[list[dict[str, Any]], bool]:
@@ -1744,7 +1768,9 @@ class SyncOrchestrator:
             unit, synced_rom_ids, progress_step=progress_step, progress_total_steps=progress_total_steps
         )
         if all_collection_rom_ids:
-            collection_memberships[unit.name] = all_collection_rom_ids
+            collection_memberships[_collection_membership_key(unit)] = CollectionMembership(
+                name=unit.name, rom_ids=all_collection_rom_ids
+            )
         return unit_roms, skipped
 
     async def _wait_for_unit_complete(self, unit: WorkUnit, event: asyncio.Event) -> dict[str, int] | None:
@@ -1781,7 +1807,7 @@ class SyncOrchestrator:
         self,
         *,
         synced_rom_ids: set[int],
-        collection_memberships: dict[str, list[int]],
+        collection_memberships: dict[tuple[str, str], CollectionMembership],
         platform_rom_ids: set[int],
         platform_names: dict[str, str],
         cancelled: bool,

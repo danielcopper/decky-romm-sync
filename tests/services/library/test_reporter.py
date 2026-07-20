@@ -8,6 +8,7 @@ from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
 
 from domain.rom import Rom
 from domain.sync_diff import BIND_ROM_ID_KEY
+from services.library._state import CollectionMembership
 
 # conftest.py patches decky before this import
 
@@ -1359,7 +1360,7 @@ class TestFinalizePerUnitRun:
         _seed_rom(uow, 2, app_id=None, platform_slug="snes", name="B (unbound)")
 
         await plugin._sync_service._reporter.finalize_per_unit_run(
-            pending_collection_memberships={"Faves": [1, 2]},
+            pending_collection_memberships={("user", "7"): CollectionMembership(name="Faves", rom_ids=[1, 2])},
             pending_platform_rom_ids={1},
             platform_names={"n64": "Nintendo 64"},
         )
@@ -1382,7 +1383,8 @@ class TestFinalizePerUnitRun:
         _seed_rom(uow, 2, app_id=None, platform_slug="n64", name="Game (JP)", group_key="g")
 
         await plugin._sync_service._reporter.finalize_per_unit_run(
-            pending_collection_memberships={"Faves": [2]},  # the UNBOUND sibling is collected
+            # the UNBOUND sibling is collected
+            pending_collection_memberships={("user", "7"): CollectionMembership(name="Faves", rom_ids=[2])},
             pending_platform_rom_ids={1},
             platform_names={"n64": "Nintendo 64"},
         )
@@ -1403,13 +1405,93 @@ class TestFinalizePerUnitRun:
         _seed_rom(uow, 2, app_id=None, platform_slug="n64", name="Game (JP)", group_key="g")
 
         await plugin._sync_service._reporter.finalize_per_unit_run(
-            pending_collection_memberships={"Faves": [1, 2]},  # BOTH siblings collected
+            # BOTH siblings collected
+            pending_collection_memberships={("user", "7"): CollectionMembership(name="Faves", rom_ids=[1, 2])},
             pending_platform_rom_ids={1},
             platform_names={"n64": "Nintendo 64"},
         )
 
         payload = next(c for c in decky.emit.call_args_list if c[0][0] == "sync_collections")[0][1]
         assert payload["romm_collection_app_ids"] == {"Faves": [1001]}
+
+    @pytest.mark.asyncio
+    async def test_same_named_collections_union_their_members(self, plugin):
+        """Two same-named DIFFERENT-kind collections UNION into one Steam collection (#1503).
+
+        RomM permits same-named collections across kinds/users. Steam's collection
+        namespace is by-name, so both must map to the single ``RomM: [X]`` tag with
+        the UNION of their members. Load-bearing: against the pre-#1503 name-keyed
+        overwrite, only the last-synced collection's member would survive.
+        """
+        import decky
+
+        decky.emit.reset_mock()
+        uow = plugin._uow
+        _seed_rom(uow, 1, app_id=1001, platform_slug="n64", name="A")
+        _seed_rom(uow, 2, app_id=1002, platform_slug="snes", name="B")
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={
+                ("user", "7"): CollectionMembership(name="X", rom_ids=[1]),
+                ("smart", "9"): CollectionMembership(name="X", rom_ids=[2]),
+            },
+            pending_platform_rom_ids={1, 2},
+            platform_names={"n64": "Nintendo 64", "snes": "Super Nintendo"},
+        )
+
+        payload = next(c for c in decky.emit.call_args_list if c[0][0] == "sync_collections")[0][1]
+        # UNION of both collections' resolved appIds, order-preserving, deduped.
+        assert payload["romm_collection_app_ids"] == {"X": [1001, 1002]}
+
+    @pytest.mark.asyncio
+    async def test_same_named_union_dedups_shared_member_across_collections(self, plugin):
+        """A member shared by two same-named collections contributes its appId once."""
+        import decky
+
+        decky.emit.reset_mock()
+        uow = plugin._uow
+        _seed_rom(uow, 1, app_id=1001, platform_slug="n64", name="A")
+        _seed_rom(uow, 2, app_id=1002, platform_slug="snes", name="B")
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={
+                ("user", "7"): CollectionMembership(name="X", rom_ids=[1, 2]),
+                ("smart", "9"): CollectionMembership(name="X", rom_ids=[1]),
+            },
+            pending_platform_rom_ids={1, 2},
+            platform_names={"n64": "Nintendo 64", "snes": "Super Nintendo"},
+        )
+
+        payload = next(c for c in decky.emit.call_args_list if c[0][0] == "sync_collections")[0][1]
+        # app 1001 is shared by both collections but appears once; 1002 follows it.
+        # (Also non-vacuous vs the old overwrite: last-write-wins would drop 1002.)
+        assert payload["romm_collection_app_ids"] == {"X": [1001, 1002]}
+
+    @pytest.mark.asyncio
+    async def test_distinct_named_collections_unchanged_common_case(self, plugin):
+        """The all-distinct-names common case is byte-for-byte the pre-#1503 output.
+
+        Each name unions a set of one, so distinct collections keep their own
+        member sets — no merge, no reordering.
+        """
+        import decky
+
+        decky.emit.reset_mock()
+        uow = plugin._uow
+        _seed_rom(uow, 1, app_id=1001, platform_slug="n64", name="A")
+        _seed_rom(uow, 2, app_id=1002, platform_slug="snes", name="B")
+
+        await plugin._sync_service._reporter.finalize_per_unit_run(
+            pending_collection_memberships={
+                ("user", "7"): CollectionMembership(name="Alpha", rom_ids=[1]),
+                ("smart", "9"): CollectionMembership(name="Beta", rom_ids=[2]),
+            },
+            pending_platform_rom_ids={1, 2},
+            platform_names={"n64": "Nintendo 64", "snes": "Super Nintendo"},
+        )
+
+        payload = next(c for c in decky.emit.call_args_list if c[0][0] == "sync_collections")[0][1]
+        assert payload["romm_collection_app_ids"] == {"Alpha": [1001], "Beta": [1002]}
 
     @pytest.mark.asyncio
     async def test_emit_sync_complete_terminal(self, plugin):
