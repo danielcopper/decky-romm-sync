@@ -570,13 +570,14 @@ describe("SlotSetupWizard", () => {
       ],
     });
 
-    it("shows the legacy migration explainer before Track is clicked", async () => {
+    it("shows the legacy migration explainer naming the target slot before Track is clicked", async () => {
       vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
         deps.setInfo(legacyInfo());
       });
       const { container } = render(<SlotSetupWizard {...defaultProps()} />);
       await flushAsync();
-      expect(container.textContent).toContain("Tracking copies the legacy save");
+      expect(container.textContent).toContain("Tracking copies the legacy save into ‘default’");
+      expect(container.textContent).not.toContain("into a named slot");
     });
 
     it("shows the start-fresh hint when there are local saves", async () => {
@@ -677,7 +678,7 @@ describe("SlotSetupWizard", () => {
       expect(onComplete).not.toHaveBeenCalled();
     });
 
-    it("'Use the server save' re-calls confirm with useServerOnConflict=true", async () => {
+    it("'Replace local save' re-calls confirm with useServerOnConflict=true", async () => {
       vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
         deps.setInfo(legacyInfo());
       });
@@ -696,21 +697,22 @@ describe("SlotSetupWizard", () => {
 
       const sub = render(<>{modalElementAt(1)}</>);
       await act(async () => {
-        fireEvent.click(sub.getByText("Use the server save"));
+        fireEvent.click(sub.getByText("Replace local save"));
         await Promise.resolve();
       });
       expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenLastCalledWith(5, "default", true, null, true);
       sub.unmount();
     });
 
-    it("'Keep my local save' re-calls confirm without migrating", async () => {
+    it("Cancel changes nothing — no second call, wizard still open with Track available", async () => {
+      // Cancelling the conflict dialog must leave the slot unconfirmed and the
+      // wizard usable, so the user can take the start-fresh route instead.
       vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
         deps.setInfo(legacyInfo());
       });
-      vi.mocked(backend.confirmSlotChoice)
-        .mockResolvedValueOnce(conflictResult())
-        .mockResolvedValueOnce({ success: true, message: "" });
-      const { getByText } = render(<SlotSetupWizard {...defaultProps({ romId: 5 })} />);
+      vi.mocked(backend.confirmSlotChoice).mockResolvedValue(conflictResult());
+      const onComplete = vi.fn();
+      const { getByText, container } = render(<SlotSetupWizard {...defaultProps({ romId: 5, onComplete })} />);
       await flushAsync();
 
       fireEvent.click(getByText("Track"));
@@ -720,12 +722,21 @@ describe("SlotSetupWizard", () => {
         await Promise.resolve();
       });
 
+      // One probe call so far (the Track click).
+      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledTimes(1);
+
       const sub = render(<>{modalElementAt(1)}</>);
       await act(async () => {
-        fireEvent.click(sub.getByText("Keep my local save"));
+        fireEvent.click(sub.getByText("Cancel"));
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenLastCalledWith(5, "default", false, null, false);
+
+      // No second call — nothing was migrated and nothing was confirmed.
+      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledTimes(1);
+      expect(onComplete).not.toHaveBeenCalled();
+      // The wizard is still usable for the start-fresh route.
+      expect(getByText("Track")).toBeTruthy();
+      expect(container.textContent).toContain("Use slot");
       sub.unmount();
     });
   });

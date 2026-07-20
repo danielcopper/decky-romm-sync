@@ -201,11 +201,22 @@ export function applyWizardRetrySetupResult(result: SaveSetupInfo, deps: WizardR
 // Every surface names the target slot; nothing is log-only.
 
 /** Pre-click explainer shown under the legacy group so "Track" reads as a
- *  migration before it is clicked, not only inside the confirm modal. States that
- *  the legacy save itself is left untouched (it is copied, never moved) so the
- *  user isn't surprised to see it still there afterwards (#1498). */
-export const LEGACY_TRACK_EXPLAINER =
-  "Tracking copies the legacy save into a named slot — the legacy save itself is left untouched in the read-only legacy bucket.";
+ *  migration before it is clicked, not only inside the confirm modal. Names the
+ *  concrete target slot (the same one the confirm modal uses) so the target never
+ *  reads as still-open, and states that the legacy save itself is left untouched
+ *  (it is copied, never moved) so the user isn't surprised to see it afterwards. */
+export function legacyTrackExplainer(slot: string): string {
+  return `Tracking copies the legacy save into ‘${slot}’ — the legacy save itself is left untouched in the read-only legacy bucket.`;
+}
+
+/** What the legacy-migration conflict dialog promises before the user confirms:
+ *  the local save is backed up and replaced, and cancelling changes nothing so the
+ *  start-fresh route stays open. "Keep my local save" is deliberately NOT offered —
+ *  it would produce the same end state as the wizard's own "Use slot" button and
+ *  re-open a decision already made by clicking Track. */
+export function legacyConflictReplaceNotice(slot: string): string {
+  return `Your local save is moved to .romm-backup and replaced with the legacy save. Cancel to go back — nothing changes, and you can start fresh with ‘${slot}’ instead.`;
+}
 
 /** Confirm-modal body for migrating the legacy group — names the target slot and
  *  states that a differing local save is asked about, never silently

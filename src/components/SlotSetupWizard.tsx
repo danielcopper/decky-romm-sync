@@ -6,10 +6,11 @@ import { scrollFocusedToCenter } from "../utils/scrollHelpers";
 import {
   applyWizardInitialSetupResult,
   applyWizardRetrySetupResult,
+  legacyConflictReplaceNotice,
   legacyMigrateConfirmDescription,
+  legacyTrackExplainer,
   startFreshHint,
   wizardMigrationOutcomeToastBody,
-  LEGACY_TRACK_EXPLAINER,
   SERVER_UNREACHABLE_WIZARD_MESSAGE,
 } from "../utils/saveSetup";
 import {
@@ -99,22 +100,23 @@ function formatSize(bytes: number | null): string {
   return formatBytes(bytes);
 }
 
-/** Resolution dialog for a legacy migration whose target already has a differing
- *  local save (#1498). Both sides are shown with size + timestamp; the choice is
- *  global across every listed conflict (each one closes the modal, then fires the
- *  matching backend re-call). "Use the server save" quarantines the local file
- *  first; "Keep my local save" leaves the legacy save in the read-only bucket and
- *  makes the local file the slot's first save on the next sync. */
+/** Informed confirmation for a legacy migration whose target already has a
+ *  differing local save (#1498). Both sides are shown with size + timestamp —
+ *  that comparison is what stops a newer local save being buried unnoticed — and
+ *  the dialog offers exactly two ways out: confirm (proceed, quarantining the
+ *  local file) or Cancel, which changes nothing and leaves the slot unconfirmed
+ *  so the user can take the wizard's start-fresh route instead. There is no
+ *  "keep my local save" action: it would produce the same end state as the
+ *  wizard's own "Use slot" button. */
 const LegacyMigrationConflictModal: FC<{
   closeModal?: () => void;
   conflicts: SlotMigrationConflict[];
   slot: string;
-  onUseServer: () => void;
-  onKeepLocal: () => void;
-}> = ({ closeModal, conflicts, slot, onUseServer, onKeepLocal }) => {
-  const resolve = (choice: () => void) => {
+  onConfirm: () => void;
+}> = ({ closeModal, conflicts, slot, onConfirm }) => {
+  const confirm = () => {
     closeModal?.();
-    choice();
+    onConfirm();
   };
   return (
     <ModalRoot {...(closeModal !== undefined ? { closeModal } : {})}>
@@ -123,7 +125,7 @@ const LegacyMigrationConflictModal: FC<{
           A local save differs from the legacy save
         </div>
         <div style={{ fontSize: "12px", color: "rgba(255, 255, 255, 0.6)", marginBottom: "12px", lineHeight: "1.4" }}>
-          Choose which save to keep in &lsquo;{slot}&rsquo;.
+          Copying the legacy save into &lsquo;{slot}&rsquo; replaces your local save.
         </div>
         {conflicts.map((c) => (
           <div key={c.filename} style={{ marginBottom: "10px" }}>
@@ -165,16 +167,14 @@ const LegacyMigrationConflictModal: FC<{
           </div>
         ))}
         <div style={{ fontSize: "11px", color: "rgba(255, 255, 255, 0.5)", margin: "4px 0 12px", lineHeight: "1.4" }}>
-          &ldquo;Use the server save&rdquo; backs up your local file to .romm-backup first. &ldquo;Keep my local
-          save&rdquo; leaves the legacy save in the read-only legacy bucket and uploads your local file on the next
-          sync.
+          {legacyConflictReplaceNotice(slot)}
         </div>
         <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
-          <DialogButton style={btnStyle} onClick={() => resolve(onKeepLocal)} onFocus={scrollFocusedToCenter}>
-            Keep my local save
+          <DialogButton style={btnStyle} onClick={() => closeModal?.()} onFocus={scrollFocusedToCenter}>
+            Cancel
           </DialogButton>
-          <DialogButton style={btnPrimaryStyle} onClick={() => resolve(onUseServer)} onFocus={scrollFocusedToCenter}>
-            Use the server save
+          <DialogButton style={btnPrimaryStyle} onClick={confirm} onFocus={scrollFocusedToCenter}>
+            Replace local save
           </DialogButton>
         </div>
       </div>
@@ -289,16 +289,16 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
       const result = await confirmSlotChoice(romId, slot, migrate, migrateFrom, useServerOnConflict);
 
       // A content-based migration found a differing local save — nothing was
-      // confirmed. Ask the user, then re-call: "Use the server save" migrates
-      // (quarantine local), "Keep my local save" confirms without migrating.
+      // confirmed. Show the comparison and let the user confirm the replacement;
+      // cancelling makes no second call, so the slot stays unconfirmed and the
+      // wizard's start-fresh route is still open.
       if (result.needs_conflict_resolution) {
         setConfirming(false);
         showModal(
           createElement(LegacyMigrationConflictModal, {
             conflicts: result.conflicts ?? [],
             slot,
-            onUseServer: () => detach(handleConfirm(slot, true, migrateFrom, true)),
-            onKeepLocal: () => detach(handleConfirm(slot, false, null, false)),
+            onConfirm: () => detach(handleConfirm(slot, true, migrateFrom, true)),
           }),
         );
         return;
@@ -445,7 +445,7 @@ export const SlotSetupWizard: FC<SlotSetupWizardProps> = ({ romId, onComplete })
                 before it is clicked, not only inside the confirm modal (#1498). */}
             {isLegacyGroup ? (
               <div className="romm-panel-muted" style={{ fontSize: "11px", marginLeft: "18px", marginTop: "2px" }}>
-                {LEGACY_TRACK_EXPLAINER}
+                {legacyTrackExplainer(defaultSlot)}
               </div>
             ) : null}
           </div>

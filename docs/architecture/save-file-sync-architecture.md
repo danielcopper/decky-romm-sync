@@ -299,12 +299,14 @@ local target** (`<rom_name>.<ext>`, the same mapping `switch_slot` uses) the mig
 2. Downloads that save's **content** and classifies it against the local file:
    - **No local file** → the content is written locally under the canonical name and copied into the slot.
    - **Byte-identical** local file (same zip-aware content hash the sync kernel uses) → migrated silently.
-   - **Differing** local file → the wizard **asks** (a modal shows both sides' size + timestamp). _Use the server save_
-     quarantines the local file into `.romm-backup` (never deleted, #965) then replaces it with the server content;
-     _Keep my local save_ confirms the slot **without** migrating, leaving the legacy save in the read-only bucket — the
-     local file becomes the slot's first save on the next sync. A differing local file holds the whole migration: the
-     slot is **not** confirmed until the user chooses (`needs_conflict_resolution` + a `conflicts` list on the
-     response).
+   - **Differing** local file → the migration **holds** for an informed confirmation: nothing is migrated and the slot
+     is **not** confirmed (`needs_conflict_resolution` + a `conflicts` list on the response), and the wizard shows both
+     sides' size + timestamp — the comparison that stops a newer local save being buried unnoticed. The dialog offers
+     exactly two ways out: _Replace local save_ (the second call, with `use_server_on_conflict`), which quarantines the
+     local file into `.romm-backup` (never deleted, #965) before writing the server content, or _Cancel_, which makes no
+     second call at all — nothing changes, the slot stays unconfirmed, and the wizard's start-fresh route ("Use slot
+     '<default>'") is still open. There is deliberately **no** "keep my local save" action: it would produce exactly the
+     same end state as that start-fresh button while re-opening a decision the user already made by clicking Track.
 3. Copies the content into the slot through the normal upload path (`do_upload_save`, `overwrite=false`,
    409-backstopped), adopting the per-file baseline — so the migrated slot is immediately in sync.
 

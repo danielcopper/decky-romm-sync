@@ -3,11 +3,12 @@ import {
   applyLaunchGateSetupOutcome,
   applyWizardInitialSetupResult,
   applyWizardRetrySetupResult,
+  legacyConflictReplaceNotice,
   legacyMigrateConfirmDescription,
+  legacyTrackExplainer,
   resolveSaveSetupOutcome,
   startFreshHint,
   wizardMigrationOutcomeToastBody,
-  LEGACY_TRACK_EXPLAINER,
   SERVER_UNREACHABLE_WIZARD_MESSAGE,
   SERVER_UNREACHABLE_TOAST_BODY,
   type LaunchGateSetupDeps,
@@ -313,9 +314,21 @@ describe("applyWizardRetrySetupResult", () => {
 });
 
 describe("legacy-migration copy (#1498)", () => {
-  it("the Track explainer reads as a migration and says the legacy save is left untouched", () => {
-    expect(LEGACY_TRACK_EXPLAINER).toContain("copies the legacy save");
-    expect(LEGACY_TRACK_EXPLAINER).toContain("left untouched");
+  it("the Track explainer names the concrete target slot and says the legacy save is left untouched", () => {
+    const body = legacyTrackExplainer("default");
+    expect(body).toContain("copies the legacy save");
+    // Names the resolved slot — never "a named slot", which reads as still-open.
+    expect(body).toContain("‘default’");
+    expect(body).not.toContain("a named slot");
+    expect(body).toContain("left untouched");
+  });
+
+  it("the conflict notice states the backup-and-replace and that cancelling changes nothing", () => {
+    const body = legacyConflictReplaceNotice("default");
+    expect(body).toContain(".romm-backup");
+    expect(body).toContain("replaced with the legacy save");
+    expect(body).toContain("nothing changes");
+    expect(body).toContain("‘default’");
   });
 
   it("the migrate confirm description names the target slot and flags the differ-ask", () => {
