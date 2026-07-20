@@ -80,19 +80,28 @@ export function estimateApplySeconds(newCount: number, changedCount: number, cov
  * skip-preview path shows before any preview delta exists.
  *
  * Prices each unit by its COMPOSITION rather than pricing every planned item as
- * a create: a predicted-skip unit costs nothing, and of the remainder's items
- * (``collapsed_count ?? rom_count``) the ones already bound to a Steam shortcut
- * (``bound_count``) take the cheap update path. This is what stops a re-sync —
- * and, for platforms, every Force Full Sync, which clears the completion stamps
- * but unbinds nothing — from being seeded at fresh-import prices. Applies to
- * platform AND collection units alike; a unit whose backend omits
- * ``bound_count`` prices all of its items as creates, the pre-#1511 behaviour.
+ * a create: a predicted-skip unit costs nothing, the unit's ROMs already bound
+ * to a Steam shortcut (``bound_count``) take the cheap update path, and the
+ * shortcuts that genuinely have to be minted (``new_shortcut_count``) take the
+ * create path. This is what stops a re-sync — and, for platforms, every Force
+ * Full Sync, which clears the completion stamps but unbinds nothing — from being
+ * seeded at fresh-import prices.
  *
- * That fallback is not rare for collections: a collection's membership is known
- * only from its completion stamp, and a Force Full Sync clears every stamp, so a
- * forced run prices its collections as creates even though their shortcuts
- * survive. Deliberate — the alternative is asserting membership the plan does
- * not have — and it errs long, the safe direction.
+ * The two terms are read INDEPENDENTLY, never derived from each other by
+ * subtracting from the unit's item weight (``collapsed_count ?? rom_count``).
+ * That weight falls back to the pre-collapse ``rom_count`` whenever the platform
+ * carries no completion stamp — exactly what a Force Full Sync leaves behind —
+ * and on a platform with sibling groups (ADR-0021) the pre-collapse count
+ * exceeds the real shortcut count, so the subtraction would price each collapsed
+ * duplicate as a phantom create plus a cover download (#1517). A unit whose
+ * backend omits ``new_shortcut_count`` (collections, older backends) keeps the
+ * subtraction, which is the pre-#1517 behaviour.
+ *
+ * The ``bound_count`` fallback is not rare for collections: a collection's
+ * membership is known only from its completion stamp, and a Force Full Sync
+ * clears every stamp, so a forced run prices its collections as creates even
+ * though their shortcuts survive. Deliberate — the alternative is asserting
+ * membership the plan does not have — and it errs long, the safe direction.
  *
  * Cover downloads ride the create term; the plan carries no cover-refresh count,
  * and a refresh-only unit's covers are the cheap warm case.
@@ -107,7 +116,7 @@ export function estimatePlanSeconds(units: readonly SyncPlanUnit[]): number {
     // could report more bound rows than the collapsed item total.
     const bound = Math.min(items, Math.max(0, unit.bound_count ?? 0));
     updated += bound;
-    created += items - bound;
+    created += unit.new_shortcut_count !== undefined ? Math.max(0, unit.new_shortcut_count) : items - bound;
   }
   return estimateApplySeconds(created, updated);
 }

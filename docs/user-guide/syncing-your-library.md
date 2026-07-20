@@ -54,12 +54,14 @@ skips it without re-listing its contents — so a large, collection-heavy librar
 The estimate also knows the **difference between adding a game and updating one**. Creating a shortcut is roughly three
 times the work of refreshing one that already exists, and it also has to pull down a cover; updating an existing
 shortcut does neither. So a re-sync over games your library already has is estimated at the cheaper update rate rather
-than as though it were building your library from scratch. One exception: after a **Force Full Sync**, your collections
-are estimated at the dearer "adding" rate for that run. The plugin only knows which games are in a collection from the
-record it keeps when that collection last finished syncing, and Force Full Sync deliberately wipes those records — so
-for that one run it can't tell that your collections' games are already in Steam. The run itself is unaffected, and the
-estimate only ever reads too long, never too short. Cover updates are counted on their own, so a run that only refreshes
-cover art is estimated from how many covers changed instead of falling back to a fixed number.
+than as though it were building your library from scratch — including a **Force Full Sync**, which re-applies every game
+your platforms already hold but adds none, so its platforms are estimated at that cheaper rate too. One exception
+remains: after a Force Full Sync, your **collections** are estimated at the dearer "adding" rate for that run. The
+plugin only knows which games are in a collection from the record it keeps when that collection last finished syncing,
+and Force Full Sync deliberately wipes those records — so for that one run it can't tell that your collections' games
+are already in Steam. The run itself is unaffected, and the estimate only ever reads too long, never too short. Cover
+updates are counted on their own, so a run that only refreshes cover art is estimated from how many covers changed
+instead of falling back to a fixed number.
 
 Once the sync has been creating shortcuts for a few seconds, that "up to" ceiling is replaced by a **live countdown** —
 "2 min left" — measured from the actual speed on your device and updated as the run proceeds. The countdown waits until

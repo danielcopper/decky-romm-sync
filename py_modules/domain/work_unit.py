@@ -38,10 +38,11 @@ class WorkUnit:
     # membership-stable signal. ``None`` when the listing omits it (e.g. a
     # franchise collection, which is never stamped) — skip-internal, off the wire.
     collection_updated_at: str | None = None
-    # Plan-time estimate riders (#1382 / #1511). ``predicted_skip`` is the
-    # plan's local-conditions guess at the fetch-time wholesale-skip gate's
-    # outcome and ``collapsed_count`` the persisted post-collapse shortcut
-    # count — both platform-only. ``bound_count`` carries on BOTH unit types:
+    # Plan-time estimate riders (#1382 / #1511 / #1517). ``predicted_skip`` is
+    # the plan's local-conditions guess at the fetch-time wholesale-skip gate's
+    # outcome, ``collapsed_count`` the persisted post-collapse shortcut count
+    # and ``new_shortcut_count`` how many of those shortcuts do not exist yet —
+    # all three platform-only. ``bound_count`` carries on BOTH unit types:
     # how many of the unit's known ROMs already hold a Steam shortcut, which is
     # what lets the frontend price them at the cheap UPDATE rate instead of the
     # create rate (a platform reads its persisted rows; a collection reads its
@@ -53,6 +54,7 @@ class WorkUnit:
     predicted_skip: bool | None = None
     collapsed_count: int | None = None
     bound_count: int | None = None
+    new_shortcut_count: int | None = None
 
     def estimated_items(self) -> int:
         """This unit's weight in the plan's skip-aware estimate total.
@@ -83,4 +85,6 @@ class WorkUnit:
             payload["collapsed_count"] = self.collapsed_count
         if self.bound_count is not None:
             payload["bound_count"] = self.bound_count
+        if self.new_shortcut_count is not None:
+            payload["new_shortcut_count"] = self.new_shortcut_count
         return payload

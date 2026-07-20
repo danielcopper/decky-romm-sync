@@ -262,6 +262,23 @@ export interface SyncPlanUnit {
    * COLLECTION units lose it and price as creates for that run.
    */
   bound_count?: number;
+  /**
+   * Shortcuts this platform's apply is expected to CREATE rather than update
+   * (#1517) — sibling groups (ADR-0021) with no binding anywhere, unbound rows
+   * with no group key, and every server ROM the local mirror holds no row for.
+   * The seed uses it as the create term directly, because deriving creates by
+   * subtracting `bound_count` from the unit's weight over-reads whenever that
+   * weight is the pre-collapse `rom_count`: a sibling group's duplicates are
+   * unbound rows that will never become shortcuts, and the subtraction prices
+   * each of them as a new shortcut plus a cover download. That is precisely a
+   * Force Full Sync, which drops `collapsed_count` (stamp-gated) while leaving
+   * the bindings intact.
+   *
+   * Platform units only; absent on collections and older backends, where the
+   * seed falls back to the subtraction. `0` is real knowledge, not absence — a
+   * fully-mirrored platform genuinely creates nothing.
+   */
+  new_shortcut_count?: number;
 }
 
 export interface SyncPlanData {

@@ -1385,7 +1385,8 @@ class TestFetchProgressNarration:
 class TestPlanEstimates:
     """build_work_queue's plan-time estimate riders (#1382).
 
-    ``predicted_skip`` / ``collapsed_count`` / ``bound_count`` are
+    ``predicted_skip`` / ``collapsed_count`` / ``bound_count`` /
+    ``new_shortcut_count`` are
     estimate-only fields that price the ``sync_plan`` payload — the fetch-time
     gate (``_try_unit_incremental_skip``) stays the sole skip authority
     (ADR-0023); see :class:`TestPredictionNeverFeedsSkipGate` for the guard.
@@ -1514,6 +1515,88 @@ class TestPlanEstimates:
         assert units[0].bound_count == 2
 
     @pytest.mark.asyncio
+    async def test_force_full_sync_of_a_sibling_heavy_platform_mints_nothing(self, plugin, fake_romm_api):
+        """The #1517 over-read: a Force Full Sync drops the collapsed count, so
+        the unit is weighed at the pre-collapse rom_count — which counts each
+        sibling duplicate. Deriving creates by subtracting the bound rows from
+        that weight prices every duplicate as a phantom new shortcut (plus a
+        cover download it never performs); new_shortcut_count reports none,
+        because the clear takes the stamps and not the bindings.
+        """
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 4}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+        # No stamp — what clear_sync_cache leaves behind. Two sibling groups
+        # (ADR-0021), each a bound representative plus an unbound duplicate.
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=None, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 12, app_id=1002, group_key="igdb:200:1")
+        _seed_persisted_rom(uow, 13, app_id=None, group_key="igdb:200:1")
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert units[0].collapsed_count is None
+        assert units[0].bound_count == 2
+        assert units[0].new_shortcut_count == 0
+
+    @pytest.mark.asyncio
+    async def test_never_synced_partial_platform_counts_the_unmirrored_remainder(self, plugin, fake_romm_api):
+        """The safety-critical shape (#1412 / #1517): a never-synced platform
+        whose only local rows are collection siblings (ADR-0021). Counting
+        creates from the known rows alone would price a handful of items for a
+        whole platform — a short read. The unmirrored server ROMs count too, so
+        creates + bound rows still cover the full rom_count.
+        """
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = [{"id": 1, "name": "SNES", "slug": "snes", "rom_count": 100}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1", platform_slug="snes")
+        _seed_persisted_rom(uow, 11, app_id=1002, group_key="igdb:101:1", platform_slug="snes")
+        _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:102:1", platform_slug="snes")
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        # One unbound group + the 97 server ROMs no row is held for.
+        assert units[0].new_shortcut_count == 98
+        assert units[0].bound_count == 2
+        assert units[0].new_shortcut_count + units[0].bound_count == units[0].rom_count
+
+    @pytest.mark.asyncio
+    async def test_first_ever_sync_counts_every_server_rom_as_a_create(self, plugin, fake_romm_api):
+        """Nothing persisted, nothing bound — the whole platform is new work."""
+        _wire_fake(plugin, fake_romm_api)
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 3}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert units[0].new_shortcut_count == 3
+        assert units[0].bound_count == 0
+
+    @pytest.mark.asyncio
+    async def test_partially_applied_platform_mints_only_its_unbound_groups(self, plugin, fake_romm_api):
+        """A fetched-but-not-fully-applied platform: the groups that never got a
+        shortcut are the creates, the bound rows the updates."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 4}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=4)
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 11, app_id=None, group_key="igdb:100:1")
+        _seed_persisted_rom(uow, 12, app_id=None, group_key="igdb:200:1")
+        _seed_persisted_rom(uow, 13, app_id=None, group_key="igdb:300:1")
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert units[0].new_shortcut_count == 2
+        assert units[0].bound_count == 1
+        # The two terms partition the collapsed count — no item priced twice.
+        assert units[0].new_shortcut_count + units[0].bound_count == units[0].collapsed_count
+
+    @pytest.mark.asyncio
     async def test_stamp_count_mismatch_predicts_no_skip_but_keeps_collapsed_count(self, plugin, fake_romm_api):
         _wire_fake(plugin, fake_romm_api)
         uow = plugin._uow
@@ -1580,6 +1663,9 @@ class TestPlanEstimates:
         # None, NOT 0 — the platform side reports 0 for "nothing mirrored", but a
         # collection with no stamp has no member set to count at all (#1511).
         assert units[0].bound_count is None
+        # Platform-only: a collection's rows belong to their platform's unit, so
+        # counting creates here would price the same shortcuts twice (#1517).
+        assert units[0].new_shortcut_count is None
 
     @pytest.mark.asyncio
     async def test_stamped_collection_counts_its_bound_members(self, plugin, fake_romm_api):
@@ -1608,6 +1694,7 @@ class TestPlanEstimates:
         units = await plugin._sync_service._fetcher.build_work_queue()
 
         assert units[0].bound_count == 2
+        assert units[0].new_shortcut_count is None
 
     @pytest.mark.asyncio
     async def test_stamped_collection_ignores_members_with_no_persisted_row(self, plugin, fake_romm_api):

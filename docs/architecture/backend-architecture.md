@@ -597,19 +597,28 @@ weights + planned totals, via `sync_plan`) and the applying frames.
   `0` there would claim knowledge that does not exist. Absent and `0` price identically today; the distinction keeps the
   field honest for later consumers, so do not collapse it into consistency. A collection's stored member set may be
   **stale** if membership changed since the stamp — accepted and bounded, since this is estimate-only and a freshness
-  probe would mean network I/O at plan time. **Hard constraint (ADR-0023): the prediction never feeds the actual skip
-  decision** — `_try_unit_incremental_skip` at fetch time remains the sole skip authority, so a mis-prediction can only
-  make the estimate read long or short, never mis-apply. A Force Full Sync needs no special case: `clear_sync_cache`
-  deletes every stamp before the run, so a forced plan predicts no skips and drops every `collapsed_count` (the forced
-  re-apply is priced at the full `rom_count`). The same collapsed counts also garnish `get_platforms` (an optional
-  per-platform `collapsed_count`), so the platform toggles show the number of games a synced platform actually produces
-  rather than the raw server file count. That garnish is **gated on the platform's completion stamp**
-  (`_read_collapsed_counts`, #1412): the count is emitted only for slugs that currently carry a `PlatformSyncState`
-  stamp — the stamp exists iff the local mirror is complete, which is exactly when a post-collapse count is meaningful.
-  A never-synced platform legitimately holds only PARTIAL rows (cross-platform collection siblings persist per
-  ADR-0021), so an ungated count would shadow the true server total; with no stamp the field is absent and the toggle
-  label falls back to the raw `rom_count`. Clearing the stamp (local removal / Force Full Sync) reverts the label to the
-  server total until the next completed sync re-stamps.
+  probe would mean network I/O at plan time. A fourth rider, `new_shortcut_count` (#1517), is the create-side complement
+  of `collapsed_count`: the shortcuts the next apply must **mint** rather than update — sibling groups with no binding
+  anywhere, unbound keyless rows, and every server ROM the local mirror holds no row for (`rom_count − persisted rows`,
+  clamped at zero). It is **platform-only** — a collection's rows belong to their platform's unit, so counting creates
+  on a collection too would price the same shortcuts twice — and like `bound_count` it is **not** stamp-gated: an
+  unbound group genuinely has no shortcut and a ROM with no local row genuinely has to be created, whether or not the
+  mirror is complete. The frontend takes it as its create term directly instead of deriving creates by subtracting
+  `bound_count` from the unit's weight (see the composition-priced seed below). **Hard constraint (ADR-0023): the
+  prediction never feeds the actual skip decision** — `_try_unit_incremental_skip` at fetch time remains the sole skip
+  authority, so a mis-prediction can only make the estimate read long or short, never mis-apply. A Force Full Sync needs
+  no special case: `clear_sync_cache` deletes every stamp before the run, so a forced plan predicts no skips and drops
+  every `collapsed_count` — the unit is then weighed at the full pre-collapse `rom_count`, but `bound_count` and
+  `new_shortcut_count` both survive the clear (they read the rows, not the stamp) and keep the forced re-apply priced by
+  composition (#1517). The same collapsed counts also garnish `get_platforms` (an optional per-platform
+  `collapsed_count`), so the platform toggles show the number of games a synced platform actually produces rather than
+  the raw server file count. That garnish is **gated on the platform's completion stamp** (`_read_collapsed_counts`,
+  #1412): the count is emitted only for slugs that currently carry a `PlatformSyncState` stamp — the stamp exists iff
+  the local mirror is complete, which is exactly when a post-collapse count is meaningful. A never-synced platform
+  legitimately holds only PARTIAL rows (cross-platform collection siblings persist per ADR-0021), so an ungated count
+  would shadow the true server total; with no stamp the field is absent and the toggle label falls back to the raw
+  `rom_count`. Clearing the stamp (local removal / Force Full Sync) reverts the label to the server total until the next
+  completed sync re-stamps.
 - **Static walk-cost ceiling (pre-run seed).** Before a run — in the preview, and again as the initial "up to X min" the
   instant a skip-preview run starts — the estimate is a pure cost model over **three independent terms** (#1511),
   because a run is three independent phases and one blended per-item rate cannot describe a mix of them:
@@ -623,18 +632,32 @@ weights + planned totals, via `sync_plan`) and the applying frames.
   covers cost 0.0018 s, 73x cheaper than cold, and pricing them would need a backend cache probe in the preview path
   that is deliberately not added, so every create is priced as needing a cold download.
 - **Composition-priced plan seed.** The skip-preview seed prices the plan **per unit by composition**, not as one
-  blended item count (#1511): a predicted-skip unit costs nothing, and of the remainder's items
-  (`collapsed_count ?? rom_count`) the ones already bound (`bound_count`) take the update rate, the rest the create
-  rate. Pricing every planned item as a create over-read by ~4x on the common case — any re-sync, and **every Force Full
-  Sync**, which clears the completion stamps but unbinds nothing and is therefore an all-updates run. Platform and
-  collection units are priced the same way on an ordinary re-sync, so a collection-heavy library does not reinstate the
-  over-read through its collections. **A Force Full Sync is the exception for collections**: `clear_sync_cache` clears
-  `collection_sync_state` wholesale, and a collection's member set lives _only_ in that stamp, so every collection unit
-  is unstamped for that run and reverts to create pricing. Platforms are unaffected — their `bound_count` is
-  deliberately not stamp-gated. This follows directly from the `None`-not-`0` rule above and errs **long**, the safe
-  direction; correcting it would mean asserting membership the plan does not have. A unit whose `bound_count` is absent
-  (older backend, unstamped or franchise collection) prices as all creates, the pre-#1511 behaviour. The live-countdown
-  weights are unaffected and stay `predicted_skip ? 0 : (collapsed_count ?? rom_count)`.
+  blended item count (#1511): a predicted-skip unit costs nothing, the unit's already-bound ROMs (`bound_count`) take
+  the update rate, and the shortcuts that genuinely have to be minted (`new_shortcut_count`) take the create rate.
+  Pricing every planned item as a create over-read by ~4x on the common case — any re-sync, and **every Force Full
+  Sync**, which clears the completion stamps but unbinds nothing and is therefore an all-updates run.
+- **Why the create term is read, not subtracted (#1517).** The two rates are priced from **independent** counts; the
+  create term is `new_shortcut_count` directly, never `items − bound_count`. The subtraction over-read a **Force Full
+  Sync of a sibling-heavy platform** by ~2.5x: a forced run drops `collapsed_count`, so the unit is weighed at its
+  pre-collapse `rom_count`, and on a platform carrying sibling groups (ADR-0021) that raw count exceeds the real
+  shortcut count — one row per group is bound, its duplicates are not. Subtracting the bound rows priced every unbound
+  duplicate as a phantom new shortcut, at the dear create rate **plus** a cover download it would never perform, even
+  though a sibling duplicate never produces a shortcut. `new_shortcut_count` reports no creates there instead, because
+  the clear takes the stamps and not the bindings, so no group is left without one. The symmetric hazard is a **never-
+  synced platform holding only PARTIAL collection-sibling rows** (ADR-0021): counting creates from the known rows alone
+  would price a handful of items for a whole platform — a **short** read, the one direction this estimate may not err
+  in. The `rom_count − persisted rows` term prices those unmirrored ROMs as creates, so the seed stays at (or above) the
+  full platform. A unit whose `new_shortcut_count` is absent (collections, older backends) falls back to the
+  `items − bound_count` subtraction, the pre-#1517 behaviour.
+- **Collections still price by bound members.** Platform and collection units are priced the same way on an ordinary
+  re-sync, so a collection-heavy library does not reinstate the over-read through its collections. **A Force Full Sync
+  is the exception for collections**: `clear_sync_cache` clears `collection_sync_state` wholesale, and a collection's
+  member set lives _only_ in that stamp, so every collection unit is unstamped for that run and reverts to create
+  pricing. Platforms are unaffected — their `bound_count` and `new_shortcut_count` are deliberately not stamp-gated.
+  This follows directly from the `None`-not-`0` rule above and errs **long**, the safe direction; correcting it would
+  mean asserting membership the plan does not have. A unit whose `bound_count` is absent (older backend, unstamped or
+  franchise collection) prices as all creates, the pre-#1511 behaviour. The live-countdown weights are unaffected and
+  stay `predicted_skip ? 0 : (collapsed_count ?? rom_count)`.
 - **Measured live countdown (takes over within seconds).** Once the apply is underway, `syncEta.ts` measures the
   **real** rate from the applying frames — one throttled sample per second over a ~30 s sliding window — and projects
   `remaining = (planned_total − processed) / rate`, rendered rounded **up** ("9 min left") so it never promises less
