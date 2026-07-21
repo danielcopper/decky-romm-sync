@@ -308,7 +308,7 @@ class LibraryFetcher:
 
     async def set_all_collections_sync(self, enabled, scope=None):
         enabled = bool(enabled)
-        if scope not in (None, "my", "smart", "franchise"):
+        if scope not in (None, "user", "smart", "franchise"):
             return {"success": False, "reason": "invalid_scope", "message": f"Invalid scope: {scope}"}
 
         buckets = self._get_enabled_collections_buckets()
@@ -326,7 +326,7 @@ class LibraryFetcher:
         self, *, buckets: dict[str, dict[str, bool]], enabled: bool, scope: str | None
     ) -> dict[str, Any] | None:
         """Fetch user collections and stamp the ``user`` bucket. Returns failure dict or None."""
-        if scope not in (None, "my"):
+        if scope not in (None, "user"):
             return None
         try:
             user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
@@ -335,7 +335,7 @@ class LibraryFetcher:
             _reason, _msg = classify_error(e)
             return {"success": False, "reason": _reason, "message": _msg}
         for c in user_collections:
-            if scope == "my" and bool(c.get("is_favorite", False)):
+            if scope == "user" and bool(c.get("is_favorite", False)):
                 continue
             buckets["user"][str(c["id"])] = enabled
         return None

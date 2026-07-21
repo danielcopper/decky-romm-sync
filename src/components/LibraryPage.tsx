@@ -15,18 +15,18 @@ import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
 import { LoadingRow } from "./LoadingRow";
 
-type CollectionSubTab = "my" | "smart" | "franchise";
+type CollectionSubTab = "user" | "smart" | "franchise";
 
-const SUB_TAB_ORDER: readonly CollectionSubTab[] = ["my", "smart", "franchise"];
+const SUB_TAB_ORDER: readonly CollectionSubTab[] = ["user", "smart", "franchise"];
 
 const SUB_TAB_LABELS: Record<CollectionSubTab, string> = {
-  my: "My",
+  user: "My",
   smart: "Smart",
   franchise: "Franchise",
 };
 
 const SUB_TAB_HEADERS: Record<CollectionSubTab, string> = {
-  my: "MY COLLECTIONS",
+  user: "MY COLLECTIONS",
   smart: "SMART COLLECTIONS",
   franchise: "FRANCHISE",
 };
@@ -42,7 +42,7 @@ function filterCollectionsBySubTab(
   includeFavoritesInMy = false,
 ): CollectionSyncSetting[] {
   switch (subTab) {
-    case "my":
+    case "user":
       return collections.filter((c) => c.kind === "user" && (includeFavoritesInMy || !c.is_favorite));
     case "smart":
       return collections.filter((c) => c.kind === "smart");
@@ -74,7 +74,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   const [collectionsError, setCollectionsError] = useState(false);
   const collectionsLoaded = useRef(false);
   const [platformGroups, setPlatformGroups] = useState(false);
-  const [activeSubTab, setActiveSubTab] = useState<CollectionSubTab>("my");
+  const [activeSubTab, setActiveSubTab] = useState<CollectionSubTab>("user");
 
   // The favorites collection (a user collection with is_favorite=true) is
   // promoted to a top-level toggle. RomM's schema theoretically allows more
@@ -108,7 +108,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   }, []);
 
   // Load collections data lazily on first switch to collections tab.
-  // Sub-tab is reset to "my" in the tab-click handler (not here);
+  // Sub-tab is reset to "user" in the tab-click handler (not here);
   // that's an event-driven concern, not state synchronisation.
   useEffect(() => {
     if (activeTab === "collections" && !collectionsLoaded.current) {
@@ -130,7 +130,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   // Reset the collections sub-tab on every entry into the Collections tab
   // so the user lands on a predictable view (no persistence).
   const handleCollectionsTabClick = () => {
-    setActiveSubTab("my");
+    setActiveSubTab("user");
     setActiveTab("collections");
   };
 

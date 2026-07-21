@@ -609,15 +609,15 @@ class TestSetAllCollectionsSync:
         assert ec["franchise"] == {}
 
     @pytest.mark.asyncio
-    async def test_filter_by_my_scope(self, plugin):
-        """Passing scope='my' only touches non-favorite user collections."""
+    async def test_filter_by_user_scope(self, plugin):
+        """Passing scope='user' only touches non-favorite user collections."""
         user = [
             {"id": 1, "name": "RPGs", "is_favorite": False},
             {"id": 2, "name": "Faves", "is_favorite": True},
         ]
         rebind_loop(plugin._sync_service, _make_loop_with_executor(user))
 
-        result = await plugin._sync_service.set_all_collections_sync(True, scope="my")
+        result = await plugin._sync_service.set_all_collections_sync(True, scope="user")
 
         assert result["success"] is True
         ec = plugin._sync_service._settings["enabled_collections"]

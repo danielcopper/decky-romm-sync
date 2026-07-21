@@ -21,7 +21,7 @@ export interface PlatformSyncSetting {
 
 export type CollectionKind = "user" | "smart" | "franchise";
 
-export type CollectionScope = "my" | "smart" | "franchise";
+export type CollectionScope = "user" | "smart" | "franchise";
 
 export interface CollectionSyncSetting {
   id: string;

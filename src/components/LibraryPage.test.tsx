@@ -504,7 +504,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      // Find the collection toggle by label (default sub-tab "my" → user collection visible).
+      // Find the collection toggle by label (default sub-tab "user" → user collection visible).
       const collectionToggle = container.querySelector<HTMLInputElement>('[data-label="MyColl"] input')!;
       expect(collectionToggle.checked).toBe(false);
       await act(async () => {
@@ -575,7 +575,7 @@ describe("LibraryPage", () => {
   // G. Collections tab — Enable/Disable All + platform-groups toggle
   // ------------------------------------------------------------------
   describe("collections tab — set-all + platform groups", () => {
-    it("calls setAllCollectionsSync(true, 'my') on Enable All in default My sub-tab", async () => {
+    it("calls setAllCollectionsSync(true, 'user') on Enable All in default My sub-tab", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [makeCollection({ id: "c1", kind: "user", is_favorite: false, sync_enabled: false })],
@@ -591,7 +591,7 @@ describe("LibraryPage", () => {
         fireEvent.click(getByText("Enable All"));
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.setAllCollectionsSync)).toHaveBeenCalledWith(true, "my");
+      expect(vi.mocked(backend.setAllCollectionsSync)).toHaveBeenCalledWith(true, "user");
     });
 
     it("calls setAllCollectionsSync(true, 'smart') when Smart sub-tab is active", async () => {
