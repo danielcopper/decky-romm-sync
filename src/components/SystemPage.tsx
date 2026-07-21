@@ -75,7 +75,13 @@ function hashIndicator(hv: boolean | null): string {
  */
 const PlatformSeparator: FC = () => (
   <PanelSectionRow>
-    <div data-testid="platform-separator" style={{ height: "1px", backgroundColor: "rgba(255, 255, 255, 0.12)" }} />
+    {/* marginTop offsets the built-in top lead of the following PanelSection
+        title (the block below the rule) so the line sits centred in the gap
+        rather than hugging the block above it. */}
+    <div
+      data-testid="platform-separator"
+      style={{ height: "1px", marginTop: "14px", backgroundColor: "rgba(255, 255, 255, 0.12)" }}
+    />
   </PanelSectionRow>
 );
 
