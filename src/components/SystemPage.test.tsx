@@ -1696,24 +1696,27 @@ describe("SystemPage", () => {
   });
 
   // ------------------------------------------------------------------
-  // N4. Platform separators (#1534) — one divider between platform blocks,
-  // none between the rows of a single platform. The intra-row
-  // `bottomSeparator="none"` props are invisible through the @decky/ui mock
-  // (it ignores the prop), so only the between-platform rule is asserted here;
-  // the "no lines within a platform" look is confirmed on-device.
+  // N4. Platform separators (#1534) — a divider precedes every platform block:
+  // between the System intro and the first platform, and between each adjacent
+  // pair; none trails the last platform. So N platforms → N dividers. No divider
+  // sits between the rows of a single platform. The intra-row
+  // `bottomSeparator="none"` props are invisible through the @decky/ui mock (it
+  // ignores the prop), so only the between-block rule is asserted here; the "no
+  // lines within a platform" look is confirmed on-device.
   // ------------------------------------------------------------------
   describe("platform separators", () => {
-    it("renders no separator when only one platform is synced", async () => {
+    it("renders one separator between the System block and the single platform", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [makeBiosPlatform({ platform_slug: "snes" })],
       });
       const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      expect(container.querySelectorAll('[data-testid="platform-separator"]')).toHaveLength(0);
+      // One platform → one divider (System → platform); none trails it.
+      expect(container.querySelectorAll('[data-testid="platform-separator"]')).toHaveLength(1);
     });
 
-    it("renders exactly one separator between each adjacent pair of synced platforms (N-1)", async () => {
+    it("renders one separator before each platform block (System→first plus each adjacent pair, N total)", async () => {
       vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
         success: true,
         platforms: [
@@ -1724,8 +1727,8 @@ describe("SystemPage", () => {
       });
       const { container } = render(<SystemPage onBack={vi.fn()} />);
       await flushAsync();
-      // Three platforms → two dividers; none trails the last platform.
-      expect(container.querySelectorAll('[data-testid="platform-separator"]')).toHaveLength(2);
+      // Three platforms → three dividers (System→snes, snes→ps1, ps1→n64); none trails the last.
+      expect(container.querySelectorAll('[data-testid="platform-separator"]')).toHaveLength(3);
     });
   });
 

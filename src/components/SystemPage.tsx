@@ -522,6 +522,10 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
             <Field label={biosStatus} />
           </PanelSectionRow>
         )}
+        {/* Close the System intro block off from the first platform with the same
+            divider that sits between platforms — so a line precedes every platform
+            block, none trails the last. Only when platforms actually follow. */}
+        {syncedPlatforms.length > 0 && <PlatformSeparator />}
       </PanelSection>
 
       {syncedPlatforms.map(renderBiosPlatform)}
