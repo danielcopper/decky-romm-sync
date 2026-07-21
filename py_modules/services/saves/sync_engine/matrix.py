@@ -235,7 +235,7 @@ class MatrixExecutor:
         if not save_state.system and system:
             save_state.adopt_system(system)
         if save_state.active_slot is None and not save_state.slots:
-            save_state.switch_active_slot(default_slot or "default")
+            save_state.switch_active_slot(default_slot or "autosave")
         save_state.record_synced_core(core_so, emulator_tag or save_state.emulator or "retroarch")
 
         now = self._clock.now().isoformat()
@@ -369,7 +369,7 @@ class MatrixExecutor:
             return save_state.active_slot
         if save_state.slots:
             return None
-        return default_slot or "default"
+        return default_slot or "autosave"
 
     def _confirm_upload_sync(self, response: dict[str, Any], device_id: str | None) -> None:
         """Ack the uploaded save on the server's DeviceSaveSync row, unless redundant.

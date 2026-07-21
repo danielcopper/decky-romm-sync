@@ -115,7 +115,8 @@ class TestUpdateFileSyncState:
 
         assert state.emulator == "retroarch-mgba"
         assert state.last_synced_core == "mgba_libretro"
-        assert state.active_slot == "default"
+        # No default_slot passed → brand-new state seeds the canonical default ("autosave").
+        assert state.active_slot == "autosave"
 
         file_state = state.files["pokemon.srm"]
         assert file_state.tracked_save_id == 200

@@ -130,7 +130,7 @@ async def test_get_save_slots_sync_disabled_failure_shape(harness):
     assert isinstance(result["message"], str)
     assert result["message"]
     assert result["slots"] == []
-    assert result["active_slot"] == "default"
+    assert result["active_slot"] == "autosave"
 
 
 async def test_get_save_slots_server_failure_shape(harness):

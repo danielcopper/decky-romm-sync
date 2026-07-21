@@ -231,6 +231,7 @@ class SyncEngine:
             logger=config.logger,
             log_debug=config.log_debug,
             resolve_core=self.resolve_core,
+            settings=config.settings,
         )
         # Device-level single-owner serialization gate: only one save-sync run
         # in flight at a time per device. A second trigger queues behind the

@@ -97,7 +97,7 @@ class TestSaveSlots:
         assert result["reason"] == "sync_disabled"
         assert "disabled" in result["message"].lower()
         assert result["slots"] == []
-        assert result["active_slot"] == "default"
+        assert result["active_slot"] == "autosave"
 
     @pytest.mark.asyncio
     async def test_get_save_slots_preserves_map_on_api_failure(self, tmp_path):

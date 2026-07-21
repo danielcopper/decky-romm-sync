@@ -685,3 +685,124 @@ class TestResolveSyncConflictContentDirGate:
 
         assert result["success"] is True
         assert "reason" not in result
+
+
+class TestResolveSyncConflictSeedsConfiguredDefaultSlot:
+    """#1529: conflict resolution on a brand-new ROM must thread the *configured*
+    default slot, never a hard-coded fallback. A ROM already tracking its own slot
+    keeps that slot — the setting never overrides it.
+
+    The brand-new cases configure a distinctive ``default_slot`` ("main") rather
+    than relying on the "autosave" default: the matrix fallback literal is also
+    "autosave", so asserting "autosave" alone could not distinguish a threaded
+    setting from the fallback. Asserting a non-default configured value is what
+    makes these non-vacuous — they fail if ``default_slot`` is not threaded
+    through ``do_download_save`` / ``do_upload_save``. A separate case pins the
+    unconfigured end-to-end default at "autosave".
+    """
+
+    @pytest.mark.asyncio
+    async def test_use_server_new_rom_seeds_configured_default_slot(self, tmp_path):
+        """use_server on a never-configured ROM seeds active_slot from the configured default."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        svc._config.settings["default_slot"] = "main"
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"local-stale")
+        # No save_state seeded → brand-new ROM (active_slot=None, empty slots),
+        # resolving against a legacy (slot:null) server save.
+
+        server_content = tmp_path / "server-content.bin"
+        server_content.write_bytes(b"server-truth")
+        ss = _server_save_with_syncs(device_syncs=[{"device_id": "device-1", "is_current": False}])
+        fake.saves[100] = ss
+        fake.uploaded_files[100] = str(server_content)
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42, filename="pokemon.srm", server_save_id=100, action="use_server"
+        )
+
+        assert result["success"] is True
+        assert save_path.read_bytes() == b"server-truth"
+        # Regression: without threading, do_download_save seeded the fallback slot
+        # instead of the configured "main".
+        assert _require_save_state(svc, 42).active_slot == "main"
+
+    @pytest.mark.asyncio
+    async def test_keep_local_new_rom_uploads_to_configured_default_slot(self, tmp_path):
+        """keep_local on a never-configured ROM POSTs to the configured default slot."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        svc._config.settings["default_slot"] = "main"
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"local-edited")
+        # No save_state seeded → brand-new ROM resolving a legacy conflict.
+
+        ss = _server_save_with_syncs(device_syncs=[{"device_id": "device-1", "is_current": False}])
+        other = tmp_path / "other.bin"
+        other.write_bytes(b"server-flavor")  # differs from local → POST path
+        fake.saves[100] = ss
+        fake.uploaded_files[100] = str(other)
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42, filename="pokemon.srm", server_save_id=100, action="keep_local"
+        )
+
+        assert result["success"] is True
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        # Regression: without threading, _resolve_upload_slot fell back to the
+        # hard-coded literal instead of the configured "main".
+        assert upload_calls[0][2]["slot"] == "main"
+        assert _require_save_state(svc, 42).active_slot == "main"
+
+    @pytest.mark.asyncio
+    async def test_new_rom_conflict_defaults_to_autosave_when_unconfigured(self, tmp_path):
+        """#1529 end-to-end: an unconfigured brand-new ROM resolves into "autosave", not "default"."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        # default_slot left unset → resolve_default_slot returns "autosave".
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path, content=b"local-stale")
+
+        server_content = tmp_path / "server-content.bin"
+        server_content.write_bytes(b"server-truth")
+        ss = _server_save_with_syncs(device_syncs=[{"device_id": "device-1", "is_current": False}])
+        fake.saves[100] = ss
+        fake.uploaded_files[100] = str(server_content)
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42, filename="pokemon.srm", server_save_id=100, action="use_server"
+        )
+
+        assert result["success"] is True
+        assert save_path.read_bytes() == b"server-truth"
+        assert _require_save_state(svc, 42).active_slot == "autosave"
+
+    @pytest.mark.asyncio
+    async def test_keep_local_tracked_rom_keeps_its_own_slot(self, tmp_path):
+        """A ROM already tracking a named slot resolves into THAT slot, not the default setting."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        # A distinctive configured default that must NOT win over the tracked slot.
+        svc._config.settings["default_slot"] = "main"
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"local-edited")
+        _seed_save_state(svc, 42, RomSaveSyncState(system="gba", active_slot="desktop", slot_confirmed=True))
+
+        ss = _server_save_with_syncs(slot="desktop", device_syncs=[{"device_id": "device-1", "is_current": False}])
+        other = tmp_path / "other.bin"
+        other.write_bytes(b"server-flavor")  # differs → POST path
+        fake.saves[100] = ss
+        fake.uploaded_files[100] = str(other)
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42, filename="pokemon.srm", server_save_id=100, action="keep_local"
+        )
+
+        assert result["success"] is True
+        upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
+        assert len(upload_calls) == 1
+        # The tracked slot wins — the configured default is irrelevant here.
+        assert upload_calls[0][2]["slot"] == "desktop"
+        assert _require_save_state(svc, 42).active_slot == "desktop"

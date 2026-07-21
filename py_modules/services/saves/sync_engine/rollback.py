@@ -28,6 +28,7 @@ from lib.errors import DeviceNotRegisteredError, classify_error
 from lib.list_result import ErrorCode
 from services.saves._helpers import local_save_target
 from services.saves._messages import DEVICE_NOT_REGISTERED, DEVICE_NOT_REGISTERED_REASON
+from services.saves._settings import resolve_default_slot
 
 if TYPE_CHECKING:
     import asyncio
@@ -73,6 +74,7 @@ class RollbackOrchestrator:
         logger: logging.Logger,
         log_debug: DebugLogger,
         resolve_core: Callable[[int], str | None],
+        settings: dict[str, Any],
     ) -> None:
         self._uow_factory = uow_factory
         self._rom_info = rom_info
@@ -85,6 +87,7 @@ class RollbackOrchestrator:
         self._logger = logger
         self._log_debug = log_debug
         self._resolve_core = resolve_core
+        self._settings = settings
 
     def _read_inputs(self, rom_id: int) -> tuple[RomSaveSyncState, str | None]:
         """Short read UoW: load the ROM's save state + device id."""
@@ -265,7 +268,8 @@ class RollbackOrchestrator:
         lands at. Mutates *save_state* in memory; ``resolve`` owns the write UoW.
         """
         target = local_save_target(server, rom_name)
-        self._matrix.do_download_save(server, saves_dir, target, save_state, device_id, system)
+        default_slot = resolve_default_slot(self._settings)
+        self._matrix.do_download_save(server, saves_dir, target, save_state, device_id, system, default_slot)
 
     def _resolve_conflict_keep_local(
         self,
@@ -336,6 +340,7 @@ class RollbackOrchestrator:
         # write-time currency (409) gate rather than 409-backstop into a conflict
         # loop (ADR-0017). The freshness of the server head was already validated
         # by the STALE_CONFLICT check in ``resolve`` before we got here.
+        default_slot = resolve_default_slot(self._settings)
         self._matrix.do_upload_save(
-            rom_id, local_path, target, save_state, device_id, system, core_so, None, overwrite=True
+            rom_id, local_path, target, save_state, device_id, system, core_so, None, default_slot, overwrite=True
         )
