@@ -1131,10 +1131,11 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
     // is the honest signal about what the server holds. When there are known
     // files it reads as a "+ N other files" footnote.
     if (unknownCount > 0) {
+      const plural = unknownCount === 1 ? "" : "s";
       const unknownNote =
         knownFiles.length > 0
-          ? `+ ${unknownCount} other file${unknownCount === 1 ? "" : "s"} on server (not required by any known core)`
-          : `${unknownCount} file${unknownCount === 1 ? "" : "s"} on server the plugin doesn't recognise`;
+          ? `+ ${unknownCount} other file${plural} on server (not required by any known core)`
+          : `${unknownCount} file${plural} on server the plugin doesn't recognise`;
       fileElements.push(
         createElement(
           "div",
