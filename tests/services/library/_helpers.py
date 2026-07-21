@@ -9,6 +9,8 @@ collection tests.
 
 from unittest.mock import AsyncMock, MagicMock
 
+from services.library.fetcher import _SUPPORTED_VIRTUAL_TYPES
+
 
 def rebind_loop(library_service, loop):
     """Rebind the event loop on every LibraryService sub-service.
@@ -41,6 +43,23 @@ def _make_loop_raising(exc):
     """Return a mock loop whose run_in_executor always raises exc."""
     mock_loop = MagicMock()
     mock_loop.run_in_executor = AsyncMock(side_effect=exc)
+    return mock_loop
+
+
+def _make_collections_loop(user=None, smart=None, virtual=None):
+    """Mock loop matching the executor call order of ``get_collections`` /
+    ``set_all_collections_sync`` (scope=None).
+
+    Both fetch list_collections, then list_smart_collections, then one
+    list_virtual_collections call per :data:`_SUPPORTED_VIRTUAL_TYPES` (in order).
+    ``virtual`` is returned for the FIRST supported virtual type and ``[]`` for
+    every other, so the whole virtual set is exactly ``virtual`` (tagged as the
+    first type) — robust to the supported-type tuple growing.
+    """
+    values = [list(user or []), list(smart or [])]
+    values.extend(list(virtual or []) if idx == 0 else [] for idx in range(len(_SUPPORTED_VIRTUAL_TYPES)))
+    mock_loop = MagicMock()
+    mock_loop.run_in_executor = AsyncMock(side_effect=values)
     return mock_loop
 
 

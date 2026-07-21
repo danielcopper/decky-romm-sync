@@ -7,18 +7,18 @@ import pytest
 from domain.collection_owner import is_own_collection
 
 
-class TestFranchiseAlwaysOwn:
-    """Franchise/virtual collections have no owner and always survive an "Own" filter."""
+class TestVirtualAlwaysOwn:
+    """Virtual collections have no owner and always survive an "Own" filter."""
 
-    def test_franchise_is_own_even_with_foreign_id(self):
-        # A franchise collection carries no user_id; even a mismatched value is ignored.
-        assert is_own_collection(999, own_user_id=1, kind="franchise") is True
+    def test_virtual_is_own_even_with_foreign_id(self):
+        # A virtual collection carries no user_id; even a mismatched value is ignored.
+        assert is_own_collection(999, own_user_id=1, kind="virtual") is True
 
-    def test_franchise_is_own_when_identity_unknown(self):
-        assert is_own_collection(None, own_user_id=None, kind="franchise") is True
+    def test_virtual_is_own_when_identity_unknown(self):
+        assert is_own_collection(None, own_user_id=None, kind="virtual") is True
 
-    def test_franchise_is_own_with_no_owner_field(self):
-        assert is_own_collection(None, own_user_id=1, kind="franchise") is True
+    def test_virtual_is_own_with_no_owner_field(self):
+        assert is_own_collection(None, own_user_id=1, kind="virtual") is True
 
 
 class TestUnknownIdentityDegradesToAll:

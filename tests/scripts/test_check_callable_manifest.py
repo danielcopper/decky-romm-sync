@@ -84,7 +84,7 @@ class TestParseFrontendCallables:
         body = textwrap.dedent(
             """\
             export const setAllCollectionsSync = callable<
-              [boolean, "my" | "smart" | "franchise" | null],
+              [boolean, "my" | "smart" | "virtual" | null],
               { success: boolean; message?: string }
             >("set_all_collections_sync");
             """

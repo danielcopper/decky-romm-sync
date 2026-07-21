@@ -143,6 +143,11 @@ class FakeRommApi:
         self.list_roms_updated_after_side_effect: Exception | None = None
         self.list_collections_side_effect: Exception | None = None
         self.list_virtual_collections_side_effect: Exception | None = None
+        # Per-type failure injection: raise only for a specific virtual type
+        # (``{"collection": RuntimeError(...)}``), so a test can fail one
+        # supported type while the other still returns — exercising the
+        # per-type fail-open in the fetcher's virtual-collection loop.
+        self.list_virtual_collections_side_effect_by_type: dict[str, Exception] = {}
         self.list_smart_collections_side_effect: Exception | None = None
         self.list_roms_by_collection_side_effect: Exception | None = None
         self.list_collection_roms_updated_after_side_effect: Exception | None = None
@@ -371,6 +376,9 @@ class FakeRommApi:
     def list_virtual_collections(self, collection_type: str) -> list[dict[str, Any]]:
         self._log("list_virtual_collections", (collection_type,))
         self._check_fail(self.list_virtual_collections_side_effect)
+        per_type = self.list_virtual_collections_side_effect_by_type.get(collection_type)
+        if per_type is not None:
+            raise per_type
         return [dict(c) for c in self.virtual_collections.get(collection_type, [])]
 
     def list_smart_collections(self) -> list[dict[str, Any]]:

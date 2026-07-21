@@ -248,8 +248,8 @@ class SettingsService:
 
         ``"all"`` (the default) syncs every collection the server lists;
         ``"own"`` restricts the sync + display to the signed-in user's own
-        collections (franchise/virtual collections have no owner and always
-        sync). An unrecognised value from the untrusted frontend wire is rejected
+        collections (virtual collections have no owner and always sync). An
+        unrecognised value from the untrusted frontend wire is rejected
         with the canonical failure shape so a bad call cannot corrupt the setting.
         """
         if scope not in ("own", "all"):

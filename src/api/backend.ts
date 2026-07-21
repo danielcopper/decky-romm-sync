@@ -162,7 +162,7 @@ export const saveCollectionSync = callable<[string, CollectionKind, boolean], { 
   "save_collection_sync",
 );
 export const setAllCollectionsSync = callable<
-  [boolean, "user" | "smart" | "franchise" | null],
+  [boolean, "user" | "smart" | "virtual" | null],
   { success: boolean; message?: string }
 >("set_all_collections_sync");
 export const saveCollectionPlatformGroups = callable<[boolean], { success: boolean }>(

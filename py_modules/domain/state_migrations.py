@@ -35,6 +35,8 @@ def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
         new_data = _migrate_v8_to_v9(new_data)
     if version < 10:
         new_data = _migrate_v9_to_v10(new_data)
+    if version < 11:
+        new_data = _migrate_v10_to_v11(new_data)
     return new_data
 
 
@@ -249,4 +251,37 @@ def _migrate_v9_to_v10(data: dict[str, Any]) -> dict[str, Any]:
     """
     data["romm_api_token_source"] = "minted" if data.get("romm_api_token") else None
     data["version"] = 10
+    return data
+
+
+def _migrate_v10_to_v11(data: dict[str, Any]) -> dict[str, Any]:
+    """v<11 → v11: rename the ``enabled_collections`` ``franchise`` bucket to ``virtual``.
+
+    The single ownerless virtual-collection kind is now ``virtual`` (it carries
+    a ``virtual_type`` sub-field distinguishing IGDB ``franchise`` from IGDB
+    ``collection``), so the on-disk enabled bucket keyed ``franchise`` is renamed
+    to ``virtual`` with every enabled id preserved — a previously-enabled
+    franchise collection stays enabled and keeps syncing.
+
+    Value semantics: the nested ``enabled_collections`` dict is rebuilt rather
+    than mutated in place. A file that somehow already carries a ``virtual``
+    bucket has the franchise entries merged into it (franchise ids win on a key
+    clash) rather than dropped — the two buckets cannot legitimately both exist
+    before v11, so the union is the loss-free reconciliation.
+
+    The historical v2→v3 step still produces the ``franchise`` bucket; this step
+    renames it afterwards, so the whole chain (v2→v3 → … → v10→v11) lands a
+    v2-origin install on the ``virtual`` bucket without rewriting frozen history.
+    """
+    collections = data.get("enabled_collections")
+    if isinstance(collections, dict) and "franchise" in collections:
+        rebuilt = {k: v for k, v in collections.items() if k != "franchise"}
+        franchise_bucket = collections["franchise"]
+        existing_virtual = rebuilt.get("virtual", {})
+        merged = dict(existing_virtual) if isinstance(existing_virtual, dict) else {}
+        if isinstance(franchise_bucket, dict):
+            merged.update(franchise_bucket)
+        rebuilt["virtual"] = merged
+        data["enabled_collections"] = rebuilt
+    data["version"] = 11
     return data

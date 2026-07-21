@@ -3,11 +3,13 @@
 from typing import Any
 
 from domain.state_migrations import (
+    _migrate_v2_to_v3,
     _migrate_v5_to_v6,
     _migrate_v6_to_v7,
     _migrate_v7_to_v8,
     _migrate_v8_to_v9,
     _migrate_v9_to_v10,
+    _migrate_v10_to_v11,
     fold_legacy_save_sync_settings,
     migrate_settings,
 )
@@ -19,28 +21,28 @@ class TestMigrateSettings:
         result = migrate_settings(data)
         assert result["steam_input_mode"] == "force_off"
         assert "disable_steam_input" not in result
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_migrate_settings_v0_disable_steam_input_false(self):
         data = {"version": 0, "disable_steam_input": False}
         result = migrate_settings(data)
         assert "disable_steam_input" not in result
         assert "steam_input_mode" not in result  # False → no override set
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_migrate_settings_v0_debug_logging_true(self):
         data = {"version": 0, "debug_logging": True}
         result = migrate_settings(data)
         assert result["log_level"] == "debug"
         assert "debug_logging" not in result
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_migrate_settings_v0_debug_logging_false(self):
         data = {"version": 0, "debug_logging": False}
         result = migrate_settings(data)
         assert "debug_logging" not in result
         assert "log_level" not in result  # False → no log_level override set
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_migrate_settings_v0_both_deprecated(self):
         data = {"version": 0, "disable_steam_input": True, "debug_logging": True}
@@ -49,13 +51,13 @@ class TestMigrateSettings:
         assert result["log_level"] == "debug"
         assert "disable_steam_input" not in result
         assert "debug_logging" not in result
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_migrate_settings_v0_no_deprecated_keys(self):
         data = {"version": 0, "romm_url": "http://example.com"}
         result = migrate_settings(data)
         assert result["romm_url"] == "http://example.com"
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_migrate_settings_v3_advances_through_token_seeding(self):
         """v3 → v10: version stamp advances and the token slots are seeded.
@@ -71,7 +73,7 @@ class TestMigrateSettings:
         data = {"version": 3, "romm_url": "http://example.com", "log_level": "warn"}
         result = migrate_settings(data)
         assert result == {
-            "version": 10,
+            "version": 11,
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": None,
@@ -85,7 +87,7 @@ class TestMigrateSettings:
         data = {"version": 4, "romm_url": "http://example.com", "log_level": "warn"}
         result = migrate_settings(data)
         assert result == {
-            "version": 10,
+            "version": 11,
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": None,
@@ -106,7 +108,7 @@ class TestMigrateSettings:
         }
         result = migrate_settings(data)
         assert result == {
-            "version": 10,
+            "version": 11,
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": "rmm_existing",
@@ -127,7 +129,7 @@ class TestMigrateSettings:
         }
         result = migrate_settings(data)
         assert result == {
-            "version": 10,
+            "version": 11,
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": "rmm_existing",
@@ -149,7 +151,7 @@ class TestMigrateSettings:
         }
         result = migrate_settings(data)
         assert result == {
-            "version": 10,
+            "version": 11,
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": "rmm_existing",
@@ -159,9 +161,9 @@ class TestMigrateSettings:
             "romm_api_token_source": "minted",
         }
 
-    def test_migrate_settings_v10_no_change(self):
+    def test_migrate_settings_v11_no_change(self):
         data = {
-            "version": 10,
+            "version": 11,
             "romm_url": "http://example.com",
             "log_level": "warn",
             "romm_api_token": "rmm_existing",
@@ -179,7 +181,7 @@ class TestMigrateSettings:
         result = migrate_settings(data)
         assert result["romm_api_token"] == "rmm_keep"
         assert result["romm_api_token_id"] == 3
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_migrate_settings_v0_to_v5_seeds_token_slots(self):
         """A pre-versioning file runs the whole chain and ends with token slots."""
@@ -187,12 +189,12 @@ class TestMigrateSettings:
         result = migrate_settings(data)
         assert result["romm_api_token"] is None
         assert result["romm_api_token_id"] is None
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_migrate_settings_fresh_empty(self):
         data = {}
         result = migrate_settings(data)
-        assert result["version"] == 10
+        assert result["version"] == 11
         assert "disable_steam_input" not in result
         assert "debug_logging" not in result
 
@@ -200,7 +202,7 @@ class TestMigrateSettings:
         data = {"romm_url": "http://example.com", "disable_steam_input": True}
         result = migrate_settings(data)
         assert result["steam_input_mode"] == "force_off"
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_migrate_settings_debug_logging_true_overrides_log_level(self):
         """When debug_logging=True is being migrated, log_level is set to 'debug' unconditionally.
@@ -212,7 +214,7 @@ class TestMigrateSettings:
         result = migrate_settings(data)
         assert result["log_level"] == "debug"
         assert "debug_logging" not in result
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_migrate_settings_idempotent(self):
         data = {"version": 0, "disable_steam_input": True, "debug_logging": True}
@@ -235,7 +237,7 @@ class TestMigrateSettingsV5Token:
         result = migrate_settings(data)
         assert result["romm_api_token"] is None
         assert result["romm_api_token_id"] is None
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_idempotent_across_two_runs(self):
         data = {"version": 4, "romm_url": "x"}
@@ -310,7 +312,7 @@ class TestMigrateSettingsV6LegacyCredentials:
         """
         data = {"version": 4, "romm_url": "http://example.com", "romm_user": "alice", "romm_pass": "secret"}
         result = migrate_settings(data)
-        assert result["version"] == 10
+        assert result["version"] == 11
         assert result["romm_api_token"] is None
         assert result["romm_user"] == "alice"
         assert result["romm_pass"] == "secret"
@@ -388,7 +390,7 @@ class TestMigrateSettingsV8TokenOrigin:
         data = {"version": 0, "romm_url": "http://example.com"}
         result = migrate_settings(data)
         assert result["romm_api_token_origin"] is None
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_idempotent_via_full_chain(self):
         data = {"version": 7, "romm_api_token_origin": "https://romm.local"}
@@ -467,7 +469,7 @@ class TestMigrateSettingsV9PurgeCredentials:
         result = migrate_settings(data)
         assert "romm_user" not in result
         assert "romm_pass" not in result
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_full_chain_tokenless_real_password_survives(self):
         """A token-less legacy install keeps its real creds for the startup mint."""
@@ -475,7 +477,7 @@ class TestMigrateSettingsV9PurgeCredentials:
         result = migrate_settings(data)
         assert result["romm_user"] == "alice"
         assert result["romm_pass"] == "secret"
-        assert result["version"] == 10
+        assert result["version"] == 11
 
 
 class TestMigrateSettingsV10TokenSource:
@@ -526,13 +528,13 @@ class TestMigrateSettingsV10TokenSource:
         }
         result = migrate_settings(data)
         assert result["romm_api_token_source"] == "minted"
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_full_chain_tokenless_stamps_none(self):
         data = {"version": 0, "romm_url": "http://example.com"}
         result = migrate_settings(data)
         assert result["romm_api_token_source"] is None
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_idempotent_via_full_chain(self):
         data = {"version": 9, "romm_api_token": "rmm_x", "romm_api_token_source": "minted"}
@@ -543,7 +545,14 @@ class TestMigrateSettingsV10TokenSource:
 
 
 class TestMigrateSettingsV3Collections:
-    """v<3 → v3 migration: split flat ``enabled_collections`` into 3 buckets."""
+    """Full-chain ``migrate_settings`` on a pre-v3 ``enabled_collections``.
+
+    The v2→v3 step splits a flat dict into user/smart/franchise buckets; the
+    later v10→v11 step renames the ``franchise`` bucket to ``virtual``. These
+    tests run the whole chain, so the observable end state is the ``virtual``
+    bucket at v11 — the v2→v3 step's own ``franchise`` output is verified in
+    isolation by :class:`TestMigrateV2ToV3ProducesFranchise`.
+    """
 
     def test_numeric_keys_move_to_user_bucket(self):
         data = {"version": 1, "enabled_collections": {"3": True, "4": False, "42": True}}
@@ -551,15 +560,15 @@ class TestMigrateSettingsV3Collections:
         assert result["enabled_collections"] == {
             "user": {"3": True, "4": False, "42": True},
             "smart": {},
-            "franchise": {},
+            "virtual": {},
         }
-        assert result["version"] == 10
+        assert result["version"] == 11
 
-    def test_base64_keys_move_to_franchise_bucket(self):
-        b64 = "eyJuYW1lIjogIkFuIFRoZSBNYXJpbyJ9"
+    def test_base64_keys_move_to_virtual_bucket(self):
+        b64 = "eyJuYW1lIjogIlN5bnRoZXRpYyBTZXJpZXMifQ=="
         data = {"version": 1, "enabled_collections": {b64: True}}
         result = migrate_settings(data)
-        assert result["enabled_collections"]["franchise"] == {b64: True}
+        assert result["enabled_collections"]["virtual"] == {b64: True}
         assert result["enabled_collections"]["user"] == {}
         assert result["enabled_collections"]["smart"] == {}
 
@@ -573,9 +582,9 @@ class TestMigrateSettingsV3Collections:
         assert result["enabled_collections"] == {
             "user": {"1": True, "42": False},
             "smart": {},
-            "franchise": {b64: True},
+            "virtual": {b64: True},
         }
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_smart_bucket_always_starts_empty(self):
         """Pre-v3 users had no smart collections — bucket must start empty."""
@@ -586,17 +595,22 @@ class TestMigrateSettingsV3Collections:
     def test_empty_enabled_collections_yields_empty_buckets(self):
         data = {"version": 1, "enabled_collections": {}}
         result = migrate_settings(data)
-        assert result["enabled_collections"] == {"user": {}, "smart": {}, "franchise": {}}
+        assert result["enabled_collections"] == {"user": {}, "smart": {}, "virtual": {}}
 
     def test_missing_enabled_collections_no_action(self):
         """When ``enabled_collections`` is absent the migration does nothing to that key."""
         data = {"version": 1, "romm_url": "x"}
         result = migrate_settings(data)
         assert "enabled_collections" not in result
-        assert result["version"] == 10
+        assert result["version"] == 11
 
-    def test_already_nested_value_passes_through_unchanged(self):
-        """Defensive: a half-stamped v3-shaped value must not be re-split."""
+    def test_already_nested_value_is_not_resplit_only_renamed(self):
+        """Defensive: a half-stamped v3-shaped value must not be re-split.
+
+        The v2→v3 step recognises the historical ``franchise``-keyed nested
+        shape and passes it through untouched; the v10→v11 step then renames the
+        ``franchise`` bucket to ``virtual`` — a rename, never a re-split.
+        """
         already_nested = {
             "user": {"1": True},
             "smart": {"5": True},
@@ -604,8 +618,12 @@ class TestMigrateSettingsV3Collections:
         }
         data = {"version": 1, "enabled_collections": already_nested}
         result = migrate_settings(data)
-        assert result["enabled_collections"] == already_nested
-        assert result["version"] == 10
+        assert result["enabled_collections"] == {
+            "user": {"1": True},
+            "smart": {"5": True},
+            "virtual": {"abc": False},
+        }
+        assert result["version"] == 11
 
     def test_partial_nested_value_normalized_with_missing_buckets(self):
         """A partial-nested value (only one bucket present) is normalized to all three buckets."""
@@ -614,12 +632,16 @@ class TestMigrateSettingsV3Collections:
         assert result["enabled_collections"] == {
             "user": {"5": True},
             "smart": {},
-            "franchise": {},
+            "virtual": {},
         }
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_partial_nested_two_buckets_fills_missing_third(self):
-        """Partial-nested with two bucket keys — missing bucket is filled empty."""
+        """Partial-nested with two bucket keys — missing bucket is filled empty.
+
+        The historical ``franchise`` key is filled to three buckets at v3, then
+        renamed to ``virtual`` at v11.
+        """
         data = {
             "version": 2,
             "enabled_collections": {"user": {"1": True}, "franchise": {"abc": True}},
@@ -628,9 +650,9 @@ class TestMigrateSettingsV3Collections:
         assert result["enabled_collections"] == {
             "user": {"1": True},
             "smart": {},
-            "franchise": {"abc": True},
+            "virtual": {"abc": True},
         }
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_v0_to_v3_runs_both_steps(self):
         """A v0 file with both deprecated keys AND old enabled_collections gets both migrations."""
@@ -645,9 +667,9 @@ class TestMigrateSettingsV3Collections:
         assert result["enabled_collections"] == {
             "user": {"1": True},
             "smart": {},
-            "franchise": {},
+            "virtual": {},
         }
-        assert result["version"] == 10
+        assert result["version"] == 11
 
     def test_negative_numeric_string_keys_go_to_user(self):
         """``key.lstrip('-').isdigit()`` accepts ``-1`` as a numeric id."""
@@ -656,14 +678,18 @@ class TestMigrateSettingsV3Collections:
         assert result["enabled_collections"]["user"] == {"-1": True}
 
     def test_v4_file_no_resplit(self):
-        """A v4 file with the nested shape keeps its collections through the v5 hop."""
+        """A v4 file with the nested shape keeps its collections; v11 renames the bucket.
+
+        The v2→v3 split is skipped (version already ≥ 3), so the historical
+        ``franchise`` bucket rides through untouched until the v10→v11 rename.
+        """
         data = {
             "version": 4,
             "enabled_collections": {"user": {"1": True}, "smart": {}, "franchise": {}},
         }
         result = migrate_settings(data)
-        assert result["enabled_collections"] == {"user": {"1": True}, "smart": {}, "franchise": {}}
-        assert result["version"] == 10
+        assert result["enabled_collections"] == {"user": {"1": True}, "smart": {}, "virtual": {}}
+        assert result["version"] == 11
 
     def test_v3_migration_does_not_mutate_caller_dict(self):
         data = {"version": 1, "enabled_collections": {"1": True, "abc": True}}
@@ -764,3 +790,106 @@ class TestFoldLegacySaveSyncSettings:
         fold_legacy_save_sync_settings(settings, raw)
         assert settings == settings_before
         assert raw == raw_before
+
+
+class TestMigrateV2ToV3ProducesFranchise:
+    """Lock the frozen v2→v3 output shape: the split still produces ``franchise``.
+
+    The v10→v11 rename relies on the v2→v3 step producing the historical
+    ``franchise`` bucket, which it then renames to ``virtual``. If the v2→v3
+    helpers were "fixed" to emit ``virtual`` directly, this chain would break —
+    so this test pins the v2→v3 step's own output in isolation.
+    """
+
+    def test_flat_split_uses_franchise_bucket_key(self):
+        b64 = "eyJ4IjogMX0="
+        result = _migrate_v2_to_v3({"version": 1, "enabled_collections": {"1": True, b64: True}})
+        assert result["enabled_collections"] == {
+            "user": {"1": True},
+            "smart": {},
+            "franchise": {b64: True},
+        }
+        assert result["version"] == 3
+
+
+class TestMigrateSettingsV11Virtual:
+    """v10 → v11 migration: rename the ``enabled_collections`` franchise bucket to ``virtual``."""
+
+    def test_v10_franchise_bucket_renamed_to_virtual_preserving_enables(self):
+        """Load-bearing lossless rename: a previously-enabled collection stays enabled.
+
+        Fails against a no-op migration — a no-op would leave the ``franchise``
+        bucket in place and never create the ``virtual`` one.
+        """
+        b64 = "eyJ0eXBlIjogImNvbGxlY3Rpb24ifQ=="
+        data = {
+            "version": 10,
+            "enabled_collections": {"user": {"1": True}, "smart": {}, "franchise": {b64: True}},
+        }
+        result = migrate_settings(data)
+        assert result["enabled_collections"] == {
+            "user": {"1": True},
+            "smart": {},
+            "virtual": {b64: True},
+        }
+        assert "franchise" not in result["enabled_collections"]
+        assert result["version"] == 11
+
+    def test_v10_without_enabled_collections_only_stamps_version(self):
+        data = {"version": 10, "romm_url": "http://example.com"}
+        result = migrate_settings(data)
+        assert result["version"] == 11
+        assert "enabled_collections" not in result
+
+    def test_full_chain_v2_flat_lands_in_virtual_bucket(self):
+        """A v2-origin install chains v2→v3 (franchise) → … → v10→v11 (virtual)."""
+        b64 = "eyJ4IjogMn0="
+        data = {"version": 2, "enabled_collections": {"7": True, b64: True}}
+        result = migrate_settings(data)
+        assert result["enabled_collections"] == {
+            "user": {"7": True},
+            "smart": {},
+            "virtual": {b64: True},
+        }
+        assert result["version"] == 11
+
+    def test_v11_file_left_untouched(self):
+        data = {
+            "version": 11,
+            "enabled_collections": {"user": {"1": True}, "smart": {}, "virtual": {"vc-1": True}},
+        }
+        result = migrate_settings(data)
+        assert result["enabled_collections"] == {
+            "user": {"1": True},
+            "smart": {},
+            "virtual": {"vc-1": True},
+        }
+        assert result["version"] == 11
+
+    def test_merges_into_existing_virtual_bucket_franchise_ids_win(self):
+        """If a ``virtual`` bucket somehow already exists, franchise ids union in."""
+        result = _migrate_v10_to_v11(
+            {
+                "version": 10,
+                "enabled_collections": {
+                    "user": {},
+                    "smart": {},
+                    "franchise": {"a": True, "shared": True},
+                    "virtual": {"b": False, "shared": False},
+                },
+            }
+        )
+        assert result["enabled_collections"]["virtual"] == {"b": False, "a": True, "shared": True}
+        assert "franchise" not in result["enabled_collections"]
+
+    def test_does_not_mutate_caller_dict(self):
+        original = {
+            "version": 10,
+            "enabled_collections": {"user": {"1": True}, "smart": {}, "franchise": {"fr": True}},
+        }
+        data = {
+            "version": 10,
+            "enabled_collections": {"user": {"1": True}, "smart": {}, "franchise": {"fr": True}},
+        }
+        migrate_settings(data)
+        assert data == original

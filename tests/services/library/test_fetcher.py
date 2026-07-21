@@ -201,7 +201,7 @@ class TestBuildWorkQueueErrorPaths:
         plugin.settings["enabled_collections"] = {
             "user": {"1": True},
             "smart": {},
-            "franchise": {"42": True},
+            "virtual": {"42": True},
         }
 
         fake_romm_api.list_collections_side_effect = RuntimeError("user collections boom")
@@ -213,27 +213,50 @@ class TestBuildWorkQueueErrorPaths:
 
         units = await plugin._sync_service._fetcher.build_work_queue()
 
-        # User-collections branch swallowed the failure; franchise collection still listed.
+        # User-collections branch swallowed the failure; virtual collection still listed.
         assert [u.name for u in units] == ["Faves"]
 
     @pytest.mark.asyncio
-    async def test_franchise_collection_list_failure_continues_with_empty(self, plugin, fake_romm_api):
-        """Franchise-collection fetch raises => warning logged, treated as empty."""
+    async def test_virtual_collection_list_failure_continues_with_empty(self, plugin, fake_romm_api):
+        """Virtual-collection fetch raises for every type => warning logged, treated as empty."""
         _wire_fake(plugin, fake_romm_api)
         plugin.settings["enabled_platforms"] = {}
         plugin.settings["enabled_collections"] = {
             "user": {"7": True},
             "smart": {},
-            "franchise": {"100": True},
+            "virtual": {"100": True},
         }
 
         fake_romm_api.collections = [{"id": "7", "name": "Faves", "slug": "faves", "rom_count": 4}]
-        fake_romm_api.list_virtual_collections_side_effect = RuntimeError("franchise collections boom")
+        fake_romm_api.list_virtual_collections_side_effect = RuntimeError("virtual collections boom")
 
         units = await plugin._sync_service._fetcher.build_work_queue()
 
-        # User collection survives; franchise branch swallowed the failure.
+        # User collection survives; both virtual-type branches swallowed the failure.
         assert [u.name for u in units] == ["Faves"]
+
+    @pytest.mark.asyncio
+    async def test_one_virtual_type_failure_still_lists_the_other(self, plugin, fake_romm_api):
+        """AC1 fail-open: a single failing virtual type never drops the other type's collections."""
+        _wire_fake(plugin, fake_romm_api)
+        plugin.settings["enabled_platforms"] = {}
+        plugin.settings["enabled_collections"] = {
+            "user": {},
+            "smart": {},
+            "virtual": {"fr-1": True, "vc-1": True},
+        }
+        # The franchise type is down; the collection type answers normally.
+        fake_romm_api.virtual_collections = {
+            "collection": [{"id": "vc-1", "name": "Series One", "slug": "s1", "rom_count": 2}],
+        }
+        fake_romm_api.list_virtual_collections_side_effect_by_type = {
+            "franchise": RuntimeError("franchise endpoint down"),
+        }
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert [u.name for u in units] == ["Series One"]
+        assert [u.collection_kind for u in units] == ["virtual"]
 
     @pytest.mark.asyncio
     async def test_smart_collection_list_failure_continues_with_empty(self, plugin, fake_romm_api):
@@ -243,7 +266,7 @@ class TestBuildWorkQueueErrorPaths:
         plugin.settings["enabled_collections"] = {
             "user": {"7": True},
             "smart": {"5": True},
-            "franchise": {},
+            "virtual": {},
         }
 
         fake_romm_api.collections = [{"id": "7", "name": "Faves", "slug": "faves", "rom_count": 4}]
@@ -258,11 +281,11 @@ class TestBuildWorkQueueErrorPaths:
         """Collections returned by the API but not in enabled_ids are filtered out."""
         _wire_fake(plugin, fake_romm_api)
         plugin.settings["enabled_platforms"] = {}
-        # Only the "1" user / "5" smart / "100" franchise collections are enabled.
+        # Only the "1" user / "5" smart / "100" virtual collections are enabled.
         plugin.settings["enabled_collections"] = {
             "user": {"1": True, "2": False},
             "smart": {"5": True, "6": False},
-            "franchise": {"100": True, "200": False},
+            "virtual": {"100": True, "200": False},
         }
 
         fake_romm_api.collections = [
@@ -285,7 +308,35 @@ class TestBuildWorkQueueErrorPaths:
         # Only enabled collections survive the cid-not-in-enabled_ids skip.
         assert [u.name for u in units] == ["Enabled User", "Enabled Smart", "Enabled Franchise"]
         kinds = [u.collection_kind for u in units]
-        assert kinds == ["user", "smart", "franchise"]
+        assert kinds == ["user", "smart", "virtual"]
+
+
+class TestGetCollectionsVirtualFailOpen:
+    """get_collections is per-virtual-type fail-open (#1538)."""
+
+    @pytest.mark.asyncio
+    async def test_one_virtual_type_failure_still_lists_the_other(self, plugin, fake_romm_api):
+        """AC1 fail-open at the callable: one failing virtual type never fails
+        get_collections nor drops the healthy type's collection."""
+        _wire_fake(plugin, fake_romm_api)
+        # The franchise type is down; the collection type answers normally.
+        fake_romm_api.virtual_collections = {
+            "collection": [{"id": "vc-1", "name": "Series One", "slug": "s1", "rom_count": 2}],
+        }
+        fake_romm_api.list_virtual_collections_side_effect_by_type = {
+            "franchise": RuntimeError("franchise endpoint down"),
+        }
+
+        result = await plugin._sync_service._fetcher.get_collections()
+
+        assert result["success"] is True
+        # The healthy collection-type virtual collection is present and tagged...
+        by_id = {c["id"]: c for c in result["collections"]}
+        assert by_id["vc-1"]["kind"] == "virtual"
+        assert by_id["vc-1"]["virtual_type"] == "collection"
+        assert by_id["vc-1"]["is_own"] is True
+        # ...and the failed franchise type contributes nothing (no franchise-typed row).
+        assert not [c for c in result["collections"] if c.get("virtual_type") == "franchise"]
 
 
 class TestBuildWorkQueueOwnerScope:
@@ -293,7 +344,7 @@ class TestBuildWorkQueueOwnerScope:
 
     @staticmethod
     def _seed(fake_romm_api):
-        """Two user, two smart (one own / one foreign each), one franchise — all enabled."""
+        """Two user, two smart (one own / one foreign each), one virtual — all enabled."""
         fake_romm_api.collections = [
             {"id": "1", "name": "Mine", "slug": "mine", "rom_count": 1, "user_id": 7},
             {"id": "2", "name": "Theirs", "slug": "theirs", "rom_count": 1, "user_id": 8},
@@ -312,12 +363,12 @@ class TestBuildWorkQueueOwnerScope:
         plugin.settings["enabled_collections"] = {
             "user": {"1": True, "2": True},
             "smart": {"5": True, "6": True},
-            "franchise": {"100": True},
+            "virtual": {"100": True},
         }
 
     @pytest.mark.asyncio
-    async def test_own_scope_drops_foreign_keeps_own_and_franchise(self, plugin, fake_romm_api):
-        """AC2: a foreign user + foreign smart collection are excluded; own + ALL franchise survive."""
+    async def test_own_scope_drops_foreign_keeps_own_and_virtual(self, plugin, fake_romm_api):
+        """AC2: a foreign user + foreign smart collection are excluded; own + ALL virtual survive."""
         _wire_fake(plugin, fake_romm_api)
         self._enable_all(plugin)
         self._seed(fake_romm_api)
@@ -985,14 +1036,14 @@ class TestFetchCollectionUnit:
         assert "list_roms_by_virtual_collection" not in method_calls
 
     @pytest.mark.asyncio
-    async def test_dispatches_franchise_collection_to_virtual_endpoint(self, plugin, fake_romm_api):
-        """collection_kind='franchise' routes through list_roms_by_virtual_collection."""
+    async def test_dispatches_virtual_collection_to_virtual_endpoint(self, plugin, fake_romm_api):
+        """collection_kind='virtual' routes through list_roms_by_virtual_collection."""
         _wire_fake(plugin, fake_romm_api)
         fake_romm_api.roms = {
             1: {"id": 1, "platform_name": "N64", "virtual_collection_ids": ["100"]},
         }
 
-        unit = WorkUnit(type="collection", id="100", name="Mario", slug="", rom_count=1, collection_kind="franchise")
+        unit = WorkUnit(type="collection", id="100", name="Mario", slug="", rom_count=1, collection_kind="virtual")
         synced: set[int] = set()
         new_roms, _ids, _skipped = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
 
@@ -1168,8 +1219,8 @@ class TestTryCollectionIncrementalSkip:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_franchise_never_skips(self, plugin, fake_romm_api):
-        """A franchise/virtual collection has no stamp and never probes."""
+    async def test_virtual_never_skips(self, plugin, fake_romm_api):
+        """A virtual collection has no stamp and never probes."""
         _wire_fake(plugin, fake_romm_api)
         unit = WorkUnit(
             type="collection",
@@ -1177,7 +1228,7 @@ class TestTryCollectionIncrementalSkip:
             name="Mario",
             slug="",
             rom_count=1,
-            collection_kind="franchise",
+            collection_kind="virtual",
             collection_updated_at="2026-01-01T00:00:00",
         )
         result = await plugin._sync_service._fetcher._try_collection_incremental_skip(unit)
@@ -1733,7 +1784,7 @@ class TestPlanEstimates:
         fake_romm_api.platforms = []
         fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 4}]
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "franchise": {}}
+        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "virtual": {}}
 
         units = await plugin._sync_service._fetcher.build_work_queue()
 
@@ -1756,7 +1807,7 @@ class TestPlanEstimates:
         fake_romm_api.platforms = []
         fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 3}]
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "franchise": {}}
+        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "virtual": {}}
         # Three members; two already hold a Steam shortcut.
         _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
         _seed_persisted_rom(uow, 11, app_id=1002, group_key="igdb:101:1")
@@ -1785,7 +1836,7 @@ class TestPlanEstimates:
         fake_romm_api.platforms = []
         fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 2}]
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "franchise": {}}
+        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "virtual": {}}
         _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
         _seed_collection_stamp(
             uow,
@@ -1802,8 +1853,8 @@ class TestPlanEstimates:
         assert units[0].bound_count == 1
 
     @pytest.mark.asyncio
-    async def test_franchise_collection_never_carries_a_bound_count(self, plugin, fake_romm_api):
-        """Franchise collections are never stampable (CollectionSyncState.stamp
+    async def test_virtual_collection_never_carries_a_bound_count(self, plugin, fake_romm_api):
+        """Virtual collections are never stampable (CollectionSyncState.stamp
         takes only user/smart), so they have no member set — the field stays absent."""
         _wire_fake(plugin, fake_romm_api)
         uow = plugin._uow
@@ -1812,12 +1863,12 @@ class TestPlanEstimates:
             "franchise": [{"id": "fr-1", "name": "Zelda", "slug": "zelda", "rom_count": 5}]
         }
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"user": {}, "smart": {}, "franchise": {"fr-1": True}}
+        plugin.settings["enabled_collections"] = {"user": {}, "smart": {}, "virtual": {"fr-1": True}}
         _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
 
         units = await plugin._sync_service._fetcher.build_work_queue()
 
-        assert [u.collection_kind for u in units] == ["franchise"]
+        assert [u.collection_kind for u in units] == ["virtual"]
         assert units[0].bound_count is None
 
     @pytest.mark.asyncio
@@ -1828,7 +1879,7 @@ class TestPlanEstimates:
         fake_romm_api.platforms = []
         fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 3}]
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "franchise": {}}
+        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "virtual": {}}
 
         def _boom():
             raise RuntimeError("db down")
@@ -1859,7 +1910,7 @@ class TestPlanEstimates:
         # A stamped collection with one bound member. Its member row sits on
         # another platform so it cannot perturb the N64 unit's own counts.
         fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 1}]
-        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "franchise": {}}
+        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "virtual": {}}
         _seed_persisted_rom(uow, 20, app_id=2001, group_key="igdb:200:1", platform_slug="snes")
         _seed_collection_stamp(
             uow,

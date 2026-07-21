@@ -70,12 +70,12 @@ class TestGetSyncStats:
         plugin.settings["enabled_collections"] = {
             "user": {"3": True},
             "smart": {"5": True},
-            "franchise": {"abc": False},  # disabled — not counted
+            "virtual": {"abc": False},  # disabled — not counted
         }
 
         stats = await plugin.get_sync_stats()
         assert stats["platforms"] == 2
-        # 3 enabled across two buckets (user["3"], smart["5"]); franchise["abc"] is False.
+        # 3 enabled across two buckets (user["3"], smart["5"]); virtual["abc"] is False.
         assert stats["collections"] == 2
         assert stats["roms"] == 3
         assert stats["total_shortcuts"] == 3

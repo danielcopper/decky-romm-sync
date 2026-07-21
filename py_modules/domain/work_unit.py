@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 UnitType = Literal["platform", "collection"]
-CollectionKind = Literal["user", "smart", "franchise"]
+CollectionKind = Literal["user", "smart", "virtual"]
 
 
 @dataclass(frozen=True)
@@ -36,7 +36,7 @@ class WorkUnit:
     # ``CollectionSyncState`` stamp (#742). RomM bumps this on any membership
     # add/remove (and a smart-criteria edit), so an equal value is the
     # membership-stable signal. ``None`` when the listing omits it (e.g. a
-    # franchise collection, which is never stamped) — skip-internal, off the wire.
+    # virtual collection, which is never stamped) — skip-internal, off the wire.
     collection_updated_at: str | None = None
     # Plan-time estimate riders (#1382 / #1511 / #1517). ``predicted_skip`` is
     # the plan's local-conditions guess at the fetch-time wholesale-skip gate's

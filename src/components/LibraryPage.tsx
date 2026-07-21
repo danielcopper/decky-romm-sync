@@ -17,26 +17,44 @@ import type {
   CollectionKind,
   CollectionScope,
   CollectionOwnerScope,
+  VirtualCollectionType,
 } from "../types";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
 import { LoadingRow } from "./LoadingRow";
 
-type CollectionSubTab = "user" | "smart" | "franchise";
+type CollectionSubTab = "user" | "smart" | "virtual";
 
-const SUB_TAB_ORDER: readonly CollectionSubTab[] = ["user", "smart", "franchise"];
+const SUB_TAB_ORDER: readonly CollectionSubTab[] = ["user", "smart", "virtual"];
 
 const SUB_TAB_LABELS: Record<CollectionSubTab, string> = {
   user: "My",
   smart: "Smart",
-  franchise: "Franchise",
+  virtual: "Virtual",
 };
 
 const SUB_TAB_HEADERS: Record<CollectionSubTab, string> = {
   user: "MY COLLECTIONS",
   smart: "SMART COLLECTIONS",
-  franchise: "FRANCHISE",
+  virtual: "VIRTUAL",
 };
+
+// Row-description label per virtual type. "IGDB Collection" (not "Collection")
+// disambiguates from the Collections page it lives inside — RomM's own label.
+const VIRTUAL_TYPE_LABELS: Record<VirtualCollectionType, string> = {
+  franchise: "Franchise",
+  collection: "IGDB Collection",
+};
+
+// A virtual row shows its type ("Franchise" / "IGDB Collection") before the ROM
+// count; user/smart rows (and a virtual row missing its type on an older
+// backend) show the plain count.
+function collectionRowDescription(c: CollectionSyncSetting): string {
+  if (c.kind === "virtual" && c.virtual_type) {
+    return `${VIRTUAL_TYPE_LABELS[c.virtual_type]} · ${c.rom_count} ROMs`;
+  }
+  return `${c.rom_count} ROMs`;
+}
 
 function filterCollectionsBySubTab(
   collections: CollectionSyncSetting[],
@@ -53,8 +71,8 @@ function filterCollectionsBySubTab(
       return collections.filter((c) => c.kind === "user" && (includeFavoritesInMy || !c.is_favorite));
     case "smart":
       return collections.filter((c) => c.kind === "smart");
-    case "franchise":
-      return collections.filter((c) => c.kind === "franchise");
+    case "virtual":
+      return collections.filter((c) => c.kind === "virtual");
   }
 }
 
@@ -346,7 +364,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
               label="Show collections"
               description={
                 ownerScope === "own"
-                  ? "Only your own collections (franchise collections always sync)."
+                  ? "Only your own collections (virtual collections always sync)."
                   : "Every collection on the server, including other users' public ones."
               }
             />
@@ -420,7 +438,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
               <PanelSectionRow key={`${collection.kind}:${collection.id}`}>
                 <ToggleField
                   label={collection.name}
-                  description={`${collection.rom_count} ROMs`}
+                  description={collectionRowDescription(collection)}
                   checked={collection.sync_enabled}
                   onChange={(value: boolean) => {
                     detach(handleCollectionToggle(collection.id, collection.kind, value));

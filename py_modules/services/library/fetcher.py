@@ -48,6 +48,16 @@ if TYPE_CHECKING:
 
 _SYNC_CANCELLED = "Sync cancelled"
 
+# The RomM virtual-collection types the plugin syncs as browsable collections.
+# RomM's ``VirtualCollection`` model has five ``type`` values, but only these two
+# are surfaced as browsable collections in RomM's own Collections view: IGDB
+# ``franchise`` groupings and the default IGDB ``collection`` (series) groupings.
+# ``genre`` / ``company`` / ``mode`` are deliberately excluded — RomM treats them
+# as ROM filter facets, not collections. Both types share the single internal
+# ``"virtual"`` kind; the per-item ``virtual_type`` sub-field carries which one.
+# Adding a type here is the only change needed to sync it.
+_SUPPORTED_VIRTUAL_TYPES: tuple[str, ...] = ("franchise", "collection")
+
 
 class _PlanEstimate(NamedTuple):
     """One platform's plan-time estimate riders for the ``sync_plan`` payload.
@@ -95,7 +105,7 @@ def _collection_units(
     When *filter_to_own* is set (the "Own" owner-scope), a foreign collection —
     one owned by a known user id other than *own_user_id* — is dropped from the
     queue even if it is enabled, so a scope selected over an earlier enable never
-    syncs someone else's collection. Franchise collections have no owner and
+    syncs someone else's collection. Virtual collections have no owner and
     always survive (:func:`is_own_collection`).
     """
     units: list[WorkUnit] = []
@@ -115,7 +125,7 @@ def _collection_units(
                 collection_kind=kind,
                 # RomM bumps the collection's updated_at on any membership change
                 # (#742). Threaded so the skip gate compares it against the stamp;
-                # ``None`` for a listing that omits it (e.g. franchise, never
+                # ``None`` for a listing that omits it (e.g. virtual, never
                 # stamped).
                 collection_updated_at=c.get("updated_at"),
             )
@@ -263,13 +273,17 @@ class LibraryFetcher:
         except Exception as e:
             self._logger.warning(f"Failed to fetch smart collections, continuing without them: {e}")
             smart_collections = []
-        try:
-            franchise_collections = await self._loop.run_in_executor(
-                None, self._romm_api.list_virtual_collections, "franchise"
-            )
-        except Exception as e:
-            self._logger.warning(f"Failed to fetch franchise collections, continuing without them: {e}")
-            franchise_collections = []
+        # One flat "virtual" kind, fetched per supported type so each item can be
+        # tagged with its ``virtual_type`` for display. A failed type-fetch is
+        # fail-open (warn + skip that type) so the rest of the list still returns.
+        virtual_by_type: list[tuple[str, list[dict[str, Any]]]] = []
+        for virtual_type in _SUPPORTED_VIRTUAL_TYPES:
+            try:
+                items = await self._loop.run_in_executor(None, self._romm_api.list_virtual_collections, virtual_type)
+            except Exception as e:
+                self._logger.warning(f"Failed to fetch {virtual_type} collections, continuing without them: {e}")
+                continue
+            virtual_by_type.append((virtual_type, items))
 
         enabled = self._get_enabled_collections_buckets()
         # Own identity for the owner-scope tag. ``None`` (never fetched / offline)
@@ -304,27 +318,29 @@ class LibraryFetcher:
                     "is_own": is_own_collection(c.get("user_id"), own_user_id, kind="smart"),
                 }
             )
-        for c in franchise_collections:
-            cid = str(c["id"])
-            result.append(
-                {
-                    "id": cid,
-                    "name": c.get("name", ""),
-                    "rom_count": c.get("rom_count", len(c.get("rom_ids", []))),
-                    "sync_enabled": enabled["franchise"].get(cid, False),
-                    "kind": "franchise",
-                    "is_favorite": False,
-                    # Franchise/virtual collections have no owner — always own.
-                    "is_own": True,
-                }
-            )
+        for virtual_type, items in virtual_by_type:
+            for c in items:
+                cid = str(c["id"])
+                result.append(
+                    {
+                        "id": cid,
+                        "name": c.get("name", ""),
+                        "rom_count": c.get("rom_count", len(c.get("rom_ids", []))),
+                        "sync_enabled": enabled["virtual"].get(cid, False),
+                        "kind": "virtual",
+                        "virtual_type": virtual_type,
+                        "is_favorite": False,
+                        # Virtual collections have no owner — always own.
+                        "is_own": True,
+                    }
+                )
 
-        _kind_order = {"user": 0, "smart": 1, "franchise": 2}
+        _kind_order = {"user": 0, "smart": 1, "virtual": 2}
         result.sort(key=lambda x: (_kind_order.get(x["kind"], 99), x["name"].lower()))
         return {"success": True, "collections": result}
 
     def save_collection_sync(self, collection_id, kind, enabled):
-        if kind not in ("user", "smart", "franchise"):
+        if kind not in ("user", "smart", "virtual"):
             return {"success": False, "reason": "invalid_kind", "message": f"Invalid collection kind: {kind}"}
         buckets = self._get_enabled_collections_buckets()
         buckets[kind][str(collection_id)] = bool(enabled)
@@ -334,12 +350,12 @@ class LibraryFetcher:
 
     async def set_all_collections_sync(self, enabled, scope=None):
         enabled = bool(enabled)
-        if scope not in (None, "user", "smart", "franchise"):
+        if scope not in (None, "user", "smart", "virtual"):
             return {"success": False, "reason": "invalid_scope", "message": f"Invalid scope: {scope}"}
 
         buckets = self._get_enabled_collections_buckets()
 
-        for apply_bucket in (self._apply_user_bucket, self._apply_smart_bucket, self._apply_franchise_bucket):
+        for apply_bucket in (self._apply_user_bucket, self._apply_smart_bucket, self._apply_virtual_bucket):
             failure = await apply_bucket(buckets=buckets, enabled=enabled, scope=scope)
             if failure is not None:
                 return failure
@@ -385,25 +401,32 @@ class LibraryFetcher:
             buckets["smart"][str(c["id"])] = enabled
         return None
 
-    async def _apply_franchise_bucket(
+    async def _apply_virtual_bucket(
         self, *, buckets: dict[str, dict[str, bool]], enabled: bool, scope: str | None
     ) -> dict[str, Any] | None:
-        """Fetch franchise collections and stamp the ``franchise`` bucket. Returns failure dict or None."""
-        if scope not in (None, "franchise"):
+        """Fetch every supported virtual type and stamp the ``virtual`` bucket.
+
+        Returns a failure dict or None. Under the ``virtual`` scope a failed
+        type-fetch surfaces the error (the user targeted virtual collections);
+        under the all-buckets scope (``None``) it warns and continues so a single
+        unavailable type never fails the whole Enable/Disable All.
+        """
+        if scope not in (None, "virtual"):
             return None
-        try:
-            franchise_collections = await self._loop.run_in_executor(
-                None, self._romm_api.list_virtual_collections, "franchise"
-            )
-        except Exception as e:
-            if scope == "franchise":
-                self._logger.error(f"Failed to fetch franchise collections: {e}")
-                _reason, _msg = classify_error(e)
-                return {"success": False, "reason": _reason, "message": _msg}
-            self._logger.warning(f"Failed to fetch franchise collections, continuing without them: {e}")
-            return None
-        for c in franchise_collections:
-            buckets["franchise"][str(c["id"])] = enabled
+        for virtual_type in _SUPPORTED_VIRTUAL_TYPES:
+            try:
+                virtual_collections = await self._loop.run_in_executor(
+                    None, self._romm_api.list_virtual_collections, virtual_type
+                )
+            except Exception as e:
+                if scope == "virtual":
+                    self._logger.error(f"Failed to fetch {virtual_type} collections: {e}")
+                    _reason, _msg = classify_error(e)
+                    return {"success": False, "reason": _reason, "message": _msg}
+                self._logger.warning(f"Failed to fetch {virtual_type} collections, continuing without them: {e}")
+                continue
+            for c in virtual_collections:
+                buckets["virtual"][str(c["id"])] = enabled
         return None
 
     def _get_enabled_collections_buckets(self) -> dict[str, dict[str, bool]]:
@@ -419,7 +442,7 @@ class LibraryFetcher:
         if not isinstance(raw, dict):
             raw = {}
         buckets: dict[str, dict[str, bool]] = {}
-        for kind in ("user", "smart", "franchise"):
+        for kind in ("user", "smart", "virtual"):
             bucket = raw.get(kind, {})
             buckets[kind] = bucket if isinstance(bucket, dict) else {}
         return buckets
@@ -458,7 +481,7 @@ class LibraryFetcher:
 
         Returns an ordered list of :class:`WorkUnit` entries (platforms
         first, then user collections, then smart collections, then
-        franchise collections) with ROM counts pulled from the listing
+        virtual collections) with ROM counts pulled from the listing
         endpoints. No ROMs are fetched here — the queue is a dispatch
         plan, not a payload. Units additionally carry the plan-time estimate
         riders for the ``sync_plan`` payload — ``predicted_skip`` /
@@ -484,15 +507,15 @@ class LibraryFetcher:
         buckets = self._get_enabled_collections_buckets()
         enabled_user_ids = {k for k, v in buckets["user"].items() if v}
         enabled_smart_ids = {k for k, v in buckets["smart"].items() if v}
-        enabled_franchise_ids = {k for k, v in buckets["franchise"].items() if v}
-        if not (enabled_user_ids or enabled_smart_ids or enabled_franchise_ids):
+        enabled_virtual_ids = {k for k, v in buckets["virtual"].items() if v}
+        if not (enabled_user_ids or enabled_smart_ids or enabled_virtual_ids):
             return units
 
         # Owner-scope filter (#1532): when "Own" is selected AND our identity is
         # known, foreign user/smart collections are dropped from the queue — a
         # sync scope that filters OVER the enabled ids without mutating them.
         # Unknown identity (own_user_id is None) never filters, so "Own" is a
-        # no-op until identity is available (non-breaking). Franchise collections
+        # no-op until identity is available (non-breaking). Virtual collections
         # have no owner and are never filtered.
         own_user_id = self._settings.get("romm_user_id")
         filter_to_own = self._settings.get("collection_owner_scope") == "own" and own_user_id is not None
@@ -508,7 +531,7 @@ class LibraryFetcher:
                 enabled_smart_ids, own_user_id=own_user_id, filter_to_own=filter_to_own
             )
         )
-        collection_units.extend(await self._build_franchise_collection_units(enabled_franchise_ids))
+        collection_units.extend(await self._build_virtual_collection_units(enabled_virtual_ids))
         # One short read UoW for every collection at once — after the listing
         # fetches, never across them.
         units.extend(await self._attach_collection_bound_counts(collection_units))
@@ -551,16 +574,24 @@ class LibraryFetcher:
             collections, enabled_ids, "smart", own_user_id=own_user_id, filter_to_own=filter_to_own
         )
 
-    async def _build_franchise_collection_units(self, enabled_ids: set[str]) -> list[WorkUnit]:
-        """Fetch franchise collections and emit work units for those whose id is in *enabled_ids*."""
+    async def _build_virtual_collection_units(self, enabled_ids: set[str]) -> list[WorkUnit]:
+        """Fetch every supported virtual type and emit units for those whose id is in *enabled_ids*.
+
+        The ids are globally unique across virtual types (RomM bakes the type
+        into the base64 id), so a single enabled-id set selects across the merged
+        listing. A failed type-fetch is fail-open (warn + skip that type).
+        """
         if not enabled_ids:
             return []
-        try:
-            collections = await self._loop.run_in_executor(None, self._romm_api.list_virtual_collections, "franchise")
-        except Exception as e:
-            self._logger.warning(f"Failed to fetch franchise collections for work queue: {e}")
-            collections = []
-        return _collection_units(collections, enabled_ids, "franchise")
+        collections: list[dict[str, Any]] = []
+        for virtual_type in _SUPPORTED_VIRTUAL_TYPES:
+            try:
+                collections.extend(
+                    await self._loop.run_in_executor(None, self._romm_api.list_virtual_collections, virtual_type)
+                )
+            except Exception as e:
+                self._logger.warning(f"Failed to fetch {virtual_type} collections for work queue: {e}")
+        return _collection_units(collections, enabled_ids, "virtual")
 
     async def _attach_plan_estimates(self, platform_units: list[WorkUnit]) -> list[WorkUnit]:
         """Stamp each platform unit with its plan-time estimate riders (#1382).
@@ -621,7 +652,7 @@ class LibraryFetcher:
         persisted rows reports ``0`` (real knowledge — nothing is mirrored, so
         every item is a create), whereas an unstamped collection is omitted
         entirely. A collection's member set exists ONLY in its stamp, so without
-        one there is no membership to count; franchise collections are never
+        one there is no membership to count; virtual collections are never
         stampable at all (``CollectionSyncState.stamp`` accepts only
         ``user``/``smart``). Reporting ``0`` there would claim knowledge we do
         not have. Absent and ``0`` price identically today — both read as
@@ -1155,14 +1186,14 @@ class LibraryFetcher:
            the stored member set (a stamp written from a partial fetch is not
            trusted to reconstruct the whole membership).
 
-        Only ``user`` / ``smart`` collections are stampable — a franchise/virtual
+        Only ``user`` / ``smart`` collections are stampable — a virtual
         collection has no stable ``updated_at`` and always full-fetches. The probe
         exception (server error mid-check) falls open to a full fetch, mirroring
         the platform gate.
         """
         kind = unit.collection_kind
         if kind not in ("user", "smart"):
-            # Franchise/virtual collections carry no stamp — always full-fetch.
+            # Virtual collections carry no stamp — always full-fetch.
             return None
         if not unit.collection_updated_at:
             self._logger.info(f"Per-unit fetch {unit.name}: no collection updated_at — full fetch")
@@ -1234,13 +1265,14 @@ class LibraryFetcher:
     ) -> dict[str, Any] | list[dict[str, Any]]:
         """Fetch one page of a collection unit's ROMs via its kind-specific endpoint.
 
-        A ``franchise`` collection is a RomM *virtual* collection (string id), a
-        ``smart`` collection a saved-search (int id), and the default a regular
-        user collection (int id) — each has its own list endpoint. ``dict | list``
-        keeps the caller's isinstance guard genuine: the paginated endpoints return
-        ``{"items": [...]}`` but a bare-list response shape is tolerated.
+        A ``virtual`` collection is a RomM virtual collection (string base64 id,
+        the same endpoint for every virtual type), a ``smart`` collection a
+        saved-search (int id), and the default a regular user collection (int id) —
+        each has its own list endpoint. ``dict | list`` keeps the caller's
+        isinstance guard genuine: the paginated endpoints return ``{"items": [...]}``
+        but a bare-list response shape is tolerated.
         """
-        if unit.collection_kind == "franchise":
+        if unit.collection_kind == "virtual":
             return await self._loop.run_in_executor(
                 None, self._romm_api.list_roms_by_virtual_collection, str(unit.id), limit, offset
             )

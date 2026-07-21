@@ -10,10 +10,10 @@ come in as arguments.
 
 Two invariants make the filter safe and non-breaking:
 
-* **Franchise/virtual collections have no owner.** They are global/derived —
-  RomM's ``VirtualCollection`` model carries no ``user_id`` column and returns
-  them identically to every user — so they are always own and always survive
-  an "Own" filter.
+* **Virtual collections have no owner.** They are global/derived — RomM's
+  ``VirtualCollection`` model carries no ``user_id`` column and returns them
+  identically to every user — so they are always own and always survive an
+  "Own" filter.
 * **Unknown identity degrades to "All".** When the plugin does not yet know its
   own user id (never fetched / offline), every collection is treated as own, so
   "Own" filters nothing rather than filtering against the wrong identity.
@@ -30,19 +30,19 @@ def is_own_collection(collection_user_id: object, own_user_id: int | None, *, ki
     collection_user_id:
         The collection's owner id (``user_id``) from the RomM listing dict, or
         ``None``/absent. Compared by value against *own_user_id*. Only user and
-        smart collections carry it; franchise/virtual collections never do.
+        smart collections carry it; virtual collections never do.
     own_user_id:
         The signed-in user's own id (``settings["romm_user_id"]``), or ``None``
         when identity is not yet known.
     kind:
-        ``"user"``, ``"smart"`` or ``"franchise"``.
+        ``"user"``, ``"smart"`` or ``"virtual"``.
 
-    Returns ``True`` (own) when the collection is a franchise/virtual collection
-    (no owner), when our own identity is unknown (the non-breaking fallback), or
+    Returns ``True`` (own) when the collection is a virtual collection (no
+    owner), when our own identity is unknown (the non-breaking fallback), or
     when the collection's owner id equals ours. ``False`` (foreign) only when a
     user/smart collection is owned by a different known id.
     """
-    if kind == "franchise":
+    if kind == "virtual":
         return True
     if own_user_id is None:
         return True

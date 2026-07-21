@@ -1700,7 +1700,7 @@ class SyncOrchestrator:
         fully synced" ⟺ "stamp exists" is atomic on a crash. ``member_rom_ids`` is
         the collection's FULL membership (every member id, not just the applied
         new_roms), which a future skip replays to rebuild the Steam-collection
-        map. Franchise/virtual collections carry no stamp (no stable
+        map. Virtual collections carry no stamp (no stable
         ``updated_at``), and a cancel or heartbeat timeout mid-unit returns before
         the final chunk — an incomplete collection is never stamped (ADR-0023).
         """

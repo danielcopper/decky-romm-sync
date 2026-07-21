@@ -58,7 +58,7 @@ class TestStamp:
                 member_rom_ids=(1,),
             )
 
-    @pytest.mark.parametrize("kind", ["franchise", "virtual", "", "USER"])
+    @pytest.mark.parametrize("kind", ["virtual", "", "USER"])
     def test_non_user_smart_kind_raises(self, kind):
         with pytest.raises(ValueError, match="collection_kind must be"):
             CollectionSyncState.stamp(

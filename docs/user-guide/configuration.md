@@ -95,7 +95,7 @@ it surfaces later as a permissions error on the affected action (save upload, de
 | `platforms.read`   | read      | Listing your platforms                                                                       |
 | `roms.read`        | read      | Listing and reading ROM metadata (the library)                                               |
 | `roms.user.read`   | read      | Your per-user ROM data — native play-session history                                         |
-| `collections.read` | read      | Reading your collections (user, smart, franchise)                                            |
+| `collections.read` | read      | Reading your collections (user, smart, virtual)                                              |
 | `firmware.read`    | read      | Listing and downloading BIOS / firmware                                                      |
 | `assets.read`      | read      | Downloading save files                                                                       |
 | `devices.read`     | read      | Reading your registered devices (device sync)                                                |

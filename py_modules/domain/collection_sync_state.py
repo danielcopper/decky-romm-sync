@@ -27,9 +27,9 @@ the stamp for a skip to fire (see ``LibraryFetcher._try_collection_incremental_s
    ``updated_at`` does not move for that).
 3. ``rom_count`` unchanged vs. both the live listing and the stored member set.
 
-Only **user** and **smart** collections carry a stamp — franchise/virtual
-collections are auto-generated groupings with no stable ``updated_at`` and are
-never stamped (they always full-fetch). A thin record built whole and upserted —
+Only **user** and **smart** collections carry a stamp — virtual collections
+are auto-generated groupings with no stable ``updated_at`` and are never
+stamped (they always full-fetch). A thin record built whole and upserted —
 never a partial field mutation — so it carries a single ``stamp`` constructor and
 no verb-named mutators. Cleared on the same events that clear platform stamps:
 the local destructive flows (shortcut removal / live-shortcut reconcile) drop any

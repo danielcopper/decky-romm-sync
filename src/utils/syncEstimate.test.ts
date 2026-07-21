@@ -117,14 +117,14 @@ describe("estimatePlanSeconds", () => {
     expect(estimatePlanSeconds([collection])).toBeLessThan(estimateApplySeconds(300, 0));
   });
 
-  it("prices an unstamped or franchise collection as all creates (bound_count absent)", () => {
+  it("prices an unstamped or virtual collection as all creates (bound_count absent)", () => {
     const collection: SyncPlanUnit = {
       type: "collection",
       id: "fr-1",
       name: "Zelda",
       slug: "zelda",
       rom_count: 40,
-      collection_kind: "franchise",
+      collection_kind: "virtual",
     };
     expect(estimatePlanSeconds([collection])).toBeCloseTo(estimateApplySeconds(40, 0));
   });

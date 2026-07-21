@@ -84,8 +84,8 @@ class TestLocking:
 class TestSettingsSchema:
     """Schema-level expectations for the settings defaults + version stamp."""
 
-    def test_settings_version_is_10(self):
-        assert _SETTINGS_VERSION == 10
+    def test_settings_version_is_11(self):
+        assert _SETTINGS_VERSION == 11
 
     def test_default_settings_omit_retired_credential_keys(self):
         """The retired legacy-credential keys must not be re-seeded on load."""
@@ -100,6 +100,11 @@ class TestSettingsSchema:
 
     def test_default_settings_carry_empty_platform_cores(self):
         assert DEFAULT_SETTINGS["platform_cores"] == {}
+
+    def test_default_settings_carry_virtual_collection_bucket(self):
+        # The ownerless virtual-collection kind is ``virtual`` (v11); the legacy
+        # ``franchise`` bucket key must be gone from the default shape.
+        assert DEFAULT_SETTINGS["enabled_collections"] == {"user": {}, "smart": {}, "virtual": {}}
 
     def test_default_settings_carry_owner_scope_defaults(self):
         # Identity unknown and scope "all" by default → the "Own" filter is inert
@@ -137,7 +142,7 @@ class TestVersionStampingOnSave:
         with open(settings_path) as f:
             loaded = json.load(f)
         assert loaded["version"] == _SETTINGS_VERSION
-        assert loaded["version"] == 10
+        assert loaded["version"] == 11
 
 
 # ── Loading edge cases ─────────────────────────────────────────────────────────

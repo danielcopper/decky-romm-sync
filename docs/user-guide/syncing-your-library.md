@@ -222,7 +222,8 @@ The **Collections** page splits collections into three sub-tabs plus a dedicated
 - **My** sub-tab — your other user-created collections
 - **Smart** sub-tab — filter-based collections that resolve membership at query time, so syncing always picks up the
   current matches
-- **Franchise** sub-tab — auto-generated franchise groupings (IGDB)
+- **Virtual** sub-tab — auto-generated groupings RomM derives from IGDB metadata: both IGDB **franchise** groupings and
+  IGDB **collection** (series) groupings. Each row is labelled with its type (Franchise / IGDB Collection).
 
 Each sub-tab shows its visible count in the section header (e.g. `MY COLLECTIONS (4)`) and lets you toggle individual
 collections, or use the paired **Enable All** / **Disable All** buttons to bulk-toggle just that sub-tab. The global
@@ -240,12 +241,12 @@ On a **shared RomM server** the collection list includes every other user's _pub
   sync, even if one was enabled earlier — switching back to **All** brings your earlier choices back, since the scope
   filters over your enable state rather than changing it.
 
-**Franchise collections always sync** under either setting: they are auto-generated groupings that belong to no one, so
+**Virtual collections always sync** under either setting: they are auto-generated groupings that belong to no one, so
 "Own" never hides them. The filter only becomes active once the plugin knows your account identity, which it learns the
 first time you sign in (existing sign-ins pick it up on the next connection check). Until then, **Own** behaves exactly
 like **All** — it never hides a collection it can't yet attribute.
 
-If two enabled collections share the same name — for example a personal collection and a smart or franchise collection
+If two enabled collections share the same name — for example a personal collection and a smart or virtual collection
 called the same thing, or (on a shared server) another account's public collection — they **merge into a single Steam
 collection** carrying the combined set of games. RomM allows collections to share a name, but Steam identifies a
 collection by its name, so the plugin unions their members rather than dropping one.

@@ -501,7 +501,7 @@ sibling row holding `shortcut_app_id` is the group's **active version**.
   collection.
 
 **Same-named collections union into one Steam collection (#1503).** RomM enforces name uniqueness only per-table and
-per-`(name, user_id)`, so two enabled collections can share a display name — a user collection and a smart/franchise
+per-`(name, user_id)`, so two enabled collections can share a display name — a user collection and a smart/virtual
 collection, or (multi-user) another account's public collection the list endpoints return. Steam's collection namespace
 is **by-name** (`RomM: [<name>] (host)`), so both must resolve to the one Steam collection. The finalize accumulator
 (`_state.py` `pending_collection_memberships`) is therefore keyed by a collision-free `(collection_kind, collection_id)`
@@ -514,17 +514,34 @@ set of one and is byte-for-byte the pre-#1503 output. The union runs **after** t
 foreign collection is dropped from the work queue it never reaches the accumulator, so "Own" narrows what is unioned
 rather than changing how the union works.
 
+**Collection kinds — one `virtual` kind covers RomM's browsable virtual types (#1538).** `get_collections` and
+`build_work_queue` group collections into three internal kinds: `user`, `smart`, and `virtual`. The `virtual` kind is
+RomM's ownerless `VirtualCollection` (base64 id, no `user_id`, no stable `updated_at` — never stamped), and it carries a
+`virtual_type` sub-field on each collection dict/setting so the UI can label the row. RomM's `VirtualCollection` has
+five `type` values, but the plugin syncs only the **two RomM itself surfaces as browsable collections**: IGDB
+`franchise` and the default IGDB `collection` (series). `genre`, `company`, and `mode` are **intentionally excluded** —
+RomM treats `genre`/`company` as ROM _filter facets_ (not collections) and `mode` as neither, so they never appear in
+RomM's Collections view. The supported set is a single constant (`services/library/fetcher._SUPPORTED_VIRTUAL_TYPES`);
+the fetcher fetches each supported type (per-type fail-open) and merges them under the one `virtual` bucket. Because the
+type is baked into the base64 id, ids are globally unique across types, so one enabled-bucket keyed by id cannot
+collide. The owner filter, stamp-exclusion, and per-unit ROM-fetch dispatch all stay a **single `kind == "virtual"`
+branch**, not fanned out per type. On disk the enabled-collections bucket was renamed `franchise → virtual` by the
+lossless `settings.json` migration **v10 → v11** (`domain/state_migrations._migrate_v10_to_v11`): it renames the bucket
+key while preserving every enabled id, so a previously-enabled franchise collection stays enabled and no re-login is
+required. (The historical v2 → v3 split still produces the `franchise` bucket; the v10 → v11 step renames it afterwards,
+so that frozen step is untouched.)
+
 **Collection owner-scope filter — "Own" is a sync scope, not just a display filter (#1532).** RomM's collection list
 endpoints return the signed-in user's own collections plus every other user's _public_ collection. The QAM
 `Show
 collections` control writes `collection_owner_scope` (`"own"` / `"all"`, default `"all"`); `get_collections` also
 tags each row with `is_own` so the frontend can hide foreign ones under "Own". Ownership is a pure predicate
-(`domain/collection_owner.is_own_collection`): a collection is own when it is a **franchise/virtual** collection (RomM's
+(`domain/collection_owner.is_own_collection`): a collection is own when it is a **virtual** collection (RomM's
 `VirtualCollection` model carries no `user_id` column — these are global/derived and belong to no one, so they always
 survive), when the plugin's own identity is unknown (the **degrade-to-"All" fallback**), or when the collection's
 `user_id` equals the stored `romm_user_id`; only user and smart collections carry a `user_id` to compare.
 `build_work_queue` applies the same predicate: under `"own"` **with a known identity** it drops foreign user/smart units
-from the queue — so a foreign collection enabled earlier is never synced — while franchise units and every unit under
+from the queue — so a foreign collection enabled earlier is never synced — while virtual units and every unit under
 `"all"` pass through unchanged. The scope filters **over** the per-kind enable state without mutating it, so switching
 back to `"all"` restores the prior enables. Because an **unknown identity never filters**, the feature is non-breaking:
 it silently no-ops until `romm_user_id` is stamped (see the ConnectionService lazy-identity note), then activates — no
@@ -622,9 +639,9 @@ weights + planned totals, via `sync_plan`) and the applying frames.
   zero persisted rows honestly means "every planned item is a create". On a **collection** it counts the bound members
   of the completion stamp's stored `member_rom_ids` (the same member set the skip replays), in one short read UoW
   covering every collection unit — no ROM fetch. The two sides are deliberately **asymmetric** on the empty case: a
-  platform reports `0`, an unstamped or franchise collection is **omitted**. A collection's membership exists only in
-  its stamp, and franchise collections are never stampable (`CollectionSyncState.stamp` accepts only `user`/`smart`), so
-  `0` there would claim knowledge that does not exist. Absent and `0` price identically today; the distinction keeps the
+  platform reports `0`, an unstamped or virtual collection is **omitted**. A collection's membership exists only in its
+  stamp, and virtual collections are never stampable (`CollectionSyncState.stamp` accepts only `user`/`smart`), so `0`
+  there would claim knowledge that does not exist. Absent and `0` price identically today; the distinction keeps the
   field honest for later consumers, so do not collapse it into consistency. A collection's stored member set may be
   **stale** if membership changed since the stamp — accepted and bounded, since this is estimate-only and a freshness
   probe would mean network I/O at plan time. A fourth rider, `new_shortcut_count` (#1517), is the create-side complement
@@ -686,8 +703,8 @@ weights + planned totals, via `sync_plan`) and the applying frames.
   pricing. Platforms are unaffected — their `bound_count` and `new_shortcut_count` are deliberately not stamp-gated.
   This follows directly from the `None`-not-`0` rule above and errs **long**, the safe direction; correcting it would
   mean asserting membership the plan does not have. A unit whose `bound_count` is absent (older backend, unstamped or
-  franchise collection) prices as all creates, the pre-#1511 behaviour. The live-countdown weights are unaffected and
-  stay `predicted_skip ? 0 : (collapsed_count ?? rom_count)`.
+  virtual collection) prices as all creates, the pre-#1511 behaviour. The live-countdown weights are unaffected and stay
+  `predicted_skip ? 0 : (collapsed_count ?? rom_count)`.
 - **Measured live countdown (takes over within seconds).** Once the apply is underway, `syncEta.ts` measures the
   **real** rate from the applying frames — one throttled sample per second over a ~30 s sliding window — and projects
   `remaining = (planned_total − processed) / rate`, rendered rounded **up** ("9 min left") so it never promises less

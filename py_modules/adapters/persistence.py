@@ -16,7 +16,7 @@ from typing import Any, Protocol
 
 from adapters.system_clock import SystemClock
 
-_SETTINGS_VERSION = 10
+_SETTINGS_VERSION = 11
 _LOCK_EXT = ".lock"
 
 
@@ -48,11 +48,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # behave like "All" (the non-breaking fallback).
     "romm_user_id": None,
     "enabled_platforms": {},
-    "enabled_collections": {"user": {}, "smart": {}, "franchise": {}},
+    "enabled_collections": {"user": {}, "smart": {}, "virtual": {}},
     "collection_create_platform_groups": False,
     # QAM collection owner-scope: ``"all"`` (default — every collection the
     # server lists) or ``"own"`` (only the signed-in user's own collections;
-    # franchise/virtual collections have no owner and always survive).
+    # virtual collections have no owner and always survive).
     "collection_owner_scope": "all",
     "preferred_region": "auto",
     "steam_input_mode": "default",

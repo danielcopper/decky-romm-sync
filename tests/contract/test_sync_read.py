@@ -207,6 +207,46 @@ async def test_get_collections_happy_shape(harness):
     assert c["is_own"] is True
 
 
+async def test_get_collections_virtual_shape(harness):
+    """Both virtual types are fetched and each item carries kind='virtual' + virtual_type."""
+    harness.romm.virtual_collections = {
+        "franchise": [{"id": "fr-1", "name": "Franchise One", "rom_count": 3}],
+        "collection": [{"id": "vc-1", "name": "Series One", "rom_count": 4}],
+    }
+    result = await harness.plugin.get_collections()
+    assert result["success"] is True
+    by_id = {c["id"]: c for c in result["collections"]}
+    assert by_id["fr-1"]["kind"] == "virtual"
+    assert by_id["fr-1"]["virtual_type"] == "franchise"
+    assert by_id["fr-1"]["is_own"] is True
+    assert by_id["vc-1"]["kind"] == "virtual"
+    assert by_id["vc-1"]["virtual_type"] == "collection"
+    assert by_id["vc-1"]["is_own"] is True
+
+
+async def test_virtual_collection_enable_round_trips(harness):
+    """Enabling an IGDB-collection virtual collection lands in the ``virtual`` bucket."""
+    harness.romm.virtual_collections = {
+        "collection": [{"id": "vc-1", "name": "Series One", "rom_count": 4}],
+    }
+    result = await harness.plugin.save_collection_sync("vc-1", "virtual", True)
+    assert result == {"success": True}
+    assert harness.plugin.settings["enabled_collections"]["virtual"]["vc-1"] is True
+
+    # And it now reads back as enabled through get_collections.
+    listing = await harness.plugin.get_collections()
+    vc = next(c for c in listing["collections"] if c["id"] == "vc-1")
+    assert vc["sync_enabled"] is True
+
+    # The legacy "franchise" kind string is rejected by the canonical failure shape.
+    rejected = await harness.plugin.save_collection_sync("vc-1", "franchise", True)
+    assert rejected["success"] is False
+    assert isinstance(rejected["reason"], str)
+    assert isinstance(rejected["message"], str) and rejected["message"]
+    assert "error" not in rejected
+    assert "error_code" not in rejected
+
+
 async def test_set_collection_owner_scope_persists(harness):
     """set_collection_owner_scope stores the value and get_settings reports it back."""
     result = await harness.plugin.set_collection_owner_scope("own")

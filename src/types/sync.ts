@@ -19,9 +19,17 @@ export interface PlatformSyncSetting {
   sync_enabled: boolean;
 }
 
-export type CollectionKind = "user" | "smart" | "franchise";
+export type CollectionKind = "user" | "smart" | "virtual";
 
-export type CollectionScope = "user" | "smart" | "franchise";
+export type CollectionScope = "user" | "smart" | "virtual";
+
+/**
+ * The RomM virtual-collection type carried on a `kind === "virtual"` collection.
+ * `"franchise"` = IGDB franchise groupings; `"collection"` = the default IGDB
+ * collection/series groupings. Only these two of RomM's five virtual types are
+ * synced (genre/company/mode are ROM filter facets, not browsable collections).
+ */
+export type VirtualCollectionType = "franchise" | "collection";
 
 /**
  * QAM collection owner-scope. `"all"` (default) syncs every collection the
@@ -38,7 +46,13 @@ export interface CollectionSyncSetting {
   kind: CollectionKind;
   is_favorite: boolean;
   /**
-   * Whether this collection is the signed-in user's own (#1532). Franchise
+   * The virtual-collection type — present only when `kind === "virtual"`, used
+   * to label the row ("Franchise" / "IGDB Collection"). Absent on user/smart
+   * collections and on older backends.
+   */
+  virtual_type?: VirtualCollectionType;
+  /**
+   * Whether this collection is the signed-in user's own (#1532). Virtual
    * collections have no owner and are always `true`; when the plugin does not
    * yet know its own identity every collection is `true` (so the "Own" filter
    * degrades to "All"). Absent on older backends — treat absent as `true`.
@@ -244,7 +258,7 @@ export interface SyncPlanUnit {
   name: string;
   slug: string;
   rom_count: number;
-  /** Only present when ``type === "collection"``. Discriminates user/smart/franchise. */
+  /** Only present when ``type === "collection"``. Discriminates user/smart/virtual. */
   collection_kind?: CollectionKind;
   /**
    * Plan-time prediction of the wholesale incremental skip (#1382) —
@@ -268,7 +282,7 @@ export interface SyncPlanUnit {
    * a re-sync (and every Force Full Sync, which unbinds nothing) is priced as a
    * fresh import. Unlike its sibling riders this rides BOTH unit kinds. Absent
    * on older backends, on never-stamped collections (a collection's membership
-   * is known only from its stamp), and on franchise collections (never
+   * is known only from its stamp), and on virtual collections (never
    * stampable); the seed then prices every item as a create, as before.
    *
    * Note the asymmetry a Force Full Sync exposes: it clears every stamp, so its

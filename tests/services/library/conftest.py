@@ -44,7 +44,7 @@ def plugin(tmp_path):
         "romm_user": "",
         "romm_pass": "",
         "enabled_platforms": {},
-        "enabled_collections": {"user": {}, "smart": {}, "franchise": {}},
+        "enabled_collections": {"user": {}, "smart": {}, "virtual": {}},
     }
     p._romm_api = MagicMock()
 

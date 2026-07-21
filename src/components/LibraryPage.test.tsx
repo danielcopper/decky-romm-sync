@@ -700,7 +700,7 @@ describe("LibraryPage", () => {
   });
 
   // ------------------------------------------------------------------
-  // H. Collections tab — sub-tabs (my / smart / franchise) + section headers
+  // H. Collections tab — sub-tabs (my / smart / virtual) + section headers
   // ------------------------------------------------------------------
   describe("collections tab — sub-tabs", () => {
     it("renders 3 sub-tab buttons with plain labels (no inline counts)", async () => {
@@ -711,8 +711,8 @@ describe("LibraryPage", () => {
           makeCollection({ id: "u1", name: "U1", kind: "user", is_favorite: false }),
           makeCollection({ id: "u2", name: "U2", kind: "user", is_favorite: false }),
           makeCollection({ id: "s1", name: "S1", kind: "smart", is_favorite: false }),
-          makeCollection({ id: "fr1", name: "Fr1", kind: "franchise", is_favorite: false }),
-          makeCollection({ id: "fr2", name: "Fr2", kind: "franchise", is_favorite: false }),
+          makeCollection({ id: "fr1", name: "Fr1", kind: "virtual", virtual_type: "franchise", is_favorite: false }),
+          makeCollection({ id: "vc1", name: "Vc1", kind: "virtual", virtual_type: "collection", is_favorite: false }),
         ],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
@@ -725,7 +725,7 @@ describe("LibraryPage", () => {
       // Plain sub-tab labels — no inline counts.
       expect(getByText("My")).not.toBeNull();
       expect(getByText("Smart")).not.toBeNull();
-      expect(getByText("Franchise")).not.toBeNull();
+      expect(getByText("Virtual")).not.toBeNull();
       // No "Favorites" sub-tab button (now a top-level toggle).
       expect(container.textContent).not.toContain("Favorites (");
     });
@@ -788,7 +788,7 @@ describe("LibraryPage", () => {
           makeCollection({ id: "u1", name: "U1", kind: "user", is_favorite: false }),
           makeCollection({ id: "u2", name: "U2", kind: "user", is_favorite: false }),
           makeCollection({ id: "s1", name: "S1", kind: "smart", is_favorite: false }),
-          makeCollection({ id: "fr1", name: "Fr1", kind: "franchise", is_favorite: false }),
+          makeCollection({ id: "fr1", name: "Fr1", kind: "virtual", virtual_type: "franchise", is_favorite: false }),
         ],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
@@ -808,17 +808,17 @@ describe("LibraryPage", () => {
       expect(container.textContent).toContain("SMART COLLECTIONS (1)");
 
       await act(async () => {
-        fireEvent.click(getByText("Franchise"));
+        fireEvent.click(getByText("Virtual"));
         await Promise.resolve();
       });
-      expect(container.textContent).toContain("FRANCHISE (1)");
+      expect(container.textContent).toContain("VIRTUAL (1)");
     });
 
     it("renders a 'No <sub-tab> collections' empty state when the bucket is empty", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          // Only smart collections — my/franchise buckets are empty.
+          // Only smart collections — my/virtual buckets are empty.
           makeCollection({ id: "s1", name: "S1", kind: "smart", is_favorite: false }),
         ],
       });
@@ -866,6 +866,71 @@ describe("LibraryPage", () => {
       });
       expect(container.querySelector('[data-label="UserOne"]')).not.toBeNull();
       expect(container.querySelector('[data-label="SmartOne"]')).toBeNull();
+    });
+
+    it("Virtual sub-tab lists both virtual types, each row labelled by its type", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({
+            id: "fr1",
+            name: "FranchiseOne",
+            kind: "virtual",
+            virtual_type: "franchise",
+            is_favorite: false,
+            rom_count: 3,
+          }),
+          makeCollection({
+            id: "vc1",
+            name: "SeriesOne",
+            kind: "virtual",
+            virtual_type: "collection",
+            is_favorite: false,
+            rom_count: 4,
+          }),
+        ],
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        fireEvent.click(getByText("Virtual"));
+        await Promise.resolve();
+      });
+      // Both types listed under the one flat Virtual sub-tab...
+      const franchiseRow = container.querySelector<HTMLElement>('[data-label="FranchiseOne"]');
+      const collectionRow = container.querySelector<HTMLElement>('[data-label="SeriesOne"]');
+      expect(franchiseRow).not.toBeNull();
+      expect(collectionRow).not.toBeNull();
+      // ...each row's description leads with its type label.
+      expect(franchiseRow?.getAttribute("data-description")).toBe("Franchise · 3 ROMs");
+      expect(collectionRow?.getAttribute("data-description")).toBe("IGDB Collection · 4 ROMs");
+    });
+
+    it("a virtual row missing its type falls back to the plain ROM count", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "fr1", name: "LegacyVirtual", kind: "virtual", is_favorite: false, rom_count: 5 }),
+        ],
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await act(async () => {
+        fireEvent.click(getByText("Virtual"));
+        await Promise.resolve();
+      });
+      const row = container.querySelector<HTMLElement>('[data-label="LegacyVirtual"]');
+      expect(row?.getAttribute("data-description")).toBe("5 ROMs");
     });
   });
 

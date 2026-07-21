@@ -1192,7 +1192,7 @@ class TestBuildWorkQueue:
         plugin.settings["enabled_collections"] = {
             "user": {"7": True},
             "smart": {"5": True},
-            "franchise": {"9": True},
+            "virtual": {"9": True},
         }
 
         units = await plugin._sync_service._fetcher.build_work_queue()
@@ -1204,7 +1204,7 @@ class TestBuildWorkQueue:
         ]
         assert units[1].collection_kind == "user"
         assert units[2].collection_kind == "smart"
-        assert units[3].collection_kind == "franchise"
+        assert units[3].collection_kind == "virtual"
 
 
 class TestFetchPlatformUnit:
@@ -1313,7 +1313,7 @@ class TestFetchCollectionUnit:
             1: {"id": 1, "platform_name": "N64", "virtual_collection_ids": ["9"]},
             2: {"id": 2, "platform_name": "SNES", "virtual_collection_ids": ["9"]},
         }
-        unit = WorkUnit(type="collection", id="9", name="Metroid", slug="", rom_count=2, collection_kind="franchise")
+        unit = WorkUnit(type="collection", id="9", name="Metroid", slug="", rom_count=2, collection_kind="virtual")
 
         # rom_id=1 was already fetched via a platform unit
         synced: set[int] = {1}
@@ -1400,7 +1400,7 @@ class TestDoSyncPerUnit:
         # weighs its raw rom_count. (A stamped collection does ride bound_count,
         # #1511 — covered in test_fetcher.)
         _seed_collection(fake_romm_api, collection_id=7, name="Faves", rom_ids=[20, 21, 22])
-        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "franchise": {}}
+        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "virtual": {}}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
@@ -3593,7 +3593,7 @@ class TestSyncOneUnitCollectionAndCancel:
         fake_romm_api.roms[2]["name"] = "B"
         fake_romm_api.roms[2]["platform_name"] = "N64"
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "franchise": {}}
+        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "virtual": {}}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
