@@ -377,6 +377,20 @@ kernels: **ladder** against `domain/sync_action.resolve_upload_conflict`, **deci
 kernel pass** — updating means deliberately re-copying the JSON and bumping the commit reference in that folder's
 `README.md`.
 
+### emu-atlas conformance vectors — vendored contract tier
+
+The same self-conformance pattern proves the plugin's save-path kernel agrees with
+[emu-atlas](https://github.com/danielcopper/emu-atlas), the config-aware emulator-knowledge library extracted from this
+plugin, where the two overlap. Its `machines` vector family (16 fixture machines in, detected installations + save
+placements out) runs against the real adapters (`RetroDeckPathsAdapter` + `RetroArchConfigAdapter`) and domain functions
+(`resolve_save_dir` / `compute_local_save_target`) in `tests/test_atlas_machine_vectors.py`. The overlap is partial by
+design — the plugin has no standalone-RetroArch saves-root concept (its saves base always comes from RetroDECK paths) —
+so every vector carries an explicit `_CHECK_LEVELS` entry: `full` (end-to-end dir + filename), `layout-only` (only the
+`retroarch.cfg` interpretation — sort flags or the `ContentDir` classification), or `n/a` (no overlap). No vector is
+silently skipped: a new upstream vector without an allowlist entry fails at collection. Vectors are vendored verbatim
+under `tests/atlas_vectors/machines/` at a pinned upstream release tag; **never edit a vector to make the kernel pass**
+— updating means re-copying the JSON and bumping the tag in that folder's `README.md`.
+
 ### Frontend component tests — `@decky/api` event harness
 
 `src/test-utils/decky-api-mock.ts` exposes an in-memory event bus that `addEventListener` / `removeEventListener` route

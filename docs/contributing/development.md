@@ -124,6 +124,39 @@ python -m pytest tests/domain/test_sync_action_gavel_vectors.py tests/domain/tes
 Updating the vectors means deliberately re-copying the JSON from the matching upstream `vectors/<family>/` directory and
 bumping the commit reference in `tests/domain/gavel_vectors/README.md`; never edit a vector to match the kernel.
 
+### emu-atlas conformance vectors
+
+The config-aware emulator knowledge — where a RetroArch / RetroDECK install keeps its saves — is likewise published as a
+standalone library, [emu-atlas](https://github.com/danielcopper/emu-atlas), extracted from this plugin. Its `machines`
+vector family (16 fixture machines in, detected installations + save placements out) runs against the plugin's own
+save-path kernel in `tests/test_atlas_machine_vectors.py`, so the two can't silently drift. Each vector materializes a
+`{path: content}` file tree under a `tmp_path` fake home, then drives the real adapters (`RetroDeckPathsAdapter` +
+`RetroArchConfigAdapter`) and the domain save-path functions (`resolve_save_dir` / `compute_local_save_target`).
+
+The overlap is partial, so every vector carries an explicit check level (an `_CHECK_LEVELS` allowlist entry that also
+records _why_):
+
+- **`full`** — end-to-end placement. The plugin derives the saves root the same way atlas does (from `retrodeck.json`,
+  or the `~/retrodeck` fallback), so the final directory + filename strings are compared. Covers the RetroDECK-flavor
+  `InSaveDir` cases and the RetroDECK-first coexistence case.
+- **`layout-only`** — only the `retroarch.cfg` interpretation overlaps. The plugin has no standalone-RetroArch
+  saves-root concept (its saves base always comes from RetroDECK paths), so a vector whose placement hangs off a
+  standalone `savefile_directory` is checked on the `SaveLayout` the plugin derives from the same cfg text — the sort
+  flags for an `InSaveDir` placement, or the `ContentDir` (next-to-ROM) classification.
+- **`n/a`** — no overlap (the plugin has no installation-enumeration surface, so atlas's "nothing detected" outcome has
+  no plugin equivalent). The check only guards that the vector stays in its non-checkable shape.
+
+No vector is silently skipped: a new upstream vector without an allowlist entry (or a stale entry for a removed one)
+fails at collection. The vectors are vendored verbatim under `tests/atlas_vectors/machines/` at a pinned upstream
+release tag — no submodule, no network in CI. Run it like any other test:
+
+```bash
+python -m pytest tests/test_atlas_machine_vectors.py -q
+```
+
+Updating means deliberately re-copying the JSON from upstream `vectors/machines/` and bumping the release tag in
+`tests/atlas_vectors/README.md`; never edit a vector to match the kernel.
+
 Every backend feature or callable where testing makes sense should have unit tests covering:
 
 - **Happy path** — normal successful operation
