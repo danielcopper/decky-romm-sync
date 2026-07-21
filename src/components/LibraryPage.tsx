@@ -1,13 +1,24 @@
-import { useState, useEffect, useMemo, useRef, FC } from "react";
-import { PanelSection, PanelSectionRow, ButtonItem, ToggleField, DialogButton, Field, Focusable } from "@decky/ui";
+import { useState, useEffect, useMemo, useRef, FC, KeyboardEvent } from "react";
+import {
+  PanelSection,
+  PanelSectionRow,
+  ButtonItem,
+  ToggleField,
+  DialogButton,
+  Field,
+  Focusable,
+  TextField,
+  ConfirmModal,
+  showModal,
+} from "@decky/ui";
 import {
   getPlatforms,
   savePlatformSync,
   setAllPlatformsSync,
   getCollections,
   saveCollectionSync,
+  saveCollectionsSync,
   setAllCollectionsSync,
-  saveCollectionPlatformGroups,
   setCollectionOwnerScope,
   getSettings,
 } from "../api/backend";
@@ -21,7 +32,18 @@ import type {
 } from "../types";
 import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
+import { fuzzyMatch } from "../utils/fuzzyMatch";
 import { LoadingRow } from "./LoadingRow";
+
+// Best-effort on-screen-keyboard dismissal: Enter (R2 on the OSK) blurs the
+// focused field. Whether R2/Enter reliably closes the Steam OSK is Steam-
+// controlled and UNVERIFIED — this is a harmless best effort to revisit in
+// PR 2 (#1539); it must not be relied upon to work.
+function dismissKeyboardOnEnter(e: KeyboardEvent<HTMLInputElement>): void {
+  if (e.key === "Enter") {
+    (document.activeElement as HTMLElement | null)?.blur();
+  }
+}
 
 type CollectionSubTab = "user" | "smart" | "virtual";
 
@@ -39,11 +61,32 @@ const SUB_TAB_HEADERS: Record<CollectionSubTab, string> = {
   virtual: "VIRTUAL",
 };
 
+// Hard ceiling on how many collection rows are ever painted at once. A large
+// library's Virtual list runs to many hundreds of entries; rendering them all
+// strains the CEF renderer, so the list is capped and the overflow is surfaced
+// as a single "refine your search" hint instead. Search + the per-type filter
+// narrow BELOW this cap.
+const COLLECTION_RENDER_CAP = 50;
+
+// The Virtual sub-tab's per-type segmented filter. "all" shows both virtual
+// types; the others narrow to one `virtual_type`.
+type VirtualTypeFilter = "all" | VirtualCollectionType;
+
+const VIRTUAL_TYPE_FILTER_ORDER: readonly VirtualTypeFilter[] = ["all", "franchise", "collection"];
+
 // Row-description label per virtual type. "IGDB Collection" (not "Collection")
 // disambiguates from the Collections page it lives inside — RomM's own label.
 const VIRTUAL_TYPE_LABELS: Record<VirtualCollectionType, string> = {
   franchise: "Franchise",
   collection: "IGDB Collection",
+};
+
+// Segmented-control labels for the per-type filter. "All" reuses the plain word;
+// the two types reuse the row labels so the control and the rows read alike.
+const VIRTUAL_TYPE_FILTER_LABELS: Record<VirtualTypeFilter, string> = {
+  all: "All",
+  franchise: VIRTUAL_TYPE_LABELS.franchise,
+  collection: VIRTUAL_TYPE_LABELS.collection,
 };
 
 // A virtual row shows its type ("Franchise" / "IGDB Collection") before the ROM
@@ -111,9 +154,20 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   const [collectionsLoading, setCollectionsLoading] = useState(true);
   const [collectionsError, setCollectionsError] = useState(false);
   const collectionsLoaded = useRef(false);
-  const [platformGroups, setPlatformGroups] = useState(false);
   const [ownerScope, setOwnerScope] = useState<CollectionOwnerScope>("all");
   const [activeSubTab, setActiveSubTab] = useState<CollectionSubTab>("user");
+  // Search + per-type filter narrow the active sub-tab's list. Both reset when
+  // the sub-tab changes so each sub-tab is entered unfiltered.
+  const [search, setSearch] = useState("");
+  const [virtualTypeFilter, setVirtualTypeFilter] = useState<VirtualTypeFilter>("all");
+  // Wraps the search field's label + input so it can be scrolled into view when
+  // the on-screen keyboard opens over the lower half of the screen (#1539).
+  const searchFieldRef = useRef<HTMLDivElement>(null);
+  const scrollSearchIntoView = () => {
+    // scrollIntoView finds the scroll parent itself and only scrolls when the
+    // element isn't already visible, so it can never push the field off-screen.
+    searchFieldRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   // The favorites collection (a user collection with is_favorite=true) is
   // promoted to a top-level toggle. RomM's schema theoretically allows more
@@ -159,7 +213,6 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
           } else {
             setCollectionsError(true);
           }
-          setPlatformGroups(!!settingsResult.collection_create_platform_groups);
           setOwnerScope(settingsResult.collection_owner_scope === "own" ? "own" : "all");
         })
         .catch(() => setCollectionsError(true))
@@ -167,11 +220,22 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     }
   }, [activeTab]);
 
-  // Reset the collections sub-tab on every entry into the Collections tab
-  // so the user lands on a predictable view (no persistence).
+  // Reset the collections sub-tab (and its search + per-type filter) on every
+  // entry into the Collections tab so the user lands on a predictable view (no
+  // persistence).
   const handleCollectionsTabClick = () => {
     setActiveSubTab("user");
+    setSearch("");
+    setVirtualTypeFilter("all");
     setActiveTab("collections");
+  };
+
+  // Switch sub-tabs and reset the per-sub-tab filters so a query typed in one
+  // sub-tab never silently hides another sub-tab's list.
+  const handleSubTabChange = (sub: CollectionSubTab) => {
+    setActiveSubTab(sub);
+    setSearch("");
+    setVirtualTypeFilter("all");
   };
 
   // --- Platforms tab handlers ---
@@ -206,6 +270,9 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     }
   };
 
+  // Whole-kind Enable/Disable All: flip every collection in the sub-tab and
+  // persist via the whole-kind callable (the server re-fetches the kind), so a
+  // huge id list never crosses the wire. Gated behind a confirm at the callsite.
   const handleSetAllCollections = async (enabled: boolean, scope: CollectionScope) => {
     const previous = collections.map((c) => ({ ...c }));
     // Optimistically flip only the entries in the active sub-tab.
@@ -217,6 +284,51 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     } catch {
       setCollections(previous);
     }
+  };
+
+  // Filtered-subset Enable/Disable All (a search or per-type filter is active):
+  // flip exactly the matched ids and persist them in one batch write, so the
+  // whole kind is never touched.
+  const handleBatchCollectionsSync = async (enabled: boolean, kind: CollectionKind, ids: string[]) => {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    const previous = collections.map((c) => ({ ...c }));
+    setCollections((prev) =>
+      prev.map((c) => (c.kind === kind && idSet.has(c.id) ? { ...c, sync_enabled: enabled } : c)),
+    );
+    try {
+      await saveCollectionsSync(ids, kind, enabled);
+    } catch {
+      setCollections(previous);
+    }
+  };
+
+  // Enable/Disable All entry point. When the current view is the whole kind
+  // (no search, and for Virtual no per-type filter) the whole-kind callable is
+  // used behind a ConfirmModal — it can flip a very large number. Otherwise the
+  // bounded matched set goes through the batch callable directly.
+  const handleCollectionsSetAll = (enabled: boolean, isWholeKind: boolean, matchedIds: string[]) => {
+    const kind = activeSubTab as CollectionKind;
+    if (isWholeKind) {
+      const label = SUB_TAB_LABELS[activeSubTab];
+      showModal(
+        <ConfirmModal
+          strTitle={enabled ? `Enable all ${label} collections?` : `Disable all ${label} collections?`}
+          strDescription={
+            enabled
+              ? `This turns on syncing for every collection in the ${label} tab, including any not currently shown. On a large library this can be a lot of collections.`
+              : `This turns off syncing for every collection in the ${label} tab, including any not currently shown.`
+          }
+          strOKButtonText={enabled ? "Enable All" : "Disable All"}
+          strCancelButtonText="Cancel"
+          onOK={() => {
+            detach(handleSetAllCollections(enabled, activeSubTab));
+          }}
+        />,
+      );
+      return;
+    }
+    detach(handleBatchCollectionsSync(enabled, kind, matchedIds));
   };
 
   const handleOwnerScopeChange = async (scope: CollectionOwnerScope) => {
@@ -319,33 +431,34 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     const kindFiltered = filterCollectionsBySubTab(collections, activeSubTab, includeFavoritesInMy);
     // Owner-scope filter runs OVER the kind sub-tab filter — under "Own" a
     // foreign collection is hidden from every kind tab (#1532).
-    const visible = filterCollectionsByOwnerScope(kindFiltered, ownerScope);
+    const scopeFiltered = filterCollectionsByOwnerScope(kindFiltered, ownerScope);
+    // Per-type filter (Virtual sub-tab only) narrows by virtual_type.
+    const showTypeFilter = activeSubTab === "virtual";
+    const typeFiltered =
+      showTypeFilter && virtualTypeFilter !== "all"
+        ? scopeFiltered.filter((c) => c.virtual_type === virtualTypeFilter)
+        : scopeFiltered;
+    // Search filter (fuzzy name match) is last, over the type-narrowed set.
+    const matched = search ? typeFiltered.filter((c) => fuzzyMatch(search, c.name)) : typeFiltered;
+    // The list is capped so the renderer never paints an unbounded set; the
+    // overflow is surfaced as a single hint row.
+    const rendered = matched.slice(0, COLLECTION_RENDER_CAP);
+    const overflow = matched.length - rendered.length;
+    // Whole-kind = nothing filtered (no search, "All" owner-scope, and for
+    // Virtual no per-type filter). Only then does Enable/Disable All use the
+    // whole-kind callable — under "Own" the owner-scoped `matched` set is a
+    // bounded subset, so it goes through the batch path instead of letting
+    // set_all_collections_sync stamp foreign collections.
+    const isWholeKind = search === "" && ownerScope === "all" && !(showTypeFilter && virtualTypeFilter !== "all");
+    const matchedIds = matched.map((c) => c.id);
+
     const activeLabel = SUB_TAB_LABELS[activeSubTab];
-    const sectionTitle = `${SUB_TAB_HEADERS[activeSubTab]} (${visible.length})`;
+    const sectionTitle = `${SUB_TAB_HEADERS[activeSubTab]} (${matched.length})`;
 
     return (
       <>
-        <PanelSection>
-          <PanelSectionRow>
-            <ToggleField
-              label="Show collection games in platform groups"
-              description="When syncing a collection, also add its games to their platform-specific Steam group."
-              checked={platformGroups}
-              onChange={(value: boolean) => {
-                setPlatformGroups(value);
-                detach(
-                  (async () => {
-                    try {
-                      await saveCollectionPlatformGroups(value);
-                    } catch {
-                      setPlatformGroups(!value);
-                    }
-                  })(),
-                );
-              }}
-            />
-          </PanelSectionRow>
-          {favoritesCollection && (
+        {favoritesCollection && (
+          <PanelSection>
             <PanelSectionRow>
               <ToggleField
                 label="Sync RomM favorites"
@@ -356,15 +469,15 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
                 }}
               />
             </PanelSectionRow>
-          )}
-        </PanelSection>
+          </PanelSection>
+        )}
         <PanelSection>
           <PanelSectionRow>
             <Field
               label="Show collections"
               description={
                 ownerScope === "own"
-                  ? "Only your own collections (virtual collections always sync)."
+                  ? "Only your own collections (virtual collections have no owner, so they always appear)."
                   : "Every collection on the server, including other users' public ones."
               }
             />
@@ -402,7 +515,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
                 opacity: activeSubTab === sub ? 1 : 0.5,
                 borderBottom: activeSubTab === sub ? "2px solid #1a9fff" : "2px solid transparent",
               }}
-              onClick={() => setActiveSubTab(sub)}
+              onClick={() => handleSubTabChange(sub)}
             >
               {SUB_TAB_LABELS[sub]}
             </DialogButton>
@@ -410,42 +523,114 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
         </Focusable>
         <PanelSection title={sectionTitle}>
           <PanelSectionRow>
+            <div ref={searchFieldRef}>
+              <TextField
+                label="Search collections"
+                value={search}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  // Bring the field into view on the first keystroke (empty →
+                  // non-empty), when the on-screen keyboard is actually in use
+                  // and would otherwise cover the field (#1539).
+                  if (search === "" && value !== "") {
+                    scrollSearchIntoView();
+                  }
+                  setSearch(value);
+                }}
+                // onFocus covers the "press A to edit" case; scrollIntoView is
+                // idempotent (no-op when already visible), so this is harmless.
+                onFocus={scrollSearchIntoView}
+                // Best-effort OSK dismissal: Enter (R2 on the keyboard) blurs the
+                // field. Whether R2/Enter reliably closes the OSK is Steam-
+                // controlled and UNVERIFIED — revisit in PR 2 (#1539). Harmless if
+                // it no-ops; do not claim it works.
+                onKeyDown={dismissKeyboardOnEnter}
+              />
+            </div>
+          </PanelSectionRow>
+          {showTypeFilter && (
+            <PanelSectionRow>
+              <Focusable
+                flow-children="horizontal"
+                // alignItems:stretch makes every button as tall as the tallest,
+                // so the wrapped "IGDB Collection" label reads as intentional
+                // rather than leaving the single-line buttons short. marginBottom
+                // separates this row from the Enable/Disable All row below (#1539).
+                style={{ display: "flex", gap: "8px", alignItems: "stretch", marginBottom: "12px" }}
+              >
+                {VIRTUAL_TYPE_FILTER_ORDER.map((type) => (
+                  <DialogButton
+                    key={type}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      padding: "8px 4px",
+                      // Center the label in the stretched button so a wrapped
+                      // two-line label sits centered like the single-line ones.
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      textAlign: "center",
+                      opacity: virtualTypeFilter === type ? 1 : 0.5,
+                      borderBottom: virtualTypeFilter === type ? "2px solid #1a9fff" : "2px solid transparent",
+                    }}
+                    onClick={() => setVirtualTypeFilter(type)}
+                  >
+                    {VIRTUAL_TYPE_FILTER_LABELS[type]}
+                  </DialogButton>
+                ))}
+              </Focusable>
+            </PanelSectionRow>
+          )}
+          <PanelSectionRow>
             <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px" }}>
               <DialogButton
                 style={{ flex: 1, minWidth: 0 }}
-                onClick={() => {
-                  detach(handleSetAllCollections(true, activeSubTab));
-                }}
+                onClick={() => handleCollectionsSetAll(true, isWholeKind, matchedIds)}
               >
                 Enable All
               </DialogButton>
               <DialogButton
                 style={{ flex: 1, minWidth: 0 }}
-                onClick={() => {
-                  detach(handleSetAllCollections(false, activeSubTab));
-                }}
+                onClick={() => handleCollectionsSetAll(false, isWholeKind, matchedIds)}
               >
                 Disable All
               </DialogButton>
             </Focusable>
           </PanelSectionRow>
-          {visible.length === 0 ? (
+          {matched.length === 0 ? (
             <PanelSectionRow>
-              <Field label={`No ${activeLabel.toLowerCase()} collections`} />
+              <Field
+                label={
+                  search
+                    ? `No ${activeLabel.toLowerCase()} collections match your search`
+                    : `No ${activeLabel.toLowerCase()} collections`
+                }
+              />
             </PanelSectionRow>
           ) : (
-            visible.map((collection) => (
-              <PanelSectionRow key={`${collection.kind}:${collection.id}`}>
-                <ToggleField
-                  label={collection.name}
-                  description={collectionRowDescription(collection)}
-                  checked={collection.sync_enabled}
-                  onChange={(value: boolean) => {
-                    detach(handleCollectionToggle(collection.id, collection.kind, value));
-                  }}
-                />
-              </PanelSectionRow>
-            ))
+            <>
+              {rendered.map((collection) => (
+                <PanelSectionRow key={`${collection.kind}:${collection.id}`}>
+                  <ToggleField
+                    label={collection.name}
+                    description={collectionRowDescription(collection)}
+                    checked={collection.sync_enabled}
+                    onChange={(value: boolean) => {
+                      detach(handleCollectionToggle(collection.id, collection.kind, value));
+                    }}
+                  />
+                </PanelSectionRow>
+              ))}
+              {overflow > 0 && (
+                <PanelSectionRow>
+                  <Field
+                    label={`${overflow} more — refine your search`}
+                    description="Type in the search box above to narrow the list."
+                  />
+                </PanelSectionRow>
+              )}
+            </>
           )}
         </PanelSection>
       </>

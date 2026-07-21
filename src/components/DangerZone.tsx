@@ -36,6 +36,7 @@ import { clearPlatformCollection, clearAllRomMCollections } from "../utils/colle
 import { formatUninstallStatus } from "../utils/formatters";
 import type { RegistryPlatform } from "../types";
 import { detach } from "../utils/detach";
+import { fuzzyMatch } from "../utils/fuzzyMatch";
 
 const DEFAULT_WHITELIST_PATTERNS: string[] = [
   "retrodeck",
@@ -54,17 +55,6 @@ const DEFAULT_WHITELIST_PATTERNS: string[] = [
   "return to gaming mode",
   "nonsteamlaunchers",
 ];
-
-// Fuzzy match: each character of the query must appear in order in the target (like fzf)
-const fuzzyMatch = (query: string, target: string): boolean => {
-  const q = query.toLowerCase();
-  const t = target.toLowerCase();
-  let qi = 0;
-  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
-    if (t[ti] === q[qi]) qi++;
-  }
-  return qi === q.length;
-};
 
 interface NonSteamApp {
   appId: number;

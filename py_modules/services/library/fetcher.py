@@ -348,6 +348,31 @@ class LibraryFetcher:
         self._settings_persister.save_settings()
         return {"success": True}
 
+    def save_collections_sync(self, collection_ids, kind, enabled):
+        """Batch-stamp a bounded set of collection ids into one kind's bucket.
+
+        The frontend uses this for the filtered-subset Enable/Disable All (a
+        search or per-type filter is active) so the whole-kind
+        ``set_all_collections_sync`` — which re-fetches every collection from the
+        server — stays reserved for the unfiltered case. One settings write
+        stamps every id in ``collection_ids`` to ``enabled`` in the ``kind``
+        bucket. An unknown kind or a non-list id argument is rejected with the
+        canonical failure shape; an empty id list is a success no-op (nothing to
+        stamp, no write).
+        """
+        if kind not in ("user", "smart", "virtual"):
+            return {"success": False, "reason": "invalid_kind", "message": f"Invalid collection kind: {kind}"}
+        if not isinstance(collection_ids, list):
+            return {"success": False, "reason": "invalid_ids", "message": "collection_ids must be a list"}
+        if not collection_ids:
+            return {"success": True}
+        buckets = self._get_enabled_collections_buckets()
+        for cid in collection_ids:
+            buckets[kind][str(cid)] = bool(enabled)
+        self._settings["enabled_collections"] = buckets
+        self._settings_persister.save_settings()
+        return {"success": True}
+
     async def set_all_collections_sync(self, enabled, scope=None):
         enabled = bool(enabled)
         if scope not in (None, "user", "smart", "virtual"):

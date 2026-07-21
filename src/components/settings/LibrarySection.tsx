@@ -1,13 +1,13 @@
 /**
- * Library-wide sync preferences. Currently houses the preferred-region
- * dropdown (ADR-0021 §3): which region wins when a game has several dumps
- * (versions) and the plugin must pick one to bind and to name the Steam
- * shortcut after. Pure renderer: parent owns the current value, the list of
- * regions discovered in the local library, and the save/confirm flow.
+ * Library-wide sync preferences. Houses set-and-forget library toggles: the
+ * preferred-region dropdown (ADR-0021 §3, which region wins when a game has
+ * several dumps and the plugin must pick one to bind + name the shortcut after)
+ * and the collection platform-groups toggle. Pure renderer: parent owns every
+ * value and the save/confirm flow.
  */
 
 import { FC } from "react";
-import { PanelSection, PanelSectionRow, DropdownItem } from "@decky/ui";
+import { PanelSection, PanelSectionRow, DropdownItem, ToggleField } from "@decky/ui";
 
 interface LibrarySectionProps {
   preferredRegion: string;
@@ -15,6 +15,11 @@ interface LibrarySectionProps {
   // backend get_known_regions read). Appended after the fixed anchors.
   libraryRegions: string[];
   onPreferredRegionChange: (region: string) => void;
+  // Whether a synced collection's games are also added to their platform's
+  // Steam group. A set-and-forget library preference, so it lives here rather
+  // than on the per-sync Collections tab.
+  platformGroups: boolean;
+  onPlatformGroupsChange: (enabled: boolean) => void;
 }
 
 // The internal sentinel for "no preference — use the fixed build-time order".
@@ -58,6 +63,8 @@ export const LibrarySection: FC<LibrarySectionProps> = ({
   preferredRegion,
   libraryRegions,
   onPreferredRegionChange,
+  platformGroups,
+  onPlatformGroupsChange,
 }) => {
   return (
     <PanelSection title="Library">
@@ -68,6 +75,14 @@ export const LibrarySection: FC<LibrarySectionProps> = ({
           rgOptions={buildRegionOptions(libraryRegions, preferredRegion)}
           selectedOption={preferredRegion}
           onChange={(option) => onPreferredRegionChange(option.data)}
+        />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ToggleField
+          label="Show collection games in platform groups"
+          description="When syncing a collection, also add its games to their platform-specific Steam group."
+          checked={platformGroups}
+          onChange={onPlatformGroupsChange}
         />
       </PanelSectionRow>
     </PanelSection>

@@ -1542,6 +1542,48 @@ describe("SettingsPage", () => {
       expect(vi.mocked(showPreferredRegionModal)).not.toHaveBeenCalled();
       expect(vi.mocked(backend.savePreferredRegion)).not.toHaveBeenCalled();
     });
+
+    it("hydrates platformGroups from getSettings", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        collection_create_platform_groups: true,
+      });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(capturedLibrary[capturedLibrary.length - 1]?.platformGroups).toBe(true);
+    });
+
+    it("defaults platformGroups to false when getSettings omits it", async () => {
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(capturedLibrary[capturedLibrary.length - 1]?.platformGroups).toBe(false);
+    });
+
+    it("onPlatformGroupsChange persists via saveCollectionPlatformGroups and flips the value", async () => {
+      vi.mocked(backend.saveCollectionPlatformGroups).mockResolvedValue({ success: true });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        capturedLibrary[capturedLibrary.length - 1]?.onPlatformGroupsChange(true);
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.saveCollectionPlatformGroups)).toHaveBeenCalledWith(true);
+      expect(capturedLibrary[capturedLibrary.length - 1]?.platformGroups).toBe(true);
+    });
+
+    it("reverts platformGroups when saveCollectionPlatformGroups rejects", async () => {
+      vi.mocked(backend.saveCollectionPlatformGroups).mockRejectedValue(new Error("boom"));
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        capturedLibrary[capturedLibrary.length - 1]?.onPlatformGroupsChange(true);
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // CATCH-REJECTION assert: rolled back to false.
+      expect(capturedLibrary[capturedLibrary.length - 1]?.platformGroups).toBe(false);
+    });
   });
 
   describe("save-sort migration handlers", () => {

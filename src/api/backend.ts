@@ -161,6 +161,13 @@ export const getCollections = callable<
 export const saveCollectionSync = callable<[string, CollectionKind, boolean], { success: boolean; message?: string }>(
   "save_collection_sync",
 );
+// Batch stamp for a bounded, filtered subset of collections (search / per-type
+// filter active). The whole-kind Enable/Disable All keeps setAllCollectionsSync
+// so a huge id list never crosses the wire.
+export const saveCollectionsSync = callable<
+  [string[], CollectionKind, boolean],
+  { success: boolean; reason?: string; message?: string }
+>("save_collections_sync");
 export const setAllCollectionsSync = callable<
   [boolean, "user" | "smart" | "virtual" | null],
   { success: boolean; message?: string }

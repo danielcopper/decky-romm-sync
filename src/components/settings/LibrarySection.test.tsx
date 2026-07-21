@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, fireEvent } from "@testing-library/react";
 import { createElement } from "react";
 import { LibrarySection, buildRegionOptions, DEFAULT_REGION_LABEL, AUTO_REGION } from "./LibrarySection";
 
@@ -28,6 +28,20 @@ vi.mock("@decky/ui", () => {
       captured.items.push(p);
       return createElement("div", { "data-testid": "dropdown" }, p.label as never);
     },
+    ToggleField: (p: AnyProps & { checked?: boolean; onChange?: (v: boolean) => void; label?: unknown }) =>
+      createElement(
+        "div",
+        {
+          "data-testid": "toggle",
+          "data-label": typeof p.label === "string" ? p.label : undefined,
+        },
+        createElement("input", {
+          type: "checkbox",
+          "data-testid": "toggle-input",
+          checked: p.checked ?? false,
+          onChange: (e: { target: { checked: boolean } }) => p.onChange?.(e.target.checked),
+        }),
+      ),
   };
 });
 
@@ -73,7 +87,13 @@ describe("LibrarySection", () => {
 
   it("renders the preferred-region dropdown with anchors + library regions", () => {
     render(
-      <LibrarySection preferredRegion={AUTO_REGION} libraryRegions={["Korea"]} onPreferredRegionChange={vi.fn()} />,
+      <LibrarySection
+        preferredRegion={AUTO_REGION}
+        libraryRegions={["Korea"]}
+        onPreferredRegionChange={vi.fn()}
+        platformGroups={false}
+        onPlatformGroupsChange={vi.fn()}
+      />,
     );
     expect(captured.items).toHaveLength(1);
     const item = captured.items[0];
@@ -82,13 +102,29 @@ describe("LibrarySection", () => {
   });
 
   it("forwards the current preferredRegion as selectedOption", () => {
-    render(<LibrarySection preferredRegion="Japan" libraryRegions={[]} onPreferredRegionChange={vi.fn()} />);
+    render(
+      <LibrarySection
+        preferredRegion="Japan"
+        libraryRegions={[]}
+        onPreferredRegionChange={vi.fn()}
+        platformGroups={false}
+        onPlatformGroupsChange={vi.fn()}
+      />,
+    );
     expect(captured.items[0]?.selectedOption).toBe("Japan");
   });
 
   it("dispatches onPreferredRegionChange with option.data when the dropdown fires", () => {
     const onChange = vi.fn();
-    render(<LibrarySection preferredRegion={AUTO_REGION} libraryRegions={[]} onPreferredRegionChange={onChange} />);
+    render(
+      <LibrarySection
+        preferredRegion={AUTO_REGION}
+        libraryRegions={[]}
+        onPreferredRegionChange={onChange}
+        platformGroups={false}
+        onPlatformGroupsChange={vi.fn()}
+      />,
+    );
     captured.items[0]?.onChange?.({ data: "Japan", label: "Japan" });
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenCalledWith("Japan");
@@ -96,8 +132,52 @@ describe("LibrarySection", () => {
 
   it("passes the auto sentinel straight through", () => {
     const onChange = vi.fn();
-    render(<LibrarySection preferredRegion="Europe" libraryRegions={[]} onPreferredRegionChange={onChange} />);
+    render(
+      <LibrarySection
+        preferredRegion="Europe"
+        libraryRegions={[]}
+        onPreferredRegionChange={onChange}
+        platformGroups={false}
+        onPlatformGroupsChange={vi.fn()}
+      />,
+    );
     captured.items[0]?.onChange?.({ data: AUTO_REGION, label: DEFAULT_REGION_LABEL });
     expect(onChange).toHaveBeenCalledWith(AUTO_REGION);
+  });
+
+  it("renders the platform-groups toggle reflecting the current value", () => {
+    const { container } = render(
+      <LibrarySection
+        preferredRegion={AUTO_REGION}
+        libraryRegions={[]}
+        onPreferredRegionChange={vi.fn()}
+        platformGroups={true}
+        onPlatformGroupsChange={vi.fn()}
+      />,
+    );
+    const toggle = container.querySelector<HTMLInputElement>(
+      '[data-label="Show collection games in platform groups"] input',
+    );
+    expect(toggle).not.toBeNull();
+    expect(toggle?.checked).toBe(true);
+  });
+
+  it("dispatches onPlatformGroupsChange when the platform-groups toggle fires", () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <LibrarySection
+        preferredRegion={AUTO_REGION}
+        libraryRegions={[]}
+        onPreferredRegionChange={vi.fn()}
+        platformGroups={false}
+        onPlatformGroupsChange={onChange}
+      />,
+    );
+    const toggle = container.querySelector<HTMLInputElement>(
+      '[data-label="Show collection games in platform groups"] input',
+    )!;
+    fireEvent.click(toggle);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(true);
   });
 });

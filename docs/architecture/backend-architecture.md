@@ -531,6 +531,15 @@ key while preserving every enabled id, so a previously-enabled franchise collect
 required. (The historical v2 → v3 split still produces the `franchise` bucket; the v10 → v11 step renames it afterwards,
 so that frozen step is untouched.)
 
+**Batch collection enable — `save_collections_sync` for a filtered subset (#1539).** The Collections tab adds a name
+search and (on Virtual) a per-type filter, and its **Enable All / Disable All** act on the current filter. When the view
+is a bounded subset (a search or per-type filter is active) the frontend calls `save_collections_sync` with the matched
+ids, the kind, and the enabled flag — a single settings write that stamps every id into the `kind` bucket, so the whole
+kind is never touched. An unknown kind or a non-list id argument is rejected with the canonical failure shape; an empty
+id list is a success no-op. The **unfiltered** whole-kind case still uses `set_all_collections_sync` (which re-fetches
+the kind from the server) so a large id list never crosses the WebSocket bridge; the frontend gates that whole-kind call
+behind a confirm. Both live on `LibraryFetcher`.
+
 **Collection owner-scope filter — "Own" is a sync scope, not just a display filter (#1532).** RomM's collection list
 endpoints return the signed-in user's own collections plus every other user's _public_ collection. The QAM
 `Show

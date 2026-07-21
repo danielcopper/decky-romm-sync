@@ -247,6 +247,45 @@ async def test_virtual_collection_enable_round_trips(harness):
     assert "error_code" not in rejected
 
 
+async def test_save_collections_sync_batch_round_trips(harness):
+    """The batch callable stamps every id in one write and reads back enabled."""
+    harness.romm.collections = [
+        {"id": 1, "name": "Alpha", "rom_count": 1},
+        {"id": 2, "name": "Beta", "rom_count": 1},
+        {"id": 3, "name": "Gamma", "rom_count": 1},
+    ]
+    result = await harness.plugin.save_collections_sync(["1", "3"], "user", True)
+    assert result == {"success": True}
+    bucket = harness.plugin.settings["enabled_collections"]["user"]
+    assert bucket["1"] is True
+    assert bucket["3"] is True
+    assert "2" not in bucket
+
+    listing = await harness.plugin.get_collections()
+    by_id = {c["id"]: c for c in listing["collections"]}
+    assert by_id["1"]["sync_enabled"] is True
+    assert by_id["2"]["sync_enabled"] is False
+    assert by_id["3"]["sync_enabled"] is True
+
+
+async def test_save_collections_sync_rejects_invalid_kind(harness):
+    """An unknown kind returns the canonical failure shape and stamps nothing."""
+    result = await harness.plugin.save_collections_sync(["1"], "franchise", True)
+    assert result["success"] is False
+    assert isinstance(result["reason"], str)
+    assert isinstance(result["message"], str) and result["message"]
+    assert "error" not in result
+    assert "error_code" not in result
+    assert harness.plugin.settings["enabled_collections"]["user"] == {}
+
+
+async def test_save_collections_sync_empty_ids_is_no_op(harness):
+    """An empty id list is a success no-op — nothing stamped."""
+    result = await harness.plugin.save_collections_sync([], "user", True)
+    assert result == {"success": True}
+    assert harness.plugin.settings["enabled_collections"]["user"] == {}
+
+
 async def test_set_collection_owner_scope_persists(harness):
     """set_collection_owner_scope stores the value and get_settings reports it back."""
     result = await harness.plugin.set_collection_owner_scope("own")

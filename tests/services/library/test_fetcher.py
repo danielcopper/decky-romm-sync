@@ -339,6 +339,92 @@ class TestGetCollectionsVirtualFailOpen:
         assert not [c for c in result["collections"] if c.get("virtual_type") == "franchise"]
 
 
+class TestSaveCollectionsSync:
+    """save_collections_sync — batch-stamp a filtered subset into one kind bucket (#1539)."""
+
+    def test_stamps_multiple_ids_in_one_write(self, plugin):
+        """Every id in the list lands enabled in the kind bucket, one persist."""
+        plugin.settings["enabled_collections"] = {"user": {}, "smart": {}, "virtual": {}}
+        recorder = plugin._settings_persister
+
+        result = plugin._sync_service._fetcher.save_collections_sync(["10", "20", "30"], "user", True)
+
+        assert result == {"success": True}
+        bucket = plugin.settings["enabled_collections"]["user"]
+        assert bucket == {"10": True, "20": True, "30": True}
+        # A single settings write for the whole batch.
+        assert recorder.save_count == 1
+
+    def test_disable_stamps_false_without_touching_other_buckets(self, plugin):
+        """Disabling a subset writes False for those ids and leaves siblings intact."""
+        plugin.settings["enabled_collections"] = {
+            "user": {},
+            "smart": {"5": True, "6": True},
+            "virtual": {},
+        }
+
+        result = plugin._sync_service._fetcher.save_collections_sync(["5"], "smart", False)
+
+        assert result == {"success": True}
+        assert plugin.settings["enabled_collections"]["smart"] == {"5": False, "6": True}
+
+    def test_coerces_non_string_ids_to_string_keys(self, plugin):
+        """Integer ids are coerced to string keys (parity with save_collection_sync)."""
+        plugin.settings["enabled_collections"] = {"user": {}, "smart": {}, "virtual": {}}
+
+        plugin._sync_service._fetcher.save_collections_sync([7, 8], "user", True)
+
+        bucket = plugin.settings["enabled_collections"]["user"]
+        assert bucket == {"7": True, "8": True}
+
+    def test_rejects_invalid_kind_with_failure_shape(self, plugin):
+        """An unknown kind is rejected with the canonical failure shape, no write."""
+        recorder = plugin._settings_persister
+
+        result = plugin._sync_service._fetcher.save_collections_sync(["1"], "bogus", True)
+
+        assert result["success"] is False
+        assert result["reason"] == "invalid_kind"
+        assert "Invalid collection kind" in result["message"]
+        assert "error" not in result
+        assert "error_code" not in result
+        assert recorder.save_count == 0
+
+    def test_rejects_non_list_ids_with_failure_shape(self, plugin):
+        """A non-list ids argument from the wire is rejected, no write."""
+        recorder = plugin._settings_persister
+
+        result = plugin._sync_service._fetcher.save_collections_sync("not-a-list", "user", True)
+
+        assert result["success"] is False
+        assert result["reason"] == "invalid_ids"
+        assert isinstance(result["message"], str) and result["message"]
+        assert recorder.save_count == 0
+
+    def test_empty_ids_is_a_success_no_op(self, plugin):
+        """An empty id list stamps nothing and does not write settings."""
+        plugin.settings["enabled_collections"] = {"user": {"1": True}, "smart": {}, "virtual": {}}
+        recorder = plugin._settings_persister
+
+        result = plugin._sync_service._fetcher.save_collections_sync([], "user", True)
+
+        assert result == {"success": True}
+        # Unchanged bucket, no persist.
+        assert plugin.settings["enabled_collections"]["user"] == {"1": True}
+        assert recorder.save_count == 0
+
+    def test_materializes_missing_buckets_before_stamping(self, plugin):
+        """A settings dict seeded without enabled_collections gets all buckets."""
+        plugin.settings.pop("enabled_collections", None)
+
+        plugin._sync_service._fetcher.save_collections_sync(["100"], "virtual", True)
+
+        ec = plugin.settings["enabled_collections"]
+        assert ec["virtual"]["100"] is True
+        assert ec["user"] == {}
+        assert ec["smart"] == {}
+
+
 class TestBuildWorkQueueOwnerScope:
     """build_work_queue applies the collection owner-scope filter (#1532)."""
 

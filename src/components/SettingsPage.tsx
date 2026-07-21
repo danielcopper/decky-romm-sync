@@ -18,6 +18,7 @@ import {
   syncAllSaves,
   saveLogLevel,
   savePreferredRegion,
+  saveCollectionPlatformGroups,
   getKnownRegions,
   fixRetroarchInputDriver,
   ensureDeviceRegistered,
@@ -95,6 +96,8 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   // Library state (preferred sibling-group region, ADR-0021)
   const [preferredRegion, setPreferredRegion] = useState(AUTO_REGION);
   const [libraryRegions, setLibraryRegions] = useState<string[]>([]);
+  // Collection platform-groups toggle (relocated from the Collections tab, #1539).
+  const [platformGroups, setPlatformGroups] = useState(false);
 
   useEffect(() => {
     getSettings()
@@ -107,6 +110,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         setSteamInputMode(s.steam_input_mode);
         setLogLevel(s.log_level);
         setPreferredRegion(s.preferred_region ?? AUTO_REGION);
+        setPlatformGroups(!!s.collection_create_platform_groups);
         if (s.retroarch_input_check) {
           setRetroarchWarning(s.retroarch_input_check);
         }
@@ -452,6 +456,20 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
     );
   };
 
+  // --- Collection platform-groups handler ---
+  const handlePlatformGroupsChange = (value: boolean) => {
+    setPlatformGroups(value);
+    detach(
+      (async () => {
+        try {
+          await saveCollectionPlatformGroups(value);
+        } catch {
+          setPlatformGroups(!value);
+        }
+      })(),
+    );
+  };
+
   // --- Save sort migration handlers ---
   const handleMigrateSaveSort = async () => {
     setSaveSortMigrating(true);
@@ -585,6 +603,8 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         preferredRegion={preferredRegion}
         libraryRegions={libraryRegions}
         onPreferredRegionChange={handlePreferredRegionChange}
+        platformGroups={platformGroups}
+        onPlatformGroupsChange={handlePlatformGroupsChange}
       />
 
       <AdvancedSection logLevel={logLevel} onLogLevelChange={handleLogLevelChange} />

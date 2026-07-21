@@ -27,11 +27,13 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { LibraryPage } from "./LibraryPage";
 import * as backend from "../api/backend";
+import { showModal } from "@decky/ui";
 import type { PlatformSyncSetting, CollectionSyncSetting, PluginSettings } from "../types";
 
-// scrollToTop is a no-op in happy-dom; mock for cleanliness.
+// scroll helpers are no-ops in happy-dom; mock for cleanliness.
 vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
 
 // Re-mock @decky/ui locally so the component tree renders with inspectable
@@ -61,6 +63,25 @@ vi.mock("@decky/ui", async () => {
     Focusable: passthrough("div"),
     DialogButton: ({ children, onClick }: AnyProps & { onClick?: () => void }) =>
       ce("button", { onClick }, children as never),
+    TextField: (
+      p: AnyProps & {
+        value?: string;
+        onChange?: (e: unknown) => void;
+        onFocus?: (e: unknown) => void;
+        onKeyDown?: (e: unknown) => void;
+      },
+    ) =>
+      ce("input", {
+        "data-testid": "text-field",
+        value: p.value ?? "",
+        onChange: (e: unknown) => p.onChange?.(e),
+        onFocus: (e: unknown) => p.onFocus?.(e),
+        onKeyDown: (e: unknown) => p.onKeyDown?.(e),
+      }),
+    // A no-render stub — showModal captures the element, so the modal body is
+    // inspected off the showModal mock, not the DOM.
+    ConfirmModal: () => null,
+    showModal: vi.fn(),
     ToggleField: (
       p: AnyProps & {
         checked?: boolean;
@@ -87,6 +108,15 @@ vi.mock("@decky/ui", async () => {
     Spinner: () => ce("div", { "data-testid": "spinner" }),
   };
 });
+
+// Inspect the last ConfirmModal shown via showModal (the whole-kind Enable/
+// Disable All confirm), and drive its onOK.
+function lastConfirmModalProps<T = Record<string, unknown>>(): T | null {
+  const calls = vi.mocked(showModal).mock.calls;
+  if (calls.length === 0) return null;
+  const el = calls[calls.length - 1]?.[0] as ReactElement<T> | undefined;
+  return el?.props ?? null;
+}
 
 // Flush mount-time + chained promise resolutions.
 const flushAsync = () =>
@@ -151,12 +181,14 @@ describe("LibraryPage", () => {
       collections: [],
     });
     vi.mocked(backend.saveCollectionSync).mockResolvedValue({ success: true });
+    vi.mocked(backend.saveCollectionsSync).mockResolvedValue({ success: true });
     vi.mocked(backend.setAllCollectionsSync).mockResolvedValue({ success: true });
-    vi.mocked(backend.saveCollectionPlatformGroups).mockResolvedValue({
-      success: true,
-    });
     vi.mocked(backend.setCollectionOwnerScope).mockResolvedValue({ success: true });
     vi.mocked(backend.getSettings).mockResolvedValue(defaultSettings());
+    vi.mocked(showModal).mockReset();
+    // happy-dom doesn't implement scrollIntoView; the search field calls it on
+    // the first keystroke / focus. Stub it so those paths are safe + spyable.
+    HTMLElement.prototype.scrollIntoView = vi.fn();
   });
 
   // ------------------------------------------------------------------
@@ -398,14 +430,10 @@ describe("LibraryPage", () => {
   // E. Collections tab — mount (lazy load)
   // ------------------------------------------------------------------
   describe("collections tab — mount", () => {
-    it("populates collections + platformGroups from Promise.all on success", async () => {
+    it("populates collections from Promise.all on success", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [makeCollection({ id: "u1", name: "MyColl", kind: "user", is_favorite: false })],
-      });
-      vi.mocked(backend.getSettings).mockResolvedValue({
-        ...defaultSettings(),
-        collection_create_platform_groups: true,
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -415,33 +443,6 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       expect(container.textContent).toContain("MyColl");
-      // platformGroups true → the renamed toggle is checked.
-      const platformGroupsToggle = container.querySelector<HTMLInputElement>(
-        '[data-label="Show collection games in platform groups"] input',
-      );
-      expect(platformGroupsToggle?.checked).toBe(true);
-    });
-
-    it("falsy collection_create_platform_groups maps to checked=false", async () => {
-      vi.mocked(backend.getCollections).mockResolvedValue({
-        success: true,
-        collections: [makeCollection({ id: "c1" })],
-      });
-      vi.mocked(backend.getSettings).mockResolvedValue({
-        ...defaultSettings(),
-        collection_create_platform_groups: false,
-      });
-      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
-      await flushAsync();
-      await act(async () => {
-        fireEvent.click(getByText("Collections"));
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      const platformGroupsToggle = container.querySelector<HTMLInputElement>(
-        '[data-label="Show collection games in platform groups"] input',
-      );
-      expect(platformGroupsToggle?.checked).toBe(false);
     });
 
     it("surfaces an error when getCollections returns success=false", async () => {
@@ -573,10 +574,10 @@ describe("LibraryPage", () => {
   });
 
   // ------------------------------------------------------------------
-  // G. Collections tab — Enable/Disable All + platform-groups toggle
+  // G. Collections tab — Enable/Disable All (whole-kind confirm path)
   // ------------------------------------------------------------------
-  describe("collections tab — set-all + platform groups", () => {
-    it("calls setAllCollectionsSync(true, 'user') on Enable All in default My sub-tab", async () => {
+  describe("collections tab — whole-kind Enable/Disable All", () => {
+    it("Enable All with no filter opens a confirm and only calls setAllCollectionsSync on OK", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [makeCollection({ id: "c1", kind: "user", is_favorite: false, sync_enabled: false })],
@@ -592,13 +593,24 @@ describe("LibraryPage", () => {
         fireEvent.click(getByText("Enable All"));
         await Promise.resolve();
       });
+      // The confirm is shown; nothing persisted yet.
+      expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(backend.setAllCollectionsSync)).not.toHaveBeenCalled();
+      // Drive the modal's onOK.
+      const props = lastConfirmModalProps<{ onOK?: () => void }>();
+      await act(async () => {
+        props?.onOK?.();
+        await Promise.resolve();
+      });
       expect(vi.mocked(backend.setAllCollectionsSync)).toHaveBeenCalledWith(true, "user");
+      // The batch callable is never used on the whole-kind path.
+      expect(vi.mocked(backend.saveCollectionsSync)).not.toHaveBeenCalled();
     });
 
-    it("calls setAllCollectionsSync(true, 'smart') when Smart sub-tab is active", async () => {
+    it("Disable All with no filter confirms then calls setAllCollectionsSync(false, scope) on the active sub-tab", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "s1", name: "S1", sync_enabled: false, kind: "smart", is_favorite: false })],
+        collections: [makeCollection({ id: "s1", name: "S1", sync_enabled: true, kind: "smart", is_favorite: false })],
       });
       const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -612,10 +624,15 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       await act(async () => {
-        fireEvent.click(getByText("Enable All"));
+        fireEvent.click(getByText("Disable All"));
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.setAllCollectionsSync)).toHaveBeenCalledWith(true, "smart");
+      const props = lastConfirmModalProps<{ onOK?: () => void }>();
+      await act(async () => {
+        props?.onOK?.();
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.setAllCollectionsSync)).toHaveBeenCalledWith(false, "smart");
     });
 
     it("restores the previous collections snapshot on setAllCollectionsSync rejection", async () => {
@@ -637,6 +654,11 @@ describe("LibraryPage", () => {
       await act(async () => {
         fireEvent.click(getByText("Disable All"));
         await Promise.resolve();
+      });
+      const props = lastConfirmModalProps<{ onOK?: () => void }>();
+      await act(async () => {
+        props?.onOK?.();
+        await Promise.resolve();
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -647,10 +669,10 @@ describe("LibraryPage", () => {
       expect(b?.checked).toBe(false);
     });
 
-    it("toggling 'Show collection games in platform groups' calls saveCollectionPlatformGroups", async () => {
+    it("does not render the platform-groups toggle on the Collections tab (moved to Settings)", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "c1" })],
+        collections: [makeCollection({ id: "c1", kind: "user", is_favorite: false })],
       });
       const { container, getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -659,43 +681,7 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      const toggle = container.querySelector<HTMLInputElement>(
-        '[data-label="Show collection games in platform groups"] input',
-      )!;
-      await act(async () => {
-        fireEvent.click(toggle);
-        await Promise.resolve();
-      });
-      expect(vi.mocked(backend.saveCollectionPlatformGroups)).toHaveBeenCalledWith(true);
-    });
-
-    it("reverts platformGroups state when saveCollectionPlatformGroups rejects", async () => {
-      vi.mocked(backend.getCollections).mockResolvedValue({
-        success: true,
-        collections: [makeCollection({ id: "c1" })],
-      });
-      vi.mocked(backend.saveCollectionPlatformGroups).mockRejectedValue(new Error("x"));
-      const { container, getByText } = render(<LibraryPage onBack={vi.fn()} />);
-      await flushAsync();
-      await act(async () => {
-        fireEvent.click(getByText("Collections"));
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      const toggle = container.querySelector<HTMLInputElement>(
-        '[data-label="Show collection games in platform groups"] input',
-      )!;
-      await act(async () => {
-        fireEvent.click(toggle);
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      // CATCH-REJECTION assert: rolled back to false
-      const after = container.querySelector<HTMLInputElement>(
-        '[data-label="Show collection games in platform groups"] input',
-      )!;
-      expect(after.checked).toBe(false);
+      expect(container.querySelector('[data-label="Show collection games in platform groups"]')).toBeNull();
     });
   });
 
@@ -1182,6 +1168,340 @@ describe("LibraryPage", () => {
       // back to "all", so the foreign collection is visible again.
       expect(vi.mocked(backend.setCollectionOwnerScope)).toHaveBeenCalledWith("own");
       expect(container.querySelector('[data-label="TheirColl"]')).not.toBeNull();
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // N2. Collections tab — search + render-cap + per-type filter + batch set-all
+  // ------------------------------------------------------------------
+  describe("collections tab — search, render-cap, per-type filter, batch set-all", () => {
+    const openCollections = async (getByText: (t: string) => HTMLElement) => {
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    };
+
+    const typeSearch = async (getByTestId: (t: string) => HTMLElement, value: string) => {
+      await act(async () => {
+        fireEvent.change(getByTestId("text-field"), { target: { value } });
+        await Promise.resolve();
+      });
+    };
+
+    it("filters the visible list by fuzzy name match and restores it when cleared", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "u1", name: "Action Heroes", kind: "user", is_favorite: false }),
+          makeCollection({ id: "u2", name: "Puzzle Box", kind: "user", is_favorite: false }),
+        ],
+      });
+      const { getByText, getByTestId, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      // "actn" is an in-order subsequence of "Action Heroes" but not "Puzzle Box".
+      await typeSearch(getByTestId, "actn");
+      expect(container.querySelector('[data-label="Action Heroes"]')).not.toBeNull();
+      expect(container.querySelector('[data-label="Puzzle Box"]')).toBeNull();
+      // Clearing restores both.
+      await typeSearch(getByTestId, "");
+      expect(container.querySelector('[data-label="Action Heroes"]')).not.toBeNull();
+      expect(container.querySelector('[data-label="Puzzle Box"]')).not.toBeNull();
+    });
+
+    it("Enter on the search field blurs it (dismisses the on-screen keyboard)", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [makeCollection({ id: "u1", name: "Action Heroes", kind: "user", is_favorite: false })],
+      });
+      const { getByText, getByTestId } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      const field = getByTestId("text-field") as HTMLInputElement;
+      field.focus();
+      expect(document.activeElement).toBe(field);
+      await act(async () => {
+        fireEvent.keyDown(field, { key: "Enter" });
+        await Promise.resolve();
+      });
+      // The handler blurs the active element, which is what dismisses the OSK.
+      expect(document.activeElement).not.toBe(field);
+    });
+
+    it("scrolls the search field into view on the FIRST keystroke only (not on later keystrokes)", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [makeCollection({ id: "u1", name: "Action Heroes", kind: "user", is_favorite: false })],
+      });
+      const scrollIntoView = vi.mocked(HTMLElement.prototype.scrollIntoView);
+      const { getByText, getByTestId } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      scrollIntoView.mockClear();
+      // First keystroke: empty → non-empty → scroll the field into view.
+      await typeSearch(getByTestId, "a");
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+      // Later keystrokes (still non-empty) must NOT re-scroll.
+      await typeSearch(getByTestId, "ac");
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    });
+
+    it("scrolls the search field into view when it gains focus", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [makeCollection({ id: "u1", name: "Action Heroes", kind: "user", is_favorite: false })],
+      });
+      const scrollIntoView = vi.mocked(HTMLElement.prototype.scrollIntoView);
+      const { getByText, getByTestId } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      scrollIntoView.mockClear();
+      await act(async () => {
+        fireEvent.focus(getByTestId("text-field"));
+        await Promise.resolve();
+      });
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+    });
+
+    it("caps the rendered rows and shows a '<n> more' hint past the cap", async () => {
+      const many: CollectionSyncSetting[] = Array.from({ length: 60 }, (_, i) =>
+        makeCollection({
+          id: `u${i}`,
+          name: `Coll ${String(i).padStart(3, "0")}`,
+          kind: "user",
+          is_favorite: false,
+        }),
+      );
+      vi.mocked(backend.getCollections).mockResolvedValue({ success: true, collections: many });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      // Never paints more than the cap (50): exactly 50 toggle rows, not 60.
+      const toggles = container.querySelectorAll('[data-testid="toggle-input"]');
+      expect(toggles).toHaveLength(50);
+      // The overflow (60 - 50 = 10) is surfaced as a single hint row.
+      expect(container.textContent).toContain("10 more — refine your search");
+      // The section header still reflects the full match count.
+      expect(container.textContent).toContain("MY COLLECTIONS (60)");
+    });
+
+    it("search narrows a huge list below the cap and drops the hint", async () => {
+      const many: CollectionSyncSetting[] = Array.from({ length: 60 }, (_, i) =>
+        makeCollection({
+          id: `u${i}`,
+          name: `Coll ${String(i).padStart(3, "0")}`,
+          kind: "user",
+          is_favorite: false,
+        }),
+      );
+      vi.mocked(backend.getCollections).mockResolvedValue({ success: true, collections: many });
+      const { getByText, getByTestId, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      // "coll 001" matches exactly one collection.
+      await typeSearch(getByTestId, "coll 001");
+      const toggles = container.querySelectorAll('[data-testid="toggle-input"]');
+      expect(toggles).toHaveLength(1);
+      expect(container.textContent).not.toContain("more — refine your search");
+    });
+
+    it("shows the per-type filter only on the Virtual sub-tab", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "u1", name: "UserOne", kind: "user", is_favorite: false }),
+          makeCollection({ id: "fr1", name: "Fr1", kind: "virtual", virtual_type: "franchise", is_favorite: false }),
+        ],
+      });
+      const { getByText, queryByText } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      // On the default My sub-tab the per-type labels are absent.
+      expect(queryByText("Franchise")).toBeNull();
+      expect(queryByText("IGDB Collection")).toBeNull();
+      // On the Virtual sub-tab they appear.
+      await act(async () => {
+        fireEvent.click(getByText("Virtual"));
+        await Promise.resolve();
+      });
+      expect(getByText("Franchise")).not.toBeNull();
+      expect(getByText("IGDB Collection")).not.toBeNull();
+    });
+
+    it("the per-type filter narrows the Virtual list by virtual_type", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({
+            id: "fr1",
+            name: "FranchiseOne",
+            kind: "virtual",
+            virtual_type: "franchise",
+            is_favorite: false,
+          }),
+          makeCollection({
+            id: "vc1",
+            name: "SeriesOne",
+            kind: "virtual",
+            virtual_type: "collection",
+            is_favorite: false,
+          }),
+        ],
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      await act(async () => {
+        fireEvent.click(getByText("Virtual"));
+        await Promise.resolve();
+      });
+      // Both visible under "All".
+      expect(container.querySelector('[data-label="FranchiseOne"]')).not.toBeNull();
+      expect(container.querySelector('[data-label="SeriesOne"]')).not.toBeNull();
+      // Narrow to Franchise → only the franchise-typed row remains.
+      await act(async () => {
+        fireEvent.click(getByText("Franchise"));
+        await Promise.resolve();
+      });
+      expect(container.querySelector('[data-label="FranchiseOne"]')).not.toBeNull();
+      expect(container.querySelector('[data-label="SeriesOne"]')).toBeNull();
+    });
+
+    it("Enable All with an active search uses the batch callable with only the matched ids", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "u1", name: "Action Heroes", kind: "user", is_favorite: false, sync_enabled: false }),
+          makeCollection({ id: "u2", name: "Action Squad", kind: "user", is_favorite: false, sync_enabled: false }),
+          makeCollection({ id: "u3", name: "Puzzle Box", kind: "user", is_favorite: false, sync_enabled: false }),
+        ],
+      });
+      const { getByText, getByTestId } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      await typeSearch(getByTestId, "action");
+      await act(async () => {
+        fireEvent.click(getByText("Enable All"));
+        await Promise.resolve();
+      });
+      // No confirm (bounded subset), no whole-kind call, batch with only matches.
+      expect(vi.mocked(showModal)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.setAllCollectionsSync)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.saveCollectionsSync)).toHaveBeenCalledWith(["u1", "u2"], "user", true);
+    });
+
+    it("Enable All under 'Own' scope (empty search) batches the own ids and never takes the whole-kind path", async () => {
+      // Own scope makes the visible set a bounded subset (one user's own
+      // collections), so Enable-All must NOT stamp the whole kind — no confirm,
+      // no set_all_collections_sync, and the foreign id is excluded.
+      vi.mocked(backend.getSettings).mockResolvedValue({ ...defaultSettings(), collection_owner_scope: "own" });
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({
+            id: "u1",
+            name: "MineOne",
+            kind: "user",
+            is_favorite: false,
+            is_own: true,
+            sync_enabled: false,
+          }),
+          makeCollection({
+            id: "u2",
+            name: "MineTwo",
+            kind: "user",
+            is_favorite: false,
+            is_own: true,
+            sync_enabled: false,
+          }),
+          makeCollection({
+            id: "u3",
+            name: "TheirOne",
+            kind: "user",
+            is_favorite: false,
+            is_own: false,
+            sync_enabled: false,
+          }),
+        ],
+      });
+      const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      await act(async () => {
+        fireEvent.click(getByText("Enable All"));
+        await Promise.resolve();
+      });
+      expect(vi.mocked(showModal)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.setAllCollectionsSync)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.saveCollectionsSync)).toHaveBeenCalledWith(["u1", "u2"], "user", true);
+    });
+
+    it("Disable All under an active per-type filter batches only that type's ids", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({
+            id: "fr1",
+            name: "FranchiseOne",
+            kind: "virtual",
+            virtual_type: "franchise",
+            is_favorite: false,
+            sync_enabled: true,
+          }),
+          makeCollection({
+            id: "fr2",
+            name: "FranchiseTwo",
+            kind: "virtual",
+            virtual_type: "franchise",
+            is_favorite: false,
+            sync_enabled: true,
+          }),
+          makeCollection({
+            id: "vc1",
+            name: "SeriesOne",
+            kind: "virtual",
+            virtual_type: "collection",
+            is_favorite: false,
+            sync_enabled: true,
+          }),
+        ],
+      });
+      const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      await act(async () => {
+        fireEvent.click(getByText("Virtual"));
+        await Promise.resolve();
+      });
+      await act(async () => {
+        fireEvent.click(getByText("Franchise"));
+        await Promise.resolve();
+      });
+      await act(async () => {
+        fireEvent.click(getByText("Disable All"));
+        await Promise.resolve();
+      });
+      expect(vi.mocked(showModal)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.setAllCollectionsSync)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.saveCollectionsSync)).toHaveBeenCalledWith(["fr1", "fr2"], "virtual", false);
+    });
+
+    it("rolls back the optimistic batch flip when saveCollectionsSync rejects", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "u1", name: "Action Heroes", kind: "user", is_favorite: false, sync_enabled: false }),
+          makeCollection({ id: "u2", name: "Puzzle Box", kind: "user", is_favorite: false, sync_enabled: false }),
+        ],
+      });
+      vi.mocked(backend.saveCollectionsSync).mockRejectedValue(new Error("boom"));
+      const { getByText, getByTestId, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      await typeSearch(getByTestId, "action");
+      await act(async () => {
+        fireEvent.click(getByText("Enable All"));
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // Clear the search to bring both rows back into view and assert the flip
+      // rolled back (Action Heroes is unchecked again).
+      await typeSearch(getByTestId, "");
+      const a = container.querySelector<HTMLInputElement>('[data-label="Action Heroes"] input');
+      expect(a?.checked).toBe(false);
     });
   });
 

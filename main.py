@@ -333,6 +333,10 @@ class Plugin:
         return self._sync_service.save_collection_sync(collection_id, kind, enabled)
 
     @migration_blocked
+    async def save_collections_sync(self, collection_ids, kind, enabled):
+        return self._sync_service.save_collections_sync(collection_ids, kind, enabled)
+
+    @migration_blocked
     async def set_all_collections_sync(self, enabled, scope=None):
         return await self._sync_service.set_all_collections_sync(enabled, scope)
 
