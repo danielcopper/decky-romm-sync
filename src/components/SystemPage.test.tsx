@@ -1696,6 +1696,40 @@ describe("SystemPage", () => {
   });
 
   // ------------------------------------------------------------------
+  // N4. Platform separators (#1534) — one divider between platform blocks,
+  // none between the rows of a single platform. The intra-row
+  // `bottomSeparator="none"` props are invisible through the @decky/ui mock
+  // (it ignores the prop), so only the between-platform rule is asserted here;
+  // the "no lines within a platform" look is confirmed on-device.
+  // ------------------------------------------------------------------
+  describe("platform separators", () => {
+    it("renders no separator when only one platform is synced", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [makeBiosPlatform({ platform_slug: "snes" })],
+      });
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(container.querySelectorAll('[data-testid="platform-separator"]')).toHaveLength(0);
+    });
+
+    it("renders exactly one separator between each adjacent pair of synced platforms (N-1)", async () => {
+      vi.mocked(backend.getFirmwareStatus).mockResolvedValue({
+        success: true,
+        platforms: [
+          makeBiosPlatform({ platform_slug: "snes" }),
+          makeBiosPlatform({ platform_slug: "ps1" }),
+          makeBiosPlatform({ platform_slug: "n64" }),
+        ],
+      });
+      const { container } = render(<SystemPage onBack={vi.fn()} />);
+      await flushAsync();
+      // Three platforms → two dividers; none trails the last platform.
+      expect(container.querySelectorAll('[data-testid="platform-separator"]')).toHaveLength(2);
+    });
+  });
+
+  // ------------------------------------------------------------------
   // O. Back button
   // ------------------------------------------------------------------
   describe("back button", () => {
