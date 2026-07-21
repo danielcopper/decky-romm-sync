@@ -74,7 +74,7 @@ class SlotListing:
             }
 
         rom_state, device_id = await self._loop.run_in_executor(None, self._read_inputs, rom_id)
-        default_slot = resolve_default_slot(self._settings) or "autosave"
+        default_slot = resolve_default_slot(self._settings)
         # ROM not tracked → fall back to the global default slot. ROM
         # tracked with ``active_slot=None`` → preserve legacy mode (None
         # means "no slots"; the persisted slots dict will contain ``""``).

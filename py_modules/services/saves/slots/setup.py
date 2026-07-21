@@ -118,7 +118,7 @@ class SetupWizard:
         # saves the user already had. Surface a distinct recommendation so
         # the frontend can hold the wizard and offer a retry instead.
         game_state, device_id = await self._loop.run_in_executor(None, self._read_setup_inputs, rom_id)
-        default_slot = resolve_default_slot(self._settings) or "autosave"
+        default_slot = resolve_default_slot(self._settings)
         try:
             server_saves: list[dict[str, Any]] = await self._loop.run_in_executor(
                 None,
