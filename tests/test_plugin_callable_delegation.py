@@ -136,6 +136,13 @@ class TestSettingsCallableDelegation:
         assert result == {"ok": True}
 
     @pytest.mark.asyncio
+    async def test_set_collection_owner_scope_delegates(self, plugin):
+        plugin._settings_service.set_collection_owner_scope.return_value = {"success": True}
+        result = await plugin.set_collection_owner_scope("own")
+        plugin._settings_service.set_collection_owner_scope.assert_called_once_with("own")
+        assert result == {"success": True}
+
+    @pytest.mark.asyncio
     async def test_debug_log_routes_through_frontend_log(self, plugin):
         await plugin.debug_log("hello")
         plugin._settings_service.frontend_log.assert_called_once_with("debug", "hello")

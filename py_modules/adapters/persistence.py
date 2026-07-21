@@ -41,9 +41,19 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "romm_api_token_id": None,
     "romm_api_token_origin": None,
     "romm_api_token_source": None,
+    # The signed-in RomM user's own id (``/api/users/me`` ``id``), or ``None``
+    # when identity is not yet known. Bound to the token like the device id —
+    # stamped at sign-in, backfilled lazily on a connection check, cleared on
+    # sign-out. Drives the collection owner-scope filter; ``None`` makes "Own"
+    # behave like "All" (the non-breaking fallback).
+    "romm_user_id": None,
     "enabled_platforms": {},
     "enabled_collections": {"user": {}, "smart": {}, "franchise": {}},
     "collection_create_platform_groups": False,
+    # QAM collection owner-scope: ``"all"`` (default — every collection the
+    # server lists) or ``"own"`` (only the signed-in user's own collections;
+    # franchise/virtual collections have no owner and always survive).
+    "collection_owner_scope": "all",
     "preferred_region": "auto",
     "steam_input_mode": "default",
     "steamgriddb_api_key": "",

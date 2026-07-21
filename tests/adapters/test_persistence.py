@@ -101,6 +101,12 @@ class TestSettingsSchema:
     def test_default_settings_carry_empty_platform_cores(self):
         assert DEFAULT_SETTINGS["platform_cores"] == {}
 
+    def test_default_settings_carry_owner_scope_defaults(self):
+        # Identity unknown and scope "all" by default → the "Own" filter is inert
+        # on a fresh install, matching today's behaviour (#1532).
+        assert DEFAULT_SETTINGS["romm_user_id"] is None
+        assert DEFAULT_SETTINGS["collection_owner_scope"] == "all"
+
     def test_mutable_default_is_not_aliased_to_template(self, adapter):
         """A missing key is backfilled with a COPY of its mutable default.
 

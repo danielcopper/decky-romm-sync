@@ -339,6 +339,9 @@ class Plugin:
     async def save_collection_platform_groups(self, enabled):
         return self._settings_service.save_collection_platform_groups(enabled)
 
+    async def set_collection_owner_scope(self, scope):
+        return self._settings_service.set_collection_owner_scope(scope)
+
     @migration_blocked
     async def start_sync(self):
         return self._sync_service.start_sync()

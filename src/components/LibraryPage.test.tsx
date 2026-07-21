@@ -155,6 +155,7 @@ describe("LibraryPage", () => {
     vi.mocked(backend.saveCollectionPlatformGroups).mockResolvedValue({
       success: true,
     });
+    vi.mocked(backend.setCollectionOwnerScope).mockResolvedValue({ success: true });
     vi.mocked(backend.getSettings).mockResolvedValue(defaultSettings());
   });
 
@@ -1036,6 +1037,86 @@ describe("LibraryPage", () => {
       } finally {
         warn.mockRestore();
       }
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // N. Collections tab — owner scope (Own / All) — #1532
+  // ------------------------------------------------------------------
+  describe("collections tab — owner scope (Own / All)", () => {
+    const ownAndForeign = (): CollectionSyncSetting[] => [
+      makeCollection({ id: "u1", name: "MineColl", kind: "user", is_favorite: false, is_own: true }),
+      makeCollection({ id: "u2", name: "TheirColl", kind: "user", is_favorite: false, is_own: false }),
+    ];
+
+    const openCollections = async (getByText: (t: string) => HTMLElement) => {
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    };
+
+    it("renders the Own / All control on the Collections tab", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({ success: true, collections: ownAndForeign() });
+      const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      expect(getByText("Own")).not.toBeNull();
+      expect(getByText("All")).not.toBeNull();
+    });
+
+    it("clicking Own calls setCollectionOwnerScope('own')", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({ success: true, collections: ownAndForeign() });
+      const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      await act(async () => {
+        fireEvent.click(getByText("Own"));
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.setCollectionOwnerScope)).toHaveBeenCalledWith("own");
+    });
+
+    it("Own hides foreign (is_own=false) collections from the list", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({ success: true, collections: ownAndForeign() });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      // Default "All" → both visible.
+      expect(container.querySelector('[data-label="MineColl"]')).not.toBeNull();
+      expect(container.querySelector('[data-label="TheirColl"]')).not.toBeNull();
+      // Switch to Own → the foreign collection is hidden.
+      await act(async () => {
+        fireEvent.click(getByText("Own"));
+        await Promise.resolve();
+      });
+      expect(container.querySelector('[data-label="MineColl"]')).not.toBeNull();
+      expect(container.querySelector('[data-label="TheirColl"]')).toBeNull();
+    });
+
+    it("initializes the scope from getSettings().collection_owner_scope", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({ ...defaultSettings(), collection_owner_scope: "own" });
+      vi.mocked(backend.getCollections).mockResolvedValue({ success: true, collections: ownAndForeign() });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      // Loaded as Own → the foreign collection is hidden from the start.
+      expect(container.querySelector('[data-label="MineColl"]')).not.toBeNull();
+      expect(container.querySelector('[data-label="TheirColl"]')).toBeNull();
+    });
+
+    it("rolls the scope back (foreign reappears) when setCollectionOwnerScope rejects", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({ success: true, collections: ownAndForeign() });
+      vi.mocked(backend.setCollectionOwnerScope).mockRejectedValue(new Error("net"));
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      await act(async () => {
+        fireEvent.click(getByText("Own"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // The rejected write proves the click fired; the catch rolls ownerScope
+      // back to "all", so the foreign collection is visible again.
+      expect(vi.mocked(backend.setCollectionOwnerScope)).toHaveBeenCalledWith("own");
+      expect(container.querySelector('[data-label="TheirColl"]')).not.toBeNull();
     });
   });
 

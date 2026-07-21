@@ -229,6 +229,22 @@ collections, or use the paired **Enable All** / **Disable All** buttons to bulk-
 **Show collection games in platform groups** toggle controls whether games pulled in via a collection also get added to
 their platform's Steam group.
 
+#### Own / All
+
+On a **shared RomM server** the collection list includes every other user's _public_ collections alongside your own. The
+**Show collections** control at the top of the Collections page lets you narrow that down:
+
+- **All** (default) — every collection the server lists, including other users' public ones. This is the original
+  behaviour.
+- **Own** — only the collections you own. Foreign collections are hidden from the sub-tabs and are excluded from the
+  sync, even if one was enabled earlier — switching back to **All** brings your earlier choices back, since the scope
+  filters over your enable state rather than changing it.
+
+**Franchise collections always sync** under either setting: they are auto-generated groupings that belong to no one, so
+"Own" never hides them. The filter only becomes active once the plugin knows your account identity, which it learns the
+first time you sign in (existing sign-ins pick it up on the next connection check). Until then, **Own** behaves exactly
+like **All** — it never hides a collection it can't yet attribute.
+
 If two enabled collections share the same name — for example a personal collection and a smart or franchise collection
 called the same thing, or (on a shared server) another account's public collection — they **merge into a single Steam
 collection** carrying the combined set of games. RomM allows collections to share a name, but Steam identifies a

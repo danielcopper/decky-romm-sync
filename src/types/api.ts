@@ -63,6 +63,10 @@ export interface PluginSettings {
   romm_allow_insecure_ssl: boolean;
   retroarch_input_check?: RetroArchInputCheck;
   collection_create_platform_groups?: boolean;
+  // QAM collection owner-scope (#1532): "all" (default) or "own" (only the
+  // signed-in user's own collections). Optional: older payloads may omit it,
+  // treated as "all". Mirrors the CollectionOwnerScope type in sync.ts.
+  collection_owner_scope?: "own" | "all";
   // Preferred sibling-group region (ADR-0021 §3). "auto" = the fixed build-time
   // default order (World > USA > Europe > Japan); any other value heads the
   // ranking with that region on the next sync. Optional: the backend always

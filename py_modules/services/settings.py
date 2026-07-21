@@ -106,6 +106,7 @@ class SettingsService:
             "log_level": self._settings.get("log_level", "warn"),
             "romm_allow_insecure_ssl": self._settings.get("romm_allow_insecure_ssl", False),
             "collection_create_platform_groups": self._settings.get("collection_create_platform_groups", False),
+            "collection_owner_scope": self._settings.get("collection_owner_scope", "all"),
             "preferred_region": self._settings.get("preferred_region", AUTO_REGION),
         }
 
@@ -239,6 +240,21 @@ class SettingsService:
     def save_collection_platform_groups(self, enabled: bool) -> dict[str, Any]:
         """Persist the collection platform-group toggle."""
         self._settings["collection_create_platform_groups"] = bool(enabled)
+        self._settings_persister.save_settings()
+        return {"success": True}
+
+    def set_collection_owner_scope(self, scope: object) -> dict[str, Any]:
+        """Validate and persist the QAM collection owner-scope (``"own"`` / ``"all"``).
+
+        ``"all"`` (the default) syncs every collection the server lists;
+        ``"own"`` restricts the sync + display to the signed-in user's own
+        collections (franchise/virtual collections have no owner and always
+        sync). An unrecognised value from the untrusted frontend wire is rejected
+        with the canonical failure shape so a bad call cannot corrupt the setting.
+        """
+        if scope not in ("own", "all"):
+            return {"success": False, "reason": "invalid_scope", "message": f"Invalid owner scope: {scope}"}
+        self._settings["collection_owner_scope"] = scope
         self._settings_persister.save_settings()
         return {"success": True}
 

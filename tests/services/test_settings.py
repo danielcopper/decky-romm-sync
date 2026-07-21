@@ -140,6 +140,7 @@ class TestGetSettings:
                 "log_level": "info",
                 "romm_allow_insecure_ssl": True,
                 "collection_create_platform_groups": True,
+                "collection_owner_scope": "own",
                 "preferred_region": "USA",
             }
         )
@@ -152,6 +153,7 @@ class TestGetSettings:
         assert result["log_level"] == "info"
         assert result["romm_allow_insecure_ssl"] is True
         assert result["collection_create_platform_groups"] is True
+        assert result["collection_owner_scope"] == "own"
         assert result["preferred_region"] == "USA"
         assert result["retroarch_input_check"] == {"warning": False}
 
@@ -200,6 +202,7 @@ class TestGetSettings:
         assert result["log_level"] == "warn"
         assert result["romm_allow_insecure_ssl"] is False
         assert result["collection_create_platform_groups"] is False
+        assert result["collection_owner_scope"] == "all"
         assert result["preferred_region"] == "auto"
 
     def test_includes_retroarch_input_check_payload(self, service, steam_config):
@@ -520,6 +523,29 @@ class TestSaveCollectionPlatformGroups:
     def test_coerces_falsy(self, service, settings):
         service.save_collection_platform_groups(0)  # type: ignore[arg-type]
         assert settings["collection_create_platform_groups"] is False
+
+
+class TestSetCollectionOwnerScope:
+    @pytest.mark.parametrize("scope", ["own", "all"])
+    def test_valid_scopes_persist(self, service, settings, settings_persister, scope):
+        result = service.set_collection_owner_scope(scope)
+        assert result == {"success": True}
+        assert settings["collection_owner_scope"] == scope
+        settings_persister.save_settings.assert_called_once_with()
+
+    def test_invalid_scope_rejected_with_canonical_failure(self, service, settings, settings_persister):
+        result = service.set_collection_owner_scope("everyone")
+        assert result["success"] is False
+        assert result["reason"] == "invalid_scope"
+        assert "Invalid owner scope" in result["message"]
+        assert "collection_owner_scope" not in settings
+        settings_persister.save_settings.assert_not_called()
+
+    def test_non_string_rejected(self, service, settings, settings_persister):
+        result = service.set_collection_owner_scope(None)  # type: ignore[arg-type]
+        assert result["success"] is False
+        assert "collection_owner_scope" not in settings
+        settings_persister.save_settings.assert_not_called()
 
 
 class TestDismissSettingsResetNotice:

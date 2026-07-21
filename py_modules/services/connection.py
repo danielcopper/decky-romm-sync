@@ -173,6 +173,7 @@ class ConnectionService:
         if version_error is not None:
             return version_error
 
+        await self._backfill_user_id_best_effort()
         return self._success_result(version)
 
     async def probe_reachability(self) -> dict[str, Any]:
@@ -240,6 +241,10 @@ class ConnectionService:
         self._settings["romm_api_token"] = None
         self._settings["romm_api_token_id"] = None
         self._settings["romm_api_token_origin"] = None
+        # A new sign-in invalidates the stored identity — re-derived below from
+        # the freshly minted token, so it can never linger for a different user
+        # or a different server.
+        self._settings["romm_user_id"] = None
 
         try:
             version = await self._loop.run_in_executor(None, self._probe_version)
@@ -288,6 +293,14 @@ class ConnectionService:
                 "reason": ErrorCode.SERVER_UNREACHABLE.value,
                 "message": "RomM did not return a usable token",
             }
+
+        # Host-bind the minted token in memory so the identity probe
+        # authenticates, then stamp the user id — both ride the single atomic
+        # token-persist save below (the mint response carries only the token id,
+        # not the user id, so /api/users/me is the only source here).
+        self._settings["romm_api_token"] = raw_token
+        self._settings["romm_api_token_origin"] = normalize_origin(trimmed)
+        await self._resolve_user_id_in_memory()
 
         try:
             self._persist_token(raw_token, token_id, origin=normalize_origin(trimmed), source="minted")
@@ -344,6 +357,9 @@ class ConnectionService:
         self._settings["romm_api_token_id"] = None
         self._settings["romm_api_token_origin"] = normalize_origin(trimmed)
         self._settings["romm_api_token_source"] = "user"
+        # A new sign-in invalidates the stored identity — re-derived from the
+        # pasted token's /api/users/me validation probe below.
+        self._settings["romm_user_id"] = None
 
         try:
             version = await self._loop.run_in_executor(None, self._probe_version)
@@ -403,6 +419,9 @@ class ConnectionService:
         self._settings["romm_api_token"] = None
         self._settings["romm_api_token_id"] = None
         self._settings["romm_api_token_origin"] = None
+        # A new sign-in invalidates the stored identity — re-derived from the
+        # exchanged token's /api/users/me validation probe below.
+        self._settings["romm_user_id"] = None
 
         try:
             version = await self._loop.run_in_executor(None, self._probe_version)
@@ -475,7 +494,7 @@ class ConnectionService:
         token value is never logged.
         """
         try:
-            await self._loop.run_in_executor(None, self._romm_api.get_current_user)
+            user_data = await self._loop.run_in_executor(None, self._romm_api.get_current_user)
         except RommAuthError:
             self._restore_auth_state(snapshot)
             return {"success": False, "reason": ErrorCode.AUTH_FAILED.value, "message": _USER_TOKEN_INVALID_MESSAGE}
@@ -485,6 +504,11 @@ class ConnectionService:
         except Exception as e:
             self._restore_auth_state(snapshot)
             return error_response(e)
+
+        # Stamp the user identity in memory so it rides the single atomic
+        # token-persist save (the validation probe already returned it — no
+        # second /api/users/me call).
+        self._set_user_id_in_memory(user_data)
 
         try:
             self._persist_token(raw_token, None, origin=normalize_origin(trimmed), source="user")
@@ -535,6 +559,72 @@ class ConnectionService:
             await self._loop.run_in_executor(None, self._forget_device)
         except Exception as e:
             self._logger.warning(f"Could not clear device id after origin change: {e}")
+
+    @staticmethod
+    def _extract_user_id(user_data: object) -> int | None:
+        """Read the RomM user id off a ``/api/users/me`` dict, or ``None``.
+
+        Tolerant of an untrusted server shape: a non-dict payload, a missing
+        ``id``, a non-int, or a bool (``isinstance(True, int)`` is ``True`` in
+        Python) all yield ``None`` so a malformed identity never becomes a wrong
+        owner-scope filter.
+        """
+        user_id = user_data.get("id") if isinstance(user_data, dict) else None
+        if isinstance(user_id, bool) or not isinstance(user_id, int):
+            return None
+        return user_id
+
+    def _set_user_id_in_memory(self, user_data: object) -> None:
+        """Stamp ``settings['romm_user_id']`` from a ``/api/users/me`` dict, no save.
+
+        The value rides the sign-in's single atomic token-persist save, so
+        identity lands on disk together with the token (never a second write). A
+        malformed payload yields ``None`` — "Own" then degrades to "All" until
+        the lazy backfill re-derives it.
+        """
+        self._settings["romm_user_id"] = self._extract_user_id(user_data)
+
+    async def _resolve_user_id_in_memory(self) -> None:
+        """Fetch the minted token's user identity into memory (best-effort, no save).
+
+        The mint response carries only the token id, not the user id, so the
+        freshly host-bound token is probed against ``/api/users/me``.
+        Best-effort: a failure leaves ``romm_user_id`` cleared (``None``) so the
+        single token-persist save records ``None`` and the lazy backfill
+        re-derives it on the next connection check. Never fails the sign-in.
+        """
+        try:
+            user_data = await self._loop.run_in_executor(None, self._romm_api.get_current_user)
+        except Exception as e:
+            self._logger.warning(f"Could not read RomM user identity at sign-in: {e}")
+            return
+        self._set_user_id_in_memory(user_data)
+
+    async def _backfill_user_id_best_effort(self) -> None:
+        """Lazily stamp ``romm_user_id`` from the current token when it is unknown.
+
+        Existing installs carry a valid token but no stored identity (the setting
+        postdates them). This backfills it on the next connection check so the
+        collection owner-scope filter can activate without a re-login. Fires only
+        when the id is missing (a known id needs no network) and a token exists;
+        persists in its own save (no token write is in flight here). Best-effort
+        — a failure or malformed payload leaves the id unknown, so "Own" keeps
+        behaving like "All".
+        """
+        if self._settings.get("romm_user_id") is not None:
+            return
+        if not self._settings.get("romm_api_token"):
+            return
+        try:
+            user_data = await self._loop.run_in_executor(None, self._romm_api.get_current_user)
+        except Exception as e:
+            self._logger.warning(f"Could not backfill RomM user identity: {e}")
+            return
+        user_id = self._extract_user_id(user_data)
+        if user_id is None:
+            return
+        self._settings["romm_user_id"] = user_id
+        self._settings_persister.save_settings()
 
     async def migrate_legacy_credentials(self) -> None:
         """Upgrade a stored-password install to a Client API Token on startup.
@@ -601,6 +691,9 @@ class ConnectionService:
         self._settings["romm_api_token_id"] = None
         self._settings["romm_api_token_origin"] = None
         self._settings["romm_api_token_source"] = None
+        # Identity is forgotten alongside the token — "Own" collection scope has
+        # no basis without a signed-in user, and the next sign-in re-derives it.
+        self._settings["romm_user_id"] = None
         try:
             self._settings_persister.save_settings()
         except Exception as e:
@@ -618,6 +711,9 @@ class ConnectionService:
         "romm_api_token_id",
         "romm_api_token_origin",
         "romm_api_token_source",
+        # Identity is bound to the token: a failed sign-in restores the previous
+        # user id, never leaving a half-changed identity behind.
+        "romm_user_id",
     )
 
     def _snapshot_auth_state(self) -> dict[str, Any]:

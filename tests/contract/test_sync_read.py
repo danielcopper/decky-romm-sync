@@ -203,6 +203,31 @@ async def test_get_collections_happy_shape(harness):
     assert c["name"] == "Favorites"
     assert c["kind"] == "user"
     assert isinstance(c["sync_enabled"], bool)
+    # Owner-scope tag (#1532): no stored identity → treated as own (degrade to "All").
+    assert c["is_own"] is True
+
+
+async def test_set_collection_owner_scope_persists(harness):
+    """set_collection_owner_scope stores the value and get_settings reports it back."""
+    result = await harness.plugin.set_collection_owner_scope("own")
+    assert result == {"success": True}
+    assert harness.plugin.settings["collection_owner_scope"] == "own"
+    assert (await harness.plugin.get_settings())["collection_owner_scope"] == "own"
+
+    result = await harness.plugin.set_collection_owner_scope("all")
+    assert result == {"success": True}
+    assert harness.plugin.settings["collection_owner_scope"] == "all"
+
+
+async def test_set_collection_owner_scope_rejects_invalid(harness):
+    """An unrecognised scope returns the canonical failure shape and stores nothing."""
+    result = await harness.plugin.set_collection_owner_scope("everyone")
+    assert result["success"] is False
+    assert isinstance(result["reason"], str)
+    assert isinstance(result["message"], str) and result["message"]
+    assert "error" not in result
+    assert "error_code" not in result
+    assert harness.plugin.settings.get("collection_owner_scope", "all") == "all"
 
 
 async def test_get_collections_server_failure_shape(harness):

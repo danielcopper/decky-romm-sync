@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from domain.collection_owner import is_own_collection
 from domain.fetch_generation import count_rows_for_skip
 from domain.platform_prefs import materialize_enabled_platforms, resolve_sync_enabled
 from domain.skip_prediction import collapsed_shortcut_count, new_shortcut_count, predict_unit_skip
@@ -81,12 +82,28 @@ class _SkipBaseline(NamedTuple):
 _FETCH_PROGRESS_PAGE_INTERVAL = 1
 
 
-def _collection_units(collections: list[dict[str, Any]], enabled_ids: set[str], kind: CollectionKind) -> list[WorkUnit]:
-    """Build WorkUnits for collections whose id is in *enabled_ids*, tagged with *kind*."""
+def _collection_units(
+    collections: list[dict[str, Any]],
+    enabled_ids: set[str],
+    kind: CollectionKind,
+    *,
+    own_user_id: int | None = None,
+    filter_to_own: bool = False,
+) -> list[WorkUnit]:
+    """Build WorkUnits for collections whose id is in *enabled_ids*, tagged with *kind*.
+
+    When *filter_to_own* is set (the "Own" owner-scope), a foreign collection —
+    one owned by a known user id other than *own_user_id* — is dropped from the
+    queue even if it is enabled, so a scope selected over an earlier enable never
+    syncs someone else's collection. Franchise collections have no owner and
+    always survive (:func:`is_own_collection`).
+    """
     units: list[WorkUnit] = []
     for c in collections:
         cid = str(c.get("id", ""))
         if cid not in enabled_ids:
+            continue
+        if filter_to_own and not is_own_collection(c.get("user_id"), own_user_id, kind=kind):
             continue
         units.append(
             WorkUnit(
@@ -255,6 +272,11 @@ class LibraryFetcher:
             franchise_collections = []
 
         enabled = self._get_enabled_collections_buckets()
+        # Own identity for the owner-scope tag. ``None`` (never fetched / offline)
+        # tags every collection ``is_own=True`` so the frontend "Own" filter
+        # degrades to "All" rather than filtering wrongly (the non-breaking
+        # fallback).
+        own_user_id = self._settings.get("romm_user_id")
         result = []
         for c in user_collections:
             cid = str(c["id"])
@@ -266,6 +288,7 @@ class LibraryFetcher:
                     "sync_enabled": enabled["user"].get(cid, False),
                     "kind": "user",
                     "is_favorite": bool(c.get("is_favorite", False)),
+                    "is_own": is_own_collection(c.get("user_id"), own_user_id, kind="user"),
                 }
             )
         for c in smart_collections:
@@ -278,6 +301,7 @@ class LibraryFetcher:
                     "sync_enabled": enabled["smart"].get(cid, False),
                     "kind": "smart",
                     "is_favorite": False,
+                    "is_own": is_own_collection(c.get("user_id"), own_user_id, kind="smart"),
                 }
             )
         for c in franchise_collections:
@@ -290,6 +314,8 @@ class LibraryFetcher:
                     "sync_enabled": enabled["franchise"].get(cid, False),
                     "kind": "franchise",
                     "is_favorite": False,
+                    # Franchise/virtual collections have no owner — always own.
+                    "is_own": True,
                 }
             )
 
@@ -462,9 +488,26 @@ class LibraryFetcher:
         if not (enabled_user_ids or enabled_smart_ids or enabled_franchise_ids):
             return units
 
+        # Owner-scope filter (#1532): when "Own" is selected AND our identity is
+        # known, foreign user/smart collections are dropped from the queue — a
+        # sync scope that filters OVER the enabled ids without mutating them.
+        # Unknown identity (own_user_id is None) never filters, so "Own" is a
+        # no-op until identity is available (non-breaking). Franchise collections
+        # have no owner and are never filtered.
+        own_user_id = self._settings.get("romm_user_id")
+        filter_to_own = self._settings.get("collection_owner_scope") == "own" and own_user_id is not None
+
         collection_units: list[WorkUnit] = []
-        collection_units.extend(await self._build_user_collection_units(enabled_user_ids))
-        collection_units.extend(await self._build_smart_collection_units(enabled_smart_ids))
+        collection_units.extend(
+            await self._build_user_collection_units(
+                enabled_user_ids, own_user_id=own_user_id, filter_to_own=filter_to_own
+            )
+        )
+        collection_units.extend(
+            await self._build_smart_collection_units(
+                enabled_smart_ids, own_user_id=own_user_id, filter_to_own=filter_to_own
+            )
+        )
         collection_units.extend(await self._build_franchise_collection_units(enabled_franchise_ids))
         # One short read UoW for every collection at once — after the listing
         # fetches, never across them.
@@ -472,8 +515,14 @@ class LibraryFetcher:
 
         return units
 
-    async def _build_user_collection_units(self, enabled_ids: set[str]) -> list[WorkUnit]:
-        """Fetch user collections and emit work units for those whose id is in *enabled_ids*."""
+    async def _build_user_collection_units(
+        self, enabled_ids: set[str], *, own_user_id: int | None = None, filter_to_own: bool = False
+    ) -> list[WorkUnit]:
+        """Fetch user collections and emit work units for those whose id is in *enabled_ids*.
+
+        Under the "Own" owner-scope (*filter_to_own*), foreign collections are
+        dropped even when enabled (see :func:`_collection_units`).
+        """
         if not enabled_ids:
             return []
         try:
@@ -481,10 +530,16 @@ class LibraryFetcher:
         except Exception as e:
             self._logger.warning(f"Failed to fetch user collections for work queue: {e}")
             collections = []
-        return _collection_units(collections, enabled_ids, "user")
+        return _collection_units(collections, enabled_ids, "user", own_user_id=own_user_id, filter_to_own=filter_to_own)
 
-    async def _build_smart_collection_units(self, enabled_ids: set[str]) -> list[WorkUnit]:
-        """Fetch smart collections and emit work units for those whose id is in *enabled_ids*."""
+    async def _build_smart_collection_units(
+        self, enabled_ids: set[str], *, own_user_id: int | None = None, filter_to_own: bool = False
+    ) -> list[WorkUnit]:
+        """Fetch smart collections and emit work units for those whose id is in *enabled_ids*.
+
+        Under the "Own" owner-scope (*filter_to_own*), foreign collections are
+        dropped even when enabled (see :func:`_collection_units`).
+        """
         if not enabled_ids:
             return []
         try:
@@ -492,7 +547,9 @@ class LibraryFetcher:
         except Exception as e:
             self._logger.warning(f"Failed to fetch smart collections for work queue: {e}")
             collections = []
-        return _collection_units(collections, enabled_ids, "smart")
+        return _collection_units(
+            collections, enabled_ids, "smart", own_user_id=own_user_id, filter_to_own=filter_to_own
+        )
 
     async def _build_franchise_collection_units(self, enabled_ids: set[str]) -> list[WorkUnit]:
         """Fetch franchise collections and emit work units for those whose id is in *enabled_ids*."""

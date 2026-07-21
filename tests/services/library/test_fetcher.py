@@ -288,6 +288,86 @@ class TestBuildWorkQueueErrorPaths:
         assert kinds == ["user", "smart", "franchise"]
 
 
+class TestBuildWorkQueueOwnerScope:
+    """build_work_queue applies the collection owner-scope filter (#1532)."""
+
+    @staticmethod
+    def _seed(fake_romm_api):
+        """Two user, two smart (one own / one foreign each), one franchise — all enabled."""
+        fake_romm_api.collections = [
+            {"id": "1", "name": "Mine", "slug": "mine", "rom_count": 1, "user_id": 7},
+            {"id": "2", "name": "Theirs", "slug": "theirs", "rom_count": 1, "user_id": 8},
+        ]
+        fake_romm_api.smart_collections = [
+            {"id": "5", "name": "MySmart", "slug": "ms", "rom_count": 1, "user_id": 7},
+            {"id": "6", "name": "TheirSmart", "slug": "ts", "rom_count": 1, "user_id": 8},
+        ]
+        fake_romm_api.virtual_collections = {
+            "franchise": [{"id": "100", "name": "Mario", "slug": "mario", "rom_count": 1}],
+        }
+
+    @staticmethod
+    def _enable_all(plugin):
+        plugin.settings["enabled_platforms"] = {}
+        plugin.settings["enabled_collections"] = {
+            "user": {"1": True, "2": True},
+            "smart": {"5": True, "6": True},
+            "franchise": {"100": True},
+        }
+
+    @pytest.mark.asyncio
+    async def test_own_scope_drops_foreign_keeps_own_and_franchise(self, plugin, fake_romm_api):
+        """AC2: a foreign user + foreign smart collection are excluded; own + ALL franchise survive."""
+        _wire_fake(plugin, fake_romm_api)
+        self._enable_all(plugin)
+        self._seed(fake_romm_api)
+        plugin.settings["romm_user_id"] = 7
+        plugin.settings["collection_owner_scope"] = "own"
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert [u.name for u in units] == ["Mine", "MySmart", "Mario"]
+
+    @pytest.mark.asyncio
+    async def test_all_scope_keeps_every_collection(self, plugin, fake_romm_api):
+        """AC3: the default "all" scope syncs every collection — today's behaviour, byte-for-byte."""
+        _wire_fake(plugin, fake_romm_api)
+        self._enable_all(plugin)
+        self._seed(fake_romm_api)
+        plugin.settings["romm_user_id"] = 7
+        plugin.settings["collection_owner_scope"] = "all"
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert [u.name for u in units] == ["Mine", "Theirs", "MySmart", "TheirSmart", "Mario"]
+
+    @pytest.mark.asyncio
+    async def test_own_scope_unknown_identity_keeps_every_collection(self, plugin, fake_romm_api):
+        """AC4 (load-bearing): "own" with no known identity must NOT filter — degrade to "All"."""
+        _wire_fake(plugin, fake_romm_api)
+        self._enable_all(plugin)
+        self._seed(fake_romm_api)
+        plugin.settings.pop("romm_user_id", None)
+        plugin.settings["collection_owner_scope"] = "own"
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert [u.name for u in units] == ["Mine", "Theirs", "MySmart", "TheirSmart", "Mario"]
+
+    @pytest.mark.asyncio
+    async def test_own_scope_is_default_all_when_setting_absent(self, plugin, fake_romm_api):
+        """No collection_owner_scope setting → treated as "all" (no filtering)."""
+        _wire_fake(plugin, fake_romm_api)
+        self._enable_all(plugin)
+        self._seed(fake_romm_api)
+        plugin.settings["romm_user_id"] = 7
+        plugin.settings.pop("collection_owner_scope", None)
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert [u.name for u in units] == ["Mine", "Theirs", "MySmart", "TheirSmart", "Mario"]
+
+
 class TestTryUnitIncrementalSkip:
     """Tests for _try_unit_incremental_skip() exception fallback."""
 

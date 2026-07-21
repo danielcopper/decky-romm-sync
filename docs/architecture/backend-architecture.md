@@ -510,9 +510,25 @@ identity — the same identity the #742 completion stamp uses — with the displ
 reporter (`_resolve_collection_memberships`) then groups the accumulator's entries by name and **unions** their resolved
 appId sets (order-preserving, de-duplicated across collections; each collection's own resolution already dedups within),
 emitting the unchanged by-name `romm_collection_app_ids: {name → [appId]}` contract — a single-collection name unions a
-set of one and is byte-for-byte the pre-#1503 output. The plugin **unions rather than owner-filters** here: RomM
-deliberately exposes public collections across accounts, so syncing them unfiltered is the established behaviour (an
-own/all QAM toggle is a separate concern).
+set of one and is byte-for-byte the pre-#1503 output. The union runs **after** the owner-scope filter (below): once a
+foreign collection is dropped from the work queue it never reaches the accumulator, so "Own" narrows what is unioned
+rather than changing how the union works.
+
+**Collection owner-scope filter — "Own" is a sync scope, not just a display filter (#1532).** RomM's collection list
+endpoints return the signed-in user's own collections plus every other user's _public_ collection. The QAM
+`Show
+collections` control writes `collection_owner_scope` (`"own"` / `"all"`, default `"all"`); `get_collections` also
+tags each row with `is_own` so the frontend can hide foreign ones under "Own". Ownership is a pure predicate
+(`domain/collection_owner.is_own_collection`): a collection is own when it is a **franchise/virtual** collection (RomM's
+`VirtualCollection` model carries no `user_id` column — these are global/derived and belong to no one, so they always
+survive), when the plugin's own identity is unknown (the **degrade-to-"All" fallback**), or when the collection's
+`user_id` equals the stored `romm_user_id`; only user and smart collections carry a `user_id` to compare.
+`build_work_queue` applies the same predicate: under `"own"` **with a known identity** it drops foreign user/smart units
+from the queue — so a foreign collection enabled earlier is never synced — while franchise units and every unit under
+`"all"` pass through unchanged. The scope filters **over** the per-kind enable state without mutating it, so switching
+back to `"all"` restores the prior enables. Because an **unknown identity never filters**, the feature is non-breaking:
+it silently no-ops until `romm_user_id` is stamped (see the ConnectionService lazy-identity note), then activates — no
+re-login required.
 
 **Incremental skip — the per-platform completion stamp is the sole authority.** A platform unit skips only when its
 `PlatformSyncState` stamp exists
@@ -991,6 +1007,21 @@ path** — a failed local clear never turns a good sign-in into a failure, and a
 restored) keeps the still-current server's id. `ensure_device_registered` never deletes the id on any failure, so a
 permission-degraded (403/timeout) session leaves the identity intact. This is Phase 0a of the RomM Device Sync negotiate
 adoption ([ADR-0016](../adr/0016-save-sync-hands-detection-to-romm-negotiate.md)).
+
+**The signed-in user's own id (`romm_user_id`) is bound to the token — stamped at sign-in, backfilled lazily, cleared on
+sign-out.** It drives the collection owner-scope filter (`build_work_queue` + `get_collections`, described in the
+LibraryService section above). Every sign-in path re-derives it from the freshly authenticated token so it can never
+linger for a different user or a different server: the mint path (`establish_token`) probes `GET /api/users/me` after
+host-binding the minted token (the mint response carries only the token id, not the user id); the pasted/paired paths
+reuse the id from the `/api/users/me` validation probe they already run (no second call). In every case the id is set
+**in memory before** the token-persist save, so it rides the same single atomic `save_settings()` — the sign-in write
+shape is unchanged. It is part of the snapshot/restore auth-state set, so a failed sign-in restores the previous id, and
+it is cleared in each path's in-memory auth clear so a probe failure or a malformed payload leaves it `None` rather than
+stale — degrading the "Own" filter to "All" until the next backfill. Existing installs (a valid token minted before this
+setting existed) carry no id; `test_connection` **lazily backfills** it — when a token is present and the id is missing,
+the successful connection check probes `/api/users/me` and persists the id (its own save), so the filter activates
+without a re-login. A known id needs no network on later checks. Every identity read is best-effort: a failure never
+fails the sign-in or the connection check.
 
 The no-sign-in URL change path (`SettingsService.save_server_url`) deliberately does not touch the token, so pointing
 the URL at a different origin leaves the stored token's origin mismatched and the auth-header guard makes subsequent

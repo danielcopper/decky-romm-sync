@@ -440,6 +440,63 @@ class TestGetCollections:
         assert result["collections"][0]["id"] == "42"
 
 
+class TestGetCollectionsOwnerScope:
+    """get_collections tags each collection with is_own for the owner-scope filter (#1532)."""
+
+    @pytest.mark.asyncio
+    async def test_own_and_foreign_user_collections_tagged(self, plugin):
+        """With a known identity, user collections split on user_id."""
+        user = [
+            {"id": 1, "name": "Mine", "rom_count": 1, "is_favorite": False, "user_id": 7},
+            {"id": 2, "name": "Theirs", "rom_count": 1, "is_favorite": False, "user_id": 8},
+        ]
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, [], []))
+        plugin._sync_service._settings["romm_user_id"] = 7
+
+        result = await plugin._sync_service.get_collections()
+
+        by_name = {c["name"]: c for c in result["collections"]}
+        assert by_name["Mine"]["is_own"] is True
+        assert by_name["Theirs"]["is_own"] is False
+
+    @pytest.mark.asyncio
+    async def test_smart_collections_tagged_by_owner(self, plugin):
+        smart = [
+            {"id": 5, "name": "MySmart", "rom_count": 1, "user_id": 7},
+            {"id": 6, "name": "TheirSmart", "rom_count": 1, "user_id": 8},
+        ]
+        rebind_loop(plugin._sync_service, _make_loop_with_executor([], smart, []))
+        plugin._sync_service._settings["romm_user_id"] = 7
+
+        result = await plugin._sync_service.get_collections()
+
+        by_name = {c["name"]: c for c in result["collections"]}
+        assert by_name["MySmart"]["is_own"] is True
+        assert by_name["TheirSmart"]["is_own"] is False
+
+    @pytest.mark.asyncio
+    async def test_franchise_always_own_even_with_known_identity(self, plugin):
+        """Franchise collections have no owner — always is_own=True."""
+        franchise = [{"id": 101, "name": "Mario", "rom_count": 1}]
+        rebind_loop(plugin._sync_service, _make_loop_with_executor([], [], franchise))
+        plugin._sync_service._settings["romm_user_id"] = 7
+
+        result = await plugin._sync_service.get_collections()
+
+        assert result["collections"][0]["is_own"] is True
+
+    @pytest.mark.asyncio
+    async def test_unknown_identity_tags_every_collection_own(self, plugin):
+        """No stored romm_user_id → all collections is_own=True (degrade to "All")."""
+        user = [{"id": 2, "name": "Theirs", "rom_count": 1, "is_favorite": False, "user_id": 8}]
+        rebind_loop(plugin._sync_service, _make_loop_with_executor(user, [], []))
+        plugin._sync_service._settings.pop("romm_user_id", None)
+
+        result = await plugin._sync_service.get_collections()
+
+        assert result["collections"][0]["is_own"] is True
+
+
 # ---------------------------------------------------------------------------
 # TestSaveCollectionSync
 # ---------------------------------------------------------------------------

@@ -1608,3 +1608,249 @@ class TestSignOut:
         assert settings["romm_api_token_source"] == "minted"
         # The version cache is cleared only after a successful save.
         romm_api.set_version.assert_not_called()
+
+
+class TestUserIdentityStamping:
+    """romm_user_id lifecycle: stamped at sign-in, backfilled lazily, cleared on sign-out.
+
+    The signed-in user's own id drives the collection owner-scope filter (#1532).
+    It is bound to the token — re-derived on every sign-in, restored on a failed
+    one, and forgotten on sign-out — so "Own" is never computed against a stale
+    server's or a different user's identity, and degrades to "All" when unknown.
+    """
+
+    # ── Fresh sign-in stamps identity (AC1) ──────────────────────────────────
+
+    def test_mint_sign_in_stamps_user_id(self, event_loop, romm_api, logger, settings_persister):
+        romm_api.get_current_user.return_value = {"id": 3, "username": "alice"}
+        settings: dict[str, Any] = {}
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+
+        result = event_loop.run_until_complete(service.establish_token("http://romm.local", "alice", "secret"))
+
+        assert result["success"] is True
+        assert settings["romm_user_id"] == 3
+        # The identity rides the SINGLE atomic token-persist save (#1015 shape held).
+        assert settings_persister.save_settings.call_count == 1
+
+    def test_mint_sign_in_identity_probe_failure_leaves_id_none_but_succeeds(
+        self, event_loop, romm_api, logger, settings_persister
+    ):
+        """A failed /api/users/me probe never fails the sign-in — id stays None (→ "Own" acts as "All")."""
+        romm_api.get_current_user.side_effect = RommConnectionError("offline")
+        settings: dict[str, Any] = {}
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+
+        result = event_loop.run_until_complete(service.establish_token("http://romm.local", "alice", "secret"))
+
+        assert result["success"] is True
+        assert settings["romm_user_id"] is None
+        assert settings_persister.save_settings.call_count == 1
+
+    def test_user_token_sign_in_stamps_user_id_from_validation_probe(
+        self, event_loop, romm_api, logger, settings_persister
+    ):
+        romm_api.get_current_user.return_value = {"id": 9, "username": "bob"}
+        settings: dict[str, Any] = {}
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+
+        result = event_loop.run_until_complete(service.establish_user_token("http://romm.local", "rmm_pasted"))
+
+        assert result["success"] is True
+        assert settings["romm_user_id"] == 9
+        # No SECOND /api/users/me call — the validation probe's result is reused.
+        romm_api.get_current_user.assert_called_once_with()
+        assert settings_persister.save_settings.call_count == 1
+
+    def test_paired_token_sign_in_stamps_user_id(self, event_loop, romm_api, logger, settings_persister):
+        romm_api.get_current_user.return_value = {"id": 11, "username": "carol"}
+        settings: dict[str, Any] = {}
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+
+        result = event_loop.run_until_complete(service.establish_paired_token("http://romm.local", "ABCD2345"))
+
+        assert result["success"] is True
+        assert settings["romm_user_id"] == 11
+        assert settings_persister.save_settings.call_count == 1
+
+    def test_malformed_identity_payload_leaves_id_none(self, event_loop, romm_api, logger):
+        """A payload with no int id (or a bool) never becomes a wrong owner id."""
+        romm_api.get_current_user.return_value = {"username": "no-id"}
+        settings: dict[str, Any] = {}
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+
+        event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
+
+        assert settings["romm_user_id"] is None
+
+    # ── Origin change re-derives / clears identity (AC5) ─────────────────────
+
+    def test_origin_change_refetches_user_id_from_new_server(self, event_loop, romm_api, logger):
+        """Signing into a different server re-derives identity from THAT server."""
+        romm_api.get_current_user.return_value = {"id": 2, "username": "new-server-user"}
+        settings = _working_settings()
+        settings["romm_user_id"] = 1  # the old server's identity
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+
+        result = event_loop.run_until_complete(service.establish_token("https://new.server", "u", "p"))
+
+        assert result["success"] is True
+        assert settings["romm_user_id"] == 2
+
+    def test_origin_change_with_probe_failure_clears_stale_id(self, event_loop, romm_api, logger):
+        """On a server switch whose identity probe fails, the old id is cleared — never stale."""
+        romm_api.get_current_user.side_effect = RommConnectionError("offline")
+        settings = _working_settings()
+        settings["romm_user_id"] = 1
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+
+        result = event_loop.run_until_complete(service.establish_token("https://new.server", "u", "p"))
+
+        assert result["success"] is True
+        assert settings["romm_user_id"] is None
+
+    def test_same_origin_different_user_rederives_identity(self, event_loop, romm_api, logger):
+        """A DIFFERENT user signing in on the SAME server re-derives identity to THEM.
+
+        The shared-server scenario the token-binding design exists for: user A
+        signs out, user B signs in against the same origin. Here
+        ``is_origin_change`` is False (the ``forget_device`` seam never fires,
+        asserted below), so identity is bound to the TOKEN, not the origin — it
+        re-derives on every sign-in. An origin-GATED re-derivation
+        (``if is_origin_change(...)``) would leave A's id in place and pass every
+        other identity test; this asserts B's id after the same-origin re-sign-in,
+        so it fails the moment the re-derivation is wrongly origin-gated.
+        """
+        forget_device = MagicMock()
+        romm_api.get_current_user.side_effect = [
+            {"id": 101, "username": "user-a"},
+            {"id": 202, "username": "user-b"},
+        ]
+        settings: dict[str, Any] = {}
+        service = _make_service(
+            settings=settings, romm_api=romm_api, loop=event_loop, logger=logger, forget_device=forget_device
+        )
+
+        # User A signs in on server X.
+        result_a = event_loop.run_until_complete(service.establish_token("http://server.x", "user-a", "pw"))
+        assert result_a["success"] is True
+        assert settings["romm_user_id"] == 101
+
+        # User B signs in on the SAME server X — same origin, no server switch.
+        result_b = event_loop.run_until_complete(service.establish_token("http://server.x", "user-b", "pw"))
+        assert result_b["success"] is True
+        # Identity re-derived to B — NOT left at A's 101 — even though the origin
+        # never changed (proven by the untouched device-forget seam).
+        assert settings["romm_user_id"] == 202
+        forget_device.assert_not_called()
+
+    def test_failed_sign_in_restores_previous_user_id(self, event_loop, romm_api, logger):
+        """A failed sign-in must not wipe the still-valid current identity."""
+        romm_api.mint_client_token.side_effect = RommConnectionError("offline")
+        settings = _working_settings()
+        settings["romm_user_id"] = 5
+        service = _make_service(settings=settings, romm_api=romm_api, loop=event_loop, logger=logger)
+
+        result = event_loop.run_until_complete(service.establish_token("https://new.server", "u", "p"))
+
+        assert result["success"] is False
+        assert settings["romm_user_id"] == 5
+
+    # ── Sign-out forgets identity ────────────────────────────────────────────
+
+    def test_sign_out_clears_user_id(self, event_loop, romm_api, logger, settings_persister):
+        settings = _working_settings()
+        settings["romm_user_id"] = 5
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+
+        service.sign_out()
+
+        assert settings["romm_user_id"] is None
+        # Still exactly one atomic save — identity clears alongside the token quad.
+        settings_persister.save_settings.assert_called_once_with()
+
+    # ── Lazy backfill on a connection check (AC1) ────────────────────────────
+
+    def test_test_connection_backfills_missing_user_id(self, event_loop, romm_api, logger, settings_persister):
+        """An existing session with a token but no stored id backfills it — no re-login."""
+        romm_api.get_current_user.return_value = {"id": 4, "username": "existing"}
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+
+        result = event_loop.run_until_complete(service.test_connection())
+
+        assert result["success"] is True
+        assert settings["romm_user_id"] == 4
+        settings_persister.save_settings.assert_called_once_with()
+
+    def test_test_connection_skips_backfill_when_user_id_known(self, event_loop, romm_api, logger, settings_persister):
+        """A known id needs no network and no save on every connection check."""
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token", "romm_user_id": 4}
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+
+        result = event_loop.run_until_complete(service.test_connection())
+
+        assert result["success"] is True
+        assert settings["romm_user_id"] == 4
+        romm_api.get_current_user.assert_not_called()
+        settings_persister.save_settings.assert_not_called()
+
+    def test_test_connection_backfill_failure_is_best_effort(self, event_loop, romm_api, logger, settings_persister):
+        """A backfill probe failure leaves the id unknown and never fails the connection check."""
+        romm_api.get_current_user.side_effect = RommConnectionError("offline")
+        settings = {"romm_url": "http://romm.local", "romm_api_token": "rmm_token"}
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+
+        result = event_loop.run_until_complete(service.test_connection())
+
+        assert result["success"] is True
+        assert settings.get("romm_user_id") is None
+        settings_persister.save_settings.assert_not_called()

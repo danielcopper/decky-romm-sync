@@ -23,6 +23,13 @@ export type CollectionKind = "user" | "smart" | "franchise";
 
 export type CollectionScope = "user" | "smart" | "franchise";
 
+/**
+ * QAM collection owner-scope. `"all"` (default) syncs every collection the
+ * server lists; `"own"` restricts sync + display to the signed-in user's own
+ * collections. Independent of the kind sub-tab — it filters by owner, not kind.
+ */
+export type CollectionOwnerScope = "own" | "all";
+
 export interface CollectionSyncSetting {
   id: string;
   name: string;
@@ -30,6 +37,13 @@ export interface CollectionSyncSetting {
   sync_enabled: boolean;
   kind: CollectionKind;
   is_favorite: boolean;
+  /**
+   * Whether this collection is the signed-in user's own (#1532). Franchise
+   * collections have no owner and are always `true`; when the plugin does not
+   * yet know its own identity every collection is `true` (so the "Own" filter
+   * degrades to "All"). Absent on older backends — treat absent as `true`.
+   */
+  is_own?: boolean;
 }
 
 export type SyncStage = "discovering" | "fetching" | "applying" | "finalizing" | "done" | "cancelled" | "error";
