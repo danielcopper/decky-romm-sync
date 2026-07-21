@@ -779,28 +779,28 @@ class TestSaveSyncSettingsSlotAndCleanup:
         assert result["success"] is True
         assert result["settings"]["default_slot"] == "desktop"
 
-    def test_update_default_slot_empty_string_becomes_default(self, tmp_path):
+    def test_update_default_slot_empty_string_becomes_autosave(self, tmp_path):
         # Legacy no-slot mode is retired (#1276): a blank slot coerces to the
-        # canonical "default" slot rather than None/legacy.
+        # canonical "autosave" slot rather than None/legacy.
         svc, _ = make_service(tmp_path)
         svc._config.settings["save_sync_enabled"] = True
         svc._config.settings["default_slot"] = "desktop"
         result = svc.update_save_sync_settings({"default_slot": ""})
-        assert result["settings"]["default_slot"] == "default"
+        assert result["settings"]["default_slot"] == "autosave"
 
-    def test_empty_string_becomes_default(self, tmp_path):
+    def test_empty_string_becomes_autosave(self, tmp_path):
         val, skip = sanitize_setting("default_slot", "")
-        assert val == "default"
+        assert val == "autosave"
         assert skip is False
 
-    def test_none_value_becomes_default(self, tmp_path):
+    def test_none_value_becomes_autosave(self, tmp_path):
         val, skip = sanitize_setting("default_slot", None)
-        assert val == "default"
+        assert val == "autosave"
         assert skip is False
 
-    def test_whitespace_only_becomes_default(self, tmp_path):
+    def test_whitespace_only_becomes_autosave(self, tmp_path):
         val, skip = sanitize_setting("default_slot", "   ")
-        assert val == "default"
+        assert val == "autosave"
         assert skip is False
 
     def test_nonempty_string_trimmed(self, tmp_path):
@@ -808,12 +808,13 @@ class TestSaveSyncSettingsSlotAndCleanup:
         assert val == "desktop"
         assert skip is False
 
-    def test_resolve_default_slot_blank_none_whitespace_all_become_default(self, tmp_path):
-        # resolve_default_slot never returns None — legacy no-slot mode retired (#1276).
-        assert resolve_default_slot({}) == "default"
-        assert resolve_default_slot({"default_slot": None}) == "default"
-        assert resolve_default_slot({"default_slot": ""}) == "default"
-        assert resolve_default_slot({"default_slot": "   "}) == "default"
+    def test_resolve_default_slot_blank_none_whitespace_all_become_autosave(self, tmp_path):
+        # resolve_default_slot never returns None — legacy no-slot mode retired (#1276);
+        # the canonical fallback is "autosave" to match the official RomM clients (#1529).
+        assert resolve_default_slot({}) == "autosave"
+        assert resolve_default_slot({"default_slot": None}) == "autosave"
+        assert resolve_default_slot({"default_slot": ""}) == "autosave"
+        assert resolve_default_slot({"default_slot": "   "}) == "autosave"
 
     def test_resolve_default_slot_named_slot_trimmed(self, tmp_path):
         assert resolve_default_slot({"default_slot": "desktop"}) == "desktop"
@@ -842,7 +843,7 @@ class TestSaveSyncSettingsSlotAndCleanup:
     def test_get_settings_includes_new_defaults(self, tmp_path):
         svc, _ = make_service(tmp_path)
         result = svc.get_save_sync_settings()
-        assert result["default_slot"] == "default"
+        assert result["default_slot"] == "autosave"
         assert result["autocleanup_limit"] == 10
 
 

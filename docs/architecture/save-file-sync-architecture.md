@@ -278,7 +278,7 @@ backup.
   mode — `UPDATE rom_save_states SET slot_confirmed=0 WHERE active_slot IS NULL AND slot_confirmed=1` (the pre-rename
   table name migration `005` targets; migration `018` later renames it to `rom_save_sync_states`). No save data is
   touched; the wizard simply reappears for that ROM and the user re-picks a named slot (optionally migrating the legacy
-  saves in). `resolve_default_slot` never returns `None` — a blank/unset default coerces to `"default"`.
+  saves in). `resolve_default_slot` never returns `None` — a blank/unset default coerces to `"autosave"`.
 - **Why the bucket is not coming back as an opt-in write target** —
   [ADR-0026](../adr/0026-legacy-bucket-stays-read-only.md) records the decision and what was measured against a live
   RomM 5.0.0 server to reach it (the web player can continue a **named**-slot save, so interop does not require
@@ -1625,7 +1625,8 @@ The save-sync feature toggles (`save_sync_enabled`, `sync_before_launch`, `sync_
 forwards) surfaces a conflict the user has no UI to resolve — the SAVES tab where one would resolve it is hidden while
 disabled. A stale server-side conflict (e.g. another device moved the save) therefore can't render a game unplayable.
 `sync_before_launch` / `sync_after_exit` gate the automatic pre-launch / post-exit syncs; `default_slot` is the slot new
-games adopt (`"default"`); `autocleanup_limit` caps retained save versions per slot on the server (10).
+games adopt (`"autosave"`, matching the official RomM clients Argosy and Grout); `autocleanup_limit` caps retained save
+versions per slot on the server (10).
 
 Conflicts are no longer persisted. They are returned ephemerally from `do_sync_rom_saves` and `_get_save_status_io` and
 surfaced via the modal at the moment of the sync. If the user dismisses the modal (Cancel), the conflict re-fires on the

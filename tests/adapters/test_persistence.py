@@ -84,8 +84,13 @@ class TestLocking:
 class TestSettingsSchema:
     """Schema-level expectations for the settings defaults + version stamp."""
 
-    def test_settings_version_is_11(self):
-        assert _SETTINGS_VERSION == 11
+    def test_settings_version_is_12(self):
+        assert _SETTINGS_VERSION == 12
+
+    def test_default_settings_default_slot_is_autosave(self):
+        # New ROMs adopt "autosave" (the slot name the official RomM clients use),
+        # aligning first-sync placement with Argosy and Grout (#1529).
+        assert DEFAULT_SETTINGS["default_slot"] == "autosave"
 
     def test_default_settings_omit_retired_credential_keys(self):
         """The retired legacy-credential keys must not be re-seeded on load."""
@@ -142,7 +147,7 @@ class TestVersionStampingOnSave:
         with open(settings_path) as f:
             loaded = json.load(f)
         assert loaded["version"] == _SETTINGS_VERSION
-        assert loaded["version"] == 11
+        assert loaded["version"] == 12
 
 
 # ── Loading edge cases ─────────────────────────────────────────────────────────

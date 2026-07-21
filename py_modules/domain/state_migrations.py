@@ -37,6 +37,8 @@ def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
         new_data = _migrate_v9_to_v10(new_data)
     if version < 11:
         new_data = _migrate_v10_to_v11(new_data)
+    if version < 12:
+        new_data = _migrate_v11_to_v12(new_data)
     return new_data
 
 
@@ -284,4 +286,22 @@ def _migrate_v10_to_v11(data: dict[str, Any]) -> dict[str, Any]:
         rebuilt["virtual"] = merged
         data["enabled_collections"] = rebuilt
     data["version"] = 11
+    return data
+
+
+def _migrate_v11_to_v12(data: dict[str, Any]) -> dict[str, Any]:
+    """v<12 → v12: align the default save slot with the ecosystem's ``autosave``.
+
+    ``default_slot`` — the slot a brand-new, never-configured ROM adopts on its
+    first sync — moves from ``"default"`` to ``"autosave"``, the slot name the
+    official RomM clients (Argosy, Grout) use, so a save synced from one client
+    lands in the slot the others read. Only a stored value of exactly
+    ``"default"`` is rewritten; a user-chosen slot name is left untouched, and an
+    absent key is left absent (``DEFAULT_SETTINGS`` seeds the new default on
+    load). Existing tracked ROMs are unaffected — each syncs to its persisted
+    ``active_slot``, never to this setting.
+    """
+    if data.get("default_slot") == "default":
+        data["default_slot"] = "autosave"
+    data["version"] = 12
     return data

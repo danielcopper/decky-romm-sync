@@ -28,17 +28,18 @@ def sync_after_exit(settings: dict[str, Any]) -> bool:
 
 
 def resolve_default_slot(settings: dict[str, Any]) -> str:
-    """The configured default slot, coercing blank/None/whitespace to ``"default"``.
+    """The configured default slot, coercing blank/None/whitespace to ``"autosave"``.
 
     Never returns ``None``: the legacy no-slot mode is retired (#1276), so a
     missing, empty, or whitespace-only ``default_slot`` collapses to the
-    canonical ``"default"`` slot rather than legacy mode.
+    canonical ``"autosave"`` slot (the name the official RomM clients use)
+    rather than legacy mode.
     """
-    raw_slot = settings.get("default_slot", "default")
+    raw_slot = settings.get("default_slot", "autosave")
     if raw_slot is None:
-        return "default"
+        return "autosave"
     slot_str = str(raw_slot).strip()
-    return slot_str if slot_str else "default"
+    return slot_str if slot_str else "autosave"
 
 
 def autocleanup_limit(settings: dict[str, Any]) -> int:
@@ -61,16 +62,16 @@ def sanitize_setting(key: str, value: object) -> tuple[object, bool]:
     """Validate and coerce a single save-sync settings key/value pair.
 
     Returns ``(coerced_value, skip)`` where ``skip=True`` means the value should
-    be discarded. Empty/whitespace/None slot names collapse to ``"default"``
+    be discarded. Empty/whitespace/None slot names collapse to ``"autosave"``
     (the legacy no-slot mode is retired, #1276 — mirroring the
     ``autocleanup_limit`` clamp philosophy), ``autocleanup_limit`` is clamped to
     a positive int, and the three booleans pass through ``bool(...)``.
     """
     if key == "default_slot":
         if value is None:
-            return "default", False  # blank/None -> canonical "default" slot
+            return "autosave", False  # blank/None -> canonical "autosave" slot
         coerced = str(value).strip()
-        return (coerced if coerced else "default"), False  # empty -> "default"
+        return (coerced if coerced else "autosave"), False  # empty -> "autosave"
     if key == "autocleanup_limit":
         return max(1, int(value)), False  # type: ignore[arg-type]
     if key in ("save_sync_enabled", "sync_before_launch", "sync_after_exit"):

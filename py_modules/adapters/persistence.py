@@ -16,7 +16,7 @@ from typing import Any, Protocol
 
 from adapters.system_clock import SystemClock
 
-_SETTINGS_VERSION = 11
+_SETTINGS_VERSION = 12
 _LOCK_EXT = ".lock"
 
 
@@ -62,7 +62,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "save_sync_enabled": False,
     "sync_before_launch": True,
     "sync_after_exit": True,
-    "default_slot": "default",
+    "default_slot": "autosave",
     "autocleanup_limit": 10,
     "device_name": None,
     "platform_cores": {},

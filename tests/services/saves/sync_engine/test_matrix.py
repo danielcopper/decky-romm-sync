@@ -289,7 +289,9 @@ class TestV47SyncFlow:
         upload_calls = [c for c in fake.call_log if c[0] == "upload_save"]
         assert len(upload_calls) == 1
         assert upload_calls[0][2]["device_id"] == "server-dev-123"
-        assert upload_calls[0][2]["slot"] == "default"
+        # Brand-new ROM (no active_slot, no slots) → first upload lands in the
+        # configured default slot, now "autosave" (#1529).
+        assert upload_calls[0][2]["slot"] == "autosave"
 
     def test_legacy_slot_uploads_as_null_not_default(self, tmp_path):
         """#1061: a sync on the explicit legacy slot uploads slot=None (slot:null), not 'default'.

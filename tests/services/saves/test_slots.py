@@ -53,7 +53,8 @@ class TestSaveSlots:
         result = await svc.get_save_slots(123)
         assert result["success"] is True
         assert len(result["slots"]) == 2
-        assert result["active_slot"] == "default"
+        # ROM is untracked → active_slot falls back to the configured default slot.
+        assert result["active_slot"] == "autosave"
 
     @pytest.mark.asyncio
     async def test_get_save_slots_latest_updated_at_from_server(self, tmp_path):
@@ -338,7 +339,7 @@ class TestGetSaveSetupInfo:
         assert result["has_local_saves"] is True
         assert len(result["server_slots"]) == 1
         assert result["server_slots"][0]["slot"] == "desktop"
-        assert result["default_slot"] == "default"
+        assert result["default_slot"] == "autosave"
 
     @pytest.mark.asyncio
     async def test_scenario_e_local_and_server_same_default_slot(self, tmp_path):
@@ -348,13 +349,13 @@ class TestGetSaveSetupInfo:
         _set_device_id(svc, "dev-1")
         _install_rom(svc, tmp_path)
         _create_save(tmp_path)
-        fake.saves[1] = _server_save(save_id=1, slot="default")
+        fake.saves[1] = _server_save(save_id=1, slot="autosave")
 
         result = await svc.get_save_setup_info(42)
         assert result["has_local_saves"] is True
         assert len(result["server_slots"]) == 1
-        assert result["server_slots"][0]["slot"] == "default"
-        assert result["default_slot"] == "default"
+        assert result["server_slots"][0]["slot"] == "autosave"
+        assert result["default_slot"] == "autosave"
 
     @pytest.mark.asyncio
     async def test_already_confirmed(self, tmp_path):
@@ -472,7 +473,7 @@ class TestGetSaveSetupInfo:
         assert result["has_local_saves"] is True
         assert len(result["local_files"]) == 1
         assert result["local_files"][0]["filename"] == "pokemon.srm"
-        assert result["default_slot"] == "default"
+        assert result["default_slot"] == "autosave"
         assert result["slot_confirmed"] is False
 
     @pytest.mark.asyncio
