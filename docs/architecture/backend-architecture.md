@@ -1157,6 +1157,24 @@ construction and is itself the `ResolveUploadConflictFn` seam (`services/protoco
   `domain.sync_action.resolve_upload_conflict` kernel is **not** a runtime fallback; it is retained as the differential
   oracle and the gavel-ladder-vector target in tests (`tests/adapters/test_gavel_native.py`), so the shipped binary is
   proven to match the same contract the Python kernel is held to.
+
+#### FirmwareService notes — the vendored BIOS registry
+
+The BIOS registry — which firmware files each platform and libretro core want, with the hashes and sizes that identify
+them — is the data `FirmwareService` reads (via `domain/bios.py`) to classify what a platform needs and whether a local
+file is the right one. It ships as `defaults/bios_registry.json` and is **vendored verbatim** from an
+[emu-atlas](https://github.com/danielcopper/emu-atlas) release, where the registry and its generator now live — there is
+no in-tree generator, and regeneration is a dev-time, offline step upstream (from the libretro `libretro-core-info` and
+`libretro-database` sources).
+
+- **What ships**: `defaults/bios_registry.json` (emu-atlas `v0.1.0`, upstream path `atlas/data/bios_registry.json`),
+  copied verbatim with a pinned SHA-256 checksum. Provenance and the update procedure live in
+  [`defaults/README.md`](https://github.com/danielcopper/decky-romm-sync/blob/main/defaults/README.md). The checksum is
+  re-verified by CI (`.github/workflows/ci.yml`, mirrored in `mise run gate`) and the release smoke test asserts the
+  registry is present in the plugin zip, so both a hand-edited snapshot and a dropped file fail the pipeline.
+- **Never hand-edit it**: a manual edit would silently diverge from the released snapshot and break the checksum gate. A
+  registry change lands by pulling a newer emu-atlas release, re-pinning the checksum, and bumping the tag in
+  `defaults/README.md`.
 - **Path resolution**: the `.so` is resolved relative to the adapter module (`__file__`), mirroring
   `sqlite_migrations.MIGRATIONS_DIR` — a fatal-load bundled resource must resolve identically in the installed plugin
   (`<plugin>/py_modules/native/…`) and in the repo checkout the real-`bootstrap()` test tiers run from, where the plugin

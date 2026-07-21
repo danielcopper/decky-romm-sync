@@ -244,7 +244,12 @@ in [`_vendor/README.md`](py_modules/_vendor/README.md). Compiled binaries (no so
 `py_modules/native/` instead (inside one of the fixed directories the Decky CLI packs into the plugin zip) — downloaded
 verbatim from an upstream release with a pinned SHA-256 (CI re-verifies it; the release smoke test asserts the artifact
 ships in the zip), loaded by an adapter via `ctypes` with no Python fallback; provenance and the update procedure live
-in [`native/README.md`](py_modules/native/README.md).
+in [`native/README.md`](py_modules/native/README.md). Vendored **data** (no source in this repo) follows the same
+discipline: `defaults/bios_registry.json` is copied verbatim from an
+[emu-atlas](https://github.com/danielcopper/emu-atlas) release with a pinned SHA-256
+(`defaults/bios_registry.json.sha256`, CI-verified via `mise run gate`; the release smoke test asserts it ships in the
+zip) — never hand-edit it, regeneration happens upstream; provenance and the update procedure live in
+[`defaults/README.md`](defaults/README.md).
 
 **Process boundaries — `main.py` vs `bootstrap.py`**: `[ours]` `main.py` owns the Decky lifecycle (`_main`, `_unload`)
 and the callable surface (one `async def` per `@callable`). `bootstrap.py` owns adapter instantiation and service

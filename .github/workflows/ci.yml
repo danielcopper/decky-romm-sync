@@ -169,6 +169,12 @@ jobs:
       # update when pulling a newer romm-gavel release).
       - name: Check vendored gavel native core checksum
         run: cd py_modules/native && sha256sum -c libgavel-x86_64-linux.so.sha256
+      # The BIOS registry ships in the plugin zip and is vendored verbatim from an
+      # emu-atlas release — there is no in-tree generator. A hand-edited snapshot
+      # must fail CI. Verify the vendored data against its checksum (bumped only by
+      # a deliberate defaults/README.md update when pulling a newer emu-atlas release).
+      - name: Check vendored BIOS registry checksum
+        run: cd defaults && sha256sum -c bios_registry.json.sha256
 
   # Skipped when SONAR_TOKEN is structurally unavailable: Dependabot PRs and
   # PRs from forks (GitHub withholds secrets from `pull_request` runs whose head
