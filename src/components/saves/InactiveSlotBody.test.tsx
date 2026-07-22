@@ -45,6 +45,7 @@ function defaultProps(overrides: Partial<InactiveSlotBodyProps> = {}): InactiveS
     handleActivate: vi.fn(),
     handleDelete: vi.fn(),
     deleting: false,
+    copy: { onCopy: vi.fn(), sourceSlot: "backup", isOffline: false },
     ...overrides,
   };
 }

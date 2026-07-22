@@ -13,6 +13,7 @@ import { showSyncConflictModal } from "../SyncConflictModal";
 import { scrollFocusedToCenter } from "../../utils/scrollHelpers";
 import { formatBytes, formatTimestamp } from "../../utils/formatters";
 import { formatAttributionSegment, formatRelativeTime, pickLastSyncer } from "./helpers";
+import { renderCopyToSlotButton, type CopyToSlotHandler } from "./CopyToSlotButton";
 import { detach } from "../../utils/detach";
 
 interface VersionHistoryPanelProps {
@@ -21,9 +22,18 @@ interface VersionHistoryPanelProps {
   filename: string;
   isOffline: boolean;
   onRestored: () => void;
+  /** Opens the copy-to-slot picker for a version row's save id (source = this slot). */
+  onCopy?: CopyToSlotHandler;
 }
 
-export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({ romId, slot, filename, isOffline, onRestored }) => {
+export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
+  romId,
+  slot,
+  filename,
+  isOffline,
+  onRestored,
+  onCopy,
+}) => {
   const [expanded, setExpanded] = useState(false);
   const [versions, setVersions] = useState<SaveVersionEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -197,25 +207,33 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({ romId, slot,
           v.file_name,
         ),
       ),
-      // Restore button (fixed right, disabled when offline)
+      // Action column (fixed right): Restore + optional Copy-to-slot.
       createElement(
-        DialogButton,
-        {
-          style: {
-            padding: "2px 8px",
-            minWidth: "auto",
-            fontSize: "11px",
-            width: "auto",
-            flexShrink: 0,
+        "div",
+        { style: { display: "flex", flexDirection: "column" as const, gap: "4px", flexShrink: 0 } },
+        // Restore button (disabled when offline)
+        createElement(
+          DialogButton,
+          {
+            key: "restore",
+            style: {
+              padding: "2px 8px",
+              minWidth: "auto",
+              fontSize: "11px",
+              width: "auto",
+              flexShrink: 0,
+            },
+            noFocusRing: false,
+            onFocus: scrollFocusedToCenter,
+            disabled: isThisRestoring || restoring !== null || isOffline,
+            onClick: () => {
+              detach(handleRestore(v));
+            },
           },
-          noFocusRing: false,
-          onFocus: scrollFocusedToCenter,
-          disabled: isThisRestoring || restoring !== null || isOffline,
-          onClick: () => {
-            detach(handleRestore(v));
-          },
-        },
-        isThisRestoring ? "Restoring..." : "Restore",
+          isThisRestoring ? "Restoring..." : "Restore",
+        ),
+        // Copy-to-slot button (source = this slot); disabled offline via the shared helper.
+        onCopy ? renderCopyToSlotButton(`copy-ver-${v.id}`, v.id, { onCopy, sourceSlot: slot, isOffline }) : null,
       ),
     );
   };

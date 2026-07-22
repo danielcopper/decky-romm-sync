@@ -41,6 +41,7 @@ import type {
   SaveSortMigrationStatus,
   RollbackStatus,
   ListFileVersionsResult,
+  CopySaveToSlotStatus,
   ListDevicesResponse,
 } from "../types";
 
@@ -743,6 +744,7 @@ export const savesListFileVersions = callable<[number, string, string], ListFile
   "saves_list_file_versions",
 );
 export const savesRollbackToVersion = callable<[number, string, number], RollbackStatus>("saves_rollback_to_version");
+export const copySaveToSlot = callable<[number, number, string], CopySaveToSlotStatus>("copy_save_to_slot");
 
 // Achievements callables
 export const getAchievements = callable<[number], AchievementList>("get_achievements");

@@ -10,6 +10,7 @@ import type { SlotSaveFile } from "../../types";
 import { scrollFocusedToCenter } from "../../utils/scrollHelpers";
 import { MUTED_COLOR } from "./helpers";
 import { renderServerSaveRow } from "./ServerSaveRow";
+import type { CopyToSlotRowProps } from "./CopyToSlotButton";
 
 export interface InactiveSlotBodyProps {
   loadingSlot: boolean;
@@ -26,6 +27,8 @@ export interface InactiveSlotBodyProps {
   handleActivate: () => void;
   handleDelete: () => void;
   deleting: boolean;
+  /** Copy-to-slot binding for each server save row (source = this slot). */
+  copy: CopyToSlotRowProps;
 }
 
 export const InactiveSlotBody: FC<InactiveSlotBodyProps> = ({
@@ -38,6 +41,7 @@ export const InactiveSlotBody: FC<InactiveSlotBodyProps> = ({
   handleActivate,
   handleDelete,
   deleting,
+  copy,
 }) => {
   const children: (ReturnType<typeof createElement> | null)[] = [];
 
@@ -47,7 +51,7 @@ export const InactiveSlotBody: FC<InactiveSlotBodyProps> = ({
     );
   } else if (slotFiles && slotFiles.length > 0) {
     for (const f of slotFiles) {
-      children.push(renderServerSaveRow(f));
+      children.push(renderServerSaveRow(f, copy));
     }
   } else if (slotFiles !== null) {
     children.push(

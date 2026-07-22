@@ -115,6 +115,24 @@ The modal blocks the Play action until you choose. If a post-exit sync detects a
 opens the next time you tap Play, where it blocks launch until resolved. There is no longer a separate "pending
 conflicts" list on the settings page.
 
+## Copying a Save to Another Slot
+
+On the SAVES tab, most save rows carry a **Copy to slot…** button — the active slot's current save, its Previous
+Versions, and the saves listed under any other slot (including the read-only legacy web-player bucket). Tap it to copy
+that save into another slot:
+
+- Pick an existing slot, or type a name to create a new one.
+- The **copy is not a move** — the original save stays where it is. Delete it from the RomM web app later if you want it
+  gone.
+- The slot you copy into **becomes the game's active slot**, with the copied save as its current save.
+
+Common uses: promote an old web-player (legacy) save into a proper named slot, or bring a save from one slot onto
+another so you can continue it there.
+
+The button is unavailable while RomM is offline. If the game's current slot has an unresolved conflict, resolve it first
+(you'll be prompted). If the destination slot has newer changes from another device, sync that slot first, then copy
+again.
+
 ## Core Switch Warning
 
 When you switch the emulator core for a game (e.g., from mGBA to gpSP for GBA), the plugin detects the change and shows

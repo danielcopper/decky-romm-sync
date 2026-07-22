@@ -1233,6 +1233,50 @@ rollback API.
   devices still see the original newest save. Calling `rollback_to_version` again is safe and idempotent: step 1 is
   already done, step 2 retries the PUT.
 
+## Copy a save to another slot
+
+A per-save **"Copy to slot…"** action (`SaveCopyService`, `services/saves/copies.py`; callable `copy_save_to_slot`)
+takes one server save — from a named slot, an older version, or the read-only legacy no-slot bucket — and copies its
+content into a target slot. The action is offered on every save row that carries a server save id: the active slot's
+current save, its Previous-Versions rows, and the inactive/legacy slot panels.
+
+Two things define the semantics:
+
+- **It is a copy, never a move.** The source save is never deleted (the user removes it in the RomM web app if they want
+  to). A ROM has many slots; this does not "move the ROM onto one slot".
+- **The target slot becomes the ROM's active/confirmed slot,** with the copied save as its current save. This is
+  mechanically forced: `do_upload_save` resolves its upload slot purely from `save_state.active_slot`
+  (`_resolve_upload_slot`) — there is no per-call slot override — so `active_slot` is set to the target (`confirm_slot`)
+  _before_ the upload.
+
+The flow is a composition of the rollback orchestration shell and the wizard-migration's make-current step (it extends
+neither in place):
+
+1. Validate the target name (empty/whitespace → `invalid_slot_name`).
+2. Under `rom_lock`, refuse an unconfigured ROM (`active_slot` is `None` or the slot is unconfirmed) with
+   `not_configured` — the Copy action is only reachable on a configured ROM, and this is the defensive backstop, not a
+   UI-gate reliance (the #1529 lesson). `rom_not_installed` when there is no install record.
+3. Multi-file (#908) and content-dir (#239) layouts are refused with `unsupported` (the content-dir case carries the
+   `savefiles_in_content_dir` reason), exactly as rollback refuses them — copying one component of an N-file set would
+   produce an incoherent save, and a content-dir layout writes where RetroArch never reads.
+4. A **matrix pre-flight** (`do_sync_rom_saves`) runs unconditionally on the _current_ slot, protecting its dirty local
+   before the copy overwrites it: `conflict_blocked` / `preflight_failed` on a bad pre-flight (same shapes as rollback).
+5. `list_saves` with **no slot filter** (the chosen save may live in any slot) locates the save by id; a missing id is
+   `version_deleted`, a failed call is `server_unreachable`.
+6. `SaveCopyService._copy_save_to_slot_io` then: `confirm_slot(target)` (creates the slot if new, switches active +
+   confirms) → `do_download_save` (the chosen content onto the canonical local file, quarantining the current local file
+   first, #965) → `do_upload_save(server_save=None, overwrite=False)` — a POST into the now-active target slot. A
+   **409** is `target_slot_busy` (the target has newer changes from another device — sync it first, then retry); any
+   other upload error is `copy_failed`.
+
+The status union mirrors `RollbackStatus`:
+`ok | not_configured | invalid_slot_name | rom_not_installed | version_deleted | unsupported{reason?} |
+server_unreachable{message} | conflict_blocked{conflicts} | preflight_failed{errors} | target_slot_busy{message} |
+copy_failed{message}`.
+On `ok` the frontend dispatches `romm_data_changed` so the parent re-fetches — refreshing both the source and the target
+slot views. The source slot is excluded from the target picker (a same-slot copy is just a rollback) and the legacy `""`
+bucket is excluded as a target (it stays a read-only source).
+
 ## RomM Save Sync API Behaviour
 
 The plugin depends on several RomM v4.8.1 behaviours that are not obvious from the OpenAPI schema and were discovered
@@ -1802,11 +1846,13 @@ RetroArch save states (`<states_path>/{system}/`, where `<states_path>` comes fr
 `paths.states_path`) are not synced. Only SRAM saves (`.srm`) are handled. Save states are large,
 emulator-version-specific, and not portable between different RetroArch core versions.
 
-### Save slot migration between slots not yet implemented
+### Copying a save into another slot
 
-Moving saves between slots (copy from slot A to slot B) is not supported. Users can delete named slots (which removes
-all saves in the slot from the server) and create new ones, but there is no "move saves from slot X to slot Y"
-operation. The legacy (web-player) bucket is the one exception — it is read-only and cannot be deleted from the plugin
+Copying a single save from one slot into another is supported via the per-save **"Copy to slot…"** action (see
+[Copy a save to another slot](#copy-a-save-to-another-slot)) — the target slot becomes the ROM's active slot and the
+source save is preserved. What is _not_ supported is a bulk **move** of a whole slot's contents (delete-from-source
+semantics): users copy individual saves, then delete the source slot from the server if they want it gone. The legacy
+(web-player) bucket is a read-only copy _source_ — it cannot be a copy target, and cannot be deleted from the plugin
 (#1478).
 
 ### Cross-device save browsing limited

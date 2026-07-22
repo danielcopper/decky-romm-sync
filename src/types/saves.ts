@@ -233,3 +233,19 @@ export type ListFileVersionsResult =
   | { status: "ok"; versions: SaveVersionEntry[] }
   | { status: "multi_file_unsupported"; versions: SaveVersionEntry[] }
   | { status: "server_unreachable"; message: string };
+
+/** Discriminated-status result of `copySaveToSlot` — copies one server save into
+ *  a target slot, which becomes the ROM's active slot (the source is preserved).
+ *  Mirrors the backend `SaveCopyService.copy_save_to_slot` union. */
+export type CopySaveToSlotStatus =
+  | { status: "ok" }
+  | { status: "not_configured" }
+  | { status: "invalid_slot_name" }
+  | { status: "rom_not_installed" }
+  | { status: "version_deleted" }
+  | { status: "unsupported"; reason?: string }
+  | { status: "server_unreachable"; message: string }
+  | { status: "conflict_blocked"; conflicts: SyncConflict[] }
+  | { status: "preflight_failed"; errors: string[] }
+  | { status: "target_slot_busy"; message: string }
+  | { status: "copy_failed"; message: string };

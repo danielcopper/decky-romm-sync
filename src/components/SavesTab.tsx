@@ -21,6 +21,7 @@ import { NewSlotModal } from "./saves/NewSlotModal";
 import { SlotPanel } from "./saves/SlotPanel";
 import { ConnectingIndicator } from "./saves/ConnectingIndicator";
 import { renderSaveFileRow } from "./saves/SaveFileRow";
+import { useCopyToSlot } from "./saves/useCopyToSlot";
 import { detach } from "../utils/detach";
 
 interface SavesTabProps {
@@ -125,6 +126,12 @@ export const SavesTab: FC<SavesTabProps> = ({
       cancelled = true;
     };
   }, [appId, romId]);
+
+  // Copy-to-slot opener, shared by every save row across the slot panels. The
+  // picker's target list is derived from availableSlots (minus the source slot
+  // and the legacy "" bucket); on success it dispatches romm_data_changed so the
+  // parent re-fetches and both the source and target views refresh.
+  const openCopyModal = useCopyToSlot(romId, availableSlots);
 
   // --- Offline banner ---
   const offlineBanner = isOffline
@@ -316,6 +323,7 @@ export const SavesTab: FC<SavesTabProps> = ({
           onSlotSwitched,
           onVersionRestored: handleVersionRestored,
           onSlotDeleted: handleSlotDeleted,
+          onCopy: openCopyModal,
         });
       }),
 

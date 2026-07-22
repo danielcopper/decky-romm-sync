@@ -91,6 +91,7 @@ function defaultProps(overrides: Partial<React.ComponentProps<typeof SlotPanel>>
     onSlotSwitched: vi.fn(),
     onVersionRestored: vi.fn(),
     onSlotDeleted: vi.fn(),
+    onCopy: vi.fn(),
     ...overrides,
   };
 }

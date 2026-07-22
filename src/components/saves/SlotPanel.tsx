@@ -22,6 +22,7 @@ import { MUTED_COLOR, computeSyncSummary, displaySlot, slotDeleteFailureToast } 
 import { renderSaveFileRow } from "./SaveFileRow";
 import { InactiveSlotBody } from "./InactiveSlotBody";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
+import { renderCopyToSlotButton, type CopyToSlotHandler } from "./CopyToSlotButton";
 import { detach } from "../../utils/detach";
 
 /**
@@ -73,11 +74,13 @@ function renderActiveSlotBody(
   slot: string,
   isOffline: boolean,
   onVersionRestored: () => void,
+  onCopy: CopyToSlotHandler,
 ): (ReturnType<typeof createElement> | null)[] {
   if (saveStatus && saveStatus.files.length > 0) {
     // Multi-file save (#908 guard): the slot's current save is one game state
     // spread across N files. The siblings are components, not prior versions,
-    // so suppress the per-file VersionHistoryPanel/rollback and show the
+    // so suppress the per-file VersionHistoryPanel/rollback AND the copy action
+    // (copying one component would produce an incoherent set) and show the
     // component list + a calm note instead.
     if (saveStatus.multi_file) {
       const componentFiles = saveStatus.component_files ?? [];
@@ -99,6 +102,20 @@ function renderActiveSlotBody(
         "div",
         { key: f.filename },
         renderSaveFileRow(f, conflict, saveStatus.last_sync_check_at),
+        // Copy-to-slot on the active slot's current save (source = this slot).
+        // Rendered as a sibling of the save-file row (never nested in its
+        // DialogButton) so Deck focus stays flat. Only when it has a server save.
+        f.server_save_id != null
+          ? createElement(
+              "div",
+              { key: `copy-active-${f.filename}`, style: { marginTop: "4px", marginLeft: "8px" } },
+              renderCopyToSlotButton(`copy-active-${f.filename}`, f.server_save_id, {
+                onCopy,
+                sourceSlot: slot,
+                isOffline,
+              }),
+            )
+          : null,
         createElement(VersionHistoryPanel, {
           key: `vhp-${f.filename}`,
           romId,
@@ -106,6 +123,7 @@ function renderActiveSlotBody(
           filename: f.filename,
           isOffline,
           onRestored: onVersionRestored,
+          onCopy,
         }),
       );
     });
@@ -132,6 +150,8 @@ interface SlotPanelProps {
   onSlotSwitched: (newSlot: string, newStatus: SaveStatus) => void;
   onVersionRestored: () => void;
   onSlotDeleted: () => void;
+  /** Opens the copy-to-slot picker for a save row in this slot. */
+  onCopy: CopyToSlotHandler;
 }
 
 export const SlotPanel: FC<SlotPanelProps> = ({
@@ -145,6 +165,7 @@ export const SlotPanel: FC<SlotPanelProps> = ({
   onSlotSwitched,
   onVersionRestored,
   onSlotDeleted,
+  onCopy,
 }) => {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [slotFiles, setSlotFiles] = useState<SlotSaveFile[] | null>(null);
@@ -369,7 +390,9 @@ export const SlotPanel: FC<SlotPanelProps> = ({
       ? createElement(
           "div",
           { key: "body", className: "romm-slot-body" },
-          ...renderActiveSlotBody(saveStatus, conflicts, romId, slotName, isOffline, onVersionRestored).filter(Boolean),
+          ...renderActiveSlotBody(saveStatus, conflicts, romId, slotName, isOffline, onVersionRestored, onCopy).filter(
+            Boolean,
+          ),
         )
       : // eslint-disable-next-line react-hooks/refs -- createElement of an FC in a ternary branch trips the new react-hooks/refs rule; the component itself takes no ref.
         createElement(InactiveSlotBody, {
@@ -388,6 +411,8 @@ export const SlotPanel: FC<SlotPanelProps> = ({
           handleDelete: () => {
             detach(handleDelete());
           },
+          // Copy source = this (inactive/legacy) slot; the picker excludes it as a target.
+          copy: { onCopy, sourceSlot: slotName, isOffline },
         });
   }
 

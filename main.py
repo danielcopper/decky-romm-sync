@@ -566,6 +566,10 @@ class Plugin:
     async def saves_rollback_to_version(self, rom_id, slot, save_id):
         return await self._save_sync_service.rollback_to_version(rom_id, slot, save_id)
 
+    @migration_blocked
+    async def copy_save_to_slot(self, rom_id, save_id, target_slot):
+        return await self._save_sync_service.copy_save_to_slot(rom_id, save_id, target_slot)
+
     async def record_session_start(self, rom_id):
         result = self._playtime_service.record_session_start(rom_id)
         # Fire-and-forget: drain any offline play-session backlog into RomM's

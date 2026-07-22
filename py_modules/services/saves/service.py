@@ -24,6 +24,7 @@ from services.saves._settings import (
     save_sync_enabled,
     save_sync_settings_view,
 )
+from services.saves.copies import SaveCopyService, SaveCopyServiceConfig
 from services.saves.rom_info import RomInfoService, RomInfoServiceConfig
 from services.saves.slots import SlotsService, SlotsServiceConfig
 from services.saves.status import StatusService, StatusServiceConfig
@@ -137,6 +138,22 @@ class SaveService:
 
         self._versions = VersionsService(
             config=VersionsServiceConfig(
+                settings=config.settings,
+                uow_factory=config.uow_factory,
+                sync_engine=self._sync_engine,
+                device_registry=self._device_registry,
+                rom_info=self._rom_info,
+                resolve_core=self._sync_engine.resolve_core,
+                romm_api=config.romm_api,
+                retry=config.retry,
+                loop=config.loop,
+                logger=config.logger,
+                log_debug=config.log_debug,
+            ),
+        )
+
+        self._copies = SaveCopyService(
+            config=SaveCopyServiceConfig(
                 settings=config.settings,
                 uow_factory=config.uow_factory,
                 sync_engine=self._sync_engine,
@@ -334,6 +351,14 @@ class SaveService:
     async def rollback_to_version(self, rom_id: int, slot: str, save_id: int) -> dict[str, Any]:
         """Switch the local + tracked save to a chosen older server version."""
         return await self._versions.rollback_to_version(rom_id, slot, save_id)
+
+    # ------------------------------------------------------------------
+    # Copy-to-slot (delegated to SaveCopyService)
+    # ------------------------------------------------------------------
+
+    async def copy_save_to_slot(self, rom_id: int, save_id: int, target_slot: str) -> dict[str, Any]:
+        """Copy a specific server save into another slot (which becomes active)."""
+        return await self._copies.copy_save_to_slot(rom_id, save_id, target_slot)
 
     # ------------------------------------------------------------------
     # Settings (settings.json — read/written directly)
