@@ -19,7 +19,12 @@ from lib.errors import (
     RommForbiddenError,
     RommServerError,
 )
-from services.connection import ConnectionService, ConnectionServiceConfig
+from lib.list_result import ErrorCode
+from services.connection import (
+    _USER_TOKEN_REJECTED_MESSAGE,
+    ConnectionService,
+    ConnectionServiceConfig,
+)
 
 _MIN_VERSION = (4, 9, 0)
 
@@ -848,7 +853,11 @@ class TestEstablishUserTokenBadPath:
         romm_api.get_current_user.assert_not_called()
 
     def test_unreachable_server_returns_error_no_validation(self, event_loop, romm_api, logger):
+        # A genuinely unreachable server fails BOTH the version probe and the
+        # post-restore reachability re-probe (#1564), so the generic
+        # server-unreachable error surfaces rather than the token-rejected one.
         romm_api.heartbeat.side_effect = RommConnectionError("refused")
+        romm_api.heartbeat_once.side_effect = RommConnectionError("refused")
         service = _make_service(settings={}, romm_api=romm_api, loop=event_loop, logger=logger)
         result = event_loop.run_until_complete(service.establish_user_token("http://romm.local", "rmm_x"))
         assert result["success"] is False
@@ -906,6 +915,74 @@ class TestEstablishUserTokenBadPath:
         assert result["success"] is False
         assert result["reason"] == "unknown"
         assert "disk full" in result["message"]
+
+
+class TestEstablishUserTokenProbeRejection:
+    """#1564: RomM 5.0 answers the token-carrying version probe with a 500 (a
+    malformed token) or a 403 (a token-shaped but invalid/revoked one) rather
+    than a clean 401, so a bad pasted token otherwise surfaces as a generic
+    server error. A probe failure is disambiguated by a post-restore
+    reachability re-probe: a reachable server proves the pasted token — not the
+    server — is at fault, so the token-rejected auth failure is returned instead
+    of the misleading generic server error."""
+
+    def test_bad_token_reachable_server_returns_token_rejected(self, event_loop, romm_api, logger, settings_persister):
+        """Probe fails with a 500 but the reachability re-probe reaches the
+        server → the pasted token is rejected, and the old state is restored."""
+        # The token-carrying version probe raises RomM's 500-for-a-bad-token.
+        romm_api.heartbeat.side_effect = RommServerError("bad token", status_code=500)
+        # The post-restore reachability re-probe (heartbeat_once) succeeds.
+        romm_api.heartbeat_once.return_value = {"SYSTEM": {"VERSION": "5.0.0"}}
+        settings = _working_settings()
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_user_token("https://new.server", "rmm_bad"))
+        assert result == {
+            "success": False,
+            "reason": ErrorCode.AUTH_FAILED.value,
+            "message": _USER_TOKEN_REJECTED_MESSAGE,
+        }
+        # The pasted token never reached the /api/users/me validation.
+        romm_api.get_current_user.assert_not_called()
+        # The previous working state is restored; nothing is persisted.
+        assert settings["romm_url"] == "https://old.server"
+        assert settings["romm_api_token"] == "rmm_old"
+        assert settings["romm_api_token_id"] == 7
+        assert settings["romm_api_token_origin"] == "https://old.server"
+        settings_persister.save_settings.assert_not_called()
+
+    def test_probe_fails_and_server_unreachable_returns_real_error(
+        self, event_loop, romm_api, logger, settings_persister
+    ):
+        """Probe fails AND the reachability re-probe also fails → the genuine
+        server error surfaces, NOT the token-rejected message."""
+        romm_api.heartbeat.side_effect = RommServerError("boom", status_code=500)
+        romm_api.heartbeat_once.side_effect = RommConnectionError("refused")
+        settings = _working_settings()
+        service = _make_service(
+            settings=settings,
+            romm_api=romm_api,
+            loop=event_loop,
+            logger=logger,
+            settings_persister=settings_persister,
+        )
+        result = event_loop.run_until_complete(service.establish_user_token("https://new.server", "rmm_bad"))
+        assert result["success"] is False
+        # error_response(e) carries the ORIGINAL probe exception's classification.
+        assert result["reason"] == "server_unreachable"
+        assert result["message"] != _USER_TOKEN_REJECTED_MESSAGE
+        assert "Server error (500)" in result["message"]
+        romm_api.get_current_user.assert_not_called()
+        # The previous working state is restored; nothing is persisted.
+        assert settings["romm_url"] == "https://old.server"
+        assert settings["romm_api_token"] == "rmm_old"
+        assert settings["romm_api_token_origin"] == "https://old.server"
+        settings_persister.save_settings.assert_not_called()
 
 
 class TestEstablishUserTokenSnapshotRestore:
