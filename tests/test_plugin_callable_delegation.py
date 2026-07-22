@@ -20,7 +20,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from conftest import _make_testable_plugin
+from _factories import _make_testable_plugin
 
 
 @pytest.fixture

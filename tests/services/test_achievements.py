@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
-from conftest import _make_testable_plugin
+from _factories import _make_testable_plugin
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_disc_resolver import FakeDiscResolver
 from fakes.fake_renderer_gc import FakeRendererGc

@@ -8,7 +8,7 @@ test_engine.py.
 import logging
 
 import pytest
-from conftest import _make_retry
+from _factories import _make_retry
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
 from fakes.fake_save_api import FakeSaveApi

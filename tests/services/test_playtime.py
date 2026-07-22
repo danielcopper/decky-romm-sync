@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from conftest import _make_retry
+from _factories import _make_retry
 from fakes.fake_romm_api import FakeRommApi
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock

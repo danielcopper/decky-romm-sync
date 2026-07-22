@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 # conftest.py patches decky before this import; use _make_testable_plugin for test-only attrs
-from conftest import _make_testable_plugin
+from _factories import _make_testable_plugin
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 
 from adapters.debug_logger import SettingsAwareDebugLogger
