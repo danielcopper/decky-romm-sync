@@ -125,6 +125,8 @@ that save into another slot:
 - The **copy is not a move** — the original save stays where it is. Delete it from the RomM web app later if you want it
   gone.
 - The slot you copy into **becomes the game's active slot**, with the copied save as its current save.
+- If that save's content is **already in the destination slot**, nothing is copied — you're told it's already there
+  (shown as `#<id>`).
 
 Common uses: promote an old web-player (legacy) save into a proper named slot, or bring a save from one slot onto
 another so you can continue it there.

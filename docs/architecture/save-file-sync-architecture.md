@@ -1263,7 +1263,12 @@ neither in place):
    before the copy overwrites it: `conflict_blocked` / `preflight_failed` on a bad pre-flight (same shapes as rollback).
 5. `list_saves` with **no slot filter** (the chosen save may live in any slot) locates the save by id; a missing id is
    `version_deleted`, a failed call is `server_unreachable`.
-6. `SaveCopyService._copy_save_to_slot_io` then: `confirm_slot(target)` (creates the slot if new, switches active +
+6. **Dedup pre-check**: if the chosen save's `content_hash` already matches a save in the _target_ slot, the copy is a
+   no-op — `already_present{existing_id}` (the existing twin's id) is returned with **no** download / upload /
+   make-current, so nothing churns (the frontend toasts "already in slot … as `#<id>`" and does not refresh). It fires
+   only when `content_hash` is populated (RomM 5.0.0+); an absent hash falls through to the copy and RomM's own
+   server-side dedup. This is what stops a repeat-copy of already-present content from re-pointing the tracked save.
+7. `SaveCopyService._copy_save_to_slot_io` then: `confirm_slot(target)` (creates the slot if new, switches active +
    confirms) → `do_download_save` (the chosen content onto the canonical local file, quarantining the current local file
    first, #965) → `do_upload_save(server_save=None, overwrite=False)` — a POST into the now-active target slot. A
    **409** is `target_slot_busy` (the target has newer changes from another device — sync it first, then retry); any
@@ -1272,7 +1277,7 @@ neither in place):
 The status union mirrors `RollbackStatus`:
 `ok | not_configured | invalid_slot_name | rom_not_installed | version_deleted | unsupported{reason?} |
 server_unreachable{message} | conflict_blocked{conflicts} | preflight_failed{errors} | target_slot_busy{message} |
-copy_failed{message}`.
+already_present{existing_id} | copy_failed{message}`.
 On `ok` the frontend dispatches `romm_data_changed` so the parent re-fetches — refreshing both the source and the target
 slot views. The source slot is excluded from the target picker (a same-slot copy is just a rollback) and the legacy `""`
 bucket is excluded as a target (it stays a read-only source).
