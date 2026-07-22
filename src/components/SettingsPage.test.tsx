@@ -597,7 +597,7 @@ describe("SettingsPage", () => {
       });
 
       // The .catch sets setStatus("Failed to save settings") — assert it
-      // surfaced via ConnectionSection.status (mirrors the handleTest throw test).
+      // surfaced via ConnectionSection.status.
       const last = capturedConnection[capturedConnection.length - 1];
       expect(last?.status).toBe("Failed to save settings");
     });
@@ -940,37 +940,6 @@ describe("SettingsPage", () => {
     });
   });
 
-  describe("handleTest", () => {
-    it("forwards the result message into ConnectionSection.status on success", async () => {
-      vi.mocked(backend.testConnection).mockResolvedValue({
-        success: true,
-        message: "Connected!",
-      });
-      render(<SettingsPage onBack={vi.fn()} />);
-      await flushAsync();
-
-      await act(async () => {
-        capturedConnection[capturedConnection.length - 1]?.onTestConnection();
-        await Promise.resolve();
-      });
-
-      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("Connected!");
-    });
-
-    it("sets status='Connection test failed' on throw", async () => {
-      vi.mocked(backend.testConnection).mockRejectedValue(new Error("boom"));
-      render(<SettingsPage onBack={vi.fn()} />);
-      await flushAsync();
-
-      await act(async () => {
-        capturedConnection[capturedConnection.length - 1]?.onTestConnection();
-        await Promise.resolve();
-      });
-
-      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("Connection test failed");
-    });
-  });
-
   describe("handleSaveSyncSettingChange", () => {
     it("does nothing when saveSyncSettings is still null", async () => {
       // Cause getSaveSyncSettings to never resolve — saveSyncSettings stays null.
@@ -1306,81 +1275,41 @@ describe("SettingsPage", () => {
   });
 
   describe("SteamGridDB handlers", () => {
-    it("handleSgdbKeySubmit success with a non-empty value sets sgdbApiKey='set' and surfaces result.message", async () => {
-      vi.mocked(backend.saveSgdbApiKey).mockResolvedValue({
-        success: true,
-        message: "Saved!",
-      });
+    it("wires onVerifyKey directly to the verifySgdbApiKey callable (tests the key without persisting)", async () => {
+      vi.mocked(backend.verifySgdbApiKey).mockResolvedValue({ success: true, message: "API key is valid" });
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
-      await act(async () => {
-        capturedSgdb[capturedSgdb.length - 1]?.onSubmitKey("apikey123");
-      });
       const sgdb = capturedSgdb[capturedSgdb.length - 1];
-      expect(sgdb?.sgdbApiKey).toBe("set");
-      expect(sgdb?.sgdbStatus).toBe("Saved!");
+      await act(async () => {
+        await sgdb?.onVerifyKey("apikey123");
+      });
+      expect(vi.mocked(backend.verifySgdbApiKey)).toHaveBeenCalledWith("apikey123");
+      // Verifying never persists — that is the modal's second step (onSaveKey).
+      expect(vi.mocked(backend.saveSgdbApiKey)).not.toHaveBeenCalled();
     });
 
-    it("handleSgdbKeySubmit success with an empty value clears the masked sgdbApiKey", async () => {
-      vi.mocked(backend.saveSgdbApiKey).mockResolvedValue({
-        success: true,
-        message: "Cleared",
-      });
+    it("handleSaveSgdbKey persists via saveSgdbApiKey and flips the masked display to a configured key", async () => {
+      vi.mocked(backend.saveSgdbApiKey).mockResolvedValue({ success: true, message: "Saved!" });
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
-        capturedSgdb[capturedSgdb.length - 1]?.onSubmitKey("");
+        await capturedSgdb[capturedSgdb.length - 1]?.onSaveKey("apikey123");
       });
-      expect(capturedSgdb[capturedSgdb.length - 1]?.sgdbApiKey).toBe("");
+      expect(vi.mocked(backend.saveSgdbApiKey)).toHaveBeenCalledWith("apikey123");
+      // A configured key renders as the masked "••••" (sgdbApiKey truthy).
+      expect(capturedSgdb[capturedSgdb.length - 1]?.sgdbApiKey).toBe("set");
     });
 
-    it("handleSgdbKeySubmit sets sgdbStatus='Failed to save API key' on throw", async () => {
+    it("handleSaveSgdbKey lets a save rejection propagate so the modal can surface it", async () => {
       vi.mocked(backend.saveSgdbApiKey).mockRejectedValue(new Error("boom"));
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
-      await act(async () => {
-        capturedSgdb[capturedSgdb.length - 1]?.onSubmitKey("k");
-      });
-      expect(capturedSgdb[capturedSgdb.length - 1]?.sgdbStatus).toBe("Failed to save API key");
-    });
-
-    it("handleSgdbVerify success=true sets sgdbStatus='Valid'", async () => {
-      vi.mocked(backend.verifySgdbApiKey).mockResolvedValue({
-        success: true,
-        message: "any",
-      });
-      render(<SettingsPage onBack={vi.fn()} />);
-      await flushAsync();
-      await act(async () => {
-        capturedSgdb[capturedSgdb.length - 1]?.onVerifyKey();
-        await Promise.resolve();
-      });
-      expect(capturedSgdb[capturedSgdb.length - 1]?.sgdbStatus).toBe("Valid");
-    });
-
-    it("handleSgdbVerify success=false surfaces result.message", async () => {
-      vi.mocked(backend.verifySgdbApiKey).mockResolvedValue({
-        success: false,
-        message: "Invalid key",
-      });
-      render(<SettingsPage onBack={vi.fn()} />);
-      await flushAsync();
-      await act(async () => {
-        capturedSgdb[capturedSgdb.length - 1]?.onVerifyKey();
-        await Promise.resolve();
-      });
-      expect(capturedSgdb[capturedSgdb.length - 1]?.sgdbStatus).toBe("Invalid key");
-    });
-
-    it("handleSgdbVerify throws → sgdbStatus='Verification failed'", async () => {
-      vi.mocked(backend.verifySgdbApiKey).mockRejectedValue(new Error("net"));
-      render(<SettingsPage onBack={vi.fn()} />);
-      await flushAsync();
-      await act(async () => {
-        capturedSgdb[capturedSgdb.length - 1]?.onVerifyKey();
-        await Promise.resolve();
-      });
-      expect(capturedSgdb[capturedSgdb.length - 1]?.sgdbStatus).toBe("Verification failed");
+      const sgdb = capturedSgdb[capturedSgdb.length - 1];
+      // The handler does not swallow — the modal's own try/catch owns the error
+      // UI, so onSaveKey must reject rather than resolve.
+      await expect(sgdb?.onSaveKey("k")).rejects.toThrow("boom");
+      // A failed save must not flip the masked display to configured.
+      expect(capturedSgdb[capturedSgdb.length - 1]?.sgdbApiKey).toBe("");
     });
   });
 

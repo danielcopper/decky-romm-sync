@@ -73,6 +73,7 @@ import type {
   SessionBudgetStatus,
   DownloadItem,
   MigrationStatus,
+  RommErrorCode,
 } from "../types";
 import { detach } from "../utils/detach";
 import { withTimeout } from "../utils/withTimeout";
@@ -98,6 +99,39 @@ const CONNECTION_CALLABLE_TIMEOUT = 5000;
 /** Backend never answered after the retry budget — distinct from `false` ("not connected"). */
 type BackendFailed = "backend_failed";
 
+/** A resolved-but-failed `test_connection()` probe. `reason`/`message` classify
+ *  why so the connection row shows a specific label instead of a bare "Not
+ *  connected"; both are absent when the probe never resolved (an unreachable
+ *  server that hung past every deadline), which reads as the generic label. */
+interface ConnectionFailure {
+  reason: RommErrorCode | undefined;
+  message: string;
+}
+
+/** The connection-row label for a failed probe, mapped from the backend's
+ *  `{reason, message}`. The two `config_error` sub-cases are split by message
+ *  text (the slug is shared). Anything unclassified falls back to the generic
+ *  "Not connected". `version_error` is included for completeness even though a
+ *  version failure short-circuits the whole panel to the VersionErrorCard. */
+function connectionFailureLabel(failure: ConnectionFailure | null | undefined): string {
+  const reason = failure?.reason;
+  const message = failure?.message ?? "";
+  switch (reason) {
+    case "auth_failed":
+      return "Sign-in rejected";
+    case "server_unreachable":
+      return "Server unreachable";
+    case "version_error":
+      return "Unsupported RomM version";
+    case "config_error":
+      if (/server url/i.test(message)) return "No server URL";
+      if (/not signed in/i.test(message)) return "Not signed in";
+      return "Not connected";
+    default:
+      return "Not connected";
+  }
+}
+
 /** Counted segments — ``[[count, word], …]`` → ``"353 new / 800 updated"``: every
  *  segment spells its word out, zero counts dropped, joined with `` / ``. Empty
  *  when every count is zero. The old ``+``/``~``/``−`` sigils were a legend the
@@ -109,7 +143,10 @@ function countedSegments(pairs: [number, string][]): string {
     .join(" / ");
 }
 
-const ConnectionIndicator: FC<{ connected: boolean | null | BackendFailed }> = ({ connected }) => {
+export const ConnectionIndicator: FC<{
+  connected: boolean | null | BackendFailed;
+  failure?: ConnectionFailure | null;
+}> = ({ connected, failure }) => {
   if (connected === "backend_failed") {
     return (
       <>
@@ -137,7 +174,7 @@ const ConnectionIndicator: FC<{ connected: boolean | null | BackendFailed }> = (
   return (
     <>
       <FaTimesCircle style={{ color: "#d4343c", fontSize: "14px" }} />
-      <span style={{ fontSize: "12px" }}>Not connected</span>
+      <span style={{ fontSize: "12px" }}>{connectionFailureLabel(failure)}</span>
     </>
   );
 };
@@ -423,6 +460,10 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
   const [stats, setStats] = useState<SyncStats | null>(null);
   const [budgetStatus, setBudgetStatus] = useState<SessionBudgetStatus | null>(null);
   const [connected, setConnected] = useState<boolean | null | BackendFailed>(null);
+  // Classifies a resolved-but-failed probe so the connection row can show a
+  // specific label (auth rejected / server unreachable / no URL / not signed
+  // in). Null for every non-failed state and for a probe that never resolved.
+  const [connectionFailure, setConnectionFailure] = useState<ConnectionFailure | null>(null);
   const versionError = useVersionError();
   const [syncing, setSyncing] = useState(false);
   // Disarmed "Cancelling…" state during the backend's RUNNING→CANCELLING→IDLE
@@ -499,6 +540,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
           const r = await withTimeout(testConnection(), CONNECTION_CALLABLE_TIMEOUT);
           if (isCancelled()) return;
           setConnected(r.success);
+          setConnectionFailure(r.success ? null : { reason: r.reason, message: r.message });
           setVersionError(r.reason === "version_error" ? r.message : null);
           return;
         } catch {
@@ -1289,7 +1331,7 @@ export const MainPage: FC<MainPageProps> = ({ onNavigate }) => {
             }
           >
             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <ConnectionIndicator connected={connected} />
+              <ConnectionIndicator connected={connected} failure={connectionFailure} />
             </div>
           </Field>
         </PanelSectionRow>

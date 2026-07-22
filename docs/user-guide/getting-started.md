@@ -71,8 +71,8 @@ After installation, you need to connect the plugin to your RomM server:
 2. Tap **Connection Settings**
 3. Enter your RomM server URL (e.g. `http://192.168.1.100:8080`) — this saves automatically
 4. Tap **Sign in**, enter your RomM username and password once, and confirm
-5. The **RomM Account** row shows **Signed in** on success. Once signed in, tap **Test Connection** to re-verify at any
-   time
+5. The **RomM Account** row shows **Signed in** on success. The plugin's main QAM panel has a **Connection** row that
+   shows the live connection status whenever you open it — there is no separate test button
 
 On a controller you can confirm a text field with the on-screen keyboard's **Enter** key (or the **R2** shortcut)
 instead of navigating to the button — for example save-slot names and the artwork search. In the sign-in dialog, Enter

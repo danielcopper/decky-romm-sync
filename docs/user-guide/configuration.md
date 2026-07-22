@@ -29,8 +29,10 @@ The Connection Settings page manages your RomM server connection.
   [Sign out](#sign-out)).
 - **Allow Insecure SSL** — shown only for `https://` URLs; skips certificate verification for self-signed certs (LAN
   only).
-- **Test Connection** — available once you are signed in; verifies the plugin can reach and authenticate with your RomM
-  server using the stored token.
+
+The plugin checks the connection for you — there is no manual "Test Connection" button. The **Connection** row on the
+plugin's main QAM panel shows the live status whenever you open it, and names the problem when it can't connect (for
+example _Sign-in rejected_, _Server unreachable_, or _No server URL_).
 
 ### Sign out
 
@@ -125,10 +127,11 @@ To set this up:
 
 1. Create a free account at [steamgriddb.com](https://www.steamgriddb.com/)
 2. Go to your [API preferences](https://www.steamgriddb.com/profile/preferences/api) and copy your API key
-3. In Connection Settings, paste it into the **API Key** field under "SteamGridDB"
-4. Tap **Verify Key** to confirm it works
+3. In Connection Settings, tap **Edit** next to **API Key** under "SteamGridDB" and paste your key
+4. Tap **Save** — the key is checked against SteamGridDB first, so an invalid key is rejected inline and only a working
+   key is stored
 
-<!-- Screenshot: SteamGridDB API Key section with Edit and Verify buttons -->
+<!-- Screenshot: SteamGridDB API Key section with the Edit button -->
 
 Without an API key, games will still have cover art from RomM but the hero banner, logo overlay, and wide grid image
 will be missing.

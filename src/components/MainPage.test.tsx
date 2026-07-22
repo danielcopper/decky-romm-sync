@@ -37,7 +37,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import { createElement, type ReactElement } from "react";
-import { MainPage } from "./MainPage";
+import { MainPage, ConnectionIndicator } from "./MainPage";
 import * as backend from "../api/backend";
 import { useVersionError } from "./VersionErrorCard";
 import {
@@ -655,6 +655,56 @@ describe("MainPage", () => {
       const { container } = render(<MainPage onNavigate={vi.fn()} />);
       await flushAsync();
       expect(container.textContent).toContain("Not connected");
+    });
+
+    // A failed probe carries the backend's {reason, message}; the row shows a
+    // specific label instead of a bare "Not connected". version_error is not
+    // exercised here — a version failure short-circuits the whole panel to the
+    // VersionErrorCard (covered separately); the label mapping is covered by the
+    // direct-render cases below.
+    it.each([
+      ["auth_failed", "401 Unauthorized", "Sign-in rejected"],
+      ["server_unreachable", "timed out", "Server unreachable"],
+      ["config_error", "No server URL configured", "No server URL"],
+      ["config_error", "Not signed in — sign in to RomM first", "Not signed in"],
+      ["config_error", "some other config issue", "Not connected"],
+    ] as const)("a failed probe with reason=%s renders %s", async (reason, message, label) => {
+      vi.mocked(backend.testConnection).mockResolvedValue({ success: false, reason, message });
+      const { container } = render(<MainPage onNavigate={vi.fn()} />);
+      await flushAsync();
+      expect(container.textContent).toContain(label);
+    });
+  });
+
+  // ===========================================================================
+  // D1. ConnectionIndicator — failure label mapping (direct render)
+  // ===========================================================================
+  describe("ConnectionIndicator failure labels", () => {
+    it.each([
+      ["auth_failed", "", "Sign-in rejected"],
+      ["server_unreachable", "", "Server unreachable"],
+      ["version_error", "server too old", "Unsupported RomM version"],
+      ["config_error", "No server URL configured", "No server URL"],
+      ["config_error", "Not signed in — sign in to RomM first", "Not signed in"],
+      ["config_error", "unclassified config problem", "Not connected"],
+      ["unknown", "", "Not connected"],
+    ] as const)("reason=%s / message=%s → %s", (reason, message, label) => {
+      const { container } = render(<ConnectionIndicator connected={false} failure={{ reason, message }} />);
+      expect(container.textContent).toContain(label);
+    });
+
+    it("falls back to 'Not connected' when no failure detail is present", () => {
+      const { container } = render(<ConnectionIndicator connected={false} failure={null} />);
+      expect(container.textContent).toContain("Not connected");
+    });
+
+    it("still renders the unchanged Connected / Checking… / Backend error states", () => {
+      const connected = render(<ConnectionIndicator connected={true} />);
+      expect(connected.container.textContent).toContain("Connected");
+      const checking = render(<ConnectionIndicator connected={null} />);
+      expect(checking.container.textContent).toContain("Checking...");
+      const failed = render(<ConnectionIndicator connected="backend_failed" />);
+      expect(failed.container.textContent).toContain("Backend error");
     });
   });
 

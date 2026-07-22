@@ -8,7 +8,6 @@ import {
   connectWithToken,
   connectWithPairingCode,
   signOut,
-  testConnection,
   saveSgdbApiKey,
   verifySgdbApiKey,
   saveSteamInputSetting,
@@ -65,13 +64,10 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   const [url, setUrl] = useState("");
   const [hasToken, setHasToken] = useState(false);
   const [status, setStatus] = useState("");
-  const [loading, setLoading] = useState(false);
   const [allowInsecureSsl, setAllowInsecureSsl] = useState(false);
 
   // SteamGridDB state
   const [sgdbApiKey, setSgdbApiKey] = useState("");
-  const [sgdbStatus, setSgdbStatus] = useState("");
-  const [sgdbVerifying, setSgdbVerifying] = useState(false);
 
   // Save Sync state
   const [saveSyncSettings, setSaveSyncSettings] = useState<SaveSyncSettingsType | null>(null);
@@ -186,18 +182,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         setDevicesLoading(false);
       });
   }
-
-  const handleTest = async () => {
-    setLoading(true);
-    setStatus("");
-    try {
-      const result = await testConnection();
-      setStatus(result.message);
-    } catch {
-      setStatus("Connection test failed");
-    }
-    setLoading(false);
-  };
 
   const handleSaveSyncSettingChange = async (partial: Partial<SaveSyncSettingsType>) => {
     if (!saveSyncSettings) return;
@@ -369,26 +353,13 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   };
 
   // --- SteamGridDB handlers ---
-  const handleSgdbKeySubmit = async (value: string) => {
-    setSgdbStatus("");
-    try {
-      const result = await saveSgdbApiKey(value);
-      setSgdbApiKey(value ? "set" : "");
-      setSgdbStatus(result.message);
-    } catch {
-      setSgdbStatus("Failed to save API key");
-    }
-  };
-  const handleSgdbVerify = async () => {
-    setSgdbVerifying(true);
-    setSgdbStatus("");
-    try {
-      const result = await verifySgdbApiKey("");
-      setSgdbStatus(result.success ? "Valid" : result.message);
-    } catch {
-      setSgdbStatus("Verification failed");
-    }
-    setSgdbVerifying(false);
+  // SgdbApiKeyModal orchestrates verify-then-save: it tests the entered key
+  // (verifySgdbApiKey) and only persists a valid one (handleSaveSgdbKey). The
+  // modal always submits a non-empty key, so a successful save means a
+  // configured key — reflect it as the masked "••••" display.
+  const handleSaveSgdbKey = async (value: string) => {
+    await saveSgdbApiKey(value);
+    setSgdbApiKey("set");
   };
 
   // --- Save-sync default-slot handlers ---
@@ -537,7 +508,6 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         hasToken={hasToken}
         allowInsecureSsl={allowInsecureSsl}
         status={status}
-        loading={loading}
         onUrlChange={(value) => {
           detach(handleUrlChange(value));
         }}
@@ -545,24 +515,11 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         onConnectToken={handleConnectToken}
         onConnectPairing={handleConnectPairing}
         onAllowInsecureSslChange={handleAllowInsecureSslChange}
-        onTestConnection={() => {
-          detach(handleTest());
-        }}
         onSignOut={() => {
           detach(handleSignOut());
         }}
       />
-      <SteamGridDBSection
-        sgdbApiKey={sgdbApiKey}
-        sgdbStatus={sgdbStatus}
-        sgdbVerifying={sgdbVerifying}
-        onSubmitKey={(value: string) => {
-          detach(handleSgdbKeySubmit(value));
-        }}
-        onVerifyKey={() => {
-          detach(handleSgdbVerify());
-        }}
-      />
+      <SteamGridDBSection sgdbApiKey={sgdbApiKey} onVerifyKey={verifySgdbApiKey} onSaveKey={handleSaveSgdbKey} />
       <SaveSyncSection
         saveSyncSettings={saveSyncSettings}
         saveSyncToggleKey={saveSyncToggleKey}
@@ -591,7 +548,9 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         steamInputStatus={steamInputStatus}
         retroarchWarning={retroarchWarning}
         retroarchFixStatus={retroarchFixStatus}
-        loading={loading}
+        // No manual connection test remains to drive a shared loading flag; the
+        // Apply button is never gated on one.
+        loading={false}
         onModeChange={handleSteamInputModeChange}
         onApplyMode={() => {
           detach(handleApplySteamInput());

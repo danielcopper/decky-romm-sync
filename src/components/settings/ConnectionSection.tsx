@@ -1,8 +1,8 @@
 /**
- * RomM server connection settings — URL, account sign-in/token, SSL toggle,
- * and the "Test Connection" affordance. Pure renderer: the parent owns the
- * field values, the has-token flag, the status string, and the
- * save/sign-in/test logic.
+ * RomM server connection settings — URL, account sign-in/token, and SSL toggle.
+ * Pure renderer: the parent owns the field values, the has-token flag, the
+ * status string, and the save/sign-in logic. The QAM connection row probes the
+ * server automatically, so there is no manual test affordance here.
  */
 
 import { FC } from "react";
@@ -31,13 +31,11 @@ interface ConnectionSectionProps {
   hasToken: boolean;
   allowInsecureSsl: boolean;
   status: string;
-  loading: boolean;
   onUrlChange: (value: string) => void;
   onConnect: (username: string, password: string) => Promise<SignInResult>;
   onConnectToken: (token: string) => Promise<SignInResult>;
   onConnectPairing: (code: string) => Promise<SignInResult>;
   onAllowInsecureSslChange: (value: boolean) => void;
-  onTestConnection: () => void;
   onSignOut: () => void;
 }
 
@@ -46,13 +44,11 @@ export const ConnectionSection: FC<ConnectionSectionProps> = ({
   hasToken,
   allowInsecureSsl,
   status,
-  loading,
   onUrlChange,
   onConnect,
   onConnectToken,
   onConnectPairing,
   onAllowInsecureSslChange,
-  onTestConnection,
   onSignOut,
 }) => {
   return (
@@ -118,16 +114,6 @@ export const ConnectionSection: FC<ConnectionSectionProps> = ({
           />
         </PanelSectionRow>
       )}
-      <PanelSectionRow>
-        <ButtonItem
-          layout="below"
-          onClick={onTestConnection}
-          disabled={loading || !hasToken}
-          description={hasToken ? undefined : "Sign in to RomM first to test the connection."}
-        >
-          Test Connection
-        </ButtonItem>
-      </PanelSectionRow>
       {status && (
         <PanelSectionRow>
           <Field label={status} />

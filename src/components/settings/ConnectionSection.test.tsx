@@ -8,7 +8,7 @@ import { showModal } from "@decky/ui";
 // so Field renders its `label` + `description` (those copy strings stay
 // queryable via field-label/field-desc) and DialogButton renders its
 // `children` ("Edit"/"Sign in") forwarding `onClick`; ButtonItem stays for the
-// layout="below" Test Connection row, forwarding `disabled` + `description` +
+// layout="below" Sign out row, forwarding `disabled` + `description` +
 // `children`; ToggleField forwards `checked` + a usable onChange that mirrors
 // the global stub's (boolean) signature.
 type AnyProps = Record<string, unknown> & { children?: unknown };
@@ -92,13 +92,11 @@ function defaultProps(overrides: Partial<React.ComponentProps<typeof ConnectionS
     hasToken: false,
     allowInsecureSsl: false,
     status: "",
-    loading: false,
     onUrlChange: vi.fn(),
     onConnect: vi.fn(),
     onConnectToken: vi.fn(),
     onConnectPairing: vi.fn(),
     onAllowInsecureSslChange: vi.fn(),
-    onTestConnection: vi.fn(),
     onSignOut: vi.fn(),
     ...overrides,
   };
@@ -282,32 +280,15 @@ describe("ConnectionSection", () => {
     });
   });
 
-  describe("Test Connection button", () => {
-    it("fires onTestConnection when clicked", () => {
-      const onTestConnection = vi.fn();
-      const { getByText } = render(<ConnectionSection {...defaultProps({ hasToken: true, onTestConnection })} />);
-      fireEvent.click(getByText("Test Connection"));
-      expect(onTestConnection).toHaveBeenCalledTimes(1);
+  describe("Test Connection button (removed)", () => {
+    it("no longer renders a Test Connection button (the QAM row probes automatically)", () => {
+      const { queryByText } = render(<ConnectionSection {...defaultProps({ hasToken: true })} />);
+      expect(queryByText("Test Connection")).toBeNull();
     });
 
-    it("is disabled while loading", () => {
-      const { getByText } = render(<ConnectionSection {...defaultProps({ hasToken: true, loading: true })} />);
-      expect(getByText("Test Connection")).toBeDisabled();
-    });
-
-    it("is disabled and shows the sign-in hint when not signed in", () => {
-      const { getByText } = render(<ConnectionSection {...defaultProps({ hasToken: false })} />);
-      const button = getByText("Test Connection");
-      expect(button).toBeDisabled();
-      expect(button.getAttribute("data-description")).toBe("Sign in to RomM first to test the connection.");
-    });
-
-    it("is enabled with no hint once signed in", () => {
-      const { getByText } = render(<ConnectionSection {...defaultProps({ hasToken: true })} />);
-      const button = getByText("Test Connection");
-      expect(button).not.toBeDisabled();
-      // `description={undefined}` renders no data-description attribute.
-      expect(button.getAttribute("data-description")).toBeNull();
+    it("stays absent when signed out too", () => {
+      const { queryByText } = render(<ConnectionSection {...defaultProps({ hasToken: false })} />);
+      expect(queryByText("Test Connection")).toBeNull();
     });
   });
 

@@ -54,8 +54,9 @@ config file.
 
 **Symptom**: Toast notifications say "RomM unreachable" or sync operations show in the Failed Syncs list.
 
-**Fix**: Check your network connection and verify the RomM server is running. Go to **Connection Settings** and tap
-**Test Connection**. Failed syncs are queued and retried automatically when the server is reachable again.
+**Fix**: Check your network connection and verify the RomM server is running. The **Connection** row on the plugin's
+main QAM panel shows the live status (and names the problem when it can't connect). Failed syncs are queued and retried
+automatically when the server is reachable again.
 
 ### Offline detection and recovery
 
@@ -175,8 +176,8 @@ For technical details, see [Steam Remote Play and Cross-Device Shortcuts](../arc
 
 ### Download shows no progress
 
-**Fix**: Check your connection to the RomM server (Connection Settings > Test Connection). If the server is reachable,
-try cancelling and restarting the download from the game detail page.
+**Fix**: Check your connection to the RomM server (the **Connection** row on the plugin's main QAM panel). If the server
+is reachable, try cancelling and restarting the download from the game detail page.
 
 ### Download failed
 
