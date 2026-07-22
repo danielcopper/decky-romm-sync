@@ -35,18 +35,18 @@ import { detach } from "../utils/detach";
 import { fuzzyMatch } from "../utils/fuzzyMatch";
 import { LoadingRow } from "./LoadingRow";
 
-type CollectionSubTab = "user" | "smart" | "virtual";
+type CollectionSubTab = "standard" | "smart" | "virtual";
 
-const SUB_TAB_ORDER: readonly CollectionSubTab[] = ["user", "smart", "virtual"];
+const SUB_TAB_ORDER: readonly CollectionSubTab[] = ["standard", "smart", "virtual"];
 
 const SUB_TAB_LABELS: Record<CollectionSubTab, string> = {
-  user: "My",
+  standard: "Standard",
   smart: "Smart",
   virtual: "Virtual",
 };
 
 const SUB_TAB_HEADERS: Record<CollectionSubTab, string> = {
-  user: "MY COLLECTIONS",
+  standard: "STANDARD COLLECTIONS",
   smart: "SMART COLLECTIONS",
   virtual: "VIRTUAL",
 };
@@ -92,16 +92,16 @@ function collectionRowDescription(c: CollectionSyncSetting): string {
 function filterCollectionsBySubTab(
   collections: CollectionSyncSetting[],
   subTab: CollectionSubTab,
-  // When the favorites toggle isn't shown (zero or >1 favorites), the "My"
+  // When the favorites toggle isn't shown (zero or >1 favorites), the "Standard"
   // sub-tab includes favorites too so they remain reachable. Defaults to
   // false because the optimistic-update callsite in handleSetAllCollections
-  // doesn't care — it only ever inspects the favorites-excluded "My" set,
+  // doesn't care — it only ever inspects the favorites-excluded "Standard" set,
   // and the favorites toggle owns favorites mutations independently.
   includeFavoritesInMy = false,
 ): CollectionSyncSetting[] {
   switch (subTab) {
-    case "user":
-      return collections.filter((c) => c.kind === "user" && (includeFavoritesInMy || !c.is_favorite));
+    case "standard":
+      return collections.filter((c) => c.kind === "standard" && (includeFavoritesInMy || !c.is_favorite));
     case "smart":
       return collections.filter((c) => c.kind === "smart");
     case "virtual":
@@ -145,7 +145,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   const [collectionsError, setCollectionsError] = useState(false);
   const collectionsLoaded = useRef(false);
   const [ownerScope, setOwnerScope] = useState<CollectionOwnerScope>("all");
-  const [activeSubTab, setActiveSubTab] = useState<CollectionSubTab>("user");
+  const [activeSubTab, setActiveSubTab] = useState<CollectionSubTab>("standard");
   // Search + per-type filter narrow the active sub-tab's list. Both reset when
   // the sub-tab changes so each sub-tab is entered unfiltered.
   const [search, setSearch] = useState("");
@@ -163,17 +163,17 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     scrollElementToTop(searchFieldRef.current);
   };
 
-  // The favorites collection (a user collection with is_favorite=true) is
+  // The favorites collection (a standard collection with is_favorite=true) is
   // promoted to a top-level toggle. RomM's schema theoretically allows more
-  // than one — if that ever happens, drop the toggle and let the "My" sub-tab
+  // than one — if that ever happens, drop the toggle and let the "Standard" sub-tab
   // surface them all, since a single toggle can't represent the set.
   const favoritesCollection = useMemo(() => {
-    const favs = collections.filter((c) => c.kind === "user" && c.is_favorite);
+    const favs = collections.filter((c) => c.kind === "standard" && c.is_favorite);
     if (favs.length === 0) return null;
     if (favs.length > 1) {
       console.warn(
         `decky-romm-sync: expected at most one favorites collection, got ${favs.length}. ` +
-          `Falling back to listing them in the My sub-tab.`,
+          `Falling back to listing them in the Standard sub-tab.`,
       );
       return null;
     }
@@ -195,7 +195,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   }, []);
 
   // Load collections data lazily on first switch to collections tab.
-  // Sub-tab is reset to "user" in the tab-click handler (not here);
+  // Sub-tab is reset to "standard" in the tab-click handler (not here);
   // that's an event-driven concern, not state synchronisation.
   //
   // The two fetches are DECOUPLED so the slow one never blocks the fast one:
@@ -232,7 +232,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   // entry into the Collections tab so the user lands on a predictable view (no
   // persistence).
   const handleCollectionsTabClick = () => {
-    setActiveSubTab("user");
+    setActiveSubTab("standard");
     setSearch("");
     setVirtualTypeFilter("all");
     setActiveTab("collections");
@@ -497,7 +497,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
                     detach(handleOwnerScopeChange(scope));
                   }}
                 >
-                  {scope === "own" ? "Own" : "All"}
+                  {scope === "own" ? "Mine" : "All"}
                 </DialogButton>
               ))}
             </Focusable>

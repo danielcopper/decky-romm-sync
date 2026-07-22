@@ -208,9 +208,9 @@ class RommApiAdapter:
         limit: int = 1,
         offset: int = 0,
     ) -> dict[str, Any]:
-        # A smart collection filters on ``smart_collection_id``; a user collection
+        # A smart collection filters on ``smart_collection_id``; a standard collection
         # on ``collection_id`` (RomM's /api/roms accepts either alongside
-        # ``updated_after`` — 5.0.0 endpoints/roms/__init__.py). Only user/smart
+        # ``updated_after`` — 5.0.0 endpoints/roms/__init__.py). Only standard/smart
         # kinds ever reach here; the skip gate never probes a virtual collection.
         param = "smart_collection_id" if kind == "smart" else "collection_id"
         quoted_after = urllib.parse.quote(updated_after)

@@ -331,22 +331,22 @@ class TestLibrarySyncCallableDelegation:
     @pytest.mark.asyncio
     async def test_save_collection_sync_delegates(self, plugin):
         plugin._sync_service.save_collection_sync.return_value = {"ok": True}
-        result = await plugin.save_collection_sync(2, "user", False)
-        plugin._sync_service.save_collection_sync.assert_called_once_with(2, "user", False)
+        result = await plugin.save_collection_sync(2, "standard", False)
+        plugin._sync_service.save_collection_sync.assert_called_once_with(2, "standard", False)
         assert result == {"ok": True}
 
     @pytest.mark.asyncio
     async def test_save_collections_sync_delegates(self, plugin):
         plugin._sync_service.save_collections_sync.return_value = {"success": True}
-        result = await plugin.save_collections_sync(["1", "2"], "user", True)
-        plugin._sync_service.save_collections_sync.assert_called_once_with(["1", "2"], "user", True)
+        result = await plugin.save_collections_sync(["1", "2"], "standard", True)
+        plugin._sync_service.save_collections_sync.assert_called_once_with(["1", "2"], "standard", True)
         assert result == {"success": True}
 
     @pytest.mark.asyncio
     async def test_set_all_collections_sync_delegates(self, plugin):
         plugin._sync_service.set_all_collections_sync = AsyncMock(return_value={"ok": True})
-        result = await plugin.set_all_collections_sync(True, "user")
-        plugin._sync_service.set_all_collections_sync.assert_awaited_once_with(True, "user")
+        result = await plugin.set_all_collections_sync(True, "standard")
+        plugin._sync_service.set_all_collections_sync.assert_awaited_once_with(True, "standard")
         assert result == {"ok": True}
 
     @pytest.mark.asyncio

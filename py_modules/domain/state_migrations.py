@@ -39,6 +39,8 @@ def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
         new_data = _migrate_v10_to_v11(new_data)
     if version < 12:
         new_data = _migrate_v11_to_v12(new_data)
+    if version < 13:
+        new_data = _migrate_v12_to_v13(new_data)
     return new_data
 
 
@@ -304,4 +306,38 @@ def _migrate_v11_to_v12(data: dict[str, Any]) -> dict[str, Any]:
     if data.get("default_slot") == "default":
         data["default_slot"] = "autosave"
     data["version"] = 12
+    return data
+
+
+def _migrate_v12_to_v13(data: dict[str, Any]) -> dict[str, Any]:
+    """v<13 → v13: rename the ``enabled_collections`` ``user`` bucket to ``standard``.
+
+    RomM's own UI calls the ownership-carrying first collection kind **Standard**;
+    the plugin's internal name for it was ``user`` (a misnomer — every kind is a
+    user's), so the on-disk enabled bucket keyed ``user`` is renamed to ``standard``
+    with every enabled id preserved — a previously-enabled standard collection stays
+    enabled and keeps syncing.
+
+    Value semantics: the nested ``enabled_collections`` dict is rebuilt rather than
+    mutated in place. A file that somehow already carries a ``standard`` bucket has
+    the ``user`` entries merged into it (``user`` ids win on a key clash) rather than
+    dropped — the two buckets cannot legitimately both exist before v13, so the union
+    is the loss-free reconciliation. Mirrors the v10→v11 ``franchise`` → ``virtual``
+    rename.
+
+    The historical v2→v3 step still produces the ``user`` bucket; this step renames it
+    afterwards, so the whole chain (v2→v3 → … → v12→v13) lands a v2-origin install on
+    the ``standard`` bucket without rewriting frozen history.
+    """
+    collections = data.get("enabled_collections")
+    if isinstance(collections, dict) and "user" in collections:
+        rebuilt = {k: v for k, v in collections.items() if k != "user"}
+        user_bucket = collections["user"]
+        existing_standard = rebuilt.get("standard", {})
+        merged = dict(existing_standard) if isinstance(existing_standard, dict) else {}
+        if isinstance(user_bucket, dict):
+            merged.update(user_bucket)
+        rebuilt["standard"] = merged
+        data["enabled_collections"] = rebuilt
+    data["version"] = 13
     return data

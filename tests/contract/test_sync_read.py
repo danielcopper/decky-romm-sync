@@ -201,7 +201,7 @@ async def test_get_collections_happy_shape(harness):
     c = result["collections"][0]
     assert c["id"] == "7"  # stringified
     assert c["name"] == "Favorites"
-    assert c["kind"] == "user"
+    assert c["kind"] == "standard"
     assert isinstance(c["sync_enabled"], bool)
     # Owner-scope tag (#1532): no stored identity → treated as own (degrade to "All").
     assert c["is_own"] is True
@@ -254,9 +254,9 @@ async def test_save_collections_sync_batch_round_trips(harness):
         {"id": 2, "name": "Beta", "rom_count": 1},
         {"id": 3, "name": "Gamma", "rom_count": 1},
     ]
-    result = await harness.plugin.save_collections_sync(["1", "3"], "user", True)
+    result = await harness.plugin.save_collections_sync(["1", "3"], "standard", True)
     assert result == {"success": True}
-    bucket = harness.plugin.settings["enabled_collections"]["user"]
+    bucket = harness.plugin.settings["enabled_collections"]["standard"]
     assert bucket["1"] is True
     assert bucket["3"] is True
     assert "2" not in bucket
@@ -276,14 +276,14 @@ async def test_save_collections_sync_rejects_invalid_kind(harness):
     assert isinstance(result["message"], str) and result["message"]
     assert "error" not in result
     assert "error_code" not in result
-    assert harness.plugin.settings["enabled_collections"]["user"] == {}
+    assert harness.plugin.settings["enabled_collections"]["standard"] == {}
 
 
 async def test_save_collections_sync_empty_ids_is_no_op(harness):
     """An empty id list is a success no-op — nothing stamped."""
-    result = await harness.plugin.save_collections_sync([], "user", True)
+    result = await harness.plugin.save_collections_sync([], "standard", True)
     assert result == {"success": True}
-    assert harness.plugin.settings["enabled_collections"]["user"] == {}
+    assert harness.plugin.settings["enabled_collections"]["standard"] == {}
 
 
 async def test_set_collection_owner_scope_persists(harness):

@@ -102,7 +102,7 @@ def _collection_units(
 ) -> list[WorkUnit]:
     """Build WorkUnits for collections whose id is in *enabled_ids*, tagged with *kind*.
 
-    When *filter_to_own* is set (the "Own" owner-scope), a foreign collection —
+    When *filter_to_own* is set (the "Mine" owner-scope), a foreign collection —
     one owned by a known user id other than *own_user_id* — is dropped from the
     queue even if it is enabled, so a scope selected over an earlier enable never
     syncs someone else's collection. Virtual collections have no owner and
@@ -263,7 +263,7 @@ class LibraryFetcher:
 
     async def get_collections(self):
         try:
-            user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
+            standard_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
         except Exception as e:
             self._logger.error(f"Failed to fetch collections: {e}")
             _reason, _msg = classify_error(e)
@@ -287,22 +287,22 @@ class LibraryFetcher:
 
         enabled = self._get_enabled_collections_buckets()
         # Own identity for the owner-scope tag. ``None`` (never fetched / offline)
-        # tags every collection ``is_own=True`` so the frontend "Own" filter
+        # tags every collection ``is_own=True`` so the frontend "Mine" filter
         # degrades to "All" rather than filtering wrongly (the non-breaking
         # fallback).
         own_user_id = self._settings.get("romm_user_id")
         result = []
-        for c in user_collections:
+        for c in standard_collections:
             cid = str(c["id"])
             result.append(
                 {
                     "id": cid,
                     "name": c.get("name", ""),
                     "rom_count": c.get("rom_count", len(c.get("rom_ids", []))),
-                    "sync_enabled": enabled["user"].get(cid, False),
-                    "kind": "user",
+                    "sync_enabled": enabled["standard"].get(cid, False),
+                    "kind": "standard",
                     "is_favorite": bool(c.get("is_favorite", False)),
-                    "is_own": is_own_collection(c.get("user_id"), own_user_id, kind="user"),
+                    "is_own": is_own_collection(c.get("user_id"), own_user_id, kind="standard"),
                 }
             )
         for c in smart_collections:
@@ -335,12 +335,12 @@ class LibraryFetcher:
                     }
                 )
 
-        _kind_order = {"user": 0, "smart": 1, "virtual": 2}
+        _kind_order = {"standard": 0, "smart": 1, "virtual": 2}
         result.sort(key=lambda x: (_kind_order.get(x["kind"], 99), x["name"].lower()))
         return {"success": True, "collections": result}
 
     def save_collection_sync(self, collection_id, kind, enabled):
-        if kind not in ("user", "smart", "virtual"):
+        if kind not in ("standard", "smart", "virtual"):
             return {"success": False, "reason": "invalid_kind", "message": f"Invalid collection kind: {kind}"}
         buckets = self._get_enabled_collections_buckets()
         buckets[kind][str(collection_id)] = bool(enabled)
@@ -360,7 +360,7 @@ class LibraryFetcher:
         canonical failure shape; an empty id list is a success no-op (nothing to
         stamp, no write).
         """
-        if kind not in ("user", "smart", "virtual"):
+        if kind not in ("standard", "smart", "virtual"):
             return {"success": False, "reason": "invalid_kind", "message": f"Invalid collection kind: {kind}"}
         if not isinstance(collection_ids, list):
             return {"success": False, "reason": "invalid_ids", "message": "collection_ids must be a list"}
@@ -375,12 +375,12 @@ class LibraryFetcher:
 
     async def set_all_collections_sync(self, enabled, scope=None):
         enabled = bool(enabled)
-        if scope not in (None, "user", "smart", "virtual"):
+        if scope not in (None, "standard", "smart", "virtual"):
             return {"success": False, "reason": "invalid_scope", "message": f"Invalid scope: {scope}"}
 
         buckets = self._get_enabled_collections_buckets()
 
-        for apply_bucket in (self._apply_user_bucket, self._apply_smart_bucket, self._apply_virtual_bucket):
+        for apply_bucket in (self._apply_standard_bucket, self._apply_smart_bucket, self._apply_virtual_bucket):
             failure = await apply_bucket(buckets=buckets, enabled=enabled, scope=scope)
             if failure is not None:
                 return failure
@@ -389,22 +389,22 @@ class LibraryFetcher:
         self._settings_persister.save_settings()
         return {"success": True}
 
-    async def _apply_user_bucket(
+    async def _apply_standard_bucket(
         self, *, buckets: dict[str, dict[str, bool]], enabled: bool, scope: str | None
     ) -> dict[str, Any] | None:
-        """Fetch user collections and stamp the ``user`` bucket. Returns failure dict or None."""
-        if scope not in (None, "user"):
+        """Fetch standard collections and stamp the ``standard`` bucket. Returns failure dict or None."""
+        if scope not in (None, "standard"):
             return None
         try:
-            user_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
+            standard_collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
         except Exception as e:
             self._logger.error(f"Failed to fetch collections: {e}")
             _reason, _msg = classify_error(e)
             return {"success": False, "reason": _reason, "message": _msg}
-        for c in user_collections:
-            if scope == "user" and bool(c.get("is_favorite", False)):
+        for c in standard_collections:
+            if scope == "standard" and bool(c.get("is_favorite", False)):
                 continue
-            buckets["user"][str(c["id"])] = enabled
+            buckets["standard"][str(c["id"])] = enabled
         return None
 
     async def _apply_smart_bucket(
@@ -467,7 +467,7 @@ class LibraryFetcher:
         if not isinstance(raw, dict):
             raw = {}
         buckets: dict[str, dict[str, bool]] = {}
-        for kind in ("user", "smart", "virtual"):
+        for kind in ("standard", "smart", "virtual"):
             bucket = raw.get(kind, {})
             buckets[kind] = bucket if isinstance(bucket, dict) else {}
         return buckets
@@ -505,7 +505,7 @@ class LibraryFetcher:
         """Phase 0 of the per-unit pipeline: enumerate enabled platforms + collections.
 
         Returns an ordered list of :class:`WorkUnit` entries (platforms
-        first, then user collections, then smart collections, then
+        first, then standard collections, then smart collections, then
         virtual collections) with ROM counts pulled from the listing
         endpoints. No ROMs are fetched here — the queue is a dispatch
         plan, not a payload. Units additionally carry the plan-time estimate
@@ -530,16 +530,16 @@ class LibraryFetcher:
         units.extend(await self._attach_plan_estimates(platform_units))
 
         buckets = self._get_enabled_collections_buckets()
-        enabled_user_ids = {k for k, v in buckets["user"].items() if v}
+        enabled_standard_ids = {k for k, v in buckets["standard"].items() if v}
         enabled_smart_ids = {k for k, v in buckets["smart"].items() if v}
         enabled_virtual_ids = {k for k, v in buckets["virtual"].items() if v}
-        if not (enabled_user_ids or enabled_smart_ids or enabled_virtual_ids):
+        if not (enabled_standard_ids or enabled_smart_ids or enabled_virtual_ids):
             return units
 
-        # Owner-scope filter (#1532): when "Own" is selected AND our identity is
-        # known, foreign user/smart collections are dropped from the queue — a
+        # Owner-scope filter (#1532): when "Mine" is selected AND our identity is
+        # known, foreign standard/smart collections are dropped from the queue — a
         # sync scope that filters OVER the enabled ids without mutating them.
-        # Unknown identity (own_user_id is None) never filters, so "Own" is a
+        # Unknown identity (own_user_id is None) never filters, so "Mine" is a
         # no-op until identity is available (non-breaking). Virtual collections
         # have no owner and are never filtered.
         own_user_id = self._settings.get("romm_user_id")
@@ -547,8 +547,8 @@ class LibraryFetcher:
 
         collection_units: list[WorkUnit] = []
         collection_units.extend(
-            await self._build_user_collection_units(
-                enabled_user_ids, own_user_id=own_user_id, filter_to_own=filter_to_own
+            await self._build_standard_collection_units(
+                enabled_standard_ids, own_user_id=own_user_id, filter_to_own=filter_to_own
             )
         )
         collection_units.extend(
@@ -563,12 +563,12 @@ class LibraryFetcher:
 
         return units
 
-    async def _build_user_collection_units(
+    async def _build_standard_collection_units(
         self, enabled_ids: set[str], *, own_user_id: int | None = None, filter_to_own: bool = False
     ) -> list[WorkUnit]:
-        """Fetch user collections and emit work units for those whose id is in *enabled_ids*.
+        """Fetch standard collections and emit work units for those whose id is in *enabled_ids*.
 
-        Under the "Own" owner-scope (*filter_to_own*), foreign collections are
+        Under the "Mine" owner-scope (*filter_to_own*), foreign collections are
         dropped even when enabled (see :func:`_collection_units`).
         """
         if not enabled_ids:
@@ -576,16 +576,18 @@ class LibraryFetcher:
         try:
             collections = await self._loop.run_in_executor(None, self._romm_api.list_collections)
         except Exception as e:
-            self._logger.warning(f"Failed to fetch user collections for work queue: {e}")
+            self._logger.warning(f"Failed to fetch standard collections for work queue: {e}")
             collections = []
-        return _collection_units(collections, enabled_ids, "user", own_user_id=own_user_id, filter_to_own=filter_to_own)
+        return _collection_units(
+            collections, enabled_ids, "standard", own_user_id=own_user_id, filter_to_own=filter_to_own
+        )
 
     async def _build_smart_collection_units(
         self, enabled_ids: set[str], *, own_user_id: int | None = None, filter_to_own: bool = False
     ) -> list[WorkUnit]:
         """Fetch smart collections and emit work units for those whose id is in *enabled_ids*.
 
-        Under the "Own" owner-scope (*filter_to_own*), foreign collections are
+        Under the "Mine" owner-scope (*filter_to_own*), foreign collections are
         dropped even when enabled (see :func:`_collection_units`).
         """
         if not enabled_ids:
@@ -1191,7 +1193,7 @@ class LibraryFetcher:
             return reconstructed
 
     async def _try_collection_incremental_skip(self, unit: WorkUnit) -> list[int] | None:
-        """Per-unit incremental-skip pre-check for a user/smart collection unit.
+        """Per-unit incremental-skip pre-check for a standard/smart collection unit.
 
         Returns the stamped member rom-id list when the collection is unchanged —
         the caller replays it into ``synced_rom_ids`` + the Steam-collection
@@ -1211,13 +1213,13 @@ class LibraryFetcher:
            the stored member set (a stamp written from a partial fetch is not
            trusted to reconstruct the whole membership).
 
-        Only ``user`` / ``smart`` collections are stampable — a virtual
+        Only ``standard`` / ``smart`` collections are stampable — a virtual
         collection has no stable ``updated_at`` and always full-fetches. The probe
         exception (server error mid-check) falls open to a full fetch, mirroring
         the platform gate.
         """
         kind = unit.collection_kind
-        if kind not in ("user", "smart"):
+        if kind not in ("standard", "smart"):
             # Virtual collections carry no stamp — always full-fetch.
             return None
         if not unit.collection_updated_at:
@@ -1292,7 +1294,7 @@ class LibraryFetcher:
 
         A ``virtual`` collection is a RomM virtual collection (string base64 id,
         the same endpoint for every virtual type), a ``smart`` collection a
-        saved-search (int id), and the default a regular user collection (int id) —
+        saved-search (int id), and the default a regular standard collection (int id) —
         each has its own list endpoint. ``dict | list`` keeps the caller's
         isinstance guard genuine: the paginated endpoints return ``{"items": [...]}``
         but a bare-list response shape is tolerated.

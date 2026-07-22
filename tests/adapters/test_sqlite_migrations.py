@@ -79,8 +79,8 @@ def _set_user_version(db_path: str, version: int) -> None:
 # + 015_add_applied_launch_options + 016_add_cover_source
 # + 017_add_last_sync_server_hash + 018_rename_rom_save_states
 # + 019_add_collection_sync_state + 020_add_fetch_generation
-# + 021_add_rom_fs_size).
-_SHIPPED_VERSION = 21
+# + 021_add_rom_fs_size + 022_rename_collection_kind_user_to_standard).
+_SHIPPED_VERSION = 22
 
 # Tables after every shipped migration: the v1 set plus 006's play-session outbox,
 # 012's per-platform completion stamp, and 019's per-collection completion stamp,
@@ -1226,12 +1226,12 @@ class Test019CollectionSyncState:
             conn.execute(
                 "INSERT OR REPLACE INTO collection_sync_state "
                 "(collection_id, collection_kind, updated_at, completed_at, rom_count, member_rom_ids) "
-                "VALUES ('7', 'user', '2026-01-01T00:00:00', '2026-01-01T00:05:00', 2, '[1, 2]')"
+                "VALUES ('7', 'standard', '2026-01-01T00:00:00', '2026-01-01T00:05:00', 2, '[1, 2]')"
             )
             conn.execute(
                 "INSERT OR REPLACE INTO collection_sync_state "
                 "(collection_id, collection_kind, updated_at, completed_at, rom_count, member_rom_ids) "
-                "VALUES ('7', 'user', '2026-02-01T00:00:00', '2026-02-01T00:05:00', 3, '[1, 2, 3]')"
+                "VALUES ('7', 'standard', '2026-02-01T00:00:00', '2026-02-01T00:05:00', 3, '[1, 2, 3]')"
             )
             conn.execute(
                 "INSERT OR REPLACE INTO collection_sync_state "
@@ -1243,8 +1243,8 @@ class Test019CollectionSyncState:
             ).fetchall()
         finally:
             conn.close()
-        # The user row was replaced (rom_count 3); the smart row coexists.
-        assert rows == [("7", "smart", 1), ("7", "user", 3)]
+        # The standard row was replaced (rom_count 3); the smart row coexists.
+        assert rows == [("7", "smart", 1), ("7", "standard", 3)]
 
     def test_member_rom_ids_rejects_invalid_json(self, tmp_path: Path):
         # The json_valid CHECK guards the JSON-array column.
@@ -1257,7 +1257,7 @@ class Test019CollectionSyncState:
                 conn.execute(
                     "INSERT INTO collection_sync_state "
                     "(collection_id, collection_kind, updated_at, completed_at, rom_count, member_rom_ids) "
-                    "VALUES ('7', 'user', 'x', 'y', 0, 'not-json')"
+                    "VALUES ('7', 'standard', 'x', 'y', 0, 'not-json')"
                 )
         finally:
             conn.close()
@@ -1400,6 +1400,83 @@ class Test021AddRomFsSize:
         finally:
             conn.close()
         assert stored == 3_145_728
+
+
+class Test022RenameCollectionKindUserToStandard:
+    """022 — data migration renaming collection_sync_state.collection_kind 'user' -> 'standard' (#1539)."""
+
+    def test_migrates_user_kind_rows_to_standard(self, tmp_path: Path):
+        # Seed a 'user'-kind stamp at v21 (before 022), then apply 022 and assert
+        # the kind is rewritten to 'standard' with every other column preserved.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 21)))
+        assert _user_version(db_path) == 21
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute(
+                "INSERT INTO collection_sync_state "
+                "(collection_id, collection_kind, updated_at, completed_at, rom_count, member_rom_ids) "
+                "VALUES ('7', 'user', '2026-01-01T00:00:00', '2026-01-01T00:05:00', 2, '[1, 2]')"
+            )
+            # A smart-kind stamp must be left untouched by the rename.
+            conn.execute(
+                "INSERT INTO collection_sync_state "
+                "(collection_id, collection_kind, updated_at, completed_at, rom_count, member_rom_ids) "
+                "VALUES ('9', 'smart', '2026-01-02T00:00:00', '2026-01-02T00:05:00', 1, '[9]')"
+            )
+        finally:
+            conn.close()
+
+        final_version = apply_migrations(db_path)
+        assert final_version == _SHIPPED_VERSION
+
+        conn = sqlite3.connect(db_path)
+        try:
+            rows = conn.execute(
+                "SELECT collection_id, collection_kind, updated_at, completed_at, rom_count, member_rom_ids "
+                "FROM collection_sync_state ORDER BY collection_id"
+            ).fetchall()
+        finally:
+            conn.close()
+        # The 'user' stamp is now 'standard' with every column intact; 'smart' is unchanged.
+        assert rows == [
+            ("7", "standard", "2026-01-01T00:00:00", "2026-01-01T00:05:00", 2, "[1, 2]"),
+            ("9", "smart", "2026-01-02T00:00:00", "2026-01-02T00:05:00", 1, "[9]"),
+        ]
+
+    def test_absent_before_022(self, tmp_path: Path):
+        # At v21 a seeded 'user' stamp is still keyed 'user' — the rename has not run.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path, str(_only_migrations_through(tmp_path, 21)))
+        assert _user_version(db_path) == 21
+
+        conn = sqlite3.connect(db_path, isolation_level=None)
+        try:
+            conn.execute(
+                "INSERT INTO collection_sync_state "
+                "(collection_id, collection_kind, updated_at, completed_at, rom_count, member_rom_ids) "
+                "VALUES ('7', 'user', '2026-01-01T00:00:00', '2026-01-01T00:05:00', 2, '[1, 2]')"
+            )
+            kind = conn.execute(
+                "SELECT collection_kind FROM collection_sync_state WHERE collection_id = '7'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        assert kind == "user"
+
+    def test_empty_table_is_noop(self, tmp_path: Path):
+        # Fresh install: the stamp table is empty, so the data migration touches nothing.
+        db_path = str(tmp_path / "romm_sync.db")
+        apply_migrations(db_path)
+        assert _user_version(db_path) == _SHIPPED_VERSION
+
+        conn = sqlite3.connect(db_path)
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM collection_sync_state").fetchone()[0]
+        finally:
+            conn.close()
+        assert count == 0
 
 
 def test_shipped_migrations_dir_resolves_to_real_schema():

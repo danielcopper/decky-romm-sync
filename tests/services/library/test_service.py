@@ -207,7 +207,7 @@ class TestGetCollections:
     """Tests for LibraryService.get_collections()."""
 
     @pytest.mark.asyncio
-    async def test_returns_user_smart_and_virtual_collections(self, plugin):
+    async def test_returns_standard_smart_and_virtual_collections(self, plugin):
         """User, smart, and virtual collections all appear in the result."""
         user = [{"id": 1, "name": "My Faves", "rom_count": 3, "is_favorite": False}]
         smart = [{"id": 5, "name": "Recent Adds", "rom_count": 12}]
@@ -224,14 +224,14 @@ class TestGetCollections:
         assert "Mario" in names
 
     @pytest.mark.asyncio
-    async def test_user_collection_has_user_kind(self, plugin):
-        """Non-favorite user collections carry kind='user' and is_favorite=False."""
+    async def test_standard_collection_has_standard_kind(self, plugin):
+        """Non-favorite standard collections carry kind='standard' and is_favorite=False."""
         user = [{"id": 1, "name": "RPGs", "rom_count": 2, "is_favorite": False}]
         rebind_loop(plugin._sync_service, _make_collections_loop(user=user))
 
         result = await plugin._sync_service.get_collections()
 
-        assert result["collections"][0]["kind"] == "user"
+        assert result["collections"][0]["kind"] == "standard"
         assert result["collections"][0]["is_favorite"] is False
 
     @pytest.mark.asyncio
@@ -257,8 +257,8 @@ class TestGetCollections:
         assert result["collections"][0]["is_favorite"] is False
 
     @pytest.mark.asyncio
-    async def test_kind_order_user_smart_virtual(self, plugin):
-        """User collections precede smart, which precede virtual (sort order)."""
+    async def test_kind_order_standard_smart_virtual(self, plugin):
+        """Standard collections precede smart, which precede virtual (sort order)."""
         user = [{"id": 1, "name": "U1", "rom_count": 1, "is_favorite": False}]
         smart = [{"id": 5, "name": "S1", "rom_count": 1}]
         franchise = [{"id": 101, "name": "F1", "rom_count": 1}]
@@ -267,20 +267,20 @@ class TestGetCollections:
         result = await plugin._sync_service.get_collections()
 
         kinds = [c["kind"] for c in result["collections"]]
-        user_idx = kinds.index("user")
+        standard_idx = kinds.index("standard")
         smart_idx = kinds.index("smart")
         virtual_idx = kinds.index("virtual")
-        assert user_idx < smart_idx < virtual_idx
+        assert standard_idx < smart_idx < virtual_idx
 
     @pytest.mark.asyncio
     async def test_favorite_collection_has_is_favorite_true(self, plugin):
-        """Collections with is_favorite=True carry kind='user' and is_favorite=True."""
+        """Collections with is_favorite=True carry kind='standard' and is_favorite=True."""
         user = [{"id": 1, "name": "Top Picks", "rom_count": 5, "is_favorite": True}]
         rebind_loop(plugin._sync_service, _make_collections_loop(user=user))
 
         result = await plugin._sync_service.get_collections()
 
-        assert result["collections"][0]["kind"] == "user"
+        assert result["collections"][0]["kind"] == "standard"
         assert result["collections"][0]["is_favorite"] is True
 
     @pytest.mark.asyncio
@@ -292,7 +292,7 @@ class TestGetCollections:
         ]
         rebind_loop(plugin._sync_service, _make_collections_loop(user=user))
         plugin._sync_service._settings["enabled_collections"] = {
-            "user": {"1": True, "2": False},
+            "standard": {"1": True, "2": False},
             "smart": {},
             "virtual": {},
         }
@@ -309,7 +309,7 @@ class TestGetCollections:
         smart = [{"id": 7, "name": "Filter A", "rom_count": 1}]
         rebind_loop(plugin._sync_service, _make_collections_loop(smart=smart))
         plugin._sync_service._settings["enabled_collections"] = {
-            "user": {"7": True},  # same id under a different bucket — must not leak
+            "standard": {"7": True},  # same id under a different bucket — must not leak
             "smart": {"7": False},
             "virtual": {},
         }
@@ -354,8 +354,8 @@ class TestGetCollections:
         assert result["collections"] == []
 
     @pytest.mark.asyncio
-    async def test_virtual_failure_still_returns_user_collections(self, plugin):
-        """If every virtual-type fetch fails, user + smart collections are still returned."""
+    async def test_virtual_failure_still_returns_standard_collections(self, plugin):
+        """If every virtual-type fetch fails, standard + smart collections are still returned."""
         user = [{"id": 1, "name": "RPGs", "rom_count": 2, "is_favorite": False}]
 
         mock_loop = MagicMock()
@@ -380,8 +380,8 @@ class TestGetCollections:
         assert result["collections"][0]["name"] == "RPGs"
 
     @pytest.mark.asyncio
-    async def test_smart_failure_still_returns_user_and_virtual(self, plugin):
-        """If smart fetch fails, user + virtual collections still come through."""
+    async def test_smart_failure_still_returns_standard_and_virtual(self, plugin):
+        """If smart fetch fails, standard + virtual collections still come through."""
         user = [{"id": 1, "name": "RPGs", "rom_count": 2, "is_favorite": False}]
         franchise = [{"id": 101, "name": "Mario", "rom_count": 3}]
 
@@ -448,7 +448,7 @@ class TestGetCollectionsOwnerScope:
     """get_collections tags each collection with is_own for the owner-scope filter (#1532)."""
 
     @pytest.mark.asyncio
-    async def test_own_and_foreign_user_collections_tagged(self, plugin):
+    async def test_own_and_foreign_standard_collections_tagged(self, plugin):
         """With a known identity, user collections split on user_id."""
         user = [
             {"id": 1, "name": "Mine", "rom_count": 1, "is_favorite": False, "user_id": 7},
@@ -509,11 +509,11 @@ class TestGetCollectionsOwnerScope:
 class TestSaveCollectionSync:
     """Tests for LibraryService.save_collection_sync() — synchronous method."""
 
-    def test_saves_enabled_user(self, plugin):
-        """Enabling a user collection stores True under enabled_collections.user."""
-        plugin._sync_service.save_collection_sync("42", "user", True)
+    def test_saves_enabled_standard(self, plugin):
+        """Enabling a standard collection stores True under enabled_collections.standard."""
+        plugin._sync_service.save_collection_sync("42", "standard", True)
 
-        assert plugin._sync_service._settings["enabled_collections"]["user"]["42"] is True
+        assert plugin._sync_service._settings["enabled_collections"]["standard"]["42"] is True
 
     def test_saves_enabled_smart(self, plugin):
         """Enabling a smart collection stores True under enabled_collections.smart."""
@@ -531,17 +531,17 @@ class TestSaveCollectionSync:
     def test_saves_disabled(self, plugin):
         """Disabling a previously-enabled collection stores False in the right bucket."""
         plugin._sync_service._settings["enabled_collections"] = {
-            "user": {"42": True},
+            "standard": {"42": True},
             "smart": {},
             "virtual": {},
         }
 
-        plugin._sync_service.save_collection_sync("42", "user", False)
+        plugin._sync_service.save_collection_sync("42", "standard", False)
 
-        assert plugin._sync_service._settings["enabled_collections"]["user"]["42"] is False
+        assert plugin._sync_service._settings["enabled_collections"]["standard"]["42"] is False
 
     def test_returns_success(self, plugin):
-        result = plugin._sync_service.save_collection_sync("1", "user", True)
+        result = plugin._sync_service.save_collection_sync("1", "standard", True)
 
         assert result == {"success": True}
 
@@ -555,10 +555,10 @@ class TestSaveCollectionSync:
 
     def test_string_id_stored_from_int(self, plugin):
         """Passing an integer id is coerced to a string key."""
-        plugin._sync_service.save_collection_sync(99, "user", True)
+        plugin._sync_service.save_collection_sync(99, "standard", True)
 
-        assert "99" in plugin._sync_service._settings["enabled_collections"]["user"]
-        assert plugin._sync_service._settings["enabled_collections"]["user"]["99"] is True
+        assert "99" in plugin._sync_service._settings["enabled_collections"]["standard"]
+        assert plugin._sync_service._settings["enabled_collections"]["standard"]["99"] is True
 
     def test_creates_enabled_collections_key_if_absent(self, plugin):
         """enabled_collections is created with all three buckets if absent."""
@@ -568,7 +568,7 @@ class TestSaveCollectionSync:
 
         ec = plugin._sync_service._settings["enabled_collections"]
         assert ec["smart"]["7"] is True
-        assert ec["user"] == {}
+        assert ec["standard"] == {}
         assert ec["virtual"] == {}
 
     def test_calls_save_settings(self, plugin):
@@ -576,7 +576,7 @@ class TestSaveCollectionSync:
         recorder = FakeSettingsPersister()
         plugin._sync_service._fetcher._settings_persister = recorder
 
-        plugin._sync_service.save_collection_sync("1", "user", True)
+        plugin._sync_service.save_collection_sync("1", "standard", True)
 
         assert recorder.save_count == 1
 
@@ -613,8 +613,8 @@ class TestSetAllCollectionsSync:
 
         assert result["success"] is True
         ec = plugin._sync_service._settings["enabled_collections"]
-        assert ec["user"]["1"] is True
-        assert ec["user"]["2"] is True
+        assert ec["standard"]["1"] is True
+        assert ec["standard"]["2"] is True
         assert ec["smart"]["5"] is True
         assert ec["virtual"]["101"] is True
 
@@ -626,7 +626,7 @@ class TestSetAllCollectionsSync:
         franchise = [{"id": 101, "name": "Mario"}]
         rebind_loop(plugin._sync_service, _make_collections_loop(user, smart, franchise))
         plugin._sync_service._settings["enabled_collections"] = {
-            "user": {"1": True},
+            "standard": {"1": True},
             "smart": {"5": True},
             "virtual": {"101": True},
         }
@@ -635,7 +635,7 @@ class TestSetAllCollectionsSync:
 
         assert result["success"] is True
         ec = plugin._sync_service._settings["enabled_collections"]
-        assert ec["user"]["1"] is False
+        assert ec["standard"]["1"] is False
         assert ec["smart"]["5"] is False
         assert ec["virtual"]["101"] is False
 
@@ -652,7 +652,7 @@ class TestSetAllCollectionsSync:
         assert result["success"] is True
         ec = plugin._sync_service._settings["enabled_collections"]
         assert ec["virtual"]["101"] is True
-        assert ec["user"] == {}
+        assert ec["standard"] == {}
         assert ec["smart"] == {}
 
     @pytest.mark.asyncio
@@ -667,24 +667,24 @@ class TestSetAllCollectionsSync:
         ec = plugin._sync_service._settings["enabled_collections"]
         assert ec["smart"]["7"] is True
         assert ec["smart"]["8"] is True
-        assert ec["user"] == {}
+        assert ec["standard"] == {}
         assert ec["virtual"] == {}
 
     @pytest.mark.asyncio
-    async def test_filter_by_user_scope(self, plugin):
-        """Passing scope='user' only touches non-favorite user collections."""
+    async def test_filter_by_standard_scope(self, plugin):
+        """Passing scope='standard' only touches non-favorite standard collections."""
         user = [
             {"id": 1, "name": "RPGs", "is_favorite": False},
             {"id": 2, "name": "Faves", "is_favorite": True},
         ]
         rebind_loop(plugin._sync_service, _make_loop_with_executor(user))
 
-        result = await plugin._sync_service.set_all_collections_sync(True, scope="user")
+        result = await plugin._sync_service.set_all_collections_sync(True, scope="standard")
 
         assert result["success"] is True
         ec = plugin._sync_service._settings["enabled_collections"]
-        assert ec["user"]["1"] is True
-        assert "2" not in ec["user"]
+        assert ec["standard"]["1"] is True
+        assert "2" not in ec["standard"]
         assert ec["smart"] == {}
         assert ec["virtual"] == {}
 
@@ -741,8 +741,8 @@ class TestSetAllCollectionsSync:
         assert plugin._sync_service._settings["enabled_collections"]["virtual"] == {}
 
     @pytest.mark.asyncio
-    async def test_virtual_failure_still_processes_user_and_smart(self, plugin):
-        """If every virtual-type fetch fails (scope=None), user + smart are still processed."""
+    async def test_virtual_failure_still_processes_standard_and_smart(self, plugin):
+        """If every virtual-type fetch fails (scope=None), standard + smart are still processed."""
         user = [{"id": 1, "name": "RPGs", "is_favorite": False}]
         smart = [{"id": 5, "name": "Filter"}]
 
@@ -765,12 +765,12 @@ class TestSetAllCollectionsSync:
 
         assert result["success"] is True
         ec = plugin._sync_service._settings["enabled_collections"]
-        assert ec["user"]["1"] is True
+        assert ec["standard"]["1"] is True
         assert ec["smart"]["5"] is True
 
     @pytest.mark.asyncio
-    async def test_smart_failure_still_processes_user_and_virtual(self, plugin):
-        """If smart fetch fails, user + virtual still go through."""
+    async def test_smart_failure_still_processes_standard_and_virtual(self, plugin):
+        """If smart fetch fails, standard + virtual still go through."""
         user = [{"id": 1, "name": "RPGs", "is_favorite": False}]
         franchise = [{"id": 101, "name": "Mario"}]
 
@@ -795,7 +795,7 @@ class TestSetAllCollectionsSync:
 
         assert result["success"] is True
         ec = plugin._sync_service._settings["enabled_collections"]
-        assert ec["user"]["1"] is True
+        assert ec["standard"]["1"] is True
         assert ec["virtual"]["101"] is True
 
     @pytest.mark.asyncio
@@ -819,7 +819,7 @@ class TestSetAllCollectionsSync:
 
         await plugin._sync_service.set_all_collections_sync(1)  # truthy int
 
-        assert plugin._sync_service._settings["enabled_collections"]["user"]["1"] is True
+        assert plugin._sync_service._settings["enabled_collections"]["standard"]["1"] is True
 
     @pytest.mark.asyncio
     async def test_scope_none_processes_all_buckets(self, plugin):
@@ -835,8 +835,8 @@ class TestSetAllCollectionsSync:
         await plugin._sync_service.set_all_collections_sync(True, scope=None)
 
         ec = plugin._sync_service._settings["enabled_collections"]
-        assert ec["user"]["1"] is True
-        assert ec["user"]["2"] is True
+        assert ec["standard"]["1"] is True
+        assert ec["standard"]["2"] is True
         assert ec["smart"]["5"] is True
         assert ec["virtual"]["101"] is True
 
@@ -1204,7 +1204,7 @@ class TestCollectionSyncEdgeCases:
         """
         svc = plugin._sync_service
         svc._settings["collection_create_platform_groups"] = False
-        svc._settings["enabled_collections"] = {"user": {"3": True}, "smart": {}, "virtual": {}}
+        svc._settings["enabled_collections"] = {"standard": {"3": True}, "smart": {}, "virtual": {}}
 
         # roms: ROM 1 from platform, ROM 2 from collection only
         _seed_rom(plugin._uow, 1, app_id=1001, platform_slug="gba", name="ROM A")
@@ -1214,7 +1214,10 @@ class TestCollectionSyncEdgeCases:
 
         with plugin._uow as uow:
             platform_app_ids, _ = svc._reporter._build_collection_app_ids(
-                uow, platform_rom_ids, {("user", "3"): CollectionMembership(name="Favorites", rom_ids=[1, 2])}, names
+                uow,
+                platform_rom_ids,
+                {("standard", "3"): CollectionMembership(name="Favorites", rom_ids=[1, 2])},
+                names,
             )
 
         assert "Game Boy Advance" in platform_app_ids
@@ -1251,7 +1254,7 @@ class TestCollectionSyncEdgeCases:
         _seed_rom(plugin._uow, 1, app_id=1001, platform_slug="gba", name="ROM A")
         names = {"gba": "Game Boy Advance"}
         platform_rom_ids = {1}
-        collection_memberships = {("user", "3"): CollectionMembership(name="Favorites", rom_ids=[1])}
+        collection_memberships = {("standard", "3"): CollectionMembership(name="Favorites", rom_ids=[1])}
 
         with plugin._uow as uow:
             platform_app_ids, romm_collection_app_ids = svc._reporter._build_collection_app_ids(
@@ -1315,7 +1318,7 @@ class TestCollectionSyncEdgeCases:
 
         with plugin._uow as uow:
             _platform_app_ids, romm_collection_app_ids = svc._reporter._build_collection_app_ids(
-                uow, {1}, {("user", "3"): CollectionMembership(name="Favorites", rom_ids=[1, 99])}, {"gba": "GBA"}
+                uow, {1}, {("standard", "3"): CollectionMembership(name="Favorites", rom_ids=[1, 99])}, {"gba": "GBA"}
             )
 
         assert "Favorites" in romm_collection_app_ids

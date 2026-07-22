@@ -109,7 +109,7 @@ describe("estimatePlanSeconds", () => {
       name: "Faves",
       slug: "",
       rom_count: 300,
-      collection_kind: "user",
+      collection_kind: "standard",
       bound_count: 300,
     };
     expect(estimatePlanSeconds([collection])).toBeCloseTo(estimateApplySeconds(0, 300));

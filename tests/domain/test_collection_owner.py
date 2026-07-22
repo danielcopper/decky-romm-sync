@@ -8,7 +8,7 @@ from domain.collection_owner import is_own_collection
 
 
 class TestVirtualAlwaysOwn:
-    """Virtual collections have no owner and always survive an "Own" filter."""
+    """Virtual collections have no owner and always survive a "Mine" filter."""
 
     def test_virtual_is_own_even_with_foreign_id(self):
         # A virtual collection carries no user_id; even a mismatched value is ignored.
@@ -24,26 +24,26 @@ class TestVirtualAlwaysOwn:
 class TestUnknownIdentityDegradesToAll:
     """Unknown own identity → every collection is own (the non-breaking fallback)."""
 
-    @pytest.mark.parametrize("kind", ["user", "smart"])
+    @pytest.mark.parametrize("kind", ["standard", "smart"])
     def test_own_when_identity_unknown(self, kind):
         assert is_own_collection(42, own_user_id=None, kind=kind) is True
 
     def test_own_when_identity_unknown_and_owner_missing(self):
-        assert is_own_collection(None, own_user_id=None, kind="user") is True
+        assert is_own_collection(None, own_user_id=None, kind="standard") is True
 
 
 class TestKnownIdentityOwnership:
-    """With a known own id, user/smart collections split on the owner id."""
+    """With a known own id, standard/smart collections split on the owner id."""
 
-    @pytest.mark.parametrize("kind", ["user", "smart"])
+    @pytest.mark.parametrize("kind", ["standard", "smart"])
     def test_own_when_ids_match(self, kind):
         assert is_own_collection(7, own_user_id=7, kind=kind) is True
 
-    @pytest.mark.parametrize("kind", ["user", "smart"])
+    @pytest.mark.parametrize("kind", ["standard", "smart"])
     def test_foreign_when_ids_differ(self, kind):
         assert is_own_collection(8, own_user_id=7, kind=kind) is False
 
     def test_foreign_when_owner_id_missing_but_identity_known(self):
-        # A user/smart collection with no user_id and a known own id can't be
+        # A standard/smart collection with no user_id and a known own id can't be
         # confirmed as ours — treated as foreign (RomM always sends user_id here).
-        assert is_own_collection(None, own_user_id=7, kind="user") is False
+        assert is_own_collection(None, own_user_id=7, kind="standard") is False

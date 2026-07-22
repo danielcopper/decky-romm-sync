@@ -1,10 +1,10 @@
 """CollectionSyncState — the per-collection "this collection fully synced" stamp.
 
 The collection sibling of :class:`domain.platform_sync_state.PlatformSyncState`
-(ADR-0023): recorded when a user/smart collection work unit finishes its **last**
+(ADR-0023): recorded when a standard/smart collection work unit finishes its **last**
 apply chunk, so the incremental-skip gate can avoid re-paginating an unchanged
 collection on the next sync. Keyed by ``(collection_id, collection_kind)`` — a
-user collection id and a smart collection id can collide (both are small ints on
+standard collection id and a smart collection id can collide (both are small ints on
 the server), so the kind is part of the identity.
 
 Unlike a platform, a collection has no local membership column to reconstruct its
@@ -27,7 +27,7 @@ the stamp for a skip to fire (see ``LibraryFetcher._try_collection_incremental_s
    ``updated_at`` does not move for that).
 3. ``rom_count`` unchanged vs. both the live listing and the stored member set.
 
-Only **user** and **smart** collections carry a stamp — virtual collections
+Only **standard** and **smart** collections carry a stamp — virtual collections
 are auto-generated groupings with no stable ``updated_at`` and are never
 stamped (they always full-fetch). A thin record built whole and upserted —
 never a partial field mutation — so it carries a single ``stamp`` constructor and
@@ -72,12 +72,12 @@ class CollectionSyncState:
         keys off to detect a member ROM's content change. ``rom_count`` is the
         server's collection ROM count as of completion, and ``member_rom_ids`` is
         the full member set the skip replays to rebuild collection membership
-        without re-fetching. Only ``user`` / ``smart`` kinds are stampable.
+        without re-fetching. Only ``standard`` / ``smart`` kinds are stampable.
         """
         if not collection_id:
             raise ValueError("collection_id is required")
-        if collection_kind not in ("user", "smart"):
-            raise ValueError(f"collection_kind must be 'user' or 'smart', got {collection_kind!r}")
+        if collection_kind not in ("standard", "smart"):
+            raise ValueError(f"collection_kind must be 'standard' or 'smart', got {collection_kind!r}")
         if not updated_at:
             raise ValueError("updated_at is required")
         if not completed_at:

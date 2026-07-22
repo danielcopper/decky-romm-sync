@@ -19,9 +19,9 @@ export interface PlatformSyncSetting {
   sync_enabled: boolean;
 }
 
-export type CollectionKind = "user" | "smart" | "virtual";
+export type CollectionKind = "standard" | "smart" | "virtual";
 
-export type CollectionScope = "user" | "smart" | "virtual";
+export type CollectionScope = "standard" | "smart" | "virtual";
 
 /**
  * The RomM virtual-collection type carried on a `kind === "virtual"` collection.

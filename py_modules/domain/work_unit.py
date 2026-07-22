@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 UnitType = Literal["platform", "collection"]
-CollectionKind = Literal["user", "smart", "virtual"]
+CollectionKind = Literal["standard", "smart", "virtual"]
 
 
 @dataclass(frozen=True)

@@ -217,22 +217,22 @@ Collections appear in Steam's library sidebar and can be used to browse games by
 
 The **Collections** page splits collections into three sub-tabs plus a dedicated top-level toggle for RomM favorites:
 
-- **Sync RomM favorites** (top-level toggle) — the user collection RomM auto-manages as your favorites. Always exactly
-  one per account, so it sits above the sub-tabs as a single switch. It stays visible but grayed out when your account
-  has no favorites collection.
-- **My** sub-tab — your other user-created collections
+- **Sync RomM favorites** (top-level toggle) — the standard collection RomM auto-manages as your favorites. Always
+  exactly one per account, so it sits above the sub-tabs as a single switch. It stays visible but grayed out when your
+  account has no favorites collection.
+- **Standard** sub-tab — your other manually-created collections
 - **Smart** sub-tab — filter-based collections that resolve membership at query time, so syncing always picks up the
   current matches
 - **Virtual** sub-tab — auto-generated groupings RomM derives from IGDB metadata: both IGDB **franchise** groupings and
   IGDB **collection** (series) groupings. Each row is labelled with its type (Franchise / IGDB Collection).
 
-Each sub-tab shows its match count in the section header (e.g. `MY COLLECTIONS (4)`) and lets you toggle individual
-collections. A **search box** above the list filters the current sub-tab by a **fuzzy** name match (its heading is
-labelled _Search collections (fuzzy)_), so a loose or partial query still finds a name — most useful on **Virtual**,
-which can run to hundreds of entries. On the **Virtual** sub-tab a segmented **All / Franchise / IGDB Collection**
-control narrows the list to one virtual type. The list itself is capped for performance: when more collections match
-than fit, the first rows render and a `… more — refine your search` hint appears — type in the search box to bring the
-rest into view.
+Each sub-tab shows its match count in the section header (e.g. `STANDARD COLLECTIONS (4)`) and lets you toggle
+individual collections. A **search box** above the list filters the current sub-tab by a **fuzzy** name match (its
+heading is labelled _Search collections (fuzzy)_), so a loose or partial query still finds a name — most useful on
+**Virtual**, which can run to hundreds of entries. On the **Virtual** sub-tab a segmented **All / Franchise / IGDB
+Collection** control narrows the list to one virtual type. The list itself is capped for performance: when more
+collections match than fit, the first rows render and a `… more — refine your search` hint appears — type in the search
+box to bring the rest into view.
 
 The owner-scope, sub-tab, and search controls appear as soon as you open the page — the collection list loads in behind
 them, so you can pick a sub-tab or start typing a search straight away. **Enable All** / **Disable All** stay disabled
@@ -246,20 +246,20 @@ The **Show collection games in platform groups** setting — whether games pulle
 their platform's Steam group — now lives on the **Settings** page under **Library**, alongside the preferred-region
 preference. It applies to every sync, so it sits with the other set-and-forget preferences rather than on this tab.
 
-#### Own / All
+#### Mine / All
 
 On a **shared RomM server** the collection list includes every other user's _public_ collections alongside your own. The
 **Show collections** control at the top of the Collections page lets you narrow that down:
 
 - **All** (default) — every collection the server lists, including other users' public ones. This is the original
   behaviour.
-- **Own** — only the collections you own. Foreign collections are hidden from the sub-tabs and are excluded from the
-  sync, even if one was enabled earlier — switching back to **All** brings your earlier choices back, since the scope
-  filters over your enable state rather than changing it.
+- **Mine** — only the collections you own. Foreign collections are hidden from the tabs and are excluded from the sync,
+  even if one was enabled earlier — switching back to **All** brings your earlier choices back, since the scope filters
+  over your enable state rather than changing it.
 
 **Virtual collections always appear** under either setting: they are auto-generated groupings that have no owner, so
-"Own" never hides them. The filter only becomes active once the plugin knows your account identity, which it learns the
-first time you sign in (existing sign-ins pick it up on the next connection check). Until then, **Own** behaves exactly
+"Mine" never hides them. The filter only becomes active once the plugin knows your account identity, which it learns the
+first time you sign in (existing sign-ins pick it up on the next connection check). Until then, **Mine** behaves exactly
 like **All** — it never hides a collection it can't yet attribute.
 
 If two enabled collections share the same name — for example a personal collection and a smart or virtual collection

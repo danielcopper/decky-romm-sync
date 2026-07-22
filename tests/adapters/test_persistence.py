@@ -84,8 +84,8 @@ class TestLocking:
 class TestSettingsSchema:
     """Schema-level expectations for the settings defaults + version stamp."""
 
-    def test_settings_version_is_12(self):
-        assert _SETTINGS_VERSION == 12
+    def test_settings_version_is_13(self):
+        assert _SETTINGS_VERSION == 13
 
     def test_default_settings_default_slot_is_autosave(self):
         # New ROMs adopt "autosave" (the slot name the official RomM clients use),
@@ -107,12 +107,13 @@ class TestSettingsSchema:
         assert DEFAULT_SETTINGS["platform_cores"] == {}
 
     def test_default_settings_carry_virtual_collection_bucket(self):
-        # The ownerless virtual-collection kind is ``virtual`` (v11); the legacy
-        # ``franchise`` bucket key must be gone from the default shape.
-        assert DEFAULT_SETTINGS["enabled_collections"] == {"user": {}, "smart": {}, "virtual": {}}
+        # The ownership-carrying first kind is ``standard`` (v13, renamed from the
+        # legacy ``user`` bucket key); the ownerless virtual kind is ``virtual``
+        # (v11). Both legacy bucket keys must be gone from the default shape.
+        assert DEFAULT_SETTINGS["enabled_collections"] == {"standard": {}, "smart": {}, "virtual": {}}
 
     def test_default_settings_carry_owner_scope_defaults(self):
-        # Identity unknown and scope "all" by default → the "Own" filter is inert
+        # Identity unknown and scope "all" by default → the "Mine" filter is inert
         # on a fresh install, matching today's behaviour (#1532).
         assert DEFAULT_SETTINGS["romm_user_id"] is None
         assert DEFAULT_SETTINGS["collection_owner_scope"] == "all"
@@ -147,7 +148,7 @@ class TestVersionStampingOnSave:
         with open(settings_path) as f:
             loaded = json.load(f)
         assert loaded["version"] == _SETTINGS_VERSION
-        assert loaded["version"] == 12
+        assert loaded["version"] == 13
 
 
 # ── Loading edge cases ─────────────────────────────────────────────────────────

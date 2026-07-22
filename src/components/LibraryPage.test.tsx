@@ -162,7 +162,7 @@ function makeCollection(overrides: Partial<CollectionSyncSetting> = {}): Collect
     name: "Favs",
     rom_count: 5,
     sync_enabled: false,
-    kind: "user",
+    kind: "standard",
     is_favorite: true,
     ...overrides,
   };
@@ -438,7 +438,7 @@ describe("LibraryPage", () => {
     it("populates collections from Promise.all on success", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "u1", name: "MyColl", kind: "user", is_favorite: false })],
+        collections: [makeCollection({ id: "u1", name: "MyColl", kind: "standard", is_favorite: false })],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -524,9 +524,9 @@ describe("LibraryPage", () => {
       const { getByText, getByTestId, queryByTestId } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
       // Controls are already visible before the (still-pending) list resolves.
-      expect(getByText("Own")).not.toBeNull();
+      expect(getByText("Mine")).not.toBeNull();
       expect(getByText("All")).not.toBeNull();
-      expect(getByText("My")).not.toBeNull();
+      expect(getByText("Standard")).not.toBeNull();
       expect(getByText("Smart")).not.toBeNull();
       expect(getByText("Virtual")).not.toBeNull();
       expect(getByTestId("text-field")).not.toBeNull();
@@ -556,20 +556,20 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "u1", name: "MineColl", kind: "user", is_favorite: false, is_own: true }),
-          makeCollection({ id: "u2", name: "TheirColl", kind: "user", is_favorite: false, is_own: false }),
+          makeCollection({ id: "u1", name: "MineColl", kind: "standard", is_favorite: false, is_own: true }),
+          makeCollection({ id: "u2", name: "TheirColl", kind: "standard", is_favorite: false, is_own: false }),
         ],
       });
       const { getByText, getByTestId, container } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
       // Scope stayed at the "All" default: a foreign (is_own=false) collection is
-      // visible — under "Own" it would be hidden.
+      // visible — under "Mine" it would be hidden.
       expect(container.querySelector('[data-label="MineColl"]')).not.toBeNull();
       expect(container.querySelector('[data-label="TheirColl"]')).not.toBeNull();
       // The list loaded normally — no error surfaced from the settings failure.
       expect(container.textContent).not.toContain("Failed to load collections");
       // Controls remain present.
-      expect(getByText("Own")).not.toBeNull();
+      expect(getByText("Mine")).not.toBeNull();
       expect(getByText("All")).not.toBeNull();
       expect(getByTestId("text-field")).not.toBeNull();
     });
@@ -587,7 +587,7 @@ describe("LibraryPage", () => {
       await act(async () => {
         resolve({
           success: true,
-          collections: [makeCollection({ id: "u1", name: "UserOne", kind: "user", is_favorite: false })],
+          collections: [makeCollection({ id: "u1", name: "UserOne", kind: "standard", is_favorite: false })],
         });
         await Promise.resolve();
         await Promise.resolve();
@@ -617,7 +617,7 @@ describe("LibraryPage", () => {
       // Error surfaces in the list area, not as a full-panel replacement — the
       // controls remain rendered alongside it.
       expect(container.textContent).toContain("Failed to load collections");
-      expect(getByText("Own")).not.toBeNull();
+      expect(getByText("Mine")).not.toBeNull();
       expect(getByText("Virtual")).not.toBeNull();
       expect(getByTestId("text-field")).not.toBeNull();
       // Enable/Disable All stay disabled on the error path (nothing to act on).
@@ -629,7 +629,7 @@ describe("LibraryPage", () => {
       const { getByText, getByTestId, container } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
       expect(container.textContent).toContain("No collections found");
-      expect(getByText("Own")).not.toBeNull();
+      expect(getByText("Mine")).not.toBeNull();
       expect(getByText("Virtual")).not.toBeNull();
       expect(getByTestId("text-field")).not.toBeNull();
       // Empty library → nothing to enable, buttons disabled.
@@ -645,7 +645,7 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "abc", name: "MyColl", sync_enabled: false, kind: "user", is_favorite: false }),
+          makeCollection({ id: "abc", name: "MyColl", sync_enabled: false, kind: "standard", is_favorite: false }),
         ],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
@@ -655,14 +655,14 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      // Find the collection toggle by label (default sub-tab "user" → user collection visible).
+      // Find the collection toggle by label (default sub-tab "standard" → standard collection visible).
       const collectionToggle = container.querySelector<HTMLInputElement>('[data-label="MyColl"] input')!;
       expect(collectionToggle.checked).toBe(false);
       await act(async () => {
         fireEvent.click(collectionToggle);
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.saveCollectionSync)).toHaveBeenCalledWith("abc", "user", true);
+      expect(vi.mocked(backend.saveCollectionSync)).toHaveBeenCalledWith("abc", "standard", true);
       const after = container.querySelector<HTMLInputElement>('[data-label="MyColl"] input')!;
       expect(after.checked).toBe(true);
     });
@@ -698,7 +698,7 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "abc", name: "MyColl", kind: "user", is_favorite: false, sync_enabled: false }),
+          makeCollection({ id: "abc", name: "MyColl", kind: "standard", is_favorite: false, sync_enabled: false }),
         ],
       });
       vi.mocked(backend.saveCollectionSync).mockRejectedValue(new Error("nope"));
@@ -729,7 +729,7 @@ describe("LibraryPage", () => {
     it("Enable All with no filter opens a confirm and only calls setAllCollectionsSync on OK", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "c1", kind: "user", is_favorite: false, sync_enabled: false })],
+        collections: [makeCollection({ id: "c1", kind: "standard", is_favorite: false, sync_enabled: false })],
       });
       const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -751,7 +751,7 @@ describe("LibraryPage", () => {
         props?.onOK?.();
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.setAllCollectionsSync)).toHaveBeenCalledWith(true, "user");
+      expect(vi.mocked(backend.setAllCollectionsSync)).toHaveBeenCalledWith(true, "standard");
       // The batch callable is never used on the whole-kind path.
       expect(vi.mocked(backend.saveCollectionsSync)).not.toHaveBeenCalled();
     });
@@ -788,8 +788,8 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "a", name: "A", kind: "user", is_favorite: false, sync_enabled: true }),
-          makeCollection({ id: "b", name: "B", kind: "user", is_favorite: false, sync_enabled: false }),
+          makeCollection({ id: "a", name: "A", kind: "standard", is_favorite: false, sync_enabled: true }),
+          makeCollection({ id: "b", name: "B", kind: "standard", is_favorite: false, sync_enabled: false }),
         ],
       });
       vi.mocked(backend.setAllCollectionsSync).mockRejectedValue(new Error("boom"));
@@ -821,7 +821,7 @@ describe("LibraryPage", () => {
     it("does not render the platform-groups toggle on the Collections tab (moved to Settings)", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "c1", kind: "user", is_favorite: false })],
+        collections: [makeCollection({ id: "c1", kind: "standard", is_favorite: false })],
       });
       const { container, getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -842,9 +842,9 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "f1", name: "F1", kind: "user", is_favorite: true }),
-          makeCollection({ id: "u1", name: "U1", kind: "user", is_favorite: false }),
-          makeCollection({ id: "u2", name: "U2", kind: "user", is_favorite: false }),
+          makeCollection({ id: "f1", name: "F1", kind: "standard", is_favorite: true }),
+          makeCollection({ id: "u1", name: "U1", kind: "standard", is_favorite: false }),
+          makeCollection({ id: "u2", name: "U2", kind: "standard", is_favorite: false }),
           makeCollection({ id: "s1", name: "S1", kind: "smart", is_favorite: false }),
           makeCollection({ id: "fr1", name: "Fr1", kind: "virtual", virtual_type: "franchise", is_favorite: false }),
           makeCollection({ id: "vc1", name: "Vc1", kind: "virtual", virtual_type: "collection", is_favorite: false }),
@@ -858,19 +858,19 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       // Plain sub-tab labels — no inline counts.
-      expect(getByText("My")).not.toBeNull();
+      expect(getByText("Standard")).not.toBeNull();
       expect(getByText("Smart")).not.toBeNull();
       expect(getByText("Virtual")).not.toBeNull();
       // No "Favorites" sub-tab button (now a top-level toggle).
       expect(container.textContent).not.toContain("Favorites (");
     });
 
-    it("defaults to the My sub-tab and shows only non-favorite user collections", async () => {
+    it("defaults to the Standard sub-tab and shows only non-favorite standard collections", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "f1", name: "FavOne", kind: "user", is_favorite: true }),
-          makeCollection({ id: "u1", name: "UserOne", kind: "user", is_favorite: false }),
+          makeCollection({ id: "f1", name: "FavOne", kind: "standard", is_favorite: true }),
+          makeCollection({ id: "u1", name: "UserOne", kind: "standard", is_favorite: false }),
           makeCollection({ id: "s1", name: "SmartOne", kind: "smart", is_favorite: false }),
         ],
       });
@@ -891,8 +891,8 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "f1", name: "FavOne", kind: "user", is_favorite: true }),
-          makeCollection({ id: "u1", name: "UserOne", kind: "user", is_favorite: false }),
+          makeCollection({ id: "f1", name: "FavOne", kind: "standard", is_favorite: true }),
+          makeCollection({ id: "u1", name: "UserOne", kind: "standard", is_favorite: false }),
           makeCollection({ id: "s1", name: "SmartOne", kind: "smart", is_favorite: false }),
         ],
       });
@@ -920,8 +920,8 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "u1", name: "U1", kind: "user", is_favorite: false }),
-          makeCollection({ id: "u2", name: "U2", kind: "user", is_favorite: false }),
+          makeCollection({ id: "u1", name: "U1", kind: "standard", is_favorite: false }),
+          makeCollection({ id: "u2", name: "U2", kind: "standard", is_favorite: false }),
           makeCollection({ id: "s1", name: "S1", kind: "smart", is_favorite: false }),
           makeCollection({ id: "fr1", name: "Fr1", kind: "virtual", virtual_type: "franchise", is_favorite: false }),
         ],
@@ -933,8 +933,8 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      // Default My sub-tab → header reflects 2 visible.
-      expect(container.textContent).toContain("MY COLLECTIONS (2)");
+      // Default Standard sub-tab → header reflects 2 visible.
+      expect(container.textContent).toContain("STANDARD COLLECTIONS (2)");
 
       await act(async () => {
         fireEvent.click(getByText("Smart"));
@@ -964,15 +964,15 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      // Default My sub-tab → no my collections present.
-      expect(container.textContent).toContain("No my collections");
+      // Default Standard sub-tab → no standard collections present.
+      expect(container.textContent).toContain("No standard collections");
     });
 
-    it("sub-tab resets to My each time the Collections tab is opened", async () => {
+    it("sub-tab resets to Standard each time the Collections tab is opened", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "u1", name: "UserOne", kind: "user", is_favorite: false }),
+          makeCollection({ id: "u1", name: "UserOne", kind: "standard", is_favorite: false }),
           makeCollection({ id: "s1", name: "SmartOne", kind: "smart", is_favorite: false }),
         ],
       });
@@ -1076,7 +1076,7 @@ describe("LibraryPage", () => {
     it("renders the favorites toggle ENABLED when exactly one favorites collection exists", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "f1", name: "Faves", kind: "user", is_favorite: true, rom_count: 3 })],
+        collections: [makeCollection({ id: "f1", name: "Faves", kind: "standard", is_favorite: true, rom_count: 3 })],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -1097,7 +1097,7 @@ describe("LibraryPage", () => {
           makeCollection({
             id: "f1",
             name: "Faves",
-            kind: "user",
+            kind: "standard",
             is_favorite: true,
             rom_count: 1,
             sync_enabled: false,
@@ -1119,7 +1119,7 @@ describe("LibraryPage", () => {
     it("renders the plural description for N>1 favorited games", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "f1", name: "Faves", kind: "user", is_favorite: true, rom_count: 7 })],
+        collections: [makeCollection({ id: "f1", name: "Faves", kind: "standard", is_favorite: true, rom_count: 7 })],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -1135,7 +1135,7 @@ describe("LibraryPage", () => {
     it("renders the plural description for 0 favorited games", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "f1", name: "Faves", kind: "user", is_favorite: true, rom_count: 0 })],
+        collections: [makeCollection({ id: "f1", name: "Faves", kind: "standard", is_favorite: true, rom_count: 0 })],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -1155,7 +1155,7 @@ describe("LibraryPage", () => {
           makeCollection({
             id: "favid",
             name: "Faves",
-            kind: "user",
+            kind: "standard",
             is_favorite: true,
             rom_count: 5,
             sync_enabled: false,
@@ -1174,7 +1174,7 @@ describe("LibraryPage", () => {
         fireEvent.click(toggle);
         await Promise.resolve();
       });
-      expect(vi.mocked(backend.saveCollectionSync)).toHaveBeenCalledWith("favid", "user", true);
+      expect(vi.mocked(backend.saveCollectionSync)).toHaveBeenCalledWith("favid", "standard", true);
     });
 
     it("reverts the favorites toggle on saveCollectionSync rejection", async () => {
@@ -1184,7 +1184,7 @@ describe("LibraryPage", () => {
           makeCollection({
             id: "favid",
             name: "Faves",
-            kind: "user",
+            kind: "standard",
             is_favorite: true,
             rom_count: 5,
             sync_enabled: false,
@@ -1214,7 +1214,7 @@ describe("LibraryPage", () => {
     it("renders the favorites toggle disabled (grayed, not hidden) when no favorites collection exists", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "u1", name: "U1", kind: "user", is_favorite: false })],
+        collections: [makeCollection({ id: "u1", name: "U1", kind: "standard", is_favorite: false })],
       });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
@@ -1229,15 +1229,15 @@ describe("LibraryPage", () => {
       expect(favInput?.disabled).toBe(true);
     });
 
-    it("falls back to listing favorites in the My sub-tab when more than one exists (with console warning)", async () => {
+    it("falls back to listing favorites in the Standard sub-tab when more than one exists (with console warning)", async () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
         vi.mocked(backend.getCollections).mockResolvedValue({
           success: true,
           collections: [
-            makeCollection({ id: "f1", name: "FavA", kind: "user", is_favorite: true }),
-            makeCollection({ id: "f2", name: "FavB", kind: "user", is_favorite: true }),
-            makeCollection({ id: "u1", name: "UserOne", kind: "user", is_favorite: false }),
+            makeCollection({ id: "f1", name: "FavA", kind: "standard", is_favorite: true }),
+            makeCollection({ id: "f2", name: "FavB", kind: "standard", is_favorite: true }),
+            makeCollection({ id: "u1", name: "UserOne", kind: "standard", is_favorite: false }),
           ],
         });
         const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
@@ -1252,7 +1252,7 @@ describe("LibraryPage", () => {
         const favInput = container.querySelector<HTMLInputElement>('[data-label="Sync RomM favorites"] input');
         expect(favInput).not.toBeNull();
         expect(favInput?.disabled).toBe(true);
-        // Both favorites surface in My (alongside the regular user collection).
+        // Both favorites surface in Standard (alongside the regular standard collection).
         expect(container.querySelector('[data-label="FavA"]')).not.toBeNull();
         expect(container.querySelector('[data-label="FavB"]')).not.toBeNull();
         expect(container.querySelector('[data-label="UserOne"]')).not.toBeNull();
@@ -1268,8 +1268,8 @@ describe("LibraryPage", () => {
   // ------------------------------------------------------------------
   describe("collections tab — owner scope (Own / All)", () => {
     const ownAndForeign = (): CollectionSyncSetting[] => [
-      makeCollection({ id: "u1", name: "MineColl", kind: "user", is_favorite: false, is_own: true }),
-      makeCollection({ id: "u2", name: "TheirColl", kind: "user", is_favorite: false, is_own: false }),
+      makeCollection({ id: "u1", name: "MineColl", kind: "standard", is_favorite: false, is_own: true }),
+      makeCollection({ id: "u2", name: "TheirColl", kind: "standard", is_favorite: false, is_own: false }),
     ];
 
     const openCollections = async (getByText: (t: string) => HTMLElement) => {
@@ -1285,7 +1285,7 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({ success: true, collections: ownAndForeign() });
       const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
-      expect(getByText("Own")).not.toBeNull();
+      expect(getByText("Mine")).not.toBeNull();
       expect(getByText("All")).not.toBeNull();
     });
 
@@ -1294,7 +1294,7 @@ describe("LibraryPage", () => {
       const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
       await act(async () => {
-        fireEvent.click(getByText("Own"));
+        fireEvent.click(getByText("Mine"));
         await Promise.resolve();
       });
       expect(vi.mocked(backend.setCollectionOwnerScope)).toHaveBeenCalledWith("own");
@@ -1309,7 +1309,7 @@ describe("LibraryPage", () => {
       expect(container.querySelector('[data-label="TheirColl"]')).not.toBeNull();
       // Switch to Own → the foreign collection is hidden.
       await act(async () => {
-        fireEvent.click(getByText("Own"));
+        fireEvent.click(getByText("Mine"));
         await Promise.resolve();
       });
       expect(container.querySelector('[data-label="MineColl"]')).not.toBeNull();
@@ -1332,7 +1332,7 @@ describe("LibraryPage", () => {
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
       await act(async () => {
-        fireEvent.click(getByText("Own"));
+        fireEvent.click(getByText("Mine"));
         await Promise.resolve();
         await Promise.resolve();
       });
@@ -1367,8 +1367,8 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "u1", name: "Action Heroes", kind: "user", is_favorite: false }),
-          makeCollection({ id: "u2", name: "Puzzle Box", kind: "user", is_favorite: false }),
+          makeCollection({ id: "u1", name: "Action Heroes", kind: "standard", is_favorite: false }),
+          makeCollection({ id: "u2", name: "Puzzle Box", kind: "standard", is_favorite: false }),
         ],
       });
       const { getByText, getByTestId, container } = render(<LibraryPage onBack={vi.fn()} />);
@@ -1386,7 +1386,7 @@ describe("LibraryPage", () => {
     it("hints the fuzzy match in the search field heading", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "u1", name: "Action Heroes", kind: "user", is_favorite: false })],
+        collections: [makeCollection({ id: "u1", name: "Action Heroes", kind: "standard", is_favorite: false })],
       });
       const { getByText, getByTestId } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
@@ -1401,7 +1401,7 @@ describe("LibraryPage", () => {
       // component wires the trigger correctly (first keystroke only).
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "u1", name: "Action Heroes", kind: "user", is_favorite: false })],
+        collections: [makeCollection({ id: "u1", name: "Action Heroes", kind: "standard", is_favorite: false })],
       });
       const scrollToField = vi.mocked(scrollElementToTop);
       const { getByText, getByTestId } = render(<LibraryPage onBack={vi.fn()} />);
@@ -1419,7 +1419,7 @@ describe("LibraryPage", () => {
     it("lifts the search field to the top of the view when it gains focus", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
-        collections: [makeCollection({ id: "u1", name: "Action Heroes", kind: "user", is_favorite: false })],
+        collections: [makeCollection({ id: "u1", name: "Action Heroes", kind: "standard", is_favorite: false })],
       });
       const scrollToField = vi.mocked(scrollElementToTop);
       const { getByText, getByTestId } = render(<LibraryPage onBack={vi.fn()} />);
@@ -1438,7 +1438,7 @@ describe("LibraryPage", () => {
         makeCollection({
           id: `u${i}`,
           name: `Coll ${String(i).padStart(3, "0")}`,
-          kind: "user",
+          kind: "standard",
           is_favorite: false,
         }),
       );
@@ -1453,7 +1453,7 @@ describe("LibraryPage", () => {
       // The overflow (60 - 50 = 10) is surfaced as a single hint row.
       expect(container.textContent).toContain("10 more — refine your search");
       // The section header still reflects the full match count.
-      expect(container.textContent).toContain("MY COLLECTIONS (60)");
+      expect(container.textContent).toContain("STANDARD COLLECTIONS (60)");
     });
 
     it("search narrows a huge list below the cap and drops the hint", async () => {
@@ -1461,7 +1461,7 @@ describe("LibraryPage", () => {
         makeCollection({
           id: `u${i}`,
           name: `Coll ${String(i).padStart(3, "0")}`,
-          kind: "user",
+          kind: "standard",
           is_favorite: false,
         }),
       );
@@ -1480,13 +1480,13 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "u1", name: "UserOne", kind: "user", is_favorite: false }),
+          makeCollection({ id: "u1", name: "UserOne", kind: "standard", is_favorite: false }),
           makeCollection({ id: "fr1", name: "Fr1", kind: "virtual", virtual_type: "franchise", is_favorite: false }),
         ],
       });
       const { getByText, queryByText } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
-      // On the default My sub-tab the per-type labels are absent.
+      // On the default Standard sub-tab the per-type labels are absent.
       expect(queryByText("Franchise")).toBeNull();
       expect(queryByText("IGDB Collection")).toBeNull();
       // On the Virtual sub-tab they appear.
@@ -1540,9 +1540,15 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "u1", name: "Action Heroes", kind: "user", is_favorite: false, sync_enabled: false }),
-          makeCollection({ id: "u2", name: "Action Squad", kind: "user", is_favorite: false, sync_enabled: false }),
-          makeCollection({ id: "u3", name: "Puzzle Box", kind: "user", is_favorite: false, sync_enabled: false }),
+          makeCollection({
+            id: "u1",
+            name: "Action Heroes",
+            kind: "standard",
+            is_favorite: false,
+            sync_enabled: false,
+          }),
+          makeCollection({ id: "u2", name: "Action Squad", kind: "standard", is_favorite: false, sync_enabled: false }),
+          makeCollection({ id: "u3", name: "Puzzle Box", kind: "standard", is_favorite: false, sync_enabled: false }),
         ],
       });
       const { getByText, getByTestId } = render(<LibraryPage onBack={vi.fn()} />);
@@ -1555,7 +1561,7 @@ describe("LibraryPage", () => {
       // No confirm (bounded subset), no whole-kind call, batch with only matches.
       expect(vi.mocked(showModal)).not.toHaveBeenCalled();
       expect(vi.mocked(backend.setAllCollectionsSync)).not.toHaveBeenCalled();
-      expect(vi.mocked(backend.saveCollectionsSync)).toHaveBeenCalledWith(["u1", "u2"], "user", true);
+      expect(vi.mocked(backend.saveCollectionsSync)).toHaveBeenCalledWith(["u1", "u2"], "standard", true);
     });
 
     it("Enable All under 'Own' scope (empty search) batches the own ids and never takes the whole-kind path", async () => {
@@ -1569,7 +1575,7 @@ describe("LibraryPage", () => {
           makeCollection({
             id: "u1",
             name: "MineOne",
-            kind: "user",
+            kind: "standard",
             is_favorite: false,
             is_own: true,
             sync_enabled: false,
@@ -1577,7 +1583,7 @@ describe("LibraryPage", () => {
           makeCollection({
             id: "u2",
             name: "MineTwo",
-            kind: "user",
+            kind: "standard",
             is_favorite: false,
             is_own: true,
             sync_enabled: false,
@@ -1585,7 +1591,7 @@ describe("LibraryPage", () => {
           makeCollection({
             id: "u3",
             name: "TheirOne",
-            kind: "user",
+            kind: "standard",
             is_favorite: false,
             is_own: false,
             sync_enabled: false,
@@ -1600,7 +1606,7 @@ describe("LibraryPage", () => {
       });
       expect(vi.mocked(showModal)).not.toHaveBeenCalled();
       expect(vi.mocked(backend.setAllCollectionsSync)).not.toHaveBeenCalled();
-      expect(vi.mocked(backend.saveCollectionsSync)).toHaveBeenCalledWith(["u1", "u2"], "user", true);
+      expect(vi.mocked(backend.saveCollectionsSync)).toHaveBeenCalledWith(["u1", "u2"], "standard", true);
     });
 
     it("Disable All under an active per-type filter batches only that type's ids", async () => {
@@ -1656,8 +1662,14 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
-          makeCollection({ id: "u1", name: "Action Heroes", kind: "user", is_favorite: false, sync_enabled: false }),
-          makeCollection({ id: "u2", name: "Puzzle Box", kind: "user", is_favorite: false, sync_enabled: false }),
+          makeCollection({
+            id: "u1",
+            name: "Action Heroes",
+            kind: "standard",
+            is_favorite: false,
+            sync_enabled: false,
+          }),
+          makeCollection({ id: "u2", name: "Puzzle Box", kind: "standard", is_favorite: false, sync_enabled: false }),
         ],
       });
       vi.mocked(backend.saveCollectionsSync).mockRejectedValue(new Error("boom"));

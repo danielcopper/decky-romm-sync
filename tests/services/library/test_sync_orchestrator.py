@@ -575,7 +575,7 @@ class TestPreviewCoverRefreshCount:
         }
         _seed_collection(fake_romm_api, collection_id=7, name="Favorites", rom_ids=[20], is_favorite=True)
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"user": {"7": True}}
+        plugin.settings["enabled_collections"] = {"standard": {"7": True}}
         _seed_rom_row(
             plugin, 20, app_id=2020, platform_slug="gba", name="CGame", fs_name="cgame.gba", cover_source=self._OLD
         )
@@ -1190,7 +1190,7 @@ class TestBuildWorkQueue:
         fake_romm_api.virtual_collections["franchise"] = [{"id": 9, "name": "Metroid", "rom_count": 8}]
         plugin.settings["enabled_platforms"] = {"1": True}
         plugin.settings["enabled_collections"] = {
-            "user": {"7": True},
+            "standard": {"7": True},
             "smart": {"5": True},
             "virtual": {"9": True},
         }
@@ -1202,7 +1202,7 @@ class TestBuildWorkQueue:
             ("collection", "Filter"),
             ("collection", "Metroid"),
         ]
-        assert units[1].collection_kind == "user"
+        assert units[1].collection_kind == "standard"
         assert units[2].collection_kind == "smart"
         assert units[3].collection_kind == "virtual"
 
@@ -1299,7 +1299,7 @@ class TestFetchCollectionUnit:
             2: {"id": 2, "platform_name": "SNES", "collection_ids": [7]},
             3: {"id": 3, "platform_name": "GBA", "collection_ids": [7]},
         }
-        unit = WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=3, collection_kind="user")
+        unit = WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=3, collection_kind="standard")
         synced: set[int] = set()
         new_roms, ids, _skipped = await plugin._sync_service._fetcher.fetch_collection_unit(unit, synced)
         assert [r["id"] for r in new_roms] == [1, 2, 3]
@@ -1400,7 +1400,7 @@ class TestDoSyncPerUnit:
         # weighs its raw rom_count. (A stamped collection does ride bound_count,
         # #1511 — covered in test_fetcher.)
         _seed_collection(fake_romm_api, collection_id=7, name="Faves", rom_ids=[20, 21, 22])
-        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "virtual": {}}
+        plugin.settings["enabled_collections"] = {"standard": {"7": True}, "smart": {}, "virtual": {}}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
@@ -2173,7 +2173,7 @@ class TestDoSyncPerUnit:
         # The collection holds ONLY the unbound sibling.
         _seed_collection(fake_romm_api, collection_id=7, name="Faves", rom_ids=[11], is_favorite=True)
         plugin.settings["enabled_platforms"] = {"1": True}
-        plugin.settings["enabled_collections"] = {"user": {"7": True}}
+        plugin.settings["enabled_collections"] = {"standard": {"7": True}}
 
         _seed_completed_run(plugin, at="2025-01-01T00:00:00Z")
         _seed_platform_stamp(plugin, "n64", at="2025-01-01T00:00:00Z", rom_count=2)
@@ -2259,7 +2259,7 @@ class TestDoSyncPerUnit:
         )
         _seed_collection(fake_romm_api, collection_id=7, name="Faves", rom_ids=[11], is_favorite=True)
         plugin.settings["enabled_platforms"] = {"1": False}
-        plugin.settings["enabled_collections"] = {"user": {"7": True}}
+        plugin.settings["enabled_collections"] = {"standard": {"7": True}}
 
         _seed_rom_row(
             plugin,
@@ -3593,7 +3593,7 @@ class TestSyncOneUnitCollectionAndCancel:
         fake_romm_api.roms[2]["name"] = "B"
         fake_romm_api.roms[2]["platform_name"] = "N64"
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "virtual": {}}
+        plugin.settings["enabled_collections"] = {"standard": {"7": True}, "smart": {}, "virtual": {}}
 
         plugin._sync_service._orchestrator._download_artwork = AsyncMock(return_value={})
         plugin._sync_service._orchestrator._wait_for_unit_complete = _fake_wait_set_event
@@ -4503,7 +4503,7 @@ class TestPlatformCompletionStamp:
         plugin._sync_service._orchestrator._wait_for_unit_complete = fake_wait
         plugin._sync_service._box.sync_state = SyncState.RUNNING
 
-        unit = WorkUnit(type="collection", id="7", name="Favs", slug="favs", rom_count=2, collection_kind="user")
+        unit = WorkUnit(type="collection", id="7", name="Favs", slug="favs", rom_count=2, collection_kind="standard")
         await plugin._sync_service._orchestrator._sync_one_unit(
             unit,
             unit_index=0,
@@ -4601,7 +4601,7 @@ class TestPlatformCompletionStamp:
         plugin._sync_service._box.sync_state = SyncState.RUNNING
         plugin._sync_service._box.current_sync_id = "run-abc"
 
-        unit = WorkUnit(type="collection", id="7", name="Favs", slug="favs", rom_count=2, collection_kind="user")
+        unit = WorkUnit(type="collection", id="7", name="Favs", slug="favs", rom_count=2, collection_kind="standard")
         await plugin._sync_service._orchestrator._sync_one_unit(
             unit,
             unit_index=0,

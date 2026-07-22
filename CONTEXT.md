@@ -276,3 +276,21 @@ Three deliberately-distinct ROM-removal notions (see [ADR-0007](docs/adr/0007-ro
   survive.
 - **Prune** — an explicit, opt-in purge that `DELETE`s the `roms` row, cascading every per-ROM child away atomically.
   The **only** thing that deletes rows; not built yet (the cascade FKs exist for it).
+
+### Collection kind (Standard / Smart / Virtual)
+
+The axis on which a RomM collection is classified for syncing — the internal literal `standard` / `smart` / `virtual`
+(the `enabled_collections` bucket keys, `WorkUnit.collection_kind`, and `CollectionSyncState.collection_kind`), matching
+RomM's own UI vocabulary. **Standard** is a manually-created collection (RomM's ownership-carrying kind — its ROM
+membership is hand-picked; the auto-managed favorites collection is a Standard one); **Smart** is a saved-search whose
+membership resolves at query time; **Virtual** is an ownerless grouping RomM derives from IGDB metadata (franchise /
+series). Only Standard and Smart are stampable for the incremental skip. Internal-name history: the first kind was
+called `user` until #1539 renamed it `standard` (display "My" → "Standard").
+
+### Collection owner-scope (Mine / All)
+
+The ownership filter over the collection list on a shared RomM server — the `collection_owner_scope` setting valued
+`all` (every collection the server lists, including other users' public ones) or `own` (only the signed-in user's own
+collections). Orthogonal to the collection kind axis: it filters by owner (`is_own` / `user_id` vs `romm_user_id`), not
+by kind, and virtual collections have no owner so they always survive. The stored value stays `own` / `all`; only the
+QAM label is **Mine** / **All** (the value was left `own` to avoid a settings migration, #1539).

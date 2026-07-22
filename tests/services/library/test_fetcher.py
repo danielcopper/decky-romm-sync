@@ -194,17 +194,17 @@ class TestBuildWorkQueueErrorPaths:
     """Tests for build_work_queue() collection-list failure / filter branches."""
 
     @pytest.mark.asyncio
-    async def test_user_collection_list_failure_continues_with_empty(self, plugin, fake_romm_api):
+    async def test_standard_collection_list_failure_continues_with_empty(self, plugin, fake_romm_api):
         """User-collection fetch raises => warning logged, treated as empty."""
         _wire_fake(plugin, fake_romm_api)
         plugin.settings["enabled_platforms"] = {}
         plugin.settings["enabled_collections"] = {
-            "user": {"1": True},
+            "standard": {"1": True},
             "smart": {},
             "virtual": {"42": True},
         }
 
-        fake_romm_api.list_collections_side_effect = RuntimeError("user collections boom")
+        fake_romm_api.list_collections_side_effect = RuntimeError("standard collections boom")
         fake_romm_api.virtual_collections = {
             "franchise": [
                 {"id": "42", "name": "Faves", "slug": "faves", "rom_count": 3},
@@ -222,7 +222,7 @@ class TestBuildWorkQueueErrorPaths:
         _wire_fake(plugin, fake_romm_api)
         plugin.settings["enabled_platforms"] = {}
         plugin.settings["enabled_collections"] = {
-            "user": {"7": True},
+            "standard": {"7": True},
             "smart": {},
             "virtual": {"100": True},
         }
@@ -241,7 +241,7 @@ class TestBuildWorkQueueErrorPaths:
         _wire_fake(plugin, fake_romm_api)
         plugin.settings["enabled_platforms"] = {}
         plugin.settings["enabled_collections"] = {
-            "user": {},
+            "standard": {},
             "smart": {},
             "virtual": {"fr-1": True, "vc-1": True},
         }
@@ -264,7 +264,7 @@ class TestBuildWorkQueueErrorPaths:
         _wire_fake(plugin, fake_romm_api)
         plugin.settings["enabled_platforms"] = {}
         plugin.settings["enabled_collections"] = {
-            "user": {"7": True},
+            "standard": {"7": True},
             "smart": {"5": True},
             "virtual": {},
         }
@@ -283,7 +283,7 @@ class TestBuildWorkQueueErrorPaths:
         plugin.settings["enabled_platforms"] = {}
         # Only the "1" user / "5" smart / "100" virtual collections are enabled.
         plugin.settings["enabled_collections"] = {
-            "user": {"1": True, "2": False},
+            "standard": {"1": True, "2": False},
             "smart": {"5": True, "6": False},
             "virtual": {"100": True, "200": False},
         }
@@ -308,7 +308,7 @@ class TestBuildWorkQueueErrorPaths:
         # Only enabled collections survive the cid-not-in-enabled_ids skip.
         assert [u.name for u in units] == ["Enabled User", "Enabled Smart", "Enabled Franchise"]
         kinds = [u.collection_kind for u in units]
-        assert kinds == ["user", "smart", "virtual"]
+        assert kinds == ["standard", "smart", "virtual"]
 
 
 class TestGetCollectionsVirtualFailOpen:
@@ -344,13 +344,13 @@ class TestSaveCollectionsSync:
 
     def test_stamps_multiple_ids_in_one_write(self, plugin):
         """Every id in the list lands enabled in the kind bucket, one persist."""
-        plugin.settings["enabled_collections"] = {"user": {}, "smart": {}, "virtual": {}}
+        plugin.settings["enabled_collections"] = {"standard": {}, "smart": {}, "virtual": {}}
         recorder = plugin._settings_persister
 
-        result = plugin._sync_service._fetcher.save_collections_sync(["10", "20", "30"], "user", True)
+        result = plugin._sync_service._fetcher.save_collections_sync(["10", "20", "30"], "standard", True)
 
         assert result == {"success": True}
-        bucket = plugin.settings["enabled_collections"]["user"]
+        bucket = plugin.settings["enabled_collections"]["standard"]
         assert bucket == {"10": True, "20": True, "30": True}
         # A single settings write for the whole batch.
         assert recorder.save_count == 1
@@ -358,7 +358,7 @@ class TestSaveCollectionsSync:
     def test_disable_stamps_false_without_touching_other_buckets(self, plugin):
         """Disabling a subset writes False for those ids and leaves siblings intact."""
         plugin.settings["enabled_collections"] = {
-            "user": {},
+            "standard": {},
             "smart": {"5": True, "6": True},
             "virtual": {},
         }
@@ -370,11 +370,11 @@ class TestSaveCollectionsSync:
 
     def test_coerces_non_string_ids_to_string_keys(self, plugin):
         """Integer ids are coerced to string keys (parity with save_collection_sync)."""
-        plugin.settings["enabled_collections"] = {"user": {}, "smart": {}, "virtual": {}}
+        plugin.settings["enabled_collections"] = {"standard": {}, "smart": {}, "virtual": {}}
 
-        plugin._sync_service._fetcher.save_collections_sync([7, 8], "user", True)
+        plugin._sync_service._fetcher.save_collections_sync([7, 8], "standard", True)
 
-        bucket = plugin.settings["enabled_collections"]["user"]
+        bucket = plugin.settings["enabled_collections"]["standard"]
         assert bucket == {"7": True, "8": True}
 
     def test_rejects_invalid_kind_with_failure_shape(self, plugin):
@@ -394,7 +394,7 @@ class TestSaveCollectionsSync:
         """A non-list ids argument from the wire is rejected, no write."""
         recorder = plugin._settings_persister
 
-        result = plugin._sync_service._fetcher.save_collections_sync("not-a-list", "user", True)
+        result = plugin._sync_service._fetcher.save_collections_sync("not-a-list", "standard", True)
 
         assert result["success"] is False
         assert result["reason"] == "invalid_ids"
@@ -403,14 +403,14 @@ class TestSaveCollectionsSync:
 
     def test_empty_ids_is_a_success_no_op(self, plugin):
         """An empty id list stamps nothing and does not write settings."""
-        plugin.settings["enabled_collections"] = {"user": {"1": True}, "smart": {}, "virtual": {}}
+        plugin.settings["enabled_collections"] = {"standard": {"1": True}, "smart": {}, "virtual": {}}
         recorder = plugin._settings_persister
 
-        result = plugin._sync_service._fetcher.save_collections_sync([], "user", True)
+        result = plugin._sync_service._fetcher.save_collections_sync([], "standard", True)
 
         assert result == {"success": True}
         # Unchanged bucket, no persist.
-        assert plugin.settings["enabled_collections"]["user"] == {"1": True}
+        assert plugin.settings["enabled_collections"]["standard"] == {"1": True}
         assert recorder.save_count == 0
 
     def test_materializes_missing_buckets_before_stamping(self, plugin):
@@ -421,7 +421,7 @@ class TestSaveCollectionsSync:
 
         ec = plugin.settings["enabled_collections"]
         assert ec["virtual"]["100"] is True
-        assert ec["user"] == {}
+        assert ec["standard"] == {}
         assert ec["smart"] == {}
 
 
@@ -447,7 +447,7 @@ class TestBuildWorkQueueOwnerScope:
     def _enable_all(plugin):
         plugin.settings["enabled_platforms"] = {}
         plugin.settings["enabled_collections"] = {
-            "user": {"1": True, "2": True},
+            "standard": {"1": True, "2": True},
             "smart": {"5": True, "6": True},
             "virtual": {"100": True},
         }
@@ -1089,7 +1089,7 @@ class TestFetchCollectionUnit:
         }
 
         rom_count = LIST_PAGE_SIZE + 1
-        unit = WorkUnit(type="collection", id=7, name="Coll", slug="", rom_count=rom_count, collection_kind="user")
+        unit = WorkUnit(type="collection", id=7, name="Coll", slug="", rom_count=rom_count, collection_kind="standard")
         synced: set[int] = set()
         new_roms, all_collection_rom_ids, skipped = await plugin._sync_service._fetcher.fetch_collection_unit(
             unit, synced
@@ -1163,7 +1163,7 @@ def _user_collection_unit(cid="7", *, rom_count=2, updated_at: str | None = "202
         name="Faves",
         slug="",
         rom_count=rom_count,
-        collection_kind="user",
+        collection_kind="standard",
         collection_updated_at=updated_at,
     )
 
@@ -1178,7 +1178,7 @@ class TestTryCollectionIncrementalSkip:
         _seed_collection_stamp(
             plugin._uow,
             "7",
-            "user",
+            "standard",
             updated_at="2026-01-01T00:00:00",
             completed_at="2026-06-01T00:00:00",
             rom_count=2,
@@ -1197,7 +1197,7 @@ class TestTryCollectionIncrementalSkip:
         # The scoped probe ran with the stamp's completed_at as the reference.
         probe = [c for c in fake_romm_api.call_log if c[0] == "list_collection_roms_updated_after"]
         assert probe, "the scoped updated_after probe must have run"
-        assert probe[-1][1] == (7, "user", "2026-06-01T00:00:00")
+        assert probe[-1][1] == (7, "standard", "2026-06-01T00:00:00")
 
     @pytest.mark.asyncio
     async def test_no_skip_when_no_stamp(self, plugin, fake_romm_api):
@@ -1214,7 +1214,7 @@ class TestTryCollectionIncrementalSkip:
         _seed_collection_stamp(
             plugin._uow,
             "7",
-            "user",
+            "standard",
             updated_at="2026-01-01T00:00:00",
             completed_at="2026-06-01T00:00:00",
             rom_count=2,
@@ -1234,7 +1234,7 @@ class TestTryCollectionIncrementalSkip:
         _seed_collection_stamp(
             plugin._uow,
             "7",
-            "user",
+            "standard",
             updated_at="2026-01-01T00:00:00",
             completed_at="2026-06-01T00:00:00",
             rom_count=2,
@@ -1256,7 +1256,7 @@ class TestTryCollectionIncrementalSkip:
         _seed_collection_stamp(
             plugin._uow,
             "7",
-            "user",
+            "standard",
             updated_at="2026-01-01T00:00:00",
             completed_at="2026-06-01T00:00:00",
             rom_count=2,
@@ -1276,7 +1276,7 @@ class TestTryCollectionIncrementalSkip:
         _seed_collection_stamp(
             plugin._uow,
             "7",
-            "user",
+            "standard",
             updated_at="2026-01-01T00:00:00",
             completed_at="2026-06-01T00:00:00",
             rom_count=2,
@@ -1294,7 +1294,7 @@ class TestTryCollectionIncrementalSkip:
         _seed_collection_stamp(
             plugin._uow,
             "7",
-            "user",
+            "standard",
             updated_at="2026-01-01T00:00:00",
             completed_at="2026-06-01T00:00:00",
             rom_count=2,
@@ -1328,7 +1328,7 @@ class TestTryCollectionIncrementalSkip:
         _seed_collection_stamp(
             plugin._uow,
             "7",
-            "user",
+            "standard",
             updated_at="2026-01-01T00:00:00",
             completed_at="2026-06-01T00:00:00",
             rom_count=2,
@@ -1383,7 +1383,7 @@ class TestFetchCollectionUnitSkip:
         _seed_collection_stamp(
             uow,
             "7",
-            "user",
+            "standard",
             updated_at="2026-01-01T00:00:00",
             completed_at="2026-06-01T00:00:00",
             rom_count=2,
@@ -1421,7 +1421,7 @@ class TestFetchCollectionUnitSkip:
         _seed_collection_stamp(
             uow,
             "7",
-            "user",
+            "standard",
             updated_at="2026-01-01T00:00:00",
             completed_at="2026-06-01T00:00:00",
             rom_count=2,
@@ -1451,7 +1451,7 @@ class TestFetchCollectionUnitSkip:
         _seed_collection_stamp(
             plugin._uow,
             "7",
-            "user",
+            "standard",
             updated_at="2026-01-01T00:00:00",
             completed_at="2026-06-01T00:00:00",
             rom_count=1,
@@ -1569,7 +1569,9 @@ class TestFetchProgressNarration:
             i: {"id": i, "platform_id": 1, "name": f"G{i}", "collection_ids": [7]} for i in range(rom_count)
         }
 
-        unit = WorkUnit(type="collection", id=7, name="Favorites", slug="", rom_count=rom_count, collection_kind="user")
+        unit = WorkUnit(
+            type="collection", id=7, name="Favorites", slug="", rom_count=rom_count, collection_kind="standard"
+        )
         await plugin._sync_service._fetcher.fetch_collection_unit(unit, set(), progress_step=2, progress_total_steps=8)
 
         frames = _fetching_frames(decky)
@@ -1870,7 +1872,7 @@ class TestPlanEstimates:
         fake_romm_api.platforms = []
         fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 4}]
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "virtual": {}}
+        plugin.settings["enabled_collections"] = {"standard": {"7": True}, "smart": {}, "virtual": {}}
 
         units = await plugin._sync_service._fetcher.build_work_queue()
 
@@ -1893,7 +1895,7 @@ class TestPlanEstimates:
         fake_romm_api.platforms = []
         fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 3}]
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "virtual": {}}
+        plugin.settings["enabled_collections"] = {"standard": {"7": True}, "smart": {}, "virtual": {}}
         # Three members; two already hold a Steam shortcut.
         _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
         _seed_persisted_rom(uow, 11, app_id=1002, group_key="igdb:101:1")
@@ -1901,7 +1903,7 @@ class TestPlanEstimates:
         _seed_collection_stamp(
             uow,
             "7",
-            "user",
+            "standard",
             updated_at="2026-01-01T00:00:00",
             completed_at="2026-01-01T00:00:00",
             rom_count=3,
@@ -1922,12 +1924,12 @@ class TestPlanEstimates:
         fake_romm_api.platforms = []
         fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 2}]
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "virtual": {}}
+        plugin.settings["enabled_collections"] = {"standard": {"7": True}, "smart": {}, "virtual": {}}
         _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
         _seed_collection_stamp(
             uow,
             "7",
-            "user",
+            "standard",
             updated_at="2026-01-01T00:00:00",
             completed_at="2026-01-01T00:00:00",
             rom_count=2,
@@ -1941,7 +1943,7 @@ class TestPlanEstimates:
     @pytest.mark.asyncio
     async def test_virtual_collection_never_carries_a_bound_count(self, plugin, fake_romm_api):
         """Virtual collections are never stampable (CollectionSyncState.stamp
-        takes only user/smart), so they have no member set — the field stays absent."""
+        takes only standard/smart), so they have no member set — the field stays absent."""
         _wire_fake(plugin, fake_romm_api)
         uow = plugin._uow
         fake_romm_api.platforms = []
@@ -1949,7 +1951,7 @@ class TestPlanEstimates:
             "franchise": [{"id": "fr-1", "name": "Zelda", "slug": "zelda", "rom_count": 5}]
         }
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"user": {}, "smart": {}, "virtual": {"fr-1": True}}
+        plugin.settings["enabled_collections"] = {"standard": {}, "smart": {}, "virtual": {"fr-1": True}}
         _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1")
 
         units = await plugin._sync_service._fetcher.build_work_queue()
@@ -1965,7 +1967,7 @@ class TestPlanEstimates:
         fake_romm_api.platforms = []
         fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 3}]
         plugin.settings["enabled_platforms"] = {}
-        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "virtual": {}}
+        plugin.settings["enabled_collections"] = {"standard": {"7": True}, "smart": {}, "virtual": {}}
 
         def _boom():
             raise RuntimeError("db down")
@@ -1996,12 +1998,12 @@ class TestPlanEstimates:
         # A stamped collection with one bound member. Its member row sits on
         # another platform so it cannot perturb the N64 unit's own counts.
         fake_romm_api.collections = [{"id": 7, "name": "Faves", "slug": "faves", "rom_count": 1}]
-        plugin.settings["enabled_collections"] = {"user": {"7": True}, "smart": {}, "virtual": {}}
+        plugin.settings["enabled_collections"] = {"standard": {"7": True}, "smart": {}, "virtual": {}}
         _seed_persisted_rom(uow, 20, app_id=2001, group_key="igdb:200:1", platform_slug="snes")
         _seed_collection_stamp(
             uow,
             "7",
-            "user",
+            "standard",
             updated_at="2026-01-01T00:00:00",
             completed_at="2026-01-01T00:00:00",
             rom_count=1,

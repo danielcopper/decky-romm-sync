@@ -68,7 +68,7 @@ class TestGetSyncStats:
             uow.sync_runs.save(run)
         plugin.settings["enabled_platforms"] = {"1": True, "2": True}
         plugin.settings["enabled_collections"] = {
-            "user": {"3": True},
+            "standard": {"3": True},
             "smart": {"5": True},
             "virtual": {"abc": False},  # disabled — not counted
         }
@@ -658,7 +658,7 @@ class TestCommitUnitResults:
         )
         stamp = CollectionSyncState.stamp(
             collection_id="7",
-            collection_kind="user",
+            collection_kind="standard",
             updated_at="2026-01-01T00:00:00+00:00",
             completed_at="2026-01-01T00:05:00+00:00",
             rom_count=1,
@@ -670,7 +670,7 @@ class TestCommitUnitResults:
         assert uow.committed is True
         with uow:
             assert uow.roms.get(42) is not None  # chunk rom upserted
-            loaded = uow.collection_sync_state.get("7", "user")
+            loaded = uow.collection_sync_state.get("7", "standard")
         assert loaded is not None
         assert loaded.rom_count == 1
         assert loaded.member_rom_ids == (42,)
@@ -689,7 +689,7 @@ class TestCommitUnitResults:
         plugin._sync_service._reporter._commit_unit_results_io({"42": 100001}, [{"id": 42}])
 
         with uow:
-            assert uow.collection_sync_state.get("7", "user") is None
+            assert uow.collection_sync_state.get("7", "standard") is None
 
     def test_commit_persists_version_metadata_from_pending(self, plugin):
         """The sibling-group key + version dimensions ride the pending entry onto
@@ -1336,7 +1336,7 @@ class TestClearSyncCache:
             uow.collection_sync_state.save(
                 CollectionSyncState.stamp(
                     collection_id="7",
-                    collection_kind="user",
+                    collection_kind="standard",
                     updated_at="2025-01-01T00:00:00",
                     completed_at="2025-01-01T00:05:00",
                     rom_count=2,
@@ -1357,7 +1357,7 @@ class TestClearSyncCache:
         plugin._sync_service.clear_sync_cache()
 
         with uow:
-            assert uow.collection_sync_state.get("7", "user") is None
+            assert uow.collection_sync_state.get("7", "standard") is None
             assert uow.collection_sync_state.get("9", "smart") is None
 
 
@@ -1404,7 +1404,7 @@ class TestFinalizePerUnitRun:
         _seed_rom(uow, 2, app_id=None, platform_slug="snes", name="B (unbound)")
 
         await plugin._sync_service._reporter.finalize_per_unit_run(
-            pending_collection_memberships={("user", "7"): CollectionMembership(name="Faves", rom_ids=[1, 2])},
+            pending_collection_memberships={("standard", "7"): CollectionMembership(name="Faves", rom_ids=[1, 2])},
             pending_platform_rom_ids={1},
             platform_names={"n64": "Nintendo 64"},
         )
@@ -1428,7 +1428,7 @@ class TestFinalizePerUnitRun:
 
         await plugin._sync_service._reporter.finalize_per_unit_run(
             # the UNBOUND sibling is collected
-            pending_collection_memberships={("user", "7"): CollectionMembership(name="Faves", rom_ids=[2])},
+            pending_collection_memberships={("standard", "7"): CollectionMembership(name="Faves", rom_ids=[2])},
             pending_platform_rom_ids={1},
             platform_names={"n64": "Nintendo 64"},
         )
@@ -1450,7 +1450,7 @@ class TestFinalizePerUnitRun:
 
         await plugin._sync_service._reporter.finalize_per_unit_run(
             # BOTH siblings collected
-            pending_collection_memberships={("user", "7"): CollectionMembership(name="Faves", rom_ids=[1, 2])},
+            pending_collection_memberships={("standard", "7"): CollectionMembership(name="Faves", rom_ids=[1, 2])},
             pending_platform_rom_ids={1},
             platform_names={"n64": "Nintendo 64"},
         )
@@ -1476,7 +1476,7 @@ class TestFinalizePerUnitRun:
 
         await plugin._sync_service._reporter.finalize_per_unit_run(
             pending_collection_memberships={
-                ("user", "7"): CollectionMembership(name="X", rom_ids=[1]),
+                ("standard", "7"): CollectionMembership(name="X", rom_ids=[1]),
                 ("smart", "9"): CollectionMembership(name="X", rom_ids=[2]),
             },
             pending_platform_rom_ids={1, 2},
@@ -1499,7 +1499,7 @@ class TestFinalizePerUnitRun:
 
         await plugin._sync_service._reporter.finalize_per_unit_run(
             pending_collection_memberships={
-                ("user", "7"): CollectionMembership(name="X", rom_ids=[1, 2]),
+                ("standard", "7"): CollectionMembership(name="X", rom_ids=[1, 2]),
                 ("smart", "9"): CollectionMembership(name="X", rom_ids=[1]),
             },
             pending_platform_rom_ids={1, 2},
@@ -1527,7 +1527,7 @@ class TestFinalizePerUnitRun:
 
         await plugin._sync_service._reporter.finalize_per_unit_run(
             pending_collection_memberships={
-                ("user", "7"): CollectionMembership(name="Alpha", rom_ids=[1]),
+                ("standard", "7"): CollectionMembership(name="Alpha", rom_ids=[1]),
                 ("smart", "9"): CollectionMembership(name="Beta", rom_ids=[2]),
             },
             pending_platform_rom_ids={1, 2},

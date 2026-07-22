@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 def _stamp(
     collection_id: str,
     *,
-    kind: str = "user",
+    kind: str = "standard",
     updated_at: str = "2026-01-01T00:00:00+00:00",
     completed_at: str = "2026-01-01T00:05:00+00:00",
     rom_count: int = 3,
@@ -34,7 +34,7 @@ class TestRoundTrip:
         stamp = _stamp("7", updated_at="2026-03-01T12:00:00+00:00", rom_count=2, member_rom_ids=(100, 200))
         uow.collection_sync_state.save(stamp)
 
-        loaded = uow.collection_sync_state.get("7", "user")
+        loaded = uow.collection_sync_state.get("7", "standard")
         assert loaded is not None
         assert loaded == stamp
         assert loaded.updated_at == "2026-03-01T12:00:00+00:00"
@@ -43,22 +43,22 @@ class TestRoundTrip:
 
     def test_empty_member_set_round_trips(self, uow: SqliteUnitOfWork):
         uow.collection_sync_state.save(_stamp("7", rom_count=0, member_rom_ids=()))
-        loaded = uow.collection_sync_state.get("7", "user")
+        loaded = uow.collection_sync_state.get("7", "standard")
         assert loaded is not None
         assert loaded.member_rom_ids == ()
 
 
 class TestMiss:
     def test_get_absent_returns_none(self, uow: SqliteUnitOfWork):
-        assert uow.collection_sync_state.get("nope", "user") is None
+        assert uow.collection_sync_state.get("nope", "standard") is None
 
 
 class TestCompositeKey:
     def test_same_id_different_kind_coexist(self, uow: SqliteUnitOfWork):
-        uow.collection_sync_state.save(_stamp("5", kind="user", rom_count=3, member_rom_ids=(1, 2, 3)))
+        uow.collection_sync_state.save(_stamp("5", kind="standard", rom_count=3, member_rom_ids=(1, 2, 3)))
         uow.collection_sync_state.save(_stamp("5", kind="smart", rom_count=1, member_rom_ids=(9,)))
 
-        user = uow.collection_sync_state.get("5", "user")
+        user = uow.collection_sync_state.get("5", "standard")
         smart = uow.collection_sync_state.get("5", "smart")
         assert user is not None
         assert smart is not None
@@ -73,7 +73,7 @@ class TestUpsert:
             _stamp("7", updated_at="2026-02-01T00:00:00+00:00", rom_count=4, member_rom_ids=(10, 11, 12, 13))
         )
 
-        loaded = uow.collection_sync_state.get("7", "user")
+        loaded = uow.collection_sync_state.get("7", "standard")
         assert loaded is not None
         assert loaded.updated_at == "2026-02-01T00:00:00+00:00"
         assert loaded.rom_count == 4
@@ -82,26 +82,26 @@ class TestUpsert:
 
 class TestDelete:
     def test_delete_removes_only_the_named_key(self, uow: SqliteUnitOfWork):
-        uow.collection_sync_state.save(_stamp("7", kind="user"))
+        uow.collection_sync_state.save(_stamp("7", kind="standard"))
         uow.collection_sync_state.save(_stamp("7", kind="smart"))
 
-        uow.collection_sync_state.delete("7", "user")
+        uow.collection_sync_state.delete("7", "standard")
 
-        assert uow.collection_sync_state.get("7", "user") is None
+        assert uow.collection_sync_state.get("7", "standard") is None
         assert uow.collection_sync_state.get("7", "smart") is not None
 
     def test_delete_absent_key_is_noop(self, uow: SqliteUnitOfWork):
-        uow.collection_sync_state.delete("nope", "user")  # no row → no error
-        assert uow.collection_sync_state.get("nope", "user") is None
+        uow.collection_sync_state.delete("nope", "standard")  # no row → no error
+        assert uow.collection_sync_state.get("nope", "standard") is None
 
 
 class TestIterAll:
     def test_iter_all_yields_every_stamp(self, uow: SqliteUnitOfWork):
-        uow.collection_sync_state.save(_stamp("7", kind="user", member_rom_ids=(1, 2)))
+        uow.collection_sync_state.save(_stamp("7", kind="standard", member_rom_ids=(1, 2)))
         uow.collection_sync_state.save(_stamp("9", kind="smart", member_rom_ids=(3,)))
 
         stamps = sorted(uow.collection_sync_state.iter_all(), key=lambda s: s.collection_id)
-        assert [(s.collection_id, s.collection_kind) for s in stamps] == [("7", "user"), ("9", "smart")]
+        assert [(s.collection_id, s.collection_kind) for s in stamps] == [("7", "standard"), ("9", "smart")]
         assert stamps[0].member_rom_ids == (1, 2)
 
     def test_iter_all_empty_when_no_stamps(self, uow: SqliteUnitOfWork):
@@ -110,14 +110,14 @@ class TestIterAll:
 
 class TestClear:
     def test_clear_removes_every_stamp(self, uow: SqliteUnitOfWork):
-        uow.collection_sync_state.save(_stamp("7", kind="user"))
+        uow.collection_sync_state.save(_stamp("7", kind="standard"))
         uow.collection_sync_state.save(_stamp("9", kind="smart"))
 
         uow.collection_sync_state.clear()
 
-        assert uow.collection_sync_state.get("7", "user") is None
+        assert uow.collection_sync_state.get("7", "standard") is None
         assert uow.collection_sync_state.get("9", "smart") is None
 
     def test_clear_is_idempotent_when_empty(self, uow: SqliteUnitOfWork):
         uow.collection_sync_state.clear()
-        assert uow.collection_sync_state.get("7", "user") is None
+        assert uow.collection_sync_state.get("7", "standard") is None

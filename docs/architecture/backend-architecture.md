@@ -501,7 +501,7 @@ sibling row holding `shortcut_app_id` is the group's **active version**.
   collection.
 
 **Same-named collections union into one Steam collection (#1503).** RomM enforces name uniqueness only per-table and
-per-`(name, user_id)`, so two enabled collections can share a display name — a user collection and a smart/virtual
+per-`(name, user_id)`, so two enabled collections can share a display name — a standard collection and a smart/virtual
 collection, or (multi-user) another account's public collection the list endpoints return. Steam's collection namespace
 is **by-name** (`RomM: [<name>] (host)`), so both must resolve to the one Steam collection. The finalize accumulator
 (`_state.py` `pending_collection_memberships`) is therefore keyed by a collision-free `(collection_kind, collection_id)`
@@ -511,11 +511,13 @@ reporter (`_resolve_collection_memberships`) then groups the accumulator's entri
 appId sets (order-preserving, de-duplicated across collections; each collection's own resolution already dedups within),
 emitting the unchanged by-name `romm_collection_app_ids: {name → [appId]}` contract — a single-collection name unions a
 set of one and is byte-for-byte the pre-#1503 output. The union runs **after** the owner-scope filter (below): once a
-foreign collection is dropped from the work queue it never reaches the accumulator, so "Own" narrows what is unioned
+foreign collection is dropped from the work queue it never reaches the accumulator, so "Mine" narrows what is unioned
 rather than changing how the union works.
 
 **Collection kinds — one `virtual` kind covers RomM's browsable virtual types (#1538).** `get_collections` and
-`build_work_queue` group collections into three internal kinds: `user`, `smart`, and `virtual`. The `virtual` kind is
+`build_work_queue` group collections into three internal kinds: `standard`, `smart`, and `virtual`. RomM's own UI calls
+the ownership-carrying first kind **Standard** (the plugin's earlier name for it was `user`, a misnomer renamed
+internally by #1539 — display "My" → "Standard"; see the enabled-bucket migration note below). The `virtual` kind is
 RomM's ownerless `VirtualCollection` (base64 id, no `user_id`, no stable `updated_at` — never stamped), and it carries a
 `virtual_type` sub-field on each collection dict/setting so the UI can label the row. RomM's `VirtualCollection` has
 five `type` values, but the plugin syncs only the **two RomM itself surfaces as browsable collections**: IGDB
@@ -529,7 +531,11 @@ branch**, not fanned out per type. On disk the enabled-collections bucket was re
 lossless `settings.json` migration **v10 → v11** (`domain/state_migrations._migrate_v10_to_v11`): it renames the bucket
 key while preserving every enabled id, so a previously-enabled franchise collection stays enabled and no re-login is
 required. (The historical v2 → v3 split still produces the `franchise` bucket; the v10 → v11 step renames it afterwards,
-so that frozen step is untouched.)
+so that frozen step is untouched.) The ownership-carrying bucket was likewise renamed `user → standard` by the lossless
+`settings.json` migration **v12 → v13** (`domain/state_migrations._migrate_v12_to_v13`, same merge-into-existing
+semantics), and old `collection_sync_state` completion stamps keyed `collection_kind = 'user'` are rewritten to
+`'standard'` by SQLite migration **022** so an unchanged standard collection still takes the incremental skip across the
+upgrade (#1539).
 
 **Batch collection enable — `save_collections_sync` for a filtered subset (#1539).** The Collections tab adds a name
 search and (on Virtual) a per-type filter, and its **Enable All / Disable All** act on the current filter. When the view
@@ -540,21 +546,21 @@ id list is a success no-op. The **unfiltered** whole-kind case still uses `set_a
 the kind from the server) so a large id list never crosses the WebSocket bridge; the frontend gates that whole-kind call
 behind a confirm. Both live on `LibraryFetcher`.
 
-**Collection owner-scope filter — "Own" is a sync scope, not just a display filter (#1532).** RomM's collection list
+**Collection owner-scope filter — "Mine" is a sync scope, not just a display filter (#1532).** RomM's collection list
 endpoints return the signed-in user's own collections plus every other user's _public_ collection. The QAM
 `Show
-collections` control writes `collection_owner_scope` (`"own"` / `"all"`, default `"all"`); `get_collections` also
-tags each row with `is_own` so the frontend can hide foreign ones under "Own". Ownership is a pure predicate
-(`domain/collection_owner.is_own_collection`): a collection is own when it is a **virtual** collection (RomM's
-`VirtualCollection` model carries no `user_id` column — these are global/derived and belong to no one, so they always
-survive), when the plugin's own identity is unknown (the **degrade-to-"All" fallback**), or when the collection's
-`user_id` equals the stored `romm_user_id`; only user and smart collections carry a `user_id` to compare.
-`build_work_queue` applies the same predicate: under `"own"` **with a known identity** it drops foreign user/smart units
-from the queue — so a foreign collection enabled earlier is never synced — while virtual units and every unit under
-`"all"` pass through unchanged. The scope filters **over** the per-kind enable state without mutating it, so switching
-back to `"all"` restores the prior enables. Because an **unknown identity never filters**, the feature is non-breaking:
-it silently no-ops until `romm_user_id` is stamped (see the ConnectionService lazy-identity note), then activates — no
-re-login required.
+collections` control writes `collection_owner_scope` (`"own"` / `"all"`, default `"all"` — the value stays `own`;
+only the QAM label changed to "Mine" in #1539); `get_collections` also tags each row with `is_own` so the frontend can
+hide foreign ones under "Mine". Ownership is a pure predicate (`domain/collection_owner.is_own_collection`): a
+collection is own when it is a **virtual** collection (RomM's `VirtualCollection` model carries no `user_id` column —
+these are global/derived and belong to no one, so they always survive), when the plugin's own identity is unknown (the
+**degrade-to-"All" fallback**), or when the collection's `user_id` equals the stored `romm_user_id`; only standard and
+smart collections carry a `user_id` to compare. `build_work_queue` applies the same predicate: under `"own"` **with a
+known identity** it drops foreign standard/smart units from the queue — so a foreign collection enabled earlier is never
+synced — while virtual units and every unit under `"all"` pass through unchanged. The scope filters **over** the
+per-kind enable state without mutating it, so switching back to `"all"` restores the prior enables. Because an **unknown
+identity never filters**, the feature is non-breaking: it silently no-ops until `romm_user_id` is stamped (see the
+ConnectionService lazy-identity note), then activates — no re-login required.
 
 **Incremental skip — the per-platform completion stamp is the sole authority.** A platform unit skips only when its
 `PlatformSyncState` stamp exists
@@ -649,8 +655,8 @@ weights + planned totals, via `sync_plan`) and the applying frames.
   of the completion stamp's stored `member_rom_ids` (the same member set the skip replays), in one short read UoW
   covering every collection unit — no ROM fetch. The two sides are deliberately **asymmetric** on the empty case: a
   platform reports `0`, an unstamped or virtual collection is **omitted**. A collection's membership exists only in its
-  stamp, and virtual collections are never stampable (`CollectionSyncState.stamp` accepts only `user`/`smart`), so `0`
-  there would claim knowledge that does not exist. Absent and `0` price identically today; the distinction keeps the
+  stamp, and virtual collections are never stampable (`CollectionSyncState.stamp` accepts only `standard`/`smart`), so
+  `0` there would claim knowledge that does not exist. Absent and `0` price identically today; the distinction keeps the
   field honest for later consumers, so do not collapse it into consistency. A collection's stored member set may be
   **stale** if membership changed since the stamp — accepted and bounded, since this is estimate-only and a freshness
   probe would mean network I/O at plan time. A fourth rider, `new_shortcut_count` (#1517), is the create-side complement
@@ -1043,11 +1049,11 @@ reuse the id from the `/api/users/me` validation probe they already run (no seco
 **in memory before** the token-persist save, so it rides the same single atomic `save_settings()` — the sign-in write
 shape is unchanged. It is part of the snapshot/restore auth-state set, so a failed sign-in restores the previous id, and
 it is cleared in each path's in-memory auth clear so a probe failure or a malformed payload leaves it `None` rather than
-stale — degrading the "Own" filter to "All" until the next backfill. Existing installs (a valid token minted before this
-setting existed) carry no id; `test_connection` **lazily backfills** it — when a token is present and the id is missing,
-the successful connection check probes `/api/users/me` and persists the id (its own save), so the filter activates
-without a re-login. A known id needs no network on later checks. Every identity read is best-effort: a failure never
-fails the sign-in or the connection check.
+stale — degrading the "Mine" filter to "All" until the next backfill. Existing installs (a valid token minted before
+this setting existed) carry no id; `test_connection` **lazily backfills** it — when a token is present and the id is
+missing, the successful connection check probes `/api/users/me` and persists the id (its own save), so the filter
+activates without a re-login. A known id needs no network on later checks. Every identity read is best-effort: a failure
+never fails the sign-in or the connection check.
 
 The no-sign-in URL change path (`SettingsService.save_server_url`) deliberately does not touch the token, so pointing
 the URL at a different origin leaves the stored token's origin mismatched and the auth-header guard makes subsequent

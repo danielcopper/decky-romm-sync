@@ -1695,7 +1695,7 @@ class SyncOrchestrator:
         """Build the completion stamp for a user/smart collection's FINAL chunk, else ``None``.
 
         The collection sibling of :meth:`_build_final_platform_stamp` (#742). On
-        the final chunk of a user/smart collection unit whose listing carried an
+        the final chunk of a standard/smart collection unit whose listing carried an
         ``updated_at``, the stamp rides that chunk's commit UoW so "collection
         fully synced" ⟺ "stamp exists" is atomic on a crash. ``member_rom_ids`` is
         the collection's FULL membership (every member id, not just the applied
@@ -1706,7 +1706,7 @@ class SyncOrchestrator:
         """
         if (
             unit.type == "collection"
-            and unit.collection_kind in ("user", "smart")
+            and unit.collection_kind in ("standard", "smart")
             and unit.collection_updated_at
             and member_rom_ids is not None
             and chunk_index == chunk_count - 1

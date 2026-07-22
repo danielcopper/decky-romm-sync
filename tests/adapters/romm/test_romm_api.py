@@ -547,7 +547,7 @@ class TestListCollectionRomsUpdatedAfter:
     def test_user_collection_uses_collection_id_param(self):
         api, client = _make_api()
         client.request.return_value = {"items": [], "total": 0}
-        api.list_collection_roms_updated_after(7, "user", "2024-01-15T10:30:00+00:00")
+        api.list_collection_roms_updated_after(7, "standard", "2024-01-15T10:30:00+00:00")
         url = client.request.call_args[0][0]
         assert "collection_id=7" in url
         assert "smart_collection_id" not in url
@@ -571,7 +571,7 @@ class TestListCollectionRomsUpdatedAfter:
     def test_includes_pagination(self):
         api, client = _make_api()
         client.request.return_value = {"items": [], "total": 0}
-        api.list_collection_roms_updated_after(7, "user", "2024-01-01", limit=10, offset=5)
+        api.list_collection_roms_updated_after(7, "standard", "2024-01-01", limit=10, offset=5)
         url = client.request.call_args[0][0]
         assert "limit=10" in url
         assert "offset=5" in url

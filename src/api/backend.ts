@@ -169,7 +169,7 @@ export const saveCollectionsSync = callable<
   { success: boolean; reason?: string; message?: string }
 >("save_collections_sync");
 export const setAllCollectionsSync = callable<
-  [boolean, "user" | "smart" | "virtual" | null],
+  [boolean, "standard" | "smart" | "virtual" | null],
   { success: boolean; message?: string }
 >("set_all_collections_sync");
 export const saveCollectionPlatformGroups = callable<[boolean], { success: boolean }>(

@@ -52,9 +52,9 @@ class TestToEventPayload:
         assert "new_shortcut_count" not in payload
 
     def test_collection_payload_carries_kind_but_no_estimate_fields(self):
-        unit = WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=4, collection_kind="user")
+        unit = WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=4, collection_kind="standard")
         payload = unit.to_event_payload()
-        assert payload["collection_kind"] == "user"
+        assert payload["collection_kind"] == "standard"
         assert "predicted_skip" not in payload
         assert "collapsed_count" not in payload
         assert "bound_count" not in payload

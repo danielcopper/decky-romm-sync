@@ -1,0 +1,25 @@
+-- =============================================================================
+-- 022_rename_collection_kind_user_to_standard.sql — rename the stored collection
+-- kind 'user' -> 'standard' on collection_sync_state completion stamps
+-- Issue #1539 (collection-kind rename: internal 'user' -> 'standard')
+-- =============================================================================
+--
+-- The plugin's internal name for RomM's ownership-carrying first collection kind
+-- was 'user' (a misnomer — RomM's own UI calls it "Standard"). The rename makes
+-- reads and writes key collection completion stamps on collection_kind='standard'
+-- (domain/collection_sync_state.py). Existing collection_sync_state rows written
+-- before the rename carry collection_kind='user'; without this data migration they
+-- strand — a stranded stamp is simply never matched, so the affected standard
+-- collections full-fetch once on the next sync instead of taking the incremental
+-- skip. This rewrites them in place so the skip keeps firing across the upgrade.
+--
+-- A plain UPDATE is safe: the composite primary key is (collection_id,
+-- collection_kind), and no 'standard'-kind row can exist before this migration
+-- (the app only ever wrote 'user' / 'smart'), so the rewrite can never collide
+-- with an existing ('<id>', 'standard') row. 'smart' / (legacy) 'virtual' rows
+-- are untouched. On a fresh install the table is empty and this is a no-op.
+--
+-- Transaction-safe DML only — the runner (adapters/sqlite_migrations.py) wraps
+-- BEGIN/COMMIT and stamps PRAGMA user_version = 22.
+-- -----------------------------------------------------------------------------
+UPDATE collection_sync_state SET collection_kind = 'standard' WHERE collection_kind = 'user';
