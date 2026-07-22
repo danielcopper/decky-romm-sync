@@ -1,5 +1,7 @@
+import atexit
 import logging
 import os
+import shutil
 import sys
 import tempfile
 from typing import Any
@@ -27,12 +29,34 @@ sys.path.insert(0, os.path.join(_project_root, "py_modules"))
 sys.path.insert(0, _tests_root)
 
 
+# Import-time temp dirs, so the mock module is complete before anything imports
+# main. The settings/runtime pair is replaced per test by `_reset_decky_mock_paths`;
+# the log dir lives for the whole process.
+_process_settings_dir = tempfile.mkdtemp()
+_process_runtime_dir = tempfile.mkdtemp()
+_process_log_dir = tempfile.mkdtemp()
+
+
+@atexit.register
+def _cleanup_process_temp_dirs() -> None:
+    """Drop the import-time temp dirs — ``mkdtemp`` never cleans up after itself.
+
+    Deliberately ``atexit`` rather than a session-scoped fixture: a fixture
+    only tears down when at least one test is collected, and this module is
+    imported twice per run (pytest's own copy plus the plain ``conftest``
+    that `tests/` modules import directly). Both copies register here, so
+    both sets of directories are released.
+    """
+    for path in (_process_settings_dir, _process_runtime_dir, _process_log_dir):
+        shutil.rmtree(path, ignore_errors=True)
+
+
 # Create mock decky module before any imports of main
 mock_decky = MagicMock()
 mock_decky.DECKY_PLUGIN_DIR = _project_root
-mock_decky.DECKY_PLUGIN_SETTINGS_DIR = tempfile.mkdtemp()
-mock_decky.DECKY_PLUGIN_RUNTIME_DIR = tempfile.mkdtemp()
-mock_decky.DECKY_PLUGIN_LOG_DIR = tempfile.mkdtemp()
+mock_decky.DECKY_PLUGIN_SETTINGS_DIR = _process_settings_dir
+mock_decky.DECKY_PLUGIN_RUNTIME_DIR = _process_runtime_dir
+mock_decky.DECKY_PLUGIN_LOG_DIR = _process_log_dir
 mock_decky.DECKY_USER_HOME = os.path.expanduser("~")
 mock_decky.logger = logging.getLogger("test_romm")
 mock_decky.emit = AsyncMock()
@@ -141,10 +165,21 @@ def _reset_decky_mock_paths():
 
     Fresh ``DECKY_PLUGIN_SETTINGS_DIR`` and ``DECKY_PLUGIN_RUNTIME_DIR``
     per test prevents cross-test pollution from persistence-touching
-    tests.
+    tests. Both are removed again on teardown — ``mkdtemp`` leaves the
+    directory behind by design, and two leaked dirs per test across a
+    suite this size exhaust the tmpfs inode table in days, not months.
+
+    They deliberately do not live under ``tmp_path``: adapter tests assert
+    on the exact contents of their ``tmp_path`` (``listdir(...) == []``),
+    and ``tests/contract`` already owns ``tmp_path/settings`` and
+    ``tmp_path/runtime``.
     """
     mock_decky.DECKY_USER_HOME = os.path.expanduser("~")
     mock_decky.DECKY_PLUGIN_DIR = _project_root
-    mock_decky.DECKY_PLUGIN_SETTINGS_DIR = tempfile.mkdtemp()
-    mock_decky.DECKY_PLUGIN_RUNTIME_DIR = tempfile.mkdtemp()
+    settings_dir = tempfile.mkdtemp()
+    runtime_dir = tempfile.mkdtemp()
+    mock_decky.DECKY_PLUGIN_SETTINGS_DIR = settings_dir
+    mock_decky.DECKY_PLUGIN_RUNTIME_DIR = runtime_dir
     yield
+    shutil.rmtree(settings_dir, ignore_errors=True)
+    shutil.rmtree(runtime_dir, ignore_errors=True)
