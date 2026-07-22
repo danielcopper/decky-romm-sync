@@ -74,8 +74,10 @@ After installation, you need to connect the plugin to your RomM server:
 5. The **RomM Account** row shows **Signed in** on success. Once signed in, tap **Test Connection** to re-verify at any
    time
 
-On a controller, any text field in the plugin can be confirmed with the on-screen keyboard's **Enter** key (or the
-**R2** shortcut) instead of navigating to the button — this applies to sign-in, save-slot names, and the artwork search.
+On a controller you can confirm a text field with the on-screen keyboard's **Enter** key (or the **R2** shortcut)
+instead of navigating to the button — for example save-slot names and the artwork search. In the sign-in dialog, Enter
+moves from the username to the password field and confirms only once every required field is filled; an incomplete form
+can't be submitted, and **Cancel** leaves your existing sign-in untouched.
 
 The plugin mints a RomM Client API Token from the credentials you enter and discards the password — it is never stored.
 The same applies if the plugin auto-migrates an older install that still had a saved password: the password is discarded
