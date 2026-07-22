@@ -50,8 +50,8 @@ _NO_SERVER_URL_MESSAGE = "No server URL configured"
 _INVALID_URL_MESSAGE = "Enter a valid http(s):// server URL"
 
 _FORBIDDEN_TOKEN_MESSAGE = (
-    "Your RomM account cannot create API tokens — ask your admin to grant "
-    "token permissions or use an account with a higher role."
+    "RomM rejected the sign-in. Check your username and password — if they are correct, your account may not be "
+    "allowed to create API tokens (ask your admin or use an account with a higher role)."
 )
 
 # Pasted-token validation (``establish_user_token``): a 401 means the token
@@ -279,8 +279,10 @@ class ConnectionService:
             minted = await self._loop.run_in_executor(None, self._mint, username, password)
         except RommForbiddenError:
             # 403 on token mint: same AUTH_FAILED slug as a 401, but a distinct
-            # message — the account lacks token-creation permission (or a
-            # Cloudflare bot-fight 403 at the edge), not wrong credentials.
+            # message. RomM answers 403 indistinguishably for wrong credentials
+            # AND for an account that lacks token-creation permission (and a
+            # Cloudflare bot-fight 403 lands here too), so the message names both
+            # causes rather than asserting only the permission one.
             self._restore_auth_state(snapshot)
             return {"success": False, "reason": ErrorCode.AUTH_FAILED.value, "message": _FORBIDDEN_TOKEN_MESSAGE}
         except Exception as e:

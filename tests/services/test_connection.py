@@ -681,7 +681,10 @@ class TestEstablishTokenBadPath:
         result = event_loop.run_until_complete(service.establish_token("http://romm.local", "u", "p"))
         assert result["success"] is False
         assert result["reason"] == "auth_failed"
-        assert "cannot create API tokens" in result["message"]
+        # The 403 is indistinguishable between wrong credentials and a missing
+        # token-creation permission, so the message names both causes.
+        assert "username and password" in result["message"]
+        assert "create API tokens" in result["message"]
 
     def test_auth_error_mint_returns_auth_error(self, event_loop, romm_api, logger):
         romm_api.mint_client_token.side_effect = RommAuthError("401")

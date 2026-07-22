@@ -238,11 +238,16 @@ export const ConnectModal: FC<ConnectModalProps> = ({ closeModal, onConnect, onC
       focusBoxAtEnd(index - 1);
       return;
     }
-    // Enter (the on-screen keyboard's "Eingabe" key) confirms once every box is
-    // filled — an incomplete code is a no-op. submit() owns closing on success,
-    // so this path must not close the modal itself.
-    if (e.key === "Enter" && code.every((c) => c !== "")) {
-      void submit();
+    if (e.key === "Enter") {
+      // Consume the event so Steam's ModalRoot cannot fire its own default
+      // confirm/close — regardless of whether the code is complete enough to
+      // submit (an incomplete field must be an inert no-op, not a close).
+      e.preventDefault();
+      e.stopPropagation();
+      // Enter (the on-screen keyboard's "Eingabe" key) confirms once every box
+      // is filled — an incomplete code is a no-op. submit() owns closing on
+      // success, so this path must not close the modal itself.
+      if (code.every((c) => c !== "")) void submit();
     }
   };
 
@@ -251,13 +256,24 @@ export const ConnectModal: FC<ConnectModalProps> = ({ closeModal, onConnect, onC
   // action. If the password input can't be found, it's a no-op (never a submit).
   const handleUsernameKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== "Enter") return;
+    // Consume the event so Steam's ModalRoot cannot fire its own default
+    // confirm/close before focus advances to the password field.
+    e.preventDefault();
+    e.stopPropagation();
     credentialsRowRef.current?.querySelectorAll("input")[1]?.focus();
   };
 
   // Enter on a completing field (password / token) submits, but only when the
   // mode's fields are complete — otherwise it's a no-op.
   const handleCompletingKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && canSubmit) void submit();
+    if (e.key !== "Enter") return;
+    // Consume the event so Steam's ModalRoot cannot fire its own default
+    // confirm/close on an incomplete field — regardless of whether we submit.
+    // (On the Deck, R2/OSK-Enter on the empty token field otherwise closed the
+    // modal even though this handler correctly no-ops when canSubmit is false.)
+    e.preventDefault();
+    e.stopPropagation();
+    if (canSubmit) void submit();
   };
 
   const handleModeChange = (option: { data: string }) => {
@@ -301,14 +317,23 @@ export const ConnectModal: FC<ConnectModalProps> = ({ closeModal, onConnect, onC
               scopes listed in the plugin docs so downloads, saves, and device sync work. The plugin never deletes a
               pasted token; you manage it in RomM.
             </div>
-            <TextField
-              focusOnMount={true}
-              label="API Token"
-              value={token}
-              bIsPassword
-              onChange={handleTokenChange}
-              onKeyDown={handleCompletingKeyDown}
-            />
+            {/* The token field is the only input in this mode and, unwrapped, is a
+                direct child of the modal body. On the Deck, R2/OSK-Enter on the
+                empty field closes the ModalRoot even though handleCompletingKeyDown
+                no-ops (canSubmit false). The pairing boxes' <Focusable> wrapper is
+                the one structure proven not to close on an incomplete field, so the
+                token field is wrapped the same way. flow-children is irrelevant for
+                a single field, so it is omitted. */}
+            <Focusable>
+              <TextField
+                focusOnMount={true}
+                label="API Token"
+                value={token}
+                bIsPassword
+                onChange={handleTokenChange}
+                onKeyDown={handleCompletingKeyDown}
+              />
+            </Focusable>
           </>
         )}
         {mode === "pairing" && (

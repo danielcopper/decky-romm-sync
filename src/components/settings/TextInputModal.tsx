@@ -29,6 +29,9 @@ export const TextInputModal: FC<TextInputModalProps> = ({
   onSubmit,
 }) => {
   const [value, setValue] = useState(initial);
+  // Every field this modal edits (SteamGridDB API key, RomM URL, Default Save
+  // Slot) must be non-empty, so a whitespace-only value never counts as a submit.
+  const canSubmit = value.trim() !== "";
   const handleOK = () => {
     if (field) {
       pendingEdits[field] = value;
@@ -39,6 +42,7 @@ export const TextInputModal: FC<TextInputModalProps> = ({
     <ConfirmModal
       {...(closeModal !== undefined ? { closeModal } : {})}
       onOK={handleOK}
+      bOKDisabled={!canSubmit}
       strTitle={label}
       bDisableBackgroundDismiss={true}
     >
@@ -51,8 +55,11 @@ export const TextInputModal: FC<TextInputModalProps> = ({
         // Enter (the on-screen keyboard's "Eingabe" key) confirms, same as the OK
         // button. ConfirmModal auto-closes on its OK button but not on this manual
         // path, so close here too — handleOK is shared so the two never drift.
+        // Gated on canSubmit so an empty/whitespace field is a no-op on Enter,
+        // matching the disabled OK button (on the Deck, R2/Enter would otherwise
+        // confirm an empty value and close the modal).
         onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
-          if (e.key === "Enter") {
+          if (e.key === "Enter" && canSubmit) {
             handleOK();
             closeModal?.();
           }

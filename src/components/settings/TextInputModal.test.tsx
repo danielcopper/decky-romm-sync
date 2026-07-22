@@ -10,6 +10,7 @@ type AnyProps = Record<string, unknown> & { children?: unknown };
 interface CapturedConfirm {
   onOK?: (() => void) | undefined;
   bDisableBackgroundDismiss?: boolean | undefined;
+  bOKDisabled?: boolean | undefined;
   closeModal?: unknown;
   strTitle?: string | undefined;
 }
@@ -19,6 +20,7 @@ vi.mock("@decky/ui", () => ({
   ConfirmModal: (p: AnyProps & CapturedConfirm) => {
     captured.onOK = p.onOK;
     captured.bDisableBackgroundDismiss = p.bDisableBackgroundDismiss;
+    captured.bOKDisabled = p.bOKDisabled;
     captured.closeModal = p.closeModal;
     captured.strTitle = p.strTitle;
     return createElement("div", { "data-testid": "confirm-modal" }, p.children as never);
@@ -95,6 +97,49 @@ describe("TextInputModal", () => {
     expect(onSubmit).toHaveBeenCalledWith("edited");
     // ConfirmModal's OK auto-closes; the manual Enter path must close itself.
     expect(closeModal).toHaveBeenCalledTimes(1);
+  });
+
+  describe("non-empty requirement", () => {
+    it("disables OK when the value is empty", () => {
+      render(<TextInputModal label="x" value="" onSubmit={vi.fn()} />);
+      expect(captured.bOKDisabled).toBe(true);
+    });
+
+    it("disables OK when the value is whitespace-only", () => {
+      render(<TextInputModal label="x" value="" onSubmit={vi.fn()} />);
+      const input = document.querySelector("input") as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "   " } });
+      expect(captured.bOKDisabled).toBe(true);
+    });
+
+    it("enables OK once the value is non-empty", () => {
+      render(<TextInputModal label="x" value="" onSubmit={vi.fn()} />);
+      expect(captured.bOKDisabled).toBe(true);
+      const input = document.querySelector("input") as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "x" } });
+      expect(captured.bOKDisabled).toBe(false);
+    });
+
+    it("ignores Enter on an empty field — no submit, no close", () => {
+      const onSubmit = vi.fn();
+      const closeModal = vi.fn();
+      render(<TextInputModal label="x" value="" closeModal={closeModal} onSubmit={onSubmit} />);
+      const input = document.querySelector("input") as HTMLInputElement;
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(closeModal).not.toHaveBeenCalled();
+    });
+
+    it("ignores Enter on a whitespace-only field — no submit, no close", () => {
+      const onSubmit = vi.fn();
+      const closeModal = vi.fn();
+      render(<TextInputModal label="x" value="" closeModal={closeModal} onSubmit={onSubmit} />);
+      const input = document.querySelector("input") as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "   " } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(closeModal).not.toHaveBeenCalled();
+    });
   });
 
   it("does NOT trim — submits whitespace as-is (parent is responsible)", () => {

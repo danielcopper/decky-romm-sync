@@ -331,14 +331,27 @@ describe("ConnectModal", () => {
       expect(closeModal).toHaveBeenCalledTimes(1);
     });
 
-    it("ignores Enter in the token field while it is empty", () => {
+    it("ignores Enter on an empty token field and consumes the event so the modal cannot close", () => {
       const onConnectToken = ok();
+      const closeModal = vi.fn();
       const { getByTestId } = render(
-        <ConnectModal onConnect={ok()} onConnectToken={onConnectToken} onConnectPairing={ok()} />,
+        <ConnectModal
+          closeModal={closeModal}
+          onConnect={ok()}
+          onConnectToken={onConnectToken}
+          onConnectPairing={ok()}
+        />,
       );
       fireEvent.click(getByTestId("mode-token"));
-      fireEvent.keyDown(getByTestId("field-API Token"), { key: "Enter" });
+      // fireEvent returns false when a handler called preventDefault. The handler
+      // must consume the Enter so Steam's ModalRoot cannot fire its own default
+      // confirm/close on the empty field — the Deck regression. The real close
+      // can't be reproduced in happy-dom, so a consumed event is the observable
+      // proxy that the fix is in place, alongside the no-submit/no-close effects.
+      const notPrevented = fireEvent.keyDown(getByTestId("field-API Token"), { key: "Enter" });
+      expect(notPrevented).toBe(false);
       expect(onConnectToken).not.toHaveBeenCalled();
+      expect(closeModal).not.toHaveBeenCalled();
     });
 
     it("switches back to credentials mode and calls onConnect again", async () => {
