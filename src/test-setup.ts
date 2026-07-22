@@ -147,11 +147,12 @@ vi.mock("@decky/ui", () => {
     },
     PanelSection: passthrough("section"),
     PanelSectionRow: passthrough("div"),
-    TextField: (p: AnyProps & { value?: string; onChange?: (e: unknown) => void }) =>
+    TextField: (p: AnyProps & { value?: string; onChange?: (e: unknown) => void; onKeyDown?: (e: unknown) => void }) =>
       createElement("input", {
         "data-testid": "text-field",
         value: p.value ?? "",
         onChange: (e: unknown) => p.onChange?.(e),
+        onKeyDown: (e: unknown) => p.onKeyDown?.(e),
       }),
     ToggleField: (p: AnyProps & { checked?: boolean; onChange?: (v: boolean) => void; label?: unknown }) =>
       createElement(

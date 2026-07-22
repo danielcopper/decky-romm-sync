@@ -50,6 +50,22 @@ describe("CopyToSlotModal", () => {
     expect(closeModal).toHaveBeenCalled();
   });
 
+  it("submits the new-slot name on Enter (the on-screen keyboard's Eingabe key)", () => {
+    const { getByTestId, onSubmit, closeModal } = renderModal();
+    const field = getByTestId("text-field");
+    fireEvent.change(field, { target: { value: "  speedrun  " } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(onSubmit).toHaveBeenCalledWith("speedrun");
+    expect(closeModal).toHaveBeenCalled();
+  });
+
+  it("ignores Enter while the new-slot field is empty (no onSubmit)", () => {
+    const { getByTestId, onSubmit, closeModal } = renderModal();
+    fireEvent.keyDown(getByTestId("text-field"), { key: "Enter" });
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(closeModal).not.toHaveBeenCalled();
+  });
+
   it("disables Create while the new-slot field is empty or whitespace", () => {
     const { getByText, getByTestId } = renderModal();
     const createBtn = getByText("Create & copy here").closest("button");

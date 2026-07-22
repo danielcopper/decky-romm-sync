@@ -7,7 +7,7 @@
  * belong to the parent (`useCopyToSlot`).
  */
 
-import { useState, createElement, FC, ChangeEvent } from "react";
+import { useState, createElement, FC, ChangeEvent, KeyboardEvent } from "react";
 import { ModalRoot, DialogButton, TextField } from "@decky/ui";
 import type { SaveSlotSummary } from "../../types";
 import { displaySlot } from "./helpers";
@@ -91,6 +91,12 @@ export const CopyToSlotModal: FC<{
           label: "New slot…",
           value: newName,
           onChange: (e: ChangeEvent<HTMLInputElement>) => setNewName(e.target.value),
+          // Enter (the on-screen keyboard's "Eingabe" key) submits the typed name,
+          // same as the "Create & copy here" button — pick() no-ops on an empty
+          // name, so a stray Enter in a blank field does nothing.
+          onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => {
+            if (e.key === "Enter") pick(newName);
+          },
         }),
         createElement(
           DialogButton,
