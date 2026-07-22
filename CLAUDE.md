@@ -147,6 +147,8 @@ Format: **invariant** — tier — enforced by.
   `scripts/check_lock_sync.py`
 - **Every local markdown link in tracked docs resolves (file target + heading/attr-list anchor)** — check —
   `scripts/check_markdown_links.py`
+- **Every stated RomM minimum version matches the enforced `Plugin._MIN_REQUIRED_VERSION`** — check —
+  `scripts/check_romm_min_version.py` (ADRs excluded: frozen history)
 - **Server-supplied path components pass `safe_join` (`lib/path_safety.py`)** — test + prompt-only — traversal tests per
   path builder; new call sites are prompt-only
 - **No sentinel objects on the wire — explicit JSON-representable tagged values only** — prompt-only — mechanize with

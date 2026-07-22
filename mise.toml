@@ -61,6 +61,7 @@ run = [
     "python scripts/check_sync_lifecycle_owner.py",
     "python scripts/check_lock_sync.py",
     "python scripts/check_markdown_links.py",
+    "python scripts/check_romm_min_version.py",
     "cd py_modules/native && sha256sum -c libgavel-x86_64-linux.so.sha256",
     "cd defaults && sha256sum -c bios_registry.json.sha256",
 ]

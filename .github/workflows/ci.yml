@@ -163,6 +163,9 @@ jobs:
 
       - name: Check local markdown links resolve (file + anchor)
         run: python scripts/check_markdown_links.py
+
+      - name: Check stated RomM minimum matches the enforced one
+        run: python scripts/check_romm_min_version.py
       # The compiled gavel core ships in the plugin zip and has no source in
       # this repo — a silently swapped binary must fail CI. Verify the vendored
       # .so against its checksum (bumped only by a deliberate native/README.md
