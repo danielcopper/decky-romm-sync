@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/logo.png" alt="" width="150"></p>
+<p align="center"><img src="assets/lockup.png" alt="herald" width="240"></p>
 
 # decky-romm-sync
 

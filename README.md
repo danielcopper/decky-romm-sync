@@ -1,8 +1,9 @@
 <div align="center">
 
-<img src="assets/logo.png" alt="" width="200">
-
-# decky-romm-sync
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/lockup-dark.png">
+  <img src="assets/lockup.png" alt="herald" width="300">
+</picture>
 
 <h3>Your self-hosted RomM library, in your Steam library</h3>
 
@@ -21,7 +22,14 @@
 <a href="https://github.com/danielcopper/decky-romm-sync/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/danielcopper/decky-romm-sync/total?style=for-the-badge&color=4795c9&labelColor=16202c"></a>
 <a href="https://github.com/rommapp/romm/releases"><img alt="Requires RomM 4.9.0 or newer" src="https://img.shields.io/badge/RomM-%E2%89%A5%204.9.0-4795c9?style=for-the-badge&labelColor=16202c"></a>
 
+<sub>formerly <code>decky-romm-sync</code></sub>
+
 </div>
+
+> [!NOTE]
+> **This project is being renamed to `herald`.** The repository and documentation links move with it; GitHub redirects
+> the old repository URLs automatically. The plugin's own package name is unchanged for now, so updating keeps your
+> settings, your synced library and your saves exactly where they are.
 
 A [Decky Loader](https://decky.xyz/) plugin that syncs your self-hosted [RomM](https://github.com/rommapp/romm) library
 into Steam as non-steam shortcuts. Games appear directly in your Steam library, launch through
@@ -77,7 +85,7 @@ into Steam as non-steam shortcuts. Games appear directly in your Steam library, 
 > **v1.0** release. Until then, use the manual install below.
 
 Once published, install it straight from Decky's built-in store — open the Quick Access Menu → **Decky** → store icon,
-search for **RomM Sync**, and install. No Developer Mode required.
+search for **herald**, and install. No Developer Mode required.
 
 </details>
 
@@ -99,7 +107,7 @@ gear icon → toggle **Developer Mode**).
 
 ## Quick start
 
-1. Open the Quick Access Menu and select **RomM Sync**
+1. Open the Quick Access Menu and select **herald**
 2. In **Settings**, enter your RomM server URL and credentials, then hit **Test Connection**
 3. In **Platforms**, enable the platforms you want to sync
 4. Hit **Sync Library** — your ROMs appear as non-steam shortcuts
