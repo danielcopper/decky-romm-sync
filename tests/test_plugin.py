@@ -730,6 +730,9 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     # Collection owner-scope (#1532) — a settings.json-only write, never touches
     # RetroDECK state; takes effect on the next sync's work-queue build.
     "set_collection_owner_scope",
+    # Collection naming mode (#1539) — a settings.json-only write, never touches
+    # RetroDECK state; takes effect on the next sync's reporter-key build.
+    "set_collection_naming_mode",
     # Preferred sibling-group region — a settings.json-only write (ADR-0021 §3),
     # never touches RetroDECK state; takes effect on the next sync. Its companion
     # read (distinct regions in the local library) is a pure local DB read.

@@ -60,6 +60,26 @@ class TestToEventPayload:
         assert "bound_count" not in payload
         assert "new_shortcut_count" not in payload
 
+    def test_virtual_type_defaults_to_none_and_stays_off_the_wire(self):
+        """virtual_type is reporter-internal (#1539): defaults None, never in the payload."""
+        unit = WorkUnit(type="collection", id="7", name="Faves", slug="", rom_count=4, collection_kind="standard")
+        assert unit.virtual_type is None
+        assert "virtual_type" not in unit.to_event_payload()
+
+    def test_virtual_type_carried_when_set(self):
+        unit = WorkUnit(
+            type="collection",
+            id="vc-1",
+            name="coll-fr",
+            slug="",
+            rom_count=3,
+            collection_kind="virtual",
+            virtual_type="franchise",
+        )
+        assert unit.virtual_type == "franchise"
+        # Still internal — the sync_plan / sync_apply_unit payload carries only kind.
+        assert "virtual_type" not in unit.to_event_payload()
+
 
 class TestEstimatedItems:
     """The unit's weight in the plan's skip-aware totals (estimate-only, ADR-0023)."""

@@ -8,6 +8,7 @@
 
 import { FC } from "react";
 import { PanelSection, PanelSectionRow, DropdownItem, ToggleField } from "@decky/ui";
+import type { CollectionNamingMode } from "../../types";
 
 interface LibrarySectionProps {
   preferredRegion: string;
@@ -20,6 +21,12 @@ interface LibrarySectionProps {
   // than on the per-sync Collections tab.
   platformGroups: boolean;
   onPlatformGroupsChange: (enabled: boolean) => void;
+  // Steam-collection naming mode (#1539). "by_label" appends the fine type
+  // label to the Steam collection name so same-named collections of different
+  // types stay separate; "merge" (default) unions them. Rendered as a boolean
+  // toggle (checked === "by_label").
+  namingMode: CollectionNamingMode;
+  onNamingModeChange: (mode: CollectionNamingMode) => void;
 }
 
 // The internal sentinel for "no preference — use the fixed build-time order".
@@ -65,6 +72,8 @@ export const LibrarySection: FC<LibrarySectionProps> = ({
   onPreferredRegionChange,
   platformGroups,
   onPlatformGroupsChange,
+  namingMode,
+  onNamingModeChange,
 }) => {
   return (
     <PanelSection title="Library">
@@ -83,6 +92,14 @@ export const LibrarySection: FC<LibrarySectionProps> = ({
           description="When syncing a collection, also add its games to their platform-specific Steam group."
           checked={platformGroups}
           onChange={onPlatformGroupsChange}
+        />
+      </PanelSectionRow>
+      <PanelSectionRow>
+        <ToggleField
+          label="Distinguish collection types in Steam names"
+          description="Adds the collection type (e.g. Franchise, IGDB Collection) to the Steam collection name so collections that share a name stay separate instead of merging into one. Applies on the next sync."
+          checked={namingMode === "by_label"}
+          onChange={(v) => onNamingModeChange(v ? "by_label" : "merge")}
         />
       </PanelSectionRow>
     </PanelSection>

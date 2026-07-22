@@ -19,6 +19,7 @@ import {
   saveLogLevel,
   savePreferredRegion,
   saveCollectionPlatformGroups,
+  setCollectionNamingMode,
   getKnownRegions,
   fixRetroarchInputDriver,
   ensureDeviceRegistered,
@@ -28,7 +29,7 @@ import {
   dismissSaveSortMigration,
   logError,
 } from "../api/backend";
-import type { SaveSortMigrationStatus, RegisteredDevice } from "../types";
+import type { SaveSortMigrationStatus, RegisteredDevice, CollectionNamingMode } from "../types";
 import {
   getSaveSortMigrationState,
   setSaveSortMigrationStatus as setStoreSaveSortStatus,
@@ -98,6 +99,8 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   const [libraryRegions, setLibraryRegions] = useState<string[]>([]);
   // Collection platform-groups toggle (relocated from the Collections tab, #1539).
   const [platformGroups, setPlatformGroups] = useState(false);
+  // Steam-collection naming mode (#1539): "merge" (default) or "by_label".
+  const [namingMode, setNamingMode] = useState<CollectionNamingMode>("merge");
 
   useEffect(() => {
     getSettings()
@@ -111,6 +114,7 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         setLogLevel(s.log_level);
         setPreferredRegion(s.preferred_region ?? AUTO_REGION);
         setPlatformGroups(!!s.collection_create_platform_groups);
+        setNamingMode(s.collection_naming_mode ?? "merge");
         if (s.retroarch_input_check) {
           setRetroarchWarning(s.retroarch_input_check);
         }
@@ -470,6 +474,21 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
     );
   };
 
+  // --- Collection naming-mode handler (#1539) ---
+  const handleNamingModeChange = (mode: CollectionNamingMode) => {
+    const previous = namingMode;
+    setNamingMode(mode);
+    detach(
+      (async () => {
+        try {
+          await setCollectionNamingMode(mode);
+        } catch {
+          setNamingMode(previous);
+        }
+      })(),
+    );
+  };
+
   // --- Save sort migration handlers ---
   const handleMigrateSaveSort = async () => {
     setSaveSortMigrating(true);
@@ -605,6 +624,8 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         onPreferredRegionChange={handlePreferredRegionChange}
         platformGroups={platformGroups}
         onPlatformGroupsChange={handlePlatformGroupsChange}
+        namingMode={namingMode}
+        onNamingModeChange={handleNamingModeChange}
       />
 
       <AdvancedSection logLevel={logLevel} onLogLevelChange={handleLogLevelChange} />

@@ -93,6 +93,8 @@ describe("LibrarySection", () => {
         onPreferredRegionChange={vi.fn()}
         platformGroups={false}
         onPlatformGroupsChange={vi.fn()}
+        namingMode="merge"
+        onNamingModeChange={vi.fn()}
       />,
     );
     expect(captured.items).toHaveLength(1);
@@ -109,6 +111,8 @@ describe("LibrarySection", () => {
         onPreferredRegionChange={vi.fn()}
         platformGroups={false}
         onPlatformGroupsChange={vi.fn()}
+        namingMode="merge"
+        onNamingModeChange={vi.fn()}
       />,
     );
     expect(captured.items[0]?.selectedOption).toBe("Japan");
@@ -123,6 +127,8 @@ describe("LibrarySection", () => {
         onPreferredRegionChange={onChange}
         platformGroups={false}
         onPlatformGroupsChange={vi.fn()}
+        namingMode="merge"
+        onNamingModeChange={vi.fn()}
       />,
     );
     captured.items[0]?.onChange?.({ data: "Japan", label: "Japan" });
@@ -139,6 +145,8 @@ describe("LibrarySection", () => {
         onPreferredRegionChange={onChange}
         platformGroups={false}
         onPlatformGroupsChange={vi.fn()}
+        namingMode="merge"
+        onNamingModeChange={vi.fn()}
       />,
     );
     captured.items[0]?.onChange?.({ data: AUTO_REGION, label: DEFAULT_REGION_LABEL });
@@ -153,6 +161,8 @@ describe("LibrarySection", () => {
         onPreferredRegionChange={vi.fn()}
         platformGroups={true}
         onPlatformGroupsChange={vi.fn()}
+        namingMode="merge"
+        onNamingModeChange={vi.fn()}
       />,
     );
     const toggle = container.querySelector<HTMLInputElement>(
@@ -171,6 +181,8 @@ describe("LibrarySection", () => {
         onPreferredRegionChange={vi.fn()}
         platformGroups={false}
         onPlatformGroupsChange={onChange}
+        namingMode="merge"
+        onNamingModeChange={vi.fn()}
       />,
     );
     const toggle = container.querySelector<HTMLInputElement>(
@@ -179,5 +191,84 @@ describe("LibrarySection", () => {
     fireEvent.click(toggle);
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenCalledWith(true);
+  });
+
+  it("renders the naming-mode toggle checked when namingMode is by_label", () => {
+    const { container } = render(
+      <LibrarySection
+        preferredRegion={AUTO_REGION}
+        libraryRegions={[]}
+        onPreferredRegionChange={vi.fn()}
+        platformGroups={false}
+        onPlatformGroupsChange={vi.fn()}
+        namingMode="by_label"
+        onNamingModeChange={vi.fn()}
+      />,
+    );
+    const toggle = container.querySelector<HTMLInputElement>(
+      '[data-label="Distinguish collection types in Steam names"] input',
+    );
+    expect(toggle).not.toBeNull();
+    expect(toggle?.checked).toBe(true);
+  });
+
+  it("renders the naming-mode toggle unchecked when namingMode is merge", () => {
+    const { container } = render(
+      <LibrarySection
+        preferredRegion={AUTO_REGION}
+        libraryRegions={[]}
+        onPreferredRegionChange={vi.fn()}
+        platformGroups={false}
+        onPlatformGroupsChange={vi.fn()}
+        namingMode="merge"
+        onNamingModeChange={vi.fn()}
+      />,
+    );
+    const toggle = container.querySelector<HTMLInputElement>(
+      '[data-label="Distinguish collection types in Steam names"] input',
+    );
+    expect(toggle?.checked).toBe(false);
+  });
+
+  it("maps the naming-mode toggle to by_label when switched on", () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <LibrarySection
+        preferredRegion={AUTO_REGION}
+        libraryRegions={[]}
+        onPreferredRegionChange={vi.fn()}
+        platformGroups={false}
+        onPlatformGroupsChange={vi.fn()}
+        namingMode="merge"
+        onNamingModeChange={onChange}
+      />,
+    );
+    const toggle = container.querySelector<HTMLInputElement>(
+      '[data-label="Distinguish collection types in Steam names"] input',
+    )!;
+    fireEvent.click(toggle);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith("by_label");
+  });
+
+  it("maps the naming-mode toggle to merge when switched off", () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <LibrarySection
+        preferredRegion={AUTO_REGION}
+        libraryRegions={[]}
+        onPreferredRegionChange={vi.fn()}
+        platformGroups={false}
+        onPlatformGroupsChange={vi.fn()}
+        namingMode="by_label"
+        onNamingModeChange={onChange}
+      />,
+    );
+    const toggle = container.querySelector<HTMLInputElement>(
+      '[data-label="Distinguish collection types in Steam names"] input',
+    )!;
+    fireEvent.click(toggle);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith("merge");
   });
 });

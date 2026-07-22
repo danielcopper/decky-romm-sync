@@ -54,10 +54,18 @@ class CollectionMembership:
     memberships and UNIONs their resolved appIds into the one
     ``RomM: [<name>] (host)`` Steam collection (RomM permits same-named collections
     across kinds/users, so the plugin merges rather than owner-filters, #1503).
+
+    ``kind`` (``"standard"`` / ``"smart"`` / ``"virtual"``) and — for the virtual
+    kind — ``virtual_type`` (``"franchise"`` / ``"collection"``) ride here too so
+    the reporter can build the fine display label under the ``by_label`` naming
+    mode (``domain.collection_label``); in the default ``merge`` mode they are
+    unused and same-named collections still union by name.
     """
 
     name: str
     rom_ids: list[int]
+    kind: str
+    virtual_type: str | None = None
 
 
 @dataclass(frozen=True)

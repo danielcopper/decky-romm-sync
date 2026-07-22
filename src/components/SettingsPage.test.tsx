@@ -1584,6 +1584,48 @@ describe("SettingsPage", () => {
       // CATCH-REJECTION assert: rolled back to false.
       expect(capturedLibrary[capturedLibrary.length - 1]?.platformGroups).toBe(false);
     });
+
+    it("hydrates namingMode from getSettings", async () => {
+      vi.mocked(backend.getSettings).mockResolvedValue({
+        ...defaultSettings(),
+        collection_naming_mode: "by_label",
+      });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(capturedLibrary[capturedLibrary.length - 1]?.namingMode).toBe("by_label");
+    });
+
+    it("defaults namingMode to merge when getSettings omits it", async () => {
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      expect(capturedLibrary[capturedLibrary.length - 1]?.namingMode).toBe("merge");
+    });
+
+    it("onNamingModeChange persists via setCollectionNamingMode and flips the value", async () => {
+      vi.mocked(backend.setCollectionNamingMode).mockResolvedValue({ success: true });
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        capturedLibrary[capturedLibrary.length - 1]?.onNamingModeChange("by_label");
+        await Promise.resolve();
+      });
+      expect(vi.mocked(backend.setCollectionNamingMode)).toHaveBeenCalledWith("by_label");
+      expect(capturedLibrary[capturedLibrary.length - 1]?.namingMode).toBe("by_label");
+    });
+
+    it("reverts namingMode to its prior value when setCollectionNamingMode rejects", async () => {
+      vi.mocked(backend.setCollectionNamingMode).mockRejectedValue(new Error("boom"));
+      render(<SettingsPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        capturedLibrary[capturedLibrary.length - 1]?.onNamingModeChange("by_label");
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // CATCH-REJECTION assert: rolled back to the pre-toggle "merge".
+      expect(capturedLibrary[capturedLibrary.length - 1]?.namingMode).toBe("merge");
+    });
   });
 
   describe("save-sort migration handlers", () => {

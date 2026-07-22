@@ -500,7 +500,10 @@ class SyncOrchestrator:
             )
             if all_collection_rom_ids:
                 collection_memberships[_collection_membership_key(unit)] = CollectionMembership(
-                    name=unit.name, rom_ids=all_collection_rom_ids
+                    name=unit.name,
+                    rom_ids=all_collection_rom_ids,
+                    kind=str(unit.collection_kind),
+                    virtual_type=unit.virtual_type,
                 )
             all_roms.extend(unit_roms)
 
@@ -1769,7 +1772,10 @@ class SyncOrchestrator:
         )
         if all_collection_rom_ids:
             collection_memberships[_collection_membership_key(unit)] = CollectionMembership(
-                name=unit.name, rom_ids=all_collection_rom_ids
+                name=unit.name,
+                rom_ids=all_collection_rom_ids,
+                kind=str(unit.collection_kind),
+                virtual_type=unit.virtual_type,
             )
         return unit_roms, skipped
 

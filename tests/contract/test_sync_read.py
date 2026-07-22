@@ -309,6 +309,29 @@ async def test_set_collection_owner_scope_rejects_invalid(harness):
     assert harness.plugin.settings.get("collection_owner_scope", "all") == "all"
 
 
+async def test_set_collection_naming_mode_persists(harness):
+    """set_collection_naming_mode stores the value and get_settings reports it back."""
+    result = await harness.plugin.set_collection_naming_mode("by_label")
+    assert result == {"success": True}
+    assert harness.plugin.settings["collection_naming_mode"] == "by_label"
+    assert (await harness.plugin.get_settings())["collection_naming_mode"] == "by_label"
+
+    result = await harness.plugin.set_collection_naming_mode("merge")
+    assert result == {"success": True}
+    assert harness.plugin.settings["collection_naming_mode"] == "merge"
+
+
+async def test_set_collection_naming_mode_rejects_invalid(harness):
+    """An unrecognised mode returns the canonical failure shape and stores nothing."""
+    result = await harness.plugin.set_collection_naming_mode("fancy")
+    assert result["success"] is False
+    assert result["reason"] == "invalid_mode"
+    assert isinstance(result["message"], str) and result["message"]
+    assert "error" not in result
+    assert "error_code" not in result
+    assert harness.plugin.settings.get("collection_naming_mode", "merge") == "merge"
+
+
 async def test_get_collections_server_failure_shape(harness):
     """User-collection fetch failure → canonical failure shape."""
     harness.romm.list_collections_side_effect = RommConnectionError("offline")

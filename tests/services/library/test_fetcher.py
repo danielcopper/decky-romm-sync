@@ -259,6 +259,30 @@ class TestBuildWorkQueueErrorPaths:
         assert [u.collection_kind for u in units] == ["virtual"]
 
     @pytest.mark.asyncio
+    async def test_virtual_type_threads_onto_work_units(self, plugin, fake_romm_api):
+        """Each virtual unit carries its query virtual_type; standard units carry None (#1539)."""
+        _wire_fake(plugin, fake_romm_api)
+        plugin.settings["enabled_platforms"] = {}
+        plugin.settings["enabled_collections"] = {
+            "standard": {"7": True},
+            "smart": {},
+            "virtual": {"fr-1": True, "vc-1": True},
+        }
+        fake_romm_api.collections = [{"id": "7", "name": "Faves", "slug": "faves", "rom_count": 4}]
+        fake_romm_api.virtual_collections = {
+            "franchise": [{"id": "fr-1", "name": "coll-fr", "slug": "coll-fr", "rom_count": 3}],
+            "collection": [{"id": "vc-1", "name": "coll-vc", "slug": "coll-vc", "rom_count": 2}],
+        }
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        by_name = {u.name: u for u in units}
+        assert by_name["coll-fr"].virtual_type == "franchise"
+        assert by_name["coll-vc"].virtual_type == "collection"
+        # A standard collection has no virtual sub-type.
+        assert by_name["Faves"].virtual_type is None
+
+    @pytest.mark.asyncio
     async def test_smart_collection_list_failure_continues_with_empty(self, plugin, fake_romm_api):
         """Smart-collection fetch raises => warning logged, treated as empty."""
         _wire_fake(plugin, fake_romm_api)

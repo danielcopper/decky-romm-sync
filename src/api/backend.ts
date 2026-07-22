@@ -10,6 +10,7 @@ import type {
   CollectionSyncSetting,
   CollectionKind,
   CollectionOwnerScope,
+  CollectionNamingMode,
   RegistryPlatform,
   FirmwareStatus,
   FirmwareDownloadResult,
@@ -182,6 +183,13 @@ export const setCollectionOwnerScope = callable<
   [CollectionOwnerScope],
   { success: boolean; reason?: string; message?: string }
 >("set_collection_owner_scope");
+// Steam-collection naming mode (#1539). "merge" (default) unions same-named
+// collections; "by_label" appends the fine type label so they stay separate.
+// Read via getSettings().collection_naming_mode; applies on the next sync.
+export const setCollectionNamingMode = callable<
+  [CollectionNamingMode],
+  { success: boolean; reason?: string; message?: string }
+>("set_collection_naming_mode");
 export const getRegistryPlatforms = callable<[], { platforms: RegistryPlatform[] }>("get_registry_platforms");
 export const removePlatformShortcuts = callable<
   [string],

@@ -141,6 +141,7 @@ class TestGetSettings:
                 "romm_allow_insecure_ssl": True,
                 "collection_create_platform_groups": True,
                 "collection_owner_scope": "own",
+                "collection_naming_mode": "by_label",
                 "preferred_region": "USA",
             }
         )
@@ -154,6 +155,7 @@ class TestGetSettings:
         assert result["romm_allow_insecure_ssl"] is True
         assert result["collection_create_platform_groups"] is True
         assert result["collection_owner_scope"] == "own"
+        assert result["collection_naming_mode"] == "by_label"
         assert result["preferred_region"] == "USA"
         assert result["retroarch_input_check"] == {"warning": False}
 
@@ -203,6 +205,7 @@ class TestGetSettings:
         assert result["romm_allow_insecure_ssl"] is False
         assert result["collection_create_platform_groups"] is False
         assert result["collection_owner_scope"] == "all"
+        assert result["collection_naming_mode"] == "merge"
         assert result["preferred_region"] == "auto"
 
     def test_includes_retroarch_input_check_payload(self, service, steam_config):
@@ -545,6 +548,30 @@ class TestSetCollectionOwnerScope:
         result = service.set_collection_owner_scope(None)  # type: ignore[arg-type]
         assert result["success"] is False
         assert "collection_owner_scope" not in settings
+        settings_persister.save_settings.assert_not_called()
+
+
+class TestSetCollectionNamingMode:
+    @pytest.mark.parametrize("mode", ["merge", "by_label"])
+    def test_valid_modes_persist(self, service, settings, settings_persister, mode):
+        result = service.set_collection_naming_mode(mode)
+        assert result == {"success": True}
+        assert settings["collection_naming_mode"] == mode
+        settings_persister.save_settings.assert_called_once_with()
+
+    def test_invalid_mode_rejected_with_canonical_failure(self, service, settings, settings_persister):
+        result = service.set_collection_naming_mode("fancy")
+        assert result["success"] is False
+        assert result["reason"] == "invalid_mode"
+        assert "Invalid naming mode" in result["message"]
+        assert "collection_naming_mode" not in settings
+        settings_persister.save_settings.assert_not_called()
+
+    def test_non_string_rejected(self, service, settings, settings_persister):
+        result = service.set_collection_naming_mode(None)  # type: ignore[arg-type]
+        assert result["success"] is False
+        assert result["reason"] == "invalid_mode"
+        assert "collection_naming_mode" not in settings
         settings_persister.save_settings.assert_not_called()
 
 

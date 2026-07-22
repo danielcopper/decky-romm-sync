@@ -118,6 +118,10 @@ class TestSettingsSchema:
         assert DEFAULT_SETTINGS["romm_user_id"] is None
         assert DEFAULT_SETTINGS["collection_owner_scope"] == "all"
 
+    def test_default_naming_mode_is_merge(self):
+        # by_label is opt-in; a fresh install keeps today's merge behaviour (#1539).
+        assert DEFAULT_SETTINGS["collection_naming_mode"] == "merge"
+
     def test_mutable_default_is_not_aliased_to_template(self, adapter):
         """A missing key is backfilled with a COPY of its mutable default.
 

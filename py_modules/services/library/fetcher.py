@@ -97,6 +97,7 @@ def _collection_units(
     enabled_ids: set[str],
     kind: CollectionKind,
     *,
+    virtual_type: str | None = None,
     own_user_id: int | None = None,
     filter_to_own: bool = False,
 ) -> list[WorkUnit]:
@@ -107,6 +108,12 @@ def _collection_units(
     queue even if it is enabled, so a scope selected over an earlier enable never
     syncs someone else's collection. Virtual collections have no owner and
     always survive (:func:`is_own_collection`).
+
+    *virtual_type* stamps the unit's virtual sub-type (``"franchise"`` /
+    ``"collection"``) for the ``kind == "virtual"`` caller, which fetches one
+    type at a time and so knows it authoritatively — the same source the QAM
+    listing uses. ``None`` for standard/smart callers (their kind alone labels
+    them).
     """
     units: list[WorkUnit] = []
     for c in collections:
@@ -123,6 +130,7 @@ def _collection_units(
                 slug=c.get("slug", ""),
                 rom_count=int(c.get("rom_count", len(c.get("rom_ids", [])))),
                 collection_kind=kind,
+                virtual_type=virtual_type,
                 # RomM bumps the collection's updated_at on any membership change
                 # (#742). Threaded so the skip gate compares it against the stamp;
                 # ``None`` for a listing that omits it (e.g. virtual, never
@@ -610,15 +618,17 @@ class LibraryFetcher:
         """
         if not enabled_ids:
             return []
-        collections: list[dict[str, Any]] = []
+        units: list[WorkUnit] = []
         for virtual_type in _SUPPORTED_VIRTUAL_TYPES:
             try:
-                collections.extend(
-                    await self._loop.run_in_executor(None, self._romm_api.list_virtual_collections, virtual_type)
+                collections = await self._loop.run_in_executor(
+                    None, self._romm_api.list_virtual_collections, virtual_type
                 )
             except Exception as e:
                 self._logger.warning(f"Failed to fetch {virtual_type} collections for work queue: {e}")
-        return _collection_units(collections, enabled_ids, "virtual")
+                continue
+            units.extend(_collection_units(collections, enabled_ids, "virtual", virtual_type=virtual_type))
+        return units
 
     async def _attach_plan_estimates(self, platform_units: list[WorkUnit]) -> list[WorkUnit]:
         """Stamp each platform unit with its plan-time estimate riders (#1382).

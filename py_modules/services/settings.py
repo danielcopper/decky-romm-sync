@@ -107,6 +107,7 @@ class SettingsService:
             "romm_allow_insecure_ssl": self._settings.get("romm_allow_insecure_ssl", False),
             "collection_create_platform_groups": self._settings.get("collection_create_platform_groups", False),
             "collection_owner_scope": self._settings.get("collection_owner_scope", "all"),
+            "collection_naming_mode": self._settings.get("collection_naming_mode", "merge"),
             "preferred_region": self._settings.get("preferred_region", AUTO_REGION),
         }
 
@@ -255,6 +256,24 @@ class SettingsService:
         if scope not in ("own", "all"):
             return {"success": False, "reason": "invalid_scope", "message": f"Invalid owner scope: {scope}"}
         self._settings["collection_owner_scope"] = scope
+        self._settings_persister.save_settings()
+        return {"success": True}
+
+    def set_collection_naming_mode(self, mode: object) -> dict[str, Any]:
+        """Validate and persist the Steam-collection naming mode (``"merge"`` / ``"by_label"``).
+
+        ``"merge"`` (the default) unions same-named collections of any kind into
+        one ``RomM: [<name>]`` Steam collection; ``"by_label"`` appends the fine
+        type label (``RomM: [<name> (Franchise)]``) so same-named collections of
+        different types stay separate. The change takes effect on the next normal
+        sync — the reporter rebuilds the complete collection set under the new
+        key and the frontend reconcile renames accordingly (no Force Full Sync).
+        An unrecognised value from the untrusted frontend wire is rejected with
+        the canonical failure shape so a bad call cannot corrupt the setting.
+        """
+        if mode not in ("merge", "by_label"):
+            return {"success": False, "reason": "invalid_mode", "message": f"Invalid naming mode: {mode}"}
+        self._settings["collection_naming_mode"] = mode
         self._settings_persister.save_settings()
         return {"success": True}
 

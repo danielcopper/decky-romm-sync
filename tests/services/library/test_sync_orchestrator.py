@@ -3606,6 +3606,51 @@ class TestSyncOneUnitCollectionAndCancel:
         assert len(complete) == 1
 
     @pytest.mark.asyncio
+    async def test_sync_collection_unit_threads_kind_and_virtual_type(self, plugin):
+        """_sync_collection_unit stamps the unit's kind + virtual_type onto the membership (#1539)."""
+        orch = plugin._sync_service._orchestrator
+        orch._fetcher.fetch_collection_unit = AsyncMock(return_value=([{"id": 1}], [1, 2], False))  # type: ignore[method-assign]
+        unit = WorkUnit(
+            type="collection",
+            id="vc-1",
+            name="coll-fr",
+            slug="coll-fr",
+            rom_count=2,
+            collection_kind="virtual",
+            virtual_type="franchise",
+        )
+        memberships: dict[tuple[str, str], Any] = {}
+
+        await orch._sync_collection_unit(unit, synced_rom_ids=set(), collection_memberships=memberships)
+
+        membership = memberships[("virtual", "vc-1")]
+        assert membership.name == "coll-fr"
+        assert membership.rom_ids == [1, 2]
+        assert membership.kind == "virtual"
+        assert membership.virtual_type == "franchise"
+
+    @pytest.mark.asyncio
+    async def test_sync_collection_unit_standard_has_no_virtual_type(self, plugin):
+        """A standard collection membership carries kind='standard' and virtual_type=None (#1539)."""
+        orch = plugin._sync_service._orchestrator
+        orch._fetcher.fetch_collection_unit = AsyncMock(return_value=([{"id": 1}], [1], False))  # type: ignore[method-assign]
+        unit = WorkUnit(
+            type="collection",
+            id="7",
+            name="Faves",
+            slug="faves",
+            rom_count=1,
+            collection_kind="standard",
+        )
+        memberships: dict[tuple[str, str], Any] = {}
+
+        await orch._sync_collection_unit(unit, synced_rom_ids=set(), collection_memberships=memberships)
+
+        membership = memberships[("standard", "7")]
+        assert membership.kind == "standard"
+        assert membership.virtual_type is None
+
+    @pytest.mark.asyncio
     async def test_cancel_after_fetch_returns_zero_applied(self, plugin, fake_romm_api):
         """CANCELLING flipped after fetch_platform_unit → unit returns 0."""
         plugin.loop = asyncio.get_event_loop()

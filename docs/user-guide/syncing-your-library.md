@@ -263,10 +263,23 @@ On a **shared RomM server** the collection list includes every other user's _pub
 first time you sign in (existing sign-ins pick it up on the next connection check). Until then, **Mine** behaves exactly
 like **All** — it never hides a collection it can't yet attribute.
 
+#### Collections that share a name
+
 If two enabled collections share the same name — for example a personal collection and a smart or virtual collection
-called the same thing, or (on a shared server) another account's public collection — they **merge into a single Steam
-collection** carrying the combined set of games. RomM allows collections to share a name, but Steam identifies a
-collection by its name, so the plugin unions their members rather than dropping one.
+called the same thing, or (on a shared server) another account's public collection — what happens depends on the
+**Distinguish collection types in Steam names** setting on the **Settings** page under **Library**:
+
+- **Off** (default) — the same-named collections **merge into a single Steam collection** carrying the combined set of
+  games. RomM allows collections to share a name, but Steam identifies a collection by its name, so the plugin unions
+  their members rather than dropping one.
+- **On** — the plugin appends the collection **type** to the Steam name, so same-named collections of different types
+  stay **separate**. A franchise and an IGDB collection that share a name become `RomM: [<name> (Franchise)]` and
+  `RomM: [<name> (IGDB Collection)]` — matching the Franchise / IGDB Collection / Smart / Standard labels you see on the
+  Collections page. Collections that share both a name **and** a type still merge.
+
+The setting applies on the **next normal sync** — no Force Full Sync is needed. After flipping it, run a sync and the
+plugin renames the affected Steam collections (and removes the old-named ones) as part of its normal end-of-sync
+housekeeping.
 
 ## Artwork
 

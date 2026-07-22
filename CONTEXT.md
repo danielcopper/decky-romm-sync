@@ -294,3 +294,15 @@ The ownership filter over the collection list on a shared RomM server — the `c
 collections). Orthogonal to the collection kind axis: it filters by owner (`is_own` / `user_id` vs `romm_user_id`), not
 by kind, and virtual collections have no owner so they always survive. The stored value stays `own` / `all`; only the
 QAM label is **Mine** / **All** (the value was left `own` to avoid a settings migration, #1539).
+
+### Collection naming mode (merge / by_label)
+
+How the Steam-collection **name** is formed when RomM collections share a display name across kinds — the
+`collection_naming_mode` setting valued `merge` (default) or `by_label`. Under **`merge`**, same-named collections union
+into one `RomM: [<name>] (<host>)` Steam collection (#1503). Under **`by_label`**, each name carries its **fine type
+label** so distinct groupings stay separate: `RomM: [<name> (Franchise)]`, `RomM: [<name> (IGDB Collection)]`,
+`RomM: [<name> (Smart)]`, `RomM: [<name> (Standard)]`. The label is the fine label, not the coarse kind — franchise and
+IGDB-collection are both `kind="virtual"`, distinguished by `virtual_type` (see the **Collection kind** entry above).
+Computed backend-side at the reporter's union key (`domain/collection_label.py`), so the wire payload stays name→appIds
+and the frontend needs no change; the mode flip is applied by the ordinary complete-set reconcile on the next normal
+sync (no Force Full Sync). Same-name-**within-one-label** still unions.

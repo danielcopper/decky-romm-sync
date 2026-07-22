@@ -54,6 +54,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # server lists) or ``"own"`` (only the signed-in user's own collections;
     # virtual collections have no owner and always survive).
     "collection_owner_scope": "all",
+    # Steam-collection naming mode: ``"merge"`` (default — same-named collections
+    # of any kind union into one ``RomM: [<name>]`` collection) or ``"by_label"``
+    # (the fine type label is appended, ``RomM: [<name> (Franchise)]``, so
+    # same-named collections of different types stay separate). Applies on the
+    # next normal sync via the reporter key + complete-set reconcile.
+    "collection_naming_mode": "merge",
     "preferred_region": "auto",
     "steam_input_mode": "default",
     "steamgriddb_api_key": "",
