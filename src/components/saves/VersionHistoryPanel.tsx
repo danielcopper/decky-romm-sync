@@ -4,7 +4,7 @@
  * fallback to the standard sync-conflict modal).
  */
 
-import { useState, createElement, FC } from "react";
+import { useState, useEffect, createElement, FC } from "react";
 import { DialogButton } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { debugLog, savesListFileVersions, savesRollbackToVersion } from "../../api/backend";
@@ -71,6 +71,27 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
       await loadVersions();
     }
   };
+
+  // Self-refresh when this ROM's saves change. A copy into this slot (or a sync
+  // / external rollback) adds or removes a version, but the list is cached on
+  // first expand — without this it stays stale in-session until the game page is
+  // re-entered. The signal is a DOM CustomEvent (`globalThis.dispatchEvent`),
+  // NOT an @decky/api emit, so we listen on `globalThis`. Invalidate on any
+  // change for this ROM; reload immediately when the panel is open, otherwise the
+  // next expand lazy-loads the fresh list. `expanded` is a dep so the handler
+  // always sees the live open/closed state (re-subscribing on toggle is cheap).
+  useEffect(() => {
+    const onDataChanged = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.rom_id !== romId) return;
+      setVersions(null);
+      setLoadError(null);
+      if (expanded && !isOffline) detach(loadVersions());
+    };
+    globalThis.addEventListener("romm_data_changed", onDataChanged);
+    return () => globalThis.removeEventListener("romm_data_changed", onDataChanged);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadVersions is stable per (romId, slot, filename); romId/isOffline/expanded are the real deps
+  }, [romId, isOffline, expanded]);
 
   const handleRestore = async (version: SaveVersionEntry) => {
     setRestoring(version.id);

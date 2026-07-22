@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, fireEvent, waitFor } from "@testing-library/react";
+import { render, fireEvent, waitFor, act } from "@testing-library/react";
 import { createElement } from "react";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
 import * as backend from "../../api/backend";
@@ -413,5 +413,80 @@ describe("VersionHistoryPanel", () => {
     expect(getByText("Restoring...")).toBeDisabled();
     resolveRestore({ status: "ok" });
     await flushAsync();
+  });
+});
+
+describe("VersionHistoryPanel — self-refresh on romm_data_changed", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // romm_data_changed is a plain DOM CustomEvent (globalThis.dispatchEvent), not
+  // an @decky/api emit, so happy-dom routes it natively to the panel's listener.
+  function dispatchDataChanged(romId: number): void {
+    act(() => {
+      globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: romId } }));
+    });
+  }
+
+  it("reloads the version list when a save-change event fires for this ROM while expanded", async () => {
+    vi.mocked(backend.savesListFileVersions)
+      .mockResolvedValueOnce({ status: "ok", versions: [makeVersion({ id: 1 })] })
+      .mockResolvedValueOnce({ status: "ok", versions: [makeVersion({ id: 1 }), makeVersion({ id: 2 })] });
+    const { getByText, container } = render(<VersionHistoryPanel {...defaultProps()} />);
+    fireEvent.click(getByText("Previous Versions"));
+    await waitFor(() => expect(container.textContent).toContain("Previous Versions (1)"));
+    expect(vi.mocked(backend.savesListFileVersions)).toHaveBeenCalledTimes(1);
+
+    // A copy into this slot dispatches the event — the panel must refetch and
+    // render the new count, not keep its stale cache.
+    dispatchDataChanged(1);
+
+    await waitFor(() => expect(vi.mocked(backend.savesListFileVersions)).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(container.textContent).toContain("Previous Versions (2)"));
+  });
+
+  it("ignores a save-change event for a different ROM", async () => {
+    vi.mocked(backend.savesListFileVersions).mockResolvedValue({ status: "ok", versions: [makeVersion({ id: 1 })] });
+    const { getByText } = render(<VersionHistoryPanel {...defaultProps()} />);
+    fireEvent.click(getByText("Previous Versions"));
+    await waitFor(() => expect(vi.mocked(backend.savesListFileVersions)).toHaveBeenCalledTimes(1));
+
+    dispatchDataChanged(999);
+    await flushAsync();
+
+    // Non-vacuous: the mismatched rom_id triggered no reload.
+    expect(vi.mocked(backend.savesListFileVersions)).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates the cache while collapsed so the next expand refetches", async () => {
+    vi.mocked(backend.savesListFileVersions).mockResolvedValue({ status: "ok", versions: [makeVersion({ id: 1 })] });
+    const { container } = render(<VersionHistoryPanel {...defaultProps()} />);
+    const button = container.querySelector("button");
+    if (!button) throw new Error("no toggle button");
+    fireEvent.click(button); // expand → load (1)
+    await waitFor(() => expect(vi.mocked(backend.savesListFileVersions)).toHaveBeenCalledTimes(1));
+    fireEvent.click(button); // collapse
+
+    dispatchDataChanged(1); // invalidate while collapsed — no reload yet
+    await flushAsync();
+    expect(vi.mocked(backend.savesListFileVersions)).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(button); // expand again → refetch because the cache was invalidated
+    await waitFor(() => expect(vi.mocked(backend.savesListFileVersions)).toHaveBeenCalledTimes(2));
+  });
+
+  it("removes the listener on unmount (a later event triggers no reload)", async () => {
+    vi.mocked(backend.savesListFileVersions).mockResolvedValue({ status: "ok", versions: [makeVersion({ id: 1 })] });
+    const { getByText, unmount } = render(<VersionHistoryPanel {...defaultProps()} />);
+    fireEvent.click(getByText("Previous Versions"));
+    await waitFor(() => expect(vi.mocked(backend.savesListFileVersions)).toHaveBeenCalledTimes(1));
+
+    unmount();
+    dispatchDataChanged(1);
+    await flushAsync();
+
+    // Cleanup ran: the post-unmount event reached no listener, so no refetch.
+    expect(vi.mocked(backend.savesListFileVersions)).toHaveBeenCalledTimes(1);
   });
 });

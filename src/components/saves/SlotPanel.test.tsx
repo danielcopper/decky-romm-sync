@@ -223,6 +223,52 @@ describe("SlotPanel", () => {
       expect(queryByTestId("vhp-b.srm")).not.toBeNull();
     });
 
+    // The header count is the number of SAVES in the slot, from the (fresh)
+    // SaveSlotSummary — not the tracked-file count, which a copy that adds a
+    // version would never move off "1 save".
+    const oneFile: SaveStatus["files"][number] = {
+      filename: "a.srm",
+      local_path: "/data/a.srm",
+      local_hash: "h",
+      local_mtime: "2025-06-15T10:00:00Z",
+      local_size: 100,
+      server_save_id: 1,
+      server_file_name: null,
+      server_emulator: null,
+      server_updated_at: null,
+      server_size: null,
+      last_sync_at: null,
+      status: "synced",
+    };
+
+    it("shows the server-side slot count in the active header, not the tracked-file count", () => {
+      const { container } = render(
+        <SlotPanel
+          {...defaultProps({
+            isActive: true,
+            slot: makeSummary({ count: 3 }),
+            saveStatus: makeStatus({ files: [oneFile] }),
+          })}
+        />,
+      );
+      // One tracked file, but the slot holds 3 saves → "3 saves", not "1 save".
+      expect(container.textContent).toContain("3 saves");
+      expect(container.textContent).not.toContain("1 save");
+    });
+
+    it("falls back to the tracked-file count when the summary count is 0 (placeholder active slot)", () => {
+      const { container } = render(
+        <SlotPanel
+          {...defaultProps({
+            isActive: true,
+            slot: makeSummary({ count: 0 }),
+            saveStatus: makeStatus({ files: [oneFile] }),
+          })}
+        />,
+      );
+      expect(container.textContent).toContain("1 save");
+    });
+
     it("multi-file slot: shows component list + #908 note and NO VersionHistoryPanel", () => {
       const status = makeStatus({
         files: [

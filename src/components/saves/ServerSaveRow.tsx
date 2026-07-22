@@ -1,6 +1,6 @@
 /**
  * Renderer for one server-side save entry inside an inactive slot panel —
- * a compact filename + (size · updated-relative) line. No state, no I/O.
+ * a compact filename + (#id · size · updated-relative) line. No state, no I/O.
  */
 
 import { createElement } from "react";
@@ -10,7 +10,9 @@ import { formatRelativeTime } from "./helpers";
 import { renderCopyToSlotButton, type CopyToSlotRowProps } from "./CopyToSlotButton";
 
 export function renderServerSaveRow(f: SlotSaveFile, copy?: CopyToSlotRowProps): ReturnType<typeof createElement> {
-  const details: string[] = [];
+  // Lead with the server save id (#<id> · …), matching the version-history
+  // header style, so a specific save can be identified across slots.
+  const details: string[] = [`#${f.id}`];
   if (f.size != null) details.push(formatBytes(f.size));
   if (f.updated_at) details.push(`Updated ${formatRelativeTime(f.updated_at)}`);
 

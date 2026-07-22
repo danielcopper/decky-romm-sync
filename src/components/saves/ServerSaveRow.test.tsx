@@ -22,12 +22,20 @@ describe("renderServerSaveRow", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it("renders just the filename when size and updated_at are missing", () => {
-    const { container } = render(<div>{renderServerSaveRow(makeFile({ updated_at: "" }))}</div>);
+  it("renders the filename + the #id line when size and updated_at are missing", () => {
+    const { container } = render(<div>{renderServerSaveRow(makeFile({ id: 7, updated_at: "" }))}</div>);
     expect(container.textContent).toContain("save.srm");
-    // No second line (size · Updated) when both are absent
+    // The #id always shows (leads the details line); with nothing else there is
+    // no separator and no "Updated" segment.
+    expect(container.textContent).toContain("#7");
     expect(container.textContent).not.toContain("·");
     expect(container.textContent).not.toContain("Updated");
+  });
+
+  it("shows the server save id with a # prefix, leading the details line", () => {
+    const { container } = render(<div>{renderServerSaveRow(makeFile({ id: 122, size: 1024 }))}</div>);
+    // Consistent with the version-history header style (#122 · …).
+    expect(container.textContent).toContain("#122 · 1.0 KB");
   });
 
   it("renders filename + formatted size when size is present", () => {
@@ -52,9 +60,11 @@ describe("renderServerSaveRow", () => {
     expect(container.textContent).toContain("Updated 30m ago");
   });
 
-  it("renders only the filename when size is null", () => {
-    const { container } = render(<div>{renderServerSaveRow(makeFile({ size: null, updated_at: "" }))}</div>);
-    expect(container.textContent).toBe("save.srm");
+  it("renders the filename + #id (no size) when size is null", () => {
+    const { container } = render(<div>{renderServerSaveRow(makeFile({ id: 3, size: null, updated_at: "" }))}</div>);
+    expect(container.textContent).toContain("save.srm");
+    expect(container.textContent).toContain("#3");
+    expect(container.textContent).not.toContain("KB");
   });
 
   it("renders only filename + Updated when updated_at is set but size is null", () => {
@@ -73,13 +83,15 @@ describe("renderServerSaveRow", () => {
     expect(container.textContent).not.toContain("KB");
   });
 
-  it("returns null for the second line when both size and updated_at are missing (no separator)", () => {
-    const { container } = render(<div>{renderServerSaveRow(makeFile())}</div>);
-    // Only the filename div exists — no second line at all
+  it("always renders the details line (the #id) even when size and updated_at are missing", () => {
+    const { container } = render(<div>{renderServerSaveRow(makeFile({ id: 9 }))}</div>);
     const wrapper = container.firstChild as HTMLElement;
-    const rowDiv = wrapper.firstChild as HTMLElement;
-    // First child = filename div; nothing else inside the row
-    expect(rowDiv.children.length).toBe(1);
+    // The info column is the first child of the flex row (the copy button, when
+    // present, is the second — absent here).
+    const infoCol = wrapper.firstChild?.firstChild as HTMLElement;
+    // Two lines now: the filename div + the #id details div.
+    expect(infoCol.children.length).toBe(2);
+    expect(infoCol.textContent).toContain("#9");
   });
 
   it("uses a unique key per save id so list reconciliation stays stable", () => {
