@@ -54,6 +54,12 @@ interface SettingsPageProps {
   onBack: () => void;
 }
 
+// Messages the connect handlers return to the ConnectModal (which surfaces them
+// inline) when the sign-in can't even be attempted or the callable throws. The
+// URL guard message mirrors the one the URL editor already shows.
+const INVALID_URL_MESSAGE = "Enter a valid http:// or https:// server URL";
+const GENERIC_SIGN_IN_ERROR = "Sign-in failed. Check your connection and try again.";
+
 export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
   // Connection state
   const [url, setUrl] = useState("");
@@ -297,55 +303,56 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
       setStatus("Failed to save settings");
     });
   };
-  const handleConnect = async (username: string, password: string) => {
-    setStatus("");
+  // The connect handlers return their result to the ConnectModal, which owns
+  // closing (on success) and error display (on failure). The bottom status line
+  // is only touched on success — a post-close confirmation — so a failed sign-in
+  // shows its message inside the still-open modal, never at the bottom.
+  const handleConnect = async (username: string, password: string): Promise<{ success: boolean; message: string }> => {
     const trimmed = trimServerUrl(url);
     if (!isValidServerUrl(trimmed)) {
-      setStatus("Enter a valid http:// or https:// server URL");
-      return;
+      return { success: false, message: INVALID_URL_MESSAGE };
     }
     try {
       const result = await connectWithCredentials(trimmed, username, password, allowInsecureSsl);
-      setStatus(result.message);
       if (result.success) {
         setHasToken(true);
+        setStatus(result.message);
       }
+      return result;
     } catch {
-      setStatus("Sign-in failed");
+      return { success: false, message: GENERIC_SIGN_IN_ERROR };
     }
   };
-  const handleConnectToken = async (token: string) => {
-    setStatus("");
+  const handleConnectToken = async (token: string): Promise<{ success: boolean; message: string }> => {
     const trimmed = trimServerUrl(url);
     if (!isValidServerUrl(trimmed)) {
-      setStatus("Enter a valid http:// or https:// server URL");
-      return;
+      return { success: false, message: INVALID_URL_MESSAGE };
     }
     try {
       const result = await connectWithToken(trimmed, token, allowInsecureSsl);
-      setStatus(result.message);
       if (result.success) {
         setHasToken(true);
+        setStatus(result.message);
       }
+      return result;
     } catch {
-      setStatus("Sign-in failed");
+      return { success: false, message: GENERIC_SIGN_IN_ERROR };
     }
   };
-  const handleConnectPairing = async (code: string) => {
-    setStatus("");
+  const handleConnectPairing = async (code: string): Promise<{ success: boolean; message: string }> => {
     const trimmed = trimServerUrl(url);
     if (!isValidServerUrl(trimmed)) {
-      setStatus("Enter a valid http:// or https:// server URL");
-      return;
+      return { success: false, message: INVALID_URL_MESSAGE };
     }
     try {
       const result = await connectWithPairingCode(trimmed, code, allowInsecureSsl);
-      setStatus(result.message);
       if (result.success) {
         setHasToken(true);
+        setStatus(result.message);
       }
+      return result;
     } catch {
-      setStatus("Sign-in failed");
+      return { success: false, message: GENERIC_SIGN_IN_ERROR };
     }
   };
   const handleSignOut = async () => {
@@ -534,15 +541,9 @@ export const SettingsPage: FC<SettingsPageProps> = ({ onBack }) => {
         onUrlChange={(value) => {
           detach(handleUrlChange(value));
         }}
-        onConnect={(username, password) => {
-          detach(handleConnect(username, password));
-        }}
-        onConnectToken={(token) => {
-          detach(handleConnectToken(token));
-        }}
-        onConnectPairing={(code) => {
-          detach(handleConnectPairing(code));
-        }}
+        onConnect={handleConnect}
+        onConnectToken={handleConnectToken}
+        onConnectPairing={handleConnectPairing}
         onAllowInsecureSslChange={handleAllowInsecureSslChange}
         onTestConnection={() => {
           detach(handleTest());

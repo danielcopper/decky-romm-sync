@@ -619,9 +619,9 @@ describe("SettingsPage", () => {
       // Precondition: not yet connected.
       expect(capturedConnection[capturedConnection.length - 1]?.hasToken).toBe(false);
 
+      let result: { success: boolean; message: string } | undefined;
       await act(async () => {
-        capturedConnection[capturedConnection.length - 1]?.onConnect("daniel", "hunter2");
-        await Promise.resolve();
+        result = await capturedConnection[capturedConnection.length - 1]?.onConnect("daniel", "hunter2");
       });
 
       expect(vi.mocked(backend.connectWithCredentials)).toHaveBeenCalledWith(
@@ -630,12 +630,13 @@ describe("SettingsPage", () => {
         "hunter2",
         false,
       );
+      expect(result).toMatchObject({ success: true, message: "Connected!" });
       const conn = capturedConnection[capturedConnection.length - 1];
       expect(conn?.status).toBe("Connected!");
       expect(conn?.hasToken).toBe(true);
     });
 
-    it("surfaces the failure message without setting hasToken (e.g. 403 auth_failed)", async () => {
+    it("returns the failure to the modal without setting hasToken or the bottom status (e.g. 403 auth_failed)", async () => {
       vi.mocked(backend.getSettings).mockResolvedValue({
         ...defaultSettings(),
         has_token: false,
@@ -648,17 +649,19 @@ describe("SettingsPage", () => {
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
 
+      let result: { success: boolean; message: string } | undefined;
       await act(async () => {
-        capturedConnection[capturedConnection.length - 1]?.onConnect("admin", "pw");
-        await Promise.resolve();
+        result = await capturedConnection[capturedConnection.length - 1]?.onConnect("admin", "pw");
       });
 
+      // The still-open modal surfaces the message; the bottom status stays clear.
+      expect(result).toMatchObject({ success: false, message: "This account cannot create API tokens." });
       const conn = capturedConnection[capturedConnection.length - 1];
-      expect(conn?.status).toBe("This account cannot create API tokens.");
+      expect(conn?.status).toBe("");
       expect(conn?.hasToken).toBe(false);
     });
 
-    it("rejects an invalid URL inline without calling connectWithCredentials", async () => {
+    it("returns an invalid-URL failure to the modal without calling connectWithCredentials", async () => {
       vi.mocked(backend.getSettings).mockResolvedValue({
         ...defaultSettings(),
         romm_url: "romm.local", // scheme-less — invalid
@@ -667,28 +670,28 @@ describe("SettingsPage", () => {
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
 
+      let result: { success: boolean; message: string } | undefined;
       await act(async () => {
-        capturedConnection[capturedConnection.length - 1]?.onConnect("daniel", "hunter2");
-        await Promise.resolve();
+        result = await capturedConnection[capturedConnection.length - 1]?.onConnect("daniel", "hunter2");
       });
 
       expect(vi.mocked(backend.connectWithCredentials)).not.toHaveBeenCalled();
-      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe(
-        "Enter a valid http:// or https:// server URL",
-      );
+      expect(result).toEqual({ success: false, message: "Enter a valid http:// or https:// server URL" });
+      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("");
     });
 
-    it("sets status='Sign-in failed' when connectWithCredentials throws", async () => {
+    it("returns a generic failure to the modal when connectWithCredentials throws", async () => {
       vi.mocked(backend.connectWithCredentials).mockRejectedValue(new Error("net"));
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
 
+      let result: { success: boolean; message: string } | undefined;
       await act(async () => {
-        capturedConnection[capturedConnection.length - 1]?.onConnect("daniel", "hunter2");
-        await Promise.resolve();
+        result = await capturedConnection[capturedConnection.length - 1]?.onConnect("daniel", "hunter2");
       });
 
-      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("Sign-in failed");
+      expect(result).toEqual({ success: false, message: "Sign-in failed. Check your connection and try again." });
+      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("");
     });
   });
 
@@ -707,18 +710,19 @@ describe("SettingsPage", () => {
       await flushAsync();
       expect(capturedConnection[capturedConnection.length - 1]?.hasToken).toBe(false);
 
+      let result: { success: boolean; message: string } | undefined;
       await act(async () => {
-        capturedConnection[capturedConnection.length - 1]?.onConnectToken("rmm_pasted");
-        await Promise.resolve();
+        result = await capturedConnection[capturedConnection.length - 1]?.onConnectToken("rmm_pasted");
       });
 
       expect(vi.mocked(backend.connectWithToken)).toHaveBeenCalledWith("https://romm.local", "rmm_pasted", false);
+      expect(result).toMatchObject({ success: true, message: "Connected!" });
       const conn = capturedConnection[capturedConnection.length - 1];
       expect(conn?.status).toBe("Connected!");
       expect(conn?.hasToken).toBe(true);
     });
 
-    it("surfaces the failure message without setting hasToken (e.g. 403 scope error)", async () => {
+    it("returns the failure to the modal without setting hasToken or the bottom status (e.g. 403 scope error)", async () => {
       vi.mocked(backend.getSettings).mockResolvedValue({
         ...defaultSettings(),
         has_token: false,
@@ -731,17 +735,21 @@ describe("SettingsPage", () => {
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
 
+      let result: { success: boolean; message: string } | undefined;
       await act(async () => {
-        capturedConnection[capturedConnection.length - 1]?.onConnectToken("rmm_readonly");
-        await Promise.resolve();
+        result = await capturedConnection[capturedConnection.length - 1]?.onConnectToken("rmm_readonly");
       });
 
+      expect(result).toMatchObject({
+        success: false,
+        message: "The API token is missing required permissions (scopes).",
+      });
       const conn = capturedConnection[capturedConnection.length - 1];
-      expect(conn?.status).toBe("The API token is missing required permissions (scopes).");
+      expect(conn?.status).toBe("");
       expect(conn?.hasToken).toBe(false);
     });
 
-    it("rejects an invalid URL inline without calling connectWithToken", async () => {
+    it("returns an invalid-URL failure to the modal without calling connectWithToken", async () => {
       vi.mocked(backend.getSettings).mockResolvedValue({
         ...defaultSettings(),
         romm_url: "romm.local", // scheme-less — invalid
@@ -750,28 +758,28 @@ describe("SettingsPage", () => {
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
 
+      let result: { success: boolean; message: string } | undefined;
       await act(async () => {
-        capturedConnection[capturedConnection.length - 1]?.onConnectToken("rmm_pasted");
-        await Promise.resolve();
+        result = await capturedConnection[capturedConnection.length - 1]?.onConnectToken("rmm_pasted");
       });
 
       expect(vi.mocked(backend.connectWithToken)).not.toHaveBeenCalled();
-      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe(
-        "Enter a valid http:// or https:// server URL",
-      );
+      expect(result).toEqual({ success: false, message: "Enter a valid http:// or https:// server URL" });
+      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("");
     });
 
-    it("sets status='Sign-in failed' when connectWithToken throws", async () => {
+    it("returns a generic failure to the modal when connectWithToken throws", async () => {
       vi.mocked(backend.connectWithToken).mockRejectedValue(new Error("net"));
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
 
+      let result: { success: boolean; message: string } | undefined;
       await act(async () => {
-        capturedConnection[capturedConnection.length - 1]?.onConnectToken("rmm_pasted");
-        await Promise.resolve();
+        result = await capturedConnection[capturedConnection.length - 1]?.onConnectToken("rmm_pasted");
       });
 
-      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("Sign-in failed");
+      expect(result).toEqual({ success: false, message: "Sign-in failed. Check your connection and try again." });
+      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("");
     });
   });
 
@@ -790,20 +798,21 @@ describe("SettingsPage", () => {
       await flushAsync();
       expect(capturedConnection[capturedConnection.length - 1]?.hasToken).toBe(false);
 
+      let result: { success: boolean; message: string } | undefined;
       await act(async () => {
-        capturedConnection[capturedConnection.length - 1]?.onConnectPairing("ABCD2345");
-        await Promise.resolve();
+        result = await capturedConnection[capturedConnection.length - 1]?.onConnectPairing("ABCD2345");
       });
 
       expect(vi.mocked(backend.connectWithPairingCode)).toHaveBeenCalledWith("https://romm.local", "ABCD2345", false);
       // The paired flow must not fall through to the pasted-token callable.
       expect(vi.mocked(backend.connectWithToken)).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ success: true, message: "Connected!" });
       const conn = capturedConnection[capturedConnection.length - 1];
       expect(conn?.status).toBe("Connected!");
       expect(conn?.hasToken).toBe(true);
     });
 
-    it("surfaces the failure message without setting hasToken (e.g. expired code)", async () => {
+    it("returns the failure to the modal without setting hasToken or the bottom status (e.g. expired code)", async () => {
       vi.mocked(backend.getSettings).mockResolvedValue({
         ...defaultSettings(),
         has_token: false,
@@ -816,17 +825,18 @@ describe("SettingsPage", () => {
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
 
+      let result: { success: boolean; message: string } | undefined;
       await act(async () => {
-        capturedConnection[capturedConnection.length - 1]?.onConnectPairing("BADCODE1");
-        await Promise.resolve();
+        result = await capturedConnection[capturedConnection.length - 1]?.onConnectPairing("BADCODE1");
       });
 
+      expect(result).toMatchObject({ success: false, message: "Pairing code is invalid or has expired." });
       const conn = capturedConnection[capturedConnection.length - 1];
-      expect(conn?.status).toBe("Pairing code is invalid or has expired.");
+      expect(conn?.status).toBe("");
       expect(conn?.hasToken).toBe(false);
     });
 
-    it("rejects an invalid URL inline without calling connectWithPairingCode", async () => {
+    it("returns an invalid-URL failure to the modal without calling connectWithPairingCode", async () => {
       vi.mocked(backend.getSettings).mockResolvedValue({
         ...defaultSettings(),
         romm_url: "romm.local", // scheme-less — invalid
@@ -835,28 +845,28 @@ describe("SettingsPage", () => {
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
 
+      let result: { success: boolean; message: string } | undefined;
       await act(async () => {
-        capturedConnection[capturedConnection.length - 1]?.onConnectPairing("ABCD2345");
-        await Promise.resolve();
+        result = await capturedConnection[capturedConnection.length - 1]?.onConnectPairing("ABCD2345");
       });
 
       expect(vi.mocked(backend.connectWithPairingCode)).not.toHaveBeenCalled();
-      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe(
-        "Enter a valid http:// or https:// server URL",
-      );
+      expect(result).toEqual({ success: false, message: "Enter a valid http:// or https:// server URL" });
+      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("");
     });
 
-    it("sets status='Sign-in failed' when connectWithPairingCode throws", async () => {
+    it("returns a generic failure to the modal when connectWithPairingCode throws", async () => {
       vi.mocked(backend.connectWithPairingCode).mockRejectedValue(new Error("net"));
       render(<SettingsPage onBack={vi.fn()} />);
       await flushAsync();
 
+      let result: { success: boolean; message: string } | undefined;
       await act(async () => {
-        capturedConnection[capturedConnection.length - 1]?.onConnectPairing("ABCD2345");
-        await Promise.resolve();
+        result = await capturedConnection[capturedConnection.length - 1]?.onConnectPairing("ABCD2345");
       });
 
-      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("Sign-in failed");
+      expect(result).toEqual({ success: false, message: "Sign-in failed. Check your connection and try again." });
+      expect(capturedConnection[capturedConnection.length - 1]?.status).toBe("");
     });
   });
 

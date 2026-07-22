@@ -18,6 +18,7 @@ import {
 } from "@decky/ui";
 import { TextInputModal } from "./TextInputModal";
 import { ConnectModal } from "./ConnectModal";
+import type { SignInResult } from "./ConnectModal";
 import { isHttpsUrl } from "../../utils/serverUrl";
 
 // Sign-out only forgets the token on this device; it never revokes it in RomM.
@@ -32,9 +33,9 @@ interface ConnectionSectionProps {
   status: string;
   loading: boolean;
   onUrlChange: (value: string) => void;
-  onConnect: (username: string, password: string) => void;
-  onConnectToken: (token: string) => void;
-  onConnectPairing: (code: string) => void;
+  onConnect: (username: string, password: string) => Promise<SignInResult>;
+  onConnectToken: (token: string) => Promise<SignInResult>;
+  onConnectPairing: (code: string) => Promise<SignInResult>;
   onAllowInsecureSslChange: (value: boolean) => void;
   onTestConnection: () => void;
   onSignOut: () => void;
