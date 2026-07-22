@@ -92,6 +92,17 @@ describe("useCopyToSlot", () => {
     expect(dataChanged).toHaveBeenCalled();
   });
 
+  it("already_present: toasts the existing save location and does NOT refresh", async () => {
+    await runCopy({ status: "already_present", existing_id: 55 }, { target: "promoted" });
+
+    // Names the slot + the existing save id; the "copied" toast and the refresh
+    // are both withheld because nothing was copied.
+    expect(toaster.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("Already in slot 'promoted' as #55") }),
+    );
+    expect(dataChanged).not.toHaveBeenCalled();
+  });
+
   it("conflict_blocked: opens the sync-conflict modal on the first conflict, no toast, no refresh", async () => {
     await runCopy({ status: "conflict_blocked", conflicts: [conflict] });
 

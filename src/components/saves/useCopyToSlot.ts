@@ -31,6 +31,11 @@ async function handleResult(result: CopySaveToSlotStatus, target: string, romId:
       toaster.toast({ title: TITLE, body: `Save copied to slot '${displaySlot(target)}'` });
       dispatchDataChanged(romId);
       return;
+    case "already_present":
+      // Content-identical to a save already in the target slot — nothing was
+      // copied (no churn), so no refresh either.
+      toaster.toast({ title: TITLE, body: `Already in slot '${displaySlot(target)}' as #${result.existing_id}` });
+      return;
     case "conflict_blocked": {
       // A real conflict on the ROM's current slot must be resolved first. The
       // modal owns the resolution feedback — don't stack a toast on top of it

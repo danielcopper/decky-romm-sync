@@ -181,6 +181,94 @@ class TestCopySaveToSlotHappyPaths:
         assert set(fake.saves) - before_ids
 
 
+class TestCopySaveToSlotDedup:
+    """The content-already-in-target dedup pre-check (no-churn guarantee)."""
+
+    @pytest.mark.asyncio
+    async def test_already_present_when_content_in_target_slot(self, tmp_path):
+        """The chosen save's content is already in the target slot → refuse the copy.
+
+        Copying content RomM would dedup server-side churns the tracked save for
+        no gain. The pre-check surfaces the existing save's id and touches no copy
+        state — no download, no new save, no make-current.
+        """
+        svc, fake = make_service(tmp_path)
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        _setup_configured(svc, tmp_path, active_slot="autosave", tracked_id=100, last_sync_hash=local_hash)
+        fake.saves[100] = _tracked_save(100, slot="autosave")
+        # A legacy source and a save already in the target slot share content.
+        fake.saves[10] = _server_save(save_id=10, rom_id=42, slot=None, updated_at="2026-02-01T10:00:00Z")
+        fake.saves[10]["content_hash"] = "SAME-CONTENT"
+        fake.saves[200] = _server_save(save_id=200, rom_id=42, slot=TARGET, updated_at="2026-01-01T10:00:00Z")
+        fake.saves[200]["content_hash"] = "SAME-CONTENT"
+
+        result = await svc.copy_save_to_slot(42, 10, TARGET)
+
+        assert result == {"status": "already_present", "existing_id": 200}
+        # No copy I/O: the source was never downloaded.
+        download_ids = [c[1][0] for c in fake.call_log if c[0] == "download_save_content"]
+        assert 10 not in download_ids
+        # No new save landed in the target slot — still just the pre-existing one.
+        assert {s["id"] for s in fake.saves.values() if s.get("slot") == TARGET} == {200}
+        # No make-current: the active slot and tracked save are unchanged.
+        state = _require_save_state(svc, 42)
+        assert state.active_slot == "autosave"
+        assert state.files["pokemon.srm"].tracked_save_id == 100
+
+    @pytest.mark.asyncio
+    async def test_falls_through_to_copy_when_content_hash_absent(self, tmp_path):
+        """A source save without a content_hash skips the pre-check and copies.
+
+        Older servers omit content_hash; the copy then relies on RomM's own
+        server-side dedup. A distinctive target proves the value flowed.
+        """
+        svc, fake = make_service(tmp_path)
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        _setup_configured(svc, tmp_path, active_slot="autosave", tracked_id=100, last_sync_hash=local_hash)
+        fake.saves[100] = _tracked_save(100, slot="autosave")
+        # Source carries no content_hash — even though a same-slot save exists, the
+        # pre-check can't compare, so the copy proceeds.
+        fake.saves[10] = _server_save(save_id=10, rom_id=42, slot=None, updated_at="2026-02-01T10:00:00Z")
+        fake.saves[200] = _server_save(save_id=200, rom_id=42, slot=TARGET, updated_at="2026-01-01T10:00:00Z")
+        fake.saves[200]["content_hash"] = "SOMETHING"
+        # We're synced to the target head, so the copy's POST stacks cleanly (no 409).
+        fake.stage_device_sync(200, "device-1", "2026-01-01T10:00:00Z")
+
+        result = await svc.copy_save_to_slot(42, 10, TARGET)
+
+        assert result == {"status": "ok"}
+        assert _require_save_state(svc, 42).active_slot == TARGET
+
+    @pytest.mark.asyncio
+    async def test_ok_copy_tracks_the_new_save_not_a_deduped_existing(self, tmp_path):
+        """A genuine copy tracks the newly-created target save (no churn artifact).
+
+        Regression lock: the tracked save becomes the new POST-created save, never
+        the source or a deduped existing head — so the current save is excluded
+        from its own version history (``list_file_versions`` excludes the tracked id).
+        """
+        svc, fake = make_service(tmp_path)
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        _setup_configured(svc, tmp_path, active_slot="autosave", tracked_id=100, last_sync_hash=local_hash)
+        fake.saves[100] = _tracked_save(100, slot="autosave")
+        # Source content is unique (target slot is empty) → a real copy.
+        fake.saves[10] = _server_save(save_id=10, rom_id=42, slot=None, updated_at="2026-02-01T10:00:00Z")
+        fake.saves[10]["content_hash"] = "UNIQUE-CONTENT"
+
+        result = await svc.copy_save_to_slot(42, 10, TARGET)
+
+        assert result == {"status": "ok"}
+        tracked_id = _require_save_state(svc, 42).files["pokemon.srm"].tracked_save_id
+        # The tracked save is the newly-created target save, not the source (10) or
+        # the old tracked head (100).
+        assert tracked_id not in (10, 100)
+        assert tracked_id is not None
+        assert fake.saves[tracked_id]["slot"] == TARGET
+
+
 class TestCopySaveToSlotRefusals:
     """Every refusal branch of the discriminated-status union."""
 

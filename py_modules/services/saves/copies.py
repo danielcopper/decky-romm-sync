@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
+from domain.save_slot import save_in_slot
 from domain.save_status import compute_multi_file_slot
 from lib.errors import RommConflictError
 from services.saves._helpers import local_save_target
@@ -108,6 +109,30 @@ class SaveCopyService:
         *installed* ROM. Returns an empty list when the ROM is not installed.
         """
         return [lf["filename"] for lf in self._rom_info.find_save_files(rom_id)]
+
+    @staticmethod
+    def _find_already_present(server_saves: list[dict[str, Any]], save_id: int, target_slot: str) -> int | None:
+        """The id of a save in *target_slot* whose content matches *save_id*, or None.
+
+        Compares the chosen save's ``content_hash`` (RomM's own digest of the
+        bytes) against every save already in the target slot. Returns the first
+        match's id — meaning the copy would be a content-identical no-op that
+        RomM would dedup server-side. Returns None when the chosen save is absent
+        (a later ``version_deleted``), carries no ``content_hash`` (older servers;
+        the copy falls through to RomM's own dedup), or has no content twin in the
+        slot.
+        """
+        source = next((s for s in server_saves if s.get("id") == save_id), None)
+        if source is None:
+            return None
+        source_hash = source.get("content_hash")
+        if not source_hash:
+            return None
+        match = next(
+            (s for s in server_saves if save_in_slot(s, target_slot) and s.get("content_hash") == source_hash),
+            None,
+        )
+        return match.get("id") if match is not None else None
 
     # ------------------------------------------------------------------
     # Copy-to-slot API
@@ -234,11 +259,16 @@ class SaveCopyService:
            failure is ``server_unreachable``.
         8. The copy proper runs in :meth:`_copy_save_to_slot_io`.
 
+        A dedup pre-check between the ``list_saves`` and the copy short-circuits
+        with ``already_present{existing_id}`` when the chosen save's content is
+        already in the target slot — copying it would only churn the tracked save
+        (RomM dedups server-side).
+
         Returns a discriminated-status dict (mirrors ``RollbackStatus``):
-        ``ok | not_configured | invalid_slot_name | rom_not_installed |
-        version_deleted | unsupported{reason?} | server_unreachable{message} |
-        conflict_blocked{conflicts} | preflight_failed{errors} |
-        target_slot_busy{message} | copy_failed{message}``.
+        ``ok | already_present{existing_id} | not_configured | invalid_slot_name |
+        rom_not_installed | version_deleted | unsupported{reason?} |
+        server_unreachable{message} | conflict_blocked{conflicts} |
+        preflight_failed{errors} | target_slot_busy{message} | copy_failed{message}``.
         """
         rom_id = int(rom_id)
         save_id = int(save_id)
@@ -307,6 +337,26 @@ class SaveCopyService:
                 # Persist whatever the pre-flight mutated before bailing.
                 await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
                 return {"status": "server_unreachable", "message": str(e)}
+
+            # Dedup pre-check: if the chosen save's content is already present in
+            # the target slot, a copy would make RomM dedup server-side and
+            # do_upload_save would adopt the pre-existing save as current —
+            # churning the tracked save for no gain (which surfaced the current
+            # save in its own version history). Detect it up front via the
+            # content_hash RomM populates on each save and refuse without touching
+            # any copy state. A missing source content_hash skips the check; the
+            # copy then falls through and RomM's own server-side dedup applies.
+            existing_id = self._find_already_present(server_saves, save_id, target_slot)
+            if existing_id is not None:
+                self._log_debug(
+                    f"copy_save_to_slot: rom {rom_id} save {save_id} already present in slot "
+                    f"{target_slot!r} as {existing_id}; skipping copy"
+                )
+                # The pre-flight may have performed real uploads/downloads on the
+                # current slot; persist those baselines even though the copy is a
+                # no-op (#1012). No copy state was mutated.
+                await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
+                return {"status": "already_present", "existing_id": existing_id}
 
             try:
                 result = await self._loop.run_in_executor(

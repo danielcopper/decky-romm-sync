@@ -239,6 +239,7 @@ export type ListFileVersionsResult =
  *  Mirrors the backend `SaveCopyService.copy_save_to_slot` union. */
 export type CopySaveToSlotStatus =
   | { status: "ok" }
+  | { status: "already_present"; existing_id: number }
   | { status: "not_configured" }
   | { status: "invalid_slot_name" }
   | { status: "rom_not_installed" }
