@@ -28,6 +28,7 @@ vi.mock("@decky/ui", () => ({
       value?: string;
       bIsPassword?: boolean;
       onChange?: (e: { target: { value: string } }) => void;
+      onKeyDown?: (e: unknown) => void;
     },
   ) => {
     captured.textFieldPassword = p.bIsPassword;
@@ -35,6 +36,7 @@ vi.mock("@decky/ui", () => ({
       value: p.value ?? "",
       type: p.bIsPassword ? "password" : "text",
       onChange: (e: unknown) => p.onChange?.(e as { target: { value: string } }),
+      onKeyDown: (e: unknown) => p.onKeyDown?.(e),
     });
   },
 }));
@@ -80,6 +82,19 @@ describe("TextInputModal", () => {
     captured.onOK?.();
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit).toHaveBeenCalledWith("edited");
+  });
+
+  it("confirms on Enter (on-screen keyboard) — submits the value and closes", () => {
+    const onSubmit = vi.fn();
+    const closeModal = vi.fn();
+    render(<TextInputModal label="x" value="initial" closeModal={closeModal} onSubmit={onSubmit} />);
+    const input = document.querySelector("input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "edited" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit).toHaveBeenCalledWith("edited");
+    // ConfirmModal's OK auto-closes; the manual Enter path must close itself.
+    expect(closeModal).toHaveBeenCalledTimes(1);
   });
 
   it("does NOT trim — submits whitespace as-is (parent is responsible)", () => {

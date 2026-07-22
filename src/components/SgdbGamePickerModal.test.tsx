@@ -158,6 +158,22 @@ describe("SgdbGamePickerModal", () => {
       expect(container.textContent).toContain("Link's Awakening");
     });
 
+    it("Enter in the search field runs a search (on-screen keyboard)", async () => {
+      vi.mocked(backend.searchSgdbGames).mockResolvedValue({
+        success: true,
+        games: [{ id: 7, name: "Link's Awakening", release_year: 1993, thumb_url: null }],
+      });
+      const { container } = renderPicker();
+      const input = container.querySelector('input[data-testid="text-field"]') as HTMLInputElement;
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+      await flushAsync();
+      // Enter runs the search (not a close) — same as the Search button.
+      expect(vi.mocked(backend.searchSgdbGames)).toHaveBeenCalledWith("Zelda");
+      expect(container.textContent).toContain("Link's Awakening");
+    });
+
     it("selecting a search result applies (2-arg)", async () => {
       vi.mocked(backend.searchSgdbGames).mockResolvedValue({
         success: true,

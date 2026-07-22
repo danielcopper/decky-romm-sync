@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
-import { createElement, type ChangeEvent, type ReactElement } from "react";
+import { createElement, type ChangeEvent, type KeyboardEvent, type ReactElement } from "react";
 import { SlotSetupWizard } from "./SlotSetupWizard";
 import * as backend from "../api/backend";
 import { toaster } from "@decky/api";
@@ -34,6 +34,7 @@ interface ConfirmModalProps {
 interface TextFieldProps {
   value?: string;
   onChange?: (e: ChangeEvent<HTMLInputElement>) => void;
+  onKeyDown?: (e: KeyboardEvent<HTMLInputElement>) => void;
   label?: string;
   focusOnMount?: boolean;
 }
@@ -69,6 +70,7 @@ vi.mock("@decky/ui", () => {
         "data-testid": "text-field",
         value: p.value ?? "",
         onChange: (e: ChangeEvent<HTMLInputElement>) => p.onChange?.(e),
+        onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => p.onKeyDown?.(e),
       }),
     showModal: vi.fn(),
   };
@@ -888,6 +890,56 @@ describe("SlotSetupWizard", () => {
       expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(21, "myslot", false, null, false);
       // Non-empty submit must NOT open the legacy-mode prompt.
       expect(vi.mocked(showModal)).toHaveBeenCalledTimes(1);
+      sub.unmount();
+    });
+
+    it("confirms the typed slot on Enter (on-screen keyboard)", async () => {
+      const info = makeSetupInfo({ server_slots: [] });
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
+      const { getByText } = render(<SlotSetupWizard {...defaultProps({ romId: 21 })} />);
+      await flushAsync();
+
+      fireEvent.click(getByText("Custom slot..."));
+      const modal = modalElementAt(0);
+      if (!modal) throw new Error("CustomSlotModal element not captured");
+
+      const sub = render(<>{modal}</>);
+      await act(async () => {
+        fireEvent.change(sub.getByTestId("text-field"), { target: { value: "  myslot  " } });
+      });
+      await act(async () => {
+        fireEvent.keyDown(sub.getByTestId("text-field"), { key: "Enter" });
+        await Promise.resolve();
+      });
+
+      // Enter trims and confirms, same as the OK button.
+      expect(vi.mocked(backend.confirmSlotChoice)).toHaveBeenCalledWith(21, "myslot", false, null, false);
+      sub.unmount();
+    });
+
+    it("ignores Enter on an empty custom slot (no confirm)", async () => {
+      const info = makeSetupInfo({ server_slots: [] });
+      vi.mocked(applyWizardInitialSetupResult).mockImplementation(async (_r, deps) => {
+        deps.setInfo(info);
+      });
+      const { getByText } = render(<SlotSetupWizard {...defaultProps({ romId: 8 })} />);
+      await flushAsync();
+
+      fireEvent.click(getByText("Custom slot..."));
+      const modal = modalElementAt(0);
+      if (!modal) throw new Error("CustomSlotModal element not captured");
+
+      const sub = render(<>{modal}</>);
+      // Don't type anything — a blank Enter must be a no-op (unlike the OK button,
+      // which sends "" straight to the backend guard).
+      await act(async () => {
+        fireEvent.keyDown(sub.getByTestId("text-field"), { key: "Enter" });
+        await Promise.resolve();
+      });
+
+      expect(vi.mocked(backend.confirmSlotChoice)).not.toHaveBeenCalled();
       sub.unmount();
     });
 

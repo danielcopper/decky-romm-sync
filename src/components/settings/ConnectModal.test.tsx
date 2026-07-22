@@ -132,6 +132,46 @@ describe("ConnectModal", () => {
       expect(onConnectToken).not.toHaveBeenCalled();
     });
 
+    it("submits on Enter in the username field (on-screen keyboard) and closes", () => {
+      const onConnect = vi.fn();
+      const closeModal = vi.fn();
+      const { getByTestId } = render(
+        <ConnectModal
+          closeModal={closeModal}
+          onConnect={onConnect}
+          onConnectToken={vi.fn()}
+          onConnectPairing={vi.fn()}
+        />,
+      );
+      fireEvent.click(getByTestId("mode-credentials"));
+      fireEvent.change(getByTestId("field-Username"), { target: { value: "daniel" } });
+      fireEvent.change(getByTestId("field-Password"), { target: { value: "hunter2" } });
+      fireEvent.keyDown(getByTestId("field-Username"), { key: "Enter" });
+      expect(onConnect).toHaveBeenCalledTimes(1);
+      expect(onConnect).toHaveBeenCalledWith("daniel", "hunter2");
+      // ConfirmModal's OK auto-closes; the manual Enter path must close itself.
+      expect(closeModal).toHaveBeenCalledTimes(1);
+    });
+
+    it("submits on Enter in the password field", () => {
+      const onConnect = vi.fn();
+      const closeModal = vi.fn();
+      const { getByTestId } = render(
+        <ConnectModal
+          closeModal={closeModal}
+          onConnect={onConnect}
+          onConnectToken={vi.fn()}
+          onConnectPairing={vi.fn()}
+        />,
+      );
+      fireEvent.click(getByTestId("mode-credentials"));
+      fireEvent.change(getByTestId("field-Username"), { target: { value: "daniel" } });
+      fireEvent.change(getByTestId("field-Password"), { target: { value: "hunter2" } });
+      fireEvent.keyDown(getByTestId("field-Password"), { key: "Enter" });
+      expect(onConnect).toHaveBeenCalledWith("daniel", "hunter2");
+      expect(closeModal).toHaveBeenCalledTimes(1);
+    });
+
     it("passes empty strings to onConnect when nothing is entered", () => {
       const onConnect = vi.fn();
       const { getByTestId } = render(
@@ -176,6 +216,25 @@ describe("ConnectModal", () => {
       expect(onConnectToken).toHaveBeenCalledTimes(1);
       expect(onConnectToken).toHaveBeenCalledWith("rmm_pasted");
       expect(onConnect).not.toHaveBeenCalled();
+    });
+
+    it("submits the token on Enter in the API token field (on-screen keyboard) and closes", () => {
+      const onConnectToken = vi.fn();
+      const closeModal = vi.fn();
+      const { getByTestId } = render(
+        <ConnectModal
+          closeModal={closeModal}
+          onConnect={vi.fn()}
+          onConnectToken={onConnectToken}
+          onConnectPairing={vi.fn()}
+        />,
+      );
+      fireEvent.click(getByTestId("mode-token"));
+      fireEvent.change(getByTestId("field-API Token"), { target: { value: "rmm_pasted" } });
+      fireEvent.keyDown(getByTestId("field-API Token"), { key: "Enter" });
+      expect(onConnectToken).toHaveBeenCalledTimes(1);
+      expect(onConnectToken).toHaveBeenCalledWith("rmm_pasted");
+      expect(closeModal).toHaveBeenCalledTimes(1);
     });
 
     it("switches back to credentials mode and calls onConnect again", () => {
@@ -297,6 +356,45 @@ describe("ConnectModal", () => {
       expect(onConnectPairing).toHaveBeenCalledWith("ABCDEFGH");
       expect(onConnect).not.toHaveBeenCalled();
       expect(onConnectToken).not.toHaveBeenCalled();
+    });
+
+    it("submits the pairing code on Enter once all eight boxes are filled and closes", () => {
+      const onConnectPairing = vi.fn();
+      const closeModal = vi.fn();
+      const { getByTestId } = render(
+        <ConnectModal
+          closeModal={closeModal}
+          onConnect={vi.fn()}
+          onConnectToken={vi.fn()}
+          onConnectPairing={onConnectPairing}
+        />,
+      );
+      fireEvent.click(getByTestId("mode-pairing"));
+      // A full paste fills all eight boxes.
+      fireEvent.change(box(getByTestId, 0), { target: { value: "abcdefgh" } });
+      fireEvent.keyDown(box(getByTestId, 7), { key: "Enter" });
+      expect(onConnectPairing).toHaveBeenCalledTimes(1);
+      expect(onConnectPairing).toHaveBeenCalledWith("ABCDEFGH");
+      expect(closeModal).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores Enter while the pairing code is incomplete (no submit, no close)", () => {
+      const onConnectPairing = vi.fn();
+      const closeModal = vi.fn();
+      const { getByTestId } = render(
+        <ConnectModal
+          closeModal={closeModal}
+          onConnect={vi.fn()}
+          onConnectToken={vi.fn()}
+          onConnectPairing={onConnectPairing}
+        />,
+      );
+      fireEvent.click(getByTestId("mode-pairing"));
+      // Only the first four boxes are filled — the code is incomplete.
+      fireEvent.change(box(getByTestId, 0), { target: { value: "abcd" } });
+      fireEvent.keyDown(box(getByTestId, 3), { key: "Enter" });
+      expect(onConnectPairing).not.toHaveBeenCalled();
+      expect(closeModal).not.toHaveBeenCalled();
     });
 
     it("switches from pairing back to token mode and routes to onConnectToken only", () => {

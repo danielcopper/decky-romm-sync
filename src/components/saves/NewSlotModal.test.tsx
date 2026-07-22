@@ -32,10 +32,11 @@ vi.mock("@decky/ui", () => ({
     captured.strTitle = p.strTitle;
     return createElement("div", { "data-testid": "confirm-modal" }, p.children as never);
   },
-  TextField: (p: AnyProps & { value?: string; onChange?: (e: unknown) => void }) =>
+  TextField: (p: AnyProps & { value?: string; onChange?: (e: unknown) => void; onKeyDown?: (e: unknown) => void }) =>
     createElement("input", {
       value: p.value ?? "",
       onChange: (e: unknown) => p.onChange?.(e),
+      onKeyDown: (e: unknown) => p.onKeyDown?.(e),
     }),
 }));
 
@@ -103,6 +104,39 @@ describe("NewSlotModal", () => {
     fireEvent.change(input, { target: { value: "    " } });
     captured.onOK?.();
     expect(onSubmit).toHaveBeenCalledWith("");
+  });
+
+  it("confirms on Enter (on-screen keyboard) — submits the trimmed name and closes", () => {
+    const onSubmit = vi.fn();
+    const closeModal = vi.fn();
+    render(<NewSlotModal closeModal={closeModal} onSubmit={onSubmit} />);
+    const input = document.querySelector("input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "  speedrun  " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit).toHaveBeenCalledWith("speedrun");
+    expect(closeModal).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores Enter while the name is empty (no submit, no close)", () => {
+    const onSubmit = vi.fn();
+    const closeModal = vi.fn();
+    render(<NewSlotModal closeModal={closeModal} onSubmit={onSubmit} />);
+    const input = document.querySelector("input") as HTMLInputElement;
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(closeModal).not.toHaveBeenCalled();
+  });
+
+  it("ignores Enter while the name is whitespace-only (no submit, no close)", () => {
+    const onSubmit = vi.fn();
+    const closeModal = vi.fn();
+    render(<NewSlotModal closeModal={closeModal} onSubmit={onSubmit} />);
+    const input = document.querySelector("input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(closeModal).not.toHaveBeenCalled();
   });
 
   it("forwards closeModal to the underlying ConfirmModal", () => {

@@ -18,7 +18,7 @@
  * OK action, which would close the modal before the user can pick.
  */
 
-import { FC, useState } from "react";
+import { FC, useState, KeyboardEvent } from "react";
 import { ConfirmModal, DialogButton, Focusable, GamepadButton, TextField, Spinner, type GamepadEvent } from "@decky/ui";
 import { toaster } from "@decky/api";
 import { searchSgdbGames, applySgdbGameId, debugLog, type SgdbCandidate } from "../api/backend";
@@ -195,6 +195,12 @@ export const SgdbGamePickerModalContent: FC<SgdbGamePickerModalProps> = ({
               label="Search SteamGridDB"
               value={term}
               onChange={(e: { target: { value: string } }) => setTerm(e.target.value)}
+              // Enter (the on-screen keyboard's "Eingabe" key) runs the search,
+              // not a close — the modal stays open so the user can pick a result.
+              // Mirror the Search button's disabled={searching} guard.
+              onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+                if (e.key === "Enter" && !searching) detach(runSearch());
+              }}
               onFocus={scrollToTop}
             />
           </div>

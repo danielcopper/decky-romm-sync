@@ -169,6 +169,14 @@ export const ConnectModal: FC<ConnectModalProps> = ({ closeModal, onConnect, onC
     // to the previous box with the caret at the end.
     if (e.key === "Backspace" && (code[index] ?? "") === "" && index > 0) {
       focusBoxAtEnd(index - 1);
+      return;
+    }
+    // Enter (the on-screen keyboard's "Eingabe" key) confirms once every box is
+    // filled — same submit as the OK button, plus the manual close ConfirmModal's
+    // OK button would do. An incomplete code is a no-op.
+    if (e.key === "Enter" && code.every((c) => c !== "")) {
+      submit();
+      closeModal?.();
     }
   };
 
@@ -180,6 +188,17 @@ export const ConnectModal: FC<ConnectModalProps> = ({ closeModal, onConnect, onC
       onConnectPairing(code.join(""));
     } else {
       onConnect(username, password);
+    }
+  };
+
+  // Enter (the on-screen keyboard's "Eingabe" key) on a single-value field
+  // confirms, same as the OK button. ConfirmModal auto-closes on its OK button
+  // but not on this manual path, so close here too. The pairing-code boxes are
+  // the exception — handleBoxKeyDown gates their Enter on a complete code.
+  const handleFieldKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      submit();
+      closeModal?.();
     }
   };
 
@@ -214,6 +233,7 @@ export const ConnectModal: FC<ConnectModalProps> = ({ closeModal, onConnect, onC
             value={token}
             bIsPassword
             onChange={(e: ChangeEvent<HTMLInputElement>) => setToken(e.target.value)}
+            onKeyDown={handleFieldKeyDown}
           />
         </>
       )}
@@ -256,12 +276,14 @@ export const ConnectModal: FC<ConnectModalProps> = ({ closeModal, onConnect, onC
             label="Username"
             value={username}
             onChange={(e: ChangeEvent<HTMLInputElement>) => setUsername(e.target.value)}
+            onKeyDown={handleFieldKeyDown}
           />
           <TextField
             label="Password"
             value={password}
             bIsPassword
             onChange={(e: ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
+            onKeyDown={handleFieldKeyDown}
           />
         </>
       )}
