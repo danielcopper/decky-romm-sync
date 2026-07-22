@@ -11,7 +11,8 @@
  */
 
 import { FC, useState, ChangeEvent, KeyboardEvent } from "react";
-import { ModalRoot, TextField, DialogButton, Focusable } from "@decky/ui";
+import { TextField, Focusable } from "@decky/ui";
+import { ValidatingModalShell } from "./ValidatingModalShell";
 
 /** The subset of the verify result the modal needs to decide whether to save
  *  (success) or surface an error and stay open (failure). */
@@ -28,16 +29,7 @@ interface SgdbApiKeyModalProps {
   onSave: (key: string) => Promise<void>;
 }
 
-// ModalRoot renders only the shell + a close affordance (no strTitle / OK
-// button), so the title, body, error line, and footer are all rendered as
-// content here — mirroring ConnectModal.
-const modalBodyStyle = { padding: "16px", minWidth: "360px" } as const;
-const titleStyle = { fontSize: "16px", fontWeight: "bold", marginBottom: "12px", color: "#fff" } as const;
 const helperTextStyle = { fontSize: "12px", marginBottom: "12px", color: "rgba(255,255,255,0.6)" } as const;
-// A failed verification surfaces here, above the footer, in a red-ish tone.
-const errorStyle = { color: "#d94126", fontSize: "13px", marginTop: "12px", marginBottom: "4px" } as const;
-const footerStyle = { display: "flex", gap: "8px", marginTop: "16px" } as const;
-const footerButtonStyle = { flex: "1 1 0px", minWidth: 0 } as const;
 
 const GENERIC_VERIFY_ERROR = "Could not verify the key. Check your connection and try again.";
 const GENERIC_SAVE_ERROR = "The key is valid, but saving it failed. Check your connection and try again.";
@@ -98,51 +90,34 @@ export const SgdbApiKeyModal: FC<SgdbApiKeyModalProps> = ({ closeModal, onVerify
   };
 
   return (
-    <ModalRoot {...(closeModal === undefined ? {} : { closeModal })}>
-      <div style={modalBodyStyle}>
-        <div style={titleStyle}>SteamGridDB API Key</div>
-        <div style={helperTextStyle}>
-          Paste the key from your SteamGridDB profile (Preferences &rarr; API). It is checked against SteamGridDB before
-          it is saved.
-        </div>
-        {/* Wrapped in <Focusable> like ConnectModal's token field: on the Deck,
-            R2/OSK-Enter on an unwrapped single field otherwise closes the
-            ModalRoot even when the Enter handler no-ops on an incomplete field. */}
-        <Focusable>
-          <TextField
-            focusOnMount={true}
-            label="API Key"
-            value={value}
-            bIsPassword
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-          />
-        </Focusable>
-        {error !== null && (
-          <div style={errorStyle} data-testid="sgdb-key-error">
-            {error}
-          </div>
-        )}
-        <div style={footerStyle}>
-          <DialogButton
-            style={footerButtonStyle}
-            disabled={!canSubmit || submitting}
-            onClick={() => {
-              void submit();
-            }}
-          >
-            {submitting ? "Verifying…" : "Save"}
-          </DialogButton>
-          <DialogButton
-            style={footerButtonStyle}
-            onClick={() => {
-              closeModal?.();
-            }}
-          >
-            Cancel
-          </DialogButton>
-        </div>
+    <ValidatingModalShell
+      {...(closeModal === undefined ? {} : { closeModal })}
+      title="SteamGridDB API Key"
+      error={error}
+      errorTestId="sgdb-key-error"
+      submitLabel={submitting ? "Verifying…" : "Save"}
+      submitDisabled={!canSubmit || submitting}
+      onSubmit={() => {
+        void submit();
+      }}
+    >
+      <div style={helperTextStyle}>
+        Paste the key from your SteamGridDB profile (Preferences &rarr; API). It is checked against SteamGridDB before
+        it is saved.
       </div>
-    </ModalRoot>
+      {/* Wrapped in <Focusable> like ConnectModal's token field: on the Deck,
+          R2/OSK-Enter on an unwrapped single field otherwise closes the
+          ModalRoot even when the Enter handler no-ops on an incomplete field. */}
+      <Focusable>
+        <TextField
+          focusOnMount={true}
+          label="API Key"
+          value={value}
+          bIsPassword
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+        />
+      </Focusable>
+    </ValidatingModalShell>
   );
 };

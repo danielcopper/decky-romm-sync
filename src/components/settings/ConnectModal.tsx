@@ -22,7 +22,8 @@
  */
 
 import { FC, Fragment, useState, useRef, ChangeEvent, KeyboardEvent } from "react";
-import { ModalRoot, TextField, DropdownItem, DialogButton, Focusable } from "@decky/ui";
+import { TextField, DropdownItem, Focusable } from "@decky/ui";
+import { ValidatingModalShell } from "./ValidatingModalShell";
 
 type SignInMode = "credentials" | "token" | "pairing";
 
@@ -47,16 +48,6 @@ const CODE_GROUP = 4;
 const CODE_INDICES = Array.from({ length: CODE_LENGTH }, (_unused, i) => i);
 
 const GENERIC_SIGN_IN_ERROR = "Sign-in failed. Check your connection and try again.";
-
-// ModalRoot renders only the shell + a close affordance (unlike ConfirmModal, it
-// has no strTitle / OK button), so the title, body, error line, and footer are
-// all rendered as content here — mirroring CopyToSlotModal.
-const modalBodyStyle = { padding: "16px", minWidth: "360px" } as const;
-const titleStyle = { fontSize: "16px", fontWeight: "bold", marginBottom: "12px", color: "#fff" } as const;
-// A failed sign-in surfaces here, above the footer, in a red-ish tone.
-const errorStyle = { color: "#d94126", fontSize: "13px", marginTop: "12px", marginBottom: "4px" } as const;
-const footerStyle = { display: "flex", gap: "8px", marginTop: "16px" } as const;
-const footerButtonStyle = { flex: "1 1 0px", minWidth: 0 } as const;
 
 const helperTextStyle = { fontSize: "12px", marginBottom: "12px", color: "rgba(255,255,255,0.6)" } as const;
 const codeLabelStyle = {
@@ -177,12 +168,12 @@ export const ConnectModal: FC<ConnectModalProps> = ({ closeModal, onConnect, onC
   // Whether the selected mode's required fields are complete enough to submit.
   // The password is checked untrimmed (a leading/trailing space can be a real
   // character); everything else is trimmed so whitespace-only never enables it.
-  const canSubmit =
-    mode === "credentials"
-      ? username.trim() !== "" && password !== ""
-      : mode === "token"
-        ? token.trim() !== ""
-        : code.every((c) => c !== "");
+  const computeCanSubmit = (): boolean => {
+    if (mode === "credentials") return username.trim() !== "" && password !== "";
+    if (mode === "token") return token.trim() !== "";
+    return code.every((c) => c !== "");
+  };
+  const canSubmit = computeCanSubmit();
 
   // Run the selected mode's sign-in to completion. Success closes the modal;
   // failure keeps it open and shows the returned message so the user can retry.
@@ -297,124 +288,107 @@ export const ConnectModal: FC<ConnectModalProps> = ({ closeModal, onConnect, onC
   };
 
   return (
-    <ModalRoot {...(closeModal === undefined ? {} : { closeModal })}>
-      <div style={modalBodyStyle}>
-        <div style={titleStyle}>Sign in to RomM</div>
-        <DropdownItem
-          label="Sign-in method"
-          rgOptions={[
-            { data: "pairing", label: "Pairing code" },
-            { data: "token", label: "API token" },
-            { data: "credentials", label: "Username & password" },
-          ]}
-          selectedOption={mode}
-          onChange={handleModeChange}
-        />
-        {mode === "token" && (
-          <>
-            <div style={helperTextStyle}>
-              Create a token in RomM&apos;s web UI (Settings → API Tokens) and paste it here. Make sure it has the
-              scopes listed in the plugin docs so downloads, saves, and device sync work. The plugin never deletes a
-              pasted token; you manage it in RomM.
-            </div>
-            {/* The token field is the only input in this mode and, unwrapped, is a
+    <ValidatingModalShell
+      {...(closeModal === undefined ? {} : { closeModal })}
+      title="Sign in to RomM"
+      error={error}
+      errorTestId="signin-error"
+      submitLabel={submitting ? "Signing in…" : "Sign in"}
+      submitDisabled={!canSubmit || submitting}
+      onSubmit={() => {
+        void submit();
+      }}
+    >
+      <DropdownItem
+        label="Sign-in method"
+        rgOptions={[
+          { data: "pairing", label: "Pairing code" },
+          { data: "token", label: "API token" },
+          { data: "credentials", label: "Username & password" },
+        ]}
+        selectedOption={mode}
+        onChange={handleModeChange}
+      />
+      {mode === "token" && (
+        <>
+          <div style={helperTextStyle}>
+            Create a token in RomM&apos;s web UI (Settings → API Tokens) and paste it here. Make sure it has the scopes
+            listed in the plugin docs so downloads, saves, and device sync work. The plugin never deletes a pasted
+            token; you manage it in RomM.
+          </div>
+          {/* The token field is the only input in this mode and, unwrapped, is a
                 direct child of the modal body. On the Deck, R2/OSK-Enter on the
                 empty field closes the ModalRoot even though handleCompletingKeyDown
                 no-ops (canSubmit false). The pairing boxes' <Focusable> wrapper is
                 the one structure proven not to close on an incomplete field, so the
                 token field is wrapped the same way. flow-children is irrelevant for
                 a single field, so it is omitted. */}
-            <Focusable>
-              <TextField
-                focusOnMount={true}
-                label="API Token"
-                value={token}
-                bIsPassword
-                onChange={handleTokenChange}
-                onKeyDown={handleCompletingKeyDown}
-              />
-            </Focusable>
-          </>
-        )}
-        {mode === "pairing" && (
-          <>
-            <div style={helperTextStyle}>
-              In RomM&apos;s web UI open your API token and click <strong>Pair</strong>, then enter the 8-character code
-              here within 60 seconds. The plugin fetches the token itself — nothing to copy or paste.
-            </div>
-            <div style={codeLabelStyle}>Pairing code</div>
-            {/* Focusable + flow-children="horizontal" tells Steam's gamepad nav to
+          <Focusable>
+            <TextField
+              focusOnMount={true}
+              label="API Token"
+              value={token}
+              bIsPassword
+              onChange={handleTokenChange}
+              onKeyDown={handleCompletingKeyDown}
+            />
+          </Focusable>
+        </>
+      )}
+      {mode === "pairing" && (
+        <>
+          <div style={helperTextStyle}>
+            In RomM&apos;s web UI open your API token and click <strong>Pair</strong>, then enter the 8-character code
+            here within 60 seconds. The plugin fetches the token itself — nothing to copy or paste.
+          </div>
+          <div style={codeLabelStyle}>Pairing code</div>
+          {/* Focusable + flow-children="horizontal" tells Steam's gamepad nav to
                 step between the boxes left/right (the analog stick/d-pad), not
                 up/down — a plain div defaults to vertical traversal. */}
-            <Focusable flow-children="horizontal" ref={codeRowRef} style={codeRowStyle} data-testid="pairing-code-row">
-              {CODE_INDICES.map((i) => (
-                <Fragment key={i}>
-                  {i === CODE_GROUP && <span style={codeSeparatorStyle}>-</span>}
-                  <div style={codeBoxWrapperStyle}>
-                    <TextField
-                      focusOnMount={i === 0}
-                      style={codeBoxFieldStyle}
-                      value={code[i] ?? ""}
-                      onChange={handleBoxChange(i)}
-                      onKeyDown={handleBoxKeyDown(i)}
-                    />
-                  </div>
-                </Fragment>
-              ))}
-            </Focusable>
-          </>
-        )}
-        {mode === "credentials" && (
-          <>
-            <div style={helperTextStyle}>
-              Enter your RomM username and password once. The plugin exchanges them for an API token and never stores
-              your password.
-            </div>
-            {/* A plain wrapping div carries the ref used to advance Enter from the
-                username field to the password field (querySelectorAll('input')[1]). */}
-            <div ref={credentialsRowRef} data-testid="credentials-row">
-              <TextField
-                focusOnMount={true}
-                label="Username"
-                value={username}
-                onChange={handleUsernameChange}
-                onKeyDown={handleUsernameKeyDown}
-              />
-              <TextField
-                label="Password"
-                value={password}
-                bIsPassword
-                onChange={handlePasswordChange}
-                onKeyDown={handleCompletingKeyDown}
-              />
-            </div>
-          </>
-        )}
-        {error !== null && (
-          <div style={errorStyle} data-testid="signin-error">
-            {error}
+          <Focusable flow-children="horizontal" ref={codeRowRef} style={codeRowStyle} data-testid="pairing-code-row">
+            {CODE_INDICES.map((i) => (
+              <Fragment key={i}>
+                {i === CODE_GROUP && <span style={codeSeparatorStyle}>-</span>}
+                <div style={codeBoxWrapperStyle}>
+                  <TextField
+                    focusOnMount={i === 0}
+                    style={codeBoxFieldStyle}
+                    value={code[i] ?? ""}
+                    onChange={handleBoxChange(i)}
+                    onKeyDown={handleBoxKeyDown(i)}
+                  />
+                </div>
+              </Fragment>
+            ))}
+          </Focusable>
+        </>
+      )}
+      {mode === "credentials" && (
+        <>
+          <div style={helperTextStyle}>
+            Enter your RomM username and password once. The plugin exchanges them for an API token and never stores your
+            password.
           </div>
-        )}
-        <div style={footerStyle}>
-          <DialogButton
-            style={footerButtonStyle}
-            disabled={!canSubmit || submitting}
-            onClick={() => {
-              void submit();
-            }}
-          >
-            {submitting ? "Signing in…" : "Sign in"}
-          </DialogButton>
-          <DialogButton
-            style={footerButtonStyle}
-            onClick={() => {
-              closeModal?.();
-            }}
-          >
-            Cancel
-          </DialogButton>
-        </div>
-      </div>
-    </ModalRoot>
+          {/* A plain wrapping div carries the ref used to advance Enter from the
+                username field to the password field (querySelectorAll('input')[1]). */}
+          <div ref={credentialsRowRef} data-testid="credentials-row">
+            <TextField
+              focusOnMount={true}
+              label="Username"
+              value={username}
+              onChange={handleUsernameChange}
+              onKeyDown={handleUsernameKeyDown}
+            />
+            <TextField
+              label="Password"
+              value={password}
+              bIsPassword
+              onChange={handlePasswordChange}
+              onKeyDown={handleCompletingKeyDown}
+            />
+          </div>
+        </>
+      )}
+    </ValidatingModalShell>
   );
 };
