@@ -47,7 +47,7 @@ export interface CollectionSyncSetting {
   is_favorite: boolean;
   /**
    * The virtual-collection type — present only when `kind === "virtual"`, used
-   * to label the row ("Franchise" / "IGDB Collection"). Absent on user/smart
+   * to label the row ("Franchise" / "IGDB Collection"). Absent on standard/smart
    * collections and on older backends.
    */
   virtual_type?: VirtualCollectionType;
@@ -258,7 +258,7 @@ export interface SyncPlanUnit {
   name: string;
   slug: string;
   rom_count: number;
-  /** Only present when ``type === "collection"``. Discriminates user/smart/virtual. */
+  /** Only present when ``type === "collection"``. Discriminates standard/smart/virtual. */
   collection_kind?: CollectionKind;
   /**
    * Plan-time prediction of the wholesale incremental skip (#1382) —

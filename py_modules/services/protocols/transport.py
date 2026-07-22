@@ -181,7 +181,7 @@ class RommRomReader(Protocol):
         combines the kind-routed collection filter (``smart_collection_id`` when
         ``kind == "smart"``, else ``collection_id``) with ``updated_after``, so
         the incremental-skip gate can detect a member ROM's content change with a
-        single ``limit=1`` probe. Only user/smart kinds are queried this way.
+        single ``limit=1`` probe. Only standard/smart kinds are queried this way.
         Returns paginated response filtered by both parameters.
         """
         ...

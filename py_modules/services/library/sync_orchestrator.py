@@ -1692,7 +1692,7 @@ class SyncOrchestrator:
         chunk_count: int,
         member_rom_ids: list[int] | None,
     ) -> CollectionSyncState | None:
-        """Build the completion stamp for a user/smart collection's FINAL chunk, else ``None``.
+        """Build the completion stamp for a standard/smart collection's FINAL chunk, else ``None``.
 
         The collection sibling of :meth:`_build_final_platform_stamp` (#742). On
         the final chunk of a standard/smart collection unit whose listing carried an

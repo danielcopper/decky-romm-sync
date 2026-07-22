@@ -1209,7 +1209,7 @@ describe("LibraryPage", () => {
       expect(favToggle?.getAttribute("data-description")).toBe("Includes 0 favorited ROMs");
     });
 
-    it("clicking the favorites toggle calls saveCollectionSync with the favorites id and kind=user", async () => {
+    it("clicking the favorites toggle calls saveCollectionSync with the favorites id and kind=standard", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [

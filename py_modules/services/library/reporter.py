@@ -443,7 +443,7 @@ class SyncReporter:
         per-platform completion stamp commits atomically with the chunk's rom
         upserts — the platform is stamped complete iff its last chunk is durable.
         ``collection_stamp`` is the collection sibling (#742), set on the final
-        chunk of a user/smart collection unit; it rides the same UoW so a
+        chunk of a standard/smart collection unit; it rides the same UoW so a
         collection is stamped complete iff its last chunk is durable. Exactly one
         of the two is ever set per commit (a unit is a platform or a collection).
 

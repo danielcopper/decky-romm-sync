@@ -380,7 +380,7 @@ class CollectionSyncStateRepository(Protocol):
 
     Identity is the composite ``(collection_id, collection_kind)``. The collection
     sibling of ``PlatformSyncStateRepository`` (ADR-0023): backs the incremental-skip
-    gate's honoring of an unchanged user/smart collection so it is not re-paginated
+    gate's honoring of an unchanged standard/smart collection so it is not re-paginated
     (#742).
     """
 

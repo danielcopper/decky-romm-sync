@@ -44,7 +44,7 @@ def is_own_collection(collection_user_id: object, own_user_id: int | None, *, ki
     Returns ``True`` (own) when the collection is a virtual collection (no
     owner), when our own identity is unknown (the non-breaking fallback), or
     when the collection's owner id equals ours. ``False`` (foreign) only when a
-    user/smart collection is owned by a different known id.
+    standard/smart collection is owned by a different known id.
     """
     if kind == "virtual":
         return True

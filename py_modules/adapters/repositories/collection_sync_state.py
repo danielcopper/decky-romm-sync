@@ -1,6 +1,6 @@
 """SQLite adapter for the ``CollectionSyncState`` aggregate over ``collection_sync_state``.
 
-One row per synced user/smart collection, keyed by the composite
+One row per synced standard/smart collection, keyed by the composite
 ``(collection_id, collection_kind)`` — the per-collection completion stamp the
 incremental-skip gate reads (ADR-0023, the collection sibling of
 ``platform_sync_state``). A leaf table with no cascade children, so ``save``

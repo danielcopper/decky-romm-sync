@@ -81,7 +81,7 @@ const VIRTUAL_TYPE_FILTER_LABELS: Record<VirtualTypeFilter, string> = {
 };
 
 // A virtual row shows its type ("Franchise" / "IGDB Collection") before the ROM
-// count; user/smart rows (and a virtual row missing its type on an older
+// count; standard/smart rows (and a virtual row missing its type on an older
 // backend) show the plain count.
 function collectionRowDescription(c: CollectionSyncSetting): string {
   if (c.kind === "virtual" && c.virtual_type) {
