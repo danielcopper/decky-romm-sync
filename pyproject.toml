@@ -63,6 +63,3 @@ select = [
 [tool.ruff.lint.isort]
 known-first-party = ["lib", "domain", "services", "adapters"]
 known-third-party = ["_vendor", "decky"]
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
