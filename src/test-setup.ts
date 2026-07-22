@@ -168,34 +168,6 @@ vi.mock("@decky/ui", () => {
     Dropdown: passthrough("select"),
     DropdownItem: (p: AnyProps) => createElement("select", {}, p.children as never),
     Spinner: () => createElement("div", { "data-testid": "spinner" }),
-    // Tabs — renders each tab's title + renderTabAddon() badge and only the
-    // active tab's content; clicking a title fires onShowTab (button bubbling).
-    Tabs: (
-      p: AnyProps & {
-        tabs?: Array<{ id: string; title: string; content?: unknown; renderTabAddon?: () => unknown }>;
-        activeTab?: string;
-        onShowTab?: (id: string) => void;
-      },
-    ) => {
-      const tabs = p.tabs ?? [];
-      return createElement(
-        "div",
-        { "data-testid": "tabs" },
-        ...tabs.map((t) =>
-          createElement(
-            "button",
-            { key: t.id, type: "button", "data-testid": `tab-${t.id}`, onClick: () => p.onShowTab?.(t.id) },
-            createElement("span", { "data-testid": `tab-title-${t.id}` }, t.title),
-            createElement(
-              "span",
-              { "data-testid": `tab-addon-${t.id}` },
-              t.renderTabAddon ? (t.renderTabAddon() as ReactNode) : null,
-            ),
-          ),
-        ),
-        tabs.find((t) => t.id === p.activeTab)?.content as ReactNode,
-      );
-    },
     showModal: vi.fn(),
     showContextMenu: vi.fn(),
     Menu: passthrough("div"),

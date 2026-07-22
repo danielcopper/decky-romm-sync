@@ -114,33 +114,6 @@ vi.mock("@decky/ui", async () => {
         typeof p.label === "string" ? p.label : null,
       ),
     Spinner: () => ce("div", { "data-testid": "spinner" }),
-    // Faithful-enough Tabs stub: renders each tab's title (queryable via
-    // getByText, clicking it fires onShowTab through button bubbling) and its
-    // renderTabAddon() badge, plus ONLY the active tab's content — mirroring the
-    // real component so tab switching + count badges + the per-tab list area
-    // (the #1539 loading UX) can be tested.
-    Tabs: (
-      p: AnyProps & {
-        tabs?: Array<{ id: string; title: string; content?: unknown; renderTabAddon?: () => unknown }>;
-        activeTab?: string;
-        onShowTab?: (id: string) => void;
-      },
-    ) => {
-      const tabs = p.tabs ?? [];
-      return ce(
-        "div",
-        { "data-testid": "tabs" },
-        ...tabs.map((t) =>
-          ce(
-            "button",
-            { key: t.id, "data-testid": `tab-${t.id}`, onClick: () => p.onShowTab?.(t.id) },
-            ce("span", { "data-testid": `tab-title-${t.id}` }, t.title),
-            ce("span", { "data-testid": `tab-addon-${t.id}` }, t.renderTabAddon ? (t.renderTabAddon() as never) : null),
-          ),
-        ),
-        tabs.find((t) => t.id === p.activeTab)?.content as never,
-      );
-    },
   };
 });
 
@@ -160,6 +133,13 @@ const flushAsync = () =>
     await Promise.resolve();
     await Promise.resolve();
   });
+
+// A kind-selector button renders its label + per-kind count as sibling spans;
+// read the whole button's text (e.g. "Standard(2)", or "Standard" while loading)
+// to assert the count badge. getByText(label) matches the bare-label span, so it
+// keeps working whether or not the count is present.
+const kindButtonText = (getByText: (t: string) => HTMLElement, label: string): string =>
+  getByText(label).closest("button")?.textContent ?? "";
 
 function defaultSettings(): PluginSettings {
   return {
@@ -663,18 +643,18 @@ describe("LibraryPage", () => {
       expect((getByText("Enable All") as HTMLButtonElement).disabled).toBe(true);
     });
 
-    it("holds the tab count badges until the list loads, then shows the per-kind counts (no '(0)' flash)", async () => {
+    it("holds the kind-button counts until the list loads, then shows the per-kind counts (no '(0)' flash)", async () => {
       const { promise, resolve } = deferredCollections();
       vi.mocked(backend.getCollections).mockReturnValue(promise);
-      const { getByText, getByTestId } = render(<LibraryPage onBack={vi.fn()} />);
+      const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
-      // While the list is still pending the tabs render but carry NO count badge
-      // — the addon slot is empty, so nothing flashes "(0)".
-      expect(getByTestId("tab-addon-standard").textContent).toBe("");
-      expect(getByTestId("tab-addon-smart").textContent).toBe("");
-      expect(getByTestId("tab-addon-virtual").textContent).toBe("");
-      // Resolve the list → each tab shows its per-kind count (an empty kind now
-      // legitimately reads "(0)", which is data, not a loading flash).
+      // While the list is still pending the kind buttons render but carry NO
+      // count — the label is the bare kind, so nothing flashes "(0)".
+      expect(kindButtonText(getByText, "Standard")).toBe("Standard");
+      expect(kindButtonText(getByText, "Smart")).toBe("Smart");
+      expect(kindButtonText(getByText, "Virtual")).toBe("Virtual");
+      // Resolve the list → each button shows its per-kind count (an empty kind
+      // now legitimately reads "(0)", which is data, not a loading flash).
       await act(async () => {
         resolve({
           success: true,
@@ -687,9 +667,9 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(getByTestId("tab-addon-standard").textContent).toContain("(2)");
-      expect(getByTestId("tab-addon-smart").textContent).toContain("(1)");
-      expect(getByTestId("tab-addon-virtual").textContent).toContain("(0)");
+      expect(kindButtonText(getByText, "Standard")).toContain("(2)");
+      expect(kindButtonText(getByText, "Smart")).toContain("(1)");
+      expect(kindButtonText(getByText, "Virtual")).toContain("(0)");
     });
   });
 
@@ -894,7 +874,7 @@ describe("LibraryPage", () => {
   // H. Collections tab — sub-tabs (my / smart / virtual) + section headers
   // ------------------------------------------------------------------
   describe("collections tab — sub-tabs", () => {
-    it("renders three kind tabs (Standard/Smart/Virtual) with per-kind count badges once loaded", async () => {
+    it("renders three kind buttons (Standard/Smart/Virtual) with per-kind counts once loaded", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
@@ -906,23 +886,23 @@ describe("LibraryPage", () => {
           makeCollection({ id: "vc1", name: "Vc1", kind: "virtual", virtual_type: "collection", is_favorite: false }),
         ],
       });
-      const { getByText, getByTestId, container } = render(<LibraryPage onBack={vi.fn()} />);
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
         fireEvent.click(getByText("Collections"));
         await Promise.resolve();
         await Promise.resolve();
       });
-      // Three kind tabs, labelled by their SUB_TAB_LABELS values.
+      // Three kind buttons, labelled by their SUB_TAB_LABELS values.
       expect(getByText("Standard")).not.toBeNull();
       expect(getByText("Smart")).not.toBeNull();
       expect(getByText("Virtual")).not.toBeNull();
-      // Per-kind count badges: the favorite is excluded from the Standard count
-      // (it's the top-level toggle), and the scope is the default "All".
-      expect(getByTestId("tab-addon-standard").textContent).toContain("(2)");
-      expect(getByTestId("tab-addon-smart").textContent).toContain("(1)");
-      expect(getByTestId("tab-addon-virtual").textContent).toContain("(2)");
-      // No "Favorites" tab (now a top-level toggle).
+      // Per-kind counts in the button labels: the favorite is excluded from the
+      // Standard count (it's the top-level toggle), and the scope is default "All".
+      expect(kindButtonText(getByText, "Standard")).toContain("(2)");
+      expect(kindButtonText(getByText, "Smart")).toContain("(1)");
+      expect(kindButtonText(getByText, "Virtual")).toContain("(2)");
+      // No "Favorites" button (now a top-level toggle).
       expect(container.textContent).not.toContain("Favorites (");
     });
 
@@ -1403,18 +1383,18 @@ describe("LibraryPage", () => {
       expect(container.querySelector('[data-label="TheirColl"]')).not.toBeNull();
     });
 
-    it("the Standard tab count badge is scope-aware (Mine drops the foreign collection)", async () => {
+    it("the Standard button count is scope-aware (Mine drops the foreign collection)", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({ success: true, collections: ownAndForeign() });
-      const { getByText, getByTestId } = render(<LibraryPage onBack={vi.fn()} />);
+      const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
       // Default "All" → both the own and foreign standard collection are counted.
-      expect(getByTestId("tab-addon-standard").textContent).toContain("(2)");
-      // Switch to "Mine" → the badge drops the foreign one.
+      expect(kindButtonText(getByText, "Standard")).toContain("(2)");
+      // Switch to "Mine" → the count drops the foreign one.
       await act(async () => {
         fireEvent.click(getByText("Mine"));
         await Promise.resolve();
       });
-      expect(getByTestId("tab-addon-standard").textContent).toContain("(1)");
+      expect(kindButtonText(getByText, "Standard")).toContain("(1)");
     });
   });
 

@@ -8,7 +8,6 @@ import {
   Field,
   Focusable,
   TextField,
-  Tabs,
   ConfirmModal,
   showModal,
 } from "@decky/ui";
@@ -316,15 +315,10 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   // (no search, and for Virtual no per-type filter) the whole-kind callable is
   // used behind a ConfirmModal — it can flip a very large number. Otherwise the
   // bounded matched set goes through the batch callable directly.
-  const handleCollectionsSetAll = (
-    sub: CollectionSubTab,
-    enabled: boolean,
-    isWholeKind: boolean,
-    matchedIds: string[],
-  ) => {
-    const kind = sub as CollectionKind;
+  const handleCollectionsSetAll = (enabled: boolean, isWholeKind: boolean, matchedIds: string[]) => {
+    const kind = activeSubTab as CollectionKind;
     if (isWholeKind) {
-      const label = SUB_TAB_LABELS[sub];
+      const label = SUB_TAB_LABELS[activeSubTab];
       showModal(
         <ConfirmModal
           strTitle={enabled ? `Enable all ${label} collections?` : `Disable all ${label} collections?`}
@@ -336,7 +330,7 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
           strOKButtonText={enabled ? "Enable All" : "Disable All"}
           strCancelButtonText="Cancel"
           onOK={() => {
-            detach(handleSetAllCollections(enabled, sub));
+            detach(handleSetAllCollections(enabled, activeSubTab));
           }}
         />,
       );
@@ -411,31 +405,32 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     );
   };
 
-  // Count of collections in a sub-tab under the current owner scope — the tab's
-  // count badge (#1539). It deliberately ignores the active tab's search and
-  // per-type filter (both reset on tab switch), so each tab shows a stable "how
-  // many live in here" rather than a value that changes as you type.
+  // Count of collections in a kind under the current owner scope — appended to
+  // each kind button's label (#1539). It deliberately ignores the search and
+  // per-type filter (both reset on kind switch), so each button shows a stable
+  // "how many live in here" rather than a value that changes as you type.
   const subTabCount = (sub: CollectionSubTab): number =>
     filterCollectionsByOwnerScope(filterCollectionsBySubTab(collections, sub, favoritesCollection === null), ownerScope)
       .length;
 
-  // One kind tab's content: the per-type filter (Virtual only), Enable/Disable
-  // All acting on this tab's filtered set, and the list body. The controls
-  // SHARED across kinds (scope, search, favorites) sit ABOVE the Tabs strip in
-  // renderCollectionsContent; only the list area gates on the slow fetch (#1539).
-  const renderTabContent = (sub: CollectionSubTab) => {
-    // `hasCollections` gates the header count and the Enable/Disable All buttons
-    // (which must not act on an unloaded/empty set).
+  // --- Collections tab content ---
+  const renderCollectionsContent = () => {
+    // The control shell (favorites, scope, the kind-selector row, search,
+    // per-type filter, Enable/Disable All) renders IMMEDIATELY — the slow
+    // getCollections fetch only gates the list AREA, not the controls (#1539).
+    // `hasCollections` gates the per-kind button counts (so they never flash
+    // "(0)"), the header count, and the Enable/Disable All buttons.
     const hasCollections = collections.length > 0;
+
     // When the favorites toggle isn't rendered (zero or multi-favorites case),
     // include any favorites in the "Standard" sub-tab so they stay reachable.
     const includeFavoritesInMy = favoritesCollection === null;
-    const kindFiltered = filterCollectionsBySubTab(collections, sub, includeFavoritesInMy);
+    const kindFiltered = filterCollectionsBySubTab(collections, activeSubTab, includeFavoritesInMy);
     // Owner-scope filter runs OVER the kind sub-tab filter — under "Mine" a
     // foreign collection is hidden from every kind tab (#1532).
     const scopeFiltered = filterCollectionsByOwnerScope(kindFiltered, ownerScope);
-    // Per-type filter (Virtual tab only) narrows by virtual_type.
-    const showTypeFilter = sub === "virtual";
+    // Per-type filter (Virtual sub-tab only) narrows by virtual_type.
+    const showTypeFilter = activeSubTab === "virtual";
     const typeFiltered =
       showTypeFilter && virtualTypeFilter !== "all"
         ? scopeFiltered.filter((c) => c.virtual_type === virtualTypeFilter)
@@ -454,87 +449,20 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     const isWholeKind = search === "" && ownerScope === "all" && !(showTypeFilter && virtualTypeFilter !== "all");
     const matchedIds = matched.map((c) => c.id);
 
-    const activeLabel = SUB_TAB_LABELS[sub];
+    const activeLabel = SUB_TAB_LABELS[activeSubTab];
     // The header count only appears once the list has loaded, so it doesn't
     // flash "(0)" while getCollections is still pending.
-    const sectionTitle = hasCollections ? `${SUB_TAB_HEADERS[sub]} (${matched.length})` : SUB_TAB_HEADERS[sub];
-
-    return (
-      <PanelSection title={sectionTitle}>
-        {showTypeFilter && (
-          <PanelSectionRow>
-            <Focusable
-              flow-children="horizontal"
-              // alignItems:stretch makes every button as tall as the tallest,
-              // so the wrapped "IGDB Collection" label reads as intentional
-              // rather than leaving the single-line buttons short. marginBottom
-              // separates this row from the Enable/Disable All row below (#1539).
-              style={{ display: "flex", gap: "8px", alignItems: "stretch", marginBottom: "12px" }}
-            >
-              {VIRTUAL_TYPE_FILTER_ORDER.map((type) => (
-                <DialogButton
-                  key={type}
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    padding: "8px 4px",
-                    // Center the label in the stretched button so a wrapped
-                    // two-line label sits centered like the single-line ones.
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    textAlign: "center",
-                    opacity: virtualTypeFilter === type ? 1 : 0.5,
-                    borderBottom: virtualTypeFilter === type ? "2px solid #1a9fff" : "2px solid transparent",
-                  }}
-                  onClick={() => setVirtualTypeFilter(type)}
-                >
-                  {VIRTUAL_TYPE_FILTER_LABELS[type]}
-                </DialogButton>
-              ))}
-            </Focusable>
-          </PanelSectionRow>
-        )}
-        <PanelSectionRow>
-          <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px" }}>
-            {/* Disabled until the list has loaded — acting on an unloaded set
-                would stamp the whole kind server-side sight-unseen (#1539). */}
-            <DialogButton
-              style={{ flex: 1, minWidth: 0 }}
-              disabled={!hasCollections}
-              onClick={() => handleCollectionsSetAll(sub, true, isWholeKind, matchedIds)}
-            >
-              Enable All
-            </DialogButton>
-            <DialogButton
-              style={{ flex: 1, minWidth: 0 }}
-              disabled={!hasCollections}
-              onClick={() => handleCollectionsSetAll(sub, false, isWholeKind, matchedIds)}
-            >
-              Disable All
-            </DialogButton>
-          </Focusable>
-        </PanelSectionRow>
-        {renderCollectionListBody(matched, rendered, overflow, activeLabel)}
-      </PanelSection>
-    );
-  };
-
-  // --- Collections tab content ---
-  const renderCollectionsContent = () => {
-    // The control shell (favorites, scope, search, the Tabs strip) renders
-    // IMMEDIATELY — the slow getCollections fetch only gates the list AREA inside
-    // the active tab, not the controls (#1539). The tab count badges wait on the
-    // loaded set so they never flash "(0)".
-    const hasCollections = collections.length > 0;
+    const sectionTitle = hasCollections
+      ? `${SUB_TAB_HEADERS[activeSubTab]} (${matched.length})`
+      : SUB_TAB_HEADERS[activeSubTab];
 
     return (
       <>
         {/* The favorites toggle ALWAYS renders so it never pops in late. It's
             interactive only when exactly one favorites collection exists;
             otherwise (still loading, zero favorites, or the multi-favorites
-            fallback that lists them in the "Standard" tab) it sits disabled and
-            grayed rather than disappearing. */}
+            fallback that lists them in the "Standard" sub-tab) it sits disabled
+            and grayed rather than disappearing. */}
         <PanelSection>
           <PanelSectionRow>
             <ToggleField
@@ -549,17 +477,20 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
             />
           </PanelSectionRow>
         </PanelSection>
-        {/* Owner-scope (Mine/All) — global to the Collections view, above the Tabs. */}
         <PanelSection>
           <PanelSectionRow>
-            <Field
-              label="Show collections"
-              description={
-                ownerScope === "own"
-                  ? "Only your own collections (virtual collections have no owner, so they always appear)."
-                  : "Every collection on the server, including other users' public ones."
-              }
-            />
+            {/* Pull the label up toward the section separator above it — the
+                default gap reads too large under the favorites toggle (#1539). */}
+            <div style={{ marginTop: "-8px" }}>
+              <Field
+                label="Show collections"
+                description={
+                  ownerScope === "own"
+                    ? "Only your own collections (virtual collections have no owner, so they always appear)."
+                    : "Every collection on the server, including other users' public ones."
+                }
+              />
+            </div>
           </PanelSectionRow>
           <PanelSectionRow>
             <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px" }}>
@@ -583,10 +514,44 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
             </Focusable>
           </PanelSectionRow>
         </PanelSection>
-        {/* Search — global to the Collections view, above the Tabs. The ref
-            wrapper is what scrollSearchToTop lifts clear of the on-screen
-            keyboard (#1539); keeping it above the Tabs keeps that working. */}
-        <PanelSection>
+        {/* Kind selector — a labeled button row (Standard/Smart/Virtual with a
+            per-kind count), mirroring the scope + per-type-filter rows. NOT the
+            native Tabs: its L1/R1 bumper glyphs eat width and truncate labels in
+            the narrow QAM (#1539). Buttons flex + wrap like the per-type filter,
+            so a "Standard (12)" label wraps its count below rather than truncating.
+            handleSubTabChange keeps the reset-on-switch semantics (search /
+            per-type filter reset). */}
+        <Focusable
+          flow-children="horizontal"
+          style={{ display: "flex", gap: "8px", alignItems: "stretch", padding: "0 16px 12px" }}
+        >
+          {SUB_TAB_ORDER.map((sub) => (
+            <DialogButton
+              key={sub}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                padding: "8px 4px",
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                justifyContent: "center",
+                columnGap: "4px",
+                textAlign: "center",
+                opacity: activeSubTab === sub ? 1 : 0.5,
+                borderBottom: activeSubTab === sub ? "2px solid #1a9fff" : "2px solid transparent",
+              }}
+              onClick={() => handleSubTabChange(sub)}
+            >
+              {/* Label and count are separate nodes so the count can appear only
+                  once loaded (no "(0)" flash) and wrap below the label when the
+                  QAM is narrow. */}
+              <span>{SUB_TAB_LABELS[sub]}</span>
+              {hasCollections && <span>{`(${subTabCount(sub)})`}</span>}
+            </DialogButton>
+          ))}
+        </Focusable>
+        <PanelSection title={sectionTitle}>
           <PanelSectionRow>
             <div ref={searchFieldRef}>
               <TextField
@@ -611,25 +576,62 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
               />
             </div>
           </PanelSectionRow>
+          {showTypeFilter && (
+            <PanelSectionRow>
+              <Focusable
+                flow-children="horizontal"
+                // alignItems:stretch makes every button as tall as the tallest,
+                // so the wrapped "IGDB Collection" label reads as intentional
+                // rather than leaving the single-line buttons short. marginBottom
+                // separates this row from the Enable/Disable All row below (#1539).
+                style={{ display: "flex", gap: "8px", alignItems: "stretch", marginBottom: "12px" }}
+              >
+                {VIRTUAL_TYPE_FILTER_ORDER.map((type) => (
+                  <DialogButton
+                    key={type}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      padding: "8px 4px",
+                      // Center the label in the stretched button so a wrapped
+                      // two-line label sits centered like the single-line ones.
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      textAlign: "center",
+                      opacity: virtualTypeFilter === type ? 1 : 0.5,
+                      borderBottom: virtualTypeFilter === type ? "2px solid #1a9fff" : "2px solid transparent",
+                    }}
+                    onClick={() => setVirtualTypeFilter(type)}
+                  >
+                    {VIRTUAL_TYPE_FILTER_LABELS[type]}
+                  </DialogButton>
+                ))}
+              </Focusable>
+            </PanelSectionRow>
+          )}
+          <PanelSectionRow>
+            <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px" }}>
+              {/* Disabled until the list has loaded — acting on an unloaded set
+                  would stamp the whole kind server-side sight-unseen (#1539). */}
+              <DialogButton
+                style={{ flex: 1, minWidth: 0 }}
+                disabled={!hasCollections}
+                onClick={() => handleCollectionsSetAll(true, isWholeKind, matchedIds)}
+              >
+                Enable All
+              </DialogButton>
+              <DialogButton
+                style={{ flex: 1, minWidth: 0 }}
+                disabled={!hasCollections}
+                onClick={() => handleCollectionsSetAll(false, isWholeKind, matchedIds)}
+              >
+                Disable All
+              </DialogButton>
+            </Focusable>
+          </PanelSectionRow>
+          {renderCollectionListBody(matched, rendered, overflow, activeLabel)}
         </PanelSection>
-        {/* Kind selector — native @decky/ui Tabs strip, paged with L1/R1 in the
-            general Steam UI, with per-kind count badges and no icons (#1539).
-            onShowTab routes through handleSubTabChange so the reset-on-switch
-            semantics (search / per-type filter reset) stay. */}
-        <Tabs
-          activeTab={activeSubTab}
-          onShowTab={(id: string) => handleSubTabChange(id as CollectionSubTab)}
-          tabs={SUB_TAB_ORDER.map((sub) => ({
-            id: sub,
-            title: SUB_TAB_LABELS[sub],
-            // Badge appears only once the list has loaded (no "(0)" flash while
-            // getCollections is pending); the count is scope-aware but ignores
-            // the active tab's search / per-type filter.
-            renderTabAddon: () =>
-              hasCollections ? <span style={{ opacity: 0.75 }}>{` (${subTabCount(sub)})`}</span> : null,
-            content: renderTabContent(sub),
-          }))}
-        />
       </>
     );
   };

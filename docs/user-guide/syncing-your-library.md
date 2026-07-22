@@ -215,34 +215,33 @@ Collections appear in Steam's library sidebar and can be used to browse games by
 
 ### Syncing RomM collections
 
-The **Collections** page groups collections into three tabs — a **Standard / Smart / Virtual** strip — plus a dedicated
-top-level toggle for RomM favorites. Switch tabs by tapping a title, or page between them with the **L1 / R1** bumpers.
-Each tab title carries a **count badge** — `Standard (4)` — showing how many collections it holds under the current
-**Mine / All** scope (the badge appears once the list has loaded, so it never flashes an empty `(0)`).
+The **Collections** page groups collections into three kinds, selected by a **Standard / Smart / Virtual** button row,
+plus a dedicated top-level toggle for RomM favorites. Each button carries a **per-kind count** — `Standard (4)` —
+showing how many collections that kind holds under the current **Mine / All** scope (the count appears once the list has
+loaded, so it never flashes an empty `(0)`).
 
 - **Sync RomM favorites** (top-level toggle) — the standard collection RomM auto-manages as your favorites. Always
-  exactly one per account, so it sits above the tabs as a single switch. It stays visible but grayed out when your
-  account has no favorites collection.
-- **Standard** tab — your other manually-created collections
-- **Smart** tab — filter-based collections that resolve membership at query time, so syncing always picks up the current
+  exactly one per account, so it sits above the kind buttons as a single switch. It stays visible but grayed out when
+  your account has no favorites collection.
+- **Standard** — your other manually-created collections
+- **Smart** — filter-based collections that resolve membership at query time, so syncing always picks up the current
   matches
-- **Virtual** tab — auto-generated groupings RomM derives from IGDB metadata: both IGDB **franchise** groupings and IGDB
+- **Virtual** — auto-generated groupings RomM derives from IGDB metadata: both IGDB **franchise** groupings and IGDB
   **collection** (series) groupings. Each row is labelled with its type (Franchise / IGDB Collection).
 
-Each tab also shows its match count in the section header (e.g. `STANDARD COLLECTIONS (4)`) and lets you toggle
-individual collections. A **search box** above the tabs filters the active tab by a **fuzzy** name match (its heading is
-labelled _Search collections (fuzzy)_), so a loose or partial query still finds a name — most useful on **Virtual**,
-which can run to hundreds of entries. On the **Virtual** tab a segmented **All / Franchise / IGDB Collection** control
-narrows the list to one virtual type. The list itself is capped for performance: when more collections match than fit,
-the first rows render and a `… more — refine your search` hint appears — type in the search box to bring the rest into
-view.
+The selected kind also shows its match count in the section header (e.g. `STANDARD COLLECTIONS (4)`) and lets you toggle
+individual collections. A **search box** filters the selected kind by a **fuzzy** name match (its heading is labelled
+_Search collections (fuzzy)_), so a loose or partial query still finds a name — most useful on **Virtual**, which can
+run to hundreds of entries. On **Virtual** a segmented **All / Franchise / IGDB Collection** control narrows the list to
+one virtual type. The list itself is capped for performance: when more collections match than fit, the first rows render
+and a `… more — refine your search` hint appears — type in the search box to bring the rest into view.
 
-The scope toggle, search box, and the tab strip appear as soon as you open the page — the collection list loads in
-behind them, so you can switch tabs or start typing a search straight away. **Enable All** / **Disable All** stay
-disabled until the list has finished loading.
+The scope toggle and the kind buttons appear as soon as you open the page — the collection list loads in behind them, so
+you can switch kinds or start typing a search straight away. **Enable All** / **Disable All** stay disabled until the
+list has finished loading.
 
 The paired **Enable All** / **Disable All** buttons act on the **current filter**: with a search or the Virtual per-type
-filter active, they toggle exactly the matching collections; with no filter they toggle the whole tab and ask for
+filter active, they toggle exactly the matching collections; with no filter they toggle the whole kind and ask for
 confirmation first, since that can be a large number.
 
 The **Show collection games in platform groups** setting — whether games pulled in via a collection also get added to
