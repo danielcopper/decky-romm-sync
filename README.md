@@ -4,7 +4,7 @@
 
 # decky-romm-sync
 
-## Your self-hosted RomM library, in your Steam library
+<h3>Your self-hosted RomM library, in your Steam library</h3>
 
 [Getting Started](https://danielcopper.github.io/decky-romm-sync/user-guide/getting-started/) ·
 [Configuration](https://danielcopper.github.io/decky-romm-sync/user-guide/configuration/) ·
@@ -20,7 +20,6 @@
 <a href="https://github.com/danielcopper/decky-romm-sync/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/danielcopper/decky-romm-sync?style=for-the-badge&color=4795c9&labelColor=16202c"></a>
 <a href="https://github.com/danielcopper/decky-romm-sync/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/danielcopper/decky-romm-sync/total?style=for-the-badge&color=4795c9&labelColor=16202c"></a>
 <a href="https://github.com/rommapp/romm/releases"><img alt="Requires RomM 4.9.0 or newer" src="https://img.shields.io/badge/RomM-%E2%89%A5%204.9.0-4795c9?style=for-the-badge&labelColor=16202c"></a>
-<a href="https://github.com/danielcopper/decky-romm-sync/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-4795c9?style=for-the-badge&labelColor=16202c"></a>
 
 </div>
 
