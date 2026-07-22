@@ -184,7 +184,7 @@ vi.mock("@decky/ui", () => {
         ...tabs.map((t) =>
           createElement(
             "button",
-            { key: t.id, "data-testid": `tab-${t.id}`, onClick: () => p.onShowTab?.(t.id) },
+            { key: t.id, type: "button", "data-testid": `tab-${t.id}`, onClick: () => p.onShowTab?.(t.id) },
             createElement("span", { "data-testid": `tab-title-${t.id}` }, t.title),
             createElement(
               "span",
