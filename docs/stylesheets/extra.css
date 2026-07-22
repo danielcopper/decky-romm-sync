@@ -1,0 +1,20 @@
+/* Site palette, taken from the plugin mark: a deep Steam-blue shell with a
+   lighter blue for interactive accents. Material's named palettes have nothing
+   in this range, so both schemes are set as custom colours. */
+
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: #2d5876;
+  --md-primary-fg-color--light: #4795c9;
+  --md-primary-fg-color--dark: #1b3549;
+  --md-accent-fg-color: #2a6f9e;
+  --md-accent-fg-color--transparent: #2a6f9e1a;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #1a3549;
+  --md-primary-fg-color--light: #2d5876;
+  --md-primary-fg-color--dark: #12222f;
+  --md-accent-fg-color: #66c0f4;
+  --md-accent-fg-color--transparent: #66c0f41a;
+  --md-typeset-a-color: #8fd0f7;
+}

@@ -1,5 +1,5 @@
 site_name: decky-romm-sync
-site_description: Decky Loader plugin to sync your RomM library to Steam as non-steam shortcuts
+site_description: A Decky Loader plugin that syncs your self-hosted RomM library into Steam
 site_url: https://danielcopper.github.io/decky-romm-sync/
 
 # Architectural Decision Records (`docs/adr/`) are kept in the repo for
@@ -15,18 +15,20 @@ edit_uri: edit/main/docs/
 
 theme:
   name: material
+  logo: assets/logo.svg
+  favicon: assets/logo.png
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: deep purple
-      accent: amber
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: deep purple
-      accent: amber
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
@@ -38,6 +40,9 @@ theme:
     - search.highlight
     - content.action.edit
     - content.code.copy
+
+extra_css:
+  - stylesheets/extra.css
 
 plugins:
   - search

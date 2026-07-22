@@ -1,4 +1,4 @@
-![decky-romm-sync](assets/banner.png)
+<p align="center"><img src="assets/logo.png" alt="" width="150"></p>
 
 # decky-romm-sync
 

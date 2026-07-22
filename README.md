@@ -1,46 +1,65 @@
-![decky-romm-sync](assets/banner.png)
+<div align="center">
 
-[![CI](https://github.com/danielcopper/decky-romm-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/danielcopper/decky-romm-sync/actions/workflows/ci.yml)
-[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
-[![Coverage](https://img.shields.io/sonar/coverage/danielcopper_decky-romm-sync?server=https%3A%2F%2Fsonarcloud.io)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
-[![Maintainability](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
-[![Reliability](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
-[![Security](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
-[![Downloads](https://img.shields.io/github/downloads/danielcopper/decky-romm-sync/total.svg)](https://github.com/danielcopper/decky-romm-sync/releases)
+<img src="assets/logo.png" alt="" width="200">
 
 # decky-romm-sync
 
+## Your self-hosted RomM library, in your Steam library
+
+[Getting Started](https://danielcopper.github.io/decky-romm-sync/user-guide/getting-started/) ·
+[Configuration](https://danielcopper.github.io/decky-romm-sync/user-guide/configuration/) ·
+[Syncing](https://danielcopper.github.io/decky-romm-sync/user-guide/syncing-your-library/) ·
+[Managing Games](https://danielcopper.github.io/decky-romm-sync/user-guide/managing-games/)
+
+[BIOS &amp; Cores](https://danielcopper.github.io/decky-romm-sync/user-guide/bios-management/) ·
+[Save Sync](https://danielcopper.github.io/decky-romm-sync/user-guide/save-sync/) ·
+[Troubleshooting](https://danielcopper.github.io/decky-romm-sync/user-guide/troubleshooting/)
+
+<a href="https://danielcopper.github.io/decky-romm-sync/"><img alt="Documentation" src="https://img.shields.io/badge/user%20guide-read-4795c9?style=for-the-badge&labelColor=16202c"></a>
+<a href="https://github.com/danielcopper/decky-romm-sync/releases/latest"><img alt="Release" src="https://img.shields.io/github/package-json/v/danielcopper/decky-romm-sync?style=for-the-badge&label=release&color=4795c9&labelColor=16202c"></a>
+<a href="https://github.com/danielcopper/decky-romm-sync/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/danielcopper/decky-romm-sync?style=for-the-badge&color=4795c9&labelColor=16202c"></a>
+<a href="https://github.com/danielcopper/decky-romm-sync/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/danielcopper/decky-romm-sync/total?style=for-the-badge&color=4795c9&labelColor=16202c"></a>
+<a href="https://github.com/rommapp/romm/releases"><img alt="Requires RomM 4.9.0 or newer" src="https://img.shields.io/badge/RomM-%E2%89%A5%204.9.0-4795c9?style=for-the-badge&labelColor=16202c"></a>
+<a href="https://github.com/danielcopper/decky-romm-sync/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-GPL--3.0-4795c9?style=for-the-badge&labelColor=16202c"></a>
+
+</div>
+
 A [Decky Loader](https://decky.xyz/) plugin that syncs your self-hosted [RomM](https://github.com/rommapp/romm) library
 into Steam as non-steam shortcuts. Games appear directly in your Steam library, launch through
-[RetroDECK](https://retrodeck.net/), and keep their saves in sync across devices through your RomM server.
-
-## 📖 [Read the full documentation →](https://danielcopper.github.io/decky-romm-sync/)
-
-Installation, setup, save sync, BIOS management, troubleshooting, and the architecture reference all live on the
-documentation site. This README is just the quick tour.
+[RetroDECK](https://retrodeck.net/), and can keep their saves in sync across devices through your RomM server.
 
 ## Features
 
-- **Library sync** — Pulls platforms and ROMs from your RomM server and creates Steam shortcuts, complete with cover
-  art, hero banners, and logos (with optional [SteamGridDB](https://www.steamgriddb.com/) artwork)
-- **Save sync** — Keeps save files in sync across devices through your RomM server, with newest-wins conflict resolution
-  and a manual override when you need it
-- **ROM downloads** — Download ROMs on demand with progress tracking and a managed download queue
-- **BIOS management** — Download firmware/BIOS files from RomM for systems that need them (PSX, Dreamcast, PS2, …)
-- **Game detail page** — Install status, BIOS status, and download/uninstall actions right on each game's Steam page
-- **Per-platform control** — Choose exactly which platforms get synced
-- **Controller friendly** — Full gamepad navigation throughout the plugin UI
-- **Steam Input config** — Per-shortcut Steam Input mode (Default / Force On / Force Off)
-- **RetroDECK path migration** — Move your RetroDECK installation between storage locations without re-syncing
-- **RetroArch diagnostics** — Detects misconfigured input drivers that break menu navigation
+- **Library sync** — Pulls the platforms and collections you pick from your RomM server into Steam as non-steam
+  shortcuts with RomM cover art; later runs are incremental and preview what will change before touching anything
+- **SteamGridDB artwork** — Add a free [SteamGridDB](https://www.steamgriddb.com/) key to get hero banners, logos, wide
+  capsules and custom icons, with a manual picker for games that don't match automatically
+- **Save sync** — Opt-in save syncing across devices through your RomM server, automatically before launch and after you
+  quit; identical saves resolve silently, and if both sides genuinely changed you decide which one wins
+- **Save slots & version history** — Multiple named save profiles per game, plus per-file version history with restore
+- **ROM downloads** — Download on demand with progress, pause/resume/cancel, and a managed queue
+- **BIOS management** — Per-platform BIOS status, download all or only what your active core requires, hash-verified
+  against a bundled registry, and delete them again when you're done
+- **Game detail page** — Replaces Steam's page for synced games: RomM metadata, RetroAchievements progress, playtime,
+  install and BIOS status, save management, and per-game actions
+- **Multi-disc & multi-version** — Pick the disc for multi-disc games and switch between regions or revisions of the
+  same game, right from its Steam page
+- **Emulator cores** — Set the core per system, or override it for a single game
+- **Steam Input** — Pick a Steam Input mode (Default / Force On / Force Off) and apply it to every shortcut the plugin
+  created
+- **RetroArch input fix** — Spots the `input_driver` value that breaks controller navigation in RetroArch's menus and
+  repairs it in one tap
+- **Follows RetroDECK moves** — Moved RetroDECK to another drive? The ROMs, BIOS files and saves the plugin manages are
+  relocated and your shortcuts repointed — nothing needs re-downloading
+- **Cleanup tools** — Remove shortcuts per platform or all at once, uninstall ROMs, and clear orphaned grid images
 
 ## Screenshots
 
-|                                   QAM panel                                    |                                        Game detail page                                         |
-| :----------------------------------------------------------------------------: | :---------------------------------------------------------------------------------------------: |
-|               ![RomM Sync QAM panel](assets/screenshot-qam.jpg)                |              ![Game detail page with metadata](assets/screenshot-game-detail.jpg)               |
-|                              **BIOS management**                               |                                      **Per-game actions**                                       |
-| ![BIOS status showing a required file to download](assets/screenshot-bios.jpg) | ![RomM actions menu: sync saves, download BIOS, refresh artwork](assets/screenshot-actions.jpg) |
+|                Quick Access panel                |                    Game detail page                    |
+| :----------------------------------------------: | :----------------------------------------------------: |
+| ![Quick Access panel](assets/screenshot-qam.jpg) | ![Game detail page](assets/screenshot-game-detail.jpg) |
+|               **BIOS management**                |                  **Per-game actions**                  |
+|    ![BIOS status](assets/screenshot-bios.jpg)    |     ![Actions menu](assets/screenshot-actions.jpg)     |
 
 ## Requirements
 
@@ -52,7 +71,8 @@ documentation site. This README is just the quick tour.
 
 ## Installation
 
-### From the Decky Store
+<details>
+<summary><b>From the Decky Store</b> — not available yet</summary>
 
 > ⚠️ **Not available yet.** The plugin will be submitted to the [Decky Store](https://plugins.deckbrew.xyz/) with the
 > **v1.0** release. Until then, use the manual install below.
@@ -60,7 +80,10 @@ documentation site. This README is just the quick tour.
 Once published, install it straight from Decky's built-in store — open the Quick Access Menu → **Decky** → store icon,
 search for **RomM Sync**, and install. No Developer Mode required.
 
-### From ZIP or URL
+</details>
+
+<details open>
+<summary><b>From ZIP or URL</b> — the current method</summary>
 
 This is the current method while v1.0 is in progress. It requires **Developer Mode** in Decky Loader (Decky settings →
 gear icon → toggle **Developer Mode**).
@@ -69,6 +92,8 @@ gear icon → toggle **Developer Mode**).
    [releases page](https://github.com/danielcopper/decky-romm-sync/releases)
 2. In Decky settings → **Developer** tab → **Install Plugin from ZIP** (or **from URL** with the
    [latest release link](https://github.com/danielcopper/decky-romm-sync/releases/latest/download/decky-romm-sync.zip))
+
+</details>
 
 > Full step-by-step instructions, including first-time setup, are in
 > [Getting Started](https://danielcopper.github.io/decky-romm-sync/user-guide/getting-started/).
@@ -93,6 +118,13 @@ Build from source, run the tests, and read the architecture reference on the doc
   UI into a windowed Big Picture on the Deck, no Game Mode switching
 - [Backend architecture](https://danielcopper.github.io/decky-romm-sync/architecture/backend-architecture/)
 
+[![CI](https://github.com/danielcopper/decky-romm-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/danielcopper/decky-romm-sync/actions/workflows/ci.yml)
+[![Quality Gate](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
+[![Coverage](https://img.shields.io/sonar/coverage/danielcopper_decky-romm-sync?server=https%3A%2F%2Fsonarcloud.io)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
+[![Maintainability](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
+[![Reliability](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=reliability_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
+[![Security](https://sonarcloud.io/api/project_badges/measure?project=danielcopper_decky-romm-sync&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=danielcopper_decky-romm-sync)
+
 ## Acknowledgments
 
 This plugin stands on the shoulders of some great projects:
@@ -116,4 +148,5 @@ This plugin stands on the shoulders of some great projects:
 
 ## License
 
-GPL-3.0
+GPL-3.0. This is an independent project and is not affiliated with, endorsed by, or sponsored by the RomM project or
+Valve Corporation.
