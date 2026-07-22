@@ -114,6 +114,33 @@ vi.mock("@decky/ui", async () => {
         typeof p.label === "string" ? p.label : null,
       ),
     Spinner: () => ce("div", { "data-testid": "spinner" }),
+    // Faithful-enough Tabs stub: renders each tab's title (queryable via
+    // getByText, clicking it fires onShowTab through button bubbling) and its
+    // renderTabAddon() badge, plus ONLY the active tab's content — mirroring the
+    // real component so tab switching + count badges + the per-tab list area
+    // (the #1539 loading UX) can be tested.
+    Tabs: (
+      p: AnyProps & {
+        tabs?: Array<{ id: string; title: string; content?: unknown; renderTabAddon?: () => unknown }>;
+        activeTab?: string;
+        onShowTab?: (id: string) => void;
+      },
+    ) => {
+      const tabs = p.tabs ?? [];
+      return ce(
+        "div",
+        { "data-testid": "tabs" },
+        ...tabs.map((t) =>
+          ce(
+            "button",
+            { key: t.id, "data-testid": `tab-${t.id}`, onClick: () => p.onShowTab?.(t.id) },
+            ce("span", { "data-testid": `tab-title-${t.id}` }, t.title),
+            ce("span", { "data-testid": `tab-addon-${t.id}` }, t.renderTabAddon ? (t.renderTabAddon() as never) : null),
+          ),
+        ),
+        tabs.find((t) => t.id === p.activeTab)?.content as never,
+      );
+    },
   };
 });
 
@@ -635,6 +662,35 @@ describe("LibraryPage", () => {
       // Empty library → nothing to enable, buttons disabled.
       expect((getByText("Enable All") as HTMLButtonElement).disabled).toBe(true);
     });
+
+    it("holds the tab count badges until the list loads, then shows the per-kind counts (no '(0)' flash)", async () => {
+      const { promise, resolve } = deferredCollections();
+      vi.mocked(backend.getCollections).mockReturnValue(promise);
+      const { getByText, getByTestId } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      // While the list is still pending the tabs render but carry NO count badge
+      // — the addon slot is empty, so nothing flashes "(0)".
+      expect(getByTestId("tab-addon-standard").textContent).toBe("");
+      expect(getByTestId("tab-addon-smart").textContent).toBe("");
+      expect(getByTestId("tab-addon-virtual").textContent).toBe("");
+      // Resolve the list → each tab shows its per-kind count (an empty kind now
+      // legitimately reads "(0)", which is data, not a loading flash).
+      await act(async () => {
+        resolve({
+          success: true,
+          collections: [
+            makeCollection({ id: "u1", name: "UserOne", kind: "standard", is_favorite: false }),
+            makeCollection({ id: "u2", name: "UserTwo", kind: "standard", is_favorite: false }),
+            makeCollection({ id: "s1", name: "SmartOne", kind: "smart", is_favorite: false }),
+          ],
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(getByTestId("tab-addon-standard").textContent).toContain("(2)");
+      expect(getByTestId("tab-addon-smart").textContent).toContain("(1)");
+      expect(getByTestId("tab-addon-virtual").textContent).toContain("(0)");
+    });
   });
 
   // ------------------------------------------------------------------
@@ -838,7 +894,7 @@ describe("LibraryPage", () => {
   // H. Collections tab — sub-tabs (my / smart / virtual) + section headers
   // ------------------------------------------------------------------
   describe("collections tab — sub-tabs", () => {
-    it("renders 3 sub-tab buttons with plain labels (no inline counts)", async () => {
+    it("renders three kind tabs (Standard/Smart/Virtual) with per-kind count badges once loaded", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
@@ -850,18 +906,23 @@ describe("LibraryPage", () => {
           makeCollection({ id: "vc1", name: "Vc1", kind: "virtual", virtual_type: "collection", is_favorite: false }),
         ],
       });
-      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      const { getByText, getByTestId, container } = render(<LibraryPage onBack={vi.fn()} />);
       await flushAsync();
       await act(async () => {
         fireEvent.click(getByText("Collections"));
         await Promise.resolve();
         await Promise.resolve();
       });
-      // Plain sub-tab labels — no inline counts.
+      // Three kind tabs, labelled by their SUB_TAB_LABELS values.
       expect(getByText("Standard")).not.toBeNull();
       expect(getByText("Smart")).not.toBeNull();
       expect(getByText("Virtual")).not.toBeNull();
-      // No "Favorites" sub-tab button (now a top-level toggle).
+      // Per-kind count badges: the favorite is excluded from the Standard count
+      // (it's the top-level toggle), and the scope is the default "All".
+      expect(getByTestId("tab-addon-standard").textContent).toContain("(2)");
+      expect(getByTestId("tab-addon-smart").textContent).toContain("(1)");
+      expect(getByTestId("tab-addon-virtual").textContent).toContain("(2)");
+      // No "Favorites" tab (now a top-level toggle).
       expect(container.textContent).not.toContain("Favorites (");
     });
 
@@ -1340,6 +1401,20 @@ describe("LibraryPage", () => {
       // back to "all", so the foreign collection is visible again.
       expect(vi.mocked(backend.setCollectionOwnerScope)).toHaveBeenCalledWith("own");
       expect(container.querySelector('[data-label="TheirColl"]')).not.toBeNull();
+    });
+
+    it("the Standard tab count badge is scope-aware (Mine drops the foreign collection)", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({ success: true, collections: ownAndForeign() });
+      const { getByText, getByTestId } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      // Default "All" → both the own and foreign standard collection are counted.
+      expect(getByTestId("tab-addon-standard").textContent).toContain("(2)");
+      // Switch to "Mine" → the badge drops the foreign one.
+      await act(async () => {
+        fireEvent.click(getByText("Mine"));
+        await Promise.resolve();
+      });
+      expect(getByTestId("tab-addon-standard").textContent).toContain("(1)");
     });
   });
 
