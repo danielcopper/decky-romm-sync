@@ -134,13 +134,6 @@ const flushAsync = () =>
     await Promise.resolve();
   });
 
-// A kind-selector button renders its label + per-kind count as sibling spans;
-// read the whole button's text (e.g. "Standard(2)", or "Standard" while loading)
-// to assert the count badge. getByText(label) matches the bare-label span, so it
-// keeps working whether or not the count is present.
-const kindButtonText = (getByText: (t: string) => HTMLElement, label: string): string =>
-  getByText(label).closest("button")?.textContent ?? "";
-
 function defaultSettings(): PluginSettings {
   return {
     romm_url: "",
@@ -643,33 +636,28 @@ describe("LibraryPage", () => {
       expect((getByText("Enable All") as HTMLButtonElement).disabled).toBe(true);
     });
 
-    it("holds the kind-button counts until the list loads, then shows the per-kind counts (no '(0)' flash)", async () => {
+    it("shows the section header without a count while loading, then with the count once loaded (no '(0)' flash)", async () => {
       const { promise, resolve } = deferredCollections();
       vi.mocked(backend.getCollections).mockReturnValue(promise);
-      const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
-      // While the list is still pending the kind buttons render but carry NO
-      // count — the label is the bare kind, so nothing flashes "(0)".
-      expect(kindButtonText(getByText, "Standard")).toBe("Standard");
-      expect(kindButtonText(getByText, "Smart")).toBe("Smart");
-      expect(kindButtonText(getByText, "Virtual")).toBe("Virtual");
-      // Resolve the list → each button shows its per-kind count (an empty kind
-      // now legitimately reads "(0)", which is data, not a loading flash).
+      // While the list is still pending the header shows the bare kind, no count
+      // — nothing flashes "(0)".
+      expect(container.textContent).toContain("STANDARD COLLECTIONS");
+      expect(container.textContent).not.toContain("STANDARD COLLECTIONS (");
+      // Resolve the list → the active kind's header carries the visible count.
       await act(async () => {
         resolve({
           success: true,
           collections: [
             makeCollection({ id: "u1", name: "UserOne", kind: "standard", is_favorite: false }),
             makeCollection({ id: "u2", name: "UserTwo", kind: "standard", is_favorite: false }),
-            makeCollection({ id: "s1", name: "SmartOne", kind: "smart", is_favorite: false }),
           ],
         });
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(kindButtonText(getByText, "Standard")).toContain("(2)");
-      expect(kindButtonText(getByText, "Smart")).toContain("(1)");
-      expect(kindButtonText(getByText, "Virtual")).toContain("(0)");
+      expect(container.textContent).toContain("STANDARD COLLECTIONS (2)");
     });
   });
 
@@ -874,7 +862,7 @@ describe("LibraryPage", () => {
   // H. Collections tab — sub-tabs (my / smart / virtual) + section headers
   // ------------------------------------------------------------------
   describe("collections tab — sub-tabs", () => {
-    it("renders three kind buttons (Standard/Smart/Virtual) with per-kind counts once loaded", async () => {
+    it("renders three plain kind buttons (Standard/Smart/Virtual); the count lives in the section header, not the buttons", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [
@@ -893,15 +881,13 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      // Three kind buttons, labelled by their SUB_TAB_LABELS values.
-      expect(getByText("Standard")).not.toBeNull();
-      expect(getByText("Smart")).not.toBeNull();
-      expect(getByText("Virtual")).not.toBeNull();
-      // Per-kind counts in the button labels: the favorite is excluded from the
-      // Standard count (it's the top-level toggle), and the scope is default "All".
-      expect(kindButtonText(getByText, "Standard")).toContain("(2)");
-      expect(kindButtonText(getByText, "Smart")).toContain("(1)");
-      expect(kindButtonText(getByText, "Virtual")).toContain("(2)");
+      // Three kind buttons with PLAIN labels — the count is not baked into any button.
+      expect(getByText("Standard").textContent).toBe("Standard");
+      expect(getByText("Smart").textContent).toBe("Smart");
+      expect(getByText("Virtual").textContent).toBe("Virtual");
+      // The count lives once in the active kind's section header (the favorite is
+      // excluded — it's the top-level toggle — and the scope is the default "All").
+      expect(container.textContent).toContain("STANDARD COLLECTIONS (2)");
       // No "Favorites" button (now a top-level toggle).
       expect(container.textContent).not.toContain("Favorites (");
     });
@@ -1383,18 +1369,18 @@ describe("LibraryPage", () => {
       expect(container.querySelector('[data-label="TheirColl"]')).not.toBeNull();
     });
 
-    it("the Standard button count is scope-aware (Mine drops the foreign collection)", async () => {
+    it("the section-header count is scope-aware (Mine drops the foreign collection)", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({ success: true, collections: ownAndForeign() });
-      const { getByText } = render(<LibraryPage onBack={vi.fn()} />);
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
       // Default "All" → both the own and foreign standard collection are counted.
-      expect(kindButtonText(getByText, "Standard")).toContain("(2)");
-      // Switch to "Mine" → the count drops the foreign one.
+      expect(container.textContent).toContain("STANDARD COLLECTIONS (2)");
+      // Switch to "Mine" → the header count drops the foreign one.
       await act(async () => {
         fireEvent.click(getByText("Mine"));
         await Promise.resolve();
       });
-      expect(kindButtonText(getByText, "Standard")).toContain("(1)");
+      expect(container.textContent).toContain("STANDARD COLLECTIONS (1)");
     });
   });
 

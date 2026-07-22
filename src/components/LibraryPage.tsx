@@ -405,14 +405,6 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     );
   };
 
-  // Count of collections in a kind under the current owner scope — appended to
-  // each kind button's label (#1539). It deliberately ignores the search and
-  // per-type filter (both reset on kind switch), so each button shows a stable
-  // "how many live in here" rather than a value that changes as you type.
-  const subTabCount = (sub: CollectionSubTab): number =>
-    filterCollectionsByOwnerScope(filterCollectionsBySubTab(collections, sub, favoritesCollection === null), ownerScope)
-      .length;
-
   // --- Collections tab content ---
   const renderCollectionsContent = () => {
     // The control shell (favorites, scope, the kind-selector row, search,
@@ -514,40 +506,27 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
             </Focusable>
           </PanelSectionRow>
         </PanelSection>
-        {/* Kind selector — a labeled button row (Standard/Smart/Virtual with a
-            per-kind count), mirroring the scope + per-type-filter rows. NOT the
-            native Tabs: its L1/R1 bumper glyphs eat width and truncate labels in
-            the narrow QAM (#1539). Buttons flex + wrap like the per-type filter,
-            so a "Standard (12)" label wraps its count below rather than truncating.
+        {/* Kind selector — a plain Standard/Smart/Virtual button row, styled
+            exactly like the scope (Mine/All) buttons. NOT the native Tabs: its
+            L1/R1 bumper glyphs eat width and truncate labels in the narrow QAM
+            (#1539). The per-kind count lives once in the section header below
+            rather than on every button, so the buttons stay compact.
             handleSubTabChange keeps the reset-on-switch semantics (search /
             per-type filter reset). */}
-        <Focusable
-          flow-children="horizontal"
-          style={{ display: "flex", gap: "8px", alignItems: "stretch", padding: "0 16px 12px" }}
-        >
+        <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px", padding: "0 16px 12px" }}>
           {SUB_TAB_ORDER.map((sub) => (
             <DialogButton
               key={sub}
               style={{
                 flex: 1,
                 minWidth: 0,
-                padding: "8px 4px",
-                display: "flex",
-                flexWrap: "wrap",
-                alignItems: "center",
-                justifyContent: "center",
-                columnGap: "4px",
-                textAlign: "center",
+                padding: "8px 0",
                 opacity: activeSubTab === sub ? 1 : 0.5,
                 borderBottom: activeSubTab === sub ? "2px solid #1a9fff" : "2px solid transparent",
               }}
               onClick={() => handleSubTabChange(sub)}
             >
-              {/* Label and count are separate nodes so the count can appear only
-                  once loaded (no "(0)" flash) and wrap below the label when the
-                  QAM is narrow. */}
-              <span>{SUB_TAB_LABELS[sub]}</span>
-              {hasCollections && <span>{`(${subTabCount(sub)})`}</span>}
+              {SUB_TAB_LABELS[sub]}
             </DialogButton>
           ))}
         </Focusable>

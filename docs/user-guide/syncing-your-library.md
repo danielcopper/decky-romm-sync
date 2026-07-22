@@ -216,9 +216,7 @@ Collections appear in Steam's library sidebar and can be used to browse games by
 ### Syncing RomM collections
 
 The **Collections** page groups collections into three kinds, selected by a **Standard / Smart / Virtual** button row,
-plus a dedicated top-level toggle for RomM favorites. Each button carries a **per-kind count** — `Standard (4)` —
-showing how many collections that kind holds under the current **Mine / All** scope (the count appears once the list has
-loaded, so it never flashes an empty `(0)`).
+plus a dedicated top-level toggle for RomM favorites.
 
 - **Sync RomM favorites** (top-level toggle) — the standard collection RomM auto-manages as your favorites. Always
   exactly one per account, so it sits above the kind buttons as a single switch. It stays visible but grayed out when
@@ -229,7 +227,8 @@ loaded, so it never flashes an empty `(0)`).
 - **Virtual** — auto-generated groupings RomM derives from IGDB metadata: both IGDB **franchise** groupings and IGDB
   **collection** (series) groupings. Each row is labelled with its type (Franchise / IGDB Collection).
 
-The selected kind also shows its match count in the section header (e.g. `STANDARD COLLECTIONS (4)`) and lets you toggle
+The selected kind shows its match count in the section header (e.g. `STANDARD COLLECTIONS (4)`, under the current **Mine
+/ All** scope — the count appears once the list has loaded, so it never flashes an empty `(0)`) and lets you toggle
 individual collections. A **search box** filters the selected kind by a **fuzzy** name match (its heading is labelled
 _Search collections (fuzzy)_), so a loose or partial query still finds a name — most useful on **Virtual**, which can
 run to hundreds of entries. On **Virtual** a segmented **All / Franchise / IGDB Collection** control narrows the list to
