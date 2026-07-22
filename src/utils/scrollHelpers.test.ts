@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { findScrollParent, findOutermostScrollParent, scrollToTop, scrollFocusedToCenter } from "./scrollHelpers";
+import {
+  findScrollParent,
+  findOutermostScrollParent,
+  scrollToTop,
+  scrollFocusedToCenter,
+  scrollElementToTop,
+} from "./scrollHelpers";
 
 /**
  * happy-dom does not compute layout. Set `scrollHeight` / `clientHeight` and
@@ -201,5 +207,106 @@ describe("scrollFocusedToCenter", () => {
     vi.runAllTimers();
 
     expect(scrollTo).not.toHaveBeenCalled();
+  });
+});
+
+describe("scrollElementToTop", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("derives the top clearance from the OUTERMOST scroll parent's clientHeight (fraction path) after the 50ms timer", () => {
+    // Outermost container: clientHeight 600, at viewport top 0, already scrolled
+    // 100px. element at viewport top 400, 40px tall.
+    // margin = min(120 cap, 600 * 0.10) = min(120, 60) = 60
+    // expected targetScroll = 100 + (400 - 0) - 60 = 440
+    const outer = makeElement({
+      overflowY: "auto",
+      scrollHeight: 2000,
+      clientHeight: 600,
+      rect: { top: 0, height: 600 },
+    });
+    outer.scrollTop = 100;
+    const inner = makeElement({
+      overflowY: "auto",
+      scrollHeight: 1000,
+      clientHeight: 400,
+      rect: { top: 0, height: 400 },
+    });
+    const leaf = makeElement({ rect: { top: 400, height: 40 } });
+    chain(outer, inner, leaf);
+    const scrollTo = vi.fn();
+    outer.scrollTo = scrollTo as unknown as typeof outer.scrollTo;
+
+    scrollElementToTop(leaf);
+    expect(scrollTo).not.toHaveBeenCalled();
+    vi.runAllTimers();
+
+    expect(scrollTo).toHaveBeenCalledOnce();
+    // Instant (behavior: "auto") — the smooth animation raced typing re-renders
+    // and jittered the field width, so the scroll settles in one frame.
+    expect(scrollTo).toHaveBeenCalledWith({ top: 440, behavior: "auto" });
+  });
+
+  it("caps the top clearance on a tall viewport (cap path)", () => {
+    // clientHeight 2000 → 2000 * 0.10 = 200, capped at 120.
+    // expected targetScroll = 0 + (500 - 0) - 120 = 380
+    const outer = makeElement({
+      overflowY: "auto",
+      scrollHeight: 5000,
+      clientHeight: 2000,
+      rect: { top: 0, height: 2000 },
+    });
+    outer.scrollTop = 0;
+    const leaf = makeElement({ rect: { top: 500, height: 40 } });
+    chain(outer, leaf);
+    const scrollTo = vi.fn();
+    outer.scrollTo = scrollTo as unknown as typeof outer.scrollTo;
+
+    scrollElementToTop(leaf);
+    vi.runAllTimers();
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 380, behavior: "auto" });
+  });
+
+  it("clamps the target to 0 when the element sits above the margin (never scrolls negative)", () => {
+    const outer = makeElement({
+      overflowY: "auto",
+      scrollHeight: 2000,
+      clientHeight: 600,
+      rect: { top: 0, height: 600 },
+    });
+    outer.scrollTop = 0;
+    // element only 5px below the container top; margin = min(120, 600*0.10) = 60
+    // → raw target 0 + 5 - 60 = -55 → clamp 0.
+    const leaf = makeElement({ rect: { top: 5, height: 40 } });
+    chain(outer, leaf);
+    const scrollTo = vi.fn();
+    outer.scrollTo = scrollTo as unknown as typeof outer.scrollTo;
+
+    scrollElementToTop(leaf);
+    vi.runAllTimers();
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: "auto" });
+  });
+
+  it("is a no-op when no scroll parent is found", () => {
+    const wrapper = makeElement({ overflowY: "visible", scrollHeight: 600, clientHeight: 600 });
+    const leaf = makeElement({ rect: { top: 0, height: 40 } });
+    chain(wrapper, leaf);
+    const scrollTo = vi.fn();
+    wrapper.scrollTo = scrollTo as unknown as typeof wrapper.scrollTo;
+
+    scrollElementToTop(leaf);
+    vi.runAllTimers();
+
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op when the element is null", () => {
+    // Guards the searchFieldRef.current === null case before first mount.
+    expect(() => {
+      scrollElementToTop(null);
+      vi.runAllTimers();
+    }).not.toThrow();
   });
 });

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, FC, KeyboardEvent } from "react";
+import { useState, useEffect, useMemo, useRef, FC } from "react";
 import {
   PanelSection,
   PanelSectionRow,
@@ -30,20 +30,10 @@ import type {
   CollectionOwnerScope,
   VirtualCollectionType,
 } from "../types";
-import { scrollToTop } from "../utils/scrollHelpers";
+import { scrollToTop, scrollElementToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
 import { fuzzyMatch } from "../utils/fuzzyMatch";
 import { LoadingRow } from "./LoadingRow";
-
-// Best-effort on-screen-keyboard dismissal: Enter (R2 on the OSK) blurs the
-// focused field. Whether R2/Enter reliably closes the Steam OSK is Steam-
-// controlled and UNVERIFIED — this is a harmless best effort to revisit in
-// PR 2 (#1539); it must not be relied upon to work.
-function dismissKeyboardOnEnter(e: KeyboardEvent<HTMLInputElement>): void {
-  if (e.key === "Enter") {
-    (document.activeElement as HTMLElement | null)?.blur();
-  }
-}
 
 type CollectionSubTab = "user" | "smart" | "virtual";
 
@@ -160,13 +150,17 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   // the sub-tab changes so each sub-tab is entered unfiltered.
   const [search, setSearch] = useState("");
   const [virtualTypeFilter, setVirtualTypeFilter] = useState<VirtualTypeFilter>("all");
-  // Wraps the search field's label + input so it can be scrolled into view when
-  // the on-screen keyboard opens over the lower half of the screen (#1539).
+  // Wraps the search field's label + input so it can be lifted to the top of
+  // the scroll view when the on-screen keyboard opens over the lower half of
+  // the screen (#1539).
   const searchFieldRef = useRef<HTMLDivElement>(null);
-  const scrollSearchIntoView = () => {
-    // scrollIntoView finds the scroll parent itself and only scrolls when the
-    // element isn't already visible, so it can never push the field off-screen.
-    searchFieldRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  const scrollSearchToTop = () => {
+    // Element-to-top rather than scrollIntoView (which centers the field
+    // on-device) or a plain panel scrollToTop (the field sits below the
+    // owner-scope + sub-tab controls, so a panel-top scroll can leave it under
+    // the keyboard). Lift the field itself to just below the QAM header at the
+    // top of the outermost scroller (the clearance scales with the viewport).
+    scrollElementToTop(searchFieldRef.current);
   };
 
   // The favorites collection (a user collection with is_favorite=true) is
@@ -203,17 +197,31 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
   // Load collections data lazily on first switch to collections tab.
   // Sub-tab is reset to "user" in the tab-click handler (not here);
   // that's an event-driven concern, not state synchronisation.
+  //
+  // The two fetches are DECOUPLED so the slow one never blocks the fast one:
+  // getSettings() is quick and only supplies the owner-scope, so it populates
+  // that control right away; getCollections() is slow (a large virtual list)
+  // and drives the list area's own loading/error/empty states. The controls
+  // render immediately regardless of the list fetch (#1539). A settings-read
+  // failure leaves the owner-scope at its "all" default rather than blanking
+  // the list — only a collections-read failure is a list error.
   useEffect(() => {
     if (activeTab === "collections" && !collectionsLoaded.current) {
       collectionsLoaded.current = true;
-      Promise.all([getCollections(), getSettings()])
-        .then(([collResult, settingsResult]) => {
+      getSettings()
+        .then((settingsResult) => {
+          setOwnerScope(settingsResult.collection_owner_scope === "own" ? "own" : "all");
+        })
+        .catch(() => {
+          // Owner-scope stays at its "all" default; the list is unaffected.
+        });
+      getCollections()
+        .then((collResult) => {
           if (collResult.success) {
             setCollections(collResult.collections);
           } else {
             setCollectionsError(true);
           }
-          setOwnerScope(settingsResult.collection_owner_scope === "own" ? "own" : "all");
         })
         .catch(() => setCollectionsError(true))
         .finally(() => setCollectionsLoading(false));
@@ -399,31 +407,13 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
 
   // --- Collections tab content ---
   const renderCollectionsContent = () => {
-    if (collectionsLoading) {
-      return (
-        <PanelSection title="Collections">
-          <LoadingRow />
-        </PanelSection>
-      );
-    }
-    if (collectionsError) {
-      return (
-        <PanelSection title="Collections">
-          <PanelSectionRow>
-            <Field label="Failed to load collections" description="Check your connection and try again" />
-          </PanelSectionRow>
-        </PanelSection>
-      );
-    }
-    if (collections.length === 0) {
-      return (
-        <PanelSection title="Collections">
-          <PanelSectionRow>
-            <Field label="No collections found" description="Create collections in RomM to sync them here" />
-          </PanelSectionRow>
-        </PanelSection>
-      );
-    }
+    // The control shell (owner-scope, sub-tabs, search, per-type filter,
+    // Enable/Disable All) renders IMMEDIATELY — the slow getCollections fetch
+    // only gates the list AREA, not the controls (#1539). `hasCollections`
+    // gates everything that needs the loaded set: the favorites toggle, the
+    // header count, and the Enable/Disable All buttons (which must not act on
+    // an unloaded/empty set).
+    const hasCollections = collections.length > 0;
 
     // When the favorites toggle isn't rendered (zero or multi-favorites case),
     // include any favorites in the "My" sub-tab so they stay reachable.
@@ -453,24 +443,33 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
     const matchedIds = matched.map((c) => c.id);
 
     const activeLabel = SUB_TAB_LABELS[activeSubTab];
-    const sectionTitle = `${SUB_TAB_HEADERS[activeSubTab]} (${matched.length})`;
+    // The header count only appears once the list has loaded, so it doesn't
+    // flash "(0)" while getCollections is still pending.
+    const sectionTitle = hasCollections
+      ? `${SUB_TAB_HEADERS[activeSubTab]} (${matched.length})`
+      : SUB_TAB_HEADERS[activeSubTab];
 
     return (
       <>
-        {favoritesCollection && (
-          <PanelSection>
-            <PanelSectionRow>
-              <ToggleField
-                label="Sync RomM favorites"
-                description={favoritesDescription(favoritesCollection.rom_count)}
-                checked={favoritesCollection.sync_enabled}
-                onChange={(value: boolean) => {
-                  detach(handleCollectionToggle(favoritesCollection.id, favoritesCollection.kind, value));
-                }}
-              />
-            </PanelSectionRow>
-          </PanelSection>
-        )}
+        {/* The favorites toggle ALWAYS renders so it never pops in late. It's
+            interactive only when exactly one favorites collection exists;
+            otherwise (still loading, zero favorites, or the multi-favorites
+            fallback that lists them in the "My" sub-tab) it sits disabled and
+            grayed rather than disappearing. */}
+        <PanelSection>
+          <PanelSectionRow>
+            <ToggleField
+              label="Sync RomM favorites"
+              description={favoritesCollection ? favoritesDescription(favoritesCollection.rom_count) : undefined}
+              checked={favoritesCollection ? favoritesCollection.sync_enabled : false}
+              disabled={favoritesCollection === null}
+              onChange={(value: boolean) => {
+                if (!favoritesCollection) return;
+                detach(handleCollectionToggle(favoritesCollection.id, favoritesCollection.kind, value));
+              }}
+            />
+          </PanelSectionRow>
+        </PanelSection>
         <PanelSection>
           <PanelSectionRow>
             <Field
@@ -525,26 +524,24 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
           <PanelSectionRow>
             <div ref={searchFieldRef}>
               <TextField
-                label="Search collections"
+                // "(fuzzy)" in the heading signals the match is a subsequence,
+                // so a partial/loose query hitting more than the exact name
+                // reads as intended.
+                label="Search collections (fuzzy)"
                 value={search}
                 onChange={(e) => {
                   const value = e.target.value;
-                  // Bring the field into view on the first keystroke (empty →
-                  // non-empty), when the on-screen keyboard is actually in use
-                  // and would otherwise cover the field (#1539).
+                  // Lift the field to the top of the view on the first keystroke
+                  // (empty → non-empty), when the on-screen keyboard is actually
+                  // in use and would otherwise cover the field (#1539).
                   if (search === "" && value !== "") {
-                    scrollSearchIntoView();
+                    scrollSearchToTop();
                   }
                   setSearch(value);
                 }}
-                // onFocus covers the "press A to edit" case; scrollIntoView is
-                // idempotent (no-op when already visible), so this is harmless.
-                onFocus={scrollSearchIntoView}
-                // Best-effort OSK dismissal: Enter (R2 on the keyboard) blurs the
-                // field. Whether R2/Enter reliably closes the OSK is Steam-
-                // controlled and UNVERIFIED — revisit in PR 2 (#1539). Harmless if
-                // it no-ops; do not claim it works.
-                onKeyDown={dismissKeyboardOnEnter}
+                // onFocus covers the "press A to edit" case; the scroll is a
+                // no-op when the field is already at the top, so this is harmless.
+                onFocus={scrollSearchToTop}
               />
             </div>
           </PanelSectionRow>
@@ -584,55 +581,91 @@ export const LibraryPage: FC<LibraryPageProps> = ({ onBack }) => {
           )}
           <PanelSectionRow>
             <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px" }}>
+              {/* Disabled until the list has loaded — acting on an unloaded set
+                  would stamp the whole kind server-side sight-unseen (#1539). */}
               <DialogButton
                 style={{ flex: 1, minWidth: 0 }}
+                disabled={!hasCollections}
                 onClick={() => handleCollectionsSetAll(true, isWholeKind, matchedIds)}
               >
                 Enable All
               </DialogButton>
               <DialogButton
                 style={{ flex: 1, minWidth: 0 }}
+                disabled={!hasCollections}
                 onClick={() => handleCollectionsSetAll(false, isWholeKind, matchedIds)}
               >
                 Disable All
               </DialogButton>
             </Focusable>
           </PanelSectionRow>
-          {matched.length === 0 ? (
-            <PanelSectionRow>
-              <Field
-                label={
-                  search
-                    ? `No ${activeLabel.toLowerCase()} collections match your search`
-                    : `No ${activeLabel.toLowerCase()} collections`
-                }
-              />
-            </PanelSectionRow>
-          ) : (
-            <>
-              {rendered.map((collection) => (
-                <PanelSectionRow key={`${collection.kind}:${collection.id}`}>
-                  <ToggleField
-                    label={collection.name}
-                    description={collectionRowDescription(collection)}
-                    checked={collection.sync_enabled}
-                    onChange={(value: boolean) => {
-                      detach(handleCollectionToggle(collection.id, collection.kind, value));
-                    }}
-                  />
-                </PanelSectionRow>
-              ))}
-              {overflow > 0 && (
-                <PanelSectionRow>
-                  <Field
-                    label={`${overflow} more — refine your search`}
-                    description="Type in the search box above to narrow the list."
-                  />
-                </PanelSectionRow>
-              )}
-            </>
-          )}
+          {renderCollectionListBody(matched, rendered, overflow, activeLabel)}
         </PanelSection>
+      </>
+    );
+  };
+
+  // The list AREA only: a spinner while getCollections is pending, then the
+  // error / empty-library / empty-sub-tab / rows states. The controls above it
+  // stay visible in every one of these states (#1539).
+  const renderCollectionListBody = (
+    matched: CollectionSyncSetting[],
+    rendered: CollectionSyncSetting[],
+    overflow: number,
+    activeLabel: string,
+  ) => {
+    if (collectionsLoading) {
+      return <LoadingRow />;
+    }
+    if (collectionsError) {
+      return (
+        <PanelSectionRow>
+          <Field label="Failed to load collections" description="Check your connection and try again" />
+        </PanelSectionRow>
+      );
+    }
+    if (collections.length === 0) {
+      return (
+        <PanelSectionRow>
+          <Field label="No collections found" description="Create collections in RomM to sync them here" />
+        </PanelSectionRow>
+      );
+    }
+    if (matched.length === 0) {
+      return (
+        <PanelSectionRow>
+          <Field
+            label={
+              search
+                ? `No ${activeLabel.toLowerCase()} collections match your search`
+                : `No ${activeLabel.toLowerCase()} collections`
+            }
+          />
+        </PanelSectionRow>
+      );
+    }
+    return (
+      <>
+        {rendered.map((collection) => (
+          <PanelSectionRow key={`${collection.kind}:${collection.id}`}>
+            <ToggleField
+              label={collection.name}
+              description={collectionRowDescription(collection)}
+              checked={collection.sync_enabled}
+              onChange={(value: boolean) => {
+                detach(handleCollectionToggle(collection.id, collection.kind, value));
+              }}
+            />
+          </PanelSectionRow>
+        ))}
+        {overflow > 0 && (
+          <PanelSectionRow>
+            <Field
+              label={`${overflow} more — refine your search`}
+              description="Type in the search box above to narrow the list."
+            />
+          </PanelSectionRow>
+        )}
       </>
     );
   };

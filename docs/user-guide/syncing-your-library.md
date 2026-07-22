@@ -218,7 +218,8 @@ Collections appear in Steam's library sidebar and can be used to browse games by
 The **Collections** page splits collections into three sub-tabs plus a dedicated top-level toggle for RomM favorites:
 
 - **Sync RomM favorites** (top-level toggle) — the user collection RomM auto-manages as your favorites. Always exactly
-  one per account, so it sits above the sub-tabs as a single switch.
+  one per account, so it sits above the sub-tabs as a single switch. It stays visible but grayed out when your account
+  has no favorites collection.
 - **My** sub-tab — your other user-created collections
 - **Smart** sub-tab — filter-based collections that resolve membership at query time, so syncing always picks up the
   current matches
@@ -226,10 +227,16 @@ The **Collections** page splits collections into three sub-tabs plus a dedicated
   IGDB **collection** (series) groupings. Each row is labelled with its type (Franchise / IGDB Collection).
 
 Each sub-tab shows its match count in the section header (e.g. `MY COLLECTIONS (4)`) and lets you toggle individual
-collections. A **search box** above the list filters the current sub-tab by name — most useful on **Virtual**, which can
-run to hundreds of entries. On the **Virtual** sub-tab a segmented **All / Franchise / IGDB Collection** control narrows
-the list to one virtual type. The list itself is capped for performance: when more collections match than fit, the first
-rows render and a `… more — refine your search` hint appears — type in the search box to bring the rest into view.
+collections. A **search box** above the list filters the current sub-tab by a **fuzzy** name match (its heading is
+labelled _Search collections (fuzzy)_), so a loose or partial query still finds a name — most useful on **Virtual**,
+which can run to hundreds of entries. On the **Virtual** sub-tab a segmented **All / Franchise / IGDB Collection**
+control narrows the list to one virtual type. The list itself is capped for performance: when more collections match
+than fit, the first rows render and a `… more — refine your search` hint appears — type in the search box to bring the
+rest into view.
+
+The owner-scope, sub-tab, and search controls appear as soon as you open the page — the collection list loads in behind
+them, so you can pick a sub-tab or start typing a search straight away. **Enable All** / **Disable All** stay disabled
+until the list has finished loading.
 
 The paired **Enable All** / **Disable All** buttons act on the **current filter**: with a search or the Virtual per-type
 filter active, they toggle exactly the matching collections; with no filter they toggle the whole sub-tab and ask for

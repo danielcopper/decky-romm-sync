@@ -11,7 +11,9 @@
 //   - handleCollectionToggle catch → rollback setCollections
 //   - handleSetAllCollections catch → restore previous collections snapshot
 //   - platform-groups inline catch → setPlatformGroups(!value) rollback
-//   - getCollections/getSettings .catch → setCollectionsError(true)
+//   - getCollections .catch → setCollectionsError(true) (the list-driving fetch)
+//   - getSettings .catch → owner-scope stays at its "all" default; the two
+//     fetches are decoupled so a settings-read failure never blanks the list.
 //
 // The System view (per-platform core + BIOS state) lives in SystemPage, a
 // top-level QAM page — its tests are in SystemPage.test.tsx, not here.
@@ -30,11 +32,13 @@ import { render, fireEvent, act } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { LibraryPage } from "./LibraryPage";
 import * as backend from "../api/backend";
+import { scrollElementToTop } from "../utils/scrollHelpers";
 import { showModal } from "@decky/ui";
 import type { PlatformSyncSetting, CollectionSyncSetting, PluginSettings } from "../types";
 
-// scroll helpers are no-ops in happy-dom; mock for cleanliness.
-vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn() }));
+// scroll helpers are no-ops in happy-dom; mock so the search-field scroll and
+// the Back-button scroll can be asserted without a real layout engine.
+vi.mock("../utils/scrollHelpers", () => ({ scrollToTop: vi.fn(), scrollElementToTop: vi.fn() }));
 
 // Re-mock @decky/ui locally so the component tree renders with inspectable
 // stubs (ToggleField checked-prop, Field label/description, DialogButton click).
@@ -61,22 +65,24 @@ vi.mock("@decky/ui", async () => {
         ce("span", { "data-testid": "field-desc" }, p.description as never),
       ),
     Focusable: passthrough("div"),
-    DialogButton: ({ children, onClick }: AnyProps & { onClick?: () => void }) =>
-      ce("button", { onClick }, children as never),
+    DialogButton: ({ children, onClick, disabled }: AnyProps & { onClick?: () => void; disabled?: boolean }) =>
+      ce("button", { onClick, disabled }, children as never),
     TextField: (
       p: AnyProps & {
         value?: string;
+        label?: unknown;
         onChange?: (e: unknown) => void;
         onFocus?: (e: unknown) => void;
-        onKeyDown?: (e: unknown) => void;
       },
     ) =>
       ce("input", {
         "data-testid": "text-field",
+        // Real TextField renders `label` as a heading above the input; expose it
+        // as aria-label so tests can assert the heading text (e.g. the fuzzy hint).
+        "aria-label": typeof p.label === "string" ? p.label : undefined,
         value: p.value ?? "",
         onChange: (e: unknown) => p.onChange?.(e),
         onFocus: (e: unknown) => p.onFocus?.(e),
-        onKeyDown: (e: unknown) => p.onKeyDown?.(e),
       }),
     // A no-render stub — showModal captures the element, so the modal body is
     // inspected off the showModal mock, not the DOM.
@@ -85,6 +91,7 @@ vi.mock("@decky/ui", async () => {
     ToggleField: (
       p: AnyProps & {
         checked?: boolean;
+        disabled?: boolean;
         onChange?: (v: boolean) => void;
         label?: unknown;
         description?: unknown;
@@ -101,6 +108,7 @@ vi.mock("@decky/ui", async () => {
           type: "checkbox",
           "data-testid": "toggle-input",
           checked: p.checked ?? false,
+          disabled: p.disabled ?? false,
           onChange: (e: { target: { checked: boolean } }) => p.onChange?.(e.target.checked),
         }),
         typeof p.label === "string" ? p.label : null,
@@ -186,9 +194,6 @@ describe("LibraryPage", () => {
     vi.mocked(backend.setCollectionOwnerScope).mockResolvedValue({ success: true });
     vi.mocked(backend.getSettings).mockResolvedValue(defaultSettings());
     vi.mocked(showModal).mockReset();
-    // happy-dom doesn't implement scrollIntoView; the search field calls it on
-    // the first keystroke / focus. Stub it so those paths are safe + spyable.
-    HTMLElement.prototype.scrollIntoView = vi.fn();
   });
 
   // ------------------------------------------------------------------
@@ -485,6 +490,150 @@ describe("LibraryPage", () => {
         await Promise.resolve();
       });
       expect(container.textContent).toContain("No collections found");
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // E2. Collections tab — loading UX (controls render before the list) — #1539
+  // ------------------------------------------------------------------
+  describe("collections tab — loading UX (#1539)", () => {
+    type CollectionsResult = { success: boolean; collections: CollectionSyncSetting[] };
+
+    // A getCollections promise the test resolves by hand, so the list stays in
+    // its pending state while the controls are asserted.
+    const deferredCollections = () => {
+      let resolve!: (value: CollectionsResult) => void;
+      const promise = new Promise<CollectionsResult>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    };
+
+    const openCollections = async (getByText: (t: string) => HTMLElement) => {
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    };
+
+    it("renders the owner-scope, sub-tabs, and search controls while getCollections is still pending", async () => {
+      const { promise } = deferredCollections();
+      vi.mocked(backend.getCollections).mockReturnValue(promise);
+      const { getByText, getByTestId, queryByTestId } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      // Controls are already visible before the (still-pending) list resolves.
+      expect(getByText("Own")).not.toBeNull();
+      expect(getByText("All")).not.toBeNull();
+      expect(getByText("My")).not.toBeNull();
+      expect(getByText("Smart")).not.toBeNull();
+      expect(getByText("Virtual")).not.toBeNull();
+      expect(getByTestId("text-field")).not.toBeNull();
+      // The list area shows a spinner in the meantime.
+      expect(queryByTestId("spinner")).not.toBeNull();
+    });
+
+    it("populates the owner-scope from getSettings without waiting on the slow getCollections", async () => {
+      // getSettings resolves; getCollections never does. The owner-scope must
+      // still initialize to "own" (the foreign collection would be hidden) even
+      // though the list is still loading — proof the fetches are decoupled.
+      vi.mocked(backend.getSettings).mockResolvedValue({ ...defaultSettings(), collection_owner_scope: "own" });
+      const { promise } = deferredCollections();
+      vi.mocked(backend.getCollections).mockReturnValue(promise);
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      // "Show collections" description reflects the resolved "own" scope while
+      // the list itself is still pending (spinner shown).
+      expect(container.textContent).toContain("Only your own collections");
+    });
+
+    it("swallows a getSettings failure — owner-scope stays 'All' and the list still loads", async () => {
+      // The decoupling property (#1539): getSettings() and getCollections() are
+      // independent, so a settings-read failure only degrades owner-scope to its
+      // "all" default — it must NOT blank or error the collection list.
+      vi.mocked(backend.getSettings).mockRejectedValue(new Error("boom"));
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [
+          makeCollection({ id: "u1", name: "MineColl", kind: "user", is_favorite: false, is_own: true }),
+          makeCollection({ id: "u2", name: "TheirColl", kind: "user", is_favorite: false, is_own: false }),
+        ],
+      });
+      const { getByText, getByTestId, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      // Scope stayed at the "All" default: a foreign (is_own=false) collection is
+      // visible — under "Own" it would be hidden.
+      expect(container.querySelector('[data-label="MineColl"]')).not.toBeNull();
+      expect(container.querySelector('[data-label="TheirColl"]')).not.toBeNull();
+      // The list loaded normally — no error surfaced from the settings failure.
+      expect(container.textContent).not.toContain("Failed to load collections");
+      // Controls remain present.
+      expect(getByText("Own")).not.toBeNull();
+      expect(getByText("All")).not.toBeNull();
+      expect(getByTestId("text-field")).not.toBeNull();
+    });
+
+    it("keeps Enable/Disable All disabled while loading, then enables them once the list loads", async () => {
+      const { promise, resolve } = deferredCollections();
+      vi.mocked(backend.getCollections).mockReturnValue(promise);
+      const { getByText, queryByTestId } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      // While pending: buttons rendered but disabled, spinner shown.
+      expect((getByText("Enable All") as HTMLButtonElement).disabled).toBe(true);
+      expect((getByText("Disable All") as HTMLButtonElement).disabled).toBe(true);
+      expect(queryByTestId("spinner")).not.toBeNull();
+      // Resolve the list → buttons enabled, spinner gone.
+      await act(async () => {
+        resolve({
+          success: true,
+          collections: [makeCollection({ id: "u1", name: "UserOne", kind: "user", is_favorite: false })],
+        });
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect((getByText("Enable All") as HTMLButtonElement).disabled).toBe(false);
+      expect((getByText("Disable All") as HTMLButtonElement).disabled).toBe(false);
+      expect(queryByTestId("spinner")).toBeNull();
+    });
+
+    it("renders the favorites toggle present but disabled while the list is loading", async () => {
+      const { promise } = deferredCollections();
+      vi.mocked(backend.getCollections).mockReturnValue(promise);
+      const { getByText, container, queryByTestId } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      // The favorites row is rendered up front (no late pop-in) but grayed until
+      // the list resolves and reveals whether a single favorites collection exists.
+      const favInput = container.querySelector<HTMLInputElement>('[data-label="Sync RomM favorites"] input');
+      expect(favInput).not.toBeNull();
+      expect(favInput?.disabled).toBe(true);
+      expect(queryByTestId("spinner")).not.toBeNull();
+    });
+
+    it("renders the error state in the list area with the controls still present", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({ success: false, collections: [] });
+      const { getByText, getByTestId, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      // Error surfaces in the list area, not as a full-panel replacement — the
+      // controls remain rendered alongside it.
+      expect(container.textContent).toContain("Failed to load collections");
+      expect(getByText("Own")).not.toBeNull();
+      expect(getByText("Virtual")).not.toBeNull();
+      expect(getByTestId("text-field")).not.toBeNull();
+      // Enable/Disable All stay disabled on the error path (nothing to act on).
+      expect((getByText("Enable All") as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it("renders the empty state in the list area with the controls still present", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({ success: true, collections: [] });
+      const { getByText, getByTestId, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await openCollections(getByText);
+      expect(container.textContent).toContain("No collections found");
+      expect(getByText("Own")).not.toBeNull();
+      expect(getByText("Virtual")).not.toBeNull();
+      expect(getByTestId("text-field")).not.toBeNull();
+      // Empty library → nothing to enable, buttons disabled.
+      expect((getByText("Enable All") as HTMLButtonElement).disabled).toBe(true);
     });
   });
 
@@ -924,6 +1073,23 @@ describe("LibraryPage", () => {
   // H2. Collections tab — favorites top-level toggle
   // ------------------------------------------------------------------
   describe("collections tab — favorites toggle", () => {
+    it("renders the favorites toggle ENABLED when exactly one favorites collection exists", async () => {
+      vi.mocked(backend.getCollections).mockResolvedValue({
+        success: true,
+        collections: [makeCollection({ id: "f1", name: "Faves", kind: "user", is_favorite: true, rom_count: 3 })],
+      });
+      const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
+      await flushAsync();
+      await act(async () => {
+        fireEvent.click(getByText("Collections"));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const favInput = container.querySelector<HTMLInputElement>('[data-label="Sync RomM favorites"] input');
+      expect(favInput).not.toBeNull();
+      expect(favInput?.disabled).toBe(false);
+    });
+
     it("renders the Sync RomM favorites toggle with the singular description for 1 game", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
@@ -1045,7 +1211,7 @@ describe("LibraryPage", () => {
       expect(reverted.checked).toBe(false);
     });
 
-    it("omits the favorites toggle when no favorites collection exists", async () => {
+    it("renders the favorites toggle disabled (grayed, not hidden) when no favorites collection exists", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [makeCollection({ id: "u1", name: "U1", kind: "user", is_favorite: false })],
@@ -1057,7 +1223,10 @@ describe("LibraryPage", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(container.querySelector('[data-label="Sync RomM favorites"]')).toBeNull();
+      // Present (never hidden / no pop-in), but disabled — nothing to sync.
+      const favInput = container.querySelector<HTMLInputElement>('[data-label="Sync RomM favorites"] input');
+      expect(favInput).not.toBeNull();
+      expect(favInput?.disabled).toBe(true);
     });
 
     it("falls back to listing favorites in the My sub-tab when more than one exists (with console warning)", async () => {
@@ -1078,8 +1247,11 @@ describe("LibraryPage", () => {
           await Promise.resolve();
           await Promise.resolve();
         });
-        // Toggle hidden — single-toggle UI can't represent multiple favorites.
-        expect(container.querySelector('[data-label="Sync RomM favorites"]')).toBeNull();
+        // Top toggle stays present but disabled — a single toggle can't
+        // represent multiple favorites, so it grays out rather than hiding.
+        const favInput = container.querySelector<HTMLInputElement>('[data-label="Sync RomM favorites"] input');
+        expect(favInput).not.toBeNull();
+        expect(favInput?.disabled).toBe(true);
         // Both favorites surface in My (alongside the regular user collection).
         expect(container.querySelector('[data-label="FavA"]')).not.toBeNull();
         expect(container.querySelector('[data-label="FavB"]')).not.toBeNull();
@@ -1211,56 +1383,54 @@ describe("LibraryPage", () => {
       expect(container.querySelector('[data-label="Puzzle Box"]')).not.toBeNull();
     });
 
-    it("Enter on the search field blurs it (dismisses the on-screen keyboard)", async () => {
+    it("hints the fuzzy match in the search field heading", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [makeCollection({ id: "u1", name: "Action Heroes", kind: "user", is_favorite: false })],
       });
       const { getByText, getByTestId } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
-      const field = getByTestId("text-field") as HTMLInputElement;
-      field.focus();
-      expect(document.activeElement).toBe(field);
-      await act(async () => {
-        fireEvent.keyDown(field, { key: "Enter" });
-        await Promise.resolve();
-      });
-      // The handler blurs the active element, which is what dismisses the OSK.
-      expect(document.activeElement).not.toBe(field);
+      expect(getByTestId("text-field").getAttribute("aria-label")).toBe("Search collections (fuzzy)");
     });
 
-    it("scrolls the search field into view on the FIRST keystroke only (not on later keystrokes)", async () => {
+    it("lifts the search field to the top of the view on the FIRST keystroke only (not on later keystrokes)", async () => {
+      // Element-to-top scroll (#1539): the wrapper ref is handed to
+      // scrollElementToTop so its "SEARCH COLLECTIONS" heading lands at the top
+      // of the outermost scroller, clear of the on-screen keyboard. The scroll
+      // math itself is unit-tested in scrollHelpers.test.ts; here we assert the
+      // component wires the trigger correctly (first keystroke only).
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [makeCollection({ id: "u1", name: "Action Heroes", kind: "user", is_favorite: false })],
       });
-      const scrollIntoView = vi.mocked(HTMLElement.prototype.scrollIntoView);
+      const scrollToField = vi.mocked(scrollElementToTop);
       const { getByText, getByTestId } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
-      scrollIntoView.mockClear();
-      // First keystroke: empty → non-empty → scroll the field into view.
+      scrollToField.mockClear();
+      // First keystroke: empty → non-empty → lift the field to the top.
       await typeSearch(getByTestId, "a");
-      expect(scrollIntoView).toHaveBeenCalledTimes(1);
-      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+      expect(scrollToField).toHaveBeenCalledTimes(1);
+      expect(scrollToField.mock.calls[0]?.[0]).toBeInstanceOf(HTMLElement);
       // Later keystrokes (still non-empty) must NOT re-scroll.
       await typeSearch(getByTestId, "ac");
-      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollToField).toHaveBeenCalledTimes(1);
     });
 
-    it("scrolls the search field into view when it gains focus", async () => {
+    it("lifts the search field to the top of the view when it gains focus", async () => {
       vi.mocked(backend.getCollections).mockResolvedValue({
         success: true,
         collections: [makeCollection({ id: "u1", name: "Action Heroes", kind: "user", is_favorite: false })],
       });
-      const scrollIntoView = vi.mocked(HTMLElement.prototype.scrollIntoView);
+      const scrollToField = vi.mocked(scrollElementToTop);
       const { getByText, getByTestId } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
-      scrollIntoView.mockClear();
+      scrollToField.mockClear();
       await act(async () => {
         fireEvent.focus(getByTestId("text-field"));
         await Promise.resolve();
       });
-      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+      expect(scrollToField).toHaveBeenCalledTimes(1);
+      expect(scrollToField.mock.calls[0]?.[0]).toBeInstanceOf(HTMLElement);
     });
 
     it("caps the rendered rows and shows a '<n> more' hint past the cap", async () => {
@@ -1275,8 +1445,10 @@ describe("LibraryPage", () => {
       vi.mocked(backend.getCollections).mockResolvedValue({ success: true, collections: many });
       const { getByText, container } = render(<LibraryPage onBack={vi.fn()} />);
       await openCollections(getByText);
-      // Never paints more than the cap (50): exactly 50 toggle rows, not 60.
-      const toggles = container.querySelectorAll('[data-testid="toggle-input"]');
+      // Never paints more than the cap (50): exactly 50 collection rows, not 60.
+      // Count the list rows by their "Coll " label so the always-present
+      // (here disabled) favorites toggle isn't counted.
+      const toggles = container.querySelectorAll('[data-label^="Coll "]');
       expect(toggles).toHaveLength(50);
       // The overflow (60 - 50 = 10) is surfaced as a single hint row.
       expect(container.textContent).toContain("10 more — refine your search");
@@ -1298,7 +1470,8 @@ describe("LibraryPage", () => {
       await openCollections(getByText);
       // "coll 001" matches exactly one collection.
       await typeSearch(getByTestId, "coll 001");
-      const toggles = container.querySelectorAll('[data-testid="toggle-input"]');
+      // Count list rows by their "Coll " label (excludes the favorites toggle).
+      const toggles = container.querySelectorAll('[data-label^="Coll "]');
       expect(toggles).toHaveLength(1);
       expect(container.textContent).not.toContain("more — refine your search");
     });
