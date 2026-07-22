@@ -108,7 +108,10 @@ function renderActiveSlotBody(
         f.server_save_id != null
           ? createElement(
               "div",
-              { key: `copy-active-${f.filename}`, style: { marginTop: "4px", marginLeft: "8px" } },
+              {
+                key: `copy-active-${f.filename}`,
+                style: { display: "flex", justifyContent: "flex-end" as const, marginTop: "4px" },
+              },
               renderCopyToSlotButton(`copy-active-${f.filename}`, f.server_save_id, {
                 onCopy,
                 sourceSlot: slot,
