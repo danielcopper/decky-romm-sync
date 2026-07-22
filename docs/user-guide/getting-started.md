@@ -74,6 +74,9 @@ After installation, you need to connect the plugin to your RomM server:
 5. The **RomM Account** row shows **Signed in** on success. Once signed in, tap **Test Connection** to re-verify at any
    time
 
+On a controller, any text field in the plugin can be confirmed with the on-screen keyboard's **Enter** key (or the
+**R2** shortcut) instead of navigating to the button — this applies to sign-in, save-slot names, and the artwork search.
+
 The plugin mints a RomM Client API Token from the credentials you enter and discards the password — it is never stored.
 The same applies if the plugin auto-migrates an older install that still had a saved password: the password is discarded
 as soon as a token is minted. If your RomM account is not allowed to create API tokens, the sign-in step reports that
