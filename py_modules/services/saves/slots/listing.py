@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_slot import save_in_slot, slot_query_param
-from lib.list_result import ErrorCode
+from lib.errors import classify_error
 from services.saves._messages import SAVE_SYNC_DISABLED
 from services.saves._settings import resolve_default_slot, save_sync_enabled
 
@@ -98,9 +98,12 @@ class SlotListing:
             )
         except Exception as e:
             self._log_debug(f"Failed to fetch save slots for rom {rom_id}: {e}")
+            reason, _message = classify_error(e)
             return {
                 "success": False,
-                "reason": ErrorCode.SERVER_UNREACHABLE,
+                "reason": reason,
+                # The raw exception text is neutral and carries the concrete
+                # detail; only the routing slug was ever wrong here.
                 "message": str(e),
                 "slots": [],
                 "active_slot": active_slot,
@@ -212,9 +215,10 @@ class SlotListing:
             ]
             return {"success": True, "slot": slot, "saves": saves}
         except Exception as e:
+            reason, _message = classify_error(e)
             return {
                 "success": False,
-                "reason": ErrorCode.SERVER_UNREACHABLE,
+                "reason": reason,
                 "message": str(e),
                 "slot": slot,
                 "saves": [],

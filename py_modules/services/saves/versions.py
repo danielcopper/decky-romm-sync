@@ -20,6 +20,7 @@ from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 from domain.save_slot import save_in_slot, slot_query_param
 from domain.save_status import compute_multi_file_slot
+from lib.errors import RommNotFoundError
 from services.saves._helpers import local_save_target
 from services.saves._settings import resolve_default_slot
 
@@ -143,6 +144,11 @@ class VersionsService:
           ``list_saves`` call failed (network, server, auth, etc.). The
           frontend distinguishes this from an empty list so it can show a
           retry affordance instead of "no versions available".
+        - ``{"status": "not_found", "message": ...}`` if the ``list_saves``
+          call drew a definitive 404 — RomM no longer has this ROM or the
+          registered device id. Distinct from ``server_unreachable``: the
+          server answered, so retrying is pointless and the panel says so
+          instead of blaming the connection (#1570).
         """
         rom_id = int(rom_id)
         save_state, device_id = await self._loop.run_in_executor(None, self._read_inputs, rom_id)
@@ -159,6 +165,11 @@ class VersionsService:
                     lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot_query_param(slot))
                 ),
             )
+        except RommNotFoundError as e:
+            # The server answered: it has no such ROM (or no such device id). A
+            # retry cannot change that, so the panel must not offer one (#1570).
+            self._log_debug(f"list_file_versions: server has no such entity: {e}")
+            return {"status": "not_found", "message": str(e)}
         except Exception as e:
             self._log_debug(f"list_file_versions: failed to list saves: {e}")
             return {"status": "server_unreachable", "message": str(e)}
@@ -318,6 +329,11 @@ class VersionsService:
           auth, etc.). The frontend distinguishes this from
           ``version_deleted`` so it can show a retry affordance instead
           of "version no longer on the server".
+        - ``{"status": "not_found", "message": ...}`` if that same call drew
+          a definitive 404 — RomM no longer has this ROM or the registered
+          device id. Distinct from both siblings: ``version_deleted`` is one
+          missing save inside a ROM the server still has, and
+          ``server_unreachable`` is a connection the user can retry (#1570).
         - ``{"status": "conflict_blocked", "conflicts": [...]}`` if the
           pre-flight surfaced a conflict on the currently-tracked save.
           The frontend resolves it via the standard conflict modal.
@@ -387,6 +403,13 @@ class VersionsService:
                         lambda: self._romm_api.list_saves(rom_id, device_id=device_id, slot=slot_query_param(slot))
                     ),
                 )
+            except RommNotFoundError as e:
+                # The server answered: it has no such ROM (or no such device id).
+                # Not a connectivity verdict, so the toast must not blame the
+                # connection or invite a retry that cannot succeed (#1570).
+                self._log_debug(f"rollback_to_version: server has no such entity: {e}")
+                await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
+                return {"status": "not_found", "message": str(e)}
             except Exception as e:
                 self._log_debug(f"rollback_to_version: failed to list saves: {e}")
                 # Persist whatever the pre-flight mutated before bailing.

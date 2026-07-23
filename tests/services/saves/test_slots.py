@@ -8,7 +8,7 @@ import pytest
 
 from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_layout import ContentDir
-from lib.errors import RommApiError, RommConnectionError
+from lib.errors import RommApiError, RommConnectionError, RommNotFoundError
 from lib.list_result import ErrorCode
 from tests.services.saves._helpers import (
     _create_save,
@@ -129,7 +129,7 @@ class TestSaveSlots:
             ),
         )
 
-        fake.fail_on_next(OSError("connection refused"))
+        fake.fail_on_next(ConnectionError("connection refused"))
 
         result = await svc.get_save_slots(123)
 
@@ -140,6 +140,37 @@ class TestSaveSlots:
         assert result["active_slot"] == "default"
         assert "connection refused" in result["message"]
         # Persisted slot map is untouched (no merge / overwrite happened).
+        assert _require_save_state(svc, 123).slots == original_slots
+
+    @pytest.mark.asyncio
+    async def test_get_save_slots_404_is_not_found_and_still_preserves_map(self, tmp_path):
+        """A 404 is not an outage — and the #625 map-preservation still holds (#1570)."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+
+        original_slots = {
+            "default": {"source": "server", "count": 1, "latest_updated_at": "2026-04-17T10:00:00"},
+            "save1": {"source": "server", "count": 3, "latest_updated_at": "2026-04-16T09:00:00"},
+        }
+        _seed_save_state(
+            svc,
+            123,
+            RomSaveSyncState(
+                active_slot="default",
+                slot_confirmed=True,
+                slots=dict(original_slots),
+            ),
+        )
+
+        fake.fail_on_next(RommNotFoundError("HTTP 404: Not Found"))
+
+        result = await svc.get_save_slots(123)
+
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
+        assert result["reason"] != "server_unreachable"
+        # The #625 guard is unchanged by the reclassification.
         assert _require_save_state(svc, 123).slots == original_slots
 
     @pytest.mark.asyncio
@@ -1038,6 +1069,21 @@ class TestGetSlotSaves:
         assert "connection timeout" in result["message"]
 
     @pytest.mark.asyncio
+    async def test_definitive_404_is_not_found(self, tmp_path):
+        """A 404 is the server ANSWERING — the slot panel must not claim offline (#1570)."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "server-dev-1")
+        fake.fail_on_next(RommNotFoundError("HTTP 404: Not Found"))
+
+        result = await svc.get_slot_saves(42, "default")
+
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
+        assert result["reason"] != "server_unreachable"
+        assert result["saves"] == []
+
+    @pytest.mark.asyncio
     async def test_sync_disabled(self, tmp_path):
         """Returns error response when save sync is disabled."""
         svc, _ = make_service(tmp_path)
@@ -1205,6 +1251,24 @@ class TestSwitchSlot:
 
         assert result["success"] is False
         assert result["reason"] == "server_unreachable"
+
+    @pytest.mark.asyncio
+    async def test_definitive_404_is_not_found(self, tmp_path):
+        """A 404 blocks the switch too, but as not_found — the server answered (#1570)."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        save_path = _create_save(tmp_path)
+        local_hash = _file_md5(str(save_path))
+        _seed_save_state(svc, 42, self._synced_state(local_hash))
+
+        fake.fail_on_next(RommNotFoundError("HTTP 404: Not Found"))
+
+        result = await svc.switch_slot(42, "desktop")
+
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
+        assert result["reason"] != "server_unreachable"
 
     @pytest.mark.asyncio
     async def test_sync_disabled(self, tmp_path):
@@ -1951,19 +2015,50 @@ class TestDeleteSlot:
                 "pokemon.srm": {"tracked_save_id": 10, "last_sync_hash": "abc"},
             },
         )
-        fake.fail_on_next(OSError("connection refused"))
+        fake.fail_on_next(ConnectionError("connection refused"))
 
         result = await svc.get_slot_delete_info(42, "save1")
 
         assert result["success"] is False
         assert result["reason"] == "server_unreachable"
         assert "message" in result
+        # The message asserted reachability before #1570; it must stay honest
+        # while still refusing the destructive confirm.
+        assert "Cannot inspect slot" in result["message"]
         # Drift guard: the legacy duplicate ``error`` field was dropped in #652.
         # Frontend now reads ``reason`` only. Re-adding ``error`` would
         # reintroduce the dual-write that was deliberately removed.
         assert "error" not in result
         # Critically: no fake "0 saves" count that would let the confirm modal
         # render "delete 0 saves".
+        assert "server_save_count" not in result
+        assert "server_save_ids" not in result
+
+    @pytest.mark.asyncio
+    async def test_get_slot_delete_info_definitive_404_is_not_found(self, tmp_path):
+        """A 404 still refuses the confirm, but does not blame the connection (#1570).
+
+        The #626 safety property is unchanged — no fake "0 saves" count reaches
+        the modal — only the slug and the message stop claiming an outage.
+        """
+        svc, fake = make_service(tmp_path)
+        self._setup_state_with_slots(
+            svc,
+            tmp_path,
+            extra_slots={"save1": {"source": "server", "count": 3, "latest_updated_at": None}},
+            files_state={
+                "pokemon.srm": {"tracked_save_id": 10, "last_sync_hash": "abc"},
+            },
+        )
+        fake.fail_on_next(RommNotFoundError("HTTP 404: Not Found"))
+
+        result = await svc.get_slot_delete_info(42, "save1")
+
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
+        assert result["reason"] != "server_unreachable"
+        assert "unreachable" not in result["message"].lower()
+        # The #626 guard still holds.
         assert "server_save_count" not in result
         assert "server_save_ids" not in result
 
@@ -2155,6 +2250,32 @@ class TestDeleteSlot:
         assert result["success"] is False
         assert result["reason"] == "server_unreachable"
         # Slot NOT removed from state (rollback on failure)
+        assert "save1" in _require_save_state(svc, 42).slots
+
+        fake.delete_server_saves = original_delete
+
+    @pytest.mark.asyncio
+    async def test_delete_slot_server_404_is_not_found_and_rolls_back(self, tmp_path):
+        """A 404 on the delete is not an outage; the rollback guard is unchanged (#1570)."""
+        svc, fake = make_service(tmp_path)
+        self._setup_state_with_slots(
+            svc,
+            tmp_path,
+            extra_slots={"save1": {"source": "server", "count": 1, "latest_updated_at": None}},
+        )
+        fake.saves[10] = _server_save(save_id=10, rom_id=42, filename="pokemon.srm", slot="save1")
+        original_delete = fake.delete_server_saves
+
+        def fail_delete(save_ids):
+            raise RommNotFoundError("HTTP 404: Not Found")
+
+        fake.delete_server_saves = fail_delete
+
+        result = await svc.delete_slot(42, "save1")
+
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
+        assert result["reason"] != "server_unreachable"
         assert "save1" in _require_save_state(svc, 42).slots
 
         fake.delete_server_saves = original_delete

@@ -15,6 +15,7 @@ from domain.save_status_builders import (
     status_from_action,
 )
 from domain.sync_action import Conflict, Skip
+from lib.errors import classify_error
 from services.saves._settings import save_sync_enabled
 
 if TYPE_CHECKING:
@@ -170,6 +171,7 @@ class StatusService:
         server_saves: list[dict[str, Any]],
         *,
         server_query_failed: bool = False,
+        server_query_reason: str | None = None,
     ) -> dict[str, Any]:
         """Sync helper for get_save_status — runs in executor.
 
@@ -309,6 +311,15 @@ class StatusService:
             "savefiles_in_content_dir": savefiles_in_content_dir,
             "save_sync_display": save_sync_display,
             "server_query_failed": server_query_failed,
+            # Why the query failed, as a :func:`classify_error` slug (None when
+            # it didn't). Additive alongside the flag, per CLAUDE.md's
+            # partial-success carve-out — do NOT collapse this into the
+            # canonical ``{success, reason, message}``: the response is a full
+            # payload the UI renders, and the binary ``success`` would erase
+            # that. The flag stays the "we lack the server's view" signal that
+            # drives ``status="unknown"``; this slug only says why, so a
+            # definitive 404 stops being reported as an offline server (#1570).
+            "server_query_reason": server_query_reason,
             # Interim #908 guard: a slot whose current save spans >1 distinct
             # file (e.g. Saturn .bkr/.bcr/.smpc) is an N-file *set*, not a
             # single file with a version history. Per-version rollback would
@@ -337,6 +348,13 @@ class StatusService:
         the matrix-derived "ready to upload" label that an empty server
         list would otherwise produce — see ``_get_save_status_io``.
 
+        ``server_query_reason`` carries the :func:`classify_error` slug for
+        that failure (``None`` on success). The flag and the slug answer
+        different questions: the flag says the server's view is unknown —
+        true for a 404 as much as for an outage, and what keeps the matrix
+        from acting on an empty list — while the slug says *why*, so only an
+        explicit ``server_unreachable`` drives the UI's offline state (#1570).
+
         The additive ``savefiles_in_content_dir: bool`` flag is ``True``
         when RetroArch writes saves next to the ROM (the unsupported case):
         local probing is skipped and the display reads "Save sync off",
@@ -353,6 +371,7 @@ class StatusService:
 
         server_saves: list[dict[str, Any]] = []
         server_query_failed = False
+        server_query_reason: str | None = None
         try:
             device_id = await self._loop.run_in_executor(None, self._device_registry.get_device_id)
             server_saves = await self._loop.run_in_executor(
@@ -362,6 +381,7 @@ class StatusService:
         except Exception as e:
             self._log_debug(f"Failed to fetch saves for rom {rom_id}: {e}")
             server_query_failed = True
+            server_query_reason, _message = classify_error(e)
 
         async with self._sync_engine.rom_lock(rom_id):
             return await self._loop.run_in_executor(
@@ -370,6 +390,7 @@ class StatusService:
                     rom_id,
                     server_saves,
                     server_query_failed=server_query_failed,
+                    server_query_reason=server_query_reason,
                 ),
             )
 

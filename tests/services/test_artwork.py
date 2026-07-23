@@ -1703,11 +1703,36 @@ class TestRefreshCover:
     ):
         _seed_rom(uow, 42, app_id=999)
         steam_config.grid_dir.return_value = str(tmp_path)
-        romm_api.get_rom.side_effect = Exception("network down")
+        romm_api.get_rom.side_effect = RommConnectionError("network down")
 
         result = await artwork_service.refresh_cover(42)
         assert result["success"] is False
         assert result["reason"] == "server_unreachable"
+        assert result["message"] == "Could not fetch ROM from server"
+        romm_api.download_cover.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_not_found_when_get_rom_404s(
+        self,
+        artwork_service,
+        uow,
+        steam_config,
+        romm_api,
+        tmp_path,
+    ):
+        """A definitive 404 is the server ANSWERING — not an outage (#1570).
+
+        The message stays the same because it is already true either way;
+        only the routing slug was wrong.
+        """
+        _seed_rom(uow, 42, app_id=999)
+        steam_config.grid_dir.return_value = str(tmp_path)
+        romm_api.get_rom.side_effect = RommNotFoundError("HTTP 404: Not Found")
+
+        result = await artwork_service.refresh_cover(42)
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
+        assert result["reason"] != "server_unreachable"
         assert result["message"] == "Could not fetch ROM from server"
         romm_api.download_cover.assert_not_called()
 

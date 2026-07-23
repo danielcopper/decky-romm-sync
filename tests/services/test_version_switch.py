@@ -13,6 +13,7 @@ from fakes.system_time import FakeClock
 
 from domain.rom import Rom
 from domain.rom_install import RomInstall
+from lib.errors import RommNotFoundError
 from services.version_switch import VersionSwitchService, VersionSwitchServiceConfig
 
 _GROUP = "igdb:100:57"
@@ -350,6 +351,22 @@ class TestGetVersionList:
         result = _run(event_loop, service.get_version_list(_APP_ID))
         assert result["multi_version"] is True
         assert result["server_query_failed"] is True
+        assert {v["rom_id"] for v in result["versions"]} == {1, 2}
+
+    def test_bound_rom_404_degrades_without_claiming_offline(self, event_loop, service, uow, romm):
+        """A 404 on the bound id must NOT raise server_query_failed (#1570).
+
+        The picker funnels that flag into the GLOBAL connection store, so a
+        ROM the server merely no longer has would black out the whole UI.
+        The list still degrades to local-only — only the flag differs.
+        """
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        romm.get_rom_side_effect = RommNotFoundError("HTTP 404: Not Found")
+
+        result = _run(event_loop, service.get_version_list(_APP_ID))
+        assert result["multi_version"] is True
+        assert result["server_query_failed"] is False
         assert {v["rom_id"] for v in result["versions"]} == {1, 2}
 
     def test_preferred_region_heads_default(self, event_loop, service, uow, romm, settings):
@@ -732,6 +749,19 @@ class TestSwitchVersion:
         assert result["success"] is False
         assert result["reason"] == "server_unreachable"
         assert "error" not in result
+
+    def test_not_found_on_target_fetch(self, event_loop, service, uow, romm):
+        """A 404 on the switch target is not an offline server (#1570)."""
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        romm.get_rom_side_effect = RommNotFoundError("HTTP 404: Not Found")
+
+        result = _run(event_loop, service.switch_version(_APP_ID, 3, False))
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
+        assert result["reason"] != "server_unreachable"
+        # The message must not claim reachability either — it used to read
+        # "RomM server not reachable." for every failure.
+        assert "not reachable" not in result["message"].lower()
 
     def test_server_target_unbuildable_is_invalid_target(self, event_loop, service, uow, romm):
         # The server detail is IN the group (its would-be key matches the bound

@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 
 from domain.rom_save_sync_state import RomSaveSyncState
-from lib.errors import RommConnectionError
+from lib.errors import RommConnectionError, RommNotFoundError
 from lib.list_result import ErrorCode
 
 from ._seed import enable_save_sync, seed_confirmed_slot, seed_install, seed_rom, seed_save_state, seed_server_save
@@ -57,6 +57,7 @@ async def test_get_save_status_full_shape_and_partial_flag(harness):
         "savefiles_in_content_dir",
         "save_sync_display",
         "server_query_failed",
+        "server_query_reason",
         "multi_file",
         "component_files",
         "rollback_supported",
@@ -68,6 +69,8 @@ async def test_get_save_status_full_shape_and_partial_flag(harness):
     # Partial-success carve-out: the additive flag is present and a bool.
     assert isinstance(result["server_query_failed"], bool)
     assert result["server_query_failed"] is False
+    # Its companion slug is None while nothing failed.
+    assert result["server_query_reason"] is None
 
 
 async def test_get_save_status_server_failure_keeps_full_payload(harness):
@@ -78,9 +81,26 @@ async def test_get_save_status_server_failure_keeps_full_payload(harness):
     # The carve-out: a failure flag rides alongside the full payload, not a
     # bare {success: False}. The frontend still renders local state.
     assert result["server_query_failed"] is True
+    assert result["server_query_reason"] == "server_unreachable"
     assert result["rom_id"] == 42
     assert "files" in result
     assert "save_sync_display" in result
+
+
+async def test_get_save_status_definitive_404_is_not_unreachable(harness):
+    """A 404 keeps the flag but carries the not_found slug (#1570).
+
+    Over the real wire: the flag must stay True (the matrix must not act on
+    an empty server list), while only the slug tells the frontend whether
+    this is a connectivity verdict.
+    """
+    enable_save_sync(harness)
+    harness.romm.list_saves_side_effect = RommNotFoundError("HTTP 404: Not Found")
+    result = await harness.plugin.get_save_status(42)
+    assert result["server_query_failed"] is True
+    assert result["server_query_reason"] == "not_found"
+    assert result["server_query_reason"] != "server_unreachable"
+    assert result["rom_id"] == 42
 
 
 async def test_get_save_status_pending_upload_display(harness):

@@ -82,7 +82,7 @@ vi.mock("../components/SyncConflictModal", () => ({
 }));
 
 import { getCachedGameDetail } from "../utils/cachedGameDetailStore";
-import { setRommConnectionState, reportServerReachable } from "../utils/connectionState";
+import { setRommConnectionState, reportServerReachable, getRommConnectionState } from "../utils/connectionState";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { markLaunchSkipped, consumeLaunchSkip } from "../utils/launchGate";
 import { getMigrationState } from "../utils/migrationStore";
@@ -1263,6 +1263,37 @@ describe("CustomPlayButton — resolve conflict reads the known conflict (#1276)
     await utils.findByText("Resolve Conflict");
 
     globalThis.removeEventListener("romm_data_changed", dataChanged);
+  });
+
+  it("server_query_failed with an unreachable reason DOES drive the store offline", async () => {
+    setRommConnectionState("connected");
+    vi.mocked(backend.getSaveStatus).mockResolvedValue(
+      saveStatus({ server_query_failed: true, server_query_reason: "server_unreachable", conflicts: [] }),
+    );
+
+    const utils = await renderInConflict();
+    await clickResolve(utils);
+
+    // Post-catch state: the global store actually flipped.
+    expect(getRommConnectionState()).toBe("offline");
+    await utils.findByText("Resolve Conflict");
+  });
+
+  it("server_query_failed with a not_found reason leaves the store ALONE", async () => {
+    setRommConnectionState("connected");
+    vi.mocked(backend.getSaveStatus).mockResolvedValue(
+      saveStatus({ server_query_failed: true, server_query_reason: "not_found", conflicts: [] }),
+    );
+
+    const utils = await renderInConflict();
+    await clickResolve(utils);
+
+    // The #1570 defect: a definitive 404 is the server ANSWERING, so feeding
+    // the global store off the bare flag blacked out the whole UI. The button
+    // must still refuse to claim the conflict was resolved.
+    expect(getRommConnectionState()).toBe("connected");
+    expect(vi.mocked(handleConflicts)).not.toHaveBeenCalled();
+    await utils.findByText("Resolve Conflict");
   });
 
   it("a thrown getSaveStatus keeps the button in conflict and toasts", async () => {

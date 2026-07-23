@@ -16,6 +16,7 @@ from fakes.system_time import FakeClock, FakeSleeper, FakeUuidGen
 
 from adapters.steam_config import SteamConfigAdapter
 from domain.rom import Rom
+from lib.errors import RommConnectionError, RommNotFoundError
 from services.achievements import AchievementsService, AchievementsServiceConfig
 from services.game_detail import GameDetailService, GameDetailServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
@@ -494,6 +495,33 @@ class TestGetAchievements:
         assert "Connection refused" in result["message"]
 
     @pytest.mark.asyncio
+    async def test_transport_error_reason_is_server_unreachable(self, svc, plugin):
+        """A genuine transport failure keeps the offline slug the tab routes on."""
+        _seed_rom(plugin._uow, 42, ra_id=9999)
+
+        plugin._romm_api.get_rom.side_effect = RommConnectionError("Connection refused")
+        result = await svc.get_achievements(42)
+
+        assert result["success"] is False
+        assert result["reason"] == "server_unreachable"
+
+    @pytest.mark.asyncio
+    async def test_definitive_404_reason_is_not_found(self, svc, plugin):
+        """A 404 must not drive the achievements tab's offline line (#1570).
+
+        RomMGameInfoPanel feeds the global connection store on
+        reason == "server_unreachable" from this very call.
+        """
+        _seed_rom(plugin._uow, 42, ra_id=9999)
+
+        plugin._romm_api.get_rom.side_effect = RommNotFoundError("HTTP 404: Not Found")
+        result = await svc.get_achievements(42)
+
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
+        assert result["reason"] != "server_unreachable"
+
+    @pytest.mark.asyncio
     async def test_rom_id_cast_to_int(self, svc, plugin):
         """rom_id is cast to int, so string input works too."""
         _seed_rom(plugin._uow, 42, ra_id=9999)
@@ -673,6 +701,23 @@ class TestGetAchievementProgress:
         assert result["earned"] == 0
         assert result["total"] == 0
         assert "Network error" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_definitive_404_reason_is_not_found(self, svc, plugin):
+        """The progress call's 404 twin — same store-feed hazard (#1570)."""
+        _seed_ra_username_cache(svc)
+        _seed_rom(plugin._uow, 42, ra_id=9999)
+        svc._achievements_cache["42"] = {
+            "achievements": _sample_achievements(),
+            "cached_at": svc._clock.time(),
+        }
+
+        plugin._romm_api.get_current_user.side_effect = RommNotFoundError("HTTP 404: Not Found")
+        result = await svc.get_achievement_progress(42)
+
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
+        assert result["reason"] != "server_unreachable"
 
     @pytest.mark.asyncio
     async def test_empty_ra_progression(self, svc, plugin):

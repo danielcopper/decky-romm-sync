@@ -147,6 +147,19 @@ describe("VersionHistoryPanel", () => {
     expect(getByText("Retry")).toBeInTheDocument();
   });
 
+  it("shows the entity-gone body, NOT the connection prompt, on a definitive 404", async () => {
+    vi.mocked(backend.savesListFileVersions).mockResolvedValue({
+      status: "not_found",
+      message: "HTTP 404: Not Found",
+    });
+    const { getByText, container } = render(<VersionHistoryPanel {...defaultProps()} />);
+    fireEvent.click(getByText("Previous Versions"));
+    await flushAsync();
+    expect(container.textContent).toContain("RomM no longer has this game's saves.");
+    // The server answered — blaming the connection is the #1570 defect.
+    expect(container.textContent).not.toContain("Couldn't reach RomM");
+  });
+
   it("Retry button retriggers loadVersions", async () => {
     vi.mocked(backend.savesListFileVersions)
       .mockResolvedValueOnce({ status: "server_unreachable", message: "boom" })
@@ -366,6 +379,21 @@ describe("VersionHistoryPanel", () => {
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
         expect.objectContaining({ body: "Couldn't reach RomM. Check your connection and try again." }),
       );
+    });
+
+    it("status 'not_found' toasts the entity-gone message, not the connection prompt", async () => {
+      vi.mocked(backend.savesRollbackToVersion).mockResolvedValue({
+        status: "not_found",
+        message: "HTTP 404: Not Found",
+      });
+      const { getByText, onRestored } = await expand();
+      fireEvent.click(getByText("Restore"));
+      await flushAsync();
+      await flushAsync();
+      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
+        expect.objectContaining({ body: "RomM no longer has this game's saves — nothing was restored." }),
+      );
+      expect(onRestored).not.toHaveBeenCalled();
     });
 
     it("status 'unsupported' toasts the version requirement", async () => {

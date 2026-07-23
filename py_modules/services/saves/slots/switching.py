@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 from domain.save_slot import save_in_slot
-from lib.list_result import ErrorCode
+from lib.errors import classify_error
 from services.saves._helpers import newest_server_saves_by_target
 from services.saves._messages import SAVE_SYNC_IN_CONTENT_DIR
 from services.saves._settings import resolve_default_slot, save_sync_enabled
@@ -237,9 +237,10 @@ class SlotSwitcher:
                     ),
                 )
             except Exception as e:
+                reason, _message = classify_error(e)
                 return {
                     "success": False,
-                    "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                    "reason": reason,
                     "message": str(e),
                 }
 

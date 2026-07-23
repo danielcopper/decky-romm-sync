@@ -4,6 +4,8 @@
  * Anything related to RomM save synchronization lives here.
  */
 
+import type { RommErrorCode } from "./api";
+
 export interface SaveSyncSettings {
   save_sync_enabled: boolean;
   sync_before_launch: boolean;
@@ -91,6 +93,12 @@ export interface SaveStatus {
    *  and surface a misleading uploads-pending indicator on what is in
    *  fact a connectivity blip. */
   server_query_failed?: boolean;
+  /** Why that query failed, as a backend `classify_error` slug (`null` when
+   *  it didn't). The flag says the server's view is unknown — true for a
+   *  definitive 404 as much as for an outage — while this says *why*, so
+   *  only `"server_unreachable"` may drive the global connection store.
+   *  Feeding the store off the bare flag is the #1570 defect. */
+  server_query_reason?: RommErrorCode | null;
   /** True when the active slot's current save spans more than one distinct
    *  file (e.g. Sega Saturn `.bkr`/`.bcr`/`.smpc`). Those siblings are
    *  components of one game state, not prior versions — so the frontend
@@ -225,6 +233,10 @@ export type RollbackStatus =
   | { status: "version_deleted" }
   | { status: "unsupported" }
   | { status: "server_unreachable"; message: string }
+  // The server ANSWERED with a definitive 404 — it no longer has this ROM or
+  // the registered device id. Distinct from `server_unreachable` (retryable)
+  // and from `version_deleted` (one missing save inside a ROM it still has).
+  | { status: "not_found"; message: string }
   | { status: "conflict_blocked"; conflicts: SyncConflict[] }
   | { status: "preflight_failed"; errors: string[] }
   | { status: "put_failed"; message: string };
@@ -232,7 +244,9 @@ export type RollbackStatus =
 export type ListFileVersionsResult =
   | { status: "ok"; versions: SaveVersionEntry[] }
   | { status: "multi_file_unsupported"; versions: SaveVersionEntry[] }
-  | { status: "server_unreachable"; message: string };
+  | { status: "server_unreachable"; message: string }
+  // See RollbackStatus — the server answered, it just has no such entry.
+  | { status: "not_found"; message: string };
 
 /** Discriminated-status result of `copySaveToSlot` — copies one server save into
  *  a target slot, which becomes the ROM's active slot (the source is preserved).

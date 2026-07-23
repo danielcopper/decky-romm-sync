@@ -16,7 +16,7 @@ from fakes.fake_settings_persister import FakeSettingsPersister
 
 from domain.iso_time import epoch_to_iso
 from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
-from lib.errors import RommConnectionError
+from lib.errors import RommConnectionError, RommNotFoundError
 from services.saves._settings import resolve_default_slot, sanitize_setting
 from tests.services.saves._helpers import (
     _create_save,
@@ -286,16 +286,36 @@ class TestListDevices:
 
     @pytest.mark.asyncio
     async def test_list_devices_adapter_error(self, tmp_path):
-        """Adapter raises — returns error response."""
+        """Adapter raises a transport error — returns the unreachable response."""
         fake = FakeSaveApi()
         svc, _ = make_service(tmp_path, fake_api=fake)
         svc._config.settings["save_sync_enabled"] = True
 
-        fake.fail_on_next(Exception("server unavailable"))
+        fake.fail_on_next(RommConnectionError("server unavailable"))
         result = await svc.list_devices()
 
         assert result["success"] is False
         assert result["reason"] == "server_unreachable"
+
+    @pytest.mark.asyncio
+    async def test_list_devices_not_found(self, tmp_path):
+        """A definitive 404 is the server ANSWERING — not an outage (#1570).
+
+        The message stays neutral ("Could not load devices") because it is
+        already true either way; only the routing slug was wrong.
+        """
+        fake = FakeSaveApi()
+        svc, _ = make_service(tmp_path, fake_api=fake)
+        svc._config.settings["save_sync_enabled"] = True
+
+        fake.fail_on_next(RommNotFoundError("HTTP 404: Not Found"))
+        result = await svc.list_devices()
+
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
+        assert result["reason"] != "server_unreachable"
+        assert result["message"] == "Could not load devices"
+        assert result["devices"] == []
 
     @pytest.mark.asyncio
     async def test_list_devices_no_own_id_all_false(self, tmp_path):

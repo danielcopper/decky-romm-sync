@@ -1,3 +1,5 @@
+import socket
+
 import pytest
 
 from lib.errors import (
@@ -236,6 +238,35 @@ class TestClassifyError:
         code, msg = classify_error(RommConflictError("conflict"))
         assert code == "server_unreachable"
         assert msg == "conflict"
+
+    def test_raw_connection_error_is_server_unreachable(self):
+        """A socket failure that never passed through the adapter's translation.
+
+        AC of #1570: routing sites through classify_error must not downgrade a
+        genuine transport failure to ``unknown``.
+        """
+        code, msg = classify_error(ConnectionError("connection refused"))
+        assert code == "server_unreachable"
+        assert "connection refused" in msg
+
+    def test_raw_timeout_error_is_server_unreachable(self):
+        code, _msg = classify_error(TimeoutError("timed out"))
+        assert code == "server_unreachable"
+
+    def test_dns_failure_is_server_unreachable(self):
+        code, _msg = classify_error(socket.gaierror("Name or service not known"))
+        assert code == "server_unreachable"
+
+    def test_bare_oserror_stays_unknown(self):
+        """Deliberately NOT server_unreachable — OSError also covers local disk.
+
+        A failed settings write raises OSError; classifying that as "the server
+        is unreachable" is the same class of lie #1570 removes, pointing the
+        other way. Only the socket-shaped subclasses above are transport.
+        """
+        code, msg = classify_error(OSError("No space left on device"))
+        assert code == "unknown"
+        assert msg == "No space left on device"
 
     def test_unknown_exception_value_error(self):
         code, msg = classify_error(ValueError("bad value"))

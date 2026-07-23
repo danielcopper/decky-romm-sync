@@ -35,6 +35,7 @@ from domain.shortcut_data import extract_version_metadata
 from domain.sibling_group import compute_sibling_group_key, target_in_sibling_group
 from domain.sibling_resolution import AUTO_REGION, resolve_group_representative
 from domain.version_metadata import VersionMetadata
+from lib.errors import RommNotFoundError, classify_error
 from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
@@ -173,7 +174,10 @@ class VersionSwitchService:
         switch the backend would reject. When the server view can't be
         fetched the local-only list is returned with the additive
         ``server_query_failed: True`` flag (partial-success carve-out) — the picker
-        still works over what's synced.
+        still works over what's synced. A definitive 404 on the bound id is NOT
+        such a failure: the server answered, it just no longer has that ROM, so
+        the local-only list carries ``server_query_failed: False`` and the picker
+        leaves the shared connection state alone (#1570).
         """
         app_id = int(app_id)
         local = await self._loop.run_in_executor(None, self._read_local_group, app_id)
@@ -182,6 +186,15 @@ class VersionSwitchService:
 
         try:
             bound_detail = await self._loop.run_in_executor(None, self._romm_api.get_rom, local.bound_rom_id)
+        except RommNotFoundError:
+            # The server ANSWERED — it just no longer has the bound id. That is a
+            # statement about the ROM, not about reachability, so the local-only
+            # list must not raise the ``server_query_failed`` flag the picker
+            # funnels into the global connection store (#1570).
+            self._logger.warning(f"Version list: bound rom {local.bound_rom_id} is gone from the server")
+            return self._build_version_list(
+                local, server_only_stubs=[], detail_by_id={}, stub_local_group_keys={}, server_query_failed=False
+            )
         except Exception as e:  # transport failure degrades to a local-only list
             self._logger.warning(f"Version list: sibling fetch failed for rom {local.bound_rom_id}: {e}")
             return self._build_version_list(
@@ -462,7 +475,10 @@ class VersionSwitchService:
         target outside the group → ``not_in_group``; target bound to a *different*
         shortcut (grandfathered duplicate, ADR-0021 §5) → ``bound_elsewhere``; a
         server-only target whose detail the aggregate rejects → ``invalid_target``;
-        an unreachable server on a server-only target fetch → ``server_unreachable``.
+        a failed server-only target fetch → the :func:`classify_error` slug for the
+        exception, so a server that answered 404 for a dropped id reads
+        ``not_found`` and only a genuine transport failure reads
+        ``server_unreachable`` (#1570).
         """
         app_id = int(app_id)
         target_rom_id = int(target_rom_id)
@@ -518,12 +534,13 @@ class VersionSwitchService:
             return block
         try:
             target_dict = await self._loop.run_in_executor(None, self._romm_api.get_rom, target_rom_id)
-        except Exception as e:  # surfaced as the canonical unreachable failure
+        except Exception as e:  # classified: a 404 on the target is not an offline server
             self._logger.warning(f"Version switch: target fetch failed for rom {target_rom_id}: {e}")
+            reason, message = classify_error(e)
             return {
                 "success": False,
-                "reason": ErrorCode.SERVER_UNREACHABLE.value,
-                "message": "RomM server not reachable.",
+                "reason": reason,
+                "message": message,
             }
 
         # Canonical compatibility against the bound key: the target's id at the

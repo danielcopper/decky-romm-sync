@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from domain.save_layout import ContentDir
+from lib.errors import RommNotFoundError
 from tests.services.saves._helpers import (
     _create_save,
     _enable_sync_with_device,
@@ -219,6 +220,28 @@ class TestListFileVersions:
         # in #652 to align with the canonical {success, reason, message} shape.
         assert "error" not in result
         # Must NOT be the same shape as the happy-path empty case.
+        assert result != {"status": "ok", "versions": []}
+
+    @pytest.mark.asyncio
+    async def test_definitive_404_returns_not_found_not_server_unreachable(self, tmp_path):
+        """A 404 is the server ANSWERING — it must not read as unreachable (#1570).
+
+        RomM 404s the saves query when it no longer has the ROM (or the
+        registered device id). Reporting that as ``server_unreachable``
+        made the panel blame a connection that is plainly working and
+        offer a retry that can never succeed.
+        """
+        svc, fake = make_service(tmp_path)
+
+        fake.fail_on_next(RommNotFoundError("HTTP 404: Not Found"))
+
+        result = await svc.list_file_versions(42, "default", "pokemon.srm")
+
+        assert result["status"] == "not_found"
+        assert result["status"] != "server_unreachable"
+        assert "message" in result
+        # Must NOT be the same shape as the happy-path empty case: the panel
+        # distinguishes "the server has nothing" from "we know nothing".
         assert result != {"status": "ok", "versions": []}
 
     @pytest.mark.asyncio
@@ -649,6 +672,44 @@ class TestRollbackToVersion:
         assert "error" not in result
         # Critical: must NOT collide with the "genuinely deleted" case.
         assert result["status"] != "version_deleted"
+
+    @pytest.mark.asyncio
+    async def test_post_preflight_definitive_404_returns_not_found(self, tmp_path):
+        """The 404 twin of the test above — three outcomes stay distinct (#1570).
+
+        ``version_deleted`` = one save gone from a ROM the server still has;
+        ``server_unreachable`` = we could not ask; ``not_found`` = the server
+        answered that it has no such ROM / device id at all.
+        """
+        svc, fake = make_service(tmp_path)
+
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        self._setup_state(svc, tmp_path, tracked_id=100, last_sync_hash=local_hash)
+        fake.saves[100] = self._tracked_save(100)
+        fake.saves[50] = _server_save(save_id=50, rom_id=42, slot="default", updated_at="2026-02-01T10:00:00Z")
+
+        # Let the pre-flight ``list_saves`` succeed, then 404 on the next one.
+        original_list = fake.list_saves
+        call_count = {"n": 0}
+
+        def fail_second_list(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] >= 2:
+                raise RommNotFoundError("HTTP 404: Not Found")
+            return original_list(*args, **kwargs)
+
+        fake.list_saves = fail_second_list  # type: ignore[method-assign]
+
+        try:
+            result = await svc.rollback_to_version(42, "default", 50)
+        finally:
+            fake.list_saves = original_list  # type: ignore[method-assign]
+
+        assert result["status"] == "not_found"
+        assert result["status"] != "server_unreachable"
+        assert result["status"] != "version_deleted"
+        assert "message" in result
 
     @pytest.mark.asyncio
     async def test_multi_file_slot_refuses_rollback(self, tmp_path):

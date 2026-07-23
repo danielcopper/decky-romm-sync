@@ -1,5 +1,6 @@
 """RomM API error types for structured error handling."""
 
+import socket
 from typing import Any
 
 from lib.list_result import ErrorCode
@@ -170,8 +171,8 @@ def classify_error(exc):
 
     ``reason`` is a canonical :class:`lib.list_result.ErrorCode` slug
     (returned as its string value). Several exception types fold onto one
-    slug \u2014 connection/timeout/SSL/5xx/generic-API all map to
-    ``server_unreachable``; 401 and 403 both map to ``auth_failed`` \u2014 but
+    slug \u2014 connection/timeout/SSL/5xx/generic-API plus raw socket errors
+    all map to ``server_unreachable``; 401/403 map to ``auth_failed`` \u2014 but
     each branch keeps a distinct human ``message``. In particular the 403
     branch stays distinguishable from the 401 branch: a Cloudflare
     bot-fight 403 at the tunnel edge is not a wrong-credentials failure, so
@@ -212,6 +213,14 @@ def classify_error(exc):
         )
     if isinstance(exc, RommApiError):
         return ErrorCode.SERVER_UNREACHABLE.value, str(exc)
+    if isinstance(exc, (ConnectionError, TimeoutError, socket.gaierror)):
+        # A socket-level failure that never passed through the adapter's
+        # ``translate_http_error`` (a caller reaching the network outside the
+        # RomM client). Same reachability verdict as ``RommConnectionError``.
+        # Deliberately NOT bare ``OSError``: that also covers local disk I/O,
+        # so a failed settings write would report the server as unreachable —
+        # the same class of lie as reporting a 404 that way.
+        return ErrorCode.SERVER_UNREACHABLE.value, f"Server unreachable — {exc}"
     return ErrorCode.UNKNOWN.value, str(exc)
 
 

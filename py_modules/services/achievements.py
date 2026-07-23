@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from domain.achievements import extract_achievements_from_rom, extract_game_progress
-from lib.list_result import ErrorCode
+from lib.errors import classify_error
 
 if TYPE_CHECKING:
     import asyncio
@@ -159,9 +159,10 @@ class AchievementsService:
                     "total": len(stale["achievements"]),
                     "stale": True,
                 }
+            reason, _message = classify_error(e)
             return {
                 "success": False,
-                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "reason": reason,
                 "message": str(e),
                 "achievements": [],
                 "total": 0,
@@ -219,9 +220,10 @@ class AchievementsService:
             stale_progress = self._achievements_cache.get(rom_id_str, {}).get("user_progress")
             if stale_progress:
                 return {**self._progress_data_response(stale_progress), "stale": True}
+            reason, _message = classify_error(e)
             return {
                 "success": False,
-                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "reason": reason,
                 "message": str(e),
                 "earned": 0,
                 "total": 0,

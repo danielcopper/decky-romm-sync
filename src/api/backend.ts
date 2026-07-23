@@ -443,7 +443,10 @@ export interface VersionInfo {
  * the picker renders nothing. When `true`, `versions` lists every version
  * (local + server-only) with markers; `server_query_failed` is `true` when the
  * live `sibling_roms` view could not be fetched, so the list is local-only
- * (partial-success carve-out).
+ * (partial-success carve-out). A definitive 404 on the bound id is NOT such a
+ * failure — the server answered, it just no longer has that ROM — so the
+ * local-only list comes back with `server_query_failed: false` and the picker
+ * leaves the shared connection state alone (#1570).
  */
 export interface VersionList {
   multi_version: boolean;

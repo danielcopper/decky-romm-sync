@@ -56,7 +56,7 @@ from domain.artwork_paths import (
 )
 from domain.cover_refresh import cover_ts_only_change, scan_cover_refresh_candidates
 from domain.sync_stage import SyncStage
-from lib.errors import RommNotFoundError
+from lib.errors import RommNotFoundError, classify_error
 from lib.list_result import ErrorCode
 
 
@@ -823,9 +823,13 @@ class ArtworkService:
             rom = await self._loop.run_in_executor(None, self._romm_api.get_rom, rom_id)
         except Exception as e:
             self._logger.warning(f"refresh_cover: failed to fetch rom {rom_id}: {e}")
+            reason, _message = classify_error(e)
             return {
                 "success": False,
-                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "reason": reason,
+                # Already true for both branches (the ROM is gone / the server
+                # is down), and more specific than the classifier's generic
+                # string — only the routing slug was ever wrong here.
                 "message": "Could not fetch ROM from server",
             }
         if not rom:

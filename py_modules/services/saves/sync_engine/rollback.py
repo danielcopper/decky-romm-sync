@@ -142,11 +142,11 @@ class RollbackOrchestrator:
                 ),
             )
         except Exception as e:
-            _code, _msg = classify_error(e)
+            reason, message = classify_error(e)
             return {
                 "success": False,
-                "reason": ErrorCode.SERVER_UNREACHABLE.value,
-                "message": f"Failed to fetch saves: {_msg}",
+                "reason": reason,
+                "message": f"Failed to fetch saves: {message}",
             }
 
         active_slot = save_state.active_slot

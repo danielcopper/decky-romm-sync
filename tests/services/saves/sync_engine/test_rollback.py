@@ -12,7 +12,7 @@ import pytest
 
 from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_layout import ContentDir
-from lib.errors import RommApiError
+from lib.errors import RommApiError, RommNotFoundError
 from tests.services.saves._helpers import (
     _create_save,
     _enable_sync_with_device,
@@ -335,7 +335,41 @@ class TestResolveSyncConflict:
         )
 
         assert result["success"] is False
+        assert result["reason"] == "server_unreachable"
         assert "Failed to fetch saves" in result["message"]
+        # State left as-is — no mutation
+        assert _get_save_state(svc, 42) == original_state
+
+    @pytest.mark.asyncio
+    async def test_resolve_list_saves_404_is_not_found(self, tmp_path):
+        """The classified verdict is USED, not discarded (#1570).
+
+        This site already called classify_error and then threw its verdict
+        away, keeping only the message — so every failure, 404 included,
+        reported the server as unreachable.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"x")
+
+        original_state = RomSaveSyncState(
+            files={"pokemon.srm": FileSyncState(tracked_save_id=100, last_sync_hash="abc")},
+        )
+        _seed_save_state(svc, 42, original_state)
+
+        fake.fail_on_next(RommNotFoundError("HTTP 404: Not Found"))
+
+        result = await svc.resolve_sync_conflict(
+            rom_id=42,
+            filename="pokemon.srm",
+            server_save_id=100,
+            action="keep_local",
+        )
+
+        assert result["success"] is False
+        assert result["reason"] == "not_found"
+        assert result["reason"] != "server_unreachable"
         # State left as-is — no mutation
         assert _get_save_state(svc, 42) == original_state
 

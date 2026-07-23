@@ -321,9 +321,12 @@ class DeviceRegistry:
             return {"success": True, "devices": enriched}
         except Exception as e:
             self._log_debug(f"list_devices failed: {e}")
+            reason, _message = classify_error(e)
             return {
                 "success": False,
-                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "reason": reason,
+                # Neutral and true whichever way the call failed — only the
+                # routing slug was ever wrong here.
                 "message": "Could not load devices",
                 "devices": [],
             }

@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from domain.save_slot import save_in_slot, slot_query_param
-from lib.list_result import ErrorCode
+from lib.errors import classify_error
 from services.saves._settings import save_sync_enabled
 
 if TYPE_CHECKING:
@@ -128,10 +128,11 @@ class SlotDeleter:
                 self._logger.warning(
                     f"get_slot_delete_info: failed to list saves for slot '{slot}': {e}",
                 )
+                reason, message = classify_error(e)
                 return {
                     "success": False,
-                    "reason": ErrorCode.SERVER_UNREACHABLE.value,
-                    "message": "Cannot inspect slot — server unreachable",
+                    "reason": reason,
+                    "message": f"Cannot inspect slot — {message}",
                 }
 
         # Local tracked files pointing to server saves in this slot
@@ -178,9 +179,10 @@ class SlotDeleter:
             return {"success": True, "count": len(save_ids), "ids": set(save_ids)}
         except Exception as e:
             self._logger.warning(f"delete_slot: server delete failed for slot '{slot}': {e}")
+            reason, _message = classify_error(e)
             return {
                 "success": False,
-                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "reason": reason,
                 "message": f"Failed to delete server saves: {e}",
             }
 

@@ -7,6 +7,7 @@ import pytest
 
 from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_layout import ContentDir, InSaveDir
+from lib.errors import RommConnectionError, RommNotFoundError
 from tests.services.saves._helpers import (
     _create_save,
     _do_sync,
@@ -622,6 +623,43 @@ class TestServerQueryFailed:
         }
 
     @pytest.mark.asyncio
+    async def test_transport_failure_carries_the_unreachable_reason(self, tmp_path):
+        """The flag says the server's view is unknown; the slug says why (#1570)."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        fake.fail_on_next(RommConnectionError("connection reset"))
+
+        result = await svc.get_save_status(42)
+
+        assert result["server_query_failed"] is True
+        assert result["server_query_reason"] == "server_unreachable"
+
+    @pytest.mark.asyncio
+    async def test_definitive_404_keeps_the_flag_but_is_not_unreachable(self, tmp_path):
+        """A 404 must NOT read as offline — and must NOT clear the flag either.
+
+        The flag is what suppresses the matrix's "ready to upload" verdict
+        against an empty server list, so it stays True: we genuinely do not
+        know the server's saves. Only the reason changes, which is what stops
+        the frontend flipping the whole UI to "RomM offline" (#1570).
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc)
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        fake.fail_on_next(RommNotFoundError("HTTP 404: Not Found"))
+
+        result = await svc.get_save_status(42)
+
+        assert result["server_query_reason"] == "not_found"
+        assert result["server_query_reason"] != "server_unreachable"
+        # The safety behaviour is unchanged — this is a classification fix only.
+        assert result["server_query_failed"] is True
+        assert result["files"][0]["status"] == "unknown"
+
+    @pytest.mark.asyncio
     async def test_happy_path_flag_is_false(self, tmp_path):
         """Successful list_saves preserves the normal flow with the flag set False."""
         svc, fake = make_service(tmp_path)
@@ -635,6 +673,7 @@ class TestServerQueryFailed:
         result = await svc.get_save_status(42)
 
         assert result["server_query_failed"] is False
+        assert result["server_query_reason"] is None
         assert len(result["files"]) >= 1
         # Real matrix verdict surfaced (not redacted).
         assert result["files"][0]["status"] != "unknown"

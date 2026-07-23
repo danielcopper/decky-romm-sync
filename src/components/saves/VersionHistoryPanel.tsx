@@ -50,6 +50,13 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
         // siblings are components, not prior versions (#908). The panel is
         // hidden for multi-file slots anyway; this is the defensive backstop.
         setVersions(result.versions);
+      } else if (result.status === "not_found") {
+        // The server answered: it has no such ROM / device id. Saying
+        // "couldn't reach RomM" here would blame a connection that is
+        // plainly working (#1570).
+        detach(debugLog(`VersionHistoryPanel: server has no such entry for ${filename}: ${result.message}`));
+        setVersions(null);
+        setLoadError("RomM no longer has this game's saves.");
       } else {
         detach(debugLog(`VersionHistoryPanel: server unreachable for ${filename}: ${result.message}`));
         setVersions(null);
@@ -148,7 +155,12 @@ export const VersionHistoryPanel: FC<VersionHistoryPanelProps> = ({
         // we just couldn't reach the server to confirm. Prompt for retry
         // instead of telling the user the version is gone.
         toaster.toast({ title: "RomM Sync", body: "Couldn't reach RomM. Check your connection and try again." });
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- exhaustive final branch of the 8-member RollbackStatus union; an explicit check (vs. plain `else`) keeps the per-status symmetry and leaves any future-added status unhandled instead of silently routing it to the "unsupported" toast
+      } else if (result.status === "not_found") {
+        // The mirror image of the branch above: RomM answered that it no
+        // longer has this game's saves, so a retry cannot help and the
+        // toast must not send the user off to check their connection (#1570).
+        toaster.toast({ title: "RomM Sync", body: "RomM no longer has this game's saves — nothing was restored." });
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- exhaustive final branch of the 9-member RollbackStatus union; an explicit check (vs. plain `else`) keeps the per-status symmetry and leaves any future-added status unhandled instead of silently routing it to the "unsupported" toast
       } else if (result.status === "unsupported") {
         toaster.toast({ title: "RomM Sync", body: "Version history requires RomM 4.7+" });
       }
