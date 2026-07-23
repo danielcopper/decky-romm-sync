@@ -29,7 +29,13 @@ import {
   dismissSaveSortMigration,
   logError,
 } from "../api/backend";
-import type { SaveSortMigrationStatus, RegisteredDevice, CollectionNamingMode } from "../types";
+import type {
+  SaveSortMigrationStatus,
+  RegisteredDevice,
+  CollectionNamingMode,
+  SaveSyncSettings as SaveSyncSettingsType,
+  RetroArchInputCheck,
+} from "../types";
 import {
   getSaveSortMigrationState,
   setSaveSortMigrationStatus as setStoreSaveSortStatus,
@@ -39,7 +45,6 @@ import {
 import { scrollToTop } from "../utils/scrollHelpers";
 import { detach } from "../utils/detach";
 import { trimServerUrl, isValidServerUrl } from "../utils/serverUrl";
-import type { SaveSyncSettings as SaveSyncSettingsType, RetroArchInputCheck } from "../types";
 import { pendingEdits } from "./settings/TextInputModal";
 import { SaveSortMigrationSection } from "./settings/SaveSortMigrationSection";
 import { ConnectionSection } from "./settings/ConnectionSection";
