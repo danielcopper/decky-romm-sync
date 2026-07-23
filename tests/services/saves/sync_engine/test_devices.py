@@ -14,7 +14,15 @@ from fakes.fake_machine_id_reader import FakeMachineIdReader
 from fakes.fake_save_api import FakeSaveApi
 from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 
-from lib.errors import RommApiError, RommAuthError, RommConnectionError, RommForbiddenError, RommSSLError
+from lib.errors import (
+    RommApiError,
+    RommAuthError,
+    RommConnectionError,
+    RommForbiddenError,
+    RommNotFoundError,
+    RommSSLError,
+    RommTimeoutError,
+)
 from lib.list_result import ErrorCode
 from services.saves.sync_engine.devices import DeviceRegistry
 from tests.services.saves._helpers import (
@@ -301,6 +309,151 @@ class TestEnsureDeviceRegisteredUpdateSwallowLogs:
         assert result["success"] is True
         assert result["device_id"] == "server-uuid"
         assert any("update_device failed" in m and "boom" in m for m in debug_log)
+
+
+class TestEnsureDeviceRegisteredReRegistersDeadDevice:
+    """#1560: after a RomM database wipe/restore the cached device id no longer
+    exists server-side, so the best-effort ``update_device`` touch gets a
+    definitive 404. That 404 (and ONLY that) forgets the dead id and
+    re-registers a fresh one; every other touch failure stays a best-effort
+    swallow that keeps the cached id, so a server blip never churns a
+    re-registration."""
+
+    @pytest.mark.asyncio
+    async def test_live_cached_id_touch_succeeds_no_reregistration(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, "server-uuid")
+        # Stamp a version so the pre-register heartbeat probe is skipped — the
+        # touch lands on update_device, which succeeds against a live id.
+        fake.set_version("4.9.0")
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is True
+        assert result["device_id"] == "server-uuid"
+        # The live touch fired and kept the id — no re-registration, id intact.
+        assert any(c[0] == "update_device" for c in fake.call_log)
+        assert _register_call(fake) is None
+        assert _get_device_id(svc) == "server-uuid"
+
+    @pytest.mark.asyncio
+    async def test_dead_cached_id_forgets_and_reregisters(self, tmp_path):
+        debug_log: list[str] = []
+        svc, fake = make_service(tmp_path, log_debug=debug_log.append)
+        _enable_sync_with_device(svc, "server-uuid")
+        fake.set_version("4.9.0")
+        # The server no longer has this device → the touch 404s (the #1560 wedge).
+        fake.fail_on_next(RommNotFoundError("Device with ID server-uuid not found"))
+
+        result = await svc.ensure_device_registered()
+
+        # A fresh id was minted and persisted, and it is the one returned — not
+        # the stale, dead one.
+        assert result["success"] is True
+        new_id = result["device_id"]
+        assert new_id
+        assert new_id != "server-uuid"
+        # register_device ran (the forget fell through to registration)...
+        assert _register_call(fake) is not None
+        # ...and the persisted kv_config id is now the fresh id, not the dead one.
+        assert _get_device_id(svc) == new_id
+        assert result["server_device_id"] == new_id
+        # The heal took the 404 branch (naming the dead id), not the generic swallow.
+        assert any("server no longer has device server-uuid" in m for m in debug_log)
+
+    @pytest.mark.asyncio
+    async def test_transport_failure_on_touch_is_not_a_heal(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, "server-uuid")
+        fake.set_version("4.9.0")
+        # A transport blip on the touch — NOT a definitive 404. The device is
+        # still registered; the id must be kept, not forgotten + re-registered.
+        fake.fail_on_next(RommConnectionError("Connection refused"))
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is True
+        assert result["device_id"] == "server-uuid"
+        # The cached id was KEPT — no forget, no re-registration.
+        assert _get_device_id(svc) == "server-uuid"
+        assert _register_call(fake) is None
+
+    @pytest.mark.asyncio
+    async def test_timeout_on_touch_is_not_a_heal(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, "server-uuid")
+        fake.set_version("4.9.0")
+        fake.fail_on_next(RommTimeoutError("timed out"))
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is True
+        assert result["device_id"] == "server-uuid"
+        assert _get_device_id(svc) == "server-uuid"
+        assert _register_call(fake) is None
+
+    @pytest.mark.asyncio
+    async def test_generic_exception_on_touch_is_not_a_heal(self, tmp_path):
+        """Edge: only a RommNotFoundError heals — a non-RomM error stays a swallow.
+
+        Guards the discriminator: broadening the peel to ``except Exception``
+        would re-register on any error, throwing away a valid id.
+        """
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, "server-uuid")
+        fake.set_version("4.9.0")
+        fake.fail_on_next(RuntimeError("unexpected"))
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is True
+        assert result["device_id"] == "server-uuid"
+        assert _get_device_id(svc) == "server-uuid"
+        assert _register_call(fake) is None
+
+    @pytest.mark.asyncio
+    async def test_heal_then_reregister_fails_leaves_clean_state(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, "server-uuid")
+        fake.set_version("4.9.0")
+
+        # The touch 404s (dead id) → forget → but the server goes away mid-heal,
+        # so the re-registration itself fails. The touch is monkeypatched to 404
+        # (leaving the one-shot ``fail_on_next`` for the register_device that
+        # follows), since a single ``fail_on_next`` can only arm one call.
+        def _touch_404(*_args, **_kwargs):
+            raise RommNotFoundError("Device with ID server-uuid not found")
+
+        fake.update_device = _touch_404
+        fake.fail_on_next(RommConnectionError("Connection refused"))
+
+        result = await svc.ensure_device_registered()
+
+        # Clean, recoverable state: classified failure, empty id, dead id cleared.
+        assert result["success"] is False
+        assert result["reason"] == ErrorCode.SERVER_UNREACHABLE.value
+        assert result["message"]
+        assert result["device_id"] == ""
+        # The dead id was forgotten and NOT replaced — kv_config is left cleared,
+        # so the next ensure_device_registered retries cleanly from None.
+        assert _get_device_id(svc) is None
+
+    @pytest.mark.asyncio
+    async def test_no_cached_id_goes_straight_to_registration(self, tmp_path):
+        """First-time path is unchanged: no cached id → no touch, register runs."""
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        fake.set_version("4.9.0")
+        # No device_id persisted → registration branch.
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is True
+        assert result["device_id"]
+        # The update_device touch is only for an existing id — it must not run on
+        # the first-time path.
+        assert not any(c[0] == "update_device" for c in fake.call_log)
+        assert _register_call(fake) is not None
 
 
 class TestPermissionDegradedNeverDropsDeviceId:

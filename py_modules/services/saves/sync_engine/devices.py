@@ -16,7 +16,7 @@ from __future__ import annotations
 import contextlib
 from typing import TYPE_CHECKING, Any
 
-from lib.errors import classify_error
+from lib.errors import RommNotFoundError, classify_error
 from lib.list_result import ErrorCode
 from services.saves._settings import save_sync_enabled
 
@@ -182,6 +182,14 @@ class DeviceRegistry:
         fingerprint sent as the RomM ``hostname`` so the server dedupes
         this device across reinstalls. When the machine id is unreadable
         (``None``) the call degrades to no-fingerprint registration.
+
+        A cached device id is trusted only as far as the best-effort
+        ``update_device`` touch below: a definitive 404 from that touch
+        means the server no longer has this device (its database was wiped
+        or restored out from under the cached id), so the dead id is
+        forgotten and a fresh one is registered in its place. Every other
+        touch failure is a transient miss that leaves the cached id in
+        force — a server blip must never churn a re-registration.
         """
         if not save_sync_enabled(self._settings):
             return {
@@ -217,22 +225,38 @@ class DeviceRegistry:
         device_id = await loop.run_in_executor(None, self.get_device_id)
         if device_id:
             server_id_str = str(device_id)
-            # Best-effort touch of the server-side client_version. A failure here
-            # is non-fatal (the device is already registered), but log it at debug
-            # so the swallow leaves a breadcrumb instead of vanishing silently.
+            # Best-effort touch of the server-side client_version, with one
+            # exception peeled off: a definitive ``RommNotFoundError`` (404)
+            # means the server no longer has this device (its DB was wiped or
+            # restored), so the cached id is dead — forget it and fall through
+            # to the registration path below to mint a fresh one (#1560). Every
+            # OTHER failure is non-fatal (the device is still registered): keep
+            # the cached id and return it, logging at debug so the swallow
+            # leaves a breadcrumb. A transient server blip must NEVER throw away
+            # a valid id and churn a spurious re-registration.
+            dead_device = False
             try:
                 await loop.run_in_executor(
                     None,
                     lambda: self._romm_api.update_device(server_id_str, client_version=self._plugin_version),
                 )
+            except RommNotFoundError as e:
+                self._log_debug(
+                    f"ensure_device_registered: server no longer has device {server_id_str} (404), re-registering: {e}"
+                )
+                await loop.run_in_executor(None, self.forget_device)
+                dead_device = True
             except Exception as e:
                 self._log_debug(f"ensure_device_registered: update_device failed (non-fatal): {e}")
-            return {
-                "success": True,
-                "device_id": device_id,
-                "device_name": self._get_device_name() or "",
-                "server_device_id": device_id,
-            }
+            if not dead_device:
+                return {
+                    "success": True,
+                    "device_id": device_id,
+                    "device_name": self._get_device_name() or "",
+                    "server_device_id": device_id,
+                }
+            # dead_device: the cached id was forgotten above; fall through to
+            # registration so a fresh id is minted and persisted.
 
         hostname = hostname_provider.get()
         machine_id = machine_id_provider.get()
