@@ -1151,7 +1151,7 @@ describe("SlotSetupWizard", () => {
       });
       await flushAsync();
 
-      expect(vi.mocked(backend.getSaveSetupInfo).mock.calls.length).toBe(callsAfterLoad);
+      expect(vi.mocked(backend.getSaveSetupInfo).mock.calls).toHaveLength(callsAfterLoad);
     });
 
     it("auto-reloads on reconnect after holding the offline error", async () => {
