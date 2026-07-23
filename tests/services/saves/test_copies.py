@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from domain.save_layout import ContentDir
+from lib.errors import RommNotFoundError
 from tests.services.saves._helpers import (
     _create_save,
     _enable_sync_with_device,
@@ -386,6 +387,46 @@ class TestCopySaveToSlotRefusals:
         assert result["status"] == "server_unreachable"
         assert "unreachable" in result.get("message", "").lower()
         assert "error" not in result
+
+    @pytest.mark.asyncio
+    async def test_definitive_404_on_post_preflight_list_is_not_found(self, tmp_path):
+        """A 404 on the post-preflight ``list_saves`` → not_found, not offline (#1570).
+
+        ``list_saves`` is rom- AND device-scoped, so a definitive 404 is the
+        #1560 family (dead ROM or dropped device registration) — the server
+        answered. It must read as ``not_found`` rather than ``server_unreachable``,
+        and — like the transport branch — it must still persist whatever the
+        pre-flight mutated before bailing, or that work is lost.
+        """
+        svc, fake = make_service(tmp_path)
+        _create_save(tmp_path)
+        local_hash = _file_md5(str(tmp_path / "saves" / "gba" / "pokemon.srm"))
+        _setup_configured(svc, tmp_path, active_slot="autosave", tracked_id=100, last_sync_hash=local_hash)
+        fake.saves[100] = _tracked_save(100, slot="autosave")
+        # Seeded state has no sync-check timestamp; the pre-flight sets one.
+        assert _require_save_state(svc, 42).last_sync_check_at is None
+
+        original_list = fake.list_saves
+        call_count = {"n": 0}
+
+        def fail_second_list(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] >= 2:
+                raise RommNotFoundError("HTTP 404: Not Found")
+            return original_list(*args, **kwargs)
+
+        fake.list_saves = fail_second_list  # type: ignore[method-assign]
+        try:
+            result = await svc.copy_save_to_slot(42, 100, TARGET)
+        finally:
+            fake.list_saves = original_list  # type: ignore[method-assign]
+
+        assert result["status"] == "not_found"
+        assert result["status"] != "server_unreachable"
+        assert "message" in result
+        # The pre-flight mutation was persisted before bailing (mark_sync_evaluated
+        # ran, so the seeded-None timestamp is now set on disk).
+        assert _require_save_state(svc, 42).last_sync_check_at is not None
 
     @pytest.mark.asyncio
     async def test_target_slot_busy_on_409(self, tmp_path):

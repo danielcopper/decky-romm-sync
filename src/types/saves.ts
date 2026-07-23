@@ -260,6 +260,8 @@ export type CopySaveToSlotStatus =
   | { status: "version_deleted" }
   | { status: "unsupported"; reason?: string }
   | { status: "server_unreachable"; message: string }
+  // See RollbackStatus — the server answered, it just has no such entry.
+  | { status: "not_found"; message: string }
   | { status: "conflict_blocked"; conflicts: SyncConflict[] }
   | { status: "preflight_failed"; errors: string[] }
   | { status: "target_slot_busy"; message: string }

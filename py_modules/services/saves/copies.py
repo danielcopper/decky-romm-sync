@@ -20,7 +20,7 @@ from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 from domain.save_slot import save_in_slot
 from domain.save_status import compute_multi_file_slot
-from lib.errors import RommConflictError
+from lib.errors import RommConflictError, RommNotFoundError
 from services.saves._helpers import local_save_target
 from services.saves._settings import resolve_default_slot
 
@@ -256,7 +256,10 @@ class SaveCopyService:
            unconditionally, to protect its dirty local before the copy overwrites
            it — ``conflict_blocked`` / ``preflight_failed`` on a bad pre-flight.
         7. ``list_saves`` with no slot filter (the source may be in any slot);
-           failure is ``server_unreachable``.
+           a transport failure is ``server_unreachable``, a definitive 404 (the
+           server answered that it has no such ROM or device id) is ``not_found``
+           — distinct so the copy surface never reports an answering server
+           offline (#1570).
         8. The copy proper runs in :meth:`_copy_save_to_slot_io`.
 
         A dedup pre-check between the ``list_saves`` and the copy short-circuits
@@ -267,7 +270,7 @@ class SaveCopyService:
         Returns a discriminated-status dict (mirrors ``RollbackStatus``):
         ``ok | already_present{existing_id} | not_configured | invalid_slot_name |
         rom_not_installed | version_deleted | unsupported{reason?} |
-        server_unreachable{message} | conflict_blocked{conflicts} |
+        server_unreachable{message} | not_found{message} | conflict_blocked{conflicts} |
         preflight_failed{errors} | target_slot_busy{message} | copy_failed{message}``.
         """
         rom_id = int(rom_id)
@@ -332,6 +335,15 @@ class SaveCopyService:
                     None,
                     lambda: self._retry.with_retry(lambda: self._romm_api.list_saves(rom_id, device_id=device_id)),
                 )
+            except RommNotFoundError as e:
+                # The server ANSWERED: it has no such ROM (or no such device id).
+                # ``list_saves`` is rom- AND device-scoped, so this is the #1560
+                # family. Not a connectivity verdict — the copy surface must not
+                # report the server offline (#1570).
+                self._log_debug(f"copy_save_to_slot: server has no such entity: {e}")
+                # Persist whatever the pre-flight mutated before bailing.
+                await self._loop.run_in_executor(None, self._write_save_state, rom_id, save_state)
+                return {"status": "not_found", "message": str(e)}
             except Exception as e:
                 self._log_debug(f"copy_save_to_slot: failed to list saves: {e}")
                 # Persist whatever the pre-flight mutated before bailing.

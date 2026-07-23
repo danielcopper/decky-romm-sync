@@ -136,6 +136,7 @@ describe("useCopyToSlot", () => {
     { result: { status: "not_configured" }, needle: "Set up save slots" },
     { result: { status: "invalid_slot_name" }, needle: "valid slot name" },
     { result: { status: "server_unreachable", message: "boom" }, needle: "Couldn't reach RomM" },
+    { result: { status: "not_found", message: "HTTP 404" }, needle: "couldn't find this game's save data" },
     { result: { status: "preflight_failed", errors: ["net"] }, needle: "Sync failed before copy" },
     { result: { status: "copy_failed", message: "oops" }, needle: "Couldn't copy the save" },
     { result: { status: "unsupported", reason: "savefiles_in_content_dir" }, needle: "writes saves next to the ROM" },
@@ -147,6 +148,20 @@ describe("useCopyToSlot", () => {
     expect(toaster.toast).toHaveBeenCalledWith(
       needle ? expect.objectContaining({ body: expect.stringContaining(needle) }) : expect.anything(),
     );
+    // A refusal never refreshes the views.
+    expect(dataChanged).not.toHaveBeenCalled();
+  });
+
+  it("not_found: names what RomM couldn't find, never a reachability or no-saves claim", async () => {
+    // The 404 means the server ANSWERED (#1560 family). Same rule as every
+    // other 404 surface in #1570: no offline blame, and no claim the game's
+    // saves are gone (the 404 can be the device registration).
+    await runCopy({ status: "not_found", message: "HTTP 404: Not Found" });
+
+    const toastCalls = vi.mocked(toaster.toast).mock.calls;
+    const body = String(toastCalls[toastCalls.length - 1]![0].body ?? "");
+    expect(body).not.toMatch(/couldn't reach|check your connection|unreachable|not reachable|offline/i);
+    expect(body).not.toMatch(/no saves|has no save|without saves/i);
     // A refusal never refreshes the views.
     expect(dataChanged).not.toHaveBeenCalled();
   });

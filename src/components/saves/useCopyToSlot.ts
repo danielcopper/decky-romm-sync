@@ -60,6 +60,13 @@ async function handleResult(result: CopySaveToSlotStatus, target: string, romId:
     case "server_unreachable":
       toaster.toast({ title: TITLE, body: "Couldn't reach RomM. Check your connection and try again." });
       return;
+    case "not_found":
+      // The server answered — it has no such ROM or device id (#1560 family).
+      // A retry can't help, so the copy must not send the user to check their
+      // connection, and must not claim the saves are gone: the 404 can be the
+      // device registration rather than the ROM (#1570).
+      toaster.toast({ title: TITLE, body: "RomM couldn't find this game's save data — nothing was copied." });
+      return;
     case "version_deleted":
       toaster.toast({ title: TITLE, body: "This save no longer exists on the server." });
       return;
