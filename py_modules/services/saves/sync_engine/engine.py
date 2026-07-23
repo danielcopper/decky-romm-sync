@@ -399,6 +399,37 @@ class SyncEngine:
             machine_id_provider=self._machine_id_provider,
         )
 
+    async def _ensure_device_live_or_fail(self) -> dict[str, Any] | None:
+        """Register-or-heal the server device id before a sync consumes it.
+
+        Runs :meth:`ensure_device_registered` UNCONDITIONALLY — not only when
+        the id is absent. Its best-effort ``update_device`` touch doubles as a
+        liveness probe, so a dead-but-present cached id (e.g. after a RomM
+        database wipe/restore, where ``kv_config`` still holds an id the server
+        now 404s) is detected and re-registered HERE, before
+        :meth:`_run_rom_sync` reads the id and calls ``list_saves`` with a dead
+        one (#1560). Gating the heal on ``if not get_device_id()`` — presence,
+        not liveness — is the exact bug one level up from the touch's own
+        presence-not-liveness gate. A live id costs one extra 200 touch per
+        sync: the accepted price of correctness (no "recently validated"
+        caching).
+
+        Returns the canonical ``DEVICE_NOT_REGISTERED`` failure dict when a live
+        registration could not be established (the caller returns it verbatim),
+        else ``None`` — the caller proceeds and the sync reads the fresh,
+        possibly-healed id through :meth:`_read_sync_inputs` (and, for the bulk
+        sweep, the re-read at ``sync_all_saves``), never a value captured before
+        the heal.
+        """
+        reg = await self.ensure_device_registered()
+        if not reg.get("success"):
+            return {
+                "success": False,
+                "reason": DEVICE_NOT_REGISTERED_REASON,
+                "message": DEVICE_NOT_REGISTERED,
+            }
+        return None
+
     async def list_devices(self) -> dict[str, Any]:
         """List all devices registered with the RomM server for this user."""
         return await self._devices.list_devices(loop=self._loop)
@@ -725,14 +756,9 @@ class SyncEngine:
                 except Exception as e:
                     return self._heartbeat_failure_result("pre_launch_sync", e)
 
-                if not self.get_device_id():
-                    reg = await self.ensure_device_registered()
-                    if not reg.get("success"):
-                        return {
-                            "success": False,
-                            "reason": DEVICE_NOT_REGISTERED_REASON,
-                            "message": DEVICE_NOT_REGISTERED,
-                        }
+                failure = await self._ensure_device_live_or_fail()
+                if failure is not None:
+                    return failure
 
                 uploaded, downloaded, errors, conflicts = await self._run_rom_sync(rom_id)
                 synced = uploaded + downloaded
@@ -810,14 +836,9 @@ class SyncEngine:
                 except Exception as e:
                     return self._heartbeat_failure_result("post_exit_sync", e)
 
-                if not self.get_device_id():
-                    reg = await self.ensure_device_registered()
-                    if not reg.get("success"):
-                        return {
-                            "success": False,
-                            "reason": DEVICE_NOT_REGISTERED_REASON,
-                            "message": DEVICE_NOT_REGISTERED,
-                        }
+                failure = await self._ensure_device_live_or_fail()
+                if failure is not None:
+                    return failure
 
                 uploaded, downloaded, errors, conflicts = await self._run_rom_sync(rom_id)
                 synced = uploaded + downloaded
@@ -893,14 +914,9 @@ class SyncEngine:
                 if self._save_sync_blocked():
                     return self._content_dir_skip()
 
-                if not self.get_device_id():
-                    reg = await self.ensure_device_registered()
-                    if not reg.get("success"):
-                        return {
-                            "success": False,
-                            "reason": DEVICE_NOT_REGISTERED_REASON,
-                            "message": DEVICE_NOT_REGISTERED,
-                        }
+                failure = await self._ensure_device_live_or_fail()
+                if failure is not None:
+                    return failure
 
                 uploaded, downloaded, errors, conflicts = await self._run_rom_sync(rom_id)
                 synced = uploaded + downloaded
@@ -1004,14 +1020,9 @@ class SyncEngine:
                 if self._save_sync_blocked():
                     return self._content_dir_skip(all_saves=True)
 
-                if not self.get_device_id():
-                    reg = await self.ensure_device_registered()
-                    if not reg.get("success"):
-                        return {
-                            "success": False,
-                            "reason": DEVICE_NOT_REGISTERED_REASON,
-                            "message": DEVICE_NOT_REGISTERED,
-                        }
+                failure = await self._ensure_device_live_or_fail()
+                if failure is not None:
+                    return failure
 
                 # One whole-device transport-only negotiate session wraps the
                 # sweep (ADR-0017); when it can't open, each confirmed non-legacy

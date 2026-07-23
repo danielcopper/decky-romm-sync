@@ -86,16 +86,18 @@ the RomM database was reset and this device's registration disappeared with it �
 badge is clear, the fix is on the RomM side (re-sync the library, or re-check the game), not with your network.
 
 When the missing thing is this device's own registration — the RomM database was wiped or restored and the id this
-device was issued no longer exists — you don't have to do anything. The next time the plugin loads (installing an update
-counts, since that reloads it) it notices the id is gone, registers this device afresh, and save sync carries on under
-the new id. A new entry shows up in RomM's device list; the old, dead one can be ignored.
+device was issued no longer exists — you don't have to do anything. Both when the plugin loads (installing an update
+counts, since that reloads it) and before every save-sync (before a game launches, after it exits, or a manual sync),
+the plugin first checks that this device's id still exists on the server; the moment it finds the id is gone it
+registers this device afresh and carries on under the new id. A new entry shows up in RomM's device list; the old, dead
+one can be ignored.
 
 The first-time save-slot setup screen is the clearest example. If RomM can't find the save data that setup needs, it
 pauses with "RomM couldn't find the save data for this setup" rather than the "server is not reachable" message, and the
 offline badge stays clear. Setup deliberately stops there instead of picking a slot for you: the plugin has no
 trustworthy view of what's on the server, and choosing a slot on that basis could overwrite real saves on the first
-sync. Re-check the game in RomM (a server database reset re-registers this device on its own the next time the plugin
-loads — see above), then tap **Retry**.
+sync. Re-check the game in RomM (a server database reset re-registers this device automatically — see above), then tap
+**Retry**.
 
 ### Save file not found
 
