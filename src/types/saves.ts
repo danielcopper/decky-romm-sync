@@ -244,8 +244,8 @@ export type RollbackStatus =
 export type ListFileVersionsResult =
   | { status: "ok"; versions: SaveVersionEntry[] }
   | { status: "multi_file_unsupported"; versions: SaveVersionEntry[] }
-  // See RollbackStatus — the server answered, it just has no such entry.
   | { status: "server_unreachable"; message: string }
+  // See RollbackStatus — the server answered, it just has no such entry.
   | { status: "not_found"; message: string };
 
 /** Discriminated-status result of `copySaveToSlot` — copies one server save into

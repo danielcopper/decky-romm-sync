@@ -735,14 +735,20 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       // believing the conflict was cleared. Surface it and stay in conflict,
       // exactly like the network-throw catch below (#1276).
       if (result.server_query_failed) {
-        // Only an explicit unreachable verdict is a connectivity signal:
-        // feeding the store off the bare flag blacked out the whole UI over a
-        // ROM the server merely no longer has (#1570).
-        if (result.server_query_reason === "server_unreachable") {
+        // Only an explicit unreachable verdict is a connectivity signal — for
+        // the store AND the copy. Off the bare flag both blamed the connection
+        // for a ROM the server merely no longer has (#1570).
+        const unreachable = result.server_query_reason === "server_unreachable";
+        if (unreachable) {
           reportServerReachable(false);
         }
         detach(debugLog(`CustomPlayButton: resolve conflict — server query failed for rom ${romId}`));
-        toaster.toast({ title: "RomM Sync", body: "Couldn't reach server to resolve conflict" });
+        toaster.toast({
+          title: "RomM Sync",
+          body: unreachable
+            ? "Couldn't reach server to resolve conflict"
+            : "RomM couldn't find this game's save data — conflict left unresolved",
+        });
         setState("conflict");
         return;
       }

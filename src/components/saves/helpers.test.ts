@@ -291,9 +291,10 @@ describe("computeSyncSummary", () => {
     });
   });
 
-  it("short-circuits to 'Server unreachable' when server_query_failed is true", () => {
+  it("short-circuits to 'Server unreachable' when the reason is server_unreachable", () => {
     const status = makeStatus({
       server_query_failed: true,
+      server_query_reason: "server_unreachable",
       files: [
         {
           filename: "save.srm",
@@ -317,8 +318,31 @@ describe("computeSyncSummary", () => {
     });
   });
 
+  it("does NOT claim the server is unreachable on a definitive 404", () => {
+    // The Saves tab is #1560's own surface: saying "Server unreachable" for a
+    // ROM the server merely answered 404 for is the exact lie #1570 removes.
+    // It still must not run the matrix against the empty server list.
+    const status = makeStatus({
+      server_query_failed: true,
+      server_query_reason: "not_found",
+      files: [],
+    });
+    const { syncSummaryText } = computeSyncSummary(true, status, []);
+    expect(syncSummaryText).not.toMatch(/unreachable|not reachable|offline/i);
+    expect(syncSummaryText).not.toMatch(/no saves|has no save|without saves/i);
+    expect(syncSummaryText).toBe("Save status unavailable");
+  });
+
+  it("does not claim unreachable when the query failed without a reason slug", () => {
+    // Defensive: an older backend (or an unclassified failure) sends the flag
+    // with no reason. Silence about the cause beats asserting the wrong one.
+    const status = makeStatus({ server_query_failed: true, files: [] });
+    const { syncSummaryText } = computeSyncSummary(true, status, []);
+    expect(syncSummaryText).not.toMatch(/unreachable|not reachable|offline/i);
+  });
+
   it("server_query_failed wins over conflicts", () => {
-    const status = makeStatus({ server_query_failed: true });
+    const status = makeStatus({ server_query_failed: true, server_query_reason: "server_unreachable" });
     const conflicts: SyncConflict[] = [
       {
         type: "sync_conflict",

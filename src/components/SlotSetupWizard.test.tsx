@@ -1120,9 +1120,6 @@ describe("SlotSetupWizard", () => {
       // #1560's path: the 404 means the server ANSWERED. Reporting offline
       // here blacked out the whole UI while RomM was working fine (#1570).
       setRommConnectionState("checking");
-      vi.mocked(backend.getSaveSetupInfo).mockResolvedValue(
-        makeSetupInfo({ recommended_action: "not_found", server_query_failed: true }),
-      );
       const result = makeSetupInfo({ recommended_action: "not_found", server_query_failed: true });
       vi.mocked(backend.getSaveSetupInfo).mockResolvedValue(result);
       render(<SlotSetupWizard {...defaultProps()} />);

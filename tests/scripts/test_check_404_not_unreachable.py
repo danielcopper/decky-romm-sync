@@ -248,6 +248,42 @@ class TestCorrectShapesAreClean:
         """)
         assert findings == []
 
+    def test_nested_try_peeling_the_404_does_not_flag_the_outer_handler(self):
+        """A nested ``try`` is scanned on its own terms, not the enclosing one.
+
+        Attributing the inner dict literals to the outer handler made a nested
+        peel read as an unpeeled verdict — a false positive, which would
+        wrongly block a future PR.
+        """
+        findings = _scan("""
+            def f():
+                try:
+                    outer()
+                except Exception:
+                    try:
+                        fetch()
+                    except RommNotFoundError:
+                        return {"recommended_action": "not_found", "server_query_failed": True}
+                    except Exception:
+                        return {"recommended_action": "server_unreachable", "server_query_failed": True}
+        """)
+        assert findings == []
+
+    def test_nested_try_does_not_mask_the_outer_handlers_own_verdict(self):
+        """The exclusion is scoped: a verdict in the OUTER body is still found."""
+        findings = _scan("""
+            def f():
+                try:
+                    outer()
+                except Exception:
+                    try:
+                        cleanup()
+                    except Exception:
+                        pass
+                    return {"success": False, "reason": ErrorCode.SERVER_UNREACHABLE.value, "message": "m"}
+        """)
+        assert len(findings) == 1
+
     def test_handler_with_no_return_dict(self):
         findings = _scan("""
             def f():

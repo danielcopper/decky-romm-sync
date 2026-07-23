@@ -123,9 +123,11 @@ export function statusLabel(status: string, lastSyncAt: string | null): { color:
  * Build the active slot's sync-summary header line.
  *
  * Returns the empty (null) state for inactive slots or missing status. When
- * the backend signals `server_query_failed`, short-circuits with a neutral
- * "Server unreachable" instead of running the matrix-derived classification
- * (which would otherwise read an empty server list as "ready to upload").
+ * the backend signals `server_query_failed`, short-circuits instead of running
+ * the matrix-derived classification (which would read an empty server list as
+ * "ready to upload"). Only an explicit `server_query_reason` of
+ * `server_unreachable` may say so in the text — on an answered 404 that would
+ * be false (#1570).
  *
  * The summary is derived from the per-file matrix statuses so it can never
  * disagree with the per-file badges (`statusLabel`): any file pending upload
@@ -142,7 +144,9 @@ export function computeSyncSummary(
   if (!isActive || !saveStatus) return { syncSummaryText: null, syncSummaryColor: MUTED_COLOR };
 
   if (saveStatus.server_query_failed) {
-    return { syncSummaryText: "Server unreachable", syncSummaryColor: MUTED_COLOR };
+    const text =
+      saveStatus.server_query_reason === "server_unreachable" ? "Server unreachable" : "Save status unavailable";
+    return { syncSummaryText: text, syncSummaryColor: MUTED_COLOR };
   }
 
   const hasConflict = conflicts.length > 0;

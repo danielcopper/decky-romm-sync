@@ -62,9 +62,10 @@ more of.
 The AST heuristic is intentionally conservative, and a guardrail rather than a
 prover: it reads one ``try`` statement at a time and does not follow a verdict
 returned by a helper the handler calls, nor one assembled across statements
-(``resp = {...}; resp["reason"] = ...``). A ``try`` nested *inside* a catch-all
-handler contributes its own dict literals to that handler's scan, so a nested
-``except RommNotFoundError`` peel can clear the outer handler too.
+(``resp = {...}; resp["reason"] = ...``). A ``try`` nested *inside* a handler is
+scanned as its own statement, with its own sibling-peel check, and its dict
+literals are NOT attributed to the enclosing handler — otherwise a nested peel
+would read as an unpeeled verdict on the outer one and false-positive.
 """
 
 from __future__ import annotations
@@ -73,6 +74,10 @@ import ast
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SERVICES_DIR = REPO_ROOT / "py_modules" / "services"
@@ -154,6 +159,22 @@ def _hardcoded_verdict_spelling(value: ast.expr) -> str | None:
     return None
 
 
+def _walk_outside_nested_try(node: ast.AST) -> Iterator[ast.AST]:
+    """Yield *node*'s descendants, never descending into a nested ``ast.Try``.
+
+    The caller's top-level walk visits every ``ast.Try`` in the module, so a
+    nested one is scanned on its own terms — with its own sibling-peel check.
+    Attributing its dict literals to the enclosing handler as well would make a
+    nested ``except RommNotFoundError`` peel look like an unpeeled verdict on
+    the outer handler, which is a false positive.
+    """
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.Try):
+            continue
+        yield child
+        yield from _walk_outside_nested_try(child)
+
+
 def _unreachable_spelling(handler: ast.ExceptHandler) -> str | None:
     """Return how *handler* hardcodes the unreachable verdict, or None.
 
@@ -161,7 +182,7 @@ def _unreachable_spelling(handler: ast.ExceptHandler) -> str | None:
     anywhere else in the handler (a log line, a comparison against a classified
     reason) is not a hardcoded verdict.
     """
-    for node in ast.walk(handler):
+    for node in _walk_outside_nested_try(handler):
         if not isinstance(node, ast.Dict):
             continue
         for key, value in zip(node.keys, node.values, strict=True):

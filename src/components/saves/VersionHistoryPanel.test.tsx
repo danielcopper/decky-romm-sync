@@ -155,9 +155,12 @@ describe("VersionHistoryPanel", () => {
     const { getByText, container } = render(<VersionHistoryPanel {...defaultProps()} />);
     fireEvent.click(getByText("Previous Versions"));
     await flushAsync();
-    expect(container.textContent).toContain("RomM no longer has this game's saves.");
-    // The server answered — blaming the connection is the #1570 defect.
-    expect(container.textContent).not.toContain("Couldn't reach RomM");
+    expect(container.textContent).toContain("RomM couldn't find this game's save data.");
+    // The server answered, so the copy must not blame the connection — and it
+    // must not claim the saves are gone either: the 404 can be the device
+    // registration rather than the ROM (#1570).
+    expect(container.textContent).not.toMatch(/couldn't reach|unreachable|not reachable|offline/i);
+    expect(container.textContent).not.toMatch(/no saves|has no save|without saves/i);
   });
 
   it("Retry button retriggers loadVersions", async () => {
@@ -390,9 +393,13 @@ describe("VersionHistoryPanel", () => {
       fireEvent.click(getByText("Restore"));
       await flushAsync();
       await flushAsync();
-      expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(
-        expect.objectContaining({ body: "RomM no longer has this game's saves — nothing was restored." }),
-      );
+      const toastCalls = vi.mocked(toaster.toast).mock.calls;
+      const body = toastCalls[toastCalls.length - 1]?.[0].body ?? "";
+      expect(body).toBe("RomM couldn't find this game's save data — nothing was restored.");
+      // Same rule as the wizard copy: no reachability claim, no claim that the
+      // game's saves are gone (the 404 can be the device id) — see #1570.
+      expect(body).not.toMatch(/couldn't reach|unreachable|not reachable|offline/i);
+      expect(body).not.toMatch(/no saves|has no save|without saves/i);
       expect(onRestored).not.toHaveBeenCalled();
     });
 
