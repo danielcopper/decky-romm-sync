@@ -2,6 +2,7 @@
   "compilerOptions": {
     "outDir": "dist",
     "module": "ESNext",
+    "removeComments": true,
     "target": "ES2020",
     "jsx": "react-jsx",
     "declaration": false,
