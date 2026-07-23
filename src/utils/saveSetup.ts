@@ -9,8 +9,7 @@
  * `recommended_action` carries the explicit failure mode from the backend (see
  * `get_save_setup_info`); the call site MUST NOT treat an empty `server_slots`
  * array as authoritative on either path or it risks clobbering real server
- * saves on first sync. The two hold identically and differ only in copy — one
- * blames the connection, the other says RomM could not find what setup needs.
+ * saves on first sync. They hold identically and differ only in copy.
  */
 
 import type { SaveSetupInfo } from "../types";
@@ -26,9 +25,8 @@ export function resolveSaveSetupOutcome(info: SaveSetupInfo): SaveSetupOutcome {
   if (info.recommended_action === "server_unreachable") {
     return { kind: "server_unreachable" };
   }
-  // The server answered that it has no such ROM or device id. Same hold as
-  // above — an empty `server_slots` is no more authoritative here than on an
-  // outage, so this must NOT fall through to the auto-confirm branch (#1570).
+  // Same hold: an empty `server_slots` is no more authoritative on a 404 than
+  // on an outage, so this must NOT fall through to auto-confirm (#1570).
   if (info.recommended_action === "not_found") {
     return { kind: "not_found" };
   }
@@ -55,11 +53,9 @@ export const SERVER_UNREACHABLE_WIZARD_MESSAGE =
 export const SERVER_UNREACHABLE_TOAST_BODY =
   "Cannot configure save slot — RomM server is not reachable. Open the Saves tab to retry.";
 
-/** Copy for the `not_found` branch — the server answered, it just has no such
- *  ROM or device id. Deliberately does NOT say the game has no saves: the 404
- *  can come from this device's registration (a RomM database reset drops it),
- *  so claiming the saves don't exist would swap one lie for a more specific
- *  one. It states what RomM could not find, and that setup is on hold. */
+/** Copy for the `not_found` branch. Deliberately does NOT say the game has no
+ *  saves: the 404 can come from this device's registration (a RomM database
+ *  reset drops it), so that would swap one lie for a more specific one. */
 export const NOT_FOUND_WIZARD_MESSAGE =
   "RomM couldn't find the save data for this setup — setup paused. The game or this device may no longer be on the server.";
 
@@ -107,8 +103,8 @@ export async function applyLaunchGateSetupOutcome(
     deps.dispatchSavesTab();
     return "abort";
   }
-  // Same abort, honest cause. The launch must NOT proceed with save tracking
-  // unconfigured just because the failure was a 404 rather than an outage.
+  // Same abort, honest cause — a 404 must not let the launch proceed with save
+  // tracking unconfigured.
   if (outcome.kind === "not_found") {
     deps.toast(NOT_FOUND_TOAST_BODY);
     deps.dispatchSavesTab();
@@ -173,7 +169,6 @@ export async function applyWizardInitialSetupResult(result: SaveSetupInfo, deps:
     return;
   }
   if (result.recommended_action === "not_found") {
-    // Same hold, honest cause — never auto-confirm on an unproven server view.
     deps.setError(NOT_FOUND_WIZARD_MESSAGE);
     return;
   }

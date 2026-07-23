@@ -93,11 +93,9 @@ export interface SaveStatus {
    *  and surface a misleading uploads-pending indicator on what is in
    *  fact a connectivity blip. */
   server_query_failed?: boolean;
-  /** Why that query failed, as a backend `classify_error` slug (`null` when
-   *  it didn't). The flag says the server's view is unknown — true for a
-   *  definitive 404 as much as for an outage — while this says *why*, so
-   *  only `"server_unreachable"` may drive the global connection store.
-   *  Feeding the store off the bare flag is the #1570 defect. */
+  /** Why it failed (`null` when it didn't). The flag says the server's view is
+   *  unknown — true for a 404 as much as for an outage; this says why, so only
+   *  `"server_unreachable"` may drive the connection store (#1570). */
   server_query_reason?: RommErrorCode | null;
   /** True when the active slot's current save spans more than one distinct
    *  file (e.g. Sega Saturn `.bkr`/`.bcr`/`.smpc`). Those siblings are
@@ -171,15 +169,15 @@ export interface SaveSetupInfo {
   default_slot: string;
   slot_confirmed: boolean;
   active_slot: string | null;
-  // "server_unreachable" means the server-saves fetch failed — the wizard MUST
-  // hold and offer a retry instead of treating the empty server_slots as
-  // authoritative (auto-confirming default would clobber real server saves on
-  // first sync). "not_found" is the same hold for a different cause: the
-  // server ANSWERED that it has no such ROM or device id, so the wizard must
+  // "server_unreachable" and "not_found" both mean the server-saves fetch
+  // failed, so the wizard MUST hold and offer a retry instead of treating the
+  // empty server_slots as authoritative (auto-confirming default would clobber
+  // real server saves on first sync). They differ only in cause: "not_found"
+  // is the server ANSWERING that it has no such ROM or device id, so it must
   // not report the server offline (#1570). See backend `get_save_setup_info`.
   recommended_action: "auto_confirm_default" | "show_wizard" | "server_unreachable" | "not_found";
-  // True whenever the server-saves query failed, whichever way — an explicit
-  // flag for call sites that route on the boolean rather than the enum.
+  // True whenever that query failed, either way — for call sites routing on a
+  // boolean rather than the enum.
   server_query_failed?: boolean;
 }
 
@@ -235,9 +233,9 @@ export type RollbackStatus =
   | { status: "version_deleted" }
   | { status: "unsupported" }
   | { status: "server_unreachable"; message: string }
-  // The server ANSWERED with a definitive 404 — it no longer has this ROM or
-  // the registered device id. Distinct from `server_unreachable` (retryable)
-  // and from `version_deleted` (one missing save inside a ROM it still has).
+  // The server ANSWERED 404 — no such ROM or device id. Distinct from
+  // `server_unreachable` (retryable) and `version_deleted` (one save missing
+  // from a ROM it still has).
   | { status: "not_found"; message: string }
   | { status: "conflict_blocked"; conflicts: SyncConflict[] }
   | { status: "preflight_failed"; errors: string[] }
@@ -246,8 +244,8 @@ export type RollbackStatus =
 export type ListFileVersionsResult =
   | { status: "ok"; versions: SaveVersionEntry[] }
   | { status: "multi_file_unsupported"; versions: SaveVersionEntry[] }
-  | { status: "server_unreachable"; message: string }
   // See RollbackStatus — the server answered, it just has no such entry.
+  | { status: "server_unreachable"; message: string }
   | { status: "not_found"; message: string };
 
 /** Discriminated-status result of `copySaveToSlot` — copies one server save into

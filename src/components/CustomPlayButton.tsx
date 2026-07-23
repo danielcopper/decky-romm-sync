@@ -735,10 +735,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       // believing the conflict was cleared. Surface it and stay in conflict,
       // exactly like the network-throw catch below (#1276).
       if (result.server_query_failed) {
-        // Only an explicit unreachable verdict is a connectivity signal. A
-        // definitive 404 means the server ANSWERED, so feeding the global
-        // store off the bare flag would black out the whole UI over a ROM
-        // the server merely no longer has (#1570) — see connectionState.ts.
+        // Only an explicit unreachable verdict is a connectivity signal:
+        // feeding the store off the bare flag blacked out the whole UI over a
+        // ROM the server merely no longer has (#1570).
         if (result.server_query_reason === "server_unreachable") {
           reportServerReachable(false);
         }
