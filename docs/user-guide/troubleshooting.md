@@ -79,6 +79,12 @@ directions. If RomM goes away, the **RomM offline** badge appears on its own wit
 reachable again the badge clears, Download and slot switching re-enable, and the saves list, achievements, and setup
 screen reload themselves on the spot — no need to leave and re-open the page.
 
+Only a genuine connection failure marks the plugin offline. If RomM replies that it no longer has the thing being asked
+about — most often because the game was deleted and re-added on the server, which gives it a brand-new id, or because
+the RomM database was reset and this device's registration disappeared with it — that is the server _answering_, so the
+**RomM offline** badge stays clear and the surface tells you what's missing instead. If you see such a message while the
+badge is clear, the fix is on the RomM side (re-sync the library, or re-check the game), not with your network.
+
 ### Save file not found
 
 **Symptom**: The game detail page shows save status but no save file is being synced.

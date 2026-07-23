@@ -128,6 +128,10 @@ Format: **invariant** — tier — enforced by.
 
 - **Callable failures use `{success, reason, message}` (never `error` / `error_code`)** — check —
   `scripts/check_failure_shape.py --check`
+- **A definitive 404 is `not_found`, never `server_unreachable` — a catch-all `except Exception` in `services/` may not
+  bind a verdict key (`reason` / `status` / `recommended_action`) to a hardcoded `SERVER_UNREACHABLE`; route the
+  exception through `classify_error`, or peel the 404 off with a sibling `except RommNotFoundError` where the verdict is
+  a partial-success flag** — check — `scripts/check_404_not_unreachable.py --check`
 - **Frontend↔backend callable parity (names + arity)** — check — `scripts/check_callable_manifest.py`
 - **Every backend `emit` event name has a frontend listener, and vice versa** — check — `scripts/check_event_parity.py`
 - **`settings.json` is written only by its owner (`adapters/persistence.py`)** — check —
