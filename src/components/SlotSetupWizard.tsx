@@ -518,6 +518,10 @@ function useSaveSetupInfo(romId: number, onComplete: () => void) {
         // definitive offline signal; any other resolved result proves the
         // server answered. A throw is a bridge/unknown error, not a verdict —
         // the catch leaves the store untouched.
+        // Only an explicit unreachable verdict means offline. A `not_found`
+        // result PROVES the server answered, so it reports reachable and
+        // leaves the reconnect gate disarmed — the wizard still holds, it
+        // just doesn't wait for a connection that was never lost (#1570).
         const reachable = result.recommended_action !== "server_unreachable";
         reportServerReachable(reachable);
         offlineHeldRef.current = !reachable;
@@ -576,6 +580,10 @@ function useSaveSetupInfo(romId: number, onComplete: () => void) {
         // Same conservative feed as the initial load (#1345): the manual
         // Retry re-probes reachability, so a server_unreachable result
         // re-arms offline and any other result reports the server back.
+        // Only an explicit unreachable verdict means offline. A `not_found`
+        // result PROVES the server answered, so it reports reachable and
+        // leaves the reconnect gate disarmed — the wizard still holds, it
+        // just doesn't wait for a connection that was never lost (#1570).
         const reachable = result.recommended_action !== "server_unreachable";
         reportServerReachable(reachable);
         offlineHeldRef.current = !reachable;

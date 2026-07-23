@@ -174,10 +174,12 @@ export interface SaveSetupInfo {
   // "server_unreachable" means the server-saves fetch failed — the wizard MUST
   // hold and offer a retry instead of treating the empty server_slots as
   // authoritative (auto-confirming default would clobber real server saves on
-  // first sync). See backend `get_save_setup_info`.
-  recommended_action: "auto_confirm_default" | "show_wizard" | "server_unreachable";
-  // Mirrors recommended_action === "server_unreachable" — explicit flag for
-  // call sites that route on the boolean rather than the enum.
+  // first sync). "not_found" is the same hold for a different cause: the
+  // server ANSWERED that it has no such ROM or device id, so the wizard must
+  // not report the server offline (#1570). See backend `get_save_setup_info`.
+  recommended_action: "auto_confirm_default" | "show_wizard" | "server_unreachable" | "not_found";
+  // True whenever the server-saves query failed, whichever way — an explicit
+  // flag for call sites that route on the boolean rather than the enum.
   server_query_failed?: boolean;
 }
 

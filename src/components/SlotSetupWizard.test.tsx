@@ -1116,6 +1116,47 @@ describe("SlotSetupWizard", () => {
       expect(getRommConnectionState()).toBe("offline");
     });
 
+    it("does NOT report offline when the load returns recommended_action=not_found", async () => {
+      // #1560's path: the 404 means the server ANSWERED. Reporting offline
+      // here blacked out the whole UI while RomM was working fine (#1570).
+      setRommConnectionState("checking");
+      vi.mocked(backend.getSaveSetupInfo).mockResolvedValue(
+        makeSetupInfo({ recommended_action: "not_found", server_query_failed: true }),
+      );
+      const result = makeSetupInfo({ recommended_action: "not_found", server_query_failed: true });
+      vi.mocked(backend.getSaveSetupInfo).mockResolvedValue(result);
+      render(<SlotSetupWizard {...defaultProps()} />);
+      await flushAsync();
+
+      // Post-load state: the store went CONNECTED (the server answered), and
+      // the result was still routed into the hold path rather than short-
+      // circuiting. The banner copy itself is covered in saveSetup.test.ts —
+      // this file stubs applyWizardInitialSetupResult.
+      expect(getRommConnectionState()).toBe("connected");
+      expect(vi.mocked(applyWizardInitialSetupResult)).toHaveBeenCalledWith(result, expect.anything());
+    });
+
+    it("leaves the reconnect gate disarmed after a not_found load", async () => {
+      // offlineHeldRef must stay false: there is no connection to wait for, so
+      // a later →connected edge must not trigger a re-fetch loop (#1570).
+      setRommConnectionState("checking");
+      vi.mocked(backend.getSaveSetupInfo).mockResolvedValue(
+        makeSetupInfo({ recommended_action: "not_found", server_query_failed: true }),
+      );
+      render(<SlotSetupWizard {...defaultProps({ romId: 9 })} />);
+      await flushAsync();
+      const callsAfterLoad = vi.mocked(backend.getSaveSetupInfo).mock.calls.length;
+
+      await act(async () => {
+        setRommConnectionState("offline");
+        reportServerReachable(true);
+        await Promise.resolve();
+      });
+      await flushAsync();
+
+      expect(vi.mocked(backend.getSaveSetupInfo).mock.calls.length).toBe(callsAfterLoad);
+    });
+
     it("auto-reloads on reconnect after holding the offline error", async () => {
       setRommConnectionState("offline");
       render(<SlotSetupWizard {...defaultProps({ romId: 5 })} />);

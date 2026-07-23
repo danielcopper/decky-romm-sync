@@ -18,7 +18,7 @@ from domain.iso_time import epoch_to_iso, parse_iso_to_epoch
 from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_layout import SAVE_SYNC_CONTENT_DIR_REASON
 from domain.save_slot import save_in_slot
-from lib.errors import classify_error
+from lib.errors import RommNotFoundError, classify_error
 from services.saves._helpers import newest_server_saves_by_target
 from services.saves._messages import (
     DEVICE_NOT_REGISTERED_REASON,
@@ -96,11 +96,45 @@ class SetupWizard:
         active_slot = game_state.active_slot if (game_state and configured) else None
         return {"configured": configured, "active_slot": active_slot}
 
+    def _setup_query_failed(
+        self,
+        *,
+        local_files: list[dict[str, Any]],
+        local_file_info: list[dict[str, Any]],
+        game_state: RomSaveSyncState | None,
+        default_slot: str,
+        recommended_action: str,
+    ) -> dict[str, Any]:
+        """Build the held-wizard payload for a failed server-saves query.
+
+        Every failure branch holds the wizard the same way — an unproven
+        server view must never auto-confirm the default slot, whatever the
+        cause. Only *recommended_action* differs, so the frontend can say
+        why without claiming the server is offline.
+        """
+        slot_confirmed = bool(game_state.slot_confirmed) if game_state else False
+        return {
+            "has_local_saves": len(local_files) > 0,
+            "local_files": local_file_info,
+            "server_slots": [],
+            "default_slot": default_slot,
+            "slot_confirmed": slot_confirmed,
+            "active_slot": game_state.active_slot if (game_state and slot_confirmed) else None,
+            "recommended_action": recommended_action,
+            "server_query_failed": True,
+        }
+
     async def get_save_setup_info(self, rom_id: int) -> dict[str, Any]:
         """Get info needed for the first-sync setup wizard.
 
         Fetches server saves, checks local files, determines which
         scenario (A-E) applies so the frontend can display the right UI.
+
+        ``recommended_action`` carries the failure cause when the server-saves
+        query raises: ``server_unreachable`` for a transport failure,
+        ``not_found`` when the server answered that it has no such ROM or
+        device id. Both hold the wizard identically — only the copy and the
+        frontend's reachability verdict differ (#1570).
         """
         rom_id = int(rom_id)
 
@@ -126,22 +160,36 @@ class SetupWizard:
                     lambda: self._romm_api.list_saves(rom_id, device_id=device_id),
                 ),
             )
+        except RommNotFoundError as e:
+            # The server ANSWERED — it has no such ROM, or no such device id
+            # (#1560's shape: a RomM database wipe drops this device's
+            # registration). Reporting that as "unreachable" sends the user to
+            # check a connection that is plainly working, so it gets its own
+            # recommendation. The wizard still HOLDS: a 404 leaves the server's
+            # slot inventory just as unproven as an outage does, so
+            # auto-confirming the default slot could still clobber real server
+            # saves on the first post-confirmation sync.
+            self._logger.warning(
+                f"get_save_setup_info({rom_id}): server has no such rom or device: {e}",
+            )
+            return self._setup_query_failed(
+                local_files=local_files,
+                local_file_info=local_file_info,
+                game_state=game_state,
+                default_slot=default_slot,
+                recommended_action="not_found",
+            )
         except Exception as e:
             self._logger.warning(
                 f"get_save_setup_info({rom_id}): failed to list server saves: {e}",
             )
-            slot_confirmed = bool(game_state.slot_confirmed) if game_state else False
-            active_slot = game_state.active_slot if (game_state and slot_confirmed) else None
-            return {
-                "has_local_saves": len(local_files) > 0,
-                "local_files": local_file_info,
-                "server_slots": [],
-                "default_slot": default_slot,
-                "slot_confirmed": slot_confirmed,
-                "active_slot": active_slot,
-                "recommended_action": "server_unreachable",
-                "server_query_failed": True,
-            }
+            return self._setup_query_failed(
+                local_files=local_files,
+                local_file_info=local_file_info,
+                game_state=game_state,
+                default_slot=default_slot,
+                recommended_action="server_unreachable",
+            )
 
         # Group server saves by slot
         slots_map: dict[str | None, list[dict[str, Any]]] = {}

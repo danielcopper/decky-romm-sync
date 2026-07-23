@@ -85,6 +85,13 @@ the RomM database was reset and this device's registration disappeared with it â
 **RomM offline** badge stays clear and the surface tells you what's missing instead. If you see such a message while the
 badge is clear, the fix is on the RomM side (re-sync the library, or re-check the game), not with your network.
 
+The first-time save-slot setup screen is the clearest example. If RomM can't find the save data that setup needs, it
+pauses with "RomM couldn't find the save data for this setup" rather than the "server is not reachable" message, and the
+offline badge stays clear. Setup deliberately stops there instead of picking a slot for you: the plugin has no
+trustworthy view of what's on the server, and choosing a slot on that basis could overwrite real saves on the first
+sync. Re-check the game in RomM (or, after a server database reset, reconnect in the plugin's Connection settings so
+this device is registered again), then tap **Retry**.
+
 ### Save file not found
 
 **Symptom**: The game detail page shows save status but no save file is being synced.

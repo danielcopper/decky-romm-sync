@@ -12,6 +12,8 @@ import {
   wizardMigrationOutcomeToastBody,
   SERVER_UNREACHABLE_WIZARD_MESSAGE,
   SERVER_UNREACHABLE_TOAST_BODY,
+  NOT_FOUND_WIZARD_MESSAGE,
+  NOT_FOUND_TOAST_BODY,
   type LaunchGateSetupDeps,
   type SaveSetupOutcome,
   type WizardRetryDeps,
@@ -43,6 +45,25 @@ describe("resolveSaveSetupOutcome", () => {
     // mirror flag for call sites that branch on a boolean.
     const info = makeInfo({ recommended_action: "server_unreachable" });
     expect(resolveSaveSetupOutcome(info)).toEqual({ kind: "server_unreachable" });
+  });
+
+  it("routes 'not_found' to its own outcome, NOT to auto-confirm", () => {
+    // The empty server_slots is no more authoritative on a 404 than on an
+    // outage, so this must not fall through to the auto-confirm branch (#1570).
+    const info = makeInfo({ recommended_action: "not_found", server_query_failed: true });
+    expect(resolveSaveSetupOutcome(info)).toEqual({ kind: "not_found" });
+  });
+
+  it("routes 'not_found' even with local saves and an empty server list present", () => {
+    // The exact shape that would otherwise auto-confirm under 'show_wizard'.
+    const info = makeInfo({
+      recommended_action: "not_found",
+      has_local_saves: true,
+      server_slots: [],
+      default_slot: "default",
+    });
+    expect(resolveSaveSetupOutcome(info)).not.toEqual({ kind: "auto_confirm", slot: "default" });
+    expect(resolveSaveSetupOutcome(info)).toEqual({ kind: "not_found" });
   });
 
   it("routes 'auto_confirm_default' to the auto-confirm outcome with the default slot", () => {
@@ -91,6 +112,17 @@ describe("applyLaunchGateSetupOutcome", () => {
     const result = await applyLaunchGateSetupOutcome({ kind: "server_unreachable" }, deps);
     expect(result).toBe("abort");
     expect(deps.toast).toHaveBeenCalledWith(SERVER_UNREACHABLE_TOAST_BODY);
+    expect(deps.dispatchSavesTab).toHaveBeenCalledOnce();
+    expect(deps.confirmSlotChoice).not.toHaveBeenCalled();
+  });
+
+  it("aborts the launch on not_found too, with its own copy", async () => {
+    // The launch must NOT proceed with save tracking unconfigured just
+    // because the failure was a 404 rather than an outage (#1570).
+    const deps = makeLaunchGateDeps();
+    const result = await applyLaunchGateSetupOutcome({ kind: "not_found" }, deps);
+    expect(result).toBe("abort");
+    expect(deps.toast).toHaveBeenCalledWith(NOT_FOUND_TOAST_BODY);
     expect(deps.dispatchSavesTab).toHaveBeenCalledOnce();
     expect(deps.confirmSlotChoice).not.toHaveBeenCalled();
   });
@@ -188,6 +220,27 @@ describe("applyWizardInitialSetupResult", () => {
     expect(deps.confirmSlotChoice).not.toHaveBeenCalled();
     expect(deps.setInfo).not.toHaveBeenCalled();
     expect(deps.onComplete).not.toHaveBeenCalled();
+  });
+
+  it("sets the not-found banner and bails, never auto-confirming", async () => {
+    // Same hold as server_unreachable — the wizard must not configure a slot
+    // against an unproven server view just because the cause was a 404 (#1570).
+    const deps = makeWizardDeps();
+    const result = makeInfo({ recommended_action: "not_found", server_query_failed: true });
+    await applyWizardInitialSetupResult(result, deps);
+    expect(deps.setError).toHaveBeenCalledWith(NOT_FOUND_WIZARD_MESSAGE);
+    expect(deps.setConfirming).not.toHaveBeenCalled();
+    expect(deps.confirmSlotChoice).not.toHaveBeenCalled();
+    expect(deps.setInfo).not.toHaveBeenCalled();
+    expect(deps.onComplete).not.toHaveBeenCalled();
+  });
+
+  it("the not-found copy names what RomM could not find, not that saves are absent", () => {
+    // The 404 can come from the DEVICE registration, so claiming the game has
+    // no saves would swap one lie for a more specific one (#1570).
+    expect(NOT_FOUND_WIZARD_MESSAGE).not.toMatch(/no saves|has no save|without saves/i);
+    expect(NOT_FOUND_WIZARD_MESSAGE).not.toMatch(/unreachable|not reachable|offline/i);
+    expect(NOT_FOUND_TOAST_BODY).not.toMatch(/unreachable|not reachable|offline/i);
   });
 
   it("auto-confirms and calls onComplete on 'auto_confirm_default'", async () => {
@@ -288,6 +341,15 @@ describe("applyWizardRetrySetupResult", () => {
     const result = makeInfo({ recommended_action: "server_unreachable" });
     applyWizardRetrySetupResult(result, deps);
     expect(deps.setError).toHaveBeenCalledWith(SERVER_UNREACHABLE_WIZARD_MESSAGE);
+    expect(deps.setLoading).toHaveBeenCalledWith(false);
+    expect(deps.setInfo).not.toHaveBeenCalled();
+  });
+
+  it("sets the not-found banner and clears loading on 'not_found'", () => {
+    const deps = makeRetryDeps();
+    const result = makeInfo({ recommended_action: "not_found" });
+    applyWizardRetrySetupResult(result, deps);
+    expect(deps.setError).toHaveBeenCalledWith(NOT_FOUND_WIZARD_MESSAGE);
     expect(deps.setLoading).toHaveBeenCalledWith(false);
     expect(deps.setInfo).not.toHaveBeenCalled();
   });

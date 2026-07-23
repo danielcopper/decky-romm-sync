@@ -491,6 +491,34 @@ class TestGetSaveSetupInfo:
         assert result["server_query_failed"] is True
 
     @pytest.mark.asyncio
+    async def test_definitive_404_recommends_not_found_and_still_holds(self, tmp_path):
+        """#1560's path: the 404 is the server ANSWERING, not an outage (#1570).
+
+        The 404 here can come from the DEVICE id (a RomM database wipe drops
+        the registration), not just the ROM — so the empty server view is no
+        more authoritative than on an outage and the wizard must still hold.
+        Only the recommendation changes, so the frontend stops reporting the
+        server offline.
+        """
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _set_device_id(svc, "dev-1")
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path)
+        fake.fail_on_next(RommNotFoundError("HTTP 404: Not Found"))
+
+        result = await svc.get_save_setup_info(42)
+
+        assert result["recommended_action"] == "not_found"
+        assert result["recommended_action"] != "server_unreachable"
+        # The safety property is unchanged: never auto-confirm on an unproven
+        # server view, and never present the empty list as authoritative.
+        assert result["recommended_action"] != "auto_confirm_default"
+        assert result["server_query_failed"] is True
+        assert result["server_slots"] == []
+        assert result["has_local_saves"] is True
+
+    @pytest.mark.asyncio
     async def test_server_error_preserves_local_info_in_response(self, tmp_path):
         """On server failure we still surface what we know locally."""
         svc, fake = make_service(tmp_path)
