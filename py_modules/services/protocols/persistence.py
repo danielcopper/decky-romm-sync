@@ -37,3 +37,7 @@ class PluginMetadataReader(Protocol):
         abort on a metadata read.
         """
         ...
+
+    def read_name(self, plugin_dir: str) -> str:
+        """Return the declared package name, or ``"decky-plugin"`` on failure."""
+        ...

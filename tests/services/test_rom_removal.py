@@ -145,7 +145,8 @@ class TestDeleteRomFiles:
         evil = "/evil/important.txt"
         rom_files.files[evil] = b"do not delete"
 
-        service._delete_rom_files(_make_install(1, file_path=evil, rom_dir=None))
+        with pytest.raises(ValueError, match="outside roms directory"):
+            service._delete_rom_files(_make_install(1, file_path=evil, rom_dir=None))
 
         assert evil in rom_files.files
         assert rom_files.remove_file_calls == []
@@ -155,7 +156,8 @@ class TestDeleteRomFiles:
         evil_dir = "/evil/dir"
         rom_files.files[f"{evil_dir}/file.txt"] = b"important"
 
-        service._delete_rom_files(_make_install(1, file_path="", rom_dir=evil_dir))
+        with pytest.raises(ValueError, match="outside roms directory"):
+            service._delete_rom_files(_make_install(1, file_path="", rom_dir=evil_dir))
 
         assert f"{evil_dir}/file.txt" in rom_files.files
         assert rom_files.remove_tree_calls == []
@@ -305,16 +307,20 @@ class TestRemoveRom:
         assert f"{_ROMS_BASE}/psx" in rom_files.dirs
 
     @pytest.mark.asyncio
-    async def test_path_traversal_rejected_record_still_deleted(self, service, uow, rom_files):
+    async def test_path_traversal_rejected_preserves_install_record(self, service, uow, rom_files):
         evil = "/etc/passwd"
         rom_files.files[evil] = b"root:x:0:0"
         _seed_install(uow, _make_install(99, file_path=evil, rom_dir=None))
 
         result = await service.remove_rom(99)
 
-        assert result["success"] is True
+        assert result == {
+            "success": False,
+            "reason": "unknown",
+            "message": "Failed to delete ROM files",
+        }
         assert evil in rom_files.files  # not deleted (outside roms dir)
-        assert uow.rom_installs.get(99) is None
+        assert uow.rom_installs.get(99) is not None
 
     @pytest.mark.asyncio
     async def test_removes_nested_single_file_entry(self, service, uow, rom_files):
@@ -447,7 +453,7 @@ class TestUninstallAllRoms:
         assert all(not p.startswith(rom_dir + "/") for p in rom_files.files)
 
     @pytest.mark.asyncio
-    async def test_outside_roms_dir_skipped_record_still_cleared(self, service, uow, rom_files):
+    async def test_outside_roms_dir_is_partial_failure_and_preserves_record(self, service, uow, rom_files):
         good_file = f"{_ROMS_BASE}/n64/game_a.z64"
         rom_files.files[good_file] = b"\x00" * 100
         bad_file = "/outside/game_b.z64"
@@ -459,12 +465,12 @@ class TestUninstallAllRoms:
             uow.rom_installs.save(_make_install(2, file_path=bad_file, rom_dir=None, system="snes"))
 
         result = await service.uninstall_all_roms()
-        assert result["success"] is True
+        assert result["success"] is False
+        assert result["removed_count"] == 1
+        assert len(result["errors"]) == 1
         assert good_file not in rom_files.files
         assert bad_file in rom_files.files  # not deleted (outside roms dir)
-        # Install records for the path-rejected (no exception) ROMs are still cleared:
-        # the safety guard returns silently, so the deletion is treated as "succeeded".
-        assert list(uow.rom_installs.iter_all()) == []
+        assert [install.rom_id for install in uow.rom_installs.iter_all()] == [2]
 
     @pytest.mark.asyncio
     async def test_partial_failure_reports_errors_and_not_success(self, service, uow, rom_files):

@@ -21,7 +21,7 @@
  * nothing (the null-gate pattern).
  */
 
-import { useState, useEffect, useRef, FC, ReactNode } from "react";
+import { useState, useEffect, useRef, FC, Fragment, ReactNode } from "react";
 import { toaster, addEventListener, removeEventListener } from "@decky/api";
 import { Menu, MenuItem, showContextMenu, DialogButton } from "@decky/ui";
 import { FaChevronDown, FaCompactDisc, FaLayerGroup } from "react-icons/fa";
@@ -49,6 +49,7 @@ import { getEventTarget } from "../utils/events";
 import { detach } from "../utils/detach";
 import type { RommDataChangedDetail, RommRomUninstalledDetail } from "../types/events";
 import type { DownloadCompleteEvent, DownloadFailedEvent } from "../types";
+import { openRemovedGamesCleanupModal } from "./RemovedGamesCleanup";
 
 interface VersionPickerProps {
   appId: number;
@@ -155,6 +156,11 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     const onDataChanged = (e: Event) => {
       const detail = (e as CustomEvent<RommDataChangedDetail>).detail;
       if (detail.type === "version_switched" && detail.app_id === appId) {
+        detach(load());
+      } else if (
+        detail.type === "rom_pruned" &&
+        (detail.app_ids.includes(appId) || detail.rom_ids.some((romId) => memberIdsRef.current.has(romId)))
+      ) {
         detach(load());
       }
     };
@@ -411,27 +417,47 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     showContextMenu(
       <Menu label="Version">
         {versions.map((v) => (
-          <MenuItem key={v.rom_id} disabled={v.vanished || !v.switchable} onClick={() => detach(handleSwitch(v))}>
-            <span
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "10px",
-                color: v.active ? ACTIVE_ACCENT : undefined,
-                // Unavailable/conflicting rows stay visible as retained context,
-                // but are dimmed and disabled until RomM offers a usable target.
-                opacity: v.vanished || !v.switchable ? 0.55 : undefined,
-              }}
-            >
-              {rowCover(v)}
-              <span>{v.label || v.name || String(v.rom_id)}</span>
-              {v.is_default ? <Badge text="Default" tone="accent" /> : null}
-              {v.installed ? <Badge text="Downloaded" tone="good" /> : null}
-              {v.switchable && !v.synced ? <Badge text="not synced" tone="muted" /> : null}
-              {rowAvailabilityHint(v)}
-              {v.active ? <span style={{ marginLeft: "6px", fontWeight: 700 }}>✓</span> : null}
-            </span>
-          </MenuItem>
+          <Fragment key={v.rom_id}>
+            <MenuItem disabled={v.vanished || !v.switchable} onClick={() => detach(handleSwitch(v))}>
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "10px",
+                  color: v.active ? ACTIVE_ACCENT : undefined,
+                  // Unavailable/conflicting rows stay visible as retained context,
+                  // but are dimmed and disabled until RomM offers a usable target.
+                  opacity: v.vanished || !v.switchable ? 0.55 : undefined,
+                }}
+              >
+                {rowCover(v)}
+                <span>{v.label || v.name || String(v.rom_id)}</span>
+                {v.is_default ? <Badge text="Default" tone="accent" /> : null}
+                {v.installed ? <Badge text="Downloaded" tone="good" /> : null}
+                {v.switchable && !v.synced ? <Badge text="not synced" tone="muted" /> : null}
+                {rowAvailabilityHint(v)}
+                {v.active ? <span style={{ marginLeft: "6px", fontWeight: 700 }}>✓</span> : null}
+              </span>
+            </MenuItem>
+            {v.vanished && v.synced ? (
+              <MenuItem
+                onClick={() =>
+                  detach(
+                    openRemovedGamesCleanupModal(v.rom_id)
+                      .then((opened) => {
+                        if (!opened) toaster.toast({ title: "RomM Sync", body: "This local entry already changed." });
+                      })
+                      .catch((error) => {
+                        logError(`VersionPicker: cleanup preview failed for rom ${v.rom_id}: ${error}`);
+                        toaster.toast({ title: "RomM Sync", body: "Could not prepare local cleanup." });
+                      }),
+                  )
+                }
+              >
+                <span style={{ color: "#ffb15c", paddingLeft: "38px" }}>Remove local data...</span>
+              </MenuItem>
+            ) : null}
+          </Fragment>
         ))}
       </Menu>,
       getEventTarget(e),

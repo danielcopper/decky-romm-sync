@@ -19,7 +19,7 @@ const HEARTBEAT_INTERVAL_MS = 10_000;
  * details before the app's data loads — those early ``undefined`` fires are
  * ignored).
  */
-function getAppDetails(appId: number, timeoutMs = 2000): Promise<SteamAppDetails | null> {
+export function getAppDetails(appId: number, timeoutMs = 2000): Promise<SteamAppDetails | null> {
   return new Promise((resolve) => {
     let resolved = false;
     // Declared with `let` BEFORE RegisterForAppDetails so a (hypothetical)
@@ -252,5 +252,29 @@ export function removeShortcut(appId: number): void {
     SteamClient.Apps.RemoveShortcut(appId);
   } catch (e) {
     logError(`Failed to remove shortcut ${appId}: ${e}`);
+  }
+}
+
+/** Remove one shortcut and require Steam's live store to confirm its absence. */
+function readDesktopAppStore(): Map<number, unknown> | null {
+  if (typeof collectionStore === "undefined") return null;
+  return collectionStore.deckDesktopApps?.apps ?? null;
+}
+
+export async function removeShortcutConfirmed(appId: number, timeoutMs = 3000): Promise<boolean> {
+  if (!readDesktopAppStore()) return false;
+  try {
+    SteamClient.Apps.RemoveShortcut(appId);
+  } catch (e) {
+    logError(`Failed to remove shortcut ${appId}: ${e}`);
+    return false;
+  }
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const apps = readDesktopAppStore();
+    if (!apps) return false;
+    if (!apps.has(appId)) return true;
+    if (Date.now() >= deadline) return false;
+    await delay(100);
   }
 }

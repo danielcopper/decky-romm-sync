@@ -1,0 +1,331 @@
+import { useEffect, useState, FC } from "react";
+import { toaster } from "@decky/api";
+import {
+  ButtonItem,
+  DialogButton,
+  Field,
+  ModalRoot,
+  PanelSection,
+  PanelSectionRow,
+  ToggleField,
+  showModal,
+} from "@decky/ui";
+import {
+  getPrunePreview,
+  startPrune,
+  logError,
+  type PrunePreviewItem,
+  type PrunePreviewRequest,
+  type PrunePreviewResult,
+  type PruneScope,
+} from "../api/backend";
+import { detach } from "../utils/detach";
+import { getPruneState, onPruneStateChange, resetPruneState } from "../utils/pruneStore";
+import { getSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
+
+const PAGE_SIZE = 50;
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let value = bytes / 1024;
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index++;
+  }
+  return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[index]}`;
+}
+
+function requestFor(
+  scope: PruneScope,
+  romId: number | null,
+  previewId: string | null,
+  offset: number,
+): PrunePreviewRequest {
+  return { scope, rom_id: romId, preview_id: previewId, offset, limit: PAGE_SIZE };
+}
+
+interface CleanupModalProps {
+  initial: PrunePreviewResult;
+  scope: PruneScope;
+  romId: number | null;
+  closeModal?: () => void;
+}
+
+const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal }) => {
+  const [items, setItems] = useState<PrunePreviewItem[]>(initial.items ?? []);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [runStarted, setRunStarted] = useState(false);
+  const [status, setStatus] = useState("");
+  const [repoint, setRepoint] = useState(true);
+  const [removeRows, setRemoveRows] = useState(true);
+  const [removeDeadGames, setRemoveDeadGames] = useState(false);
+  const [recovery, setRecovery] = useState(true);
+  const [confirmWithoutRecovery, setConfirmWithoutRecovery] = useState(false);
+  const [includedContent, setIncludedContent] = useState<Set<number>>(new Set());
+  const [pruneState, setPruneState] = useState(getPruneState());
+
+  useEffect(() => {
+    const unsubscribe = onPruneStateChange(() => setPruneState(getPruneState()));
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  const total = initial.total ?? items.length;
+  const selectedBytes = items.reduce(
+    (sum, item) => sum + (includedContent.has(item.rom_id) ? (item.installed_bytes ?? 0) : 0),
+    0,
+  );
+  const freeBytes = initial.free_bytes ?? 0;
+  const unknownSelectedSize = items.some(
+    (item) => includedContent.has(item.rom_id) && item.installed && item.installed_bytes === null,
+  );
+  const insufficientSpace = recovery && (unknownSelectedSize || selectedBytes > freeBytes);
+  const destructiveConfirmed = recovery || confirmWithoutRecovery;
+  const progress = pruneState.progress;
+  const complete = pruneState.complete;
+  const runInFlight = starting || (runStarted && complete === null);
+  const canStart =
+    !runInFlight && complete === null && !insufficientSpace && destructiveConfirmed && (removeRows || removeDeadGames);
+
+  const toggleContent = (romIdToToggle: number, checked: boolean): void => {
+    setIncludedContent((current) => {
+      const next = new Set(current);
+      if (checked) next.add(romIdToToggle);
+      else next.delete(romIdToToggle);
+      return next;
+    });
+  };
+
+  const loadMore = async (): Promise<void> => {
+    if (!initial.preview_id || items.length >= total) return;
+    setLoadingMore(true);
+    try {
+      const next = await getPrunePreview(requestFor(scope, romId, initial.preview_id, items.length));
+      if (!next.success) {
+        setStatus(next.message ?? "Could not load more candidates.");
+        return;
+      }
+      setItems((current) => [...current, ...(next.items ?? [])]);
+    } catch (e) {
+      setStatus(`Could not load more candidates: ${e}`);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const start = async (): Promise<void> => {
+    if (!canStart || !initial.preview_id) return;
+    setStarting(true);
+    setStatus("Starting cleanup...");
+    resetPruneState();
+    try {
+      const result = await startPrune({
+        preview_id: initial.preview_id,
+        confirmed: true,
+        repoint_shortcuts: repoint,
+        remove_rows: removeRows,
+        remove_fully_vanished: removeDeadGames,
+        create_recovery_bundle: recovery,
+        include_installed_rom_ids: [...includedContent],
+      });
+      if (!result.success) {
+        setStatus(result.message ?? "Cleanup could not start.");
+        return;
+      }
+      setRunStarted(true);
+      setStatus("Cleanup running...");
+    } catch (e) {
+      setStatus(`Cleanup could not start: ${e}`);
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  return (
+    <ModalRoot closeModal={closeModal}>
+      <div style={{ minWidth: "440px", maxWidth: "720px", padding: "18px" }}>
+        <div style={{ fontSize: "20px", fontWeight: 700, marginBottom: "6px" }}>Clean Up Removed RomM Games</div>
+        <div style={{ color: "#c7d5e0", marginBottom: "14px" }}>
+          {total} local entr{total === 1 ? "y" : "ies"} were absent from a completed RomM fetch. Every entry is checked
+          again by exact ID; only a confirmed 404 can be removed.
+        </div>
+
+        <div style={{ maxHeight: "62vh", overflowY: "auto", paddingRight: "10px" }}>
+          <ToggleField
+            label="Repoint vanished shortcuts to the live Default"
+            checked={repoint}
+            disabled={runInFlight}
+            onChange={setRepoint}
+          />
+          <ToggleField
+            label="Remove confirmed rows and installed content from groups with a live version"
+            checked={removeRows}
+            disabled={runInFlight}
+            onChange={setRemoveRows}
+          />
+          <ToggleField
+            label="Remove fully vanished games and their Steam shortcut"
+            description="Off by default. This removes the whole local game only when every local ID returns 404."
+            checked={removeDeadGames}
+            disabled={runInFlight}
+            onChange={setRemoveDeadGames}
+          />
+          <ToggleField
+            label="Create recovery bundle"
+            description={`Verified bundles are sealed under ${initial.recovery_root ?? "the recovery directory"}.`}
+            checked={recovery}
+            disabled={runInFlight}
+            onChange={(checked: boolean) => {
+              setRecovery(checked);
+              if (checked) setConfirmWithoutRecovery(false);
+            }}
+          />
+          {!recovery && (
+            <ToggleField
+              label="I understand local database state and playtime will have no recovery bundle"
+              checked={confirmWithoutRecovery}
+              disabled={runInFlight}
+              onChange={setConfirmWithoutRecovery}
+            />
+          )}
+
+          <div style={{ margin: "14px 0 8px", fontWeight: 700 }}>Candidates</div>
+          {items.map((item) => (
+            <div key={item.rom_id} style={{ padding: "10px 0", borderTop: "1px solid rgba(255,255,255,0.10)" }}>
+              <div style={{ fontWeight: 600 }}>{item.name || item.fs_name || `ROM ${item.rom_id}`}</div>
+              <div style={{ fontSize: "12px", color: "#8f98a0" }}>
+                {item.platform_slug} · ROM {item.rom_id} · group of {item.group_size}
+              </div>
+              {item.warning && <div style={{ color: "#e5a43b", fontSize: "12px" }}>{item.warning}</div>}
+              {item.installed && (
+                <ToggleField
+                  label={`Include installed ROM content (${item.installed_bytes === null ? "size unavailable" : formatBytes(item.installed_bytes)})`}
+                  checked={includedContent.has(item.rom_id)}
+                  disabled={runInFlight}
+                  onChange={(checked: boolean) => toggleContent(item.rom_id, checked)}
+                />
+              )}
+              {item.installed && !includedContent.has(item.rom_id) && (
+                <div style={{ color: "#e5a43b", fontSize: "12px" }}>
+                  Installed content is not backed up but will still be deleted if this row is removed.
+                </div>
+              )}
+            </div>
+          ))}
+          {items.length < total && (
+            <DialogButton disabled={loadingMore} onClick={() => detach(loadMore())}>
+              {loadingMore ? "Loading..." : `Load more (${items.length} of ${total})`}
+            </DialogButton>
+          )}
+        </div>
+
+        <div style={{ marginTop: "14px", padding: "10px", background: "rgba(0,0,0,0.20)" }}>
+          Selected ROM-content recovery: {formatBytes(selectedBytes)} · Free at target: {formatBytes(freeBytes)}
+          {insufficientSpace && (
+            <div style={{ color: "#ff8c6a", marginTop: "4px" }}>
+              {unknownSelectedSize ? "A selected installed ROM has no safe measurable size." : "Not enough free space."}
+            </div>
+          )}
+        </div>
+        {progress && (
+          <div style={{ marginTop: "10px", color: "#c7d5e0" }}>
+            {progress.stage.replace(/_/g, " ")} · {progress.current} of {progress.total} · {progress.name}
+          </div>
+        )}
+        {complete && (
+          <div style={{ marginTop: "10px", color: complete.success ? "#8fd18b" : "#ffcc66" }}>
+            {complete.removed_rom_ids.length} removed;{" "}
+            {complete.results.filter((item) => item.status !== "removed").length} skipped or failed.
+          </div>
+        )}
+        {status && !complete && <div style={{ marginTop: "10px", color: "#ffcc66" }}>{status}</div>}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "16px" }}>
+          <DialogButton disabled={starting} onClick={() => closeModal?.()}>
+            {runStarted ? "Close" : "Cancel"}
+          </DialogButton>
+          <DialogButton disabled={!canStart} onClick={() => detach(start())}>
+            {starting ? "Starting..." : progress ? `${progress.stage.replace(/_/g, " ")}...` : "Confirm Cleanup"}
+          </DialogButton>
+        </div>
+      </div>
+    </ModalRoot>
+  );
+};
+
+export async function openRemovedGamesCleanupModal(romId?: number): Promise<boolean> {
+  const scope: PruneScope = romId === undefined ? "bulk" : "rom";
+  const result = await getPrunePreview(requestFor(scope, romId ?? null, null, 0));
+  if (!result.success) throw new Error(result.message ?? "Cleanup scan failed.");
+  if ((result.total ?? 0) === 0) return false;
+  showModal(<CleanupModal initial={result} scope={scope} romId={romId ?? null} />);
+  return true;
+}
+
+export const RemovedGamesCleanupSection: FC = () => {
+  const [scanning, setScanning] = useState(false);
+  const [syncRunning, setSyncRunning] = useState(getSyncProgress().running);
+  const [pruneState, setPruneState] = useState(getPruneState());
+
+  useEffect(() => {
+    const unsubscribeSync = onSyncProgressChange(() => setSyncRunning(getSyncProgress().running));
+    const unsubscribePrune = onPruneStateChange(() => setPruneState(getPruneState()));
+    return () => {
+      unsubscribeSync();
+      unsubscribePrune();
+    };
+  }, []);
+
+  const scan = async (): Promise<void> => {
+    setScanning(true);
+    try {
+      if (!(await openRemovedGamesCleanupModal())) {
+        toaster.toast({ title: "RomM Sync", body: "No removed RomM entries were found." });
+      }
+    } catch (e) {
+      logError(`Removed-game cleanup scan failed: ${e}`);
+      toaster.toast({ title: "RomM Sync", body: "Could not scan removed RomM games." });
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const progress = pruneState.progress;
+  const complete = pruneState.complete;
+  return (
+    <PanelSection title="Removed RomM Games">
+      <PanelSectionRow>
+        <ButtonItem
+          layout="below"
+          disabled={scanning || syncRunning || progress !== null}
+          description={syncRunning ? "Unavailable while a library sync is running." : undefined}
+          onClick={() => detach(scan())}
+        >
+          {scanning ? "Scanning..." : "Clean Up Removed RomM Games"}
+        </ButtonItem>
+      </PanelSectionRow>
+      {progress && (
+        <PanelSectionRow>
+          <Field
+            label={`${progress.stage.replace(/_/g, " ")} · ${progress.current} of ${progress.total} · ${progress.name}`}
+            description={progress.bundle_path ? `Recovery sealed: ${progress.bundle_path}` : undefined}
+          />
+        </PanelSectionRow>
+      )}
+      {complete && (
+        <PanelSectionRow>
+          <Field
+            label={`${complete.removed_rom_ids.length} removed; ${complete.results.filter((item) => item.status !== "removed").length} skipped or failed`}
+            description={complete.results
+              .filter((item) => item.status !== "removed")
+              .map((item) => item.message)
+              .join(" · ")}
+          />
+        </PanelSectionRow>
+      )}
+    </PanelSection>
+  );
+};

@@ -299,9 +299,13 @@ removal), so foreign keys are deliberately sparse:
   this cascade is **dormant**: a `roms` row is a permanent identity anchor keyed by RomM's stable `rom_id`. **Auto-stale
   = unbind** — when the automatic sync finds a ROM gone from RomM (or its shortcut is removed), the row is _unbound_
   (`Rom.unbind_shortcut()` NULLs `shortcut_app_id`, the row and its per-ROM children stay) so local
-  playtime/saves/metadata survive. **Only a deliberate purge = delete** — an explicit, opt-in user action (which does
-  not exist today) `DELETE`s the row and lets the cascade reap the children. The automatic sync never `DELETE`s a `roms`
-  row.
+  playtime/saves/metadata survive. **Only a deliberate purge = delete** — the explicit **Clean Up Removed RomM Games**
+  action may delete a row after a fresh exact-ID 404, option checks, save/content guards, any enabled recovery bundle,
+  and required Steam acknowledgement. Its final short UoW revalidates the expected group and binding before repository
+  deletion lets the cascade reap all six child tables. The automatic sync never `DELETE`s a `roms` row. Collection
+  completion stamps whose `member_rom_ids` intersect a purged id are deleted in that same UoW. Ordinary row cleanup
+  preserves the platform completion stamp; a fully vanished game clears its affected platform stamp so one later
+  complete fetch can rebuild platform truth.
   - **Caveat — writes to a cascade parent (`roms`) MUST UPSERT, never `INSERT OR REPLACE`/`REPLACE`.** In SQLite
     `REPLACE` resolves a PK conflict by _delete-then-insert_ of the parent row, and that DELETE fires the
     `ON DELETE CASCADE` above — silently wiping every per-ROM child on a re-save (a normal library re-sync, where the

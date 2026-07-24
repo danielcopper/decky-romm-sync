@@ -130,6 +130,7 @@ class Plugin:
         self._core_service = services["core_service"]
         self._disc_service = services["disc_service"]
         self._version_switch_service = services["version_switch_service"]
+        self._prune_service = services["prune_service"]
         self._connection_service = services["connection_service"]
         self._startup_healing_service = services["startup_healing_service"]
         self._launch_gate_service = services["launch_gate_service"]
@@ -162,6 +163,7 @@ class Plugin:
 
     async def _unload(self):  # Decky lifecycle — must be async
         self._sync_service.shutdown()
+        await self._prune_service.shutdown()
         await self._download_service.shutdown()
         await self._migration_service.shutdown()
         await self._session_lifecycle_service.shutdown()
@@ -287,6 +289,19 @@ class Plugin:
     @migration_blocked
     async def switch_version(self, app_id, target_rom_id, allow_stranded):
         return await self._version_switch_service.switch_version(app_id, target_rom_id, allow_stranded)
+
+    @migration_blocked
+    @sync_active_blocked
+    async def get_prune_preview(self, request):
+        return await self._prune_service.get_prune_preview(request)
+
+    @migration_blocked
+    @sync_active_blocked
+    async def start_prune(self, request):
+        return await self._prune_service.start_prune(request)
+
+    async def report_prune_action(self, request):
+        return await self._prune_service.report_prune_action(request)
 
     # ── Firmware delegation to FirmwareService ──────────────
 

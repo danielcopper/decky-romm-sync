@@ -163,6 +163,36 @@ the normal retry/classification policy and is not preceded by a redundant exact-
 into `version_vanished`. A refusal performs no binding, row/install/applied-launch-options write, launch-command
 resolution, event, cache invalidation, sync, or completion-stamp update.
 
+#### Explicit removed-game cleanup (`services/prune/`)
+
+| Module        | Role                                                                                         |
+| ------------- | -------------------------------------------------------------------------------------------- |
+| `service.py`  | Callable facade, one-run state, liveness probes, and serial group execution                  |
+| `preview.py`  | Local generation-gated candidate snapshot, fingerprint, size measurement, and paging         |
+| `recovery.py` | Lossless aggregate snapshots, recovery artifact assembly, and human-readable bundle metadata |
+| `registry.py` | Short SQLite reads, pre-mutation race validation, and final cascade delete                   |
+| `requests.py` | Preview/option decoding and bounded Steam snapshot validation                                |
+
+`PruneService` is the only path that deliberately deletes retained `roms` aggregate roots. A bulk preview is local-only:
+for each platform it requires a non-empty completed fetch generation and selects rows whose `last_fetch_id` differs,
+including NULL row generations. An inline preview may nominate one concrete retained ROM without generation evidence.
+Both forms return bounded pages plus an ephemeral fingerprint; `start_prune` rebuilds the preview and rejects stale
+local state. Migration and active-library-sync decorators guard preview and start.
+
+The executor processes sibling groups serially. It rejects multiple shortcut bindings and active downloads, probes every
+local group member with the single-attempt three-second `get_rom_once`, and treats only a typed `RommNotFoundError` as
+destructive authority. Live, malformed, wrong-id, transport, authentication, timeout, server, and unknown outcomes
+retain data. Long recovery and frontend round trips are followed by another exact-ID proof before local source removal.
+The natural live repoint target uses the same `resolve_group_representative` ranking as the version picker with empty
+installed/bound preference sets.
+
+Recovery is coordinated through ordered ROM save locks, acquired with no UoW open. Short read UoWs close before
+filesystem work, and no RomM request or frontend wait runs under those locks. The bundle is sealed before mutation;
+after the frontend action the service reacquires the relevant locks, re-inventories exact save ownership, and
+quarantines exclusive current saves through the existing history-preserving funnel. The final SQLite delete is one short
+UoW that revalidates bindings/group membership, invalidates intersecting collection stamps, and clears platform stamps
+only for fully vanished games. Mixed runs emit per-group reasons and continue unrelated groups.
+
 #### LibraryService decomposition (`services/library/`)
 
 The library sync subsystem is a façade over three sub-services that coordinate through a shared `LibrarySyncStateBox`:
@@ -1169,12 +1199,15 @@ Adapters own all I/O and implement the Protocols defined in `services/protocols/
 | `download_file.py`                                                         | `DownloadFileAdapter` — download filesystem                                                                                                                                                                                                                                            |
 | `firmware_file.py` / `migration_file.py` / `rom_files.py` / `save_file.py` | per-subtree filesystem adapters (BIOS, RetroDECK migration, ROM removal, local saves)                                                                                                                                                                                                  |
 | `retrodeck_paths.py`                                                       | `RetroDeckPathsAdapter` — reads `retrodeck.json` for ROMs/saves/BIOS/home paths                                                                                                                                                                                                        |
+| `recovery_bundle.py`                                                       | `RecoveryBundleAdapter` — safe recovery-root derivation, exact source measurement, verified copies, checksums/human manifests, fsync, staging cleanup, and atomic bundle sealing                                                                                                       |
+| `prune_artifacts.py`                                                       | `PruneArtifactAdapter` — per-ROM cover/validator and SteamGridDB cache discovery/removal                                                                                                                                                                                               |
+| `steam_recovery.py`                                                        | `SteamRecoveryAdapter` — per-shortcut Steam grid, Steam Input, and controller-setting recovery inventory plus post-confirmation cleanup                                                                                                                                                |
 | `retroarch_config.py`                                                      | `RetroArchConfigAdapter` — reads `retroarch.cfg` save-sort flags                                                                                                                                                                                                                       |
 | `retroarch_core_info.py`                                                   | `RetroArchCoreInfoAdapter` — reads RetroArch `.info` files (`corename`, metadata)                                                                                                                                                                                                      |
 | `es_de_config.py`                                                          | `CoreResolver` — ES-DE `es_systems.xml` (system-layer default core + available cores); the gamelist is no longer read or written                                                                                                                                                       |
 | `gavel_native.py`                                                          | `GavelNativeAdapter` — loads the compiled [romm-gavel](https://github.com/danielcopper/romm-gavel) core (`py_modules/native/libgavel-x86_64-linux.so`) via `ctypes` and is itself the `ResolveUploadConflictFn` seam for the save-sync upload-409 decision (no Python fallback)        |
 | `system_clock.py` / `system_uuid_gen.py` / `asyncio_sleeper.py`            | concrete `Clock` / `UuidGen` / `Sleeper` seams                                                                                                                                                                                                                                         |
-| `hostname.py` / `path_probe.py` / `plugin_metadata.py` / `debug_logger.py` | hostname, path-exists probe, `package.json` version reader, settings-aware debug logger                                                                                                                                                                                                |
+| `hostname.py` / `path_probe.py` / `plugin_metadata.py` / `debug_logger.py` | hostname, path-exists probe, `package.json` name/version reader, settings-aware debug logger                                                                                                                                                                                           |
 | `renderer_rss.py` / `renderer_gc.py`                                       | `RendererRssFn` — max `steamwebhelper` `VmRSS` from `/proc`; `RendererGcFn` (`HeapProfiler.collectGarbage`) over the CEF debugger. The session-budget measure + settle seams (ADR-0024). The "free memory" action is a frontend `SteamClient.User.StartRestart`, not a backend adapter |
 | `game_process.py`                                                          | `GameProcessControl` — resolves a flatpak app's live instances via the per-user registry (`info` / `bwrapinfo.json`) plus the `/proc` child walk, reporting each tree's PIDs and argv separately, and signals them. Direct reads + `os.kill`, no subprocess; fail-soft on every read   |
 

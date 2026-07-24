@@ -72,6 +72,15 @@ class SaveFileAdapter:
         """Return True when *path* exists and is a directory."""
         return os.path.isdir(path)
 
+    def canonical_path(self, path: str) -> str:
+        return os.path.realpath(path)
+
+    def is_within(self, path: str, root: str) -> bool:
+        try:
+            return os.path.commonpath((os.path.realpath(path), os.path.realpath(root))) == os.path.realpath(root)
+        except ValueError:
+            return False
+
     def make_dirs(self, path: str) -> None:
         """Create *path* and any missing parents. Idempotent."""
         os.makedirs(path, exist_ok=True)

@@ -22,6 +22,12 @@ Two hard properties follow, and they define the entire coverage envelope:
 2. **The file must live in the save folder.** A save in RetroArch's _system_ directory (Flycast VMUs), in a per-emulator
    subdirectory (`mame/nvram/`), or next to the ROM (`savefiles_in_content_dir`) is never seen.
 
+The explicit removed-game cleanup uses this same exact-path projection for recovery and deletion. It never expands the
+coverage envelope by scanning: class (c), fixed/shared names, unresolved uninstalled layouts, and save states are left
+physically untouched and recorded as warnings where applicable. If two installed local rows project the same canonical
+current-save path, that path is shared ownership; purging one owner may copy it into recovery but cannot remove it while
+another owner remains.
+
 The extension list is a small static map keyed by the **RetroDECK system** (the normalized value from `resolve_system` /
 `platform_map`, not the raw RomM platform slug — keying by system keeps the lookup aligned with the save directory,
 cores, and gamelists, which are all system-keyed): a default of `.srm` / `.rtc` / `.sav`, plus per-system overrides

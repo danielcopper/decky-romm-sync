@@ -12,9 +12,10 @@ The clean-commit path also models the schema's ``rom_id`` foreign key: the real
 per-rom child aggregate whose ``rom_id`` has no matching ``roms`` row raises
 ``sqlite3.IntegrityError``. The fake reproduces that at commit (see
 ``_PER_ROM_FK_CHILD_REPOS``) and, like the real failed COMMIT, rolls the
-uncommitted writes back rather than leaving the orphan observable. ON DELETE
-CASCADE is intentionally **not** modeled — no consumer deliberately purges a
-``roms`` row yet (ADR-0007); only the orphan-child-on-commit check exists.
+uncommitted writes back rather than leaving the orphan observable. A deliberate
+parent-row deletion also models ``ON DELETE CASCADE`` across every per-ROM child
+aggregate, including the playtime outbox and save-file rows represented inside
+their parent fake repositories.
 
 The repositories persist across clean ``with`` blocks (the fake's storage is the
 fake's identity), so a service test can open the unit several times and see
@@ -131,6 +132,7 @@ class FakeUnitOfWork:
             # Mirror PRAGMA foreign_keys=ON: a child row whose rom_id has no
             # matching roms row aborts the commit with sqlite3.IntegrityError.
             try:
+                self._cascade_deleted_roms(snapshot)
                 self._enforce_rom_id_foreign_keys()
             except sqlite3.IntegrityError:
                 # A failed COMMIT discards the transaction's uncommitted writes;
@@ -177,6 +179,17 @@ class FakeUnitOfWork:
                 raise sqlite3.IntegrityError(
                     f"FOREIGN KEY constraint failed: {repo_name} rom_id(s) {orphans} not in roms"
                 )
+
+    def _cascade_deleted_roms(self, snapshot: _Snapshot | None) -> None:
+        """Mirror the real schema's per-ROM ``ON DELETE CASCADE`` behavior."""
+        if snapshot is None:
+            return
+        removed = set(snapshot.roms) - set(self.roms._snapshot())
+        for rom_id in removed:
+            self.rom_installs.delete(rom_id)
+            self.rom_metadata.delete(rom_id)
+            self.playtime.delete(rom_id)
+            self.rom_save_sync_states.delete(rom_id)
 
 
 class FakeUnitOfWorkFactory:

@@ -82,6 +82,7 @@ _BOUND_SERVICE_ATTRS = {
     "_core_service": "core_service",
     "_disc_service": "disc_service",
     "_version_switch_service": "version_switch_service",
+    "_prune_service": "prune_service",
     "_connection_service": "connection_service",
     "_startup_healing_service": "startup_healing_service",
     "_launch_gate_service": "launch_gate_service",

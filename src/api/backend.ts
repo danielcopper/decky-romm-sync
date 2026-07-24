@@ -549,6 +549,91 @@ export type SwitchVersionResult = SwitchVersionSuccess | SwitchVersionUnsyncedSa
 export const getVersionList = callable<[number], VersionList>("get_version_list");
 export const switchVersion = callable<[number, number, boolean], SwitchVersionResult>("switch_version");
 
+export type PruneScope = "bulk" | "rom";
+
+export interface PrunePreviewRequest {
+  scope: PruneScope;
+  rom_id: number | null;
+  preview_id: string | null;
+  offset: number;
+  limit: number;
+}
+
+export interface PrunePreviewItem {
+  rom_id: number;
+  name: string;
+  fs_name: string;
+  platform_slug: string;
+  group_id: string;
+  group_size: number;
+  bound_count: number;
+  installed: boolean;
+  installed_bytes: number | null;
+  warning: string | null;
+}
+
+export interface PrunePreviewResult {
+  success: boolean;
+  reason?: string;
+  message?: string;
+  preview_id?: string;
+  scope?: PruneScope;
+  items?: PrunePreviewItem[];
+  offset?: number;
+  limit?: number;
+  total?: number;
+  free_bytes?: number;
+  recovery_root?: string | null;
+  blocked_by_migration?: boolean;
+}
+
+export interface StartPruneRequest {
+  preview_id: string;
+  confirmed: boolean;
+  repoint_shortcuts: boolean;
+  remove_rows: boolean;
+  remove_fully_vanished: boolean;
+  create_recovery_bundle: boolean;
+  include_installed_rom_ids: number[];
+}
+
+export interface StartPruneResult {
+  success: boolean;
+  run_id?: string;
+  status?: "running";
+  reason?: string;
+  message?: string;
+  blocked_by_migration?: boolean;
+}
+
+export interface PruneSteamSnapshot {
+  app_id: number;
+  name: string;
+  exe: string;
+  start_dir: string;
+  launch_options: string;
+  minutes_playtime_forever: number | null;
+  minutes_playtime_last_two_weeks: number | null;
+  last_played: number | null;
+  collections: Array<{ id: string; name: string }>;
+}
+
+export interface ReportPruneActionRequest {
+  run_id: string;
+  action_token: string;
+  success: boolean;
+  reason?: string;
+  message: string;
+  snapshot?: PruneSteamSnapshot;
+}
+
+export const getPrunePreview = callable<[PrunePreviewRequest], PrunePreviewResult>("get_prune_preview");
+export const startPrune = callable<[StartPruneRequest], StartPruneResult>("start_prune");
+export const reportPruneAction = callable<
+  [ReportPruneActionRequest],
+  { success: boolean; ignored?: boolean; reason?: string; message: string }
+>("report_prune_action");
+
 export const saveLogLevel = callable<[string], { success: boolean }>("save_log_level");
 // Preferred sibling-group region (ADR-0021 §3). "auto" = build-time default
 // order; any RomM region string heads the ranking on the next sync.

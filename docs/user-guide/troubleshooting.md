@@ -214,6 +214,23 @@ While a library sync is running (or cancelling), the shortcut and ROM removal ac
 unavailable — the buttons are disabled with a short hint, and the backend refuses the request too. Wait for the sync to
 finish, or cancel it, before removing shortcuts or ROMs. Save-file and BIOS deletions are not affected.
 
+### Clean Up Removed RomM Games
+
+This is the only workflow that deletes retained local database rows for games RomM no longer has. The initial scan may
+show a candidate, but deletion still requires a fresh exact-id 404 during the confirmed run and another check after long
+recovery or Steam work. A skip is therefore expected if RomM comes back, the response is uncertain, a download starts,
+local state changes, recovery cannot seal, or Steam cannot confirm its action.
+
+Recovery bundles are under `~/decky-romm-sync-recovery/bundles/`. A directory appears there only after every required
+copy and checksum succeeds and the staging directory is atomically sealed. A failed attempt may report
+`recovery_failed`; it leaves the local game unchanged and cleans incomplete staging best-effort. Free-space blocking in
+the modal covers the installed ROM content you selected. The backend checks actual source size and free space again at
+copy time, so a later disk-space change can still stop the group safely.
+
+The cleanup report is per group: unrelated groups continue after a skip or failure. If a recovery bundle was sealed but
+a later liveness or Steam check aborted, keep the bundle; it is a valid pre-action snapshot even though no local row was
+deleted. Recovery has no automatic import flow.
+
 A bulk shortcut removal is paced so it never freezes the interface, so on a large library it can take a few seconds.
 While one is running, all the removal buttons are disabled and a spinner with a live **Removing x of y** counter shows
 the progress; the buttons re-enable and the final count appears once it finishes. You can't start a second removal (or a

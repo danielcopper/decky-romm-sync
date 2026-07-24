@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractContextManager
 
+    from models.prune import RecoveryArtifact, SteamRecoverySnapshot
+
 
 class DirectoryFileListerFn(Protocol):
     """Recursively list the absolute paths of every file under a directory.
@@ -388,6 +390,14 @@ class SaveFileStore(Protocol):
         """Return True when *path* exists and is a directory."""
         ...
 
+    def canonical_path(self, path: str) -> str:
+        """Return the canonical real path used for exact ownership comparison."""
+        ...
+
+    def is_within(self, path: str, root: str) -> bool:
+        """Return whether canonical *path* is contained by canonical *root*."""
+        ...
+
     def make_dirs(self, path: str) -> None:
         """Create *path* and any missing parents. Idempotent."""
         ...
@@ -506,3 +516,33 @@ class SgdbArtworkCache(Protocol):
     def read_bytes(self, path: str) -> bytes:
         """Return the contents of *path* as raw bytes."""
         ...
+
+
+class RecoveryBundleStore(Protocol):
+    """Build and seal verified recovery bundles under the plugin recovery root."""
+
+    def root(self) -> str: ...
+    def free_bytes(self) -> int: ...
+    def measure_path(self, path: str, safe_root: str) -> int: ...
+    def seal_bundle(
+        self,
+        bundle_id: str,
+        snapshot: dict[str, object],
+        artifacts: list[RecoveryArtifact],
+        readme: str,
+        playtime_text: str,
+    ) -> str: ...
+
+
+class PruneArtifactStore(Protocol):
+    """Own per-ROM cover and SteamGridDB cache artifacts during cleanup."""
+
+    def recovery_artifacts(self, rom_ids: list[int]) -> list[RecoveryArtifact]: ...
+    def remove(self, rom_ids: list[int]) -> None: ...
+
+
+class SteamRecoveryStore(Protocol):
+    """Own per-shortcut Steam Input/grid recovery files and controller state."""
+
+    def snapshot(self, app_id: int) -> SteamRecoverySnapshot: ...
+    def remove_files(self, app_id: int) -> None: ...

@@ -72,6 +72,12 @@ class FakeSaveFileStore:
         prefix = path.rstrip("/") + "/"
         return any(stored.startswith(prefix) for stored in self.files)
 
+    def canonical_path(self, path: str) -> str:
+        return path
+
+    def is_within(self, path: str, root: str) -> bool:
+        return path == root or path.startswith(root.rstrip("/") + "/")
+
     def make_dirs(self, path: str) -> None:
         self.dirs.add(path)
 

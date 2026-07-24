@@ -199,6 +199,20 @@ class RomInfoService:
                 results.append({"path": save_path, "filename": rom_name + ext})
         return results
 
+    def expected_save_files(self, rom_id: int) -> list[dict[str, str]]:
+        """Project exact save paths for one installed ROM without broad scanning."""
+        info = self.get_rom_save_info(rom_id)
+        if not info:
+            return []
+        return [
+            {
+                "path": os.path.join(info["saves_dir"], info["rom_name"] + ext),
+                "filename": info["rom_name"] + ext,
+                "saves_dir": info["saves_dir"],
+            }
+            for ext in get_save_extensions(info["system"])
+        ]
+
     def pending_sort_settings(self) -> SaveSortSettings | None:
         """Return previous save-sort settings if a migration is pending, else None.
 

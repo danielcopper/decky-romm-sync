@@ -12,10 +12,13 @@ single-sub-service logic does not.
 
 from __future__ import annotations
 
+import contextlib
+import os
 from typing import TYPE_CHECKING, Any
 
 from domain.iso_time import epoch_to_iso
 from domain.rom_save_sync_state import RomSaveSyncState
+from domain.save_backup import is_backup_for
 from lib.list_result import ErrorCode
 from services.saves._config import SaveServiceConfig
 from services.saves._settings import (
@@ -33,6 +36,8 @@ from services.saves.sync_engine.devices import DeviceRegistry
 from services.saves.versions import VersionsService, VersionsServiceConfig
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from models.sync import ClientSaveState
 
     from services.protocols import UnitOfWorkFactory
@@ -256,6 +261,85 @@ class SaveService:
         if save_entry is None:
             return {}
         return {filename: state.last_sync_hash for filename, state in save_entry.files.items()}
+
+    @contextlib.asynccontextmanager
+    async def lock_prune_roms(self, rom_ids: list[int]) -> AsyncIterator[None]:
+        """Hold affected save locks in ascending id order for recovery/removal."""
+        async with contextlib.AsyncExitStack() as stack:
+            for rom_id in sorted({int(value) for value in rom_ids}):
+                await stack.enter_async_context(self._sync_engine.rom_lock(rom_id))
+            yield
+
+    def inventory_prune_saves(self, purge_rom_ids: list[int]) -> dict[str, Any]:
+        """Build exact-path save ownership and recovery artifacts for a purge set."""
+        purge_ids = {int(value) for value in purge_rom_ids}
+        with self._uow_factory() as uow:
+            installed_ids = [install.rom_id for install in uow.rom_installs.iter_all()]
+
+        ownership: dict[str, set[int]] = {}
+        expected_by_id: dict[int, list[dict[str, str]]] = {}
+        for rom_id in installed_ids:
+            expected = self._rom_info.expected_save_files(rom_id)
+            expected_by_id[rom_id] = expected
+            for item in expected:
+                ownership.setdefault(self._save_file_store.canonical_path(item["path"]), set()).add(rom_id)
+
+        saves_root = self._config.retrodeck_paths.saves_path()
+        artifacts: list[dict[str, object]] = []
+        exclusive: list[dict[str, str]] = []
+        shared: list[str] = []
+        warnings: list[str] = []
+        lock_ids = set(purge_ids)
+        for rom_id in sorted(purge_ids):
+            expected = expected_by_id.get(rom_id, [])
+            if not expected:
+                warnings.append(f"ROM {rom_id}: save path could not be resolved; physical saves were left untouched")
+                continue
+            for item in expected:
+                path = item["path"]
+                if not self._save_file_store.is_within(path, saves_root):
+                    warnings.append(f"ROM {rom_id}: save path is outside the supported saves root; left untouched")
+                    continue
+                owners = ownership.get(self._save_file_store.canonical_path(path), {rom_id})
+                lock_ids.update(owners)
+                if self._save_file_store.is_file(path):
+                    artifacts.append(
+                        {"source_path": path, "safe_root": saves_root, "kind": "current_save", "rom_id": rom_id}
+                    )
+                    if owners <= purge_ids:
+                        exclusive.append(item)
+                    else:
+                        shared.append(path)
+                backup_dir = os.path.join(item["saves_dir"], ".romm-backup")
+                for entry in self._save_file_store.listdir(backup_dir):
+                    backup_path = os.path.join(backup_dir, entry)
+                    if is_backup_for(item["filename"], entry) and self._save_file_store.is_file(backup_path):
+                        artifacts.append(
+                            {
+                                "source_path": backup_path,
+                                "safe_root": saves_root,
+                                "kind": "save_backup",
+                                "rom_id": rom_id,
+                            }
+                        )
+        return {
+            "artifacts": artifacts,
+            "exclusive": exclusive,
+            "shared": sorted(set(shared)),
+            "warnings": warnings,
+            "lock_rom_ids": sorted(lock_ids),
+        }
+
+    def quarantine_prune_saves(self, files: list[dict[str, str]]) -> dict[str, Any]:
+        """Move exclusive current saves through the sanctioned backup funnel."""
+        moved: list[str] = []
+        try:
+            for item in files:
+                if self._sync_engine.quarantine_local_file(item["saves_dir"], item["filename"], preserve_history=True):
+                    moved += [item["path"]]
+        except Exception as exc:
+            return {"success": False, "reason": "save_quarantine_failed", "message": str(exc), "moved": moved}
+        return {"success": True, "moved": moved}
 
     # ------------------------------------------------------------------
     # Sync orchestration (delegated to SyncEngine)

@@ -31,6 +31,7 @@ import {
   getSaveSortMigrationStatus,
   getInstalledRelaunchOptions,
   testConnection,
+  invalidateCachedGameDetail,
   logError,
   logInfo,
 } from "./api/backend";
@@ -64,6 +65,10 @@ import { removeShortcutsPaced } from "./utils/shortcutRemoval";
 import { batchConfirmLaunchOptions } from "./utils/launchOptionsReconcile";
 import { withTimeout } from "./utils/withTimeout";
 import { fetchMetadataCachePages } from "./utils/metadataCache";
+import { handlePruneAction } from "./utils/pruneActions";
+import type { PruneActionRequired } from "./utils/pruneActions";
+import { setPruneComplete, setPruneProgress } from "./utils/pruneStore";
+import type { PruneComplete, PruneProgress } from "./utils/pruneStore";
 
 type Page = "main" | "settings" | "library" | "data" | "downloads" | "system";
 
@@ -791,6 +796,43 @@ export default definePlugin(() => {
     },
   );
 
+  // Destructive cleanup actions must keep running even when the Danger Zone or
+  // game-detail picker unmounts. The backend emits one tokenized action at a
+  // time; this root handler owns every Steam API mutation and reports the exact
+  // token outcome before backend filesystem/SQLite finalization can proceed.
+  const pruneActionListener = addEventListener<[PruneActionRequired]>(
+    "prune_action_required",
+    (action: PruneActionRequired) => {
+      detach(handlePruneAction(action));
+    },
+  );
+
+  const pruneProgressListener = addEventListener<[PruneProgress]>("prune_progress", (progress: PruneProgress) =>
+    setPruneProgress(progress),
+  );
+
+  const pruneCompleteListener = addEventListener<[PruneComplete]>("prune_complete", (result: PruneComplete) => {
+    setPruneComplete(result);
+    for (const appId of result.affected_app_ids) invalidateCachedGameDetail(appId);
+    globalThis.dispatchEvent(
+      new CustomEvent("romm_data_changed", {
+        detail: {
+          type: "rom_pruned",
+          app_ids: result.affected_app_ids,
+          rom_ids: result.removed_rom_ids,
+        },
+      }),
+    );
+    const removed = result.removed_rom_ids.length;
+    const skipped = result.results.filter((item) => item.status !== "removed").length;
+    toaster.toast({
+      title: "RomM Sync",
+      body: removed
+        ? `Removed ${removed} local entr${removed === 1 ? "y" : "ies"}${skipped ? `; ${skipped} group(s) skipped` : ""}.`
+        : result.message || "No removed RomM games were cleaned up.",
+    });
+  });
+
   return {
     name: "RomM Sync",
     icon: <FaGamepad />,
@@ -815,6 +857,9 @@ export default definePlugin(() => {
       removeEventListener("save_status_updated", saveStatusListener);
       removeEventListener("migration_relaunch_options", migrationRelaunchListener);
       removeEventListener("server_retry_progress", serverRetryListener);
+      removeEventListener("prune_action_required", pruneActionListener);
+      removeEventListener("prune_progress", pruneProgressListener);
+      removeEventListener("prune_complete", pruneCompleteListener);
     },
   };
 });

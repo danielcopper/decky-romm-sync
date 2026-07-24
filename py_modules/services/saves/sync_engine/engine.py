@@ -316,9 +316,9 @@ class SyncEngine:
         """Download a save file from server (delegate to :class:`MatrixExecutor`)."""
         self._matrix.do_download_save(server_save, saves_dir, filename, save_state, device_id, system, default_slot)
 
-    def quarantine_local_file(self, saves_dir: str, filename: str) -> bool:
+    def quarantine_local_file(self, saves_dir: str, filename: str, *, preserve_history: bool = False) -> bool:
         """Back up a local save into ``.romm-backup`` (delegate to :class:`MatrixExecutor`)."""
-        return self._matrix.quarantine_local_file(saves_dir, filename)
+        return self._matrix.quarantine_local_file(saves_dir, filename, preserve_history=preserve_history)
 
     def do_upload_save(
         self,

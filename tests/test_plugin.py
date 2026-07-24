@@ -780,6 +780,10 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "report_unit_results",
     "get_registry_platforms",
     "report_removal_results",
+    # Ack for an already-started cleanup run must remain available while the
+    # run waits on its exact Steam action token; gating it would deadlock the
+    # recovery-backed operation if migration state changed mid-run.
+    "report_prune_action",
     # Sync-start reconcile of Steam-UI-deleted shortcut bindings (#1046) — clears
     # only the SQLite ``shortcut_app_id`` link (never a RetroDECK path), so it is
     # not gated by a pending migration, matching report_removal_results above.
@@ -995,6 +999,7 @@ class TestMainStartupOrdering:
             "core_service": MagicMock(),
             "disc_service": MagicMock(),
             "version_switch_service": MagicMock(),
+            "prune_service": MagicMock(shutdown=AsyncMock()),
             "connection_service": connection_service,
             "startup_healing_service": startup_healing_service,
             "launch_gate_service": MagicMock(),
@@ -1022,6 +1027,9 @@ class TestMainStartupOrdering:
                 renderer_gc=FakeRendererGc(),
                 game_process=FakeGameProcessControlAdapter(),
                 resolve_upload_conflict=MagicMock(),
+                recovery_store=MagicMock(),
+                prune_artifacts=MagicMock(),
+                steam_recovery=MagicMock(),
             ),
             stores=StateBundle(
                 settings={},

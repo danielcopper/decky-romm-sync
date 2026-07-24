@@ -76,12 +76,17 @@ class RomRemovalService:
         file_path = install.file_path
 
         roms_base = self._retrodeck_paths.roms_path()
-        if rom_dir and is_safe_rom_path(rom_dir, roms_base) and self._rom_file_store.is_dir(rom_dir):
-            self._rom_file_store.remove_tree(rom_dir)
-        elif file_path:
+        if rom_dir:
+            if not is_safe_rom_path(rom_dir, roms_base):
+                raise ValueError(f"Refusing to delete path outside roms directory: {rom_dir}")
+            if self._rom_file_store.is_dir(rom_dir):
+                self._rom_file_store.remove_tree(rom_dir)
+            elif self._rom_file_store.exists(rom_dir):
+                raise ValueError(f"Expected installed ROM directory, found another file type: {rom_dir}")
+            return
+        if file_path:
             if not is_safe_rom_path(file_path, roms_base):
-                self._logger.error(f"Refusing to delete path outside roms directory: {file_path}")
-                return
+                raise ValueError(f"Refusing to delete path outside roms directory: {file_path}")
             if self._rom_file_store.is_dir(file_path):
                 self._rom_file_store.remove_tree(file_path)
             elif self._rom_file_store.exists(file_path):

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from domain.fetch_generation import count_rows_for_skip
+from domain.fetch_generation import count_rows_for_skip, prune_candidate_ids
+from domain.platform_sync_state import PlatformSyncState
 from domain.rom import Rom
 
 
@@ -62,3 +63,23 @@ class TestCountRowsForSkip:
     def test_a_platform_with_no_superseded_rows_counts_all_of_them(self):
         rows = [_row(25135, "run-new"), _row(25136, "run-new")]
         assert count_rows_for_skip(rows, "run-new") == len(rows)
+
+
+class TestPruneCandidateIds:
+    def test_mismatch_and_null_are_candidates(self):
+        stamp = PlatformSyncState.stamp(platform_slug="dc", at="now", rom_count=1, fetch_id="new")
+        assert prune_candidate_ids([_row(1, "new"), _row(2, "old"), _row(3, None)], stamp) == {2, 3}
+
+    def test_missing_legacy_and_empty_completion_yield_none(self):
+        rows = [_row(1, "old")]
+        assert prune_candidate_ids(rows, None) == set()
+        assert (
+            prune_candidate_ids(rows, PlatformSyncState.stamp(platform_slug="dc", at="now", rom_count=1, fetch_id=None))
+            == set()
+        )
+        assert (
+            prune_candidate_ids(
+                rows, PlatformSyncState.stamp(platform_slug="dc", at="now", rom_count=0, fetch_id="new")
+            )
+            == set()
+        )

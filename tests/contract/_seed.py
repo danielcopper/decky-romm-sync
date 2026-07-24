@@ -89,7 +89,7 @@ def seed_install(
 ) -> str:
     """Seed a ``RomInstall`` (seeds the ``Rom`` FK first). Returns the file path."""
     seed_rom(harness, rom_id, platform_slug=platform_slug)
-    file_path = str(harness.tmp_path / "retrodeck" / "roms" / system / file_name)
+    file_path = os.path.join(harness.retrodeck_paths.roms_path(), system, file_name)
     with harness.uow_factory() as uow:
         uow.rom_installs.save(
             RomInstall.mark_installed(
@@ -147,7 +147,7 @@ def seed_group_member(
         )
     if not installed:
         return None
-    file_path = str(harness.tmp_path / "retrodeck" / "roms" / system / file_name)
+    file_path = os.path.join(harness.retrodeck_paths.roms_path(), system, file_name)
     with harness.uow_factory() as uow:
         uow.rom_installs.save(
             RomInstall.mark_installed(

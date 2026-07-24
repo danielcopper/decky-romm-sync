@@ -308,6 +308,10 @@ shortcuts are updated rather than duplicated. If the specific version a shortcut
 game still has other versions on the server, the shortcut is **kept** and quietly re-pointed at a surviving version — it
 is not torn down and re-created, so its artwork, collections, and playtime are preserved.
 
+Sync itself never purges a retained local ROM row, installed content, saves, or playtime solely because RomM stopped
+returning that id. Removing that state requires the separate confirmed
+[Clean Up Removed RomM Games](managing-games.md#cleaning-up-versions-removed-from-romm) workflow.
+
 ## Removing Shortcuts
 
 To remove synced games, use the **Danger Zone** page. See

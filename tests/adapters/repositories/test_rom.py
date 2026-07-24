@@ -692,7 +692,14 @@ def _seed_children(uow: SqliteUnitOfWork, rom_id: int) -> None:
             steam_categories=(),
         ),
     )
-    uow.playtime.save(rom_id, Playtime(total_seconds=3600, session_count=2))
+    playtime = Playtime(total_seconds=3600, session_count=2)
+    playtime.enqueue_session(
+        device_id="device-1",
+        start_time="2026-01-01T10:00:00Z",
+        end_time="2026-01-01T11:00:00Z",
+        duration_ms=3_600_000,
+    )
+    uow.playtime.save(rom_id, playtime)
     state = RomSaveSyncState(system="snes")
     state.adopt_baseline(
         "battery.srm",
@@ -726,7 +733,9 @@ class TestReSaveDoesNotCascade:
         # (b) Every cascade child still exists.
         assert uow.rom_installs.get(rom_id) is not None
         assert uow.rom_metadata.get(rom_id) is not None
-        assert uow.playtime.get(rom_id) is not None
+        playtime = uow.playtime.get(rom_id)
+        assert playtime is not None
+        assert "2026-01-01T10:00:00Z" in playtime.pending_sessions
         save_state = uow.rom_save_sync_states.get(rom_id)
         assert save_state is not None
         assert "battery.srm" in save_state.files
@@ -755,3 +764,8 @@ class TestReSaveDoesNotCascade:
             (rom_id,),
         ).fetchone()[0]
         assert file_count == 0
+        session_count = uow._conn.execute(
+            "SELECT COUNT(*) FROM rom_playtime_sessions WHERE rom_id = ?",
+            (rom_id,),
+        ).fetchone()[0]
+        assert session_count == 0

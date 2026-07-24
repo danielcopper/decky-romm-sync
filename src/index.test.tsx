@@ -20,6 +20,7 @@ import {
   getAllPlaytime,
   getAppIdRomIdMap,
   getInstalledRelaunchOptions,
+  invalidateCachedGameDetail,
   getMetadataCachePage,
 } from "./api/backend";
 import { getSettingsResetState, setSettingsResetState } from "./utils/settingsResetStore";
@@ -29,6 +30,7 @@ import { estimateApplySeconds } from "./utils/syncEstimate";
 import { resetEta, weightedCoarseFraction } from "./utils/syncEta";
 import { recordSyncCreated, resetSyncDelta, getSyncDelta } from "./utils/syncDeltaStore";
 import { resetSyncCancel } from "./utils/syncManager";
+import { getPruneState, resetPruneState } from "./utils/pruneStore";
 import type {
   DownloadCompleteEvent,
   DownloadProgressEvent,
@@ -56,6 +58,11 @@ vi.mock("./utils/launchInterceptor", () => ({
 vi.mock("./utils/sessionManager", () => ({
   initSessionManager: vi.fn().mockResolvedValue(undefined),
   destroySessionManager: vi.fn(),
+}));
+
+const handlePruneAction = vi.fn().mockResolvedValue(undefined);
+vi.mock("./utils/pruneActions", () => ({
+  handlePruneAction: (...args: unknown[]) => handlePruneAction(...args),
 }));
 vi.mock("./utils/syncManager", () => ({
   initUnitSyncManager: vi.fn(() => () => {}),
@@ -89,6 +96,7 @@ vi.mock("./api/backend", async () => {
   const actual = await vi.importActual<typeof import("./api/backend")>("./api/backend");
   return {
     ...actual,
+    invalidateCachedGameDetail: vi.fn(),
     logError: (...args: unknown[]) => logError(...args),
     logInfo: vi.fn(),
   };
@@ -116,11 +124,72 @@ beforeEach(() => {
   // The sync-progress store is a real module — reset it so an etaSeconds set by
   // one test's sync_plan doesn't leak into the next.
   setSyncProgress({ running: false, stage: "", current: 0, total: 0, message: "" });
+  resetPruneState();
+  handlePruneAction.mockClear();
+  vi.mocked(invalidateCachedGameDetail).mockClear();
   // The global afterEach's vi.unstubAllGlobals wipes the Steam ambient globals
   // after the file's first test; several sync_complete paths read SteamClient /
   // appStore, so default them to no-ops here.
   vi.stubGlobal("SteamClient", { Apps: {} });
   vi.stubGlobal("appStore", { GetAppOverviewByAppID: () => null, allApps: [] });
+});
+
+describe("index.tsx — persistent prune listeners", () => {
+  it("handles tokenized Steam actions at the plugin root and unregisters on dismount", async () => {
+    const plugin = pluginFactory();
+    const action = {
+      run_id: "run-1",
+      action_token: "token-1",
+      action: "remove_shortcut" as const,
+      app_id: 9001,
+    };
+    expect(deckyEventListenerCount("prune_action_required")).toBe(1);
+
+    await act(async () => {
+      emitDeckyEvent("prune_action_required", action);
+      await Promise.resolve();
+    });
+
+    expect(handlePruneAction).toHaveBeenCalledWith(action);
+    plugin.onDismount();
+    expect(deckyEventListenerCount("prune_action_required")).toBe(0);
+    expect(deckyEventListenerCount("prune_progress")).toBe(0);
+    expect(deckyEventListenerCount("prune_complete")).toBe(0);
+  });
+
+  it("stores progress and completion, invalidates affected details, and emits a refresh", async () => {
+    const plugin = pluginFactory();
+    const changed = vi.fn();
+    globalThis.addEventListener("romm_data_changed", changed);
+
+    act(() => {
+      emitDeckyEvent("prune_progress", {
+        run_id: "run-1",
+        current: 1,
+        total: 2,
+        stage: "checking",
+        rom_ids: [7],
+        name: "Removed Game",
+      });
+      emitDeckyEvent("prune_complete", {
+        success: true,
+        partial: false,
+        run_id: "run-1",
+        removed_rom_ids: [7],
+        affected_app_ids: [9001],
+        results: [{ group_id: "group-1", rom_ids: [7], status: "removed", message: "Removed." }],
+      });
+    });
+
+    expect(getPruneState().progress).toBeNull();
+    expect(getPruneState().complete?.removed_rom_ids).toEqual([7]);
+    expect(invalidateCachedGameDetail).toHaveBeenCalledWith(9001);
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Removed 1 local entry." });
+
+    globalThis.removeEventListener("romm_data_changed", changed);
+    plugin.onDismount();
+  });
 });
 
 describe("index.tsx — download_complete launch-options sync", () => {

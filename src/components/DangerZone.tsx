@@ -37,6 +37,7 @@ import { formatUninstallStatus } from "../utils/formatters";
 import type { RegistryPlatform } from "../types";
 import { detach } from "../utils/detach";
 import { fuzzyMatch } from "../utils/fuzzyMatch";
+import { RemovedGamesCleanupSection } from "./RemovedGamesCleanup";
 
 const DEFAULT_WHITELIST_PATTERNS: string[] = [
   "retrodeck",
@@ -933,6 +934,8 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
           />
         </PanelSection>
       )}
+
+      <RemovedGamesCleanupSection />
 
       <ShortcutRemovalSection
         platforms={platforms}

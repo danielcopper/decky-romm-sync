@@ -2774,12 +2774,13 @@ class TestPathTraversalDeleteRomFiles:
             rom_dir=str(evil_dir),
         )
 
-        await plugin.remove_rom(99)
+        result = await plugin.remove_rom(99)
         # The evil dir/file should NOT be deleted
         assert evil_dir.exists()
         assert evil_file.exists()
-        # The install record is still cleaned up (the rejection is silent)
-        assert plugin._uow.rom_installs.get(99) is None
+        assert result["success"] is False
+        # Unsafe paths are failures: retain the record so the user can repair it.
+        assert plugin._uow.rom_installs.get(99) is not None
 
     @pytest.mark.asyncio
     async def test_rejects_file_path_outside_roms_base(self, plugin, tmp_path):
@@ -2805,9 +2806,10 @@ class TestPathTraversalDeleteRomFiles:
             rom_dir=None,
         )
 
-        await plugin.remove_rom(99)
+        result = await plugin.remove_rom(99)
         assert evil_file.exists()
-        assert plugin._uow.rom_installs.get(99) is None
+        assert result["success"] is False
+        assert plugin._uow.rom_installs.get(99) is not None
 
 
 class TestPathTraversalFsName:
@@ -3569,8 +3571,7 @@ class TestUninstallAllRomsMixedResults:
         good_file = roms_dir / "game_a.z64"
         good_file.write_text("data")
 
-        # Create another file but make deletion fail by using a non-safe path
-        # (outside roms dir, which _delete_rom_files should reject silently)
+        # Create another file but make deletion fail by using a non-safe path.
         bad_file = tmp_path / "outside" / "game_b.z64"
         bad_file.parent.mkdir(parents=True)
         bad_file.write_text("data")
@@ -3579,14 +3580,16 @@ class TestUninstallAllRomsMixedResults:
         _seed_install(plugin._uow, 2, file_path=str(bad_file), rom_dir=None, system="snes")
 
         result = await plugin.uninstall_all_roms()
-        assert result["success"] is True
+        assert result["success"] is False
         # good_file should be deleted
         assert not good_file.exists()
         # bad_file should still exist (outside roms dir)
         assert bad_file.exists()
-        # The path rejection is silent (no exception), so both records are cleared.
-        assert result["removed_count"] == 2
-        assert list(plugin._uow.rom_installs.iter_all()) == []
+        assert result["removed_count"] == 1
+        assert len(result["errors"]) == 1
+        assert result["errors"][0]["rom_id"] == "2"
+        assert plugin._uow.rom_installs.get(1) is None
+        assert plugin._uow.rom_installs.get(2) is not None
 
 
 class TestRemoveRomFileAlreadyGone:

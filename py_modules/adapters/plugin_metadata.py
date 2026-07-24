@@ -11,14 +11,26 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 
 
 class PluginMetadataAdapter:
     """Real ``PluginMetadataReader`` backed by the on-disk ``package.json``."""
 
     def read_version(self, plugin_dir: str) -> str:
+        return self._read(plugin_dir).get("version", "0.0.0")
+
+    def read_name(self, plugin_dir: str) -> str:
+        value = self._read(plugin_dir).get("name")
+        return value if isinstance(value, str) and value else "decky-plugin"
+
+    @staticmethod
+    def _read(plugin_dir: str) -> dict[str, Any]:
         try:
             with open(os.path.join(plugin_dir, "package.json")) as f:
-                return json.load(f).get("version", "0.0.0")
+                payload = json.load(f)
         except (OSError, json.JSONDecodeError):
-            return "0.0.0"
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        return payload

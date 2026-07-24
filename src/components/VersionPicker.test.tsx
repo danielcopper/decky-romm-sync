@@ -59,10 +59,14 @@ vi.mock("../utils/steamShortcuts", () => ({
 vi.mock("./UnsyncedSavesSwitchModal", () => ({
   showUnsyncedSavesModal: vi.fn(),
 }));
+vi.mock("./RemovedGamesCleanup", () => ({
+  openRemovedGamesCleanupModal: vi.fn(),
+}));
 
 import { invalidateCachedGameDetail } from "../utils/cachedGameDetailStore";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { showUnsyncedSavesModal } from "./UnsyncedSavesSwitchModal";
+import { openRemovedGamesCleanupModal } from "./RemovedGamesCleanup";
 
 const APP_ID = 100;
 
@@ -197,6 +201,7 @@ describe("VersionPicker — non-switchable rows (#1359)", () => {
     vi.mocked(backend.switchVersion).mockReset();
     vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
     vi.mocked(toaster.toast).mockReset();
+    vi.mocked(openRemovedGamesCleanupModal).mockReset().mockResolvedValue(true);
   });
 
   // A group whose second version is a RomM sibling from a DIFFERENT local group
@@ -329,6 +334,36 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
     await clickRow(menu.container, "Game (Japan)");
 
     expect(backend.switchVersion).toHaveBeenCalledWith(APP_ID, 2, false);
+  });
+
+  it("offers local cleanup only for a synced vanished row and scopes it to that ROM", async () => {
+    vi.mocked(backend.getVersionList).mockResolvedValue(listWithBoundVanished());
+
+    const { menu } = await renderAndOpen();
+    const cleanup = within(menu.container).getByText("Remove local data...");
+    await act(async () => {
+      fireEvent.click(cleanup.closest('[role="menuitem"]')!);
+      await Promise.resolve();
+    });
+
+    expect(openRemovedGamesCleanupModal).toHaveBeenCalledWith(1);
+    expect(within(menu.container).getAllByText("Remove local data...")).toHaveLength(1);
+  });
+
+  it("surfaces an inline cleanup-preview failure", async () => {
+    vi.mocked(backend.getVersionList).mockResolvedValue(listWithBoundVanished());
+    vi.mocked(openRemovedGamesCleanupModal).mockRejectedValue(new Error("offline"));
+    const log = vi.spyOn(backend, "logError").mockImplementation(() => {});
+
+    const { menu } = await renderAndOpen();
+    await act(async () => {
+      fireEvent.click(within(menu.container).getByText("Remove local data...").closest('[role="menuitem"]')!);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("offline"));
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Could not prepare local cleanup." });
   });
 });
 

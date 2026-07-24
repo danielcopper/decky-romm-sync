@@ -54,6 +54,7 @@ def plugin():
     p._launch_gate_service = MagicMock()
     p._session_lifecycle_service = MagicMock()
     p._game_process_service = MagicMock()
+    p._prune_service = MagicMock()
     return p
 
 
@@ -834,8 +835,10 @@ class TestUnloadHook:
         plugin._download_service.shutdown = AsyncMock()
         plugin._migration_service.shutdown = AsyncMock()
         plugin._session_lifecycle_service.shutdown = AsyncMock()
+        plugin._prune_service.shutdown = AsyncMock()
         await plugin._unload()
         plugin._sync_service.shutdown.assert_called_once_with()
         plugin._download_service.shutdown.assert_awaited_once_with()
         plugin._migration_service.shutdown.assert_awaited_once_with()
         plugin._session_lifecycle_service.shutdown.assert_awaited_once_with()
+        plugin._prune_service.shutdown.assert_awaited_once_with()

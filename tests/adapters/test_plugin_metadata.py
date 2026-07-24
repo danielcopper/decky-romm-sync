@@ -47,6 +47,15 @@ class TestPluginMetadataAdapter:
         adapter = PluginMetadataAdapter()
         assert adapter.read_version(str(plugin_dir)) == "0.0.0"
 
+    def test_read_name_returns_declared_name_and_has_safe_fallback(self, tmp_path):
+        plugin_dir = tmp_path / "plugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "package.json").write_text(json.dumps({"name": "custom-plugin"}))
+        adapter = PluginMetadataAdapter()
+        assert adapter.read_name(str(plugin_dir)) == "custom-plugin"
+        (plugin_dir / "package.json").write_text(json.dumps({"name": None}))
+        assert adapter.read_name(str(plugin_dir)) == "decky-plugin"
+
     @pytest.mark.parametrize("empty_value", ["", None])
     def test_read_version_empty_version_returned_as_is(self, tmp_path, empty_value):
         """The adapter does not validate the version string — empty/None pass through.

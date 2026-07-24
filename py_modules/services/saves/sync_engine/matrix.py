@@ -311,7 +311,7 @@ class MatrixExecutor:
         self.update_file_sync_state(save_state, filename, server_save, local_path, system, default_slot=default_slot)
         self._log_debug(f"Downloaded save: {filename}")
 
-    def quarantine_local_file(self, saves_dir: str, filename: str) -> bool:
+    def quarantine_local_file(self, saves_dir: str, filename: str, *, preserve_history: bool = False) -> bool:
         """Move a local save file aside into ``.romm-backup`` before it is destroyed.
 
         The single source of truth for the save-file backup discipline: both the
@@ -340,10 +340,11 @@ class MatrixExecutor:
         self._save_file_store.rename(local_path, os.path.join(backup_dir, backup))
         # Bound the recovery net: keep only the newest N backups per save file (#974).
         existing.add(backup)
-        for stale in select_backups_to_prune(filename, list(existing), _BACKUP_RETENTION):
-            if stale == backup:
-                continue  # never prune the backup just created this call (#974 — would destroy the save)
-            self._save_file_store.remove_file(os.path.join(backup_dir, stale))
+        if not preserve_history:
+            for stale in select_backups_to_prune(filename, list(existing), _BACKUP_RETENTION):
+                if stale == backup:
+                    continue  # never prune the backup just created this call (#974 — would destroy the save)
+                self._save_file_store.remove_file(os.path.join(backup_dir, stale))
         return True
 
     @staticmethod

@@ -36,6 +36,8 @@ from adapters.persistence import (
     SettingsPersisterAdapter,
 )
 from adapters.plugin_metadata import PluginMetadataAdapter
+from adapters.prune_artifacts import PruneArtifactAdapter
+from adapters.recovery_bundle import RecoveryBundleAdapter
 from adapters.renderer_gc import RendererGcAdapter
 from adapters.renderer_rss import RendererRssAdapter
 from adapters.repositories.unit_of_work import SqliteUnitOfWork
@@ -49,6 +51,7 @@ from adapters.save_file import SaveFileAdapter
 from adapters.sgdb_artwork_cache import SgdbArtworkCacheAdapter
 from adapters.sqlite_migrations import MIGRATIONS_DIR, apply_migrations
 from adapters.steam_config import SteamConfigAdapter
+from adapters.steam_recovery import SteamRecoveryAdapter
 from adapters.steamgriddb import SteamGridDbAdapter
 from adapters.system_clock import SystemClock
 from adapters.system_uuid_gen import SystemUuidGen
@@ -76,6 +79,9 @@ if TYPE_CHECKING:
         PathExistsReader,
         PlatformCoreReader,
         PluginMetadataReader,
+        PruneArtifactStore,
+        RecoveryBundleStore,
+        SteamRecoveryStore,
         RendererGcFn,
         RendererRssFn,
         ResolveUploadConflictFn,
@@ -159,6 +165,9 @@ class CallbackBundle:
     settings_persister: SettingsPersister
     log_debug: DebugLogger
     plugin_metadata: PluginMetadataReader
+    recovery_store: RecoveryBundleStore
+    prune_artifacts: PruneArtifactStore
+    steam_recovery: SteamRecoveryStore
     uow_factory: UnitOfWorkFactory
 
 
@@ -308,7 +317,16 @@ def bootstrap(
     # version once at boot and thread the string to every HTTP-talking
     # adapter. Bot Fight Mode on Cloudflare blocks the default
     # ``Python-urllib`` UA before requests reach self-hosted RomM (#249).
-    user_agent = f"decky-romm-sync/{plugin_metadata.read_version(plugin_dir)}"
+    plugin_version = plugin_metadata.read_version(plugin_dir)
+    package_name = plugin_metadata.read_name(plugin_dir)
+    user_agent = f"decky-romm-sync/{plugin_version}"
+    recovery_store = RecoveryBundleAdapter(
+        user_home=user_home,
+        package_name=package_name,
+        plugin_version=plugin_version,
+    )
+    prune_artifacts = PruneArtifactAdapter(runtime_dir=runtime_dir)
+    steam_recovery = SteamRecoveryAdapter(user_home=user_home, logger=logger)
     http_adapter = RommHttpAdapter(settings, plugin_dir, logger, user_agent)
     romm_api = RommApiAdapter(http_adapter)
     steam_config = SteamConfigAdapter(user_home=user_home, logger=logger)
@@ -368,6 +386,9 @@ def bootstrap(
         settings_persister=settings_persister,
         log_debug=debug_logger,
         plugin_metadata=plugin_metadata,
+        recovery_store=recovery_store,
+        prune_artifacts=prune_artifacts,
+        steam_recovery=steam_recovery,
         uow_factory=uow_factory,
     )
     runtime_adapters = RuntimeAdaptersBundle(

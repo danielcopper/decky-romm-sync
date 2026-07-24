@@ -167,6 +167,28 @@ short write UoW, whose fresh membership and bound-elsewhere checks still decide 
 cross-system interval after a successful response: the liveness check reduces stale-list risk but is not a transaction
 with RomM.
 
+## Explicit cleanup of vanished versions
+
+Automatic sync remains unbind/retain-only. Deleting retained local state is a separate confirmed workflow under **Danger
+Zone → Clean Up Removed RomM Games**, also reachable as **Remove local data...** beside a synced vanished version in the
+picker. Candidate discovery is not deletion authority: the backend freshly probes each exact RomM id, and only typed
+404s can proceed.
+
+For a vanished bound version with a live sibling, the default-on repoint action reuses `switch_version`, then the
+frontend confirm-writes the returned exact launch options and applies the target cover before acknowledging the token.
+It changes neither shortcut name nor exe and never calls `AddShortcut`, so the assigned appId, collections, and Steam
+playtime remain attached. Unsynced-save stranding can be overridden only after enabled recovery has sealed.
+
+For a fully vanished bound game, whole-game cleanup is separately default-off. With recovery enabled, the root frontend
+handler first captures bounded shortcut details, Steam playtime fields, and collection ids/names; the backend adds grid
+artwork, both per-app Steam Input roots, and the relevant controller setting to the bundle. The frontend then calls
+`RemoveShortcut(appId)` once and polls Steam's live shortcut store until the app is absent. An unreadable store or
+timeout is failure, and no row/source finalization follows that failed acknowledgement. The workflow handles one
+shortcut action at a time; the bulk paced-removal helper remains for multi-shortcut teardown paths.
+
+Recovery records the Steam-assigned appId and playtime, but there is no automatic restore and Steam cannot currently
+reattach those values to a newly created shortcut.
+
 ## Sync-start reconcile of Steam-UI-deleted shortcuts
 
 A user can delete a RomM shortcut through **Steam's own UI** (remove from library), which the plugin never observes. The

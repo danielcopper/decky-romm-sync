@@ -50,6 +50,7 @@ from services.game_process import GameProcessService
 from services.library import LibraryService
 from services.metadata import MetadataService
 from services.playtime import PlaytimeService
+from services.prune import PruneService
 from services.saves import SaveService
 from services.steamgrid import SteamGridService
 from services.version_switch import VersionSwitchService
@@ -250,6 +251,9 @@ class TestWireServices:
             "renderer_gc": FakeRendererGc(),
             "game_process": FakeGameProcessControlAdapter(),
             "resolve_upload_conflict": resolve_upload_conflict,
+            "recovery_store": MagicMock(),
+            "prune_artifacts": MagicMock(),
+            "steam_recovery": MagicMock(),
             "settings": settings,
             "loop": asyncio.new_event_loop(),
             "logger": logger,
@@ -303,6 +307,9 @@ class TestWireServices:
                 renderer_gc=deps["renderer_gc"],
                 game_process=deps["game_process"],
                 resolve_upload_conflict=deps["resolve_upload_conflict"],
+                recovery_store=deps["recovery_store"],
+                prune_artifacts=deps["prune_artifacts"],
+                steam_recovery=deps["steam_recovery"],
             ),
             stores=StateBundle(
                 settings=deps["settings"],
@@ -397,6 +404,7 @@ class TestWireServices:
         assert isinstance(result["disc_service"], DiscService)
         assert "version_switch_service" in result
         assert isinstance(result["version_switch_service"], VersionSwitchService)
+        assert isinstance(result["prune_service"], PruneService)
         assert "connection_service" in result
         assert "startup_healing_service" in result
         assert "launch_gate_service" in result

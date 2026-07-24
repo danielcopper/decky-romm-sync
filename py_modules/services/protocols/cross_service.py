@@ -13,6 +13,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
+    from contextlib import AbstractAsyncContextManager
+
     from models.state import InstalledRomEntry, ShortcutRegistryEntry
     from models.sync import ClientSaveState
 
@@ -208,6 +210,14 @@ class ActiveDownloadRomIdsFn(Protocol):
     """
 
     def __call__(self) -> set[int]: ...
+
+
+class PruneSaveCoordinator(Protocol):
+    """Exact-path save inventory, locking, and quarantine consumed by prune."""
+
+    def lock_prune_roms(self, rom_ids: list[int]) -> AbstractAsyncContextManager[None]: ...
+    def inventory_prune_saves(self, purge_rom_ids: list[int]) -> dict[str, Any]: ...
+    def quarantine_prune_saves(self, files: list[dict[str, str]]) -> dict[str, Any]: ...
 
 
 class AchievementsReader(Protocol):

@@ -256,6 +256,21 @@ exception: the backup a quarantine just wrote is never pruned in that same call,
 the folder may briefly hold one extra copy (11) — honouring the cap by deleting the just-saved file would defeat the
 backup.
 
+#### Removed-game cleanup and save recovery
+
+Explicit cleanup of a retained RomM 404 projects the same exact per-ROM save paths used by sync; it never broad-scans a
+save directory. Before a row can be purged, the service canonicalizes those paths for the purge set and every remaining
+installed ROM. A current save with any owner outside the purge set is copied into an enabled recovery bundle but left in
+the emulator directory. An exclusively owned current save is copied and checksum-verified when recovery is enabled, then
+moved through `quarantine_local_file(..., preserve_history=True)`. This operation deliberately keeps all existing
+`.romm-backup` history instead of enforcing the normal newest-ten cap.
+
+Recovery also copies matching `.romm-backup` files while leaving the originals untouched. If an uninstalled ROM or an
+unsupported layout has no resolvable exact path, the manifest preserves known save-sync filenames/state and records a
+warning, but physical files are not guessed or removed. Save states are outside this workflow. Save locks are acquired
+in ascending ROM-id order, including remaining owners of shared paths, with no UoW open while lock acquisition waits.
+Short read UoWs close before filesystem work, and network/frontend waits run outside the locks.
+
 ### The `none` slot (legacy) — a migration source, no longer a target
 
 - Saves uploaded before v2 (or without the slot parameter) have `slot=null`.

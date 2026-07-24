@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from domain.platform_sync_state import PlatformSyncState
     from domain.rom import Rom
 
 
@@ -44,3 +45,16 @@ def count_rows_for_skip(rows: Sequence[Rom], fetch_id: str | None) -> int:
     if not fetch_id:
         return len(rows)
     return sum(1 for row in rows if row.last_fetch_id == fetch_id)
+
+
+def prune_candidate_ids(rows: Sequence[Rom], stamp: PlatformSyncState | None) -> set[int]:
+    """Return rows absent from a known non-empty completed platform fetch.
+
+    This is discovery only, never deletion authority. A missing/legacy stamp or
+    an empty completed fetch cannot establish a safe comparison set and yields
+    no candidates. With a usable generation, every row carrying a different
+    generation is a candidate, including rows whose ``last_fetch_id`` is NULL.
+    """
+    if stamp is None or not stamp.fetch_id or stamp.rom_count <= 0:
+        return set()
+    return {row.rom_id for row in rows if row.last_fetch_id != stamp.fetch_id}

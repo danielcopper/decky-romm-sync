@@ -18,7 +18,8 @@ export type RommDataChangedDetail =
   | { type: "bios"; platform_slug: string }
   | { type: "core_changed"; platform_slug: string }
   | { type: "cover_refreshed"; rom_id: number }
-  | { type: "version_switched"; app_id: number; rom_id: number };
+  | { type: "version_switched"; app_id: number; rom_id: number }
+  | { type: "rom_pruned"; app_ids: number[]; rom_ids: number[] };
 
 export interface RommRomUninstalledDetail {
   rom_id: number;

@@ -13,8 +13,9 @@ class FakePluginMetadataReader:
     called with so tests can assert wiring.
     """
 
-    def __init__(self, version: str = "0.0.0") -> None:
+    def __init__(self, version: str = "0.0.0", name: str = "decky-romm-sync") -> None:
         self.version = version
+        self.name = name
         self.last_plugin_dir: str | None = None
         self.read_count = 0
 
@@ -22,3 +23,7 @@ class FakePluginMetadataReader:
         self.last_plugin_dir = plugin_dir
         self.read_count += 1
         return self.version
+
+    def read_name(self, plugin_dir: str) -> str:
+        self.last_plugin_dir = plugin_dir
+        return self.name

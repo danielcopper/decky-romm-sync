@@ -98,6 +98,35 @@ While a switch is being applied, the version control briefly shows a spinner and
 settles and its version list refreshes — so a fast second tap can't act against the not-yet-updated list (for example,
 switching straight back before the list has caught up).
 
+### Cleaning up versions removed from RomM
+
+Normal library sync never deletes retained local rows, installed files, saves, or playtime just because a game
+disappears from RomM. To remove that state explicitly, open **Danger Zone → Clean Up Removed RomM Games**. The first
+scan is local and only finds rows absent from a completed platform fetch; the confirmation run checks every exact RomM
+id again. Only a confirmed 404 can be removed. Offline, timeout, authentication, server, malformed-response,
+active-download, and ambiguous multi-shortcut cases are skipped and reported without deleting data.
+
+The confirmation options apply to this run only:
+
+- **Repoint vanished shortcuts to the live Default** is on. It preserves the Steam shortcut and its appId, collections,
+  artwork, and playtime while switching to the group's natural live Default.
+- **Remove confirmed rows and installed content from groups with a live version** is on.
+- **Remove fully vanished games and their Steam shortcut** is off. Enable it only when you intend to remove a whole
+  game.
+- **Create recovery bundle** is on. Bundles are sealed under `~/decky-romm-sync-recovery/bundles/` before mutation.
+- **Include installed ROM content** is off for every installed candidate. Its exact recursive size is shown; selecting
+  more than the currently free recovery space blocks confirmation. Unselected installed content is still deleted if the
+  row is removed.
+
+Recovery always records the affected database state, local playtime and pending sessions, exact attributable current
+saves and backup history, and relevant plugin caches. Fully vanished shortcut recovery also records bounded Steam
+details, collections/playtime fields, grid art, Steam Input files, and the controller setting. It contains no settings,
+credentials, tokens, whole database, BIOS, or save states. Recovery is manual only: there is no restore UI, and a new
+Steam shortcut cannot inherit the recorded Steam-assigned appId or playtime.
+
+A synced vanished row also has **Remove local data...** directly below it in the version picker. That opens the same
+confirmation scoped to that one row; the vanished version itself remains non-switchable.
+
 ### Region and Languages
 
 In the panel's **Game Info** tab, the plugin shows the **Region** (e.g. `USA/Europe`) and **Languages** (e.g. `En, Fr`)

@@ -1813,8 +1813,8 @@ describe("DangerZone", () => {
       expect(getByText("Remove All RomM Shortcuts")).toBeDisabled();
       expect(getByText("Uninstall All Installed ROMs")).toBeDisabled();
       expect(getByText("Remove Orphaned Grid Images")).toBeDisabled();
-      // All three disabled buttons carry the hint description.
-      expect(getAllByText(HINT)).toHaveLength(3);
+      // All four destructive actions carry the hint description.
+      expect(getAllByText(HINT)).toHaveLength(4);
       // Clicking the disabled buttons must not arm the confirm flow.
       fireEvent.click(getByText("Remove All RomM Shortcuts"));
       fireEvent.click(getByText("Uninstall All Installed ROMs"));
