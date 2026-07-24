@@ -15,6 +15,7 @@ import time
 import zipfile
 
 import pytest
+from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 
 from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_layout import ContentDir, InSaveDir
@@ -1384,6 +1385,29 @@ class TestSyncEngineDelegates:
         assert result["devices"][0]["is_current_device"] is True
 
 
+class TestResolveCore:
+    """``resolve_core`` gates on the install record before consulting the
+    per-game active-core seam — an uninstalled ROM has no launch to stamp an
+    upload's emulator tag against, so the core lookup never runs for it."""
+
+    def test_uninstalled_rom_resolves_no_core(self, tmp_path):
+        # A core is configured for every ROM, so ``None`` can only come from the
+        # install gate.
+        active_core = FakeActiveCoreResolver(default=("mgba_libretro.so", "mGBA"))
+        svc, _ = make_service(tmp_path, active_core=active_core)
+
+        assert svc._sync_engine.resolve_core(42) is None
+        assert active_core.calls == []
+
+    def test_installed_rom_resolves_the_active_core(self, tmp_path):
+        active_core = FakeActiveCoreResolver(per_rom={42: ("mgba_libretro.so", "mGBA")})
+        svc, _ = make_service(tmp_path, active_core=active_core)
+        _install_rom(svc, tmp_path)
+
+        assert svc._sync_engine.resolve_core(42) == "mgba_libretro.so"
+        assert active_core.calls == [42]
+
+
 class TestSaveSyncContentDirGate:
     """All four public sync entry points hard-gate save sync when RetroArch
     writes saves to the content dir (savefiles_in_content_dir=true). The gate
@@ -2243,3 +2267,121 @@ class TestSyncPathsHealDeadDevice:
         list_calls = [c for c in fake.call_log if c[0] == "list_saves"]
         assert list_calls
         assert all(c[2]["device_id"] == "live-device" for c in list_calls)
+
+
+# The server calls only a *running* sync makes. Device registration and
+# heartbeat traffic is deliberately excluded — those fire on the way TO the
+# sync, while these four are the sync itself reaching the server.
+_SYNC_SERVER_CALLS = ("list_saves", "negotiate_sync", "upload_save", "download_save_content")
+
+
+def _sync_server_calls(fake) -> list[str]:
+    """Names of the sync's own server calls recorded on *fake*, in order."""
+    return [call[0] for call in fake.call_log if call[0] in _SYNC_SERVER_CALLS]
+
+
+class TestSyncPathsAbortWhenDeviceUnregisterable:
+    """#1560 (caller-level, failure half): when no live device registration can
+    be established, each of the four sync entry points returns the canonical
+    ``DEVICE_NOT_REGISTERED`` failure and runs no sync at all.
+
+    The guarantee under test is the *absence*: a sync must never reach the
+    server without a live device id, because every save it moved would be
+    attributed to a device the server does not have. Each test mirrors the setup
+    of its :class:`TestSyncPathsHealDeadDevice` twin — same install, same
+    local/server save — where a live id IS established and the sync does call
+    the server, so the contrast isolates the abort from a sync that had nothing
+    to do anyway.
+
+    The registration failure modelled here is a 200 whose body carries no device
+    id: it leaves the device unregistered without a transport error, so no
+    reachability guard upstream of the device gate can account for the abort.
+    """
+
+    @pytest.mark.asyncio
+    async def test_pre_launch_sync_aborts_and_downloads_nothing(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        fake.set_version("4.9.0")
+        fake.saves[100] = _server_save()
+        fake.arm_register_device_without_id()
+
+        result = await svc.pre_launch_sync(42)
+
+        assert result == {
+            "success": False,
+            "reason": DEVICE_NOT_REGISTERED_REASON,
+            "message": DEVICE_NOT_REGISTERED,
+        }
+        # Registration was attempted and yielded no id — the abort is the device
+        # gate's, not an upstream guard's.
+        assert any(c[0] == "register_device" for c in fake.call_log)
+        assert _get_device_id(svc) is None
+        # The server save the registered twin downloads was never even queried.
+        assert _sync_server_calls(fake) == []
+
+    @pytest.mark.asyncio
+    async def test_post_exit_sync_aborts_and_uploads_nothing(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        _create_save(tmp_path, content=b"local save bytes")
+        fake.set_version("4.9.0")
+        fake.arm_register_device_without_id()
+
+        result = await svc.post_exit_sync(42)
+
+        assert result == {
+            "success": False,
+            "reason": DEVICE_NOT_REGISTERED_REASON,
+            "message": DEVICE_NOT_REGISTERED,
+        }
+        assert any(c[0] == "register_device" for c in fake.call_log)
+        assert _get_device_id(svc) is None
+        # The local save the registered twin uploads stays put — nothing is
+        # pushed to the server unattributed.
+        assert _sync_server_calls(fake) == []
+
+    @pytest.mark.asyncio
+    async def test_sync_rom_saves_aborts_and_syncs_nothing(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path)
+        fake.set_version("4.9.0")
+        fake.saves[100] = _server_save()
+        fake.arm_register_device_without_id()
+
+        result = await svc.sync_rom_saves(42)
+
+        assert result == {
+            "success": False,
+            "reason": DEVICE_NOT_REGISTERED_REASON,
+            "message": DEVICE_NOT_REGISTERED,
+        }
+        assert any(c[0] == "register_device" for c in fake.call_log)
+        assert _get_device_id(svc) is None
+        assert _sync_server_calls(fake) == []
+
+    @pytest.mark.asyncio
+    async def test_sync_all_saves_aborts_before_the_bulk_negotiate(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        svc._config.settings["save_sync_enabled"] = True
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="game1.gba")
+        _seed_save_state(svc, 1, RomSaveSyncState(system="gba", slot_confirmed=True, active_slot="default"))
+        _create_save(tmp_path, system="gba", rom_name="game1", content=b"s1")
+        fake.set_version("4.9.0")
+        fake.arm_register_device_without_id()
+
+        result = await svc.sync_all_saves()
+
+        assert result == {
+            "success": False,
+            "reason": DEVICE_NOT_REGISTERED_REASON,
+            "message": DEVICE_NOT_REGISTERED,
+        }
+        assert any(c[0] == "register_device" for c in fake.call_log)
+        assert _get_device_id(svc) is None
+        # The sweep aborts ahead of the whole-device negotiate — no session is
+        # opened for a device the server never issued an id for.
+        assert _sync_server_calls(fake) == []

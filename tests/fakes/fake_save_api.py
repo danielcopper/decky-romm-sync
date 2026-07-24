@@ -60,6 +60,9 @@ class FakeSaveApi:
         # One-shot: arm the next slot POST to model add_save's content-dedup
         # early-return against this save_id (see ``arm_add_save_dedup``).
         self._dedup_next_upload_save_id: int | None = None
+        # One-shot: arm the next device registration to answer without an id
+        # (see ``arm_register_device_without_id``).
+        self._register_without_id: bool = False
         # Native play-session store (ADR-0018): rom_id -> stored session dicts.
         # ``ingest_play_sessions`` appends here and dedupes on
         # ``(device_id, rom_id, start_time)``.
@@ -132,6 +135,17 @@ class FakeSaveApi:
         post-upload confirm ack is the only writer of our sync row (#1458).
         """
         self._dedup_next_upload_save_id = save_id
+
+    def arm_register_device_without_id(self) -> None:
+        """One-shot: model a 200 registration whose body carries no device id.
+
+        RomM answers ``POST /devices`` with the DeviceSchema; a proxy or a
+        version mismatch can answer 200 with a body the client finds no ``id``
+        in. The next ``register_device`` returns such a body and records no
+        device, so registration yields nothing usable without any transport
+        error — the client is left unregistered.
+        """
+        self._register_without_id = True
 
     def seed_foreign_save(
         self,
@@ -435,6 +449,9 @@ class FakeSaveApi:
     ) -> dict[str, Any]:
         self.call_log.append(("register_device", (name, platform, client, client_version), {"hostname": hostname}))
         self._check_fail()
+        if self._register_without_id:
+            self._register_without_id = False
+            return {"name": name, "created_at": datetime.now(UTC).isoformat()}
         device_id = f"device-{self._next_device_id}"
         self._next_device_id += 1
         device = {"id": device_id, "name": name, "created_at": datetime.now(UTC).isoformat()}
