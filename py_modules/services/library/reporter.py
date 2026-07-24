@@ -159,17 +159,29 @@ class SyncReporter:
 
         When a group carries several bound rows (grandfathered duplicates) the
         smallest rom_id's binding wins, deterministically.
+
+        Platform display names are grouped **case-insensitively** (keyed by
+        ``display.casefold()``, first-seen original casing kept for display): Steam
+        collapses collection names by a case-insensitive identity, so two display
+        names differing only in case must land in one Steam collection or the
+        second create overwrites the first. Two distinct slugs colliding this way
+        is rare, but the union keeps it lossless and matches the collection-map
+        rule (:meth:`_resolve_collection_memberships`).
         """
         create_groups = self._settings.get("collection_create_platform_groups", False)
-        platform_app_ids: dict[str, list[int]] = {}
+        display_by_fold: dict[str, str] = {}
+        platform_app_ids_by_fold: dict[str, list[int]] = {}
         group_bound: dict[str, tuple[int, int]] = {}
         for rom in uow.roms.iter_all():
             if rom.shortcut_app_id is None:
                 continue
             if should_include_in_platform_collection(rom.rom_id, pending_platform_rom_ids, create_groups):
                 display = platform_names.get(rom.platform_slug, rom.platform_slug)
-                platform_app_ids.setdefault(display, []).append(rom.shortcut_app_id)
+                fold = display.casefold()
+                display_by_fold.setdefault(fold, display)
+                platform_app_ids_by_fold.setdefault(fold, []).append(rom.shortcut_app_id)
             self._note_group_binding(group_bound, rom)
+        platform_app_ids = {display_by_fold[fold]: app_ids for fold, app_ids in platform_app_ids_by_fold.items()}
         return platform_app_ids, {key: app_id for key, (_rid, app_id) in group_bound.items()}
 
     @staticmethod
@@ -207,20 +219,31 @@ class SyncReporter:
         collections of the SAME name AND label still union. Injecting the label
         here (not in the frontend) keeps the create-name and the reconcile
         ``activeNames`` derived from this one key.
+
+        Grouping is **case-insensitive** (keyed by ``key.casefold()``, first-seen
+        original casing kept for display): Steam collapses collection names by a
+        case-insensitive identity, so two keys differing only in case ("7 up" vs
+        "7 Up") must union or the second Steam create overwrites the first and its
+        games are lost (#1569). Under ``by_label`` this merges same-type case
+        variants (label matches) while different-type variants stay separate (the
+        label differs, so the folded keys differ).
         """
         naming_mode = self._settings.get("collection_naming_mode", "merge")
-        romm_collection_app_ids: dict[str, list[int]] = {}
-        seen_by_key: dict[str, set[int]] = {}
+        display_key_by_fold: dict[str, str] = {}
+        app_ids_by_fold: dict[str, list[int]] = {}
+        seen_by_fold: dict[str, set[int]] = {}
         for membership in pending_collection_memberships.values():
             key = self._collection_key(membership, naming_mode)
-            app_ids = romm_collection_app_ids.setdefault(key, [])
-            seen = seen_by_key.setdefault(key, set())
+            fold = key.casefold()
+            display_key_by_fold.setdefault(fold, key)
+            app_ids = app_ids_by_fold.setdefault(fold, [])
+            seen = seen_by_fold.setdefault(fold, set())
             for rid in membership.rom_ids:
                 app_id = self._member_app_id(uow, rid, group_bound_app_id)
                 if app_id is not None and app_id not in seen:
                     seen.add(app_id)
                     app_ids.append(app_id)
-        return {key: app_ids for key, app_ids in romm_collection_app_ids.items() if app_ids}
+        return {display_key_by_fold[fold]: app_ids for fold, app_ids in app_ids_by_fold.items() if app_ids}
 
     @staticmethod
     def _collection_key(membership: CollectionMembership, naming_mode: str) -> str:

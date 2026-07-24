@@ -720,6 +720,45 @@ describe("index.tsx — sync_complete stale-collection cleanup (#1040)", () => {
     plugin.onDismount();
   });
 
+  it("keeps a case-variant ACTIVE RomM collection (does not delete it) (#1569)", async () => {
+    const { snes, faves } = seedCollections();
+    const plugin = pluginFactory();
+
+    // The live collection is "[Faves]"; the active map keys it as "faves" (the
+    // reporter's folded-first-seen casing). Case-insensitive identity → it is
+    // ACTIVE and must survive. SNES has no active platform → still stale.
+    emitSyncComplete({
+      platform_app_ids: { "Nintendo 64": [1] },
+      romm_collection_app_ids: { faves: [1] },
+      total_games: 1,
+    });
+    await flush();
+
+    expect(faves.Delete).not.toHaveBeenCalled();
+    // Non-vacuous: the stale SNES platform IS still cleaned, so cleanup ran.
+    expect(clearPlatformCollection).toHaveBeenCalledWith("Super Nintendo");
+    expect(snes.Delete).not.toHaveBeenCalled(); // platform delete routes via clearPlatformCollection
+    plugin.onDismount();
+  });
+
+  it("keeps a case-variant ACTIVE platform collection (does not clear it) (#1569)", async () => {
+    const { faves } = seedCollections();
+    const plugin = pluginFactory();
+
+    // Live "RomM: Super Nintendo (steamdeck)"; active map keys it "super nintendo".
+    // Case-insensitive → ACTIVE, must not be cleared. [Faves] has no active RomM
+    // entry → stale and removed (non-vacuous: cleanup ran).
+    emitSyncComplete({
+      platform_app_ids: { "super nintendo": [1] },
+      total_games: 1,
+    });
+    await flush();
+
+    expect(clearPlatformCollection).not.toHaveBeenCalled();
+    expect(faves.Delete).toHaveBeenCalledTimes(1);
+    plugin.onDismount();
+  });
+
   it("skips the stale cleanup on a cancelled sync with a partial map (regression)", async () => {
     const { snes, faves } = seedCollections();
     const plugin = pluginFactory();

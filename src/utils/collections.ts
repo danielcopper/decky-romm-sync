@@ -61,7 +61,12 @@ export async function createOrUpdateCollections(
       const overviews = getOverviews(appIds);
 
       try {
-        const existing = collectionStore.userCollections.find((c) => c.displayName === collectionName);
+        // Case-insensitive match: Steam collapses collection names by a
+        // case-insensitive identity, so a case-variant collection ("RomM: [7 Up]
+        // (host)" vs "RomM: [7 up] (host)") must be UPDATED, not shadowed by a
+        // colliding new create that then overwrites it and loses its games (#1569).
+        const target = collectionName.toLowerCase();
+        const existing = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === target);
 
         if (existing) {
           logInfo(`Updating collection "${collectionName}" with ${appIds.length} apps`);
@@ -109,7 +114,12 @@ export async function createOrUpdateRomMCollections(
       const overviews = getOverviews(appIds);
 
       try {
-        const existing = collectionStore.userCollections.find((c) => c.displayName === collectionName);
+        // Case-insensitive match: Steam collapses collection names by a
+        // case-insensitive identity, so a case-variant collection ("RomM: [7 Up]
+        // (host)" vs "RomM: [7 up] (host)") must be UPDATED, not shadowed by a
+        // colliding new create that then overwrites it and loses its games (#1569).
+        const target = collectionName.toLowerCase();
+        const existing = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === target);
 
         if (existing) {
           logInfo(`Updating RomM collection "${collectionName}" with ${appIds.length} apps`);
@@ -145,15 +155,21 @@ export async function clearPlatformCollection(platformName: string): Promise<voi
     const scopedName = `RomM: ${platformName} (${hostname})`;
     const legacyName = `RomM: ${platformName}`;
 
+    // Case-insensitive match on the full name: Steam's collection identity is
+    // case-insensitive, so a case-variant of this platform's collection is the
+    // SAME Steam collection and must still be found for deletion (#1569).
+    const scopedTarget = scopedName.toLowerCase();
+    const legacyTarget = legacyName.toLowerCase();
+
     // Delete the machine-scoped collection
-    const scoped = collectionStore.userCollections.find((c) => c.displayName === scopedName);
+    const scoped = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === scopedTarget);
     if (scoped) {
       logInfo(`Deleting collection "${scopedName}" (id=${scoped.id})`);
       await scoped.Delete();
     }
 
     // Also clean up legacy collection (without hostname suffix) if it exists
-    const legacy = collectionStore.userCollections.find((c) => c.displayName === legacyName);
+    const legacy = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === legacyTarget);
     if (legacy) {
       logInfo(`Deleting legacy collection "${legacyName}" (id=${legacy.id})`);
       await legacy.Delete();
@@ -175,16 +191,21 @@ export async function clearAllRomMCollections(): Promise<void> {
     }
     const hostname = await getHostname();
     const suffix = ` (${hostname})`;
+    const lowerSuffix = suffix.toLowerCase();
 
     // Match collections belonging to this machine OR legacy ones without any hostname suffix.
     // Covers both platform collections ("RomM: PlatformName (hostname)") and
     // RomM collection-based collections ("RomM: [CollectionName] (hostname)").
     // Legacy collections match "RomM: ..." but do NOT have a parenthesized suffix.
     // This avoids deleting collections from other devices like "RomM: N64 (othermachine)".
+    // Prefix + host-suffix are compared case-insensitively (Steam's collection
+    // identity is case-insensitive, so a case-variant of one of our names is the
+    // same collection and must still be swept, #1569).
     const rommCollections = collectionStore.userCollections.filter((c) => {
-      if (!c.displayName.startsWith("RomM: ")) return false;
+      const lower = c.displayName.toLowerCase();
+      if (!lower.startsWith("romm: ")) return false;
       // This machine's scoped collections (both platform and RomM collection style)
-      if (c.displayName.endsWith(suffix)) return true;
+      if (lower.endsWith(lowerSuffix)) return true;
       // Legacy collections: start with "RomM: " but have no " (...)" suffix at all
       if (!/\s\([^)]+\)$/.test(c.displayName)) return true;
       return false;

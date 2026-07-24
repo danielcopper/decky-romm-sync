@@ -445,15 +445,18 @@ export default definePlugin(() => {
             const hostname = await getHostname();
             const suffix = ` (${hostname})`;
 
-            // Clean stale platform collections
-            const activePlatforms = new Set(Object.keys(data.platform_app_ids));
+            // Clean stale platform collections. Name comparison is
+            // case-insensitive: Steam's collection identity is case-insensitive,
+            // so a case-variant that IS active must not be treated as stale and
+            // deleted (which would orphan its games, #1569).
+            const activePlatforms = new Set(Object.keys(data.platform_app_ids).map((n) => n.toLowerCase()));
             const stalePlatform = collectionStore.userCollections.filter((c) => {
               if (!c.displayName.startsWith("RomM: ")) return false;
               const afterPrefix = c.displayName.slice(6);
               if (afterPrefix.startsWith("[")) return false; // Skip RomM collections
               if (!c.displayName.endsWith(suffix)) return false; // Only this machine
               const platformName = afterPrefix.replace(/\s\([^)]+\)$/, "");
-              return !activePlatforms.has(platformName);
+              return !activePlatforms.has(platformName.toLowerCase());
             });
             for (const c of stalePlatform) {
               const afterPrefix = c.displayName.slice(6);
@@ -462,14 +465,16 @@ export default definePlugin(() => {
               await clearPlatformCollection(platformName);
             }
 
-            // Clean stale RomM collection-based collections
-            const activeNames = new Set(Object.keys(data.romm_collection_app_ids ?? {}));
+            // Clean stale RomM collection-based collections. Name comparison is
+            // case-insensitive (Steam's case-insensitive collection identity), so a
+            // case-variant that IS active is kept, not deleted/orphaned (#1569).
+            const activeNames = new Set(Object.keys(data.romm_collection_app_ids ?? {}).map((n) => n.toLowerCase()));
             const rommCollectionPattern = /^RomM: \[([^\]]+)\]/;
             const staleRomm = collectionStore.userCollections.filter((c) => {
               if (!c.displayName.startsWith("RomM: [")) return false;
               if (!c.displayName.endsWith(suffix)) return false;
               const match = rommCollectionPattern.exec(c.displayName);
-              return match ? !activeNames.has(match[1]!) : false; // group 1 present whenever match is non-null
+              return match ? !activeNames.has(match[1]!.toLowerCase()) : false; // group 1 present whenever match is non-null
             });
             for (const c of staleRomm) {
               logInfo(`Removing stale RomM collection "${c.displayName}"`);

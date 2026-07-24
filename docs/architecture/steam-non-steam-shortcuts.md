@@ -285,6 +285,18 @@ normal sync: the reporter re-emits the complete set of enabled collections under
 the new-named collections and deletes any old-named collection absent from the new complete set. No skip-state
 invalidation is involved (same mechanism owner-scope reshaping uses).
 
+**Name identity is case-insensitive (#1569).** Steam collapses collection names by a **case-insensitive** identity — two
+collections whose display names differ only in case (`RomM: [7 up]` vs `RomM: [7 Up]`) are the same Steam collection, so
+creating the second silently overwrites the first and loses its games. To match, collection **and** platform name
+identity is treated case-insensitively **everywhere** the plugin compares names: the reporter groups both
+`romm_collection_app_ids` and `platform_app_ids` by a case-folded key (`str.casefold()`), keeping the first-seen
+original casing for display (which exact casing wins is irrelevant — Steam uppercases collection names anyway); the
+frontend create/find (`createOrUpdateCollections` / `createOrUpdateRomMCollections`), the cleanup matchers
+(`clearPlatformCollection` / `clearAllRomMCollections`), and the `onSyncComplete` stale-delete comparisons all match by
+`toLowerCase()`. This is always safe precisely because Steam's identity is case-insensitive: two collections differing
+only by case can never coexist, so there is never an ambiguous match to disambiguate. The DB is unaffected —
+`collection_sync_state` is keyed by `(collection_id, collection_kind)`, never by name — so there is no migration.
+
 ## App IDs and Artwork
 
 `SteamClient.Apps.AddShortcut()` returns the real `appId`, so the plugin does **not** compute shortcut app IDs itself —

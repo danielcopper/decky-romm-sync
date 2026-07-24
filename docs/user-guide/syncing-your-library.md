@@ -271,7 +271,8 @@ called the same thing, or (on a shared server) another account's public collecti
 
 - **Off** (default) — the same-named collections **merge into a single Steam collection** carrying the combined set of
   games. RomM allows collections to share a name, but Steam identifies a collection by its name, so the plugin unions
-  their members rather than dropping one.
+  their members rather than dropping one. Names that differ only in **capitalisation** ("7 up" vs "7 Up") count as the
+  same name and merge too — Steam itself treats collection names case-insensitively.
 - **On** — the plugin appends the collection **type** to the Steam name, so same-named collections of different types
   stay **separate**. A franchise and an IGDB collection that share a name become `RomM: [<name> (Franchise)]` and
   `RomM: [<name> (IGDB Collection)]` — matching the Franchise / IGDB Collection / Smart / Standard labels you see on the
