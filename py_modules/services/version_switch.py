@@ -4,9 +4,10 @@ Owns the two frontend callables behind the game-detail version picker.
 ``get_version_list`` reports every version of a sibling group — the local rows
 (rich version dimensions) merged with the server's live ``sibling_roms`` view
 (slim stubs for versions not yet synced) — with the active / downloaded / default
-markers the picker paints. ``switch_version`` moves the group's Steam-shortcut
-binding to a chosen sibling (the active version), persisting a server-only target
-first when needed.
+markers the picker paints. Retained local rows are checked for ephemeral liveness
+on each read; only an exact-ROM 404 marks one vanished. ``switch_version`` moves
+the group's Steam-shortcut binding to a chosen sibling (the active version),
+persisting a server-only target first when needed.
 
 A version switch is a pure binding move: the shortcut's name and appId stay
 sticky (ADR-0021 §2) and no save state migrates (ADR-0021 §4). Switching a
@@ -158,12 +159,13 @@ class VersionSwitchService:
     async def get_version_list(self, app_id: int) -> dict[str, Any]:
         """Report the version picker's state for the group bound to ``app_id``.
 
-        Returns ``{"multi_version": False}`` when the appId is unknown/unbound or
-        the group has a single version (the frontend renders no picker). Otherwise
-        ``{"multi_version": True, "versions": [...], "server_query_failed": bool}``
-        — one entry per version with ``rom_id`` / ``label`` / ``name`` / the
-        version dimensions and the ``synced`` / ``installed`` / ``active`` /
-        ``is_default`` / ``switchable`` markers. Local rows always appear; the
+        Returns ``multi_version: False`` when the appId is unknown/unbound or the
+        group has a single version (the frontend renders no picker). Every result
+        carries ``bound_vanished``; every known-group result also carries the
+        server-query verdict, including the single-row shape. A multi-version
+        result has one entry per version with ``rom_id`` / ``label`` / ``name`` /
+        the version dimensions and the ``synced`` / ``installed`` / ``active`` /
+        ``is_default`` / ``switchable`` / ``vanished`` markers. Local rows always appear; the
         server's ``sibling_roms`` add any not-yet-synced versions
         (``synced: False``). ``switchable`` is the same membership authority
         ``switch_version`` decides by (:func:`target_in_sibling_group`): a RomM
@@ -171,8 +173,12 @@ class VersionSwitchService:
         under a different group key (#1359) or never synced but carrying a
         *different* id at the bound group's canonical source (#1360) — is listed but
         ``switchable: False``, so the picker disables it instead of offering a
-        switch the backend would reject. When the server view can't be
-        fetched the local-only list is returned with the additive
+        switch the backend would reject. Liveness is recomputed per call: the
+        successful bound detail makes that id live, local ids in its direct
+        sibling view are live, and absent local ids are exact-id probed once on
+        the executor. Only :class:`RommNotFoundError` sets ``vanished``; every
+        other probe outcome fails open. When the server view can't be fetched the
+        local-only list is returned with the additive
         ``server_query_failed: True`` flag (partial-success carve-out) — the picker
         still works over what's synced. A definitive 404 on the bound id is NOT
         such a failure: the server answered, it just no longer has that ROM, so
@@ -182,7 +188,7 @@ class VersionSwitchService:
         app_id = int(app_id)
         local = await self._loop.run_in_executor(None, self._read_local_group, app_id)
         if local is None:
-            return {"multi_version": False}
+            return {"multi_version": False, "server_query_failed": False, "bound_vanished": False}
 
         try:
             bound_detail = await self._loop.run_in_executor(None, self._romm_api.get_rom, local.bound_rom_id)
@@ -192,19 +198,46 @@ class VersionSwitchService:
             # list must not raise the ``server_query_failed`` flag the picker
             # funnels into the global connection store (#1570).
             self._logger.warning(f"Version list: bound rom {local.bound_rom_id} is gone from the server")
+            vanished_ids = {local.bound_rom_id}
+            vanished_ids.update(await self._probe_vanished(local.member_ids - {local.bound_rom_id}))
             return self._build_version_list(
-                local, server_only_stubs=[], detail_by_id={}, stub_local_group_keys={}, server_query_failed=False
+                local,
+                server_only_stubs=[],
+                detail_by_id={},
+                stub_local_group_keys={},
+                vanished_ids=vanished_ids,
+                bound_vanished=True,
+                server_query_failed=False,
             )
         except Exception as e:  # transport failure degrades to a local-only list
             self._logger.warning(f"Version list: sibling fetch failed for rom {local.bound_rom_id}: {e}")
             return self._build_version_list(
-                local, server_only_stubs=[], detail_by_id={}, stub_local_group_keys={}, server_query_failed=True
+                local,
+                server_only_stubs=[],
+                detail_by_id={},
+                stub_local_group_keys={},
+                vanished_ids=set(),
+                bound_vanished=False,
+                server_query_failed=True,
             )
 
-        stubs = bound_detail.get("sibling_roms") or []
-        server_only_stubs = [
-            s for s in stubs if int(s.get("id", 0)) not in local.member_ids and int(s.get("id", 0)) > 0
-        ]
+        bound_payload: Any = bound_detail
+        raw_stubs = bound_payload.get("sibling_roms") if isinstance(bound_payload, dict) else None
+        stubs: list[dict[str, Any]] = []
+        if isinstance(raw_stubs, list):
+            for stub in raw_stubs:
+                if not isinstance(stub, dict):
+                    continue
+                try:
+                    rom_id = int(stub.get("id", 0))
+                except (TypeError, ValueError):
+                    continue
+                if rom_id > 0:
+                    stubs.append(stub)
+        direct_sibling_ids = {int(s["id"]) for s in stubs}
+        suspect_ids = local.member_ids - direct_sibling_ids - {local.bound_rom_id}
+        vanished_ids = await self._probe_vanished(suspect_ids)
+        server_only_stubs = [s for s in stubs if int(s["id"]) not in local.member_ids]
         detail_by_id = await self._fetch_stub_details(server_only_stubs)
         stub_local_group_keys = await self._loop.run_in_executor(
             None, self._read_stub_local_group_keys, [int(s["id"]) for s in server_only_stubs]
@@ -214,8 +247,30 @@ class VersionSwitchService:
             server_only_stubs=server_only_stubs,
             detail_by_id=detail_by_id,
             stub_local_group_keys=stub_local_group_keys,
+            vanished_ids=vanished_ids,
+            bound_vanished=False,
             server_query_failed=False,
         )
+
+    async def _probe_vanished(self, rom_ids: set[int]) -> set[int]:
+        """Return ids whose single-attempt exact-ROM probe produced a typed 404."""
+        ordered_ids = sorted(rom_ids)
+        if not ordered_ids:
+            return set()
+        verdicts = await asyncio.gather(
+            *(self._loop.run_in_executor(None, self._probe_rom_vanished, rom_id) for rom_id in ordered_ids)
+        )
+        return {rom_id for rom_id, vanished in zip(ordered_ids, verdicts, strict=True) if vanished}
+
+    def _probe_rom_vanished(self, rom_id: int) -> bool:
+        """Probe one exact id once; every outcome except a typed 404 fails open."""
+        try:
+            self._romm_api.get_rom_once(rom_id)
+        except RommNotFoundError:
+            return True
+        except Exception as e:
+            self._logger.warning(f"Version list: liveness probe failed open for rom {rom_id}: {e}")
+        return False
 
     async def _fetch_stub_details(self, stubs: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
         """Fetch each server-only sibling's full dims concurrently (best-effort).
@@ -306,6 +361,8 @@ class VersionSwitchService:
         server_only_stubs: list[dict[str, Any]],
         detail_by_id: dict[int, dict[str, Any]],
         stub_local_group_keys: dict[int, str | None],
+        vanished_ids: set[int],
+        bound_vanished: bool,
         server_query_failed: bool,
     ) -> dict[str, Any]:
         """Merge local rows + server-only stubs into the picker's version list.
@@ -315,8 +372,10 @@ class VersionSwitchService:
         one is available (else empty). Every entry carries ``switchable`` — the
         single authority (:func:`target_in_sibling_group`) that ``switch_version``
         also decides by, so a listed row the switch would reject is rendered
-        non-switchable rather than a dead-end. A single-version group renders no
-        picker.
+        non-switchable rather than a dead-end. ``vanished`` is independent of
+        membership: retained rows keep their switchable verdict but are excluded
+        from default ranking and disabled by the frontend. A single-version group
+        renders no picker while preserving its bound/server verdicts.
         """
         entries: list[dict[str, Any]] = [
             {
@@ -329,6 +388,7 @@ class VersionSwitchService:
                 "tags": m.tags,
                 "synced": True,
                 "installed": m.installed,
+                "vanished": m.rom_id in vanished_ids,
                 # Members share the bound key by construction (iter_by_group_key),
                 # so they are always switchable — routed through the shared
                 # predicate to keep a single authority.
@@ -346,14 +406,23 @@ class VersionSwitchService:
         ]
 
         if len(entries) <= 1:
-            return {"multi_version": False}
+            return {
+                "multi_version": False,
+                "server_query_failed": server_query_failed,
+                "bound_vanished": bound_vanished,
+            }
 
-        switchable_ids = {e["rom_id"] for e in entries if e["switchable"]}
-        default_rom_id = self._resolve_default(local, server_only_stubs, detail_by_id, switchable_ids)
+        default_candidate_ids = {e["rom_id"] for e in entries if e["switchable"] and not e["vanished"]}
+        default_rom_id = self._resolve_default(local, server_only_stubs, detail_by_id, default_candidate_ids)
         for e in entries:
             e["active"] = e["rom_id"] == local.bound_rom_id
             e["is_default"] = e["rom_id"] == default_rom_id
-        return {"multi_version": True, "versions": entries, "server_query_failed": server_query_failed}
+        return {
+            "multi_version": True,
+            "versions": entries,
+            "server_query_failed": server_query_failed,
+            "bound_vanished": bound_vanished,
+        }
 
     def _server_only_entry(
         self,
@@ -385,6 +454,9 @@ class VersionSwitchService:
             "tags": list(meta.get("tags") or []),
             "synced": False,
             "installed": False,
+            # Presence in the bound ROM's current direct sibling response is a
+            # positive server statement, so a server-only stub is live.
+            "vanished": False,
             "switchable": target_in_sibling_group(
                 bound_group_key=local.group_key,
                 target_group_key=stub_local_group_keys.get(rom_id) if target_is_local else None,
@@ -399,7 +471,7 @@ class VersionSwitchService:
         local: _LocalGroup,
         server_only_stubs: list[dict[str, Any]],
         detail_by_id: dict[int, dict[str, Any]],
-        switchable_ids: set[int],
+        candidate_ids: set[int],
     ) -> int | None:
         """The version the resolution chain would pick as the group's default.
 
@@ -407,12 +479,12 @@ class VersionSwitchService:
         filters, so the badge marks the *natural* default — RomM's
         ``is_main_sibling`` else the 1G1R + preferred-region ranking — independent
         of which version is currently bound (marking that would be circular with
-        the ``active`` flag). Ranks over the group's *switchable* versions only
-        (``switchable_ids``): a cross-group RomM sibling is not a real member here,
-        so it must not win the Default badge. A server-only stub with no fetched
-        detail ranks with only its label. Returns ``None`` if the chain somehow
-        can't decide (never, for a non-empty group) so the badge is simply absent
-        rather than the call failing.
+        the ``active`` flag). Ranks only over the caller's candidates: switchable,
+        live versions. A cross-group RomM sibling and a retained vanished row must
+        not win the Default badge. A server-only stub with no fetched detail ranks
+        with only its label. Returns ``None`` when no candidate remains or the
+        chain cannot decide, so the badge is simply absent rather than the call
+        failing.
         """
         ranking: list[dict[str, Any]] = [
             {
@@ -424,11 +496,11 @@ class VersionSwitchService:
                 "fs_name_no_ext": m.label,
             }
             for m in local.members
-            if m.rom_id in switchable_ids
+            if m.rom_id in candidate_ids
         ]
         for stub in server_only_stubs:
             rom_id = int(stub["id"])
-            if rom_id not in switchable_ids:
+            if rom_id not in candidate_ids:
                 continue
             detail = detail_by_id.get(rom_id)
             meta = extract_version_metadata(detail) if detail is not None else {}

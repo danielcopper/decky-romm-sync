@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from typing import Any
 
 import pytest
@@ -13,7 +14,7 @@ from fakes.system_time import FakeClock
 
 from domain.rom import Rom
 from domain.rom_install import RomInstall
-from lib.errors import RommNotFoundError
+from lib.errors import RommAuthError, RommNotFoundError, RommServerError, RommTimeoutError
 from services.version_switch import VersionSwitchService, VersionSwitchServiceConfig
 
 _GROUP = "igdb:100:57"
@@ -191,12 +192,20 @@ def _run(loop, coro):
 
 class TestGetVersionList:
     def test_unknown_app_id_not_multi(self, event_loop, service):
-        assert _run(event_loop, service.get_version_list(999)) == {"multi_version": False}
+        assert _run(event_loop, service.get_version_list(999)) == {
+            "multi_version": False,
+            "server_query_failed": False,
+            "bound_vanished": False,
+        }
 
     def test_solo_group_not_multi(self, event_loop, service, uow, romm):
         _seed_rom(uow, rom_id=1, app_id=_APP_ID)
         romm.roms[1] = {"id": 1, "sibling_roms": []}
-        assert _run(event_loop, service.get_version_list(_APP_ID)) == {"multi_version": False}
+        assert _run(event_loop, service.get_version_list(_APP_ID)) == {
+            "multi_version": False,
+            "server_query_failed": False,
+            "bound_vanished": False,
+        }
 
     def test_local_members_listed_with_markers(self, event_loop, service, uow, romm):
         _seed_rom(uow, rom_id=1, app_id=_APP_ID, regions=("USA",))
@@ -206,10 +215,12 @@ class TestGetVersionList:
         result = _run(event_loop, service.get_version_list(_APP_ID))
         assert result["multi_version"] is True
         assert result["server_query_failed"] is False
+        assert result["bound_vanished"] is False
         by_id = {v["rom_id"]: v for v in result["versions"]}
         assert by_id[1]["active"] is True
         assert by_id[2]["active"] is False
         assert by_id[1]["synced"] is True and by_id[2]["synced"] is True
+        assert by_id[1]["vanished"] is False and by_id[2]["vanished"] is False
         # Default badge ignores the current binding → the is_main_sibling wins.
         assert by_id[2]["is_default"] is True
         assert by_id[1]["is_default"] is False
@@ -225,6 +236,7 @@ class TestGetVersionList:
         result = _run(event_loop, service.get_version_list(_APP_ID))
         by_id = {v["rom_id"]: v for v in result["versions"]}
         assert by_id[5]["synced"] is False
+        assert by_id[5]["vanished"] is False
         assert by_id[5]["label"] == "Game (Japan)"
         assert by_id[5]["regions"] == ["Japan"]
 
@@ -351,9 +363,11 @@ class TestGetVersionList:
         result = _run(event_loop, service.get_version_list(_APP_ID))
         assert result["multi_version"] is True
         assert result["server_query_failed"] is True
+        assert result["bound_vanished"] is False
         assert {v["rom_id"] for v in result["versions"]} == {1, 2}
+        assert all(v["vanished"] is False for v in result["versions"])
 
-    def test_bound_rom_404_degrades_without_claiming_offline(self, event_loop, service, uow, romm):
+    def test_bound_rom_404_marks_only_bound_without_claiming_offline(self, event_loop, service, uow, romm):
         """A 404 on the bound id must NOT raise server_query_failed (#1570).
 
         The picker funnels that flag into the GLOBAL connection store, so a
@@ -367,7 +381,172 @@ class TestGetVersionList:
         result = _run(event_loop, service.get_version_list(_APP_ID))
         assert result["multi_version"] is True
         assert result["server_query_failed"] is False
-        assert {v["rom_id"] for v in result["versions"]} == {1, 2}
+        assert result["bound_vanished"] is True
+        by_id = {v["rom_id"]: v for v in result["versions"]}
+        assert by_id[1]["vanished"] is True
+        assert by_id[2]["vanished"] is False
+
+    def test_direct_local_sibling_is_live_and_only_absent_local_id_is_probed(self, event_loop, service, uow, romm):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        _seed_rom(uow, rom_id=3, app_id=None)
+        romm.roms[1] = {"id": 1, "sibling_roms": [{"id": 2}]}
+        romm.roms[3] = {"id": 3}
+        # If rom 2 were probed this would mark it vanished; direct presence is
+        # already a positive live statement and must suppress that probe.
+        romm.get_rom_once_side_effect_by_id[2] = RommNotFoundError("stale injected 404")
+
+        result = _run(event_loop, service.get_version_list(_APP_ID))
+
+        by_id = {v["rom_id"]: v for v in result["versions"]}
+        assert by_id[2]["vanished"] is False
+        assert by_id[3]["vanished"] is False
+        probe_ids = [args[0] for name, args, _kwargs in romm.call_log if name == "get_rom_once"]
+        assert probe_ids == [3]
+
+    def test_absent_transitive_member_exact_404_is_vanished(self, event_loop, service, uow, romm):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        romm.roms[1] = {"id": 1, "sibling_roms": []}
+        romm.get_rom_once_side_effect_by_id[2] = RommNotFoundError("HTTP 404: Not Found")
+
+        result = _run(event_loop, service.get_version_list(_APP_ID))
+
+        by_id = {v["rom_id"]: v for v in result["versions"]}
+        assert by_id[2]["vanished"] is True
+        # Liveness does not rewrite sibling membership semantics.
+        assert by_id[2]["switchable"] is True
+        assert [args[0] for name, args, _kwargs in romm.call_log if name == "get_rom_once"] == [2]
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            RommTimeoutError("timeout"),
+            RommAuthError("unauthorized"),
+            RommServerError("server error", status_code=503),
+            ConnectionError("transport"),
+        ],
+    )
+    def test_non_404_probe_failures_fail_open(self, event_loop, service, uow, romm, failure):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        romm.roms[1] = {"id": 1, "sibling_roms": []}
+        romm.get_rom_once_side_effect_by_id[2] = failure
+
+        result = _run(event_loop, service.get_version_list(_APP_ID))
+
+        by_id = {v["rom_id"]: v for v in result["versions"]}
+        assert by_id[2]["vanished"] is False
+        assert sum(1 for name, _args, _kwargs in romm.call_log if name == "get_rom_once") == 1
+
+    def test_falsy_exact_probe_response_is_live_fail_open(self, event_loop, service, uow, romm):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        romm.roms[1] = {"id": 1, "sibling_roms": []}
+        romm.roms[2] = {}
+
+        result = _run(event_loop, service.get_version_list(_APP_ID))
+
+        by_id = {v["rom_id"]: v for v in result["versions"]}
+        assert by_id[2]["vanished"] is False
+
+    def test_falsy_bound_200_fails_open_and_probes_other_local_ids(self, event_loop, service, uow, romm, monkeypatch):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        monkeypatch.setattr(romm, "get_rom", lambda _rom_id: None)
+        romm.roms[2] = {"id": 2}
+
+        result = _run(event_loop, service.get_version_list(_APP_ID))
+
+        assert result["server_query_failed"] is False
+        assert result["bound_vanished"] is False
+        by_id = {v["rom_id"]: v for v in result["versions"]}
+        assert by_id[1]["vanished"] is False
+        assert by_id[2]["vanished"] is False
+        assert [args[0] for name, args, _kwargs in romm.call_log if name == "get_rom_once"] == [2]
+
+    def test_bound_404_probes_every_other_local_member_and_allows_mixed_verdicts(self, event_loop, service, uow, romm):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        _seed_rom(uow, rom_id=3, app_id=None)
+        romm.get_rom_side_effect = RommNotFoundError("bound gone")
+        romm.get_rom_once_side_effect_by_id[2] = RommNotFoundError("sibling gone")
+        romm.roms[3] = {"id": 3}
+
+        result = _run(event_loop, service.get_version_list(_APP_ID))
+
+        assert result["bound_vanished"] is True
+        assert result["server_query_failed"] is False
+        by_id = {v["rom_id"]: v for v in result["versions"]}
+        assert {rom_id: row["vanished"] for rom_id, row in by_id.items()} == {1: True, 2: True, 3: False}
+        probe_ids = [args[0] for name, args, _kwargs in romm.call_log if name == "get_rom_once"]
+        assert sorted(probe_ids) == [2, 3]
+
+    def test_single_bound_404_preserves_bound_verdict_in_non_multi_shape(self, event_loop, service, uow, romm):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        romm.get_rom_side_effect = RommNotFoundError("bound gone")
+
+        assert _run(event_loop, service.get_version_list(_APP_ID)) == {
+            "multi_version": False,
+            "server_query_failed": False,
+            "bound_vanished": True,
+        }
+
+    def test_vanished_stale_main_sibling_never_receives_default_badge(self, event_loop, service, uow, romm):
+        _seed_rom(uow, rom_id=1, app_id=None, is_main_sibling=True)
+        _seed_rom(uow, rom_id=10, app_id=_APP_ID)
+        romm.roms[10] = {"id": 10, "sibling_roms": []}
+        romm.get_rom_once_side_effect_by_id[1] = RommNotFoundError("old id gone")
+
+        by_id = {v["rom_id"]: v for v in _run(event_loop, service.get_version_list(_APP_ID))["versions"]}
+
+        assert by_id[1]["vanished"] is True
+        assert by_id[1]["is_default"] is False
+        assert by_id[10]["is_default"] is True
+
+    def test_vanished_lower_id_never_wins_metadata_tie(self, event_loop, service, uow, romm):
+        _seed_rom(uow, rom_id=1, app_id=None, name="Same", fs_name="same.sfc")
+        _seed_rom(uow, rom_id=10, app_id=_APP_ID, name="Same", fs_name="same.sfc")
+        romm.roms[10] = {"id": 10, "sibling_roms": []}
+        romm.get_rom_once_side_effect_by_id[1] = RommNotFoundError("old id gone")
+
+        by_id = {v["rom_id"]: v for v in _run(event_loop, service.get_version_list(_APP_ID))["versions"]}
+
+        assert by_id[1]["is_default"] is False
+        assert by_id[10]["is_default"] is True
+
+    def test_liveness_is_recomputed_on_every_load(self, event_loop, service, uow, romm):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        romm.roms[1] = {"id": 1, "sibling_roms": []}
+        romm.get_rom_once_side_effect_by_id[2] = RommNotFoundError("temporarily gone")
+
+        first = _run(event_loop, service.get_version_list(_APP_ID))
+        assert {v["rom_id"]: v["vanished"] for v in first["versions"]}[2] is True
+
+        romm.get_rom_once_side_effect_by_id.clear()
+        romm.roms[2] = {"id": 2}
+        second = _run(event_loop, service.get_version_list(_APP_ID))
+        assert {v["rom_id"]: v["vanished"] for v in second["versions"]}[2] is False
+        assert sum(1 for name, _args, _kwargs in romm.call_log if name == "get_rom_once") == 2
+
+    def test_multiple_exact_probes_run_concurrently(self, event_loop, service, uow, romm, monkeypatch):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        _seed_rom(uow, rom_id=3, app_id=None)
+        romm.roms[1] = {"id": 1, "sibling_roms": []}
+        barrier = threading.Barrier(2)
+
+        def get_rom_once(rom_id: int) -> dict[str, Any]:
+            barrier.wait(timeout=2)
+            return {"id": rom_id}
+
+        monkeypatch.setattr(romm, "get_rom_once", get_rom_once)
+
+        result = _run(event_loop, service.get_version_list(_APP_ID))
+
+        assert result["multi_version"] is True
+        assert all(v["vanished"] is False for v in result["versions"])
 
     def test_preferred_region_heads_default(self, event_loop, service, uow, romm, settings):
         # No is_main_sibling → the default falls to the 1G1R region ranking, and

@@ -139,6 +139,8 @@ class FakeRommApi:
         self.get_firmware_side_effect: Exception | None = None
         self.download_firmware_side_effect: Exception | None = None
         self.get_rom_side_effect: Exception | None = None
+        self.get_rom_once_side_effect: Exception | None = None
+        self.get_rom_once_side_effect_by_id: dict[int, Exception] = {}
         self.list_roms_side_effect: Exception | None = None
         self.list_roms_updated_after_side_effect: Exception | None = None
         self.list_collections_side_effect: Exception | None = None
@@ -275,6 +277,18 @@ class FakeRommApi:
     def get_rom(self, rom_id: int) -> dict[str, Any]:
         self._log("get_rom", (rom_id,))
         self._check_fail(self.get_rom_side_effect)
+        rom = self.roms.get(rom_id)
+        if rom is None:
+            return {"id": rom_id}
+        return dict(rom)
+
+    def get_rom_once(self, rom_id: int) -> dict[str, Any]:
+        """Single-attempt exact-ROM fake with per-id failure injection."""
+        self._log("get_rom_once", (rom_id,))
+        self._check_fail(self.get_rom_once_side_effect)
+        per_id = self.get_rom_once_side_effect_by_id.get(rom_id)
+        if per_id is not None:
+            raise per_id
         rom = self.roms.get(rom_id)
         if rom is None:
             return {"id": rom_id}

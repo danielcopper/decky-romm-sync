@@ -102,7 +102,7 @@ export const SavesTab: FC<SavesTabProps> = ({
         const list = await getVersionList(appId);
         if (isCancelled()) return;
         const inactiveInstalled = list.multi_version
-          ? (list.versions ?? []).filter((v) => v.installed && !v.active)
+          ? (list.versions ?? []).filter((v) => v.installed && !v.active && !v.vanished)
           : [];
         // Probe every inactive-installed sibling (any of them can hold stranded
         // saves), and surface the first one that actually drifted.

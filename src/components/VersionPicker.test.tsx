@@ -15,6 +15,7 @@ import { toaster } from "@decky/api";
 import { VersionPicker } from "./VersionPicker";
 import * as backend from "../api/backend";
 import type { VersionList } from "../api/backend";
+import { getRommConnectionState, setRommConnectionState } from "../utils/connectionState";
 import { emitDeckyEvent } from "../test-utils/decky-api-mock";
 import type { DownloadCompleteEvent } from "../types";
 import {
@@ -69,6 +70,7 @@ function multiVersionList(overrides: Partial<VersionList> = {}): VersionList {
   return {
     multi_version: true,
     server_query_failed: false,
+    bound_vanished: false,
     versions: [
       {
         rom_id: 1,
@@ -83,6 +85,7 @@ function multiVersionList(overrides: Partial<VersionList> = {}): VersionList {
         active: true,
         is_default: false,
         switchable: true,
+        vanished: false,
       },
       {
         rom_id: 2,
@@ -97,6 +100,7 @@ function multiVersionList(overrides: Partial<VersionList> = {}): VersionList {
         active: false,
         is_default: true,
         switchable: true,
+        vanished: false,
       },
       {
         rom_id: 3,
@@ -111,6 +115,7 @@ function multiVersionList(overrides: Partial<VersionList> = {}): VersionList {
         active: false,
         is_default: false,
         switchable: true,
+        vanished: false,
       },
     ],
     ...overrides,
@@ -136,7 +141,7 @@ describe("VersionPicker — render gate", () => {
   });
 
   it("renders nothing for a single-version group (multi_version:false)", async () => {
-    vi.mocked(backend.getVersionList).mockResolvedValue({ multi_version: false });
+    vi.mocked(backend.getVersionList).mockResolvedValue({ multi_version: false, bound_vanished: false });
 
     const { container } = render(<VersionPicker appId={APP_ID} />);
 
@@ -212,6 +217,7 @@ describe("VersionPicker — non-switchable rows (#1359)", () => {
           active: true,
           is_default: true,
           switchable: true,
+          vanished: false,
         },
         {
           rom_id: 5,
@@ -226,6 +232,7 @@ describe("VersionPicker — non-switchable rows (#1359)", () => {
           active: false,
           is_default: false,
           switchable: false,
+          vanished: false,
         },
       ],
     });
@@ -258,6 +265,101 @@ describe("VersionPicker — non-switchable rows (#1359)", () => {
     // The guard makes the click a no-op — the dead-end rejection toast never fires.
     expect(backend.switchVersion).not.toHaveBeenCalled();
     expect(toaster.toast).not.toHaveBeenCalled();
+  });
+});
+
+describe("VersionPicker — vanished retained rows (#1570)", () => {
+  beforeEach(() => {
+    captured.menu = null;
+    vi.mocked(backend.getVersionList).mockReset();
+    vi.mocked(backend.switchVersion).mockReset();
+    vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
+    vi.mocked(toaster.toast).mockReset();
+  });
+
+  function listWithBoundVanished(): VersionList {
+    const versions = (multiVersionList().versions ?? []).slice(0, 2).map((v) => ({ ...v }));
+    versions[0] = { ...versions[0]!, active: true, installed: true, is_default: false, vanished: true };
+    versions[1] = { ...versions[1]!, active: false, is_default: true, vanished: false };
+    return multiVersionList({ bound_vanished: true, versions });
+  }
+
+  it("keeps a vanished active row visible, dimmed, disabled, labelled, and marked", async () => {
+    vi.mocked(backend.getVersionList).mockResolvedValue(listWithBoundVanished());
+
+    const { menu } = await renderAndOpen();
+
+    const items = within(menu.container).getAllByRole("menuitem");
+    const vanishedRow = items.find((i) => i.textContent.includes("Game (USA)"));
+    expect(vanishedRow).toBeTruthy();
+    expect(vanishedRow?.getAttribute("aria-disabled")).toBe("true");
+    expect(vanishedRow?.textContent).toContain("No longer available on RomM");
+    expect(vanishedRow?.textContent).toContain("Downloaded");
+    expect(vanishedRow?.textContent).toContain("✓");
+    expect((vanishedRow?.firstElementChild as HTMLElement | null)?.style.opacity).toBe("0.55");
+    // The live recovery target remains selectable.
+    const liveRow = items.find((i) => i.textContent.includes("Game (Japan)"));
+    expect(liveRow?.getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("clicking an inactive vanished row is inert in code", async () => {
+    const list = listWithBoundVanished();
+    list.bound_vanished = false;
+    list.versions = (list.versions ?? []).map((v) =>
+      v.rom_id === 1 ? { ...v, active: false } : { ...v, active: true },
+    );
+    vi.mocked(backend.getVersionList).mockResolvedValue(list);
+
+    const { menu } = await renderAndOpen();
+    await clickRow(menu.container, "Game (USA)");
+
+    expect(backend.switchVersion).not.toHaveBeenCalled();
+    expect(toaster.toast).not.toHaveBeenCalled();
+  });
+
+  it("allows recovery by selecting a live alternative to the vanished binding", async () => {
+    vi.mocked(backend.getVersionList).mockResolvedValue(listWithBoundVanished());
+    vi.mocked(backend.switchVersion).mockResolvedValue({
+      success: false,
+      reason: "bound_elsewhere",
+      message: "test stop",
+    });
+
+    const { menu } = await renderAndOpen();
+    await clickRow(menu.container, "Game (Japan)");
+
+    expect(backend.switchVersion).toHaveBeenCalledWith(APP_ID, 2, false);
+  });
+});
+
+describe("VersionPicker — liveness connection signals (#1570)", () => {
+  beforeEach(() => {
+    captured.menu = null;
+    vi.mocked(backend.getVersionList).mockReset();
+    vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
+    setRommConnectionState("checking");
+  });
+
+  afterEach(() => setRommConnectionState("checking"));
+
+  it("does not feed a bound-id 404 into the global connection store", async () => {
+    vi.mocked(backend.getVersionList).mockResolvedValue(
+      multiVersionList({ bound_vanished: true, server_query_failed: false }),
+    );
+
+    render(<VersionPicker appId={APP_ID} />);
+    await waitFor(() => expect(backend.getVersionList).toHaveBeenCalledWith(APP_ID));
+
+    expect(getRommConnectionState()).toBe("checking");
+  });
+
+  it("preserves the explicit server-unreachable feed", async () => {
+    vi.mocked(backend.getVersionList).mockResolvedValue(
+      multiVersionList({ bound_vanished: false, server_query_failed: true }),
+    );
+
+    render(<VersionPicker appId={APP_ID} />);
+    await waitFor(() => expect(getRommConnectionState()).toBe("offline"));
   });
 });
 

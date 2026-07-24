@@ -21,6 +21,7 @@ import os
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.rom_save_sync_state import RomSaveSyncState
+from lib.errors import RommNotFoundError
 
 from ._seed import seed_group_member
 
@@ -81,6 +82,7 @@ async def test_get_version_list_happy_shape(harness):
     result = await harness.plugin.get_version_list(_APP_ID)
     assert result["multi_version"] is True
     assert result["server_query_failed"] is False
+    assert result["bound_vanished"] is False
     by_id = {v["rom_id"]: v for v in result["versions"]}
     assert set(by_id) == {1, 2}
     assert by_id[1]["active"] is True
@@ -90,6 +92,22 @@ async def test_get_version_list_happy_shape(harness):
     assert by_id[1]["synced"] is True and by_id[2]["synced"] is True
     # Both local members share the bound key, so both are switchable.
     assert by_id[1]["switchable"] is True and by_id[2]["switchable"] is True
+    assert by_id[1]["vanished"] is False and by_id[2]["vanished"] is False
+    assert set(by_id[1]) == {
+        "rom_id",
+        "name",
+        "label",
+        "regions",
+        "languages",
+        "revision",
+        "tags",
+        "synced",
+        "installed",
+        "switchable",
+        "vanished",
+        "active",
+        "is_default",
+    }
 
 
 async def test_get_version_list_cross_group_sibling_not_switchable(harness):
@@ -213,13 +231,21 @@ async def test_get_version_list_solo_group_not_multi(harness):
     _seed_rom(harness, rom_id=1, app_id=_APP_ID)
     harness.romm.roms[1] = {"id": 1, "sibling_roms": []}
     result = await harness.plugin.get_version_list(_APP_ID)
-    assert result == {"multi_version": False}
+    assert result == {
+        "multi_version": False,
+        "server_query_failed": False,
+        "bound_vanished": False,
+    }
 
 
 async def test_get_version_list_unknown_app_not_multi(harness):
     """An unknown / unbound appId renders no picker."""
     result = await harness.plugin.get_version_list(999)
-    assert result == {"multi_version": False}
+    assert result == {
+        "multi_version": False,
+        "server_query_failed": False,
+        "bound_vanished": False,
+    }
 
 
 async def test_get_version_list_server_fail_partial_shape(harness):
@@ -231,7 +257,42 @@ async def test_get_version_list_server_fail_partial_shape(harness):
     result = await harness.plugin.get_version_list(_APP_ID)
     assert result["multi_version"] is True
     assert result["server_query_failed"] is True
+    assert result["bound_vanished"] is False
     assert {v["rom_id"] for v in result["versions"]} == {1, 2}
+    assert all(v["vanished"] is False for v in result["versions"])
+
+
+async def test_get_version_list_bound_404_mixed_local_liveness_shape(harness):
+    """A bound 404 is explicit list state; each other local id gets its own verdict."""
+    _seed_rom(harness, rom_id=1, app_id=_APP_ID)
+    _seed_rom(harness, rom_id=2, app_id=None)
+    _seed_rom(harness, rom_id=3, app_id=None)
+    harness.romm.get_rom_side_effect = RommNotFoundError("bound gone")
+    harness.romm.get_rom_once_side_effect_by_id[2] = RommNotFoundError("sibling gone")
+    harness.romm.roms[3] = {"id": 3}
+
+    result = await harness.plugin.get_version_list(_APP_ID)
+
+    assert set(result) == {"multi_version", "versions", "server_query_failed", "bound_vanished"}
+    assert result["multi_version"] is True
+    assert result["server_query_failed"] is False
+    assert result["bound_vanished"] is True
+    assert {v["rom_id"]: v["vanished"] for v in result["versions"]} == {1: True, 2: True, 3: False}
+    assert {v["rom_id"]: v["switchable"] for v in result["versions"]} == {1: True, 2: True, 3: True}
+
+
+async def test_get_version_list_single_bound_404_preserves_non_multi_verdict(harness):
+    """The no-picker shape must not silently discard a definitive bound-id 404."""
+    _seed_rom(harness, rom_id=1, app_id=_APP_ID)
+    harness.romm.get_rom_side_effect = RommNotFoundError("bound gone")
+
+    result = await harness.plugin.get_version_list(_APP_ID)
+
+    assert result == {
+        "multi_version": False,
+        "server_query_failed": False,
+        "bound_vanished": True,
+    }
 
 
 # ── switch_version ───────────────────────────────────────────────────────

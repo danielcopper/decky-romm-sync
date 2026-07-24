@@ -609,7 +609,7 @@ describe("RomMPlaySection", () => {
         tags: ["Demo"],
       });
       // Single-version group → the compact switcher is absent too.
-      vi.mocked(backend.getVersionList).mockResolvedValue({ multi_version: false });
+      vi.mocked(backend.getVersionList).mockResolvedValue({ multi_version: false, bound_vanished: false });
 
       const { container } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();
@@ -622,6 +622,7 @@ describe("RomMPlaySection", () => {
       vi.mocked(backend.getVersionList).mockResolvedValue({
         multi_version: true,
         server_query_failed: false,
+        bound_vanished: false,
         versions: [
           {
             rom_id: 1,
@@ -636,6 +637,7 @@ describe("RomMPlaySection", () => {
             active: true,
             is_default: true,
             switchable: true,
+            vanished: false,
           },
           {
             rom_id: 2,
@@ -650,6 +652,7 @@ describe("RomMPlaySection", () => {
             active: false,
             is_default: false,
             switchable: true,
+            vanished: false,
           },
         ],
       });
@@ -672,7 +675,7 @@ describe("RomMPlaySection", () => {
 
     it("renders no version trigger for a single-version group", async () => {
       vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({ found: true, rom_id: 12 });
-      vi.mocked(backend.getVersionList).mockResolvedValue({ multi_version: false });
+      vi.mocked(backend.getVersionList).mockResolvedValue({ multi_version: false, bound_vanished: false });
 
       const { container } = render(<RomMPlaySection appId={testAppId} />);
       await flushAsync();

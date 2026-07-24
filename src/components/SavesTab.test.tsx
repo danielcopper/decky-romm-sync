@@ -132,7 +132,7 @@ describe("SavesTab", () => {
     setRommConnectionState("connected");
     // Stranded-version banner probes (#1298) — default to "no other versions" so
     // the banner is absent for the unrelated slot/legacy tests.
-    vi.mocked(backend.getVersionList).mockResolvedValue({ multi_version: false });
+    vi.mocked(backend.getVersionList).mockResolvedValue({ multi_version: false, bound_vanished: false });
     vi.mocked(backend.checkLocalDrift).mockResolvedValue({ drifted: false, rom_id: 0 });
     installDomEventListenerSpy();
   });
@@ -653,6 +653,7 @@ describe("SavesTab", () => {
         active: false,
         is_default: false,
         switchable: true,
+        vanished: false,
         ...overrides,
       };
     }
@@ -660,6 +661,7 @@ describe("SavesTab", () => {
     // Active = Japan (installed); an inactive USA build is also on disk.
     const listWithStranded: import("../api/backend").VersionList = {
       multi_version: true,
+      bound_vanished: false,
       versions: [
         makeVersion({ rom_id: 2, label: "Game (Japan)", active: true, installed: true }),
         makeVersion({ rom_id: 5, label: "Game (USA)", active: false, installed: true }),
@@ -668,6 +670,7 @@ describe("SavesTab", () => {
     // Active = Japan (installed); the other version is NOT downloaded.
     const listNoStranded: import("../api/backend").VersionList = {
       multi_version: true,
+      bound_vanished: false,
       versions: [
         makeVersion({ rom_id: 2, label: "Game (Japan)", active: true, installed: true }),
         makeVersion({ rom_id: 5, label: "Game (USA)", active: false, installed: false }),
@@ -724,6 +727,7 @@ describe("SavesTab", () => {
       // drifted. The banner must probe past USA and name Europe.
       vi.mocked(backend.getVersionList).mockResolvedValue({
         multi_version: true,
+        bound_vanished: false,
         versions: [
           makeVersion({ rom_id: 2, label: "Game (Japan)", active: true, installed: true }),
           makeVersion({ rom_id: 5, label: "Game (USA)", active: false, installed: true }),
@@ -745,6 +749,30 @@ describe("SavesTab", () => {
       expect(backend.checkLocalDrift).toHaveBeenCalledWith(5);
       expect(backend.checkLocalDrift).toHaveBeenCalledWith(6);
       expect(container.textContent).not.toContain("Game (USA)");
+    });
+
+    it("skips vanished installs and continues to a later live drifted version", async () => {
+      vi.mocked(backend.getVersionList).mockResolvedValue({
+        multi_version: true,
+        bound_vanished: false,
+        versions: [
+          makeVersion({ rom_id: 2, label: "Game (Japan)", active: true, installed: true }),
+          makeVersion({ rom_id: 5, label: "Gone (USA)", installed: true, vanished: true }),
+          makeVersion({ rom_id: 6, label: "Game (Europe)", installed: true }),
+        ],
+      });
+      vi.mocked(backend.checkLocalDrift).mockResolvedValue({ drifted: true, rom_id: 6 });
+
+      const { container } = render(<SavesTab {...defaultProps({ romId: 2 })} />);
+
+      await waitFor(() =>
+        expect(container.textContent).toContain(
+          'Version "Game (Europe)" has saves that were never uploaded — switch back to sync them.',
+        ),
+      );
+      expect(backend.checkLocalDrift).not.toHaveBeenCalledWith(5);
+      expect(backend.checkLocalDrift).toHaveBeenCalledWith(6);
+      expect(container.textContent).not.toContain("Gone (USA)");
     });
 
     it("logs a warning and hides the banner when the version-list probe rejects", async () => {

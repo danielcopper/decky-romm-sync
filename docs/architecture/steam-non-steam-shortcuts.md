@@ -125,6 +125,32 @@ Two guards keep a re-import from wiping a freshly-bound shortcut (`#1036`):
   the run just re-bound onto the new `rom_id` is never emitted for removal. The `get_by_app_id` reverse lookup orders
   `rom_id DESC LIMIT 1` so it resolves the live (newest) binding for any pre-migration edge state.
 
+### Retained-row availability in the version picker
+
+ADR-0007 keeps a `roms` row after RomM stops returning that id because the row can anchor local-only saves, playtime,
+and an installed ROM. Retention does not imply that RomM still offers the row as a playable version. The Game Page's
+lazy `get_version_list` load therefore recomputes availability every time; there is no liveness column, migration,
+cache, or persisted verdict.
+
+The existing detail request for the bound id supplies its own answer and RomM's current direct `sibling_roms` view. The
+bound id and every local id positively present in that view are live. A local group member absent from the direct view
+is only a suspect because RomM sibling membership can be transitive, so each suspect is checked by an exact-id
+`get_rom_once` request. These checks fan out concurrently on the worker executor and use the short timeout with no
+retry, keeping them off the event loop and out of the initial Game Page render.
+
+Only a typed `RommNotFoundError` from an exact id marks that entry `vanished`. A successful response is live; timeout,
+transport, authentication, server errors, and malformed or empty data all fail open and leave it available. If the bound
+detail itself 404s, `bound_vanished` is true, `server_query_failed` stays false, and every other local member is checked
+individually. That entity-specific 404 is not fed into the global connection store; a genuine explicit
+server-unreachable result still is. Cover and save endpoints are not liveness authorities.
+
+Vanished rows stay visible with their active and downloaded markers, but are disabled and excluded before the existing
+default-resolution kernel runs. `vanished` does not change `switchable` or
+`domain.sibling_group.target_in_sibling_group`: availability and sibling membership remain separate verdicts. This lets
+a shortcut still bound to a vanished id show the retained context while the user selects a live alternative. The Saves
+tab likewise skips positively vanished inactive installs before checking local drift, then continues through later live
+candidates.
+
 ## Sync-start reconcile of Steam-UI-deleted shortcuts
 
 A user can delete a RomM shortcut through **Steam's own UI** (remove from library), which the plugin never observes. The

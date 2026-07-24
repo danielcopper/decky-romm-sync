@@ -145,6 +145,10 @@ class RommRomReader(Protocol):
         """
         ...
 
+    def get_rom_once(self, rom_id: int) -> dict[str, Any]:
+        """Fetch a single ROM by ID once with the short probe timeout."""
+        ...
+
     def list_roms(self, platform_id: int, limit: int = LIST_PAGE_SIZE, offset: int = 0) -> dict[str, Any]:
         """List ROMs for a platform with pagination.
 

@@ -78,6 +78,18 @@ class TestGetRom:
         assert result["id"] == 42
 
 
+class TestGetRomOnce:
+    def test_uses_single_attempt_short_timeout_request(self):
+        api, client = _make_api()
+        client.request_once.return_value = {"id": 42, "name": "Zelda"}
+
+        result = api.get_rom_once(42)
+
+        client.request_once.assert_called_once_with("/api/roms/42", timeout=3)
+        client.request.assert_not_called()
+        assert result == {"id": 42, "name": "Zelda"}
+
+
 class TestListRoms:
     def test_includes_platform_id_and_pagination(self):
         api, client = _make_api()

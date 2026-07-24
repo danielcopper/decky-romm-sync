@@ -54,6 +54,16 @@ a not-yet-synced version whose match conflicts, are both shown (so you know they
 either would move the shortcut onto a different game. To make one selectable, fix its metadata match in RomM so it
 agrees with this game's, then re-sync.
 
+A retained local version that RomM has positively confirmed it no longer has is also shown dimmed and disabled, with the
+separate label _"No longer available on RomM"_. Its **active** and **Downloaded** markers remain visible so it is clear
+what the shortcut and local files still refer to, but it never receives the **Default** badge. If the shortcut is still
+active on that unavailable id, choose any live alternative in the same list to recover the game.
+
+This availability check is fresh each time the version list loads and is not saved in the plugin database. Only a 404
+for that exact ROM id establishes that it is gone. Timeouts, sign-in/permission errors, server errors, and malformed
+responses fail open: the plugin does not disable a version merely because it could not get a trustworthy answer. A
+ROM-specific 404 also does not make the rest of the plugin report that RomM is offline.
+
 Selecting a different version **rebinds** the game to it: the Download button now fetches that version, the panel's
 title and Region/Languages rows update to reflect it, and its cover refreshes to the new version. The Steam shortcut
 keeps its name, its place in your collections, and its playtime — all tied to the shortcut, which never changes. A
@@ -71,7 +81,8 @@ switch. What happens depends on whether the version you're leaving is downloaded
   drops the sync option and offers only **Switch anyway** and **Cancel**, explaining why.
 
 When you leave a downloaded version with unsynced saves behind, the **Saves** tab shows a reminder banner ("switch back
-to sync them") so those saves aren't forgotten.
+to sync them") so those saves aren't forgotten. It does not recommend switching back to a version positively confirmed
+as no longer available on RomM; it skips that retained row and continues checking any later live versions.
 
 While a download of the game is running, switching is blocked with a short message — cancel the running download first.
 

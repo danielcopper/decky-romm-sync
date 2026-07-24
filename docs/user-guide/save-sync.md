@@ -40,6 +40,11 @@ plugin warns you before you leave such a version and shows a reminder banner on 
 forgotten (see [Managing Games → Versions](managing-games.md#versions)). Nothing is lost — the saves just don't sync
 while their version is inactive.
 
+The reminder never tells you to switch back to a retained version that the current version-list check positively
+confirmed is [no longer available on RomM](managing-games.md#the-switch-version-control). Such a row may still keep its
+local files and saves, but it cannot be selected; the Saves tab skips it and continues looking for drift on later live
+inactive versions.
+
 ## Important: Use Your Own RomM Account
 
 Save files in RomM are tied to the authenticated user account. If multiple people share the same RomM account, their

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import base64
 
+from lib.errors import RommNotFoundError
+
 
 async def test_fetch_cover_base64_downloads_and_returns_bytes(harness):
     """A cache miss fetches the ROM's cover from RomM and returns its bytes."""
@@ -52,6 +54,16 @@ async def test_fetch_cover_base64_server_unreachable_returns_null(harness):
     harness.romm.get_rom_side_effect = ConnectionError("down")
 
     result = await harness.plugin.fetch_cover_base64(7)
+    assert result == {"base64": None}
+    assert "success" not in result and "reason" not in result
+
+
+async def test_fetch_cover_base64_rom_404_returns_null_data_shape(harness):
+    """Artwork remains a data query, not a ROM-liveness authority."""
+    harness.romm.get_rom_side_effect = RommNotFoundError("HTTP 404: Not Found")
+
+    result = await harness.plugin.fetch_cover_base64(7)
+
     assert result == {"base64": None}
     assert "success" not in result and "reason" not in result
 

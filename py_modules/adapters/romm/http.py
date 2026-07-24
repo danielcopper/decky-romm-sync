@@ -348,10 +348,9 @@ class RommHttpAdapter:
         """GET a JSON resource in a SINGLE attempt with a SHORT *timeout*.
 
         Deliberately bypasses :meth:`with_retry` and the 30s urlopen timeout used
-        by :meth:`request`. The launch-gate reachability probe needs a fast
-        offline verdict (~3s, one shot) instead of waiting through 3 retry
-        attempts and up to ~90s of accumulated remote timeouts. The real sync
-        paths keep the retrying :meth:`request`.
+        by :meth:`request`. Point probes need a fast verdict (~3s, one shot)
+        instead of waiting through 3 retry attempts and up to ~90s of accumulated
+        remote timeouts. The real sync paths keep the retrying :meth:`request`.
         """
         return self._build_get(path, timeout=timeout)()
 

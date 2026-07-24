@@ -101,9 +101,8 @@ class RommApiAdapter:
 
     # ── Server / Auth ─────────────────────────────────────────────────
 
-    # Fast-fail reachability probe: a single ~3s attempt, no retry. Keeps the
-    # launch gate's "offline" verdict snappy instead of waiting through the
-    # retrying heartbeat (3 attempts + up to ~90s of accumulated timeouts).
+    # Fast-fail point probes: a single ~3s attempt, no retry. Keeps verdicts
+    # snappy instead of waiting through 3 attempts and accumulated timeouts.
     _PROBE_TIMEOUT_SECONDS = 3
 
     def heartbeat(self) -> dict[str, Any]:
@@ -129,6 +128,10 @@ class RommApiAdapter:
 
     def get_rom(self, rom_id: int) -> dict[str, Any]:
         return self._client.request(f"/api/roms/{rom_id}")
+
+    def get_rom_once(self, rom_id: int) -> dict[str, Any]:
+        """Single-attempt, short-timeout exact-ROM read for liveness probes."""
+        return self._client.request_once(f"/api/roms/{rom_id}", timeout=self._PROBE_TIMEOUT_SECONDS)
 
     def list_roms(self, platform_id: int, limit: int = LIST_PAGE_SIZE, offset: int = 0) -> dict[str, Any]:
         return self._client.request(

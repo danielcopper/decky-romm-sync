@@ -124,6 +124,22 @@ class TestSeededReads:
         api = FakeRommApi()
         assert api.get_rom(42) == {"id": 42}
 
+    def test_get_rom_once_has_a_distinct_observable_call(self) -> None:
+        api = FakeRommApi()
+        api.roms[42] = {"id": 42, "name": "Zelda"}
+
+        assert api.get_rom_once(42) == {"id": 42, "name": "Zelda"}
+        assert api.call_log == [("get_rom_once", (42,), {})]
+
+    def test_get_rom_once_supports_per_id_mixed_failures(self) -> None:
+        api = FakeRommApi()
+        api.get_rom_once_side_effect_by_id[41] = OSError("missing")
+        api.roms[42] = {"id": 42}
+
+        with pytest.raises(OSError, match="missing"):
+            api.get_rom_once(41)
+        assert api.get_rom_once(42) == {"id": 42}
+
     def test_list_play_sessions_returns_seeded_history(self) -> None:
         api = FakeRommApi()
         api.play_sessions = {1: [{"id": 100, "rom_id": 1, "duration_ms": 900}]}

@@ -1737,7 +1737,7 @@ class TestRefreshCover:
         romm_api.download_cover.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_server_unreachable_when_get_rom_returns_none(
+    async def test_not_found_when_get_rom_returns_none(
         self,
         artwork_service,
         uow,
@@ -1751,7 +1751,7 @@ class TestRefreshCover:
 
         result = await artwork_service.refresh_cover(42)
         assert result["success"] is False
-        assert result["reason"] == "server_unreachable"
+        assert result["reason"] == "not_found"
 
     @pytest.mark.asyncio
     async def test_no_cover_url_in_rom_payload(

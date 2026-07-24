@@ -420,7 +420,9 @@ export const selectDisc = callable<[number, string | null], SelectDiscResult>("s
  * this game's — a locally-synced ROM under a different group key (#1359) or a
  * not-yet-synced sibling carrying a different id at the group's canonical source
  * (#1360) — the picker lists it but disables the row, because switch_version would
- * reject it; every other row is switchable (#1368).
+ * reject it; every other row is switchable (#1368). `vanished` is a separate,
+ * ephemeral liveness verdict: RomM answered 404 for that exact local id during
+ * this list load. The retained row stays visible but cannot be selected.
  */
 export interface VersionInfo {
   rom_id: number;
@@ -435,6 +437,7 @@ export interface VersionInfo {
   active: boolean;
   is_default: boolean;
   switchable: boolean;
+  vanished: boolean;
 }
 
 /**
@@ -443,15 +446,17 @@ export interface VersionInfo {
  * the picker renders nothing. When `true`, `versions` lists every version
  * (local + server-only) with markers; `server_query_failed` is `true` when the
  * live `sibling_roms` view could not be fetched, so the list is local-only
- * (partial-success carve-out). A 404 on the bound id is NOT such a failure —
- * the server answered — so the local-only list comes back with
- * `server_query_failed: false` and the picker leaves the connection state
- * alone (#1570).
+ * (partial-success carve-out). `bound_vanished` is required even on a
+ * single-version/unknown result so a bound-id 404 is never lost when the picker
+ * itself does not render. A 404 on the bound id is NOT a query failure — the
+ * server answered — and the picker does not feed that entity verdict into the
+ * global connection state (#1570).
  */
 export interface VersionList {
   multi_version: boolean;
   versions?: VersionInfo[];
   server_query_failed?: boolean;
+  bound_vanished: boolean;
 }
 
 /**

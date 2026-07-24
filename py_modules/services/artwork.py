@@ -835,7 +835,7 @@ class ArtworkService:
         if not rom:
             return {
                 "success": False,
-                "reason": ErrorCode.SERVER_UNREACHABLE.value,
+                "reason": ErrorCode.NOT_FOUND.value,
                 "message": "Could not fetch ROM from server",
             }
 
