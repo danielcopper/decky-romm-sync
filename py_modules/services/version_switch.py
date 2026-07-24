@@ -592,24 +592,7 @@ class VersionSwitchService:
             return self._switch_success(ctx.bound_rom_id, ctx.bound_installed, launch_options, app_id)
 
         if ctx.target_is_local:
-            # Fast reject an invalid local target before the drift/reachability
-            # probes; the write UoW re-checks these same facts (TOCTOU).
-            if not target_in_sibling_group(
-                bound_group_key=ctx.group_key,
-                target_group_key=ctx.target_group_key,
-                target_is_local=True,
-                target_is_server_sibling=False,
-            ):
-                return self._not_in_group()
-            if ctx.target_app_id is not None and ctx.target_app_id != app_id:
-                return self._bound_elsewhere(target_rom_id)
-            block = await self._save_stranding_block(ctx, allow_stranded)
-            if block is not None:
-                return block
-            target_vanished = await self._loop.run_in_executor(None, self._probe_switch_target_vanished, target_rom_id)
-            if target_vanished:
-                return self._version_vanished()
-            return await self._switch_local(app_id, target_rom_id, ctx.group_key)
+            return await self._switch_to_local_target(app_id, target_rom_id, allow_stranded, ctx)
 
         # Target not persisted locally — the save-stranding gate on the bound
         # version applies first (allow_stranded skips it), then fetch the detail,
@@ -649,6 +632,29 @@ class VersionSwitchService:
         return await self._loop.run_in_executor(
             None, self._persist_and_bind, target_dict, app_id, ctx.platform_slug, ctx.group_key
         )
+
+    async def _switch_to_local_target(
+        self, app_id: int, target_rom_id: int, allow_stranded: bool, ctx: _SwitchContext
+    ) -> dict[str, Any]:
+        """Validate a local target, guard its liveness, then enter the binding write."""
+        # Fast reject invalid local state before drift/reachability probes; the
+        # write UoW re-checks these same membership/collision facts (TOCTOU).
+        if not target_in_sibling_group(
+            bound_group_key=ctx.group_key,
+            target_group_key=ctx.target_group_key,
+            target_is_local=True,
+            target_is_server_sibling=False,
+        ):
+            return self._not_in_group()
+        if ctx.target_app_id is not None and ctx.target_app_id != app_id:
+            return self._bound_elsewhere(target_rom_id)
+        block = await self._save_stranding_block(ctx, allow_stranded)
+        if block is not None:
+            return block
+        target_vanished = await self._loop.run_in_executor(None, self._probe_switch_target_vanished, target_rom_id)
+        if target_vanished:
+            return self._version_vanished()
+        return await self._switch_local(app_id, target_rom_id, ctx.group_key)
 
     def _probe_switch_target_vanished(self, rom_id: int) -> bool:
         """Probe one local switch target once; only a typed 404 refuses it."""
