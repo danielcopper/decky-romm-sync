@@ -356,6 +356,20 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     return <FaCompactDisc size={20} color={NEUTRAL_GREY} style={{ flexShrink: 0 }} />;
   };
 
+  const rowAvailabilityHint = (v: VersionInfo): ReactNode => {
+    let text: string;
+    if (v.vanished) {
+      text = "No longer available on RomM";
+    } else if (!v.switchable) {
+      text = "conflicting metadata match in RomM";
+    } else {
+      return null;
+    }
+    return (
+      <span style={{ marginLeft: "8px", fontSize: "11px", fontStyle: "italic", color: NEUTRAL_GREY }}>{text}</span>
+    );
+  };
+
   const openMenu = (e: MouseEvent): void => {
     // Blocked while a switch is in flight — the list is stale until the reload
     // lands, so opening it now would let a click act against the wrong versions.
@@ -380,15 +394,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
               {v.is_default ? <Badge text="Default" tone="accent" /> : null}
               {v.installed ? <Badge text="Downloaded" tone="good" /> : null}
               {v.switchable && !v.synced ? <Badge text="not synced" tone="muted" /> : null}
-              {v.vanished ? (
-                <span style={{ marginLeft: "8px", fontSize: "11px", fontStyle: "italic", color: NEUTRAL_GREY }}>
-                  No longer available on RomM
-                </span>
-              ) : v.switchable ? null : (
-                <span style={{ marginLeft: "8px", fontSize: "11px", fontStyle: "italic", color: NEUTRAL_GREY }}>
-                  conflicting metadata match in RomM
-                </span>
-              )}
+              {rowAvailabilityHint(v)}
               {v.active ? <span style={{ marginLeft: "6px", fontWeight: 700 }}>✓</span> : null}
             </span>
           </MenuItem>

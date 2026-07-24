@@ -221,19 +221,7 @@ class VersionSwitchService:
                 server_query_failed=True,
             )
 
-        bound_payload: Any = bound_detail
-        raw_stubs = bound_payload.get("sibling_roms") if isinstance(bound_payload, dict) else None
-        stubs: list[dict[str, Any]] = []
-        if isinstance(raw_stubs, list):
-            for stub in raw_stubs:
-                if not isinstance(stub, dict):
-                    continue
-                try:
-                    rom_id = int(stub.get("id", 0))
-                except (TypeError, ValueError):
-                    continue
-                if rom_id > 0:
-                    stubs.append(stub)
+        stubs = self._valid_sibling_stubs(bound_detail)
         direct_sibling_ids = {int(s["id"]) for s in stubs}
         suspect_ids = local.member_ids - direct_sibling_ids - {local.bound_rom_id}
         vanished_ids = await self._probe_vanished(suspect_ids)
@@ -251,6 +239,24 @@ class VersionSwitchService:
             bound_vanished=False,
             server_query_failed=False,
         )
+
+    @staticmethod
+    def _valid_sibling_stubs(bound_detail: Any) -> list[dict[str, Any]]:
+        """Return dict-shaped sibling stubs carrying a positive integer id."""
+        raw_stubs = bound_detail.get("sibling_roms") if isinstance(bound_detail, dict) else None
+        stubs: list[dict[str, Any]] = []
+        if not isinstance(raw_stubs, list):
+            return stubs
+        for stub in raw_stubs:
+            if not isinstance(stub, dict):
+                continue
+            try:
+                rom_id = int(stub.get("id", 0))
+            except (TypeError, ValueError):
+                continue
+            if rom_id > 0:
+                stubs.append(stub)
+        return stubs
 
     async def _probe_vanished(self, rom_ids: set[int]) -> set[int]:
         """Return ids whose single-attempt exact-ROM probe produced a typed 404."""
