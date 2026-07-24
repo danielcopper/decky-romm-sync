@@ -7,6 +7,7 @@ Owns the two frontend callables behind the game-detail version picker.
 markers the picker paints. Retained local rows are checked for ephemeral liveness
 on each read; only an exact-ROM 404 marks one vanished. ``switch_version`` moves
 the group's Steam-shortcut binding to a chosen sibling (the active version),
+rechecking a local target's exact-id liveness immediately before the write and
 persisting a server-only target first when needed.
 
 A version switch is a pure binding move: the shortcut's name and appId stay
@@ -21,7 +22,8 @@ uninstalled version returns the empty placeholder (ADR-0009). The group is
 resolved by ``sibling_group_key`` over the migration-010 index; the server view
 comes from ``get_rom(bound).sibling_roms``. Server I/O and the relaunch resolver
 run outside the Unit of Work (ADR-0006) — read/close, then fetch/resolve, then a
-short write UoW.
+short write UoW. The liveness request narrows the race but cannot transact with
+RomM and SQLite as one unit.
 """
 
 from __future__ import annotations
@@ -540,8 +542,10 @@ class VersionSwitchService:
         first — the refusal carries ``server_reachable`` (from the reachability
         probe), ``unsynced_rom_id``, and ``unsynced_version_name`` so the frontend
         modal can offer "Sync now & switch" / "Switch anyway" / "Cancel".
-        ``allow_stranded`` is the "Switch anyway" override — honoured even offline
-        (the switch is purely local). Saves are never deleted or transferred.
+        ``allow_stranded`` is the "Switch anyway" override for the save-stranding
+        gate only. The local target still receives a short, single-attempt exact-id
+        liveness probe; only a typed 404 refuses it, while uncertainty fails open so
+        an offline switch stays fast. Saves are never deleted or transferred.
 
         On success returns
         ``{success: True, rom_id, target_installed, launch_options, app_id}``:
@@ -553,10 +557,10 @@ class VersionSwitchService:
         target outside the group → ``not_in_group``; target bound to a *different*
         shortcut (grandfathered duplicate, ADR-0021 §5) → ``bound_elsewhere``; a
         server-only target whose detail the aggregate rejects → ``invalid_target``;
-        a failed server-only target fetch → the :func:`classify_error` slug for the
-        exception, so a server that answered 404 for a dropped id reads
-        ``not_found`` and only a genuine transport failure reads
-        ``server_unreachable`` (#1570).
+        a definitive 404 for either target shape → ``version_vanished``; any other
+        failed mandatory server-only target fetch → the :func:`classify_error` slug
+        for the exception. The optional local probe instead fails open on every
+        non-404 outcome (#1570).
         """
         app_id = int(app_id)
         target_rom_id = int(target_rom_id)
@@ -602,6 +606,9 @@ class VersionSwitchService:
             block = await self._save_stranding_block(ctx, allow_stranded)
             if block is not None:
                 return block
+            target_vanished = await self._loop.run_in_executor(None, self._probe_switch_target_vanished, target_rom_id)
+            if target_vanished:
+                return self._version_vanished()
             return await self._switch_local(app_id, target_rom_id, ctx.group_key)
 
         # Target not persisted locally — the save-stranding gate on the bound
@@ -612,7 +619,10 @@ class VersionSwitchService:
             return block
         try:
             target_dict = await self._loop.run_in_executor(None, self._romm_api.get_rom, target_rom_id)
-        except Exception as e:  # classified: a 404 on the target is not an offline server
+        except RommNotFoundError:
+            self._logger.warning(f"Version switch: target rom {target_rom_id} is gone from the server")
+            return self._version_vanished()
+        except Exception as e:  # mandatory fetch: preserve every non-404 classified failure
             self._logger.warning(f"Version switch: target fetch failed for rom {target_rom_id}: {e}")
             reason, message = classify_error(e)
             return {
@@ -639,6 +649,16 @@ class VersionSwitchService:
         return await self._loop.run_in_executor(
             None, self._persist_and_bind, target_dict, app_id, ctx.platform_slug, ctx.group_key
         )
+
+    def _probe_switch_target_vanished(self, rom_id: int) -> bool:
+        """Probe one local switch target once; only a typed 404 refuses it."""
+        try:
+            self._romm_api.get_rom_once(rom_id)
+        except RommNotFoundError:
+            return True
+        except Exception as e:
+            self._logger.warning(f"Version switch: target liveness probe failed open for rom {rom_id}: {e}")
+        return False
 
     async def _save_stranding_block(self, ctx: _SwitchContext, allow_stranded: bool) -> dict[str, Any] | None:
         """Soft-block the switch when the bound version has un-uploaded save drift.
@@ -873,4 +893,12 @@ class VersionSwitchService:
             "success": False,
             "reason": "bound_elsewhere",
             "message": f"Version {target_rom_id} is already used by another shortcut.",
+        }
+
+    @staticmethod
+    def _version_vanished() -> dict[str, Any]:
+        return {
+            "success": False,
+            "reason": "version_vanished",
+            "message": "This version is no longer available on RomM.",
         }

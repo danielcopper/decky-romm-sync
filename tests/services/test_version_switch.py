@@ -14,7 +14,14 @@ from fakes.system_time import FakeClock
 
 from domain.rom import Rom
 from domain.rom_install import RomInstall
-from lib.errors import RommAuthError, RommNotFoundError, RommServerError, RommTimeoutError
+from lib.errors import (
+    RommAuthError,
+    RommConnectionError,
+    RommNotFoundError,
+    RommServerError,
+    RommSSLError,
+    RommTimeoutError,
+)
 from services.version_switch import VersionSwitchService, VersionSwitchServiceConfig
 
 _GROUP = "igdb:100:57"
@@ -84,6 +91,7 @@ def _seed_rom(
     revision: str = "",
     tags: tuple[str, ...] = (),
     is_main_sibling: bool = False,
+    applied_launch_options: str | None = None,
 ) -> None:
     uow.roms.save(
         Rom(
@@ -99,6 +107,7 @@ def _seed_rom(
             revision=revision,
             tags=tags,
             is_main_sibling=is_main_sibling,
+            applied_launch_options=applied_launch_options,
         )
     )
 
@@ -185,6 +194,10 @@ def service(
 
 def _run(loop, coro):
     return loop.run_until_complete(coro)
+
+
+def _romm_call_ids(romm: FakeRommApi, name: str) -> list[int]:
+    return [int(args[0]) for called_name, args, _kwargs in romm.call_log if called_name == name]
 
 
 # ── get_version_list ─────────────────────────────────────────────────────
@@ -576,14 +589,15 @@ def _assert_success(result: dict[str, Any], *, rom_id: int, installed: bool, lau
 
 
 class TestSwitchVersion:
-    def test_unknown_app_id_not_found(self, event_loop, service):
+    def test_unknown_app_id_not_found(self, event_loop, service, romm):
         result = _run(event_loop, service.switch_version(999, 2, False))
         assert result["success"] is False
         assert result["reason"] == "not_found"
         assert "error" not in result
+        assert _romm_call_ids(romm, "get_rom_once") == []
 
     def test_f1_active_download_of_group_member_blocks_switch(
-        self, event_loop, service, uow, active_downloads, drift_probe
+        self, event_loop, service, uow, romm, active_downloads, drift_probe
     ):
         # A sibling (rom 2) is mid-download → the switch is refused with the
         # cancel-first shape, before the drift probe or any write.
@@ -598,6 +612,7 @@ class TestSwitchVersion:
         assert isinstance(result["message"], str)
         assert "error" not in result and "error_code" not in result
         assert drift_probe.calls == []  # refused upstream of the drift probe
+        assert _romm_call_ids(romm, "get_rom_once") == []
         with uow as u:
             assert u.roms.get(1).shortcut_app_id == _APP_ID  # nothing switched
             assert u.roms.get(2).shortcut_app_id is None
@@ -622,9 +637,9 @@ class TestSwitchVersion:
         result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
         _assert_success(result, rom_id=2, installed=False, launch_options="")
 
-    def test_t2_switch_away_synced_saves_is_free(self, event_loop, service, uow, drift_probe, reachability_probe):
-        # Bound version installed, saves synced (no drift) → free switch, no prompt,
-        # and the local rebind makes NO server contact (reachability untouched).
+    def test_t2_switch_away_synced_saves_is_free(self, event_loop, service, uow, romm, drift_probe, reachability_probe):
+        # Bound version installed, saves synced (no drift) → free switch after one
+        # exact-id target probe; the retrying detail path stays untouched.
         _seed_rom(uow, rom_id=1, app_id=_APP_ID)
         _seed_rom(uow, rom_id=2, app_id=None)
         _seed_install(uow, 1)
@@ -633,9 +648,99 @@ class TestSwitchVersion:
         _assert_success(result, rom_id=2, installed=False, launch_options="")
         assert drift_probe.calls == [1]  # drift probed on the bound (installed) version
         assert reachability_probe.calls == 0  # no block → no reachability probe
+        assert _romm_call_ids(romm, "get_rom_once") == [2]
+        assert _romm_call_ids(romm, "get_rom") == []
         with uow as u:
             assert u.roms.get(2).shortcut_app_id == _APP_ID
             assert u.roms.get(1).shortcut_app_id is None
+
+    def test_local_target_404_refuses_without_mutation(self, event_loop, service, uow, romm, relaunch_resolver):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID, applied_launch_options="old-command")
+        _seed_rom(uow, rom_id=2, app_id=None, applied_launch_options="target-command")
+        _seed_install(uow, 2)
+        romm.get_rom_once_side_effect_by_id[2] = RommNotFoundError("HTTP 404: Not Found")
+
+        result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
+
+        assert result == {
+            "success": False,
+            "reason": "version_vanished",
+            "message": "This version is no longer available on RomM.",
+        }
+        assert _romm_call_ids(romm, "get_rom_once") == [2]
+        assert _romm_call_ids(romm, "get_rom") == []
+        assert relaunch_resolver.calls == []
+        with uow as current:
+            assert current.roms.get(1).shortcut_app_id == _APP_ID
+            assert current.roms.get(1).applied_launch_options == "old-command"
+            assert current.roms.get(2).shortcut_app_id is None
+            assert current.roms.get(2).applied_launch_options == "target-command"
+            assert current.rom_installs.get(2) is not None
+
+    def test_allow_stranded_does_not_bypass_local_target_404(self, event_loop, service, uow, romm, drift_probe):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        _seed_install(uow, 1)
+        drift_probe.drifted = True
+        romm.get_rom_once_side_effect_by_id[2] = RommNotFoundError("gone")
+
+        result = _run(event_loop, service.switch_version(_APP_ID, 2, True))
+
+        assert result == {
+            "success": False,
+            "reason": "version_vanished",
+            "message": "This version is no longer available on RomM.",
+        }
+        assert drift_probe.calls == []
+        assert _romm_call_ids(romm, "get_rom_once") == [2]
+        with uow as current:
+            assert current.roms.get(1).shortcut_app_id == _APP_ID
+            assert current.roms.get(2).shortcut_app_id is None
+
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            RommTimeoutError("timeout"),
+            RommConnectionError("transport"),
+            RommSSLError("ssl"),
+            RommAuthError("unauthorized"),
+            RommServerError("server error", status_code=503),
+            ConnectionError("raw transport"),
+        ],
+        ids=["timeout", "transport", "ssl", "auth", "server-5xx", "raw-transport"],
+    )
+    def test_local_target_probe_uncertainty_logs_and_fails_open(self, event_loop, service, uow, romm, caplog, failure):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        romm.get_rom_once_side_effect_by_id[2] = failure
+
+        with caplog.at_level(logging.WARNING, logger="test_version_switch"):
+            result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
+
+        _assert_success(result, rom_id=2, installed=False, launch_options="")
+        assert _romm_call_ids(romm, "get_rom_once") == [2]
+        assert _romm_call_ids(romm, "get_rom") == []
+        assert "target liveness probe failed open for rom 2" in caplog.text
+
+    @pytest.mark.parametrize("response", [None, {}, [], "malformed"], ids=["none", "empty", "list", "string"])
+    def test_local_target_falsy_or_malformed_probe_payload_fails_open(
+        self, event_loop, service, uow, romm, monkeypatch, response
+    ):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        calls: list[int] = []
+
+        def get_rom_once(rom_id: int) -> Any:
+            calls.append(rom_id)
+            return response
+
+        monkeypatch.setattr(romm, "get_rom_once", get_rom_once)
+
+        result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
+
+        _assert_success(result, rom_id=2, installed=False, launch_options="")
+        assert calls == [2]
+        assert _romm_call_ids(romm, "get_rom") == []
 
     def test_records_applied_launch_options_for_installed_target(self, event_loop, service, uow, relaunch_resolver):
         # Switching onto an installed version re-bakes its launch command (the
@@ -675,7 +780,9 @@ class TestSwitchVersion:
         _assert_success(result, rom_id=2, installed=True, launch_options="flatpak run net.retrodeck.retrodeck /x")
         assert relaunch_resolver.calls == [2]
 
-    def test_t4_unsynced_saves_online_soft_blocks(self, event_loop, service, uow, drift_probe, reachability_probe):
+    def test_t4_unsynced_saves_online_soft_blocks(
+        self, event_loop, service, uow, romm, drift_probe, reachability_probe
+    ):
         _seed_rom(uow, rom_id=1, app_id=_APP_ID, fs_name="Game (USA).sfc")
         _seed_rom(uow, rom_id=2, app_id=None)
         _seed_install(uow, 1)
@@ -690,6 +797,7 @@ class TestSwitchVersion:
         assert result["unsynced_version_name"] == "Game (USA)"
         assert isinstance(result["message"], str)
         assert "error" not in result and "error_code" not in result
+        assert _romm_call_ids(romm, "get_rom_once") == []
         # Nothing switched — the binding is untouched.
         with uow as u:
             assert u.roms.get(1).shortcut_app_id == _APP_ID
@@ -711,45 +819,84 @@ class TestSwitchVersion:
         assert result["reason"] == "unsynced_saves"
         assert result["server_reachable"] is False
 
-    def test_t5_allow_stranded_switches_even_offline(self, event_loop, service, uow, drift_probe, reachability_probe):
-        # "Switch anyway" overrides the gate and is honoured offline — the drift and
-        # reachability probes are not even consulted (allow_stranded short-circuits).
+    def test_t5_allow_stranded_switches_even_offline(
+        self, event_loop, service, uow, romm, drift_probe, reachability_probe
+    ):
+        # "Switch anyway" overrides only the save gate. The target liveness probe
+        # still runs, but transport uncertainty fails open without a retry ladder.
         _seed_rom(uow, rom_id=1, app_id=_APP_ID)
         _seed_rom(uow, rom_id=2, app_id=None)
         _seed_install(uow, 1)
         drift_probe.drifted = True
         reachability_probe.online = False
+        romm.get_rom_once_side_effect_by_id[2] = ConnectionError("offline")
 
         result = _run(event_loop, service.switch_version(_APP_ID, 2, True))
         _assert_success(result, rom_id=2, installed=False, launch_options="")
         assert drift_probe.calls == []
         assert reachability_probe.calls == 0
+        assert _romm_call_ids(romm, "get_rom_once") == [2]
+        assert _romm_call_ids(romm, "get_rom") == []
         with uow as u:
             assert u.roms.get(2).shortcut_app_id == _APP_ID
 
-    def test_t6_synced_offline_switch_makes_no_server_contact(
+    def test_post_save_sync_retry_probes_target(self, event_loop, service, uow, romm, drift_probe):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        _seed_install(uow, 1)
+        drift_probe.drifted = True
+
+        blocked = _run(event_loop, service.switch_version(_APP_ID, 2, False))
+        assert blocked["reason"] == "unsynced_saves"
+        assert _romm_call_ids(romm, "get_rom_once") == []
+
+        drift_probe.drifted = False
+        retried = _run(event_loop, service.switch_version(_APP_ID, 2, False))
+
+        _assert_success(retried, rom_id=2, installed=False, launch_options="")
+        assert _romm_call_ids(romm, "get_rom_once") == [2]
+
+    def test_switch_anyway_retry_probes_target(self, event_loop, service, uow, romm, drift_probe):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        _seed_install(uow, 1)
+        drift_probe.drifted = True
+
+        blocked = _run(event_loop, service.switch_version(_APP_ID, 2, False))
+        assert blocked["reason"] == "unsynced_saves"
+        assert _romm_call_ids(romm, "get_rom_once") == []
+
+        forced = _run(event_loop, service.switch_version(_APP_ID, 2, True))
+
+        _assert_success(forced, rom_id=2, installed=False, launch_options="")
+        assert _romm_call_ids(romm, "get_rom_once") == [2]
+
+    def test_t6_synced_offline_switch_probe_fails_open(
         self, event_loop, service, uow, romm, drift_probe, reachability_probe
     ):
-        # Bound installed, saves synced, offline — switch is purely local, allowed,
-        # and touches neither the reachability probe nor the RomM transport.
+        # Bound installed, saves synced, offline — the optional exact-id probe is
+        # attempted once and fails open; no reachability or retrying detail call.
         _seed_rom(uow, rom_id=1, app_id=_APP_ID)
         _seed_rom(uow, rom_id=2, app_id=None)
         _seed_install(uow, 1)
         drift_probe.drifted = False
         reachability_probe.online = False
+        romm.get_rom_once_side_effect_by_id[2] = ConnectionError("offline")
 
         result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
         _assert_success(result, rom_id=2, installed=False, launch_options="")
         assert reachability_probe.calls == 0
-        assert romm.call_log == []
+        assert _romm_call_ids(romm, "get_rom_once") == [2]
+        assert _romm_call_ids(romm, "get_rom") == []
 
-    def test_switch_to_active_is_noop_success(self, event_loop, service, uow, relaunch_resolver):
+    def test_switch_to_active_is_noop_success(self, event_loop, service, uow, romm, relaunch_resolver):
         _seed_rom(uow, rom_id=1, app_id=_APP_ID, name="Game 1")
         _seed_install(uow, 1)
         relaunch_resolver.items[1] = {"app_id": _APP_ID, "launch_options": "cmd"}
 
         result = _run(event_loop, service.switch_version(_APP_ID, 1, False))
         _assert_success(result, rom_id=1, installed=True, launch_options="cmd")
+        assert _romm_call_ids(romm, "get_rom_once") == []
 
     def test_resolver_miss_on_installed_target_still_succeeds(self, event_loop, service, uow, relaunch_resolver):
         # Installed target but the resolver unexpectedly returns nothing: the rebind
@@ -764,21 +911,23 @@ class TestSwitchVersion:
         with uow as u:
             assert u.roms.get(2).shortcut_app_id == _APP_ID  # binding committed
 
-    def test_bound_elsewhere_rejects(self, event_loop, service, uow):
+    def test_bound_elsewhere_rejects(self, event_loop, service, uow, romm):
         _seed_rom(uow, rom_id=1, app_id=_APP_ID)
         _seed_rom(uow, rom_id=2, app_id=777)  # already a different shortcut
 
         result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
         assert result["success"] is False
         assert result["reason"] == "bound_elsewhere"
+        assert _romm_call_ids(romm, "get_rom_once") == []
 
-    def test_local_target_other_group_not_in_group(self, event_loop, service, uow):
+    def test_local_target_other_group_not_in_group(self, event_loop, service, uow, romm):
         _seed_rom(uow, rom_id=1, app_id=_APP_ID, group_key=_GROUP)
         _seed_rom(uow, rom_id=2, app_id=None, group_key="igdb:999:57")
 
         result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
         assert result["success"] is False
         assert result["reason"] == "not_in_group"
+        assert _romm_call_ids(romm, "get_rom_once") == []
 
     def test_not_in_group_message_is_human_readable(self, event_loop, service, uow):
         # The refusal message is human-readable and carries no raw internals (the
@@ -824,6 +973,32 @@ class TestSwitchVersion:
         assert result["success"] is False
         assert result["reason"] == "bound_elsewhere"
 
+    def test_probe_callback_race_still_hits_write_uow_bound_elsewhere_guard(
+        self, event_loop, service, uow, uow_factory, romm, monkeypatch
+    ):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        original_get_rom_once = romm.get_rom_once
+
+        def rebind_during_probe(rom_id: int) -> dict[str, Any]:
+            response = original_get_rom_once(rom_id)
+            with uow_factory() as current:
+                target = current.roms.get(rom_id)
+                target.bind_shortcut(999)
+                current.roms.save(target)
+            return response
+
+        monkeypatch.setattr(romm, "get_rom_once", rebind_during_probe)
+
+        result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
+
+        assert result["success"] is False
+        assert result["reason"] == "bound_elsewhere"
+        assert _romm_call_ids(romm, "get_rom_once") == [2]
+        with uow as current:
+            assert current.roms.get(1).shortcut_app_id == _APP_ID
+            assert current.roms.get(2).shortcut_app_id == 999
+
     def test_server_only_target_persisted_and_bound(self, event_loop, service, uow, romm):
         _seed_rom(uow, rom_id=1, app_id=_APP_ID, group_key=_GROUP)
         romm.roms[3] = {
@@ -840,6 +1015,8 @@ class TestSwitchVersion:
 
         result = _run(event_loop, service.switch_version(_APP_ID, 3, False))
         _assert_success(result, rom_id=3, installed=False, launch_options="")
+        assert _romm_call_ids(romm, "get_rom_once") == []
+        assert _romm_call_ids(romm, "get_rom") == [3]
         with uow as u:
             persisted = u.roms.get(3)
             assert persisted is not None
@@ -850,6 +1027,51 @@ class TestSwitchVersion:
             # server-only sibling shows its download size without a resync.
             assert persisted.fs_size_bytes == 4_194_304
             assert u.roms.get(1).shortcut_app_id is None
+
+    def test_vanished_bound_id_can_recover_to_live_local_target(self, event_loop, service, uow, romm):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        _seed_rom(uow, rom_id=2, app_id=None)
+        romm.get_rom_side_effect = RommNotFoundError("bound gone")
+
+        before = _run(event_loop, service.get_version_list(_APP_ID))
+        assert before["bound_vanished"] is True
+
+        romm.call_log.clear()
+        romm.get_rom_side_effect = None
+        result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
+
+        _assert_success(result, rom_id=2, installed=False, launch_options="")
+        assert _romm_call_ids(romm, "get_rom_once") == [2]
+        with uow as current:
+            assert current.roms.get(1).shortcut_app_id is None
+            assert current.roms.get(2).shortcut_app_id == _APP_ID
+
+    def test_vanished_bound_id_can_recover_to_live_server_only_target(self, event_loop, service, uow, romm):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        romm.get_rom_side_effect = RommNotFoundError("bound gone")
+        before = _run(event_loop, service.get_version_list(_APP_ID))
+        assert before["bound_vanished"] is True
+
+        romm.call_log.clear()
+        romm.get_rom_side_effect = None
+        romm.roms[3] = {
+            "id": 3,
+            "name": "Game 3",
+            "fs_name": "game_3.sfc",
+            "platform_id": 57,
+            "platform_slug": "snes",
+            "igdb_id": 100,
+            "sibling_roms": [{"id": 1}],
+        }
+
+        result = _run(event_loop, service.switch_version(_APP_ID, 3, False))
+
+        _assert_success(result, rom_id=3, installed=False, launch_options="")
+        assert _romm_call_ids(romm, "get_rom_once") == []
+        assert _romm_call_ids(romm, "get_rom") == [3]
+        with uow as current:
+            assert current.roms.get(1).shortcut_app_id is None
+            assert current.roms.get(3).shortcut_app_id == _APP_ID
 
     def test_uneven_coverage_server_only_switchable_and_adopts_bound_key(self, event_loop, service, uow, romm):
         # #1368: the bound group keys on igdb; a never-synced sibling matched only on
@@ -929,18 +1151,33 @@ class TestSwitchVersion:
         assert result["reason"] == "server_unreachable"
         assert "error" not in result
 
-    def test_not_found_on_target_fetch(self, event_loop, service, uow, romm):
-        """A 404 on the switch target is not an offline server (#1570)."""
+    def test_server_only_target_auth_failure_keeps_classified_reason(self, event_loop, service, uow, romm):
+        _seed_rom(uow, rom_id=1, app_id=_APP_ID)
+        romm.get_rom_side_effect = RommAuthError("unauthorized")
+
+        result = _run(event_loop, service.switch_version(_APP_ID, 3, False))
+
+        assert result["success"] is False
+        assert result["reason"] == "auth_failed"
+        assert isinstance(result["message"], str)
+        assert _romm_call_ids(romm, "get_rom_once") == []
+        assert _romm_call_ids(romm, "get_rom") == [3]
+
+    def test_server_only_target_404_is_version_vanished_without_row(self, event_loop, service, uow, romm):
         _seed_rom(uow, rom_id=1, app_id=_APP_ID)
         romm.get_rom_side_effect = RommNotFoundError("HTTP 404: Not Found")
 
         result = _run(event_loop, service.switch_version(_APP_ID, 3, False))
-        assert result["success"] is False
-        assert result["reason"] == "not_found"
-        assert result["reason"] != "server_unreachable"
-        # The message must not claim reachability either — it used to read
-        # "RomM server not reachable." for every failure.
-        assert "not reachable" not in result["message"].lower()
+        assert result == {
+            "success": False,
+            "reason": "version_vanished",
+            "message": "This version is no longer available on RomM.",
+        }
+        assert _romm_call_ids(romm, "get_rom_once") == []
+        assert _romm_call_ids(romm, "get_rom") == [3]
+        with uow as current:
+            assert current.roms.get(1).shortcut_app_id == _APP_ID
+            assert current.roms.get(3) is None
 
     def test_server_target_unbuildable_is_invalid_target(self, event_loop, service, uow, romm):
         # The server detail is IN the group (its would-be key matches the bound

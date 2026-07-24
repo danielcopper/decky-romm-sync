@@ -142,6 +142,26 @@ excluded from default ranking. A bound-id 404 is a successful entity verdict (`b
 `server_query_failed: false`), not a global reachability signal. Artwork and save reads do not contribute availability
 evidence; `fetch_cover_base64` remains a nullable data callable.
 
+#### Version-switch target liveness
+
+`VersionSwitchService.switch_version` obtains a fresh exact-id verdict immediately before every actual binding move onto
+an already-local target. The save-stranding guard runs first, so its initial soft block performs no target request; both
+follow-up choices (`Sync now` retry and `Switch anyway`) re-enter the service and receive the same liveness guard.
+`allow_stranded` bypasses only save stranding. The active-target no-op, invalid local context, active download,
+non-member target, and target bound to another shortcut all stop before the request because none can enter the binding
+write.
+
+The local-target request uses `RommRomReader.get_rom_once` on the worker executor: one attempt, three-second timeout, no
+retry-progress event, and no open UoW. Only `RommNotFoundError` returns the canonical `version_vanished` refusal.
+Timeout, transport/DNS/SSL, authentication, server errors, and malformed or empty successful payloads are logged and
+fail open, preserving the fast offline switch path. The existing short write UoW still rechecks membership and
+bound-elsewhere after the request; the request narrows the race but cannot form a transaction across RomM and SQLite.
+
+A server-only target still needs its full detail before it can be validated and persisted. That mandatory fetch keeps
+the normal retry/classification policy and is not preceded by a redundant exact-id probe; only its typed 404 is peeled
+into `version_vanished`. A refusal performs no binding, row/install/applied-launch-options write, launch-command
+resolution, event, cache invalidation, sync, or completion-stamp update.
+
 #### LibraryService decomposition (`services/library/`)
 
 The library sync subsystem is a façade over three sub-services that coordinate through a shared `LibrarySyncStateBox`:

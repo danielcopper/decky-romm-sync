@@ -505,6 +505,7 @@ export interface SwitchVersionUnsyncedSaves {
  * `bound_elsewhere` (a grandfathered duplicate),
  * `invalid_target` (a server-only target the aggregate rejects),
  * `download_in_progress` (a group download is running — cancel it first), or
+ * `version_vanished` (RomM definitively no longer has the target), or
  * `server_unreachable`. All surface via the picker's toast fallback
  * (`result.message`). The literal reason union excludes `unsynced_saves` so the
  * soft-block variant narrows cleanly.
@@ -512,7 +513,13 @@ export interface SwitchVersionUnsyncedSaves {
 export interface SwitchVersionFailure {
   success: false;
   reason:
-    "not_found" | "not_in_group" | "bound_elsewhere" | "invalid_target" | "download_in_progress" | "server_unreachable";
+    | "not_found"
+    | "not_in_group"
+    | "bound_elsewhere"
+    | "invalid_target"
+    | "download_in_progress"
+    | "version_vanished"
+    | "server_unreachable";
   message: string;
 }
 

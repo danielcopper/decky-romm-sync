@@ -151,6 +151,22 @@ a shortcut still bound to a vanished id show the retained context while the user
 tab likewise skips positively vanished inactive installs before checking local drift, then continues through later live
 candidates.
 
+The list verdict is advisory UI state, not authority for a later write. Immediately before `switch_version` moves the
+binding onto an already-local target, it checks that exact target id again through the same three-second, single-attempt
+`get_rom_once` path. The request runs on the worker executor outside the write UoW and after the save-stranding guard
+permits the attempt. Consequently an initial unsynced-save warning makes no target request, while both `Sync now` and
+`Switch anyway` retries are protected; `allow_stranded` never bypasses liveness. A typed target 404 returns
+`version_vanished` without changing the binding or any recorded launch state. Every other optional-probe outcome fails
+open, so a local switch remains fast when RomM is uncertain or offline. The active-target no-op does not probe because
+it moves no binding.
+
+A server-only target already requires its full RomM detail for membership validation and row construction. That fetch
+keeps its normal retry policy, doubles as the liveness verdict, and receives no second probe. Its typed 404 produces the
+same `version_vanished` refusal; other failures retain their ordinary classified reason. Network I/O remains outside the
+short write UoW, whose fresh membership and bound-elsewhere checks still decide SQLite races. This leaves an unavoidable
+cross-system interval after a successful response: the liveness check reduces stale-list risk but is not a transaction
+with RomM.
+
 ## Sync-start reconcile of Steam-UI-deleted shortcuts
 
 A user can delete a RomM shortcut through **Steam's own UI** (remove from library), which the plugin never observes. The

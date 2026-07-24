@@ -69,6 +69,14 @@ title and Region/Languages rows update to reflect it, and its cover refreshes to
 keeps its name, its place in your collections, and its playtime — all tied to the shortcut, which never changes. A
 single-version game shows no Version control.
 
+The plugin checks the selected version again immediately before moving the shortcut. If RomM now answers that the exact
+version no longer exists, the switch is refused with **Could not switch version**, nothing about the shortcut changes,
+and the picker refreshes directly so the row becomes unavailable without starting a library sync. This protection also
+applies after **Sync now & switch** and **Switch anyway**; the latter bypasses only the unsynced-save warning. If RomM
+cannot provide a definitive answer because of a timeout, connection/sign-in/server error, or malformed response, the
+local switch is allowed to continue. In particular, the offline **Switch anyway** path does not wait through the normal
+retry sequence. A target-specific refusal does not by itself change the plugin's global online/offline status.
+
 Switching **never deletes anything.** ROM files already on disk stay put, and save files are never moved or deleted by a
 switch. What happens depends on whether the version you're leaving is downloaded and whether its saves are synced:
 

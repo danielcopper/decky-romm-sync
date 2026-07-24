@@ -35,7 +35,13 @@ import {
   logError,
   logWarn,
 } from "../api/backend";
-import type { VersionList, VersionInfo, SwitchVersionSuccess } from "../api/backend";
+import type {
+  VersionList,
+  VersionInfo,
+  SwitchVersionSuccess,
+  SwitchVersionFailure,
+  SwitchVersionUnsyncedSaves,
+} from "../api/backend";
 import { reportServerReachable } from "../utils/connectionState";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { showUnsyncedSavesModal } from "./UnsyncedSavesSwitchModal";
@@ -52,6 +58,14 @@ interface VersionPickerProps {
 // palette DiscSelector uses so the two game-detail pickers read as one system.
 const ACTIVE_ACCENT = "#59b6ff";
 const NEUTRAL_GREY = "#dcdedf";
+
+const reportVersionListReachability = (result: VersionList): void => {
+  if (result.server_query_failed) {
+    reportServerReachable(false);
+  } else if (result.multi_version && !result.bound_vanished) {
+    reportServerReachable(true);
+  }
+};
 
 const BADGE_COLORS: Record<"accent" | "muted" | "good", { bg: string; fg: string }> = {
   accent: { bg: "rgba(89, 182, 255, 0.18)", fg: ACTIVE_ACCENT },
@@ -108,11 +122,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         // is an entity verdict, not a connection signal, so it feeds neither
         // direction into the global store. A single/unbound group carries no
         // reachability signal.
-        if (result.server_query_failed) {
-          reportServerReachable(false);
-        } else if (result.multi_version && !result.bound_vanished) {
-          reportServerReachable(true);
-        }
+        reportVersionListReachability(result);
         memberIdsRef.current = new Set((result.versions ?? []).map((v) => v.rom_id));
         if (!cancelled) setVersionList(result);
       } catch (e) {
@@ -230,6 +240,24 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     );
   };
 
+  const refreshAfterVanishedRefusal = async (): Promise<void> => {
+    try {
+      const result = await getVersionList(appId);
+      reportVersionListReachability(result);
+      memberIdsRef.current = new Set((result.versions ?? []).map((v) => v.rom_id));
+      setVersionList(result);
+    } catch (e) {
+      logWarn(`VersionPicker: version-vanished list refresh failed: ${e}`);
+    }
+  };
+
+  const handleSwitchFailure = (result: SwitchVersionFailure | SwitchVersionUnsyncedSaves): void => {
+    if (result.reason === "server_unreachable") reportServerReachable(false);
+    setSwitching(false);
+    toaster.toast({ title: "RomM Sync", body: "Could not switch version", subtext: result.message });
+    if (result.reason === "version_vanished") detach(refreshAfterVanishedRefusal());
+  };
+
   // Sync the stranded version's saves, then retry the switch. Any failure —
   // sync failed, sync surfaced conflicts, or the retry blocked again — aborts
   // with a short toast and re-runs the save-status refresh so the conflict UI
@@ -264,7 +292,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         // race) — say so instead of the generic "couldn't switch".
         abort("Saves still unsynced — try again");
       } else {
-        abort("Couldn't switch versions");
+        handleSwitchFailure(retry);
       }
     } catch (e) {
       logError(`VersionPicker: sync-then-switch failed: ${e}`);
@@ -287,7 +315,6 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     try {
       const result = await switchVersion(appId, target.rom_id, false);
       if (result.success) {
-        reportServerReachable(true);
         await applySwitchSuccess(result);
         return;
       }
@@ -315,16 +342,13 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         if (forced.success) {
           await applySwitchSuccess(forced);
         } else {
-          setSwitching(false);
-          toaster.toast({ title: "RomM Sync", body: "Could not switch version", subtext: forced.message });
+          handleSwitchFailure(forced);
         }
         return;
       }
-      if (result.reason === "server_unreachable") reportServerReachable(false);
-      setSwitching(false);
       // Keep the toast body short (Steam truncates it to one line) and put the
       // backend detail in the subtext so the reason is readable (#1359).
-      toaster.toast({ title: "RomM Sync", body: "Could not switch version", subtext: result.message });
+      handleSwitchFailure(result);
     } catch (e) {
       setSwitching(false);
       logError(`VersionPicker: switchVersion failed: ${e}`);

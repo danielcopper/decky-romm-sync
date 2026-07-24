@@ -39,21 +39,24 @@ def _seed_rom(
     regions: tuple[str, ...] = (),
     is_main_sibling: bool = False,
     name: str | None = None,
+    applied_launch_options: str | None = None,
 ) -> None:
     with harness.uow_factory() as uow:
-        uow.roms.save(
-            Rom(
-                rom_id=rom_id,
-                platform_slug="snes",
-                name=name or f"Game {rom_id}",
-                fs_name=f"game_{rom_id}.sfc",
-                shortcut_app_id=app_id,
-                last_synced_at="2026-01-01T00:00:00",
-                sibling_group_key=group_key,
-                regions=regions,
-                is_main_sibling=is_main_sibling,
-            )
+        rom = Rom(
+            rom_id=rom_id,
+            platform_slug="snes",
+            name=name or f"Game {rom_id}",
+            fs_name=f"game_{rom_id}.sfc",
+            shortcut_app_id=app_id,
+            last_synced_at="2026-01-01T00:00:00",
+            sibling_group_key=group_key,
+            regions=regions,
+            is_main_sibling=is_main_sibling,
+            applied_launch_options=applied_launch_options,
         )
+        uow.roms.save(rom)
+        if applied_launch_options is not None:
+            uow.roms.set_applied_launch_options(rom_id, applied_launch_options)
 
 
 def _seed_install(harness, rom_id: int) -> None:
@@ -329,6 +332,8 @@ async def test_switch_version_happy_moves_binding(harness):
         "launch_options": "",
         "app_id": _APP_ID,
     }
+    assert [args[0] for name, args, _kwargs in harness.romm.call_log if name == "get_rom_once"] == [2]
+    assert not any(name == "get_rom" for name, _args, _kwargs in harness.romm.call_log)
 
     with harness.uow_factory() as uow:
         assert uow.roms.get(2).shortcut_app_id == _APP_ID
@@ -339,6 +344,87 @@ async def test_switch_version_happy_moves_binding(harness):
     assert by_id[2]["active"] is True
 
 
+async def test_switch_version_local_404_has_canonical_shape_and_no_mutation(harness):
+    """A definitive local-target 404 refuses before every write/effect boundary."""
+    _seed_rom(harness, rom_id=1, app_id=_APP_ID, applied_launch_options="old-command")
+    _seed_rom(harness, rom_id=2, app_id=None, applied_launch_options="target-command")
+    _seed_install(harness, 2)
+    harness.romm.get_rom_once_side_effect_by_id[2] = RommNotFoundError("gone")
+    harness.emit.reset_mock()
+
+    result = await harness.plugin.switch_version(_APP_ID, 2, False)
+
+    assert result == {
+        "success": False,
+        "reason": "version_vanished",
+        "message": "This version is no longer available on RomM.",
+    }
+    assert [args[0] for name, args, _kwargs in harness.romm.call_log if name == "get_rom_once"] == [2]
+    assert not any(name == "get_rom" for name, _args, _kwargs in harness.romm.call_log)
+    assert not any(name.startswith("list_") for name, _args, _kwargs in harness.romm.call_log)
+    harness.emit.assert_not_awaited()
+    with harness.uow_factory() as uow:
+        assert uow.roms.get(1).shortcut_app_id == _APP_ID
+        assert uow.roms.get(1).applied_launch_options == "old-command"
+        assert uow.roms.get(2).shortcut_app_id is None
+        assert uow.roms.get(2).applied_launch_options == "target-command"
+        assert uow.rom_installs.get(2) is not None
+
+
+async def test_switch_version_local_probe_transport_failure_fails_open_once(harness):
+    """The real callable preserves the fast offline local-switch path."""
+    _seed_rom(harness, rom_id=1, app_id=_APP_ID)
+    _seed_rom(harness, rom_id=2, app_id=None)
+    harness.romm.get_rom_once_side_effect_by_id[2] = ConnectionError("offline")
+
+    result = await harness.plugin.switch_version(_APP_ID, 2, False)
+
+    assert result["success"] is True
+    assert result["rom_id"] == 2
+    assert [args[0] for name, args, _kwargs in harness.romm.call_log if name == "get_rom_once"] == [2]
+    assert not any(name == "get_rom" for name, _args, _kwargs in harness.romm.call_log)
+
+
+async def test_switch_version_allow_stranded_still_refuses_local_404(harness):
+    """The frontend override bypasses save drift, never target liveness."""
+    _seed_rom(harness, rom_id=1, app_id=_APP_ID)
+    _seed_rom(harness, rom_id=2, app_id=None)
+    harness.romm.get_rom_once_side_effect_by_id[2] = RommNotFoundError("gone")
+
+    result = await harness.plugin.switch_version(_APP_ID, 2, True)
+
+    assert result == {
+        "success": False,
+        "reason": "version_vanished",
+        "message": "This version is no longer available on RomM.",
+    }
+    with harness.uow_factory() as uow:
+        assert uow.roms.get(1).shortcut_app_id == _APP_ID
+        assert uow.roms.get(2).shortcut_app_id is None
+
+
+async def test_switch_version_server_only_404_is_version_vanished_without_row(harness):
+    """Mandatory server-only detail loading peels only its typed 404."""
+    _seed_rom(harness, rom_id=1, app_id=_APP_ID, applied_launch_options="old-command")
+    harness.romm.get_rom_side_effect = RommNotFoundError("gone")
+    harness.emit.reset_mock()
+
+    result = await harness.plugin.switch_version(_APP_ID, 3, False)
+
+    assert result == {
+        "success": False,
+        "reason": "version_vanished",
+        "message": "This version is no longer available on RomM.",
+    }
+    assert [args[0] for name, args, _kwargs in harness.romm.call_log if name == "get_rom"] == [3]
+    assert not any(name == "get_rom_once" for name, _args, _kwargs in harness.romm.call_log)
+    harness.emit.assert_not_awaited()
+    with harness.uow_factory() as uow:
+        assert uow.roms.get(1).shortcut_app_id == _APP_ID
+        assert uow.roms.get(1).applied_launch_options == "old-command"
+        assert uow.roms.get(3) is None
+
+
 async def test_switch_version_unknown_app_failure_shape(harness):
     """An unknown appId → canonical ``{success, reason, message}``."""
     result = await harness.plugin.switch_version(999, 2, False)
@@ -347,6 +433,7 @@ async def test_switch_version_unknown_app_failure_shape(harness):
     assert isinstance(result["message"], str)
     assert "error" not in result
     assert "error_code" not in result
+    assert not any(name == "get_rom_once" for name, _args, _kwargs in harness.romm.call_log)
 
 
 async def test_switch_version_not_in_group_failure_shape(harness):
@@ -383,6 +470,7 @@ async def test_switch_version_blocked_by_active_download(harness):
     assert result["reason"] == "download_in_progress"
     assert isinstance(result["message"], str)
     assert "error" not in result and "error_code" not in result
+    assert not any(name == "get_rom_once" for name, _args, _kwargs in harness.romm.call_log)
     # Nothing switched — the binding is untouched.
     with harness.uow_factory() as uow:
         assert uow.roms.get(1).shortcut_app_id == _APP_ID
@@ -431,6 +519,7 @@ async def test_switch_version_unsynced_saves_online_soft_blocks(harness):
     assert isinstance(result["unsynced_version_name"], str)
     assert isinstance(result["message"], str)
     assert "error" not in result and "error_code" not in result
+    assert not any(name == "get_rom_once" for name, _args, _kwargs in harness.romm.call_log)
     # Nothing switched.
     with harness.uow_factory() as uow:
         assert uow.roms.get(1).shortcut_app_id == _APP_ID
@@ -464,15 +553,17 @@ async def test_switch_version_switch_anyway_overrides_online(harness):
 
 
 async def test_switch_version_switch_anyway_overrides_offline(harness):
-    """allow_stranded switches despite unsynced saves AND an unreachable server."""
+    """allow_stranded skips save drift while target-probe uncertainty fails open."""
     seed_group_member(harness, 1, group_key=_GROUP, shortcut_app_id=_APP_ID, installed=True, file_name="game.gba")
     seed_group_member(harness, 2, group_key=_GROUP, shortcut_app_id=None)
     _seed_bound_drift(harness, 1, baseline="stale-baseline-hash")
     harness.romm.heartbeat_side_effect = ConnectionError("offline")
+    harness.romm.get_rom_once_side_effect_by_id[2] = ConnectionError("offline")
 
     result = await harness.plugin.switch_version(_APP_ID, 2, True)
     assert result["success"] is True
     assert result["rom_id"] == 2
+    assert [args[0] for name, args, _kwargs in harness.romm.call_log if name == "get_rom_once"] == [2]
 
 
 async def test_switch_version_sync_then_retry_succeeds(harness):
@@ -489,6 +580,7 @@ async def test_switch_version_sync_then_retry_succeeds(harness):
     retried = await harness.plugin.switch_version(_APP_ID, 2, False)
     assert retried["success"] is True
     assert retried["rom_id"] == 2
+    assert [args[0] for name, args, _kwargs in harness.romm.call_log if name == "get_rom_once"] == [2]
 
 
 async def test_switch_version_unbuildable_target_failure_shape(harness):
