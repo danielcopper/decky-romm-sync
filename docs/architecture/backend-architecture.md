@@ -130,10 +130,11 @@ the rest are single modules. A service over ~700 LOC is the decomposition signal
 #### Version-list liveness
 
 `VersionSwitchService.get_version_list` separates retained local membership from current RomM availability. On each lazy
-Game Page load, the bound detail request proves the bound id live and supplies the direct sibling ids; every other local
-group member is exact-id probed through `RommRomReader.get_rom_once`, the adapter's single-attempt short-timeout
-`request_once` path, concurrently on the existing executor fan-out. Only `RommNotFoundError` produces `vanished: true`.
-All other probe failures and malformed/falsy responses fail open. No result is persisted.
+Game Page load, the bound detail request proves the bound id live and supplies the direct sibling ids; only non-bound
+local members absent from that direct sibling view are exact-id probed through `RommRomReader.get_rom_once`, the
+adapter's single-attempt short-timeout `request_once` path, concurrently on the existing executor fan-out. Only
+`RommNotFoundError` produces `vanished: true`. All other probe failures and malformed/falsy responses fail open. No
+result is persisted.
 
 The response carries `vanished` on every version and `bound_vanished` even when `multi_version` is false. Retained
 vanished rows remain in the payload and keep the independently-computed `switchable` membership verdict, but are
