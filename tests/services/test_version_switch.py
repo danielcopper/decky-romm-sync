@@ -722,9 +722,13 @@ class TestSwitchVersion:
         assert _romm_call_ids(romm, "get_rom") == []
         assert "target liveness probe failed open for rom 2" in caplog.text
 
-    @pytest.mark.parametrize("response", [None, {}, [], "malformed"], ids=["none", "empty", "list", "string"])
+    @pytest.mark.parametrize(
+        "response",
+        [None, {}, [], "malformed", {"id": 999}],
+        ids=["none", "empty", "list", "string", "wrong-id"],
+    )
     def test_local_target_falsy_or_malformed_probe_payload_fails_open(
-        self, event_loop, service, uow, romm, monkeypatch, response
+        self, event_loop, service, uow, romm, monkeypatch, caplog, response
     ):
         _seed_rom(uow, rom_id=1, app_id=_APP_ID)
         _seed_rom(uow, rom_id=2, app_id=None)
@@ -736,11 +740,13 @@ class TestSwitchVersion:
 
         monkeypatch.setattr(romm, "get_rom_once", get_rom_once)
 
-        result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
+        with caplog.at_level(logging.WARNING, logger="test_version_switch"):
+            result = _run(event_loop, service.switch_version(_APP_ID, 2, False))
 
         _assert_success(result, rom_id=2, installed=False, launch_options="")
         assert calls == [2]
         assert _romm_call_ids(romm, "get_rom") == []
+        assert "target liveness probe returned an untrustworthy payload for rom 2; failing open" in caplog.text
 
     def test_records_applied_launch_options_for_installed_target(self, event_loop, service, uow, relaunch_resolver):
         # Switching onto an installed version re-bakes its launch command (the

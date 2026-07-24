@@ -825,6 +825,136 @@ describe("VersionPicker — switch target liveness (#1570)", () => {
     expect(getRommConnectionState()).toBe("checking");
   });
 
+  it("ignores a late refusal reload after a newer successful-switch reload settles", async () => {
+    let resolveRefusalReload!: (value: VersionList) => void;
+    const refusalReload = new Promise<VersionList>((resolve) => {
+      resolveRefusalReload = resolve;
+    });
+    const switchedList = multiVersionList({
+      server_query_failed: true,
+      versions: (multiVersionList().versions ?? []).map((v) => ({ ...v, active: v.rom_id === 3 })),
+    });
+    vi.mocked(backend.getVersionList)
+      .mockResolvedValueOnce(multiVersionList())
+      .mockReturnValueOnce(refusalReload)
+      .mockResolvedValueOnce(switchedList);
+    vi.mocked(backend.switchVersion).mockResolvedValueOnce(vanishedFailure).mockResolvedValueOnce({
+      success: true,
+      rom_id: 3,
+      target_installed: false,
+      launch_options: "",
+      app_id: APP_ID,
+    });
+
+    const { r, menu } = await renderAndOpen();
+    setRommConnectionState("checking");
+    await clickRow(menu.container, "Game (Japan)");
+    expect(backend.getVersionList).toHaveBeenCalledTimes(2);
+
+    captured.menu = null;
+    await act(async () => {
+      fireEvent.click(r.getByTestId("version-btn"));
+      await Promise.resolve();
+    });
+    const nextMenu = render(<>{captured.menu}</>);
+    await clickRow(nextMenu.container, "Game (Europe)");
+    await waitFor(() => expect(backend.getVersionList).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(r.container.querySelector(".romm-throbber")).toBeNull());
+    expect(getRommConnectionState()).toBe("offline");
+
+    await act(async () => {
+      resolveRefusalReload(multiVersionList());
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+    });
+    expect(getRommConnectionState()).toBe("offline");
+
+    vi.mocked(backend.switchVersion).mockClear().mockResolvedValue({
+      success: false,
+      reason: "bound_elsewhere",
+      message: "test stop",
+    });
+    captured.menu = null;
+    await act(async () => {
+      fireEvent.click(r.getByTestId("version-btn"));
+      await Promise.resolve();
+    });
+    const settledMenu = render(<>{captured.menu}</>);
+    await clickRow(settledMenu.container, "Game (USA)");
+
+    // If the late refusal snapshot had overwritten the newer list, USA would be
+    // marked active and handleSwitch would swallow this switch-back click.
+    expect(backend.switchVersion).toHaveBeenCalledWith(APP_ID, 1, false);
+  });
+
+  it("ignores a refusal reload completion from an obsolete appId lifetime", async () => {
+    const nextAppId = APP_ID + 1;
+    let resolveOldReload!: (value: VersionList) => void;
+    const oldReload = new Promise<VersionList>((resolve) => {
+      resolveOldReload = resolve;
+    });
+    const nextAppList = multiVersionList({
+      server_query_failed: true,
+      versions: (multiVersionList().versions ?? []).map((v) => ({ ...v, active: v.rom_id === 3 })),
+    });
+    vi.mocked(backend.getVersionList)
+      .mockResolvedValueOnce(multiVersionList())
+      .mockReturnValueOnce(oldReload)
+      .mockResolvedValueOnce(nextAppList);
+    vi.mocked(backend.switchVersion).mockResolvedValue(vanishedFailure);
+
+    const { r, menu } = await renderAndOpen();
+    await clickRow(menu.container, "Game (Japan)");
+    expect(backend.getVersionList).toHaveBeenCalledTimes(2);
+    setRommConnectionState("checking");
+
+    r.rerender(<VersionPicker appId={nextAppId} />);
+    await waitFor(() => expect(backend.getVersionList).toHaveBeenNthCalledWith(3, nextAppId));
+    await waitFor(() => expect(getRommConnectionState()).toBe("offline"));
+
+    await act(async () => {
+      resolveOldReload(multiVersionList());
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+    });
+    expect(getRommConnectionState()).toBe("offline");
+
+    vi.mocked(backend.switchVersion).mockClear().mockResolvedValue({
+      success: false,
+      reason: "bound_elsewhere",
+      message: "test stop",
+    });
+    captured.menu = null;
+    await act(async () => {
+      fireEvent.click(r.getByTestId("version-btn"));
+      await Promise.resolve();
+    });
+    const nextAppMenu = render(<>{captured.menu}</>);
+    await clickRow(nextAppMenu.container, "Game (USA)");
+
+    expect(backend.switchVersion).toHaveBeenCalledWith(nextAppId, 1, false);
+  });
+
+  it("ignores a refusal reload completion after unmount", async () => {
+    let resolveReload!: (value: VersionList) => void;
+    const reload = new Promise<VersionList>((resolve) => {
+      resolveReload = resolve;
+    });
+    vi.mocked(backend.getVersionList).mockResolvedValueOnce(multiVersionList()).mockReturnValueOnce(reload);
+    vi.mocked(backend.switchVersion).mockResolvedValue(vanishedFailure);
+
+    const { r, menu } = await renderAndOpen();
+    await clickRow(menu.container, "Game (Japan)");
+    expect(backend.getVersionList).toHaveBeenCalledTimes(2);
+    setRommConnectionState("checking");
+    r.unmount();
+
+    await act(async () => {
+      resolveReload(multiVersionList({ server_query_failed: true }));
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+    });
+
+    expect(getRommConnectionState()).toBe("checking");
+  });
+
   it("keeps the refusal visible and releases the guard when its direct reload rejects", async () => {
     const logWarnSpy = vi.spyOn(backend, "logWarn").mockImplementation(() => {});
     try {

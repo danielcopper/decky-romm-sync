@@ -107,15 +107,23 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   // The group's member rom_ids from the last loaded list — lets the install-change
   // listeners below ignore events for other games without a fetch.
   const memberIdsRef = useRef<Set<number>>(new Set());
+  const listRequestIdRef = useRef(0);
+  const loadVersionListRef = useRef<{
+    appId: number;
+    load: (source?: "normal" | "vanished_refusal") => Promise<void>;
+  } | null>(null);
 
   // Initial load + refresh on a version switch (this or another surface). The
-  // loader is defined inside the effect (shared with the event handler) so its
-  // post-`await` setState never reads as a synchronous effect-body write.
+  // effect owns the loader lifetime for this appId. All request sources share one
+  // generation so only the latest completion can publish list/reachability state.
   useEffect(() => {
     let cancelled = false;
-    const load = async (): Promise<void> => {
+    const load = async (source: "normal" | "vanished_refusal" = "normal"): Promise<void> => {
+      const requestId = ++listRequestIdRef.current;
+      const isCurrent = (): boolean => !cancelled && requestId === listRequestIdRef.current;
       try {
         const result = await getVersionList(appId);
+        if (!isCurrent()) return;
         // get_version_list touches the server for the sibling view (#1345): an
         // explicit server_query_failed means offline; a multi-version list that
         // loaded without failure proves the server is reachable. A bound-id 404
@@ -124,18 +132,24 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         // reachability signal.
         reportVersionListReachability(result);
         memberIdsRef.current = new Set((result.versions ?? []).map((v) => v.rom_id));
-        if (!cancelled) setVersionList(result);
+        setVersionList(result);
       } catch (e) {
-        logError(`VersionPicker: getVersionList failed: ${e}`);
+        if (!isCurrent()) return;
+        if (source === "vanished_refusal") {
+          logWarn(`VersionPicker: version-vanished list refresh failed: ${e}`);
+        } else {
+          logError(`VersionPicker: getVersionList failed: ${e}`);
+        }
       } finally {
         // The post-switch version_switched reload landing is the "switch fully
         // settled" signal — clear the in-flight guard here so the trigger
         // re-enables against a FRESH list, never a stale one (#1345 round-2 / E).
         // In the finally (not just on success) so a failed reload can't leave the
         // guard stuck; on the initial mount load switching is already false (no-op).
-        if (!cancelled) setSwitching(false);
+        if (source === "normal" && isCurrent()) setSwitching(false);
       }
     };
+    loadVersionListRef.current = { appId, load };
     detach(load());
 
     const onDataChanged = (e: Event) => {
@@ -163,6 +177,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
 
     return () => {
       cancelled = true;
+      if (loadVersionListRef.current?.load === load) loadVersionListRef.current = null;
       globalThis.removeEventListener("romm_data_changed", onDataChanged);
       removeEventListener("download_complete", dlComplete);
       removeEventListener("download_failed", dlFailed);
@@ -240,15 +255,10 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     );
   };
 
-  const refreshAfterVanishedRefusal = async (): Promise<void> => {
-    try {
-      const result = await getVersionList(appId);
-      reportVersionListReachability(result);
-      memberIdsRef.current = new Set((result.versions ?? []).map((v) => v.rom_id));
-      setVersionList(result);
-    } catch (e) {
-      logWarn(`VersionPicker: version-vanished list refresh failed: ${e}`);
-    }
+  const refreshAfterVanishedRefusal = (): Promise<void> => {
+    const loader = loadVersionListRef.current;
+    if (loader?.appId !== appId) return Promise.resolve();
+    return loader.load("vanished_refusal");
   };
 
   const handleSwitchFailure = (result: SwitchVersionFailure | SwitchVersionUnsyncedSaves): void => {

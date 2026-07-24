@@ -653,11 +653,18 @@ class VersionSwitchService:
     def _probe_switch_target_vanished(self, rom_id: int) -> bool:
         """Probe one local switch target once; only a typed 404 refuses it."""
         try:
-            self._romm_api.get_rom_once(rom_id)
+            response: Any = self._romm_api.get_rom_once(rom_id)
         except RommNotFoundError:
             return True
         except Exception as e:
             self._logger.warning(f"Version switch: target liveness probe failed open for rom {rom_id}: {e}")
+            return False
+        payload_id = response.get("id") if isinstance(response, dict) else None
+        if type(payload_id) is not int or payload_id != rom_id:
+            self._logger.warning(
+                f"Version switch: target liveness probe returned an untrustworthy payload for rom {rom_id}; "
+                "failing open"
+            )
         return False
 
     async def _save_stranding_block(self, ctx: _SwitchContext, allow_stranded: bool) -> dict[str, Any] | None:
