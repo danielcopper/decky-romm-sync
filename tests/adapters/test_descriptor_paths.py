@@ -57,18 +57,19 @@ def test_replacement_in_pre_rename_window_is_verified_and_rolled_back(tmp_path, 
     captured = stat_beneath(str(source), str(safe))
     assert captured is not None
     identity = identity_for_stat(captured)
-    original = os.rename
+    module = __import__("adapters.descriptor_paths", fromlist=["rename_noreplace_at"])
+    original = module.rename_noreplace_at
     replaced = False
 
-    def replace_then_rename(src, dst, *args, **kwargs):
+    def replace_then_rename(source_fd, src, destination_fd, dst):
         nonlocal replaced
         if src == source.name and not replaced:
             replaced = True
             source.unlink()
             source.write_bytes(b"replacement")
-        return original(src, dst, *args, **kwargs)
+        return original(source_fd, src, destination_fd, dst)
 
-    monkeypatch.setattr("adapters.descriptor_paths.os.rename", replace_then_rename)
+    monkeypatch.setattr(module, "rename_noreplace_at", replace_then_rename)
     with pytest.raises(RuntimeError, match="while it was claimed"):
         remove_exact(str(source), str(safe), identity)
 
@@ -202,3 +203,53 @@ def test_rename_reports_post_move_fsync_uncertainty(tmp_path, monkeypatch):
     assert outcome["changed"] is True
     assert outcome["ambiguous"] is True
     assert destination.read_bytes() == b"save"
+
+
+def test_rename_never_replaces_a_destination_created_after_the_absence_check(tmp_path, monkeypatch):
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    source = safe / "save.srm"
+    destination = safe / "backup.srm"
+    source.write_bytes(b"current-save")
+    claim = claim_source(str(source), str(safe))
+    module = __import__("adapters.descriptor_paths", fromlist=["rename_noreplace_at"])
+    original = module.rename_noreplace_at
+
+    def race_destination(*args, **kwargs):
+        destination.write_bytes(b"concurrent-backup")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "rename_noreplace_at", race_destination)
+
+    with pytest.raises(FileExistsError, match="already exists"):
+        rename_claimed(str(source), str(destination), str(safe), claim)
+
+    assert source.read_bytes() == b"current-save"
+    assert destination.read_bytes() == b"concurrent-backup"
+
+
+def test_remove_reports_lease_release_failure_after_unlink_as_ambiguous(tmp_path, monkeypatch):
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    source = safe / "save.srm"
+    source.write_bytes(b"save")
+    claim = claim_source(str(source), str(safe))
+    module = __import__("adapters.descriptor_paths", fromlist=["fcntl"])
+    original = module.fcntl.fcntl
+
+    def fail_unlock(fd, command, *args):
+        if command == module.fcntl.F_SETLEASE and args == (module.fcntl.F_UNLCK,):
+            raise OSError("injected lease release failure")
+        return original(fd, command, *args)
+
+    monkeypatch.setattr(module.fcntl, "fcntl", fail_unlock)
+
+    outcome = remove_claimed(str(source), str(safe), claim)
+
+    assert outcome == {
+        "success": False,
+        "changed": True,
+        "ambiguous": True,
+        "message": "Source was removed but writer-exclusion teardown is uncertain: injected lease release failure",
+    }
+    assert not source.exists()

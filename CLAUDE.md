@@ -219,9 +219,11 @@ Format: **invariant** — tier — enforced by.
   launch evaluation, save mutations, session writes, uninstalls, connection identity changes, and affected cache
   cleanup; each conflicting callable registers before its first await, detached work retains that claim for the task
   lifetime, and frontend-owned multi-call work holds and heartbeats a globally registered, bounded tokenized lease
-  through every sibling Steam continuation's final write; failed event delivery, owner teardown, and plugin dismount
-  release their reachable leases; run admission atomically refuses those registrations before reserving the prune claim
-  and refreshing the preview** — test
+  through every sibling Steam continuation's final write (including paced `sync_stale` removal); every continuation
+  checks its abort signal before each later Steam mutation; failed event delivery releases an unreachable token, while
+  owner teardown/plugin dismount stop renewal and future writes but defer explicit release until already-started Steam
+  promises settle; run admission atomically refuses those registrations before reserving the prune claim and refreshing
+  the preview** — test
   - prompt-only — prune service/gate race tests + contract callable-entry matrix; new conflicting entry points are
     prompt-only
 - **A prune frontend action mutates Steam only after atomically claiming its exact run/token/discriminant/binding;
@@ -234,13 +236,15 @@ Format: **invariant** — tier — enforced by.
   regular-file deletion holds kernel writer exclusion from final validation through unlink, selected sources consume
   claims decoded from the same held and digest-bound sealed bundle, unselected/recovery-off sources take a final
   presence-or-absence claim, all expected-absent saves are collectively rechecked immediately before aggregate cascade,
-  and path re-lookup alone never authorizes delete/quarantine; unsafe recovery-failure cleanup preserves staging** —
-  test + prompt-only — descriptor-path, recovery-adapter, real RomRemovalService, and prune contract tests; new mutation
+  quarantine publication is atomic no-replace, writer-exclusion teardown faults are ambiguity, controller claim branches
+  revalidate and preserve newer held-inode edits at a surfaced path, and path re-lookup alone never authorizes
+  delete/quarantine; unsafe recovery-failure cleanup preserves and reports the anchored staging path** — test +
+  prompt-only — descriptor-path, recovery-adapter, real RomRemovalService, and prune contract tests; new mutation
   adapters are prompt-only
 - **Every prune action/progress/completion frame carries its originating preview ID; a pending frontend preview may
   adopt only a matching run, including when the successful start response is lost, and foreign frames never trigger
-  state or side effects** — test + prompt-only — prune service frame tests + `src/utils/pruneStore.test.ts`; new prune
-  frame types are prompt-only
+  state or side effects; an accepted contiguous terminal result seals the run against every later frame** — test +
+  prompt-only — prune service frame tests + `src/utils/pruneStore.test.ts`; new prune frame types are prompt-only
 - **Every destructive RomM proof is bound to one canonical server-origin/token-origin/user namespace from preview
   through every exact-ID request; a namespace change is uncertainty, never a 404 deletion authority** — test +
   prompt-only — prune service namespace-race tests; new destructive RomM proof paths are prompt-only

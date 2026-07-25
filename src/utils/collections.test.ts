@@ -83,6 +83,28 @@ describe("createOrUpdateCollections (platform) — case-insensitive identity (#1
     expect(NewUnsavedCollection).not.toHaveBeenCalled();
     expect(existing.Save).toHaveBeenCalledTimes(1);
   });
+
+  it("does not begin another collection mutation after cancellation", async () => {
+    let settle!: () => void;
+    const first = fakeCollection("RomM: First (test)");
+    const pendingSave = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    first.Save.mockReturnValueOnce(pendingSave);
+    const second = fakeCollection("RomM: Second (test)");
+    vi.stubGlobal("collectionStore", { userCollections: [first, second], NewUnsavedCollection: vi.fn() });
+    const controller = new AbortController();
+    const applying = createOrUpdateCollections({ First: [1], Second: [2] }, undefined, controller.signal);
+    await Promise.resolve();
+
+    controller.abort();
+    settle();
+    await applying;
+
+    expect(first.Save).toHaveBeenCalledTimes(1);
+    expect(second.dnd.AddApps).not.toHaveBeenCalled();
+    expect(second.Save).not.toHaveBeenCalled();
+  });
 });
 
 describe("clearPlatformCollection — case-insensitive identity (#1569)", () => {

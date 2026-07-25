@@ -958,9 +958,10 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         // raced-past not_installed launch execs `bin/rom-launcher` with no args (clean
         // exit 1) instead of a stale `flatpak run … "<deleted path>"` (#1051). Best-effort:
         // a launch-options hiccup must not turn a successful uninstall into an error.
-        await withPruneLease(result.prune_lease_token, "ROM uninstall", () =>
-          setLaunchOptionsConfirmed(appId, "").catch(() => false),
-        );
+        await withPruneLease(result.prune_lease_token, "ROM uninstall", async (signal) => {
+          if (signal.aborted) return;
+          await setLaunchOptionsConfirmed(appId, "").catch(() => false);
+        });
         globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: romId } }));
         toaster.toast({ title: "RomM Sync", body: `${romName || "ROM"} uninstalled` });
         // Dark pulse transition before showing Download button

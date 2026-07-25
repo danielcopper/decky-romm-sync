@@ -40,6 +40,7 @@ function getOverviews(appIds: number[]): AppStoreOverview[] {
 export async function createOrUpdateCollections(
   platformAppIds: Record<string, number[]>,
   onProgress?: (current: number, total: number, name: string) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   try {
     if (typeof collectionStore === "undefined") {
@@ -48,6 +49,7 @@ export async function createOrUpdateCollections(
     }
 
     const hostname = await getHostname();
+    if (signal?.aborted) return;
     logInfo(
       `Creating/updating collections for platforms: ${Object.keys(platformAppIds).join(", ")} (hostname: ${hostname})`,
     );
@@ -55,6 +57,7 @@ export async function createOrUpdateCollections(
     const entries = Object.entries(platformAppIds);
     let idx = 0;
     for (const [platformName, appIds] of entries) {
+      if (signal?.aborted) return;
       idx++;
       onProgress?.(idx, entries.length, platformName);
       const collectionName = `RomM: ${platformName} (${hostname})`;
@@ -72,14 +75,19 @@ export async function createOrUpdateCollections(
           logInfo(`Updating collection "${collectionName}" with ${appIds.length} apps`);
           const existingApps = existing.allApps;
           if (existingApps.length > 0) {
+            if (signal?.aborted) return;
             existing.AsDragDropCollection().RemoveApps(existingApps);
           }
+          if (signal?.aborted) return;
           existing.AsDragDropCollection().AddApps(overviews);
+          if (signal?.aborted) return;
           await existing.Save();
         } else {
           logInfo(`Creating collection "${collectionName}" with ${appIds.length} apps`);
           const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
+          if (signal?.aborted) return;
           collection.AsDragDropCollection().AddApps(overviews);
+          if (signal?.aborted) return;
           await collection.Save();
         }
         logInfo(`Successfully saved collection "${collectionName}"`);
@@ -95,6 +103,7 @@ export async function createOrUpdateCollections(
 export async function createOrUpdateRomMCollections(
   collectionAppIds: Record<string, number[]>,
   onProgress?: (current: number, total: number, name: string) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   try {
     if (typeof collectionStore === "undefined") {
@@ -103,11 +112,13 @@ export async function createOrUpdateRomMCollections(
     }
 
     const hostname = await getHostname();
+    if (signal?.aborted) return;
     logInfo(`Creating/updating RomM collections: ${Object.keys(collectionAppIds).join(", ")} (hostname: ${hostname})`);
 
     const entries = Object.entries(collectionAppIds);
     let idx = 0;
     for (const [collName, appIds] of entries) {
+      if (signal?.aborted) return;
       idx++;
       onProgress?.(idx, entries.length, collName);
       const collectionName = `RomM: [${collName}] (${hostname})`;
@@ -125,14 +136,19 @@ export async function createOrUpdateRomMCollections(
           logInfo(`Updating RomM collection "${collectionName}" with ${appIds.length} apps`);
           const existingApps = existing.allApps;
           if (existingApps.length > 0) {
+            if (signal?.aborted) return;
             existing.AsDragDropCollection().RemoveApps(existingApps);
           }
+          if (signal?.aborted) return;
           existing.AsDragDropCollection().AddApps(overviews);
+          if (signal?.aborted) return;
           await existing.Save();
         } else {
           logInfo(`Creating RomM collection "${collectionName}" with ${appIds.length} apps`);
           const collection = collectionStore.NewUnsavedCollection(collectionName, undefined, []);
+          if (signal?.aborted) return;
           collection.AsDragDropCollection().AddApps(overviews);
+          if (signal?.aborted) return;
           await collection.Save();
         }
         logInfo(`Successfully saved RomM collection "${collectionName}"`);
@@ -145,13 +161,14 @@ export async function createOrUpdateRomMCollections(
   }
 }
 
-export async function clearPlatformCollection(platformName: string): Promise<void> {
+export async function clearPlatformCollection(platformName: string, signal?: AbortSignal): Promise<void> {
   try {
     if (typeof collectionStore === "undefined") {
       logWarn("collectionStore not available, cannot clear platform collection");
       return;
     }
     const hostname = await getHostname();
+    if (signal?.aborted) return;
     const scopedName = `RomM: ${platformName} (${hostname})`;
     const legacyName = `RomM: ${platformName}`;
 
@@ -165,6 +182,7 @@ export async function clearPlatformCollection(platformName: string): Promise<voi
     const scoped = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === scopedTarget);
     if (scoped) {
       logInfo(`Deleting collection "${scopedName}" (id=${scoped.id})`);
+      if (signal?.aborted) return;
       await scoped.Delete();
     }
 
@@ -172,6 +190,7 @@ export async function clearPlatformCollection(platformName: string): Promise<voi
     const legacy = collectionStore.userCollections.find((c) => c.displayName.toLowerCase() === legacyTarget);
     if (legacy) {
       logInfo(`Deleting legacy collection "${legacyName}" (id=${legacy.id})`);
+      if (signal?.aborted) return;
       await legacy.Delete();
     }
 
@@ -183,13 +202,14 @@ export async function clearPlatformCollection(platformName: string): Promise<voi
   }
 }
 
-export async function clearAllRomMCollections(): Promise<void> {
+export async function clearAllRomMCollections(signal?: AbortSignal): Promise<void> {
   try {
     if (typeof collectionStore === "undefined") {
       logWarn("collectionStore not available, cannot clear collections");
       return;
     }
     const hostname = await getHostname();
+    if (signal?.aborted) return;
     const suffix = ` (${hostname})`;
     const lowerSuffix = suffix.toLowerCase();
 
@@ -213,6 +233,7 @@ export async function clearAllRomMCollections(): Promise<void> {
 
     logInfo(`Deleting ${rommCollections.length} RomM collections (hostname: ${hostname})`);
     for (const c of rommCollections) {
+      if (signal?.aborted) return;
       logInfo(`Deleting collection "${c.displayName}" (id=${c.id})`);
       await c.Delete();
     }

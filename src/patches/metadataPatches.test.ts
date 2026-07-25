@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { registerMetadataPatches, applyAllMetadata, updatePlaytimeDisplay } from "./metadataPatches";
+import { registerMetadataPatches, applyAllMetadata, applyAllPlaytime, updatePlaytimeDisplay } from "./metadataPatches";
 import type { RomMetadata } from "../types";
 
 // RomMetadata has several required fields; build a full object and override the
@@ -85,6 +85,39 @@ describe("applyAllMetadata (#1203 readiness retry)", () => {
 
     expect([...ov.m_setStoreCategories].sort((a, b) => a - b)).toEqual([5, 7]);
     expect(ov.controller_support).toBe(2);
+  });
+
+  it("does not retry metadata mutations after cancellation", async () => {
+    const ov = makeOverview(100);
+    vi.mocked(appStore.GetAppOverviewByAppID)
+      .mockReturnValueOnce(null)
+      .mockReturnValue(ov as unknown as SteamAppOverview);
+    registerMetadataPatches({ "10": makeMeta({ average_rating: 70 }) }, APP_ID_MAP);
+    const controller = new AbortController();
+
+    const done = applyAllMetadata(controller.signal);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(1000);
+    await done;
+
+    expect(appStore.GetAppOverviewByAppID).toHaveBeenCalledTimes(1);
+    expect(ov.controller_support).toBe(0);
+  });
+
+  it("does not retry playtime mutations after cancellation", async () => {
+    const overview = { minutes_playtime_forever: 0, rt_last_time_played: 0 };
+    vi.mocked(appStore.GetAppOverviewByAppID)
+      .mockReturnValueOnce(null)
+      .mockReturnValue(overview as unknown as SteamAppOverview);
+    const controller = new AbortController();
+
+    const done = applyAllPlaytime({ "10": { total_seconds: 600 } }, APP_ID_MAP, controller.signal);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(1000);
+    await done;
+
+    expect(appStore.GetAppOverviewByAppID).toHaveBeenCalledTimes(1);
+    expect(overview.minutes_playtime_forever).toBe(0);
   });
 });
 

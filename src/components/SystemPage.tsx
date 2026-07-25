@@ -16,7 +16,6 @@ import {
   deletePlatformBios,
   setSystemCore,
   debugLog,
-  logError,
 } from "../api/backend";
 import type { FirmwarePlatformExt } from "../types";
 import { scrollToTop } from "../utils/scrollHelpers";
@@ -24,8 +23,8 @@ import { biosColorForLevel } from "../utils/biosColor";
 import { detach } from "../utils/detach";
 import { getEventTarget } from "../utils/events";
 import { buildEmulatorMenu } from "../utils/emulatorMenu";
-import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { withPruneLease } from "../utils/pruneLease";
+import { batchConfirmLaunchOptions } from "../utils/launchOptionsReconcile";
 
 /**
  * Build the per-platform summary label/description from the backend BIOS
@@ -216,25 +215,9 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
         // Mirrors the migration_relaunch_options fan-out in index.tsx
         // (bounded-concurrency batches so a platform with many ROMs doesn't
         // serialize worst-case per-shortcut confirm-poll timeouts).
-        await withPruneLease(result.prune_lease_token, "setSystemCore", async () => {
-          const items = result.rebake_items ?? [];
-          const CONCURRENCY = 10;
-          for (let i = 0; i < items.length; i += CONCURRENCY) {
-            const batch = items.slice(i, i + CONCURRENCY);
-            await Promise.all(
-              batch.map(async (item) => {
-                try {
-                  const ok = await setLaunchOptionsConfirmed(item.app_id, item.launch_options);
-                  if (!ok) {
-                    logError(`setSystemCore: failed to confirm launch options for appId ${item.app_id}`);
-                  }
-                } catch (e) {
-                  logError(`setSystemCore: failed to set launch options for appId ${item.app_id}: ${e}`);
-                }
-              }),
-            );
-          }
-        });
+        await withPruneLease(result.prune_lease_token, "setSystemCore", (signal) =>
+          batchConfirmLaunchOptions(result.rebake_items ?? [], "setSystemCore", signal),
+        );
         await refreshSystem();
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", {

@@ -93,7 +93,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   const allEntriesLoaded = items.length === total;
   const progress = pruneState.progress;
   const complete = pruneState.complete;
-  const runInFlight = starting || (pruneState.runId !== null && complete === null);
+  const runInFlight = complete === null && (starting || pruneState.runId !== null);
   const canStart =
     !runInFlight &&
     complete === null &&
@@ -388,8 +388,8 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
           </div>
         )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "16px" }}>
-          <DialogButton disabled={starting} onClick={() => closeModal?.()}>
-            {runStarted ? "Close" : "Cancel"}
+          <DialogButton disabled={starting && complete === null} onClick={() => closeModal?.()}>
+            {runStarted || complete !== null ? "Close" : "Cancel"}
           </DialogButton>
           <DialogButton disabled={!canStart} onClick={() => detach(start())}>
             {starting ? "Starting..." : progress ? `${progress.stage.replace(/_/g, " ")}...` : "Confirm Cleanup"}

@@ -84,6 +84,7 @@ export function beginPruneRun(runId: string, previewId: string): void {
 }
 
 export function admitPruneFrame(previewId: string, runId: string): boolean {
+  if (complete !== null) return false;
   if (activeRunId !== null) return activeRunId === runId;
   if (pendingPreviewId === null || pendingPreviewId !== previewId) return false;
   activeRunId = runId;

@@ -192,11 +192,13 @@ they mutate recovered state. Frontend-owned shortcut removal, core/disc writes, 
 application, download completion, home migration, startup healing, pre-launch healing, and every post-sync Steam branch
 (launch options, collections, playtime, and overview metadata) hold tokenized conflict leases through their final Steam
 write and bounded release. Active continuations heartbeat those leases once per minute. A global frontend registry
-signals cooperative cancellation and releases leases by component owner or on plugin dismount; unresolved operations
-stop renewing after a bounded five minutes, and the backend lease then expires after five minutes without a successful
-heartbeat. Event delivery failure releases a token that never reached the frontend. This closes the reciprocal admission
-race, and each path refuses while a prune claim is active. Migration and active-library-sync decorators additionally
-guard preview and start.
+signals cooperative cancellation by component owner or on plugin dismount. Cancellation stops every not-yet-started
+Steam mutation and lease renewal, but explicit backend release waits for any already-started non-cancellable Steam
+promise to settle. An unresolved operation stops renewing after a bounded five minutes; the backend's five-minute
+no-heartbeat expiry is the abandonment backstop if it never settles. The paced `sync_stale` removal tail participates in
+the `sync_complete` continuation's settlement set rather than running detached from its lease. Event delivery failure
+releases a token that never reached the frontend. This closes the reciprocal admission race, and each path refuses while
+a prune claim is active. Migration and active-library-sync decorators additionally guard preview and start.
 
 The executor processes sibling groups serially and catches ordinary exceptions per group. It rejects multiple shortcut
 bindings and active downloads, pins the preview's canonical RomM origin/token-origin/user namespace, probes every local
@@ -222,16 +224,19 @@ mount transitions. After the anchored root rename, deletion obtains kernel read 
 before removing any entry and holds them through the last descriptor/hash check and unlink. An existing writer, an
 unsupported lease, or any inability to establish exclusion restores/retains the source rather than deleting bytes not in
 recovery. Content excluded from the bundle and recovery-off saves still receive a final complete no-follow claim; their
-remove/quarantine uses anchored parents and directory-durable rename rather than a raw path fallback. Expected-absent
-save paths are collectively rechecked after all filesystem work and immediately before the aggregate cascade. Validation
-and claim decoding share one held bundle descriptor and return a digest that every later guard compares to the cached
-claims. Recovery root, staging, bundles, destination files, and the sealed bundle remain descriptor-anchored through
-copy, metadata application, hashing, cross-directory rename, validation, and both-parent fsync. Failure cleanup uses the
-same mount-aware descriptor-relative remover; if cleanup cannot prove a safe tree, it leaves and reports the staging
-directory instead of recursively entering uncertain data. Adapter outcomes carry actual and durability-ambiguous changes
-into the mutation ledger even when a later item or parent fsync fails. The final SQLite delete is one short UoW that
-revalidates complete row/binding state, invalidates intersecting collection stamps, and clears platform stamps only for
-fully vanished games.
+remove/quarantine uses anchored parents and atomic no-replace rename rather than a raw path fallback, so a concurrently
+created backup is never overwritten. Writer-exclusion teardown faults after mutation are reported as ambiguous, not
+exact success. Controller rewrites revalidate the held claimed inode before every restore/discard branch and retain a
+newer claimed inode at a surfaced path when a concurrent Steam file wins publication. Expected-absent save paths are
+collectively rechecked after all filesystem work and immediately before the aggregate cascade. Validation and claim
+decoding share one held bundle descriptor and return a digest that every later guard compares to the cached claims.
+Recovery root, staging, bundles, destination files, and the sealed bundle remain descriptor-anchored through copy,
+metadata application, hashing, cross-directory rename, validation, and both-parent fsync. Failure cleanup uses the same
+mount-aware descriptor-relative remover; if cleanup cannot prove a safe tree, it leaves and reports the full anchored
+staging path instead of recursively entering uncertain data. Adapter outcomes carry actual and durability-ambiguous
+changes into the mutation ledger even when a later item or parent fsync fails. The final SQLite delete is one short UoW
+that revalidates complete row/binding state, invalidates intersecting collection stamps, and clears platform stamps only
+for fully vanished games.
 
 Frontend Steam events use a claim/complete protocol. A claim checks the run, token, discriminant, appId, target, exact
 single-binding group, and current binding before the frontend rechecks the live `rom-launcher` executable and mutates
@@ -248,8 +253,10 @@ shielded child faults: the current group's truthful fault/ledger result is recor
 result strings/arrays are bounded and chunks are built to a serialized byte budget. Every action/progress/completion
 frame carries the originating preview ID, allowing the frontend to adopt a matching run even if the successful start
 response is delayed or lost while still rejecting foreign frames; completion finalizes only a contiguous chunk sequence.
-Committed repoint publication performs a bounded/retried backend release acknowledgement before gated cover/status work.
-Mixed runs continue unrelated groups.
+An accepted contiguous terminal sequence seals that run against every later action, progress, or completion frame, and
+the modal exposes its terminal controls immediately even if the start response is still pending. Committed repoint
+publication performs a bounded/retried backend release acknowledgement before gated cover/status work. Mixed runs
+continue unrelated groups.
 
 #### LibraryService decomposition (`services/library/`)
 

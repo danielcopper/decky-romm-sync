@@ -8,7 +8,7 @@
 
 import { getSgdbArtworkBase64, saveShortcutIcon, debugLog } from "../api/backend";
 import { detach } from "./detach";
-import { releasePruneLeasesByOwner, withPruneLeases } from "./pruneLease";
+import { isPruneLeaseCancelled, releasePruneLeasesByOwner, withPruneLeases } from "./pruneLease";
 
 /**
  * Newest-apply-wins guard. Each appId's most recent applyArtwork call claims a
@@ -27,8 +27,10 @@ const artworkGenerations = new Map<number, number>();
  * (Steam owns shortcuts.vdf in memory and clobbers external writes). Returns
  * whether the icon was actually applied — a save failure or a missing path is not.
  */
-async function applyIcon(appId: number, base64: string): Promise<boolean> {
+async function applyIcon(appId: number, base64: string, signal: AbortSignal): Promise<boolean> {
+  if (isPruneLeaseCancelled(signal)) return false;
   const iconResult = await saveShortcutIcon(appId, base64);
+  if (isPruneLeaseCancelled(signal)) return false;
   if (iconResult.success && iconResult.icon_path) {
     SteamClient.Apps.SetShortcutIcon(appId, iconResult.icon_path);
     return true;
@@ -60,7 +62,7 @@ export async function applyArtwork(romId: number, appId: number): Promise<number
   return withPruneLeases(
     leaseTokens,
     "Artwork apply",
-    async () => {
+    async (signal) => {
       let applied = 0;
       // A later apply for this appId can start during any of the awaits above/below,
       // so re-check before every Steam write. Once superseded, go silent (log once,
@@ -78,6 +80,7 @@ export async function applyArtwork(romId: number, appId: number): Promise<number
       ];
       for (const [base64, assetType] of customArt) {
         if (!base64) continue;
+        if (isPruneLeaseCancelled(signal)) return applied;
         if (superseded()) return bail();
         await SteamClient.Apps.SetCustomArtworkForApp(appId, base64, "png", assetType);
         applied++;
@@ -85,8 +88,9 @@ export async function applyArtwork(romId: number, appId: number): Promise<number
 
       // Type 4 = icon (a distinct apply path — see applyIcon).
       if (results[3].base64) {
+        if (isPruneLeaseCancelled(signal)) return applied;
         if (superseded()) return bail();
-        if (await applyIcon(appId, results[3].base64)) applied++;
+        if (await applyIcon(appId, results[3].base64, signal)) applied++;
       }
 
       return applied;

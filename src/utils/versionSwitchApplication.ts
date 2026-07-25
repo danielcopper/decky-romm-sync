@@ -6,7 +6,7 @@ import {
   type SwitchVersionSuccess,
 } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "./steamShortcuts";
-import { withPruneLease } from "./pruneLease";
+import { isPruneLeaseCancelled, withPruneLease } from "./pruneLease";
 
 export async function applyCommittedVersionSwitch(
   result: SwitchVersionSuccess,
@@ -17,6 +17,7 @@ export async function applyCommittedVersionSwitch(
     "Version switch",
     async (signal) => {
       let confirmed = false;
+      if (isPruneLeaseCancelled(signal)) return confirmed;
       try {
         confirmed = await setLaunchOptionsConfirmed(result.app_id, result.launch_options);
       } catch (e) {
@@ -27,7 +28,9 @@ export async function applyCommittedVersionSwitch(
       if (!confirmed) {
         logError(`Version switch: could not confirm launch options for rom ${result.rom_id} (appId ${result.app_id})`);
       }
-      if (!signal.aborted) await publishCommittedVersionSwitch(result.app_id, result.rom_id, onCover, signal);
+      if (!isPruneLeaseCancelled(signal)) {
+        await publishCommittedVersionSwitch(result.app_id, result.rom_id, onCover, signal);
+      }
       return confirmed;
     },
     `version-picker:${result.app_id}`,

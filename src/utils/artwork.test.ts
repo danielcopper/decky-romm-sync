@@ -75,7 +75,7 @@ describe("applyArtwork", () => {
     ).toEqual(["lease-1", "lease-2", "lease-3", "lease-4"]);
   });
 
-  it("component cancellation releases artwork leases even while a Steam write is pending", async () => {
+  it("component cancellation retains artwork leases until a pending Steam write settles", async () => {
     const write = deferred<void>();
     vi.mocked(backend.getSgdbArtworkBase64).mockResolvedValue({
       base64: "AA==",
@@ -87,11 +87,15 @@ describe("applyArtwork", () => {
 
     const applying = applyArtwork(42, 5000);
     await vi.waitFor(() => expect(SteamClient.Apps.SetCustomArtworkForApp).toHaveBeenCalled());
-    await cancelArtworkApply(5000);
-    expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("artwork-lease");
+    const cancelling = cancelArtworkApply(5000);
+    await Promise.resolve();
+    expect(backend.releasePruneConflictLease).not.toHaveBeenCalledWith("artwork-lease");
 
     write.resolve(undefined);
     await applying;
+    await cancelling;
+    expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("artwork-lease");
+    expect(SteamClient.Apps.SetCustomArtworkForApp).toHaveBeenCalledTimes(1);
   });
 
   it("does not call SetShortcutIcon when saveShortcutIcon reports failure", async () => {

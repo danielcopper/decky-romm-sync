@@ -130,11 +130,13 @@ export const DiscSelector: FC<DiscSelectorProps> = ({ appId }) => {
     if (rid == null) return;
     try {
       const result = await selectDisc(rid, data);
-      await withPruneLease(result.prune_lease_token, "DiscSelector", async () => {
+      await withPruneLease(result.prune_lease_token, "DiscSelector", async (signal) => {
         if (result.success) {
           if (result.launch_options !== undefined) {
+            if (signal.aborted) return;
             await setLaunchOptionsConfirmed(appId, result.launch_options);
           }
+          if (signal.aborted) return;
           setSelected(result.selected ?? null);
         } else {
           toaster.toast({ title: "RomM Sync", body: result.message || "Failed to select disc" });

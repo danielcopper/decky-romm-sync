@@ -14,6 +14,7 @@ from adapters.descriptor_paths import (
     open_directory_fd,
     open_regular_fd,
     remove_claimed,
+    rename_noreplace_at,
     require_directory,
 )
 from domain.artwork_paths import grid_image_filenames
@@ -218,25 +219,28 @@ class SteamRecoveryAdapter:
                         vdf.dump(payload, output, pretty=True)
                         output.flush()
                         os.fsync(output.fileno())
-                    os.rename(
-                        "localconfig.vdf",
-                        claimed,
-                        src_dir_fd=config_fd,
-                        dst_dir_fd=config_fd,
-                    )
+                    rename_noreplace_at(config_fd, "localconfig.vdf", config_fd, claimed)
                     source_claimed = True
                     claimed_stat = os.stat(claimed, dir_fd=config_fd, follow_symlinks=False)
                     stable = ("device", "inode", "mode", "size", "mtime_ns")
                     claimed_identity = identity_for_stat(claimed_stat)
                     if any(claimed_identity[field] != source_identity[field] for field in stable):
-                        SteamRecoveryAdapter._restore_or_discard_claim(config_fd, claimed)
+                        preserved = SteamRecoveryAdapter._restore_or_preserve_claim(
+                            config_fd, claimed, source_fd, source_identity, source_hash
+                        )
                         os.unlink(temporary, dir_fd=config_fd)
                         os.close(source_fd)
+                        if preserved is not None:
+                            return SteamRecoveryAdapter._preserved_controller_outcome(config_dir, preserved)
                         continue
                     if not SteamRecoveryAdapter._source_unchanged(source_fd, source_identity, source_hash):
-                        SteamRecoveryAdapter._restore_or_discard_claim(config_fd, claimed)
+                        preserved = SteamRecoveryAdapter._restore_or_preserve_claim(
+                            config_fd, claimed, source_fd, source_identity, source_hash
+                        )
                         os.unlink(temporary, dir_fd=config_fd)
                         os.close(source_fd)
+                        if preserved is not None:
+                            return SteamRecoveryAdapter._preserved_controller_outcome(config_dir, preserved)
                         continue
                     try:
                         os.link(
@@ -248,19 +252,37 @@ class SteamRecoveryAdapter:
                         )
                         replacement_installed = True
                     except FileExistsError:
-                        os.unlink(claimed, dir_fd=config_fd)
+                        preserved = SteamRecoveryAdapter._restore_or_preserve_claim(
+                            config_fd, claimed, source_fd, source_identity, source_hash
+                        )
                         os.unlink(temporary, dir_fd=config_fd)
-                        os.fsync(config_fd)
                         os.close(source_fd)
+                        if preserved is not None:
+                            return SteamRecoveryAdapter._preserved_controller_outcome(config_dir, preserved)
                         continue
                     os.unlink(temporary, dir_fd=config_fd)
                     if not SteamRecoveryAdapter._source_unchanged(source_fd, source_identity, source_hash):
                         os.unlink("localconfig.vdf", dir_fd=config_fd)
-                        SteamRecoveryAdapter._restore_or_discard_claim(config_fd, claimed)
+                        preserved = SteamRecoveryAdapter._restore_or_preserve_claim(
+                            config_fd, claimed, source_fd, source_identity, source_hash
+                        )
                         os.fsync(config_fd)
                         os.close(source_fd)
+                        if preserved is not None:
+                            return SteamRecoveryAdapter._preserved_controller_outcome(config_dir, preserved)
                         continue
                     try:
+                        SteamRecoveryAdapter._require_claim_matches_source(config_fd, claimed, source_fd)
+                        if not SteamRecoveryAdapter._source_unchanged(source_fd, source_identity, source_hash):
+                            os.unlink("localconfig.vdf", dir_fd=config_fd)
+                            preserved = SteamRecoveryAdapter._restore_or_preserve_claim(
+                                config_fd, claimed, source_fd, source_identity, source_hash
+                            )
+                            os.fsync(config_fd)
+                            os.close(source_fd)
+                            if preserved is not None:
+                                return SteamRecoveryAdapter._preserved_controller_outcome(config_dir, preserved)
+                            continue
                         os.unlink(claimed, dir_fd=config_fd)
                         os.fsync(config_fd)
                     except OSError as exc:
@@ -279,25 +301,38 @@ class SteamRecoveryAdapter:
                         "message": "Controller setting removed",
                     }
                 except BaseException as exc:
-                    with contextlib.suppress(OSError):
-                        os.close(source_fd)
                     with contextlib.suppress(FileNotFoundError):
                         os.unlink(temporary, dir_fd=config_fd)
+                    cleanup_outcome: MutationOutcome | None = None
                     try:
                         if source_claimed and SteamRecoveryAdapter._stat_at(config_fd, claimed) is not None:
                             if replacement_installed:
                                 # The claimed inode may contain a newer unrelated Steam edit.
                                 # If rollback could not restore it, retain that only good copy.
+                                SteamRecoveryAdapter._require_claim_matches_source(config_fd, claimed, source_fd)
                                 os.fsync(config_fd)
                             else:
-                                SteamRecoveryAdapter._restore_or_discard_claim(config_fd, claimed)
-                    except OSError as cleanup_exc:
-                        return {
+                                preserved = SteamRecoveryAdapter._restore_or_preserve_claim(
+                                    config_fd, claimed, source_fd, source_identity, source_hash
+                                )
+                                if preserved is not None:
+                                    cleanup_outcome = SteamRecoveryAdapter._preserved_controller_outcome(
+                                        config_dir, preserved, cause=exc
+                                    )
+                    except BaseException as cleanup_exc:
+                        cleanup_outcome = {
                             "success": False,
                             "changed": source_claimed,
                             "ambiguous": True,
-                            "message": f"Controller rewrite rollback is uncertain: {cleanup_exc}",
+                            "message": (
+                                "Controller rewrite rollback is uncertain; the claimed source was preserved as "
+                                f"{os.path.join(config_dir, claimed)}: {cleanup_exc}"
+                            ),
                         }
+                    with contextlib.suppress(OSError):
+                        os.close(source_fd)
+                    if cleanup_outcome is not None:
+                        return cleanup_outcome
                     if replacement_installed:
                         return {
                             "success": False,
@@ -314,12 +349,57 @@ class SteamRecoveryAdapter:
             os.close(config_fd)
 
     @staticmethod
-    def _restore_or_discard_claim(config_fd: int, claimed: str) -> None:
+    def _restore_or_preserve_claim(
+        config_fd: int,
+        claimed: str,
+        source_fd: int,
+        expected_identity: SourceIdentity,
+        expected_hash: str,
+    ) -> str | None:
+        SteamRecoveryAdapter._require_claim_matches_source(config_fd, claimed, source_fd)
         if SteamRecoveryAdapter._stat_at(config_fd, "localconfig.vdf") is None:
-            os.rename(claimed, "localconfig.vdf", src_dir_fd=config_fd, dst_dir_fd=config_fd)
-        else:
-            os.unlink(claimed, dir_fd=config_fd)
+            try:
+                rename_noreplace_at(config_fd, claimed, config_fd, "localconfig.vdf")
+            except FileExistsError:
+                pass
+            else:
+                os.fsync(config_fd)
+                return None
+        if not SteamRecoveryAdapter._source_unchanged(source_fd, expected_identity, expected_hash):
+            os.fsync(config_fd)
+            return claimed
+        SteamRecoveryAdapter._require_claim_matches_source(config_fd, claimed, source_fd)
+        if not SteamRecoveryAdapter._source_unchanged(source_fd, expected_identity, expected_hash):
+            os.fsync(config_fd)
+            return claimed
+        os.unlink(claimed, dir_fd=config_fd)
         os.fsync(config_fd)
+        return None
+
+    @staticmethod
+    def _require_claim_matches_source(config_fd: int, claimed: str, source_fd: int) -> None:
+        claimed_stat = SteamRecoveryAdapter._stat_at(config_fd, claimed)
+        if claimed_stat is None:
+            raise RuntimeError(f"Claimed Steam controller source disappeared: {claimed}")
+        held_stat = os.fstat(source_fd)
+        fields = ("st_dev", "st_ino", "st_mode")
+        if any(getattr(claimed_stat, field) != getattr(held_stat, field) for field in fields):
+            raise RuntimeError(f"Claimed Steam controller source identity changed: {claimed}")
+
+    @staticmethod
+    def _preserved_controller_outcome(
+        config_dir: str, claimed: str, *, cause: BaseException | None = None
+    ) -> MutationOutcome:
+        suffix = f": {cause}" if cause is not None else ""
+        return {
+            "success": False,
+            "changed": True,
+            "ambiguous": True,
+            "message": (
+                "Controller rewrite collided with concurrent Steam state; the newer source was preserved as "
+                f"{os.path.join(config_dir, claimed)}{suffix}"
+            ),
+        }
 
     @staticmethod
     def _stat_at(directory_fd: int, name: str) -> os.stat_result | None:

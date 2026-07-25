@@ -10,12 +10,17 @@ interface ActiveLease {
   context: string;
   owner: string;
   interval: ReturnType<typeof setInterval>;
+  settlement: Promise<void> | undefined;
 }
 
 const activeLeases = new Map<string, ActiveLease>();
 
 class UnsettledContinuation {
   constructor(readonly error: unknown) {}
+}
+
+export function isPruneLeaseCancelled(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted ?? false;
 }
 
 /** Bounded best-effort release for frontend-owned prune conflict leases. */
@@ -35,12 +40,23 @@ async function finishLease(token: string, releaseBackend: boolean): Promise<void
   if (releaseBackend) await releasePruneLease(token, active.context);
 }
 
+function retireLeaseAfterSettlement(token: string): Promise<void> {
+  const active = activeLeases.get(token);
+  if (!active) return Promise.resolve();
+  activeLeases.delete(token);
+  clearInterval(active.interval);
+  active.abortController?.abort();
+  const release = () => releasePruneLease(token, active.context);
+  return active.settlement ? active.settlement.then(release) : release();
+}
+
 /** Keep a frontend continuation demonstrably live until its bounded release. */
 export function maintainPruneLease(
   token: string,
   context: string,
   owner = context,
   abortController?: AbortController,
+  settlement?: Promise<void>,
 ): () => Promise<void> {
   const renew = async (): Promise<void> => {
     if (!activeLeases.has(token)) return;
@@ -48,6 +64,7 @@ export function maintainPruneLease(
       const result = await withTimeout(renewPruneConflictLease(token), RELEASE_TIMEOUT_MS);
       if (!result.success) {
         logError(`${context}: prune lease renewal was refused: ${result.message}`);
+        activeLeases.get(token)?.abortController?.abort();
         await finishLease(token, false);
       }
     } catch (e) {
@@ -55,7 +72,7 @@ export function maintainPruneLease(
     }
   };
   const interval = setInterval(() => void renew(), RENEW_INTERVAL_MS);
-  activeLeases.set(token, { abortController, context, owner, interval });
+  activeLeases.set(token, { abortController, context, owner, interval, settlement });
   return () => finishLease(token, true);
 }
 
@@ -63,19 +80,15 @@ export async function releasePruneLeasesByOwner(owner: string): Promise<void> {
   const owned = [...activeLeases].filter(([, lease]) => lease.owner === owner);
   for (const [, lease] of owned) lease.abortController?.abort();
   const tokens = owned.map(([token]) => token);
-  await Promise.all(tokens.map((token) => finishLease(token, true)));
+  await Promise.all(tokens.map(retireLeaseAfterSettlement));
 }
 
 export async function releaseAllPruneLeases(): Promise<void> {
   for (const lease of activeLeases.values()) lease.abortController?.abort();
-  await Promise.all([...activeLeases].map(([token]) => finishLease(token, true)));
+  await Promise.all([...activeLeases].map(([token]) => retireLeaseAfterSettlement(token)));
 }
 
-async function boundedContinuation<T>(
-  operation: (signal: AbortSignal) => Promise<T>,
-  abortController: AbortController,
-): Promise<{ result: T; settled: true }> {
-  const promise = operation(abortController.signal);
+async function boundedContinuation<T>(promise: Promise<T>): Promise<{ result: T; settled: true }> {
   const settled = promise.then(
     (result) => ({ kind: "result" as const, result }),
     (error: unknown) => ({ kind: "error" as const, error }),
@@ -105,21 +118,28 @@ export async function withPruneLeases<T>(
 ): Promise<T> {
   const uniqueTokens = [...new Set(tokens.filter((token): token is string => !!token))];
   const abortController = new AbortController();
+  const operationPromise = Promise.resolve().then(() => operation(abortController.signal));
+  const settlement = operationPromise.then(
+    () => undefined,
+    () => undefined,
+  );
   const releases = uniqueTokens.map((token) => ({
     token,
-    release: maintainPruneLease(token, context, owner, abortController),
+    release: maintainPruneLease(token, context, owner, abortController, settlement),
   }));
+  let timedOut = false;
   try {
-    return (await boundedContinuation(operation, abortController)).result;
+    return (await boundedContinuation(operationPromise)).result;
   } catch (caught) {
     if (caught instanceof UnsettledContinuation) {
+      timedOut = true;
       abortController.abort();
-      await Promise.all(releases.map(({ token }) => finishLease(token, false)));
+      for (const { token } of releases) void retireLeaseAfterSettlement(token);
       throw caught.error;
     }
     throw caught;
   } finally {
-    await Promise.all(releases.map(({ release }) => release()));
+    if (!timedOut) await Promise.all(releases.map(({ release }) => release()));
   }
 }
 

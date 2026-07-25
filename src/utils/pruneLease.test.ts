@@ -80,12 +80,39 @@ it("owner teardown aborts a delayed continuation before its next write", async (
   );
   await Promise.resolve();
 
-  await releasePruneLeasesByOwner("version-picker:42");
+  const teardown = releasePruneLeasesByOwner("version-picker:42");
+  await Promise.resolve();
+  expect(releasePruneConflictLease).not.toHaveBeenCalledWith("lease-delayed");
   resume();
   await continuation;
+  await teardown;
 
   expect(wroteAfterAwait).toBe(false);
   expect(releasePruneConflictLease).toHaveBeenCalledWith("lease-delayed");
+});
+
+it("owner teardown retains backend exclusion until a started non-cancellable operation settles", async () => {
+  vi.mocked(releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
+  let settle!: () => void;
+  const continuation = withPruneLease(
+    "lease-started",
+    "Artwork",
+    () =>
+      new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    "artwork:42",
+  );
+  await Promise.resolve();
+
+  const teardown = releasePruneLeasesByOwner("artwork:42");
+  await Promise.resolve();
+  expect(releasePruneConflictLease).not.toHaveBeenCalledWith("lease-started");
+
+  settle();
+  await continuation;
+  await teardown;
+  expect(releasePruneConflictLease).toHaveBeenCalledWith("lease-started");
 });
 
 it("plugin teardown releases all registered frontend leases", async () => {
@@ -118,4 +145,48 @@ it("stops renewing an unresolved continuation at the five-minute bound", async (
   expect(renewalsAtTimeout).toBeGreaterThan(0);
   expect(renewPruneConflictLease).toHaveBeenCalledTimes(renewalsAtTimeout);
   expect(releasePruneConflictLease).not.toHaveBeenCalledWith("lease-hung");
+});
+
+it("timeout aborts future work and releases only after the underlying operation settles", async () => {
+  vi.useFakeTimers();
+  vi.mocked(renewPruneConflictLease).mockResolvedValue({ success: true, message: "renewed" });
+  vi.mocked(releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
+  let resume!: () => void;
+  let wroteAfterAwait = false;
+  const operation = withPruneLease("lease-timeout", "Timed continuation", async (signal) => {
+    await new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    if (!signal.aborted) wroteAfterAwait = true;
+  });
+  const rejection = expect(operation).rejects.toThrow("callable timed out after 300000ms");
+
+  await vi.advanceTimersByTimeAsync(300_001);
+  await rejection;
+  expect(releasePruneConflictLease).not.toHaveBeenCalledWith("lease-timeout");
+
+  resume();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(wroteAfterAwait).toBe(false);
+  expect(releasePruneConflictLease).toHaveBeenCalledWith("lease-timeout");
+});
+
+it("a refused renewal aborts future writes and abandons the refused token", async () => {
+  vi.useFakeTimers();
+  vi.mocked(renewPruneConflictLease).mockResolvedValue({ success: false, message: "expired" });
+  let resume!: () => void;
+  let wroteAfterAwait = false;
+  const operation = withPruneLease("lease-refused", "Refused continuation", async (signal) => {
+    await new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    if (!signal.aborted) wroteAfterAwait = true;
+  });
+
+  await vi.advanceTimersByTimeAsync(60_000);
+  resume();
+  await operation;
+
+  expect(wroteAfterAwait).toBe(false);
+  expect(releasePruneConflictLease).not.toHaveBeenCalledWith("lease-refused");
 });

@@ -44,4 +44,23 @@ describe("shortcutRemoval — removeShortcutsPaced", () => {
       [3, 3],
     ]);
   });
+
+  it("does not start another Steam removal after its abort signal fires", async () => {
+    let settle!: () => void;
+    removeShortcut.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    const controller = new AbortController();
+    const removal = removeShortcutsPaced([11, 22], undefined, controller.signal);
+    await Promise.resolve();
+
+    controller.abort();
+    settle();
+    await removal;
+
+    expect(removeShortcut.mock.calls.map((call) => call[0])).toEqual([11]);
+  });
 });

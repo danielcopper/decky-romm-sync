@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  admitPruneFrame,
   beginPrunePreview,
   beginPruneRun,
   getPruneState,
@@ -131,5 +132,43 @@ describe("pruneStore", () => {
 
     expect(complete?.removed_rom_ids).toEqual([1, 2]);
     expect(complete?.results.map((item) => item.group_id)).toEqual(["one", "two"]);
+  });
+
+  it("keeps a completed run terminal when delayed same-run frames arrive", () => {
+    begin("run-terminal");
+    const terminal = setPruneComplete({
+      success: true,
+      partial: false,
+      run_id: "run-terminal",
+      preview_id: "preview-1",
+      removed_rom_ids: [7],
+      affected_app_ids: [70],
+      results: [],
+    });
+
+    setPruneProgress({
+      run_id: "run-terminal",
+      preview_id: "preview-1",
+      current: 1,
+      total: 1,
+      stage: "late",
+      rom_ids: [7],
+      name: "late",
+    });
+    expect(
+      setPruneComplete({
+        success: false,
+        partial: true,
+        run_id: "run-terminal",
+        preview_id: "preview-1",
+        chunk_index: 1,
+        removed_rom_ids: [],
+        affected_app_ids: [],
+        results: [],
+      }),
+    ).toBeNull();
+    expect(admitPruneFrame("preview-1", "run-terminal")).toBe(false);
+
+    expect(getPruneState()).toEqual({ runId: "run-terminal", progress: null, complete: terminal });
   });
 });

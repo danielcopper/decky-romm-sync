@@ -30,9 +30,10 @@ export async function reconfirmLaunchOptions(romId: number, appId: number, conte
       ),
     ]);
     if (item?.success) {
-      await withPruneLease(item.prune_lease_token, context, () =>
-        setLaunchOptionsConfirmed(appId, item.launch_options).then(() => undefined),
-      );
+      await withPruneLease(item.prune_lease_token, context, async (signal) => {
+        if (signal.aborted) return;
+        await setLaunchOptionsConfirmed(appId, item.launch_options);
+      });
     }
   } catch (e) {
     logError(`${context}: launch_options re-confirm failed (launching anyway): ${e}`);
@@ -49,12 +50,14 @@ export async function reconfirmLaunchOptions(romId: number, appId: number, conte
 export async function batchConfirmLaunchOptions(
   items: { app_id: number; launch_options: string }[],
   context: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (!Array.isArray(items) || items.length === 0) return;
   for (let i = 0; i < items.length; i += CONCURRENCY) {
     const batch = items.slice(i, i + CONCURRENCY);
     await Promise.all(
       batch.map(async (item) => {
+        if (signal?.aborted) return;
         try {
           const ok = await setLaunchOptionsConfirmed(item.app_id, item.launch_options);
           if (!ok) {

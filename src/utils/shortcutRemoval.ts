@@ -25,6 +25,7 @@ const REMOVAL_CHUNK_DELAY_MS = 50;
 export async function removeShortcutsPaced(
   appIds: number[],
   onProgress?: (removed: number, total: number) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const total = appIds.length;
   await pacedForEach(appIds, (appId) => removeShortcut(appId), {
@@ -33,5 +34,6 @@ export async function removeShortcutsPaced(
     // Only thread the hook when a caller wants one (exactOptionalPropertyTypes
     // forbids passing an explicit ``undefined`` for an optional property).
     ...(onProgress ? { onProgress: (completed: number) => onProgress(completed, total) } : {}),
+    ...(signal ? { isCancelled: () => signal.aborted } : {}),
   });
 }

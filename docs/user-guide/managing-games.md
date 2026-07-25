@@ -146,8 +146,9 @@ in a focusable terminal-detail region even when the group was removed successful
 failure message remains visible after earlier groups committed. If bounded warning or message text was omitted or
 shortened, the detail distinguishes omitted warnings from shortened displayed text and never reports zero additional
 warnings. Progress is tied to the preview that you confirmed, so a matching run is still shown if only the successful
-start response is delayed or lost; frames from an older preview are ignored. These outcomes are intentional and
-retryable rather than being reported as unchanged.
+start response is delayed or lost; a matching terminal event makes the modal closable immediately. Once that terminal
+result is assembled, delayed frames for the same run cannot replace it. Frames from an older preview are ignored. These
+outcomes are intentional and retryable rather than being reported as unchanged.
 
 ### Region and Languages
 

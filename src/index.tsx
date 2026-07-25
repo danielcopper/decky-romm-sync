@@ -69,7 +69,7 @@ import type {
 import { setLaunchOptionsConfirmed } from "./utils/steamShortcuts";
 import { removeShortcutsPaced } from "./utils/shortcutRemoval";
 import { batchConfirmLaunchOptions } from "./utils/launchOptionsReconcile";
-import { releaseAllPruneLeases, withPruneLease } from "./utils/pruneLease";
+import { isPruneLeaseCancelled, releaseAllPruneLeases, withPruneLease } from "./utils/pruneLease";
 import { withTimeout } from "./utils/withTimeout";
 import { fetchMetadataCachePages } from "./utils/metadataCache";
 import { cancelPruneActions, handlePruneAction } from "./utils/pruneActions";
@@ -209,6 +209,8 @@ export default definePlugin(() => {
   const METADATA_PAGE_SIZE = 500;
   let initAttempt = 0;
   let initDone = false;
+  let syncContinuationController = new AbortController();
+  let staleRemovalTail: Promise<void> = Promise.resolve();
 
   async function loadAppIdsAndMetadata() {
     const appIdMap = await withTimeout(getAppIdRomIdMap(), CALLABLE_TIMEOUT);
@@ -271,8 +273,8 @@ export default definePlugin(() => {
         try {
           const result = await getInstalledRelaunchOptions();
           if (result.success) {
-            await withPruneLease(result.prune_lease_token, "Startup reconcile", () =>
-              batchConfirmLaunchOptions(result.items, "startup_reconcile"),
+            await withPruneLease(result.prune_lease_token, "Startup reconcile", (signal) =>
+              batchConfirmLaunchOptions(result.items, "startup_reconcile", signal),
             );
           }
         } catch (e) {
@@ -421,27 +423,34 @@ export default definePlugin(() => {
     registerAppIds(data.platform_app_ids);
     registerAppIds(data.romm_collection_app_ids ?? {});
 
-    const reconcileLaunchOptions = async (): Promise<void> => {
+    const reconcileLaunchOptions = async (signal: AbortSignal): Promise<void> => {
       try {
         const result = await getInstalledRelaunchOptions();
+        if (isPruneLeaseCancelled(signal)) return;
         if (result.success) {
-          await withPruneLease(result.prune_lease_token, "Installed reconcile", () =>
-            batchConfirmLaunchOptions(result.items, "sync_reconcile"),
-          );
+          await withPruneLease(result.prune_lease_token, "Installed reconcile", (innerSignal) => {
+            if (isPruneLeaseCancelled(innerSignal)) return Promise.resolve();
+            return batchConfirmLaunchOptions(result.items, "sync_reconcile", signal);
+          });
         }
       } catch (e) {
         logError(`sync_reconcile: failed to reconcile launch options: ${e}`);
       }
     };
 
-    const reconcileCollections = async (): Promise<void> => {
+    const reconcileCollections = async (signal: AbortSignal): Promise<void> => {
       try {
-        if (Object.keys(data.platform_app_ids).length > 0) await createOrUpdateCollections(data.platform_app_ids);
-        if (data.romm_collection_app_ids && Object.keys(data.romm_collection_app_ids).length > 0) {
-          await createOrUpdateRomMCollections(data.romm_collection_app_ids);
+        if (Object.keys(data.platform_app_ids).length > 0) {
+          await createOrUpdateCollections(data.platform_app_ids, undefined, signal);
         }
+        if (isPruneLeaseCancelled(signal)) return;
+        if (data.romm_collection_app_ids && Object.keys(data.romm_collection_app_ids).length > 0) {
+          await createOrUpdateRomMCollections(data.romm_collection_app_ids, undefined, signal);
+        }
+        if (isPruneLeaseCancelled(signal)) return;
         if (!data.cancelled && typeof collectionStore !== "undefined") {
           const hostname = await getHostname();
+          if (isPruneLeaseCancelled(signal)) return;
           const suffix = ` (${hostname})`;
           const activePlatforms = new Set(Object.keys(data.platform_app_ids).map((name) => name.toLowerCase()));
           for (const collection of collectionStore.userCollections.filter((candidate) => {
@@ -457,7 +466,8 @@ export default definePlugin(() => {
           })) {
             const platformName = collection.displayName.slice(6).replace(/\s\([^)]+\)$/, "");
             logInfo(`Removing stale platform collection "${collection.displayName}"`);
-            await clearPlatformCollection(platformName);
+            await clearPlatformCollection(platformName, signal);
+            if (isPruneLeaseCancelled(signal)) return;
           }
           const activeNames = new Set(
             Object.keys(data.romm_collection_app_ids ?? {}).map((name) => name.toLowerCase()),
@@ -469,6 +479,7 @@ export default definePlugin(() => {
             return match ? !activeNames.has(match[1]!.toLowerCase()) : false;
           })) {
             logInfo(`Removing stale RomM collection "${collection.displayName}"`);
+            if (isPruneLeaseCancelled(signal)) return;
             await collection.Delete();
           }
         }
@@ -477,31 +488,49 @@ export default definePlugin(() => {
       }
     };
 
-    const reconcilePlaytime = async (): Promise<void> => {
+    const reconcilePlaytime = async (signal: AbortSignal): Promise<void> => {
       try {
         const [{ playtime }, appIdMap] = await Promise.all([getAllPlaytime(), getAppIdRomIdMap()]);
-        await applyAllPlaytime(playtime, appIdMap);
+        if (isPruneLeaseCancelled(signal)) return;
+        await applyAllPlaytime(playtime, appIdMap, signal);
       } catch (e) {
         logError(`Failed to re-apply playtime after sync: ${e}`);
       }
     };
 
-    const reconcileMetadata = async (): Promise<void> => {
+    const reconcileMetadata = async (signal: AbortSignal): Promise<void> => {
       try {
         const [cache, appIdMap] = await Promise.all([
           fetchMetadataCachePages(METADATA_PAGE_SIZE, CALLABLE_TIMEOUT),
           getAppIdRomIdMap(),
         ]);
+        if (isPruneLeaseCancelled(signal)) return;
         registerMetadataPatches(cache, appIdMap);
-        await applyAllMetadata();
+        await applyAllMetadata(signal);
       } catch (e) {
         logError(`Failed to re-apply metadata after sync: ${e}`);
       }
     };
 
+    const continuationController = syncContinuationController;
+    const staleRemovals = staleRemovalTail;
     detach(
-      withPruneLease(data.prune_lease_token, "Sync completion", async () => {
-        await Promise.all([reconcileLaunchOptions(), reconcileCollections(), reconcilePlaytime(), reconcileMetadata()]);
+      withPruneLease(data.prune_lease_token, "Sync completion", async (leaseSignal) => {
+        const abort = () => continuationController.abort();
+        if (leaseSignal.aborted) abort();
+        else leaseSignal.addEventListener("abort", abort, { once: true });
+        try {
+          const signal = continuationController.signal;
+          await Promise.all([
+            staleRemovals,
+            reconcileLaunchOptions(signal),
+            reconcileCollections(signal),
+            reconcilePlaytime(signal),
+            reconcileMetadata(signal),
+          ]);
+        } finally {
+          leaseSignal.removeEventListener("abort", abort);
+        }
       }),
     );
   };
@@ -522,6 +551,8 @@ export default definePlugin(() => {
   // ``sync_plan`` arrives once per run with the full work queue (info only
   // for now — future PR adds a per-platform progress view).
   const syncPlanListener = addEventListener<[SyncPlanData]>("sync_plan", (data: SyncPlanData) => {
+    syncContinuationController.abort();
+    syncContinuationController = new AbortController();
     // sync_plan fires once per run, before any unit — reset the per-run delta
     // so the terminal toast counts only this run's created/removed shortcuts.
     resetSyncDelta();
@@ -581,7 +612,7 @@ export default definePlugin(() => {
   // shortcut by the ``app_id`` the backend captured BEFORE unbinding the
   // row. Resolving rom_id→app_id here (via getExistingRomMShortcuts) would
   // race the backend unbind and find nothing, orphaning the shortcut.
-  const syncStaleListener = addEventListener<[SyncStaleData]>("sync_stale", async (data: SyncStaleData) => {
+  const syncStaleListener = addEventListener<[SyncStaleData]>("sync_stale", (data: SyncStaleData) => {
     if (!Array.isArray(data.remove) || data.remove.length === 0) return;
     // Collect the valid app_ids and record the "removed" delta for each UP FRONT —
     // synchronously, before the first paced breather. recordSyncRemoved is a cheap,
@@ -600,8 +631,11 @@ export default definePlugin(() => {
         recordSyncRemoved(app_id);
       }
     }
-    await removeShortcutsPaced(appIds);
-    logInfo(`sync_stale: removed ${data.remove.length} stale shortcuts`);
+    const signal = syncContinuationController.signal;
+    staleRemovalTail = staleRemovalTail.then(async () => {
+      await removeShortcutsPaced(appIds, undefined, signal);
+      if (!isPruneLeaseCancelled(signal)) logInfo(`sync_stale: removed ${data.remove.length} stale shortcuts`);
+    });
   });
 
   // ``sync_collections`` arrives at the end of the per-unit run with the
@@ -685,9 +719,10 @@ export default definePlugin(() => {
         detach(
           (async () => {
             try {
-              const ok = await withPruneLease(data.prune_lease_token, "Download completion", () =>
-                setLaunchOptionsConfirmed(appId, data.launch_options),
-              );
+              const ok = await withPruneLease(data.prune_lease_token, "Download completion", async (signal) => {
+                if (isPruneLeaseCancelled(signal)) return false;
+                return setLaunchOptionsConfirmed(appId, data.launch_options);
+              });
               if (!ok) {
                 logError(`download_complete: failed to confirm launch options for rom ${data.rom_id} (appId ${appId})`);
               }
@@ -752,8 +787,8 @@ export default definePlugin(() => {
     [{ items: { app_id: number; launch_options: string }[]; prune_lease_token?: string }]
   >("migration_relaunch_options", (data) => {
     detach(
-      withPruneLease(data.prune_lease_token, "RetroDECK migration", () =>
-        batchConfirmLaunchOptions(data.items, "migration_relaunch_options"),
+      withPruneLease(data.prune_lease_token, "RetroDECK migration", (signal) =>
+        batchConfirmLaunchOptions(data.items, "migration_relaunch_options", signal),
       ),
     );
   });
@@ -858,6 +893,7 @@ export default definePlugin(() => {
     content: <QAMPanel />,
     alwaysRender: true,
     onDismount() {
+      syncContinuationController.abort();
       destroySessionManager();
       unregisterLaunchInterceptor();
       unregisterGameDetailPatch();

@@ -594,7 +594,7 @@ describe("VersionPicker — per-version covers (#1346)", () => {
     }
   });
 
-  it("unmount releases the lease and ignores a delayed post-switch cover", async () => {
+  it("unmount aborts a delayed post-switch cover and releases only after its fetch settles", async () => {
     const setArt = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("SteamClient", { Apps: { SetCustomArtworkForApp: setArt } });
     vi.mocked(backend.switchVersion).mockResolvedValue({
@@ -622,11 +622,13 @@ describe("VersionPicker — per-version covers (#1346)", () => {
     fireEvent.click(within(menu.container).getByText("Game (Japan)"));
     await waitFor(() => expect(backend.fetchCoverBase64).toHaveBeenCalledWith(2));
     r.unmount();
-    await waitFor(() => expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("version-lease"));
+    await Promise.resolve();
+    expect(backend.releasePruneConflictLease).not.toHaveBeenCalledWith("version-lease");
     resolveCover({ base64: "LATE" });
     await act(async () => {
       for (let i = 0; i < 5; i++) await Promise.resolve();
     });
+    await waitFor(() => expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("version-lease"));
 
     expect(setArt).not.toHaveBeenCalled();
     expect(invalidateCachedGameDetail).not.toHaveBeenCalled();

@@ -316,10 +316,11 @@ def test_failed_seal_preserves_staging_instead_of_crossing_nested_mount(tmp_path
     monkeypatch.setattr("adapters.descriptor_paths._mount_id", fake_mount_id)
     monkeypatch.setattr(adapter, "_verify_staging_checksums", add_mount_transition_then_fail)
 
-    with pytest.raises(RuntimeError, match="unsafe staging was preserved"):
+    with pytest.raises(RuntimeError, match="unsafe staging was preserved") as caught:
         adapter.seal_bundle("20260724T120000Z_7_mounted", _snapshot(), [], "readme", "playtime")
 
     assert staging_path is not None
+    assert str(staging_path) in str(caught.value)
     assert (staging_path / "mounted" / "outside-marker").read_bytes() == b"keep"
 
 

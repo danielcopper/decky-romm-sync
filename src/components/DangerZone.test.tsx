@@ -373,7 +373,7 @@ describe("DangerZone", () => {
       expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(11);
       expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(12);
       expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2], "platform-removal-lease");
-      expect(vi.mocked(clearPlatformCollection)).toHaveBeenCalledWith("Super Nintendo");
+      expect(vi.mocked(clearPlatformCollection)).toHaveBeenCalledWith("Super Nintendo", expect.any(AbortSignal));
       expect(vi.mocked(clearPlatformCollection).mock.invocationCallOrder[0]).toBeLessThan(
         vi.mocked(backend.reportRemovalResults).mock.invocationCallOrder[0]!,
       );
@@ -398,7 +398,40 @@ describe("DangerZone", () => {
         await Promise.resolve();
         await Promise.resolve();
       });
-      expect(vi.mocked(clearPlatformCollection)).toHaveBeenCalledWith("Super Nintendo");
+      expect(vi.mocked(clearPlatformCollection)).toHaveBeenCalledWith("Super Nintendo", expect.any(AbortSignal));
+    });
+
+    it("unmount aborts future removal work but retains the backend lease until the started Steam call settles", async () => {
+      vi.mocked(backend.getRegistryPlatforms).mockResolvedValue({
+        platforms: [{ slug: "snes", name: "Super Nintendo", count: 1 }],
+      });
+      vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({
+        success: true,
+        app_ids: [11],
+        rom_ids: [1],
+        platform_name: "Super Nintendo",
+        prune_lease_token: "danger-zone-lease",
+      });
+      vi.mocked(backend.releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
+      let settle!: () => void;
+      const pendingCollection = new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+      vi.mocked(clearPlatformCollection).mockReturnValueOnce(pendingCollection);
+      const view = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(view.getByText("Super Nintendo (1)"));
+      lastShownModalProps<{ onRemoveShortcuts?: () => void }>()?.onRemoveShortcuts?.();
+      await waitFor(() => expect(clearPlatformCollection).toHaveBeenCalled());
+
+      view.unmount();
+      await Promise.resolve();
+      expect(backend.releasePruneConflictLease).not.toHaveBeenCalledWith("danger-zone-lease");
+
+      settle();
+      await waitFor(() => expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("danger-zone-lease"));
+      expect(clearPlatformCollection).toHaveBeenCalledTimes(1);
+      expect(backend.reportRemovalResults).not.toHaveBeenCalled();
     });
 
     it("skips reportRemovalResults when rom_ids is empty", async () => {

@@ -705,6 +705,7 @@ describe("index.tsx — startup launch-options reconcile (#1043)", () => {
 describe("index.tsx — sync_complete launch-options reconcile (#1151)", () => {
   type SyncCompletePayload = {
     platform_app_ids: Record<string, number[]>;
+    romm_collection_app_ids?: Record<string, number[]>;
     total_games: number;
     cancelled?: boolean;
     prune_lease_token?: string;
@@ -818,12 +819,86 @@ describe("index.tsx — sync_complete launch-options reconcile (#1151)", () => {
         prune_lease_token: "sync-complete-lease",
       });
     });
-    await vi.waitFor(() => expect(createOrUpdateCollections).toHaveBeenCalledWith({ SNES: [100] }));
+    await vi.waitFor(() =>
+      expect(createOrUpdateCollections).toHaveBeenCalledWith({ SNES: [100] }, undefined, expect.any(AbortSignal)),
+    );
     expect(releasePruneConflictLease).not.toHaveBeenCalledWith("sync-complete-lease");
 
     finishCollections?.();
     await vi.waitFor(() => expect(releasePruneConflictLease).toHaveBeenCalledWith("sync-complete-lease"));
     plugin.onDismount();
+  });
+
+  it("plugin dismount defers sync lease release until a started collection save settles", async () => {
+    let finishCollections: (() => void) | undefined;
+    createOrUpdateCollections.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCollections = resolve;
+        }),
+    );
+    const plugin = pluginFactory();
+    await flush();
+    vi.mocked(releasePruneConflictLease).mockClear();
+    createOrUpdateRomMCollections.mockClear();
+
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
+        platform_app_ids: { SNES: [100] },
+        romm_collection_app_ids: { Favorites: [100] },
+        total_games: 1,
+        prune_lease_token: "dismount-sync-lease",
+      });
+    });
+    await vi.waitFor(() => expect(createOrUpdateCollections).toHaveBeenCalled());
+
+    plugin.onDismount();
+    await Promise.resolve();
+    expect(releasePruneConflictLease).not.toHaveBeenCalledWith("dismount-sync-lease");
+
+    finishCollections?.();
+    await vi.waitFor(() => expect(releasePruneConflictLease).toHaveBeenCalledWith("dismount-sync-lease"));
+    expect(createOrUpdateRomMCollections).not.toHaveBeenCalled();
+  });
+
+  it("holds the sync event lease until the paced sync_stale tail settles", async () => {
+    const plugin = pluginFactory();
+    await flush();
+    vi.mocked(releasePruneConflictLease).mockClear();
+    removeShortcut.mockClear();
+    const remove = Array.from({ length: 26 }, (_, index) => ({ rom_id: index + 1, app_id: 1000 + index }));
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        emitDeckyEvent<[SyncStaleData]>("sync_stale", { remove });
+      });
+      await act(async () => {
+        for (let index = 0; index < 40; index++) await Promise.resolve();
+      });
+      expect(removeShortcut).toHaveBeenCalledTimes(25);
+
+      act(() => {
+        emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
+          platform_app_ids: {},
+          total_games: 0,
+          prune_lease_token: "stale-tail-lease",
+        });
+      });
+      await act(async () => {
+        for (let index = 0; index < 20; index++) await Promise.resolve();
+      });
+      expect(releasePruneConflictLease).not.toHaveBeenCalledWith("stale-tail-lease");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      expect(removeShortcut).toHaveBeenCalledTimes(26);
+      await vi.waitFor(() => expect(releasePruneConflictLease).toHaveBeenCalledWith("stale-tail-lease"));
+    } finally {
+      vi.useRealTimers();
+      plugin.onDismount();
+    }
   });
 });
 
@@ -997,7 +1072,7 @@ describe("index.tsx — sync_complete stale-collection cleanup (#1040)", () => {
     emitSyncComplete({ platform_app_ids: { "Nintendo 64": [1] }, total_games: 1 });
     await flush();
 
-    expect(clearPlatformCollection).toHaveBeenCalledWith("Super Nintendo");
+    expect(clearPlatformCollection).toHaveBeenCalledWith("Super Nintendo", expect.any(AbortSignal));
     expect(faves.Delete).toHaveBeenCalledTimes(1);
     plugin.onDismount();
   });
@@ -1018,7 +1093,7 @@ describe("index.tsx — sync_complete stale-collection cleanup (#1040)", () => {
 
     expect(faves.Delete).not.toHaveBeenCalled();
     // Non-vacuous: the stale SNES platform IS still cleaned, so cleanup ran.
-    expect(clearPlatformCollection).toHaveBeenCalledWith("Super Nintendo");
+    expect(clearPlatformCollection).toHaveBeenCalledWith("Super Nintendo", expect.any(AbortSignal));
     expect(snes.Delete).not.toHaveBeenCalled(); // platform delete routes via clearPlatformCollection
     plugin.onDismount();
   });
@@ -1096,7 +1171,7 @@ describe("index.tsx — sync_complete stale-collection cleanup (#1040)", () => {
 
     // The additive create/update path is NOT gated on cancel — the platforms
     // that DID complete still get their collections.
-    expect(createOrUpdateCollections).toHaveBeenCalledWith({ "Nintendo 64": [1] });
+    expect(createOrUpdateCollections).toHaveBeenCalledWith({ "Nintendo 64": [1] }, undefined, expect.any(AbortSignal));
     plugin.onDismount();
   });
 });

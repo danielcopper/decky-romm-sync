@@ -183,10 +183,11 @@ def test_controller_cleanup_retries_and_preserves_unrelated_concurrent_write(tmp
     adapter = SteamRecoveryAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
     snapshot = adapter.snapshot(app_id)
     localconfig = grid.parent / "localconfig.vdf"
-    original = os.rename
+    module = __import__("adapters.steam_recovery", fromlist=["rename_noreplace_at"])
+    original = module.rename_noreplace_at
     injected = False
 
-    def write_then_rename(src, dst, *args, **kwargs):
+    def write_then_rename(source_fd, src, destination_fd, dst):
         nonlocal injected
         if src == "localconfig.vdf" and not injected:
             injected = True
@@ -195,9 +196,9 @@ def test_controller_cleanup_retries_and_preserves_unrelated_concurrent_write(tmp
             payload["UserLocalConfigStore"]["Unrelated"] = {"Fresh": "value"}
             with localconfig.open("w") as output:
                 vdf.dump(payload, output, pretty=True)
-        return original(src, dst, *args, **kwargs)
+        return original(source_fd, src, destination_fd, dst)
 
-    monkeypatch.setattr("adapters.steam_recovery.os.rename", write_then_rename)
+    monkeypatch.setattr(module, "rename_noreplace_at", write_then_rename)
 
     outcome = adapter.remove_state(app_id, snapshot, _source_claims(snapshot))
 
@@ -243,6 +244,53 @@ def test_controller_cleanup_preserves_write_through_held_fd_after_rename(tmp_pat
         payload = vdf.load(source)
     assert payload["UserLocalConfigStore"]["Unrelated"] == {"Fresh": "value"}
     assert str(app_id) not in payload["UserLocalConfigStore"]["Apps"]
+
+
+def test_controller_link_collision_preserves_newer_claimed_inode(tmp_path, monkeypatch):
+    app_id = 0x80000007
+    _first, _second, grid = _layout(tmp_path, app_id)
+    adapter = SteamRecoveryAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+    snapshot = adapter.snapshot(app_id)
+    localconfig = grid.parent / "localconfig.vdf"
+    with localconfig.open() as source:
+        fresh_payload = vdf.load(source)
+    fresh_payload["UserLocalConfigStore"]["Unrelated"] = {"HeldFresh": "value"}
+    replacement_payload = {"UserLocalConfigStore": {"Unrelated": {"NewPath": "value"}}}
+    held_fd = os.open(localconfig, os.O_RDWR)
+    original_link = os.link
+    injected = False
+
+    def write_recreate_then_link(*args, **kwargs):
+        nonlocal injected
+        if not injected:
+            injected = True
+            with os.fdopen(os.dup(held_fd), "w") as output:
+                output.seek(0)
+                output.truncate()
+                vdf.dump(fresh_payload, output, pretty=True)
+                output.flush()
+            with localconfig.open("w") as output:
+                vdf.dump(replacement_payload, output, pretty=True)
+        return original_link(*args, **kwargs)
+
+    monkeypatch.setattr("adapters.steam_recovery.os.link", write_recreate_then_link)
+    try:
+        outcome = adapter.remove_state(app_id, snapshot, _source_claims(snapshot))
+    finally:
+        os.close(held_fd)
+
+    claimed = list(grid.parent.glob(".localconfig.vdf.prune-old-*"))
+    assert outcome["success"] is False
+    assert outcome["changed"] is True
+    assert outcome["ambiguous"] is True
+    assert "newer source was preserved" in outcome["message"]
+    assert len(claimed) == 1
+    assert str(claimed[0]) in outcome["message"]
+    with localconfig.open() as source:
+        assert vdf.load(source) == replacement_payload
+    with claimed[0].open() as source:
+        preserved = vdf.load(source)
+    assert preserved["UserLocalConfigStore"]["Unrelated"] == {"HeldFresh": "value"}
 
 
 def test_controller_rollback_failure_preserves_claimed_newer_vdf(tmp_path, monkeypatch):

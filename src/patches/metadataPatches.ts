@@ -67,9 +67,10 @@ export function registerMetadataPatches(cache: Record<string, RomMetadata>, appI
  * Attempt one pass of metadata mutations over the given appIds. Returns the
  * appIds whose appStore overview wasn't available yet, so the caller can retry.
  */
-function tryApplyMetadata(appIds: number[]): number[] {
+function tryApplyMetadata(appIds: number[], signal?: AbortSignal): number[] {
   const notApplied: number[] = [];
   for (const appId of appIds) {
+    if (signal?.aborted) break;
     const meta = getMetadataForAppId(appId);
     if (!meta) continue; // no metadata for this app — nothing to apply, not a retry case
     if (!applyDirectMutations(appId, meta)) notApplied.push(appId);
@@ -87,7 +88,7 @@ function tryApplyMetadata(appIds: number[]): number[] {
  * retry. Idempotent (re-applying the same values is safe), so retries can't
  * corrupt state. Call after {@link registerMetadataPatches}.
  */
-export async function applyAllMetadata(): Promise<void> {
+export async function applyAllMetadata(signal?: AbortSignal): Promise<void> {
   let pending = [...registeredAppIds].filter((appId) => getMetadataForAppId(appId) != null);
   if (pending.length === 0) return;
 
@@ -98,8 +99,9 @@ export async function applyAllMetadata(): Promise<void> {
       // attempt < delays.length (loop guard) ⇒ index in bounds
       await new Promise((r) => setTimeout(r, delays[attempt]));
     }
+    if (signal?.aborted) return;
 
-    pending = tryApplyMetadata(pending);
+    pending = tryApplyMetadata(pending, signal);
 
     if (pending.length > 0 && attempt < delays.length - 1) {
       detach(
@@ -175,9 +177,10 @@ type PlaytimeItem = { appId: number; totalSeconds: number };
  * Attempt one pass of playtime writes. Returns items whose appStore overview
  * wasn't available yet, so the caller can retry them after a delay.
  */
-function tryWritePlaytime(items: PlaytimeItem[]): PlaytimeItem[] {
+function tryWritePlaytime(items: PlaytimeItem[], signal?: AbortSignal): PlaytimeItem[] {
   const notWritten: PlaytimeItem[] = [];
   for (const item of items) {
+    if (signal?.aborted) break;
     if (!updatePlaytimeDisplay(item.appId, item.totalSeconds, false)) {
       notWritten.push(item);
     }
@@ -194,6 +197,7 @@ function tryWritePlaytime(items: PlaytimeItem[]): PlaytimeItem[] {
 export async function applyAllPlaytime(
   playtimeMap: Record<string, { total_seconds: number }>,
   appIdMap: Record<string, number>,
+  signal?: AbortSignal,
 ) {
   // Build rom_id -> app_id reverse lookup
   const romIdToAppId: Record<string, number> = {};
@@ -225,8 +229,9 @@ export async function applyAllPlaytime(
       // attempt < delays.length (loop guard) ⇒ index in bounds
       await new Promise((r) => setTimeout(r, delays[attempt]));
     }
+    if (signal?.aborted) return;
 
-    pending = tryWritePlaytime(pending);
+    pending = tryWritePlaytime(pending, signal);
 
     if (pending.length > 0 && attempt < delays.length - 1) {
       detach(

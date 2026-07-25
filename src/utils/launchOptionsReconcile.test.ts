@@ -59,6 +59,24 @@ describe("batchConfirmLaunchOptions", () => {
     expect(msg).toContain("migration_relaunch_options: failed to set launch options for appId 2");
     expect(msg).toContain("boom");
   });
+
+  it("does not begin a later Steam batch after cancellation", async () => {
+    let settle!: () => void;
+    const firstBatch = new Promise<boolean>((resolve) => {
+      settle = () => resolve(true);
+    });
+    vi.mocked(steamShortcuts.setLaunchOptionsConfirmed).mockReturnValue(firstBatch);
+    const controller = new AbortController();
+    const applying = batchConfirmLaunchOptions(items(12), "setSystemCore", controller.signal);
+    await Promise.resolve();
+    expect(steamShortcuts.setLaunchOptionsConfirmed).toHaveBeenCalledTimes(10);
+
+    controller.abort();
+    settle();
+    await applying;
+
+    expect(steamShortcuts.setLaunchOptionsConfirmed).toHaveBeenCalledTimes(10);
+  });
 });
 
 describe("reconfirmLaunchOptions", () => {

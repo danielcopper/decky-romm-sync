@@ -262,7 +262,8 @@ class RecoveryBundleAdapter:
                     raise RuntimeError(cleanup["message"])
             except BaseException as cleanup_exc:
                 raise RuntimeError(
-                    f"Recovery bundle failed and unsafe staging was preserved because cleanup failed: {cleanup_exc}"
+                    "Recovery bundle failed and unsafe staging was preserved at "
+                    f"{cleanup_path} because cleanup failed: {cleanup_exc}"
                 ) from primary
             raise
         finally:

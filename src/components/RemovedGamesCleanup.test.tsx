@@ -196,6 +196,31 @@ describe("RemovedGamesCleanup", () => {
     }
   });
 
+  it("shows an enabled Close control immediately when completion wins the start-response race", async () => {
+    vi.mocked(backend.startPrune).mockImplementation(() => new Promise(() => {}));
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await act(async () => Promise.resolve());
+
+    act(() => {
+      setPruneComplete({
+        success: true,
+        partial: false,
+        run_id: "event-first-run",
+        preview_id: "preview-1",
+        removed_rom_ids: [7],
+        affected_app_ids: [],
+        results: [],
+      });
+    });
+
+    const close = modal.getByRole("button", { name: "Close" }) as HTMLButtonElement;
+    expect(close.disabled).toBe(false);
+    expect(modal.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(modal.container.textContent).toContain("1 removed");
+  });
+
   it("surfaces scan rejection and re-enables the Danger Zone action", async () => {
     vi.mocked(backend.getPrunePreview).mockRejectedValue(new Error("offline"));
     const section = render(createElement(RemovedGamesCleanupSection));

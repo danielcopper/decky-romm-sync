@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import contextlib
+import ctypes
+import errno
 import fcntl
 import hashlib
 import os
@@ -17,6 +19,7 @@ if TYPE_CHECKING:
 
 _F_SETOWN_EX = 15
 _F_OWNER_TID = 0
+_RENAME_NOREPLACE = 1
 
 
 def identity_for_stat(value: os.stat_result, mount_id: int = 0) -> SourceIdentity:
@@ -116,7 +119,7 @@ def remove_claimed(path: str, safe_root: str, claim: SourceClaim) -> MutationOut
         temporary = f".{name}.romm-prune-{current.st_ino}"
         if _stat_name(parent_fd, temporary) is not None:
             raise FileExistsError(f"Prune staging entry already exists: {temporary}")
-        os.rename(name, temporary, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        rename_noreplace_at(parent_fd, name, parent_fd, temporary)
         claimed = _stat_name(parent_fd, temporary)
         lease_stack = contextlib.ExitStack()
         leased_files: dict[str, int] = {}
@@ -151,7 +154,11 @@ def remove_claimed(path: str, safe_root: str, claim: SourceClaim) -> MutationOut
                 _require_same_mount(parent_fd, file_fd, path)
                 _require_file_claim(path, file_fd, expected, claim["sha256"], claimed=True)
         except Exception:
-            lease_stack.close()
+            close_error: BaseException | None = None
+            try:
+                lease_stack.close()
+            except BaseException as exc:
+                close_error = exc
             try:
                 _restore_claim(parent_fd, name, temporary)
             except Exception as restore_exc:
@@ -161,7 +168,12 @@ def remove_claimed(path: str, safe_root: str, claim: SourceClaim) -> MutationOut
                     ambiguous=True,
                     message=f"Source validation failed and rollback was uncertain: {restore_exc}",
                 )
+            if close_error is not None:
+                raise RuntimeError(
+                    f"Writer-exclusion teardown failed after source validation: {close_error}"
+                ) from close_error
             raise
+        removal_error: BaseException | None = None
         try:
             if stat.S_ISDIR(current.st_mode):
                 directory_fd = _open_child_directory(parent_fd, temporary)
@@ -182,14 +194,23 @@ def remove_claimed(path: str, safe_root: str, claim: SourceClaim) -> MutationOut
                 _require_entry_matches_fd(path, current_claim, _identity_for_fd(file_fd))
                 os.unlink(temporary, dir_fd=parent_fd)
         except Exception as exc:
+            removal_error = exc
+        try:
+            lease_stack.close()
+        except BaseException as exc:
             return _outcome(
                 success=False,
                 changed=True,
                 ambiguous=True,
-                message=f"Source removal stopped after the source was claimed: {exc}",
+                message=f"Source was removed but writer-exclusion teardown is uncertain: {exc}",
             )
-        finally:
-            lease_stack.close()
+        if removal_error is not None:
+            return _outcome(
+                success=False,
+                changed=True,
+                ambiguous=True,
+                message=f"Source removal stopped after the source was claimed: {removal_error}",
+            )
         try:
             os.fsync(parent_fd)
         except OSError as exc:
@@ -249,12 +270,10 @@ def rename_claimed(src: str, dst: str, safe_root: str, claim: SourceClaim) -> Mu
                 os.close(file_fd)
         if _stat_name(destination_fd, destination_name) is not None:
             raise FileExistsError(f"Recovery destination already exists: {dst}")
-        os.rename(
-            source_name,
-            destination_name,
-            src_dir_fd=source_fd,
-            dst_dir_fd=destination_fd,
-        )
+        try:
+            rename_noreplace_at(source_fd, source_name, destination_fd, destination_name)
+        except FileExistsError:
+            raise FileExistsError(f"Recovery destination already exists: {dst}") from None
         claimed = _stat_name(destination_fd, destination_name)
         try:
             _require_claimed_identity(src, claimed, expected)
@@ -276,12 +295,7 @@ def rename_claimed(src: str, dst: str, safe_root: str, claim: SourceClaim) -> Mu
         except Exception:
             try:
                 if _stat_name(source_fd, source_name) is None:
-                    os.rename(
-                        destination_name,
-                        source_name,
-                        src_dir_fd=destination_fd,
-                        dst_dir_fd=source_fd,
-                    )
+                    rename_noreplace_at(destination_fd, destination_name, source_fd, source_name)
                     os.fsync(source_fd)
                     if destination_fd != source_fd:
                         os.fsync(destination_fd)
@@ -429,6 +443,27 @@ def _open_child_regular(parent_fd: int, name: str) -> int:
     return os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
 
 
+def rename_noreplace_at(source_fd: int, source_name: str, destination_fd: int, destination_name: str) -> None:
+    """Atomically rename one descriptor-relative entry without replacing a destination."""
+    try:
+        renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
+    except AttributeError as exc:
+        raise OSError(errno.ENOSYS, "renameat2(RENAME_NOREPLACE) is unavailable") from exc
+    result = renameat2(
+        source_fd,
+        os.fsencode(source_name),
+        destination_fd,
+        os.fsencode(destination_name),
+        _RENAME_NOREPLACE,
+    )
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error == errno.EEXIST:
+        raise FileExistsError(error, os.strerror(error), destination_name)
+    raise OSError(error, os.strerror(error), source_name)
+
+
 @contextlib.contextmanager
 def _leased_regular(parent_fd: int, name: str, path: str):
     """Exclude every external writer at the kernel until the caller unlinks the file."""
@@ -449,13 +484,18 @@ def _leased_regular(parent_fd: int, name: str, path: str):
         leased = True
         yield fd
     finally:
+        release_error: OSError | None = None
         if leased:
-            with contextlib.suppress(OSError):
+            try:
                 fcntl.fcntl(fd, fcntl.F_SETLEASE, fcntl.F_UNLCK)
+            except OSError as exc:
+                release_error = exc
         if signal.SIGIO in signal.sigpending():
             signal.sigwait({signal.SIGIO})
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         os.close(fd)
+        if release_error is not None:
+            raise release_error
 
 
 def _inventory_directory(directory_fd: int, mount_id: int, prefix: str = "") -> dict[str, SourceEntry]:
@@ -522,7 +562,7 @@ def _require_claim_shape(path: str, safe_root: str, claim: SourceClaim) -> None:
 def _restore_claim(parent_fd: int, name: str, temporary: str) -> None:
     if _stat_name(parent_fd, name) is not None:
         raise RuntimeError(f"Cannot restore claimed source because its path was replaced: {name}")
-    os.rename(temporary, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    rename_noreplace_at(parent_fd, temporary, parent_fd, name)
     os.fsync(parent_fd)
 
 
