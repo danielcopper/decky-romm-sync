@@ -401,12 +401,10 @@ class SaveService:
         return {"success": True, "moved": moved, "ambiguous": False}
 
     def validate_prune_absences(self, claims: dict[str, SourceClaim]) -> bool:
-        """Recheck every purge-owned path that was absent before final cascade."""
+        """Require every quarantined purge-owned path to remain absent before cascade."""
         saves_root = self._config.retrodeck_paths.saves_path()
         try:
-            for path, claim in claims.items():
-                if claim["source_identity"]["exists"]:
-                    continue
+            for path in claims:
                 current = self._save_file_store.claim_source(path, saves_root)
                 if current["source_identity"]["exists"]:
                     return False

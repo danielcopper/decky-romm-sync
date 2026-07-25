@@ -46,7 +46,12 @@ import { applyCommittedVersionSwitch } from "../utils/versionSwitchApplication";
 import { showUnsyncedSavesModal } from "./UnsyncedSavesSwitchModal";
 import { getEventTarget } from "../utils/events";
 import { detach } from "../utils/detach";
-import { releasePruneLeasesByOwner } from "../utils/pruneLease";
+import {
+  capturePruneLeaseAdmission,
+  mountPruneLeaseOwner,
+  releasePruneLeasesByOwner,
+  type PruneLeaseAdmission,
+} from "../utils/pruneLease";
 import type { RommDataChangedDetail, RommRomUninstalledDetail } from "../types/events";
 import type { DownloadCompleteEvent, DownloadFailedEvent } from "../types";
 import { openRemovedGamesCleanupModal } from "./RemovedGamesCleanup";
@@ -95,6 +100,7 @@ const Badge: FC<{ text: string; tone: "accent" | "muted" | "good" }> = ({ text, 
 };
 
 export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
+  const leaseOwner = `version-picker:${appId}`;
   const [versionList, setVersionList] = useState<VersionList | null>(null);
   // In-flight switch guard (#1345 round-2 / E): a switch rebinds the shortcut and
   // then relies on the version_switched re-fetch to refresh the (now stale) list.
@@ -118,6 +124,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   // effect owns the loader lifetime for this appId. All request sources share one
   // generation so only the latest completion can publish list/reachability state.
   useEffect(() => {
+    mountPruneLeaseOwner(leaseOwner);
     let cancelled = false;
     const load = async (source: "normal" | "vanished_refusal" = "normal"): Promise<void> => {
       const requestId = ++listRequestIdRef.current;
@@ -183,14 +190,14 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
 
     return () => {
       cancelled = true;
-      detach(releasePruneLeasesByOwner(`version-picker:${appId}`));
+      detach(releasePruneLeasesByOwner(leaseOwner));
       if (loadVersionListRef.current?.load === load) loadVersionListRef.current = null;
       globalThis.removeEventListener("romm_data_changed", onDataChanged);
       removeEventListener("download_complete", dlComplete);
       removeEventListener("download_failed", dlFailed);
       globalThis.removeEventListener("romm_rom_uninstalled", onUninstalled);
     };
-  }, [appId]);
+  }, [appId, leaseOwner]);
 
   // Lazily fetch a cover for every version once the list is known, via the
   // cache-first fetchCoverBase64 (#1346): a synced version resolves from the
@@ -230,9 +237,11 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   // write fails or throws. A missed confirm only leaves the shortcut on a stale
   // command; it self-heals at the next startup/sync reconcile, so we warn and
   // nudge the user rather than reporting the whole switch as failed.
-  const applySwitchSuccess = async (result: SwitchVersionSuccess): Promise<void> => {
-    const confirmed = await applyCommittedVersionSwitch(result, (romId, cover) =>
-      setCovers((prev) => ({ ...prev, [romId]: cover })),
+  const applySwitchSuccess = async (result: SwitchVersionSuccess, admission: PruneLeaseAdmission): Promise<void> => {
+    const confirmed = await applyCommittedVersionSwitch(
+      result,
+      (romId, cover) => setCovers((prev) => ({ ...prev, [romId]: cover })),
+      admission,
     );
     if (!confirmed) {
       toaster.toast({ title: "RomM Sync", body: "Switched — re-switch if launch fails" });
@@ -256,7 +265,11 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   // sync failed, sync surfaced conflicts, or the retry blocked again — aborts
   // with a short toast and re-runs the save-status refresh so the conflict UI
   // surfaces through the normal save_status_updated loop.
-  const syncThenSwitch = async (unsyncedRomId: number, target: VersionInfo): Promise<void> => {
+  const syncThenSwitch = async (
+    unsyncedRomId: number,
+    target: VersionInfo,
+    admission: PruneLeaseAdmission,
+  ): Promise<void> => {
     const abort = (body: string): void => {
       // Every sync-then-switch failure is terminal for this attempt — release the
       // in-flight guard so the trigger re-enables (it never reaches a reload).
@@ -280,7 +293,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
       }
       const retry = await switchVersion(appId, target.rom_id, false);
       if (retry.success) {
-        await applySwitchSuccess(retry);
+        await applySwitchSuccess(retry, admission);
       } else if (retry.reason === "unsynced_saves") {
         // The sync ran but the version still reports drift (a partial upload or a
         // race) — say so instead of the generic "couldn't switch".
@@ -306,10 +319,11 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     // (defense-in-depth), so switch_version's rejection can never reach a toast.
     if (!target.switchable) return;
     setSwitching(true);
+    const admission = capturePruneLeaseAdmission(leaseOwner);
     try {
       const result = await switchVersion(appId, target.rom_id, false);
       if (result.success) {
-        await applySwitchSuccess(result);
+        await applySwitchSuccess(result, admission);
         return;
       }
       if (result.reason === "unsynced_saves") {
@@ -326,7 +340,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         if (choice === "sync_and_switch") {
           // syncThenSwitch owns the guard from here: it clears on abort and leaves
           // it set on its own success (its reload clears it).
-          await syncThenSwitch(result.unsynced_rom_id, target);
+          await syncThenSwitch(result.unsynced_rom_id, target, admission);
           return;
         }
         // "Switch anyway" — the override skips the stranding gate; strand the
@@ -334,7 +348,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         // user switches back).
         const forced = await switchVersion(appId, target.rom_id, true);
         if (forced.success) {
-          await applySwitchSuccess(forced);
+          await applySwitchSuccess(forced, admission);
         } else {
           handleSwitchFailure(forced);
         }

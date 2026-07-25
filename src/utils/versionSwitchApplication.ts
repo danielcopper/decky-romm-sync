@@ -6,11 +6,12 @@ import {
   type SwitchVersionSuccess,
 } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "./steamShortcuts";
-import { isPruneLeaseCancelled, withPruneLease } from "./pruneLease";
+import { isPruneLeaseCancelled, withPruneLease, type PruneLeaseAdmission } from "./pruneLease";
 
 export async function applyCommittedVersionSwitch(
   result: SwitchVersionSuccess,
   onCover?: (romId: number, cover: string) => void,
+  admission?: PruneLeaseAdmission,
 ): Promise<boolean> {
   return withPruneLease(
     result.prune_lease_token,
@@ -34,6 +35,7 @@ export async function applyCommittedVersionSwitch(
       return confirmed;
     },
     `version-picker:${result.app_id}`,
+    admission,
   );
 }
 

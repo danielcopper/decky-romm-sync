@@ -434,6 +434,43 @@ describe("DangerZone", () => {
       expect(backend.reportRemovalResults).not.toHaveBeenCalled();
     });
 
+    it("releases a late backend token without mutating Steam after unmount", async () => {
+      setupOnePlatform();
+      let resolveRemoval!: (value: {
+        success: true;
+        app_ids: number[];
+        rom_ids: number[];
+        platform_name: string;
+        prune_lease_token: string;
+      }) => void;
+      vi.mocked(backend.removePlatformShortcuts).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveRemoval = resolve;
+          }),
+      );
+      vi.mocked(backend.releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
+      const view = render(<DangerZone onBack={vi.fn()} />);
+      await flushAsync();
+      fireEvent.click(view.getByText("Super Nintendo (2)"));
+      lastShownModalProps<{ onRemoveShortcuts?: () => void }>()?.onRemoveShortcuts?.();
+      await waitFor(() => expect(backend.removePlatformShortcuts).toHaveBeenCalledWith("snes"));
+
+      view.unmount();
+      resolveRemoval({
+        success: true,
+        app_ids: [11],
+        rom_ids: [1],
+        platform_name: "Super Nintendo",
+        prune_lease_token: "late-danger-zone-lease",
+      });
+
+      await waitFor(() => expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("late-danger-zone-lease"));
+      expect(removeShortcut).not.toHaveBeenCalled();
+      expect(clearPlatformCollection).not.toHaveBeenCalled();
+      expect(backend.reportRemovalResults).not.toHaveBeenCalled();
+    });
+
     it("skips reportRemovalResults when rom_ids is empty", async () => {
       setupOnePlatform();
       vi.mocked(backend.removePlatformShortcuts).mockResolvedValue({

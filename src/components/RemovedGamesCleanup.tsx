@@ -362,6 +362,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
                   (item) =>
                     ["partial", "failed", "skipped"].includes(item.status) ||
                     (item.warnings?.length ?? 0) > 0 ||
+                    item.warnings_omitted ||
                     item.warnings_truncated,
                 )
                 .map((item) => (
@@ -371,7 +372,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
                     {item.warnings?.map((warning) => (
                       <div key={warning}>Warning: {warning}</div>
                     ))}
-                    {(item.warning_count ?? 0) > (item.warnings?.length ?? 0) && (
+                    {item.warnings_omitted && (item.warning_count ?? 0) > (item.warnings?.length ?? 0) && (
                       <div>
                         {(item.warning_count ?? 0) - (item.warnings?.length ?? 0)} additional warning(s) omitted.
                       </div>

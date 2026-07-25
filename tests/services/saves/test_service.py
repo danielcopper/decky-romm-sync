@@ -1542,3 +1542,17 @@ class TestPruneSaveInventory:
 
         assert svc.validate_prune_absences(inventory["source_claims"]) is False
         assert expected.read_bytes() == b"created after absence was consumed"
+
+    def test_quarantined_present_save_is_rechecked_for_recreation_before_cascade(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="present.gba")
+        expected = _create_save(tmp_path, system="gba", rom_name="present", content=b"sealed-current")
+        inventory = svc.inventory_prune_saves([42])
+        assert inventory["source_claims"][str(expected)]["source_identity"]["exists"] is True
+
+        result = svc.quarantine_prune_saves(inventory["exclusive"], inventory["source_claims"])
+        assert result["success"] is True
+        expected.write_bytes(b"emulator-recreated")
+
+        assert svc.validate_prune_absences(inventory["source_claims"]) is False
+        assert expected.read_bytes() == b"emulator-recreated"

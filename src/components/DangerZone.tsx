@@ -38,7 +38,13 @@ import type { RegistryPlatform } from "../types";
 import { detach } from "../utils/detach";
 import { fuzzyMatch } from "../utils/fuzzyMatch";
 import { RemovedGamesCleanupSection } from "./RemovedGamesCleanup";
-import { isPruneLeaseCancelled, releasePruneLeasesByOwner, withPruneLease } from "../utils/pruneLease";
+import {
+  capturePruneLeaseAdmission,
+  isPruneLeaseCancelled,
+  mountPruneLeaseOwner,
+  releasePruneLeasesByOwner,
+  withPruneLease,
+} from "../utils/pruneLease";
 import { withTimeout } from "../utils/withTimeout";
 
 const REMOVAL_REPORT_TIMEOUT_MS = 15000;
@@ -205,6 +211,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     runRemoval(async (onProgress) => {
       setActionStatus(`Removing ${p.name} shortcuts...`);
       try {
+        const admission = capturePruneLeaseAdmission(DANGER_ZONE_LEASE_OWNER);
         const result = await removePlatformShortcuts(p.slug);
         // The @migration_blocked / @sync_active_blocked gates short-circuit to
         // { success: false, message, ... } with no app_ids/rom_ids — surface
@@ -229,6 +236,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
             }
           },
           DANGER_ZONE_LEASE_OWNER,
+          admission,
         );
         setActionStatus(`Removed ${p.count} ${p.name} game${p.count === 1 ? "" : "s"}`);
         await refreshPlatforms();
@@ -291,6 +299,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
       setStatus("Removing all shortcuts...");
       let removedCount = 0;
       try {
+        const admission = capturePruneLeaseAdmission(DANGER_ZONE_LEASE_OWNER);
         const result = await removeAllShortcuts();
         if (!result.success) {
           // A gate refusal (@sync_active_blocked / @migration_blocked) carries
@@ -342,6 +351,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
               }
             },
             DANGER_ZONE_LEASE_OWNER,
+            admission,
           );
           setStatus(result.message ?? "All shortcuts removed");
         }
@@ -360,6 +370,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     }
     try {
       setUninstallStatus("Uninstalling...");
+      const admission = capturePruneLeaseAdmission(DANGER_ZONE_LEASE_OWNER);
       const result = await uninstallAllRoms();
       if (!result.success && result.app_ids === undefined) {
         // A gate refusal (@sync_active_blocked / @migration_blocked) carries no
@@ -383,6 +394,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
               signal,
             ),
           DANGER_ZONE_LEASE_OWNER,
+          admission,
         );
         setUninstallStatus(formatUninstallStatus(result.removed_count ?? 0, (result.errors ?? []).length));
       }
@@ -932,6 +944,7 @@ export const DangerZone: FC<DangerZoneProps> = ({ onBack }) => {
   };
 
   useEffect(() => {
+    mountPruneLeaseOwner(DANGER_ZONE_LEASE_OWNER);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial async data loads on mount are the standard React pattern; the rule is overzealous here
     refreshPlatforms().catch((e) => logError(`Failed to refresh platforms: ${e}`));
     loadNonSteamApps();

@@ -368,6 +368,7 @@ describe("RemovedGamesCleanup", () => {
             message_truncated: true,
             warnings: ["Shared save was retained."],
             warning_count: 7,
+            warnings_omitted: true,
             warnings_truncated: true,
           },
         ],
@@ -381,6 +382,39 @@ describe("RemovedGamesCleanup", () => {
     const details = modal.getByRole("region", { name: "Cleanup details" });
     expect(details.getAttribute("tabindex")).toBe("0");
     expect(modal.getByRole("status").textContent).not.toContain("Shared save was retained");
+  });
+
+  it("does not call omitted short warnings shortened", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("Cleanup running..."));
+
+    act(() => {
+      setPruneComplete({
+        success: false,
+        partial: true,
+        run_id: "run-1",
+        preview_id: "preview-1",
+        removed_rom_ids: [],
+        affected_app_ids: [],
+        results: [
+          {
+            group_id: "group-1",
+            rom_ids: [7],
+            status: "partial",
+            message: "Local cleanup was incomplete.",
+            warnings: ["One", "Two", "Three", "Four", "Five"],
+            warning_count: 6,
+            warnings_omitted: true,
+            warnings_truncated: false,
+          },
+        ],
+      });
+    });
+
+    expect(modal.container.textContent).toContain("1 additional warning(s) omitted.");
+    expect(modal.container.textContent).not.toContain("displayed warnings were shortened");
   });
 
   it("surfaces warnings from successful removals and a run-level terminal error", async () => {

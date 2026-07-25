@@ -37,6 +37,7 @@ from services.steamgrid import SteamGridService, SteamGridServiceConfig
     ("event", "payload"),
     [
         ("sync_complete", {"total_games": 1}),
+        ("sync_stale", {"remove": [{"rom_id": 1, "app_id": 42}]}),
         ("download_complete", {"app_id": 42, "launch_options": "launch"}),
         ("migration_relaunch_options", {"items": [{"app_id": 42, "launch_options": "launch"}]}),
     ],
@@ -81,6 +82,26 @@ async def test_download_without_a_bound_shortcut_emits_no_continuation_lease(plu
 
     assert "prune_lease_token" not in decky.emit.await_args.args[1]
     assert not hasattr(plugin, "_prune_admission_gate")
+
+
+@pytest.mark.asyncio
+async def test_terminal_prune_completion_holds_publication_lease_before_release_wait(plugin):
+    import decky
+
+    decky.emit.reset_mock()
+    plugin._prune_service.start_prune = AsyncMock(return_value={"success": True, "run_id": "next"})
+
+    await plugin._emit_with_prune_continuation(
+        "prune_complete",
+        {"run_id": "run-1", "final": True, "publication_required": True},
+    )
+
+    token = decky.emit.await_args.args[1]["prune_lease_token"]
+    assert token.startswith("prune_complete:")
+    blocked = await plugin.start_prune({"confirmed": True})
+    assert blocked["reason"] == "operation_active"
+    assert (await plugin.release_prune_conflict_lease(token))["success"] is True
+    assert await plugin.start_prune({"confirmed": True}) == {"success": True, "run_id": "next"}
 
 
 @pytest.fixture

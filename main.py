@@ -86,6 +86,8 @@ class Plugin:
         payload = cast("dict[str, Any]", args[0]) if args and isinstance(args[0], dict) else None
         needs_lease = payload is not None and (
             event == "sync_complete"
+            or (event == "sync_stale" and bool(payload.get("remove")))
+            or (event == "prune_complete" and payload.get("final") is not False and payload.get("publication_required"))
             or (event == "download_complete" and payload.get("app_id") is not None)
             or (event == "migration_relaunch_options" and bool(payload.get("items")))
         )

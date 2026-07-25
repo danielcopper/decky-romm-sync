@@ -465,9 +465,8 @@ def rename_noreplace_at(source_fd: int, source_name: str, destination_fd: int, d
 
 
 @contextlib.contextmanager
-def _leased_regular(parent_fd: int, name: str, path: str):
-    """Exclude every external writer at the kernel until the caller unlinks the file."""
-    fd = _open_child_regular(parent_fd, name)
+def hold_writer_exclusion(fd: int, path: str):
+    """Exclude external writers from an already-open regular file descriptor."""
     previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGIO})
     leased = False
     try:
@@ -493,9 +492,19 @@ def _leased_regular(parent_fd: int, name: str, path: str):
         if signal.SIGIO in signal.sigpending():
             signal.sigwait({signal.SIGIO})
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
-        os.close(fd)
         if release_error is not None:
             raise release_error
+
+
+@contextlib.contextmanager
+def _leased_regular(parent_fd: int, name: str, path: str):
+    """Open a regular file and exclude every external writer until context exit."""
+    fd = _open_child_regular(parent_fd, name)
+    try:
+        with hold_writer_exclusion(fd, path):
+            yield fd
+    finally:
+        os.close(fd)
 
 
 def _inventory_directory(directory_fd: int, mount_id: int, prefix: str = "") -> dict[str, SourceEntry]:

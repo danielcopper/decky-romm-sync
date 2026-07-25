@@ -192,13 +192,19 @@ they mutate recovered state. Frontend-owned shortcut removal, core/disc writes, 
 application, download completion, home migration, startup healing, pre-launch healing, and every post-sync Steam branch
 (launch options, collections, playtime, and overview metadata) hold tokenized conflict leases through their final Steam
 write and bounded release. Active continuations heartbeat those leases once per minute. A global frontend registry
-signals cooperative cancellation by component owner or on plugin dismount. Cancellation stops every not-yet-started
-Steam mutation and lease renewal, but explicit backend release waits for any already-started non-cancellable Steam
-promise to settle. An unresolved operation stops renewing after a bounded five minutes; the backend's five-minute
-no-heartbeat expiry is the abandonment backstop if it never settles. The paced `sync_stale` removal tail participates in
-the `sync_complete` continuation's settlement set rather than running detached from its lease. Event delivery failure
-releases a token that never reached the frontend. This closes the reciprocal admission race, and each path refuses while
-a prune claim is active. Migration and active-library-sync decorators additionally guard preview and start.
+signals cooperative cancellation by component owner or on plugin dismount. Every backend wait captures the current
+plugin/owner mount generation before it starts; teardown tombstones that generation synchronously, so a lease-bearing
+response that arrives afterward is released without running its continuation. Only a genuine plugin/component remount
+opens a new generation. Cancellation stops every not-yet-started Steam mutation and lease renewal, but explicit backend
+release waits for any already-started non-cancellable Steam promise to settle. An unresolved operation stops renewing
+after a bounded five minutes; the backend's five-minute no-heartbeat expiry is the abandonment backstop if it never
+settles. Each non-empty `sync_stale` event carries its own lease through the paced removal tail; a later `sync_complete`
+lease overlaps and joins that same promise, so success composes both leases while a post-stale backend failure still
+leaves the tail covered. A terminal prune result that needs repoint publication likewise acquires its lease before event
+delivery while the old run is active; the frontend holds it across release acknowledgement and cover publication. Event
+delivery failure releases a token that never reached the frontend. This closes the reciprocal admission race, and each
+path refuses while a prune claim is active. Migration and active-library-sync decorators additionally guard preview and
+start.
 
 The executor processes sibling groups serially and catches ordinary exceptions per group. It rejects multiple shortcut
 bindings and active downloads, pins the preview's canonical RomM origin/token-origin/user namespace, probes every local
@@ -223,20 +229,23 @@ regular-file hash. Every resolvable exclusive save path is represented even when
 mount transitions. After the anchored root rename, deletion obtains kernel read leases for every regular root/descendant
 before removing any entry and holds them through the last descriptor/hash check and unlink. An existing writer, an
 unsupported lease, or any inability to establish exclusion restores/retains the source rather than deleting bytes not in
-recovery. Content excluded from the bundle and recovery-off saves still receive a final complete no-follow claim; their
-remove/quarantine uses anchored parents and atomic no-replace rename rather than a raw path fallback, so a concurrently
-created backup is never overwritten. Writer-exclusion teardown faults after mutation are reported as ambiguous, not
-exact success. Controller rewrites revalidate the held claimed inode before every restore/discard branch and retain a
-newer claimed inode at a surfaced path when a concurrent Steam file wins publication. Expected-absent save paths are
-collectively rechecked after all filesystem work and immediately before the aggregate cascade. Validation and claim
-decoding share one held bundle descriptor and return a digest that every later guard compares to the cached claims.
-Recovery root, staging, bundles, destination files, and the sealed bundle remain descriptor-anchored through copy,
-metadata application, hashing, cross-directory rename, validation, and both-parent fsync. Failure cleanup uses the same
-mount-aware descriptor-relative remover; if cleanup cannot prove a safe tree, it leaves and reports the full anchored
-staging path instead of recursively entering uncertain data. Adapter outcomes carry actual and durability-ambiguous
-changes into the mutation ledger even when a later item or parent fsync fails. The final SQLite delete is one short UoW
-that revalidates complete row/binding state, invalidates intersecting collection stamps, and clears platform stamps only
-for fully vanished games.
+recovery. The controller VDF's held claimed inode uses the same writer exclusion from its final identity/hash validation
+through claim unlink on both normal publication and collision/rollback discard; setup failure preserves the claim and
+teardown failure after unlink is an ambiguous mutation. Content excluded from the bundle and recovery-off saves still
+receive a final complete no-follow claim; their remove/quarantine uses anchored parents and atomic no-replace rename
+rather than a raw path fallback, so a concurrently created backup is never overwritten. Writer-exclusion teardown faults
+after mutation are reported as ambiguous, not exact success. Controller rewrites revalidate the held claimed inode
+before every restore/discard branch and retain a newer claimed inode at a surfaced path when a concurrent Steam file
+wins publication. Every exclusive current-save path is expected absent after quarantine, regardless of whether it
+existed during inventory, and the whole set is collectively rechecked after all filesystem work and immediately before
+the aggregate cascade. Validation and claim decoding share one held bundle descriptor and return a digest that every
+later guard compares to the cached claims. Recovery root, staging, bundles, destination files, and the sealed bundle
+remain descriptor-anchored through copy, metadata application, hashing, cross-directory rename, validation, and
+both-parent fsync. Failure cleanup uses the same mount-aware descriptor-relative remover; if cleanup cannot prove a safe
+tree, it leaves and reports the full anchored staging path instead of recursively entering uncertain data. Adapter
+outcomes carry actual and durability-ambiguous changes into the mutation ledger even when a later item or parent fsync
+fails. The final SQLite delete is one short UoW that revalidates complete row/binding state, invalidates intersecting
+collection stamps, and clears platform stamps only for fully vanished games.
 
 Frontend Steam events use a claim/complete protocol. A claim checks the run, token, discriminant, appId, target, exact
 single-binding group, and current binding before the frontend rechecks the live `rom-launcher` executable and mutates

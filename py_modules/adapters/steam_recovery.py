@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from _vendor import vdf
 
 from adapters.descriptor_paths import (
+    hold_writer_exclusion,
     identity_for_stat,
     open_directory_fd,
     open_regular_fd,
@@ -272,8 +273,15 @@ class SteamRecoveryAdapter:
                             return SteamRecoveryAdapter._preserved_controller_outcome(config_dir, preserved)
                         continue
                     try:
-                        SteamRecoveryAdapter._require_claim_matches_source(config_fd, claimed, source_fd)
-                        if not SteamRecoveryAdapter._source_unchanged(source_fd, source_identity, source_hash):
+                        source_changed = False
+                        with hold_writer_exclusion(source_fd, os.path.join(config_dir, claimed)):
+                            SteamRecoveryAdapter._require_claim_matches_source(config_fd, claimed, source_fd)
+                            source_changed = not SteamRecoveryAdapter._source_unchanged(
+                                source_fd, source_identity, source_hash
+                            )
+                            if not source_changed:
+                                os.unlink(claimed, dir_fd=config_fd)
+                        if source_changed:
                             os.unlink("localconfig.vdf", dir_fd=config_fd)
                             preserved = SteamRecoveryAdapter._restore_or_preserve_claim(
                                 config_fd, claimed, source_fd, source_identity, source_hash
@@ -283,10 +291,20 @@ class SteamRecoveryAdapter:
                             if preserved is not None:
                                 return SteamRecoveryAdapter._preserved_controller_outcome(config_dir, preserved)
                             continue
-                        os.unlink(claimed, dir_fd=config_fd)
                         os.fsync(config_fd)
                     except OSError as exc:
+                        retained_claim = SteamRecoveryAdapter._stat_at(config_fd, claimed)
                         os.close(source_fd)
+                        if retained_claim is not None:
+                            return {
+                                "success": False,
+                                "changed": True,
+                                "ambiguous": True,
+                                "message": (
+                                    "Controller setting changed but writer exclusion failed; the source was preserved "
+                                    f"as {os.path.join(config_dir, claimed)}: {exc}"
+                                ),
+                            }
                         return {
                             "success": False,
                             "changed": True,
@@ -305,7 +323,15 @@ class SteamRecoveryAdapter:
                         os.unlink(temporary, dir_fd=config_fd)
                     cleanup_outcome: MutationOutcome | None = None
                     try:
-                        if source_claimed and SteamRecoveryAdapter._stat_at(config_fd, claimed) is not None:
+                        claim_stat = SteamRecoveryAdapter._stat_at(config_fd, claimed) if source_claimed else None
+                        if source_claimed and claim_stat is None:
+                            cleanup_outcome = {
+                                "success": False,
+                                "changed": True,
+                                "ambiguous": True,
+                                "message": f"Controller source claim removal is uncertain: {exc}",
+                            }
+                        elif source_claimed:
                             if replacement_installed:
                                 # The claimed inode may contain a newer unrelated Steam edit.
                                 # If rollback could not restore it, retain that only good copy.
@@ -368,11 +394,12 @@ class SteamRecoveryAdapter:
         if not SteamRecoveryAdapter._source_unchanged(source_fd, expected_identity, expected_hash):
             os.fsync(config_fd)
             return claimed
-        SteamRecoveryAdapter._require_claim_matches_source(config_fd, claimed, source_fd)
-        if not SteamRecoveryAdapter._source_unchanged(source_fd, expected_identity, expected_hash):
-            os.fsync(config_fd)
-            return claimed
-        os.unlink(claimed, dir_fd=config_fd)
+        with hold_writer_exclusion(source_fd, claimed):
+            SteamRecoveryAdapter._require_claim_matches_source(config_fd, claimed, source_fd)
+            if not SteamRecoveryAdapter._source_unchanged(source_fd, expected_identity, expected_hash):
+                os.fsync(config_fd)
+                return claimed
+            os.unlink(claimed, dir_fd=config_fd)
         os.fsync(config_fd)
         return None
 

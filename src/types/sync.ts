@@ -374,6 +374,7 @@ export interface SyncStaleData {
    * Steam shortcut to remove.
    */
   remove: { rom_id: number; app_id: number }[];
+  prune_lease_token?: string;
 }
 
 export interface SyncCollectionsData {

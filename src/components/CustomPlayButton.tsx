@@ -56,7 +56,12 @@ import type { DownloadProgressEvent, DownloadCompleteEvent, DownloadFailedEvent 
 import { SAVEFILES_IN_CONTENT_DIR_REASON } from "../types";
 import { detach } from "../utils/detach";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
-import { withPruneLease } from "../utils/pruneLease";
+import {
+  capturePruneLeaseAdmission,
+  mountPruneLeaseOwner,
+  releasePruneLeasesByOwner,
+  withPruneLease,
+} from "../utils/pruneLease";
 import { reconfirmLaunchOptions } from "../utils/launchOptionsReconcile";
 import { saveSyncToastBody } from "../utils/saveSyncToast";
 
@@ -110,6 +115,7 @@ interface CustomPlayButtonProps {
 // Prettier from relocating the trailing comment into the body (which would break the suppression).
 // prettier-ignore
 export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // NOSONAR(typescript:S3776) — remaining cc is the per-state render branching (download/dl_complete/uninstalling/launching/syncing/conflict/play each return a distinct button shape); the gate chain now lives in runLaunchGate, not here.
+  const leaseOwner = `custom-play-button:${appId}`;
   const [state, setState] = useState<PlayButtonState>("loading");
   const [romId, setRomId] = useState<number | null>(null);
   const [romName, setRomName] = useState<string>("");
@@ -130,6 +136,13 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   const romIdRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    mountPruneLeaseOwner(leaseOwner);
+    return () => {
+      detach(releasePruneLeasesByOwner(leaseOwner));
+    };
+  }, [leaseOwner]);
 
   // Hide the native PlaySection via CSS while this component is mounted
   useEffect(() => {
@@ -952,16 +965,23 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     if (!romId) return;
     detach(debugLog(`CustomPlayButton: uninstalling romId=${romId}`));
     try {
+      const admission = capturePruneLeaseAdmission(leaseOwner);
       const result = await removeRom(romId);
       if (result.success) {
         // Reset the now-stale launch command to the uninstalled "" placeholder so a
         // raced-past not_installed launch execs `bin/rom-launcher` with no args (clean
         // exit 1) instead of a stale `flatpak run … "<deleted path>"` (#1051). Best-effort:
         // a launch-options hiccup must not turn a successful uninstall into an error.
-        await withPruneLease(result.prune_lease_token, "ROM uninstall", async (signal) => {
-          if (signal.aborted) return;
-          await setLaunchOptionsConfirmed(appId, "").catch(() => false);
-        });
+        await withPruneLease(
+          result.prune_lease_token,
+          "ROM uninstall",
+          async (signal) => {
+            if (signal.aborted) return;
+            await setLaunchOptionsConfirmed(appId, "").catch(() => false);
+          },
+          leaseOwner,
+          admission,
+        );
         globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: romId } }));
         toaster.toast({ title: "RomM Sync", body: `${romName || "ROM"} uninstalled` });
         // Dark pulse transition before showing Download button

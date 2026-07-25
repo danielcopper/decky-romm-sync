@@ -589,6 +589,7 @@ async def test_bound_live_group_repoints_then_deletes_old_row(harness):
     )
     assert duplicate["ignored"] is True
     complete = await _finish(harness)
+    assert complete["publication_required"] is True
     assert complete["removed_rom_ids"] == [1]
     assert harness.uow.roms.get(1) is None
     assert harness.uow.roms.get(2).shortcut_app_id == app_id
@@ -1493,6 +1494,24 @@ async def test_recovery_warnings_are_bounded_and_visible_without_a_bundle(harnes
     assert len(result["warnings"]) == 5
     assert all(len(value) <= 256 for value in result["warnings"])
     assert result["warnings_truncated"] is True
+    assert result["warnings_omitted"] is True
+
+
+@pytest.mark.asyncio
+async def test_omitted_short_warnings_are_not_marked_as_display_truncated(harness):
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    harness.saves.warnings = [f"warning {index}" for index in range(6)]
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+
+    complete = await _finish(harness)
+
+    result = complete["results"][0]
+    assert result["warning_count"] == 6
+    assert len(result["warnings"]) == 5
+    assert result["warnings_omitted"] is True
+    assert result["warnings_truncated"] is False
 
 
 @pytest.mark.asyncio

@@ -57,7 +57,14 @@ import {
   logError,
 } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
-import { isPruneLeaseCancelled, releasePruneLeasesByOwner, withPruneLease } from "../utils/pruneLease";
+import {
+  capturePruneLeaseAdmission,
+  isPruneLeaseCancelled,
+  mountPruneLeaseOwner,
+  releasePruneLeasesByOwner,
+  withPruneLease,
+  type PruneLeaseAdmission,
+} from "../utils/pruneLease";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import { buildEmulatorMenu } from "../utils/emulatorMenu";
 import type { BiosStatus, DownloadCompleteEvent, EmulatorOption, SaveStatus } from "../types";
@@ -300,6 +307,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
 
   // Cache-first load: render instantly from cached data, then check connection in background
   useEffect(() => {
+    mountPruneLeaseOwner(`game-detail:${appId}`);
     let cancelled = false;
 
     detach(loadCached(appId, () => cancelled, romIdRef, setInfo));
@@ -850,6 +858,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     if (actionPending || !info.romId) return;
     setActionPending("uninstall");
     try {
+      const admission = capturePruneLeaseAdmission(`game-detail:${appId}`);
       const result = await removeRom(info.romId);
       if (result.success) {
         await withPruneLease(
@@ -862,6 +871,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
             globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: info.romId } }));
           },
           `game-detail:${appId}`,
+          admission,
         );
         toaster.toast({ title: "RomM Sync", body: `${info.romName || "ROM"} uninstalled` });
       } else {
@@ -954,6 +964,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     romId: number,
     platformSlug: string,
     successBody: string,
+    admission: PruneLeaseAdmission,
   ) => {
     await withPruneLease(result.prune_lease_token, "Core selection", async (signal) => {
       if (!result.success) {
@@ -976,7 +987,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       // Confirmed (or uninstalled/unbound: nothing to confirm) → success.
       toaster.toast({ title: "RomM Sync", body: successBody });
       await refreshCoreDisplay(romId, platformSlug);
-    }, `game-detail:${appId}`);
+    }, `game-detail:${appId}`, admission);
   };
 
   const handleChangeGameCore = async (coreLabel: string) => {
@@ -985,9 +996,10 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     const platformSlug = info.platformSlug;
     detach(debugLog(`handleChangeGameCore: romId=${romId} coreLabel=${coreLabel}`));
     try {
+      const admission = capturePruneLeaseAdmission(`game-detail:${appId}`);
       const result = await setGameCore(romId, coreLabel);
       detach(debugLog(`handleChangeGameCore: result success=${result.success}`));
-      await applyCoreResult(result, romId, platformSlug, `Core set to ${coreLabel}`);
+      await applyCoreResult(result, romId, platformSlug, `Core set to ${coreLabel}`, admission);
     } catch {
       toaster.toast({ title: "RomM Sync", body: "Failed to set core" });
     }
@@ -999,9 +1011,10 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     const platformSlug = info.platformSlug;
     detach(debugLog(`handleResetGameCore: romId=${romId}`));
     try {
+      const admission = capturePruneLeaseAdmission(`game-detail:${appId}`);
       const result = await clearGameCore(romId);
       detach(debugLog(`handleResetGameCore: result success=${result.success}`));
-      await applyCoreResult(result, romId, platformSlug, "Now following the system core");
+      await applyCoreResult(result, romId, platformSlug, "Now following the system core", admission);
     } catch {
       toaster.toast({ title: "RomM Sync", body: "Failed to reset core" });
     }

@@ -633,6 +633,44 @@ describe("VersionPicker — per-version covers (#1346)", () => {
     expect(setArt).not.toHaveBeenCalled();
     expect(invalidateCachedGameDetail).not.toHaveBeenCalled();
   });
+
+  it("releases a switch token that arrives after unmount without writing Steam", async () => {
+    vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
+    let resolveSwitch!: (value: {
+      success: true;
+      rom_id: number;
+      target_installed: true;
+      launch_options: string;
+      app_id: number;
+      prune_lease_token: string;
+    }) => void;
+    vi.mocked(backend.switchVersion).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSwitch = resolve;
+        }),
+    );
+    vi.mocked(backend.releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
+    const { r, menu } = await renderAndOpen();
+    vi.mocked(backend.fetchCoverBase64).mockClear();
+
+    fireEvent.click(within(menu.container).getByText("Game (Japan)"));
+    await waitFor(() => expect(backend.switchVersion).toHaveBeenCalledWith(APP_ID, 2, false));
+    r.unmount();
+    resolveSwitch({
+      success: true,
+      rom_id: 2,
+      target_installed: true,
+      launch_options: "cmd",
+      app_id: APP_ID,
+      prune_lease_token: "late-version-lease",
+    });
+
+    await waitFor(() => expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("late-version-lease"));
+    expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+    expect(backend.fetchCoverBase64).not.toHaveBeenCalledWith(2);
+    expect(invalidateCachedGameDetail).not.toHaveBeenCalled();
+  });
 });
 
 /** Capture the events dispatched on `romm_data_changed` while `fn` runs. */

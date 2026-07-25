@@ -14,6 +14,15 @@ interface ActiveLease {
 }
 
 const activeLeases = new Map<string, ActiveLease>();
+const ownerGenerations = new Map<string, { generation: number; mounted: boolean }>();
+let pluginGeneration = 0;
+let pluginMounted = true;
+
+export interface PruneLeaseAdmission {
+  pluginGeneration: number;
+  owner?: string;
+  ownerGeneration?: number;
+}
 
 class UnsettledContinuation {
   constructor(readonly error: unknown) {}
@@ -21,6 +30,32 @@ class UnsettledContinuation {
 
 export function isPruneLeaseCancelled(signal: AbortSignal | undefined): boolean {
   return signal?.aborted ?? false;
+}
+
+export function mountPruneLeasePlugin(): void {
+  pluginGeneration++;
+  pluginMounted = true;
+}
+
+export function mountPruneLeaseOwner(owner: string): void {
+  const current = ownerGenerations.get(owner);
+  if (current?.mounted) return;
+  ownerGenerations.set(owner, { generation: (current?.generation ?? 0) + 1, mounted: true });
+}
+
+export function capturePruneLeaseAdmission(owner?: string): PruneLeaseAdmission {
+  const current = owner === undefined ? undefined : ownerGenerations.get(owner);
+  return {
+    pluginGeneration,
+    ...(owner === undefined ? {} : { owner, ownerGeneration: current?.generation ?? 0 }),
+  };
+}
+
+function admissionIsCurrent(admission: PruneLeaseAdmission): boolean {
+  if (!pluginMounted || admission.pluginGeneration !== pluginGeneration) return false;
+  if (admission.owner === undefined) return true;
+  const current = ownerGenerations.get(admission.owner);
+  return current?.mounted === true && current.generation === admission.ownerGeneration;
 }
 
 /** Bounded best-effort release for frontend-owned prune conflict leases. */
@@ -77,6 +112,8 @@ export function maintainPruneLease(
 }
 
 export async function releasePruneLeasesByOwner(owner: string): Promise<void> {
+  const current = ownerGenerations.get(owner);
+  ownerGenerations.set(owner, { generation: (current?.generation ?? 0) + 1, mounted: false });
   const owned = [...activeLeases].filter(([, lease]) => lease.owner === owner);
   for (const [, lease] of owned) lease.abortController?.abort();
   const tokens = owned.map(([token]) => token);
@@ -84,6 +121,11 @@ export async function releasePruneLeasesByOwner(owner: string): Promise<void> {
 }
 
 export async function releaseAllPruneLeases(): Promise<void> {
+  pluginGeneration++;
+  pluginMounted = false;
+  for (const [owner, current] of ownerGenerations) {
+    ownerGenerations.set(owner, { generation: current.generation + 1, mounted: false });
+  }
   for (const lease of activeLeases.values()) lease.abortController?.abort();
   await Promise.all([...activeLeases].map(([token]) => retireLeaseAfterSettlement(token)));
 }
@@ -115,8 +157,13 @@ export async function withPruneLeases<T>(
   context: string,
   operation: (signal: AbortSignal) => Promise<T>,
   owner = context,
+  admission: PruneLeaseAdmission = capturePruneLeaseAdmission(),
 ): Promise<T> {
   const uniqueTokens = [...new Set(tokens.filter((token): token is string => !!token))];
+  if (!admissionIsCurrent(admission)) {
+    await Promise.all(uniqueTokens.map((token) => releasePruneLease(token, context)));
+    throw new Error(`${context}: continuation was cancelled before lease registration`);
+  }
   const abortController = new AbortController();
   const operationPromise = Promise.resolve().then(() => operation(abortController.signal));
   const settlement = operationPromise.then(
@@ -148,6 +195,7 @@ export function withPruneLease<T>(
   context: string,
   operation: (signal: AbortSignal) => Promise<T>,
   owner = context,
+  admission?: PruneLeaseAdmission,
 ): Promise<T> {
-  return withPruneLeases([token], context, operation, owner);
+  return withPruneLeases([token], context, operation, owner, admission);
 }

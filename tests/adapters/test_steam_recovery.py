@@ -177,6 +177,56 @@ def test_controller_replacement_fsyncs_its_containing_directory(tmp_path, monkey
     assert synced_directory_inodes == [config_inode]
 
 
+def test_controller_writer_exclusion_release_failure_is_ambiguous(tmp_path, monkeypatch):
+    app_id = 0x80000007
+    _first, _second, grid = _layout(tmp_path, app_id)
+    adapter = SteamRecoveryAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+    snapshot = adapter.snapshot(app_id)
+    module = __import__("adapters.descriptor_paths", fromlist=["fcntl"])
+    original = module.fcntl.fcntl
+
+    def fail_unlock(fd, command, *args):
+        if command == module.fcntl.F_SETLEASE and args == (module.fcntl.F_UNLCK,):
+            raise OSError("injected controller lease release failure")
+        return original(fd, command, *args)
+
+    monkeypatch.setattr(module.fcntl, "fcntl", fail_unlock)
+
+    outcome = adapter.remove_state(app_id, snapshot, _source_claims(snapshot))
+
+    assert outcome["success"] is False
+    assert outcome["changed"] is True
+    assert outcome["ambiguous"] is True
+    assert "injected controller lease release failure" in outcome["message"]
+    assert not list(grid.parent.glob(".localconfig.vdf.prune-old-*"))
+
+
+def test_controller_writer_exclusion_setup_failure_surfaces_retained_claim(tmp_path, monkeypatch):
+    app_id = 0x80000007
+    _first, _second, grid = _layout(tmp_path, app_id)
+    adapter = SteamRecoveryAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+    snapshot = adapter.snapshot(app_id)
+    module = __import__("adapters.descriptor_paths", fromlist=["fcntl"])
+    original = module.fcntl.fcntl
+
+    def fail_setup(fd, command, *args):
+        if command == module._F_SETOWN_EX:
+            raise OSError("injected controller lease setup failure")
+        return original(fd, command, *args)
+
+    monkeypatch.setattr(module.fcntl, "fcntl", fail_setup)
+
+    outcome = adapter.remove_state(app_id, snapshot, _source_claims(snapshot))
+
+    claimed = list(grid.parent.glob(".localconfig.vdf.prune-old-*"))
+    assert outcome["success"] is False
+    assert outcome["changed"] is True
+    assert outcome["ambiguous"] is True
+    assert len(claimed) == 1
+    assert str(claimed[0]) in outcome["message"]
+    assert "injected controller lease setup failure" in outcome["message"]
+
+
 def test_controller_cleanup_retries_and_preserves_unrelated_concurrent_write(tmp_path, monkeypatch):
     app_id = 0x80000007
     _first, _second, grid = _layout(tmp_path, app_id)
@@ -209,7 +259,7 @@ def test_controller_cleanup_retries_and_preserves_unrelated_concurrent_write(tmp
     assert str(app_id) not in payload["UserLocalConfigStore"]["Apps"]
 
 
-def test_controller_cleanup_preserves_write_through_held_fd_after_rename(tmp_path, monkeypatch):
+def test_controller_cleanup_retains_write_through_held_fd_after_rename(tmp_path, monkeypatch):
     app_id = 0x80000007
     _first, _second, grid = _layout(tmp_path, app_id)
     adapter = SteamRecoveryAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
@@ -239,11 +289,73 @@ def test_controller_cleanup_preserves_write_through_held_fd_after_rename(tmp_pat
     finally:
         os.close(held_fd)
 
-    assert outcome["success"] is True
+    claimed = list(grid.parent.glob(".localconfig.vdf.prune-old-*"))
+    assert outcome["success"] is False
+    assert outcome["changed"] is True
+    assert outcome["ambiguous"] is True
+    assert len(claimed) == 1
+    assert str(claimed[0]) in outcome["message"]
     with localconfig.open() as source:
         payload = vdf.load(source)
-    assert payload["UserLocalConfigStore"]["Unrelated"] == {"Fresh": "value"}
     assert str(app_id) not in payload["UserLocalConfigStore"]["Apps"]
+    with claimed[0].open() as source:
+        preserved = vdf.load(source)
+    assert preserved["UserLocalConfigStore"]["Unrelated"] == {"Fresh": "value"}
+
+
+def test_controller_cleanup_retains_claim_when_preopened_writer_blocks_final_exclusion(tmp_path):
+    app_id = 0x80000007
+    _first, _second, grid = _layout(tmp_path, app_id)
+    adapter = SteamRecoveryAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+    snapshot = adapter.snapshot(app_id)
+    localconfig = grid.parent / "localconfig.vdf"
+    writer = os.open(localconfig, os.O_WRONLY)
+    try:
+        outcome = adapter.remove_state(app_id, snapshot, _source_claims(snapshot))
+    finally:
+        os.close(writer)
+
+    claimed = list(grid.parent.glob(".localconfig.vdf.prune-old-*"))
+    assert outcome["success"] is False
+    assert outcome["changed"] is True
+    assert outcome["ambiguous"] is True
+    assert len(claimed) == 1
+    assert str(claimed[0]) in outcome["message"]
+
+
+def test_controller_collision_retains_claim_when_preopened_writer_blocks_discard(tmp_path, monkeypatch):
+    app_id = 0x80000007
+    _first, _second, grid = _layout(tmp_path, app_id)
+    adapter = SteamRecoveryAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+    snapshot = adapter.snapshot(app_id)
+    localconfig = grid.parent / "localconfig.vdf"
+    replacement_payload = {"UserLocalConfigStore": {"Unrelated": {"NewPath": "value"}}}
+    writer = os.open(localconfig, os.O_WRONLY)
+    original_link = os.link
+    injected = False
+
+    def collide_then_link(*args, **kwargs):
+        nonlocal injected
+        if not injected:
+            injected = True
+            with localconfig.open("w") as output:
+                vdf.dump(replacement_payload, output, pretty=True)
+        return original_link(*args, **kwargs)
+
+    monkeypatch.setattr("adapters.steam_recovery.os.link", collide_then_link)
+    try:
+        outcome = adapter.remove_state(app_id, snapshot, _source_claims(snapshot))
+    finally:
+        os.close(writer)
+
+    claimed = list(grid.parent.glob(".localconfig.vdf.prune-old-*"))
+    assert outcome["success"] is False
+    assert outcome["changed"] is True
+    assert outcome["ambiguous"] is True
+    assert len(claimed) == 1
+    assert str(claimed[0]) in outcome["message"]
+    with localconfig.open() as source:
+        assert vdf.load(source) == replacement_payload
 
 
 def test_controller_link_collision_preserves_newer_claimed_inode(tmp_path, monkeypatch):

@@ -25,7 +25,12 @@ import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { getEventTarget } from "../utils/events";
 import { detach } from "../utils/detach";
 import type { DownloadCompleteEvent } from "../types";
-import { withPruneLease } from "../utils/pruneLease";
+import {
+  capturePruneLeaseAdmission,
+  mountPruneLeaseOwner,
+  releasePruneLeasesByOwner,
+  withPruneLease,
+} from "../utils/pruneLease";
 
 interface DiscSelectorProps {
   appId: number;
@@ -61,6 +66,7 @@ const DiscWithNumber: FC<{ size: number; color: string; num: string }> = ({ size
 );
 
 export const DiscSelector: FC<DiscSelectorProps> = ({ appId }) => {
+  const leaseOwner = `disc-selector:${appId}`;
   const [selection, setSelection] = useState<DiscSelection | null>(null);
   // Locally-tracked pin: `selected` echoed by a successful selectDisc. Mirrors
   // the persisted `roms.selected_disc` (null = following the default).
@@ -80,6 +86,7 @@ export const DiscSelector: FC<DiscSelectorProps> = ({ appId }) => {
 
   // Initial load: resolve rom_id from cache (instant), then fetch selection.
   useEffect(() => {
+    mountPruneLeaseOwner(leaseOwner);
     let cancelled = false;
 
     async function init() {
@@ -97,8 +104,9 @@ export const DiscSelector: FC<DiscSelectorProps> = ({ appId }) => {
     detach(init());
     return () => {
       cancelled = true;
+      detach(releasePruneLeasesByOwner(leaseOwner));
     };
-  }, [appId]);
+  }, [appId, leaseOwner]);
 
   // Re-fetch on download_complete (a newly installed ROM may now be multi-disc);
   // hide on uninstall.
@@ -129,19 +137,26 @@ export const DiscSelector: FC<DiscSelectorProps> = ({ appId }) => {
     const rid = romIdRef.current;
     if (rid == null) return;
     try {
+      const admission = capturePruneLeaseAdmission(leaseOwner);
       const result = await selectDisc(rid, data);
-      await withPruneLease(result.prune_lease_token, "DiscSelector", async (signal) => {
-        if (result.success) {
-          if (result.launch_options !== undefined) {
+      await withPruneLease(
+        result.prune_lease_token,
+        "DiscSelector",
+        async (signal) => {
+          if (result.success) {
+            if (result.launch_options !== undefined) {
+              if (signal.aborted) return;
+              await setLaunchOptionsConfirmed(appId, result.launch_options);
+            }
             if (signal.aborted) return;
-            await setLaunchOptionsConfirmed(appId, result.launch_options);
+            setSelected(result.selected ?? null);
+          } else {
+            toaster.toast({ title: "RomM Sync", body: result.message || "Failed to select disc" });
           }
-          if (signal.aborted) return;
-          setSelected(result.selected ?? null);
-        } else {
-          toaster.toast({ title: "RomM Sync", body: result.message || "Failed to select disc" });
-        }
-      });
+        },
+        leaseOwner,
+        admission,
+      );
     } catch (e) {
       // Observable catch effect: surface the failure so the user knows the pick
       // didn't take, and leave `selected` unchanged (revert to the prior pin).

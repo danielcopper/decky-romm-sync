@@ -69,7 +69,13 @@ import type {
 import { setLaunchOptionsConfirmed } from "./utils/steamShortcuts";
 import { removeShortcutsPaced } from "./utils/shortcutRemoval";
 import { batchConfirmLaunchOptions } from "./utils/launchOptionsReconcile";
-import { isPruneLeaseCancelled, releaseAllPruneLeases, withPruneLease } from "./utils/pruneLease";
+import {
+  capturePruneLeaseAdmission,
+  isPruneLeaseCancelled,
+  mountPruneLeasePlugin,
+  releaseAllPruneLeases,
+  withPruneLease,
+} from "./utils/pruneLease";
 import { withTimeout } from "./utils/withTimeout";
 import { fetchMetadataCachePages } from "./utils/metadataCache";
 import { cancelPruneActions, handlePruneAction } from "./utils/pruneActions";
@@ -195,6 +201,8 @@ function registerAppIds(map: Record<string, number[]>): void {
 }
 
 export default definePlugin(() => {
+  mountPruneLeasePlugin();
+  const pluginAdmission = capturePruneLeaseAdmission();
   registerGameDetailPatch();
   registerLaunchInterceptor();
 
@@ -273,8 +281,12 @@ export default definePlugin(() => {
         try {
           const result = await getInstalledRelaunchOptions();
           if (result.success) {
-            await withPruneLease(result.prune_lease_token, "Startup reconcile", (signal) =>
-              batchConfirmLaunchOptions(result.items, "startup_reconcile", signal),
+            await withPruneLease(
+              result.prune_lease_token,
+              "Startup reconcile",
+              (signal) => batchConfirmLaunchOptions(result.items, "startup_reconcile", signal),
+              "Startup reconcile",
+              pluginAdmission,
             );
           }
         } catch (e) {
@@ -391,6 +403,7 @@ export default definePlugin(() => {
     restart_recommended?: boolean;
     prune_lease_token?: string;
   }) => {
+    const syncAdmission = capturePruneLeaseAdmission();
     logInfo(`sync_complete received: ${data.total_games} games, cancelled=${data.cancelled ?? false}`);
 
     const { body, duration } = buildSyncCompleteToast(data, getSyncDelta());
@@ -426,12 +439,17 @@ export default definePlugin(() => {
     const reconcileLaunchOptions = async (signal: AbortSignal): Promise<void> => {
       try {
         const result = await getInstalledRelaunchOptions();
-        if (isPruneLeaseCancelled(signal)) return;
         if (result.success) {
-          await withPruneLease(result.prune_lease_token, "Installed reconcile", (innerSignal) => {
-            if (isPruneLeaseCancelled(innerSignal)) return Promise.resolve();
-            return batchConfirmLaunchOptions(result.items, "sync_reconcile", signal);
-          });
+          await withPruneLease(
+            result.prune_lease_token,
+            "Installed reconcile",
+            (innerSignal) => {
+              if (isPruneLeaseCancelled(innerSignal)) return Promise.resolve();
+              return batchConfirmLaunchOptions(result.items, "sync_reconcile", signal);
+            },
+            "Installed reconcile",
+            syncAdmission,
+          );
         }
       } catch (e) {
         logError(`sync_reconcile: failed to reconcile launch options: ${e}`);
@@ -631,10 +649,21 @@ export default definePlugin(() => {
         recordSyncRemoved(app_id);
       }
     }
-    const signal = syncContinuationController.signal;
-    staleRemovalTail = staleRemovalTail.then(async () => {
-      await removeShortcutsPaced(appIds, undefined, signal);
-      if (!isPruneLeaseCancelled(signal)) logInfo(`sync_stale: removed ${data.remove.length} stale shortcuts`);
+    const continuationController = syncContinuationController;
+    const previousTail = staleRemovalTail;
+    staleRemovalTail = withPruneLease(data.prune_lease_token, "Sync stale removal", async (leaseSignal) => {
+      const abort = () => continuationController.abort();
+      if (leaseSignal.aborted) abort();
+      else leaseSignal.addEventListener("abort", abort, { once: true });
+      try {
+        await previousTail;
+        const signal = continuationController.signal;
+        if (isPruneLeaseCancelled(signal)) return;
+        await removeShortcutsPaced(appIds, undefined, signal);
+        if (!isPruneLeaseCancelled(signal)) logInfo(`sync_stale: removed ${data.remove.length} stale shortcuts`);
+      } finally {
+        leaseSignal.removeEventListener("abort", abort);
+      }
     });
   });
 
@@ -811,22 +840,38 @@ export default definePlugin(() => {
   const publishPruneSwitches = async (
     runId: string,
     pending: Array<{ appId: number; romId: number }>,
+    leaseToken: string | undefined,
   ): Promise<void> => {
-    let lastMessage = "Cleanup claim release was not confirmed.";
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        const released = await withTimeout(waitForPruneRelease(runId), 6000);
-        if (released.success) {
-          for (const item of pending) await publishCommittedVersionSwitch(item.appId, item.romId);
-          return;
-        }
-        lastMessage = released.message;
-      } catch (e) {
-        lastMessage = e instanceof Error ? e.message : String(e);
-      }
-      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 100));
+    if (!leaseToken) {
+      logError("Cleanup publication was skipped because its continuation lease was missing.");
+      return;
     }
-    logError(`Cleanup publication could not confirm claim release: ${lastMessage}`);
+    await withPruneLease(
+      leaseToken,
+      "Cleanup repoint publication",
+      async (signal) => {
+        let lastMessage = "Cleanup claim release was not confirmed.";
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            const released = await withTimeout(waitForPruneRelease(runId), 6000);
+            if (released.success) {
+              for (const item of pending) {
+                if (isPruneLeaseCancelled(signal)) return;
+                await publishCommittedVersionSwitch(item.appId, item.romId, undefined, signal);
+              }
+              return;
+            }
+            lastMessage = released.message;
+          } catch (e) {
+            lastMessage = e instanceof Error ? e.message : String(e);
+          }
+          if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 100));
+        }
+        logError(`Cleanup publication could not confirm claim release: ${lastMessage}`);
+      },
+      "root",
+      pluginAdmission,
+    );
   };
 
   const pruneActionListener = addEventListener<[PruneActionRequired]>(
@@ -867,7 +912,9 @@ export default definePlugin(() => {
         publications.push({ appId: item.app_id, romId: item.target_rom_id });
       }
     }
-    if (publications.length) detach(publishPruneSwitches(completed.run_id, publications));
+    if (publications.length) {
+      detach(publishPruneSwitches(completed.run_id, publications, completed.prune_lease_token));
+    }
     const removed = completed.removed_count ?? completed.removed_rom_ids.length;
     const skipped =
       completed.problem_count ??

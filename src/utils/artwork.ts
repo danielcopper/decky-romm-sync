@@ -8,7 +8,13 @@
 
 import { getSgdbArtworkBase64, saveShortcutIcon, debugLog } from "../api/backend";
 import { detach } from "./detach";
-import { isPruneLeaseCancelled, releasePruneLeasesByOwner, withPruneLeases } from "./pruneLease";
+import {
+  capturePruneLeaseAdmission,
+  isPruneLeaseCancelled,
+  mountPruneLeaseOwner,
+  releasePruneLeasesByOwner,
+  withPruneLeases,
+} from "./pruneLease";
 
 /**
  * Newest-apply-wins guard. Each appId's most recent applyArtwork call claims a
@@ -42,6 +48,9 @@ async function applyIcon(appId: number, base64: string, signal: AbortSignal): Pr
  *  Returns count of successfully applied images, or -1 when no SGDB API
  *  key is configured. */
 export async function applyArtwork(romId: number, appId: number): Promise<number> {
+  const leaseOwner = `artwork:${appId}`;
+  mountPruneLeaseOwner(leaseOwner);
+  const admission = capturePruneLeaseAdmission(leaseOwner);
   const generation = (artworkGenerations.get(appId) ?? 0) + 1;
   artworkGenerations.set(appId, generation);
   const superseded = (): boolean => artworkGenerations.get(appId) !== generation;
@@ -54,9 +63,8 @@ export async function applyArtwork(romId: number, appId: number): Promise<number
   ]);
 
   const leaseTokens = results.map((result) => ("prune_lease_token" in result ? result.prune_lease_token : undefined));
-  const leaseOwner = `artwork:${appId}`;
   if (results.some((r) => r.no_api_key)) {
-    return withPruneLeases(leaseTokens, "Artwork apply", async () => -1, leaseOwner);
+    return withPruneLeases(leaseTokens, "Artwork apply", async () => -1, leaseOwner, admission);
   }
 
   return withPruneLeases(
@@ -96,6 +104,7 @@ export async function applyArtwork(romId: number, appId: number): Promise<number
       return applied;
     },
     leaseOwner,
+    admission,
   );
 }
 

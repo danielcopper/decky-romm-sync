@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { act } from "@testing-library/react";
+import { act, waitFor } from "@testing-library/react";
 import { toaster } from "@decky/api";
 import { emitDeckyEvent, deckyEventListenerCount } from "./test-utils/decky-api-mock";
 import {
@@ -297,6 +297,8 @@ describe("index.tsx — persistent prune listeners", () => {
         partial: true,
         run_id: "run-repoint-partial",
         preview_id: "preview-repoint",
+        publication_required: true,
+        prune_lease_token: "publication-lease",
         removed_rom_ids: [],
         affected_app_ids: [9001],
         results: [
@@ -315,9 +317,11 @@ describe("index.tsx — persistent prune listeners", () => {
     await flush();
 
     expect(publishCommittedVersionSwitch).not.toHaveBeenCalled();
+    expect(releasePruneConflictLease).not.toHaveBeenCalledWith("publication-lease");
     release?.({ success: true, message: "released" });
     await flush();
-    expect(publishCommittedVersionSwitch).toHaveBeenCalledWith(9001, 8);
+    expect(publishCommittedVersionSwitch).toHaveBeenCalledWith(9001, 8, undefined, expect.any(AbortSignal));
+    expect(releasePruneConflictLease).toHaveBeenCalledWith("publication-lease");
     plugin.onDismount();
   });
 
@@ -355,6 +359,42 @@ describe("index.tsx — persistent prune listeners", () => {
       body: "Shortcut repoint outcome is uncertain; source data was retained.",
       subtext: "The repoint outcome is unknown.",
     });
+    plugin.onDismount();
+  });
+
+  it("fails closed when a committed repoint terminal frame has no publication lease", async () => {
+    const plugin = pluginFactory();
+    beginPrunePreview("preview-missing-publication-lease");
+
+    act(() => {
+      emitDeckyEvent("prune_complete", {
+        success: true,
+        partial: false,
+        run_id: "run-missing-publication-lease",
+        preview_id: "preview-missing-publication-lease",
+        publication_required: true,
+        removed_rom_ids: [7],
+        affected_app_ids: [9001],
+        results: [
+          {
+            group_id: "group-1",
+            rom_ids: [7, 8],
+            status: "repointed",
+            committed_action: "repoint_shortcut",
+            app_id: 9001,
+            target_rom_id: 8,
+            message: "Repointed.",
+          },
+        ],
+      });
+    });
+    await flush();
+
+    expect(waitForPruneRelease).not.toHaveBeenCalledWith("run-missing-publication-lease");
+    expect(publishCommittedVersionSwitch).not.toHaveBeenCalled();
+    expect(logError).toHaveBeenCalledWith(
+      "Cleanup publication was skipped because its continuation lease was missing.",
+    );
     plugin.onDismount();
   });
 });
@@ -563,6 +603,34 @@ describe("index.tsx — sync_stale listener", () => {
       vi.useRealTimers();
     }
     plugin.onDismount();
+  });
+
+  it("holds its own event lease through a paced tail when sync_complete never arrives", async () => {
+    const plugin = pluginFactory();
+    await flush();
+    vi.mocked(releasePruneConflictLease).mockClear();
+    const remove = Array.from({ length: 26 }, (_, i) => ({ rom_id: i + 1, app_id: 2000 + i }));
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        emitDeckyEvent<[SyncStaleData]>("sync_stale", { remove, prune_lease_token: "standalone-stale-lease" });
+      });
+      await act(async () => {
+        for (let i = 0; i < 40; i++) await Promise.resolve();
+      });
+      expect(removeShortcut).toHaveBeenCalledTimes(25);
+      expect(releasePruneConflictLease).not.toHaveBeenCalledWith("standalone-stale-lease");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+      expect(removeShortcut).toHaveBeenCalledTimes(26);
+      await vi.waitFor(() => expect(releasePruneConflictLease).toHaveBeenCalledWith("standalone-stale-lease"));
+    } finally {
+      vi.useRealTimers();
+      plugin.onDismount();
+    }
   });
 });
 
@@ -861,6 +929,38 @@ describe("index.tsx — sync_complete launch-options reconcile (#1151)", () => {
     expect(createOrUpdateRomMCollections).not.toHaveBeenCalled();
   });
 
+  it("plugin dismount releases an installed-reconcile token that arrives afterward", async () => {
+    const plugin = pluginFactory();
+    await flush();
+    setLaunchOptionsConfirmed.mockClear();
+    vi.mocked(getInstalledRelaunchOptions).mockReset();
+    let resolveReconcile!: (value: ReturnType<typeof relaunchOptions>) => void;
+    vi.mocked(getInstalledRelaunchOptions).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveReconcile = resolve;
+        }),
+    );
+
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
+        platform_app_ids: {},
+        total_games: 0,
+        prune_lease_token: "outer-sync-lease",
+      });
+    });
+    await waitFor(() => expect(getInstalledRelaunchOptions).toHaveBeenCalled());
+    plugin.onDismount();
+    resolveReconcile({
+      success: true,
+      items: [{ app_id: 100, launch_options: "cmd" }],
+      prune_lease_token: "late-installed-lease",
+    });
+
+    await vi.waitFor(() => expect(releasePruneConflictLease).toHaveBeenCalledWith("late-installed-lease"));
+    expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+  });
+
   it("holds the sync event lease until the paced sync_stale tail settles", async () => {
     const plugin = pluginFactory();
     await flush();
@@ -871,12 +971,13 @@ describe("index.tsx — sync_complete launch-options reconcile (#1151)", () => {
     vi.useFakeTimers();
     try {
       act(() => {
-        emitDeckyEvent<[SyncStaleData]>("sync_stale", { remove });
+        emitDeckyEvent<[SyncStaleData]>("sync_stale", { remove, prune_lease_token: "stale-event-lease" });
       });
       await act(async () => {
         for (let index = 0; index < 40; index++) await Promise.resolve();
       });
       expect(removeShortcut).toHaveBeenCalledTimes(25);
+      expect(releasePruneConflictLease).not.toHaveBeenCalledWith("stale-event-lease");
 
       act(() => {
         emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
@@ -895,6 +996,10 @@ describe("index.tsx — sync_complete launch-options reconcile (#1151)", () => {
       });
       expect(removeShortcut).toHaveBeenCalledTimes(26);
       await vi.waitFor(() => expect(releasePruneConflictLease).toHaveBeenCalledWith("stale-tail-lease"));
+      expect(releasePruneConflictLease).toHaveBeenCalledWith("stale-event-lease");
+      expect(
+        vi.mocked(releasePruneConflictLease).mock.calls.filter(([token]) => token === "stale-event-lease"),
+      ).toHaveLength(1);
     } finally {
       vi.useRealTimers();
       plugin.onDismount();

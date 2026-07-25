@@ -1216,6 +1216,13 @@ class PruneExecutor:
         partial = any(result["status"] == "partial" for result in results) or bool(
             committed and (failures or run_failed)
         )
+        publication_required = any(
+            result.get("committed_action") == "repoint_shortcut"
+            and not result.get("action_ambiguous")
+            and type(result.get("app_id")) is int
+            and type(result.get("target_rom_id")) is int
+            for result in results
+        )
         bounded_reason = reason[:_COMPLETION_REASON_CHARS] if reason is not None else None
         bounded_message = message[:_COMPLETION_TEXT_CHARS] if message is not None else None
         chunks: list[list[dict[str, Any]]] = []
@@ -1233,6 +1240,7 @@ class PruneExecutor:
                 problem_count=len(failures),
                 reason=bounded_reason,
                 message=bounded_message,
+                publication_required=publication_required,
             )
             if current and len(json.dumps(probe, ensure_ascii=True).encode("utf-8")) > _COMPLETION_BUDGET_BYTES:
                 chunks.append(current)
@@ -1252,6 +1260,7 @@ class PruneExecutor:
                 problem_count=len(failures),
                 reason=bounded_reason,
                 message=bounded_message,
+                publication_required=publication_required,
             )
             await self._emit("prune_complete", payload)
 
@@ -1268,6 +1277,7 @@ class PruneExecutor:
         problem_count: int,
         reason: str | None,
         message: str | None,
+        publication_required: bool,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "success": success,
@@ -1287,6 +1297,8 @@ class PruneExecutor:
             ),
             "results": chunk,
         }
+        if publication_required:
+            payload["publication_required"] = True
         if reason is not None:
             payload["reason"] = reason
         if message is not None:
@@ -1352,7 +1364,8 @@ class PruneExecutor:
             ]
             result["warnings"] = bounded_warnings
             result["warning_count"] = len(warnings)
-            result["warnings_truncated"] = len(warnings) > len(bounded_warnings) or any(
+            result["warnings_omitted"] = len(warnings) > len(bounded_warnings)
+            result["warnings_truncated"] = any(
                 len(str(item)) > _COMPLETION_WARNING_CHARS for item in warnings[:_COMPLETION_WARNINGS_PER_GROUP]
             )
         if action_ambiguous:

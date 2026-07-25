@@ -1,7 +1,10 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { logError, releasePruneConflictLease, renewPruneConflictLease } from "../api/backend";
 import {
+  capturePruneLeaseAdmission,
   maintainPruneLease,
+  mountPruneLeaseOwner,
+  mountPruneLeasePlugin,
   releaseAllPruneLeases,
   releasePruneLease,
   releasePruneLeasesByOwner,
@@ -14,10 +17,63 @@ vi.mock("../api/backend", () => ({
   renewPruneConflictLease: vi.fn(),
 }));
 
+beforeEach(() => {
+  mountPruneLeasePlugin();
+});
+
 afterEach(async () => {
   await releaseAllPruneLeases();
   vi.useRealTimers();
   vi.clearAllMocks();
+});
+
+it("rejects and releases a lease-bearing response that arrives after owner teardown", async () => {
+  vi.mocked(releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
+  mountPruneLeaseOwner("danger-zone");
+  const admission = capturePruneLeaseAdmission("danger-zone");
+  const operation = vi.fn().mockResolvedValue(undefined);
+
+  await releasePruneLeasesByOwner("danger-zone");
+  await expect(withPruneLease("late-owner", "Late owner", operation, "danger-zone", admission)).rejects.toThrow(
+    "cancelled before lease registration",
+  );
+
+  expect(operation).not.toHaveBeenCalled();
+  expect(releasePruneConflictLease).toHaveBeenCalledWith("late-owner");
+});
+
+it("an old plugin generation stays stale after a genuine remount", async () => {
+  vi.mocked(releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
+  const oldAdmission = capturePruneLeaseAdmission();
+  const operation = vi.fn().mockResolvedValue(undefined);
+
+  await releaseAllPruneLeases();
+  mountPruneLeasePlugin();
+  await expect(withPruneLease("late-plugin", "Late plugin", operation, "root", oldAdmission)).rejects.toThrow(
+    "cancelled before lease registration",
+  );
+
+  expect(operation).not.toHaveBeenCalled();
+  expect(releasePruneConflictLease).toHaveBeenCalledWith("late-plugin");
+});
+
+it("admits work only after the owner is genuinely mounted again", async () => {
+  vi.mocked(releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
+  mountPruneLeaseOwner("version-picker:42");
+  const staleAdmission = capturePruneLeaseAdmission("version-picker:42");
+  await releasePruneLeasesByOwner("version-picker:42");
+  mountPruneLeaseOwner("version-picker:42");
+  const currentAdmission = capturePruneLeaseAdmission("version-picker:42");
+  const operation = vi.fn().mockResolvedValue("applied");
+
+  await expect(
+    withPruneLease("stale", "Stale version", operation, "version-picker:42", staleAdmission),
+  ).rejects.toThrow("cancelled before lease registration");
+  await expect(
+    withPruneLease("current", "Current version", operation, "version-picker:42", currentAdmission),
+  ).resolves.toBe("applied");
+
+  expect(operation).toHaveBeenCalledTimes(1);
 });
 
 it("renews active ownership and stops heartbeats before release", async () => {

@@ -1,6 +1,6 @@
 import { getRomRelaunchOptions, logError } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "./steamShortcuts";
-import { withPruneLease } from "./pruneLease";
+import { capturePruneLeaseAdmission, withPruneLease } from "./pruneLease";
 
 // Apply in bounded-concurrency batches (mirrors getExistingRomMShortcuts) so a
 // reconcile touching many ROMs doesn't serialize worst-case per-shortcut
@@ -22,6 +22,7 @@ const RECONFIRM_FETCH_TIMEOUT_MS = 3000;
  * Shared by the Play-button funnel and the direct-launch watcher relaunch path.
  */
 export async function reconfirmLaunchOptions(romId: number, appId: number, context: string): Promise<void> {
+  const admission = capturePruneLeaseAdmission();
   try {
     const item = await Promise.race([
       getRomRelaunchOptions(romId),
@@ -30,10 +31,16 @@ export async function reconfirmLaunchOptions(romId: number, appId: number, conte
       ),
     ]);
     if (item?.success) {
-      await withPruneLease(item.prune_lease_token, context, async (signal) => {
-        if (signal.aborted) return;
-        await setLaunchOptionsConfirmed(appId, item.launch_options);
-      });
+      await withPruneLease(
+        item.prune_lease_token,
+        context,
+        async (signal) => {
+          if (signal.aborted) return;
+          await setLaunchOptionsConfirmed(appId, item.launch_options);
+        },
+        context,
+        admission,
+      );
     }
   } catch (e) {
     logError(`${context}: launch_options re-confirm failed (launching anyway): ${e}`);
