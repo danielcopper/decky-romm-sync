@@ -21,6 +21,7 @@ def test_preview_pages_stay_within_wire_budget_for_non_ascii_rows() -> None:
             uow_factory=cast("Any", None),
             recovery_store=cast("Any", _Recovery()),
             retrodeck_paths=cast("Any", None),
+            settings={},
         )
     )
     entries = tuple(
@@ -43,7 +44,7 @@ def test_preview_pages_stay_within_wire_budget_for_non_ascii_rows() -> None:
         }
         for index in range(1, 51)
     )
-    preview = PrunePreview("preview", "bulk", None, frozenset(range(1, 51)), (), entries, 1000)
+    preview = PrunePreview("preview", "bulk", None, frozenset(range(1, 51)), (), entries, 1000, "server|user")
     offset = 0
     seen: list[int] = []
 

@@ -212,7 +212,7 @@ class TestDeleteRomFiles:
             "readme",
             "playtime",
         )
-        claims = recovery.source_claims(bundle)
+        claims = recovery.source_claims(bundle)["claims"]
         rom_path.unlink()
         rom_path.write_bytes(b"replacement")
         uow = FakeUnitOfWork()
@@ -248,7 +248,7 @@ class TestDeleteRomFiles:
             "readme",
             "playtime",
         )
-        claims = recovery.source_claims(bundle)
+        claims = recovery.source_claims(bundle)["claims"]
         child.write_bytes(b"replacement")
         uow = FakeUnitOfWork()
         _seed_install(uow, _make_install(1, file_path=str(child), rom_dir=str(rom_dir), system="psx"))

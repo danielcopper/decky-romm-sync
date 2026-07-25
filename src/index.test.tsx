@@ -31,7 +31,7 @@ import { estimateApplySeconds } from "./utils/syncEstimate";
 import { resetEta, weightedCoarseFraction } from "./utils/syncEta";
 import { recordSyncCreated, resetSyncDelta, getSyncDelta } from "./utils/syncDeltaStore";
 import { resetSyncCancel } from "./utils/syncManager";
-import { getPruneState, resetPruneState } from "./utils/pruneStore";
+import { beginPruneRun, getPruneState, resetPruneState } from "./utils/pruneStore";
 import type {
   DownloadCompleteEvent,
   DownloadProgressEvent,
@@ -201,6 +201,37 @@ describe("index.tsx — persistent prune listeners", () => {
     expect(changed).toHaveBeenCalledTimes(1);
     expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Removed 1 local entry." });
 
+    globalThis.removeEventListener("romm_data_changed", changed);
+    plugin.onDismount();
+  });
+
+  it("a foreign or duplicate terminal frame has no root side effects", () => {
+    const plugin = pluginFactory();
+    const changed = vi.fn();
+    globalThis.addEventListener("romm_data_changed", changed);
+    vi.mocked(unregisterRomMAppId).mockClear();
+    beginPruneRun("current");
+    const frame = {
+      success: true,
+      partial: false,
+      run_id: "old",
+      chunk_index: 0,
+      final: true,
+      removed_rom_ids: [7],
+      affected_app_ids: [9001],
+      removed_app_ids: [9001],
+      results: [{ group_id: "group-1", rom_ids: [7], status: "removed" as const, message: "Removed." }],
+    };
+
+    act(() => {
+      emitDeckyEvent("prune_complete", frame);
+      emitDeckyEvent("prune_complete", frame);
+    });
+
+    expect(getPruneState().runId).toBe("current");
+    expect(invalidateCachedGameDetail).not.toHaveBeenCalled();
+    expect(unregisterRomMAppId).not.toHaveBeenCalled();
+    expect(changed).not.toHaveBeenCalled();
     globalThis.removeEventListener("romm_data_changed", changed);
     plugin.onDismount();
   });
@@ -586,6 +617,12 @@ describe("index.tsx — migration_relaunch_options listener", () => {
 });
 
 describe("index.tsx — startup launch-options reconcile (#1043)", () => {
+  const relaunchOptions = (items: { app_id: number; launch_options: string }[]) => ({
+    success: true as const,
+    items,
+    prune_lease_token: items.length > 0 ? "installed-lease" : null,
+  });
+
   beforeEach(() => {
     setLaunchOptionsConfirmed.mockClear();
     setLaunchOptionsConfirmed.mockResolvedValue(true);
@@ -599,10 +636,12 @@ describe("index.tsx — startup launch-options reconcile (#1043)", () => {
   });
 
   it("confirm-sets launch options for each reconciled item after init", async () => {
-    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue([
-      { app_id: 100, launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/a.bin"' },
-      { app_id: 200, launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/b.bin"' },
-    ]);
+    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue(
+      relaunchOptions([
+        { app_id: 100, launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/a.bin"' },
+        { app_id: 200, launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/b.bin"' },
+      ]),
+    );
     const plugin = pluginFactory();
     await flush();
 
@@ -613,7 +652,7 @@ describe("index.tsx — startup launch-options reconcile (#1043)", () => {
   });
 
   it("never confirm-sets when there is nothing installed to reconcile", async () => {
-    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue([]);
+    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue(relaunchOptions([]));
     const plugin = pluginFactory();
     await flush();
 
@@ -624,9 +663,9 @@ describe("index.tsx — startup launch-options reconcile (#1043)", () => {
 
   it("surfaces a startup_reconcile-prefixed logError when a confirm returns false", async () => {
     setLaunchOptionsConfirmed.mockResolvedValue(false);
-    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue([
-      { app_id: 100, launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/a.bin"' },
-    ]);
+    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue(
+      relaunchOptions([{ app_id: 100, launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/a.bin"' }]),
+    );
     const plugin = pluginFactory();
     await flush();
 
@@ -655,6 +694,12 @@ describe("index.tsx — sync_complete launch-options reconcile (#1151)", () => {
     cancelled?: boolean;
   };
 
+  const relaunchOptions = (items: { app_id: number; launch_options: string }[]) => ({
+    success: true as const,
+    items,
+    prune_lease_token: items.length > 0 ? "installed-lease" : null,
+  });
+
   beforeEach(() => {
     setLaunchOptionsConfirmed.mockClear();
     setLaunchOptionsConfirmed.mockResolvedValue(true);
@@ -665,7 +710,7 @@ describe("index.tsx — sync_complete launch-options reconcile (#1151)", () => {
     // The startup reconcile fires on factory init; default it to an empty set
     // so each test isolates the sync_complete-triggered reconcile below.
     vi.mocked(getInstalledRelaunchOptions).mockReset();
-    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue([]);
+    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue(relaunchOptions([]));
   });
 
   it("re-confirms launch options for every installed+bound ROM after a sync", async () => {
@@ -673,9 +718,9 @@ describe("index.tsx — sync_complete launch-options reconcile (#1151)", () => {
     await flush(); // settle the startup reconcile (empty set)
     setLaunchOptionsConfirmed.mockClear();
     vi.mocked(getInstalledRelaunchOptions).mockClear();
-    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue([
-      { app_id: 100, launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/a.bin"' },
-    ]);
+    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue(
+      relaunchOptions([{ app_id: 100, launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/a.bin"' }]),
+    );
 
     act(() => {
       emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
@@ -697,9 +742,9 @@ describe("index.tsx — sync_complete launch-options reconcile (#1151)", () => {
     await flush();
     setLaunchOptionsConfirmed.mockClear();
     vi.mocked(getInstalledRelaunchOptions).mockClear();
-    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue([
-      { app_id: 200, launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/b.bin"' },
-    ]);
+    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue(
+      relaunchOptions([{ app_id: 200, launch_options: 'flatpak run net.retrodeck.retrodeck "/roms/b.bin"' }]),
+    );
 
     act(() => {
       emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
@@ -760,7 +805,11 @@ describe("index.tsx — sync_complete registers RomM appIds (#1205)", () => {
     vi.mocked(getAppIdRomIdMap).mockResolvedValue({});
     vi.mocked(getSettingsResetNotice).mockResolvedValue({ pending: false, backed_up_to: null });
     vi.mocked(getInstalledRelaunchOptions).mockReset();
-    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue([]);
+    vi.mocked(getInstalledRelaunchOptions).mockResolvedValue({
+      success: true,
+      items: [],
+      prune_lease_token: null,
+    });
     // Empty collectionStore so the detached stale-cleanup is a no-op here.
     vi.stubGlobal("collectionStore", { userCollections: [] });
   });

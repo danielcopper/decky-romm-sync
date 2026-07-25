@@ -218,8 +218,8 @@ Format: **invariant** — tier — enforced by.
 - **A prune claim excludes library sync, downloads/resumes, migrations, version switches, core/disc/controller writes,
   launch evaluation, save mutations, session writes, uninstalls, and affected cache cleanup; each conflicting callable
   registers before its first await, detached work retains that claim for the task lifetime, and frontend-owned
-  multi-call work holds a tokenized expiring lease; run admission atomically refuses those registrations before
-  reserving the prune claim and refreshing the preview** — test
+  multi-call work holds and heartbeats a tokenized expiring lease through its final Steam write; run admission
+  atomically refuses those registrations before reserving the prune claim and refreshing the preview** — test
   - prompt-only — prune service/gate race tests + contract callable-entry matrix; new conflicting entry points are
     prompt-only
 - **A prune frontend action mutates Steam only after atomically claiming its exact run/token/discriminant/binding;
@@ -227,11 +227,15 @@ Format: **invariant** — tier — enforced by.
   the Steam operation, and a claimed outcome lost in transit is reported as ambiguous until live Steam absence is
   reconciled** — test + prompt-only — prune service claim tests + `src/utils/pruneActions.test.ts`; new action kinds are
   prompt-only
-- **Every prune source carries a no-follow claim (root `(device, inode, mode, size, mtime, ctime)` plus every descendant
-  identity and regular-file hash) through descriptor-relative mutation; selected sources consume the sealed claim,
-  unselected/recovery-off sources take a final claim, directory deletion re-inventories the renamed root, and path
-  re-lookup alone never authorizes delete/quarantine** — test + prompt-only — descriptor-path, recovery-adapter, real
-  RomRemovalService, and prune contract tests; new mutation adapters are prompt-only
+- **Every prune source carries a no-follow claim (root `(device, inode, mount-id, mode, size, mtime, ctime)` plus every
+  descendant identity and regular-file hash) through descriptor-relative mutation; mount transitions are refused,
+  selected sources consume claims decoded from the same held and digest-bound sealed bundle, unselected/recovery-off
+  sources take a final presence-or-absence claim, and path re-lookup alone never authorizes delete/quarantine** — test +
+  prompt-only — descriptor-path, recovery-adapter, real RomRemovalService, and prune contract tests; new mutation
+  adapters are prompt-only
+- **Every destructive RomM proof is bound to one canonical server-origin/token-origin/user namespace from preview
+  through every exact-ID request; a namespace change is uncertainty, never a 404 deletion authority** — test +
+  prompt-only — prune service namespace-race tests; new destructive RomM proof paths are prompt-only
 
 When a change applies a guard / sanitize / backup / grouping pattern, sweep for sibling sites of the same pattern — the
 register is what that sweep checks against.

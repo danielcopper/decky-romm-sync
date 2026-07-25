@@ -20,6 +20,7 @@ class PrunePreview:
     fingerprint: tuple[tuple[object, ...], ...]
     entries: tuple[dict[str, Any], ...]
     free_bytes: int
+    server_namespace: str
 
 
 @dataclass(frozen=True)
@@ -69,3 +70,4 @@ class RecoveryHandle:
     save_inventory: dict[str, Any]
     steam_backend: SteamRecoverySnapshot | None
     source_claims: dict[str, SourceClaim]
+    bundle_digest: str

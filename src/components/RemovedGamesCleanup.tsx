@@ -22,7 +22,7 @@ import {
   type PruneScope,
 } from "../api/backend";
 import { detach } from "../utils/detach";
-import { beginPruneRun, getPruneState, onPruneStateChange, resetPruneState } from "../utils/pruneStore";
+import { beginPrunePreview, beginPruneRun, getPruneState, onPruneStateChange } from "../utils/pruneStore";
 import { getSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
 import { withTimeout } from "../utils/withTimeout";
 
@@ -345,8 +345,19 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
               tabIndex={0}
               style={{ maxHeight: "180px", overflowY: "auto", marginTop: "6px" }}
             >
+              {complete.message && (
+                <div style={{ fontSize: "12px", marginTop: "4px" }}>
+                  {complete.reason ? `${complete.reason}: ` : ""}
+                  {complete.message}
+                </div>
+              )}
               {complete.results
-                .filter((item) => ["partial", "failed", "skipped"].includes(item.status))
+                .filter(
+                  (item) =>
+                    ["partial", "failed", "skipped"].includes(item.status) ||
+                    (item.warnings?.length ?? 0) > 0 ||
+                    item.warnings_truncated,
+                )
                 .map((item) => (
                   <div key={item.group_id} style={{ fontSize: "12px", marginTop: "4px" }}>
                     {item.group_id}: {item.message}
@@ -354,12 +365,12 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
                     {item.warnings?.map((warning) => (
                       <div key={warning}>Warning: {warning}</div>
                     ))}
-                    {(item.warnings_truncated || (item.warning_count ?? 0) > (item.warnings?.length ?? 0)) && (
+                    {(item.warning_count ?? 0) > (item.warnings?.length ?? 0) && (
                       <div>
-                        {Math.max(0, (item.warning_count ?? item.warnings?.length ?? 0) - (item.warnings?.length ?? 0))}{" "}
-                        additional warning(s) omitted or shortened.
+                        {(item.warning_count ?? 0) - (item.warnings?.length ?? 0)} additional warning(s) omitted.
                       </div>
                     )}
+                    {item.warnings_truncated && <div>One or more displayed warnings were shortened.</div>}
                   </div>
                 ))}
             </Focusable>
@@ -391,7 +402,7 @@ export async function openRemovedGamesCleanupModal(romId?: number): Promise<bool
   );
   if (!result.success) throw new Error(result.message ?? "Cleanup scan failed.");
   if ((result.total ?? 0) === 0) return false;
-  resetPruneState();
+  beginPrunePreview();
   showModal(<CleanupModal initial={result} scope={scope} romId={romId ?? null} />);
   return true;
 }
@@ -450,9 +461,13 @@ export const RemovedGamesCleanupSection: FC = () => {
         <PanelSectionRow>
           <Field
             label={`${complete.removed_count ?? complete.removed_rom_ids.length} removed; ${complete.problem_count ?? complete.results.filter((item) => ["partial", "failed", "skipped"].includes(item.status)).length} skipped, partial, or failed`}
-            description={complete.results
-              .filter((item) => item.status !== "removed")
-              .map((item) => item.message)
+            description={[
+              complete.message,
+              ...complete.results
+                .filter((item) => item.status !== "removed" || (item.warnings?.length ?? 0) > 0)
+                .flatMap((item) => [item.message, ...(item.warnings ?? []).map((warning) => `Warning: ${warning}`)]),
+            ]
+              .filter(Boolean)
               .join(" · ")}
           />
         </PanelSectionRow>

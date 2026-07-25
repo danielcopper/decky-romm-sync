@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 from typing import TYPE_CHECKING, Any
 
@@ -20,7 +21,7 @@ from domain.artwork_paths import grid_image_filenames
 if TYPE_CHECKING:
     import logging
 
-    from models.prune import MutationOutcome, RecoveryArtifact, SourceClaim, SteamRecoverySnapshot
+    from models.prune import MutationOutcome, RecoveryArtifact, SourceClaim, SourceIdentity, SteamRecoverySnapshot
 
 
 class SteamRecoveryAdapter:
@@ -186,8 +187,14 @@ class SteamRecoveryAdapter:
                     dir_fd=config_fd,
                 )
                 source_identity = identity_for_stat(os.fstat(source_fd))
-                with os.fdopen(source_fd, encoding="utf-8") as source:
-                    payload: dict[str, Any] = vdf.load(source)
+                source_hash = SteamRecoveryAdapter._sha256_fd(source_fd)
+                os.lseek(source_fd, 0, os.SEEK_SET)
+                try:
+                    with os.fdopen(os.dup(source_fd), encoding="utf-8") as source:
+                        payload: dict[str, Any] = vdf.load(source)
+                except BaseException:
+                    os.close(source_fd)
+                    raise
                 apps = payload.get("UserLocalConfigStore", {}).get("Apps", {})
                 app = apps.get(str(app_id)) if isinstance(apps, dict) else None
                 if not isinstance(app, dict) or str(app.get("UseSteamControllerConfig")) != expected:
@@ -224,6 +231,12 @@ class SteamRecoveryAdapter:
                     if any(claimed_identity[field] != source_identity[field] for field in stable):
                         SteamRecoveryAdapter._restore_or_discard_claim(config_fd, claimed)
                         os.unlink(temporary, dir_fd=config_fd)
+                        os.close(source_fd)
+                        continue
+                    if not SteamRecoveryAdapter._source_unchanged(source_fd, source_identity, source_hash):
+                        SteamRecoveryAdapter._restore_or_discard_claim(config_fd, claimed)
+                        os.unlink(temporary, dir_fd=config_fd)
+                        os.close(source_fd)
                         continue
                     try:
                         os.link(
@@ -238,18 +251,27 @@ class SteamRecoveryAdapter:
                         os.unlink(claimed, dir_fd=config_fd)
                         os.unlink(temporary, dir_fd=config_fd)
                         os.fsync(config_fd)
+                        os.close(source_fd)
                         continue
                     os.unlink(temporary, dir_fd=config_fd)
+                    if not SteamRecoveryAdapter._source_unchanged(source_fd, source_identity, source_hash):
+                        os.unlink("localconfig.vdf", dir_fd=config_fd)
+                        SteamRecoveryAdapter._restore_or_discard_claim(config_fd, claimed)
+                        os.fsync(config_fd)
+                        os.close(source_fd)
+                        continue
                     try:
                         os.unlink(claimed, dir_fd=config_fd)
                         os.fsync(config_fd)
                     except OSError as exc:
+                        os.close(source_fd)
                         return {
                             "success": False,
                             "changed": True,
                             "ambiguous": True,
                             "message": f"Controller setting changed but durability is uncertain: {exc}",
                         }
+                    os.close(source_fd)
                     return {
                         "success": True,
                         "changed": True,
@@ -257,6 +279,8 @@ class SteamRecoveryAdapter:
                         "message": "Controller setting removed",
                     }
                 except BaseException as exc:
+                    with contextlib.suppress(OSError):
+                        os.close(source_fd)
                     with contextlib.suppress(FileNotFoundError):
                         os.unlink(temporary, dir_fd=config_fd)
                     try:
@@ -299,6 +323,22 @@ class SteamRecoveryAdapter:
             return os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
         except FileNotFoundError:
             return None
+
+    @staticmethod
+    def _sha256_fd(fd: int) -> str:
+        digest = hashlib.sha256()
+        os.lseek(fd, 0, os.SEEK_SET)
+        while block := os.read(fd, 1024 * 1024):
+            digest.update(block)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _source_unchanged(fd: int, expected_identity: SourceIdentity, expected_hash: str) -> bool:
+        current = identity_for_stat(os.fstat(fd))
+        stable = ("device", "inode", "mode", "size", "mtime_ns")
+        return all(current[field] == expected_identity[field] for field in stable) and (
+            SteamRecoveryAdapter._sha256_fd(fd) == expected_hash
+        )
 
     @staticmethod
     def _input_roots(user_dir: str, steam_root: str, user_id: str, app_id: int) -> tuple[str, str]:

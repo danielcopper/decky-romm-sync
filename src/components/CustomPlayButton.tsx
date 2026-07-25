@@ -55,6 +55,7 @@ import type { DownloadProgressEvent, DownloadCompleteEvent, DownloadFailedEvent 
 import { SAVEFILES_IN_CONTENT_DIR_REASON } from "../types";
 import { detach } from "../utils/detach";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
+import { withPruneLease } from "../utils/pruneLease";
 import { reconfirmLaunchOptions } from "../utils/launchOptionsReconcile";
 import { saveSyncToastBody } from "../utils/saveSyncToast";
 
@@ -949,7 +950,9 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         // raced-past not_installed launch execs `bin/rom-launcher` with no args (clean
         // exit 1) instead of a stale `flatpak run … "<deleted path>"` (#1051). Best-effort:
         // a launch-options hiccup must not turn a successful uninstall into an error.
-        await setLaunchOptionsConfirmed(appId, "").catch(() => false);
+        await withPruneLease(result.prune_lease_token, "ROM uninstall", () =>
+          setLaunchOptionsConfirmed(appId, "").catch(() => false),
+        );
         globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: romId } }));
         toaster.toast({ title: "RomM Sync", body: `${romName || "ROM"} uninstalled` });
         // Dark pulse transition before showing Download button

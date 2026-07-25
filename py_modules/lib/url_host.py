@@ -15,6 +15,7 @@ no I/O, no network — purely lexical normalization.
 from __future__ import annotations
 
 import urllib.parse
+from typing import Any
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -94,3 +95,12 @@ def is_valid_server_url(url: str) -> bool:
     hostless, or non-http(s) value is rejected.
     """
     return normalize_origin(url.strip()) is not None
+
+
+def romm_namespace(settings: dict[str, Any]) -> str:
+    """Return the stable server/user namespace destructive RomM proofs belong to."""
+    origin = normalize_origin(str(settings.get("romm_url") or "")) or "invalid-origin"
+    token_origin = normalize_origin(str(settings.get("romm_api_token_origin") or "")) or "no-token-origin"
+    raw_user = settings.get("romm_user_id")
+    user = str(raw_user) if raw_user not in {None, ""} else "unknown-user"
+    return f"{origin}|{token_origin}|{user}"

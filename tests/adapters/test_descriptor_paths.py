@@ -91,6 +91,83 @@ def test_claimed_directory_revalidates_descendants_and_restores_root_on_change(t
     assert child.read_bytes() == b"replacement"
 
 
+def test_regular_root_hash_rejects_held_fd_write_after_rename(tmp_path, monkeypatch):
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    source = safe / "save.srm"
+    source.write_bytes(b"sealed")
+    claim = claim_source(str(source), str(safe))
+    writer = os.open(source, os.O_WRONLY)
+    original = __import__("adapters.descriptor_paths", fromlist=["_require_claimed_identity"])._require_claimed_identity
+    changed = False
+
+    def mutate_after_rename(path, current, expected):
+        nonlocal changed
+        original(path, current, expected)
+        if not changed:
+            changed = True
+            os.pwrite(writer, b"change", 0)
+
+    monkeypatch.setattr("adapters.descriptor_paths._require_claimed_identity", mutate_after_rename)
+    try:
+        with pytest.raises(RuntimeError, match="changed after sealing"):
+            remove_claimed(str(source), str(safe), claim)
+    finally:
+        os.close(writer)
+
+    assert source.read_bytes() == b"change"
+
+
+def test_directory_child_write_after_post_rename_inventory_is_restored(tmp_path, monkeypatch):
+    safe = tmp_path / "safe"
+    source = safe / "game"
+    source.mkdir(parents=True)
+    child = source / "disc.bin"
+    child.write_bytes(b"sealed")
+    claim = claim_source(str(source), str(safe))
+    writer = os.open(child, os.O_WRONLY)
+    module = __import__("adapters.descriptor_paths", fromlist=["_inventory_directory"])
+    original = module._inventory_directory
+    calls = 0
+
+    def mutate_after_inventory(*args, **kwargs):
+        nonlocal calls
+        result = original(*args, **kwargs)
+        calls += 1
+        if calls == 1:
+            os.pwrite(writer, b"change", 0)
+        return result
+
+    monkeypatch.setattr("adapters.descriptor_paths._inventory_directory", mutate_after_inventory)
+    try:
+        with pytest.raises(RuntimeError, match="changed after sealing"):
+            remove_claimed(str(source), str(safe), claim)
+    finally:
+        os.close(writer)
+
+    assert child.read_bytes() == b"change"
+
+
+def test_claim_rejects_same_device_nested_mount_identity(tmp_path, monkeypatch):
+    safe = tmp_path / "safe"
+    mounted = safe / "game" / "mounted"
+    mounted.mkdir(parents=True)
+    (mounted / "outside.bin").write_bytes(b"keep")
+    module = __import__("adapters.descriptor_paths", fromlist=["_mount_id"])
+    original = module._mount_id
+
+    def fake_mount_id(fd):
+        target = os.readlink(f"/proc/self/fd/{fd}")
+        return original(fd) + (1 if "/mounted" in target else 0)
+
+    monkeypatch.setattr("adapters.descriptor_paths._mount_id", fake_mount_id)
+
+    with pytest.raises(ValueError, match="mount boundary"):
+        claim_source(str(safe / "game"), str(safe))
+
+    assert (mounted / "outside.bin").read_bytes() == b"keep"
+
+
 def test_remove_reports_post_unlink_fsync_uncertainty(tmp_path, monkeypatch):
     safe = tmp_path / "safe"
     safe.mkdir()

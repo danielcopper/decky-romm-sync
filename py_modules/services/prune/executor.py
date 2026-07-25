@@ -7,12 +7,14 @@ import contextlib
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from functools import partial
 from typing import TYPE_CHECKING, Any, Literal
 
 from domain.prune import selected_prune_ids
 from domain.sibling_resolution import AUTO_REGION, fs_name_stem, resolve_group_representative
 from lib.errors import RommNotFoundError, classify_error
 from lib.list_result import ErrorCode
+from lib.url_host import romm_namespace
 from services.prune._models import PruneOptions, PrunePreview, RecoveryHandle
 
 if TYPE_CHECKING:
@@ -120,6 +122,7 @@ class PruneExecutor:
         self._recovery = config.recovery
         self._registry = config.registry
         self._request_action = config.request_action
+        self._run_namespace: str | None = None
 
     async def run(self, run_id: str, preview: PrunePreview, options: PruneOptions) -> None:
         """Execute every candidate group and emit bounded terminal chunks."""
@@ -127,7 +130,10 @@ class PruneExecutor:
         cancelled = False
         terminal_reason: str | None = None
         terminal_message: str | None = None
+        self._run_namespace = preview.server_namespace
         try:
+            if romm_namespace(self._settings) != preview.server_namespace:
+                raise RuntimeError("The RomM server or user changed after cleanup preview.")
             groups = await self._loop.run_in_executor(
                 None, self._registry.groups_for_candidates, set(preview.candidate_ids)
             )
@@ -160,13 +166,16 @@ class PruneExecutor:
             self._logger.exception("Vanished-ROM cleanup failed")
             terminal_reason = ErrorCode.UNKNOWN.value
             terminal_message = str(exc)
-        await self._emit_completion(
-            run_id,
-            results,
-            cancelled=cancelled,
-            reason=terminal_reason,
-            message=terminal_message,
-        )
+        try:
+            await self._emit_completion(
+                run_id,
+                results,
+                cancelled=cancelled,
+                reason=terminal_reason,
+                message=terminal_message,
+            )
+        finally:
+            self._run_namespace = None
         if cancelled:
             raise asyncio.CancelledError
 
@@ -232,11 +241,18 @@ class PruneExecutor:
         uncertain_ids = group_ids - vanished_ids - live_ids
         fully_dead = bool(group_ids) and group_ids <= vanished_ids
         if not live_ids and uncertain_ids:
+            namespace_changed = any(
+                verdicts[rom_id]["reason"] == "server_namespace_changed" for rom_id in uncertain_ids
+            )
             return self._group_result(
                 rows,
                 "skipped",
-                "liveness_uncertain",
-                f"RomM could not confirm {len(uncertain_ids)} group member(s); nothing was removed.",
+                "server_namespace_changed" if namespace_changed else "liveness_uncertain",
+                (
+                    "The RomM server or user changed during exact-ID proof; nothing was removed."
+                    if namespace_changed
+                    else f"RomM could not confirm {len(uncertain_ids)} group member(s); nothing was removed."
+                ),
             )
 
         delete_ids = selected_prune_ids(
@@ -354,8 +370,17 @@ class PruneExecutor:
                         )
                     )
                     bundle_path, steam_backend = sealed
-                    claims = await self._loop.run_in_executor(None, self._recovery_store.source_claims, bundle_path)
-                    handle = RecoveryHandle(bundle_path, snapshot, save_inventory, steam_backend, claims)
+                    sealed_claims = await self._loop.run_in_executor(
+                        None, self._recovery_store.source_claims, bundle_path
+                    )
+                    handle = RecoveryHandle(
+                        bundle_path,
+                        snapshot,
+                        save_inventory,
+                        steam_backend,
+                        sealed_claims["claims"],
+                        sealed_claims["bundle_digest"],
+                    )
                     ledger.bundle_path = bundle_path
                     if seal_cancelled:
                         raise asyncio.CancelledError
@@ -686,7 +711,8 @@ class PruneExecutor:
                     launch_options,
                 )
                 sources_match = await self._loop.run_in_executor(
-                    None, self._recovery_store.validate_sources, handle.bundle_path
+                    None,
+                    partial(self._recovery_store.validate_sources, handle.bundle_path, handle.bundle_digest),
                 )
                 backend_matches = True
                 if committed_action == "remove_shortcut" and app_id is not None and handle.steam_backend is not None:
@@ -768,7 +794,7 @@ class PruneExecutor:
             None,
             self._save_coordinator.quarantine_prune_saves,
             delete_inventory["exclusive"],
-            handle.source_claims if handle is not None else None,
+            handle.source_claims if handle is not None else delete_inventory.get("source_claims"),
         )
         raw_moved = quarantine.get("moved")
         moved = [str(path) for path in raw_moved] if isinstance(raw_moved, list) else []
@@ -923,13 +949,32 @@ class PruneExecutor:
         return dict(await asyncio.gather(*(one(rom_id) for rom_id in sorted(rom_ids))))
 
     def _probe_one(self, rom_id: int) -> dict[str, str]:
+        expected_namespace = self._run_namespace or romm_namespace(self._settings)
+        if romm_namespace(self._settings) != expected_namespace:
+            return {
+                "status": "uncertain",
+                "reason": "server_namespace_changed",
+                "message": "The RomM server or user changed before the exact-ID proof.",
+            }
         try:
             payload: Any = self._romm_api.get_rom_once(rom_id)
         except RommNotFoundError:
+            if romm_namespace(self._settings) != expected_namespace:
+                return {
+                    "status": "uncertain",
+                    "reason": "server_namespace_changed",
+                    "message": "The RomM server or user changed during the exact-ID proof.",
+                }
             return {"status": "vanished", "reason": ErrorCode.NOT_FOUND.value, "message": "RomM confirmed 404."}
         except Exception as exc:
             reason, message = classify_error(exc)
             return {"status": "uncertain", "reason": reason, "message": message}
+        if romm_namespace(self._settings) != expected_namespace:
+            return {
+                "status": "uncertain",
+                "reason": "server_namespace_changed",
+                "message": "The RomM server or user changed during the exact-ID proof.",
+            }
         payload_id = payload.get("id") if isinstance(payload, dict) else None
         if type(payload_id) is int and payload_id == rom_id:
             return {"status": "live", "reason": "live", "message": "RomM returned the exact ROM."}
@@ -1004,7 +1049,8 @@ class PruneExecutor:
                 launch_options,
             )
             sources_match = await self._loop.run_in_executor(
-                None, self._recovery_store.validate_sources, handle.bundle_path
+                None,
+                partial(self._recovery_store.validate_sources, handle.bundle_path, handle.bundle_digest),
             )
             backend_matches = True
             if app_id is not None and handle.steam_backend is not None:
@@ -1134,7 +1180,17 @@ class PruneExecutor:
         removed_count = sum(
             int(result.get("removed_count", len(result.get("removed_rom_ids", [])))) for result in results
         )
-        partial = any(result["status"] == "partial" for result in results) or bool(removed_count and failures)
+        committed = bool(removed_count) or any(
+            result.get("committed_action")
+            or result.get("action_ambiguous")
+            or result.get("mutations")
+            or result.get("ambiguous_mutations")
+            for result in results
+        )
+        run_failed = cancelled or reason is not None
+        partial = any(result["status"] == "partial" for result in results) or bool(
+            committed and (failures or run_failed)
+        )
         bounded_reason = reason[:_COMPLETION_REASON_CHARS] if reason is not None else None
         bounded_message = message[:_COMPLETION_TEXT_CHARS] if message is not None else None
         chunks: list[list[dict[str, Any]]] = []

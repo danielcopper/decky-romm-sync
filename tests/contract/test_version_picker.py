@@ -328,6 +328,8 @@ async def test_switch_version_happy_moves_binding(harness):
     harness.romm.roms[1] = {"id": 1, "sibling_roms": [{"id": 2}]}
 
     result = await harness.plugin.switch_version(_APP_ID, 2, False)
+    lease_token = result.pop("prune_lease_token")
+    assert lease_token.startswith("version_switch:")
     assert result == {
         "success": True,
         "rom_id": 2,

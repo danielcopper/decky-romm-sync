@@ -188,3 +188,40 @@ def test_controller_cleanup_retries_and_preserves_unrelated_concurrent_write(tmp
         payload = vdf.load(source)
     assert payload["UserLocalConfigStore"]["Unrelated"] == {"Fresh": "value"}
     assert str(app_id) not in payload["UserLocalConfigStore"]["Apps"]
+
+
+def test_controller_cleanup_preserves_write_through_held_fd_after_rename(tmp_path, monkeypatch):
+    app_id = 0x80000007
+    _first, _second, grid = _layout(tmp_path, app_id)
+    adapter = SteamRecoveryAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+    snapshot = adapter.snapshot(app_id)
+    localconfig = grid.parent / "localconfig.vdf"
+    with localconfig.open() as source:
+        fresh_payload = vdf.load(source)
+    fresh_payload["UserLocalConfigStore"]["Unrelated"] = {"Fresh": "value"}
+    held_fd = os.open(localconfig, os.O_RDWR)
+    original = os.link
+    injected = False
+
+    def write_then_link(*args, **kwargs):
+        nonlocal injected
+        if not injected:
+            injected = True
+            with os.fdopen(os.dup(held_fd), "w") as output:
+                output.seek(0)
+                output.truncate()
+                vdf.dump(fresh_payload, output, pretty=True)
+                output.flush()
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr("adapters.steam_recovery.os.link", write_then_link)
+    try:
+        outcome = adapter.remove_state(app_id, snapshot, _source_claims(snapshot))
+    finally:
+        os.close(held_fd)
+
+    assert outcome["success"] is True
+    with localconfig.open() as source:
+        payload = vdf.load(source)
+    assert payload["UserLocalConfigStore"]["Unrelated"] == {"Fresh": "value"}
+    assert str(app_id) not in payload["UserLocalConfigStore"]["Apps"]

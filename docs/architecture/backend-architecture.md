@@ -185,22 +185,26 @@ row. `start_prune` consumes a finalized preview-bound installed-content selectio
 bounded pages, so wire bounds do not cap the total selected set. Start atomically refuses any registered conflicting
 callable and reserves the run before rebuilding the preview; concurrent starts cannot consume one token twice, and
 shutdown owns/cancels an admitted refresh before it can spawn a run. Each sync, download, migration, version-switch,
-save-write, session, uninstall, or cache-mutation callable registers for its full lifetime before its first await.
-Detached status, download, and playtime tasks transfer the claim to their task lifetime. Core/disc writes, launch
-evaluation, and Steam Input application are included because they mutate recovered state. Frontend-owned shortcut
-removal and core/disc Steam writes hold tokenized conflict leases through acknowledgement; abandoned leases expire, and
-cancellation starts a fresh bounded frontend action queue. This closes the reciprocal admission race, and each path
-refuses while a prune claim is active. Migration and active-library-sync decorators additionally guard preview and
-start.
+save-write, session, uninstall, connection-identity change, or cache-mutation callable registers for its full lifetime
+before its first await. Detached status, download, and playtime tasks transfer the claim to their task lifetime.
+Core/disc writes, launch evaluation, and Steam Input application are included because they mutate recovered state.
+Frontend-owned shortcut removal, core/disc writes, version switches, uninstalls, download completion, home migration,
+startup healing, pre-launch healing, and post-sync reconciliation hold tokenized conflict leases through their final
+Steam write and bounded release. Active continuations heartbeat those leases once per minute; a lease expires after five
+minutes without a successful heartbeat so an abandoned page cannot block cleanup forever. This closes the reciprocal
+admission race, and each path refuses while a prune claim is active. Migration and active-library-sync decorators
+additionally guard preview and start.
 
 The executor processes sibling groups serially and catches ordinary exceptions per group. It rejects multiple shortcut
-bindings and active downloads, probes every local group member with the single-attempt three-second `get_rom_once`, and
-treats only a typed `RommNotFoundError` as destructive authority. Live, malformed, wrong-id, transport, authentication,
-timeout, server, and unknown outcomes retain data. Long recovery and frontend round trips are followed by another
-exact-ID proof before local source removal; every repoint re-proves both the vanished source and live target after the
-frontend action, including a vanished source that is not itself a generation candidate. The natural live repoint target
-uses the same filename-stem projection and `resolve_group_representative` ranking as the version picker with empty
-installed/bound preference sets. Repoint selection is independent of row deletion.
+bindings and active downloads, pins the preview's canonical RomM origin/token-origin/user namespace, probes every local
+group member with the single-attempt three-second `get_rom_once`, and treats only a typed `RommNotFoundError` from that
+same namespace as destructive authority. A connection/server/user change before, during, or after an exact-ID request is
+uncertain. Live, malformed, wrong-id, transport, authentication, timeout, server, and unknown outcomes retain data. Long
+recovery and frontend round trips are followed by another exact-ID proof before local source removal; every repoint
+re-proves both the vanished source and live target after the frontend action, including a vanished source that is not
+itself a generation candidate. The natural live repoint target uses the same filename-stem projection and
+`resolve_group_representative` ranking as the version picker with empty installed/bound preference sets. Repoint
+selection is independent of row deletion.
 
 Recovery is coordinated through ordered ROM save locks, acquired with no UoW open. The lock set is retried until shared
 save ownership is stable. Short read UoWs close before filesystem work, and no RomM request, event emission, or frontend
@@ -208,14 +212,17 @@ wait runs under those locks. The bundle is sealed before mutation. Aggregate, sa
 and fresh frontend Steam state are validated before the irreversible Steam action. After that action the service
 reacquires the same recovery-set locks and repeats the guards immediately before local finalization; quarantine
 ownership is separately projected only for rows being deleted. The locks remain held through save quarantine,
-filesystem-only installed-content removal, and the final parent cascade. Source sets record expected absence, the root's
-sealed no-follow identity, and every descendant identity and regular-file hash. Directory deletion first renames the
-root through an anchored parent, re-inventories that claimed tree, and restores it on any descendant mismatch. Content
-excluded from the bundle and recovery-off saves still receive a final complete no-follow claim; their remove/quarantine
-uses anchored parents and directory-durable rename rather than a raw path fallback. Recovery root, staging, bundles, and
-the sealed bundle remain descriptor-anchored through copy, cross-directory rename, validation, and both-parent fsync.
-Adapter outcomes carry actual and durability-ambiguous changes into the mutation ledger even when a later item or parent
-fsync fails. The final SQLite delete is one short UoW that revalidates complete row/binding state, invalidates
+filesystem-only installed-content removal, and the final parent cascade. Source sets record expected presence or
+absence, the root's sealed no-follow identity and regular-file hash, and every descendant identity, mount ID, and
+regular-file hash. Every resolvable exclusive save path is represented even when it was absent. Traversal refuses nested
+mount transitions, and directory deletion consumes held descendants after the anchored root rename instead of delegating
+to a path-recursive remover. Content excluded from the bundle and recovery-off saves still receive a final complete
+no-follow claim; their remove/quarantine uses anchored parents and directory-durable rename rather than a raw path
+fallback. Validation and claim decoding share one held bundle descriptor and return a digest that every later guard
+compares to the cached claims. Recovery root, staging, bundles, destination files, and the sealed bundle remain
+descriptor-anchored through copy, metadata application, hashing, cross-directory rename, validation, and both-parent
+fsync. Adapter outcomes carry actual and durability-ambiguous changes into the mutation ledger even when a later item or
+parent fsync fails. The final SQLite delete is one short UoW that revalidates complete row/binding state, invalidates
 intersecting collection stamps, and clears platform stamps only for fully vanished games.
 
 Frontend Steam events use a claim/complete protocol. A claim checks the run, token, discriminant, appId, target, exact

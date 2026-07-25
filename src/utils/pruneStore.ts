@@ -58,6 +58,7 @@ let progress: PruneProgress | null = null;
 let complete: PruneComplete | null = null;
 const receivedChunks = new Map<number, PruneComplete>();
 let terminalChunkIndex: number | null = null;
+let previewAdmissionPending = false;
 const listeners = new Set<Listener>();
 
 function notify(): void {
@@ -71,6 +72,7 @@ function unique(values: number[]): number[] {
 export function beginPruneRun(runId: string): void {
   if (activeRunId === runId) return;
   activeRunId = runId;
+  previewAdmissionPending = false;
   progress = null;
   complete = null;
   receivedChunks.clear();
@@ -79,6 +81,7 @@ export function beginPruneRun(runId: string): void {
 }
 
 export function setPruneProgress(value: PruneProgress): void {
+  if (previewAdmissionPending && activeRunId === null) return;
   if (activeRunId !== null && activeRunId !== value.run_id) return;
   activeRunId = value.run_id;
   progress = value;
@@ -87,6 +90,7 @@ export function setPruneProgress(value: PruneProgress): void {
 }
 
 export function setPruneComplete(value: PruneComplete): PruneComplete | null {
+  if (previewAdmissionPending && activeRunId === null) return null;
   if (activeRunId !== null && activeRunId !== value.run_id) return null;
   activeRunId = value.run_id;
   const chunkIndex = value.chunk_index ?? 0;
@@ -130,5 +134,16 @@ export function resetPruneState(): void {
   complete = null;
   receivedChunks.clear();
   terminalChunkIndex = null;
+  previewAdmissionPending = false;
+  notify();
+}
+
+export function beginPrunePreview(): void {
+  activeRunId = null;
+  progress = null;
+  complete = null;
+  receivedChunks.clear();
+  terminalChunkIndex = null;
+  previewAdmissionPending = true;
   notify();
 }

@@ -1820,7 +1820,12 @@ describe("CustomPlayButton — pre-launch relaunch re-confirm (#1150)", () => {
   }
 
   it("re-confirms launch_options (getRomRelaunchOptions → setLaunchOptionsConfirmed) BEFORE RunGame", async () => {
-    vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({ app_id: 100, launch_options: RELAUNCH_COMMAND });
+    vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({
+      success: true,
+      app_id: 100,
+      launch_options: RELAUNCH_COMMAND,
+      prune_lease_token: "launch-lease",
+    });
 
     await clickPlay();
 

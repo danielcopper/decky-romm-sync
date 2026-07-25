@@ -1186,6 +1186,21 @@ describe("RomMPlaySection", () => {
       expect(vi.mocked(updatePlaytimeDisplay)).not.toHaveBeenCalled();
     });
 
+    it("a resolved prune gate failure never writes a playtime payload", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({ found: true, rom_id: 78 });
+      vi.mocked(backend.reconcilePlaytime).mockResolvedValue({
+        success: false,
+        reason: "prune_active",
+        message: "Cleanup is active.",
+      });
+
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+
+      expect(vi.mocked(updatePlaytimeDisplay)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("playtime reconcile deferred"));
+    });
+
     it("#869 — a romm_playtime_changed event refreshes PLAYTIME on the same mount (no remount)", async () => {
       useDistinctPlaytimeFormatter();
       // Mount with a stale local total of 10 minutes.

@@ -32,6 +32,42 @@ from services.startup_healing import StartupHealingService, StartupHealingServic
 from services.steamgrid import SteamGridService, SteamGridServiceConfig
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("event", "payload"),
+    [
+        ("sync_complete", {"total_games": 1}),
+        ("download_complete", {"app_id": 42, "launch_options": "launch"}),
+        ("migration_relaunch_options", {"items": [{"app_id": 42, "launch_options": "launch"}]}),
+    ],
+)
+async def test_continuation_events_hold_a_renewable_prune_lease(plugin, event, payload):
+    import decky
+
+    decky.emit.reset_mock()
+    await plugin._emit_with_prune_continuation(event, payload)
+
+    emitted = decky.emit.await_args.args[1]
+    token = emitted["prune_lease_token"]
+    assert token.startswith(f"{event}:")
+    assert "prune_lease_token" not in payload
+    assert plugin._prune_admission_gate.conflicting_operations == 1
+    assert (await plugin.renew_prune_conflict_lease(token))["success"] is True
+    assert (await plugin.release_prune_conflict_lease(token))["success"] is True
+    assert plugin._prune_admission_gate.conflicting_operations == 0
+
+
+@pytest.mark.asyncio
+async def test_download_without_a_bound_shortcut_emits_no_continuation_lease(plugin):
+    import decky
+
+    decky.emit.reset_mock()
+    await plugin._emit_with_prune_continuation("download_complete", {"app_id": None})
+
+    assert "prune_lease_token" not in decky.emit.await_args.args[1]
+    assert not hasattr(plugin, "_prune_admission_gate")
+
+
 @pytest.fixture
 def plugin():
     p = Plugin()
@@ -784,6 +820,7 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "report_removal_results",
     "stage_prune_installed_selection",
     "release_prune_conflict_lease",
+    "renew_prune_conflict_lease",
     "wait_for_prune_release",
     # Ack for an already-started cleanup run must remain available while the
     # run waits on its exact Steam action token; gating it would deadlock the

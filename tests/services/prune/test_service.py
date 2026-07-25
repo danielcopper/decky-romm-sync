@@ -13,6 +13,7 @@ import pytest_asyncio
 from fakes.fake_retrodeck_paths import FakeRetroDeckPaths
 from fakes.fake_unit_of_work import FakeUnitOfWork, FakeUnitOfWorkFactory
 from fakes.system_time import FakeClock, FakeUuidGen
+from models.prune import SealedSourceClaims
 
 from domain.platform_sync_state import PlatformSyncState
 from domain.rom import Rom
@@ -55,13 +56,13 @@ class FakeRecoveryStore:
         del path, safe_root
         return 123
 
-    def validate_sources(self, bundle_path: str) -> bool:
-        del bundle_path
+    def validate_sources(self, bundle_path: str, bundle_digest: str | None = None) -> bool:
+        del bundle_path, bundle_digest
         return self.sources_valid
 
-    def source_claims(self, bundle_path: str):
+    def source_claims(self, bundle_path: str) -> SealedSourceClaims:
         del bundle_path
-        return {}
+        return SealedSourceClaims(claims={}, bundle_digest="sealed-digest")
 
     def seal_bundle(self, bundle_id, snapshot, artifacts, readme, playtime_text):
         if self.failure is not None:
@@ -863,6 +864,8 @@ async def test_shutdown_waits_for_inflight_filesystem_finalization(harness):
     assert harness.uow.roms.get(1) is None
     complete = [payload for name, payload in harness.events.events if name == "prune_complete"][-1]
     assert complete["reason"] == "cancelled"
+    assert complete["partial"] is True
+    assert complete["removed_count"] == 1
     assert complete["results"][0]["status"] == "removed"
 
 
@@ -1045,6 +1048,37 @@ async def test_shutdown_after_snapshot_claim_does_not_begin_recovery(harness):
     assert harness.recovery.sealed == []
     assert harness.artifacts.removed == []
     assert harness.uow.roms.get(1) is not None
+
+
+@pytest.mark.asyncio
+async def test_server_switch_during_exact_404_never_authorizes_deletion(harness, monkeypatch):
+    harness.service._settings.update(
+        {
+            "romm_url": "https://server-a.example",
+            "romm_api_token_origin": "https://server-a.example",
+            "romm_user_id": 10,
+        }
+    )
+    _seed(harness.uow, _rom(1, fetch="old"))
+    preview = await _preview(harness)
+
+    def switched_namespace_404(_rom_id):
+        harness.service._settings.update(
+            {
+                "romm_url": "https://server-b.example",
+                "romm_api_token_origin": "https://server-b.example",
+                "romm_user_id": 20,
+            }
+        )
+        raise RommNotFoundError("server B has no matching numeric id")
+
+    monkeypatch.setattr(harness.romm, "get_rom_once", switched_namespace_404)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    complete = await _finish(harness)
+
+    assert complete["results"][0]["reason"] == "server_namespace_changed"
+    assert harness.uow.roms.get(1) is not None
+    assert harness.artifacts.removed == []
 
 
 @pytest.mark.asyncio
@@ -1485,7 +1519,7 @@ async def test_post_seal_aggregate_drift_aborts_before_shortcut_removal(harness,
             assert row is not None
             row.record_fetch_generation("changed-after-seal")
             harness.uow.roms.save(row)
-        return {}
+        return {"claims": {}, "bundle_digest": "sealed-digest"}
 
     monkeypatch.setattr(harness.recovery, "source_claims", mutate_after_seal)
     await _complete_action(harness, capture, snapshot=_steam_snapshot(app_id))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import shutil
 import stat
 from pathlib import Path
 
@@ -290,3 +291,59 @@ def test_recovery_bundle_parent_replacement_is_not_reauthorized(tmp_path, monkey
         adapter.seal_bundle("20260724T120000Z_7_swapped", _snapshot(), [], "readme", "playtime")
 
     assert list(outside.iterdir()) == []
+
+
+def test_claim_digest_rejects_same_name_bundle_replacement(tmp_path):
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    source = safe / "save.srm"
+    source.write_bytes(b"save")
+    adapter = _adapter(tmp_path)
+    sealed = Path(
+        adapter.seal_bundle(
+            "20260724T120000Z_7_bound",
+            _snapshot(),
+            [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
+            "readme",
+            "playtime",
+        )
+    )
+    decoded = adapter.source_claims(str(sealed))
+    original = sealed.with_name("original-bound")
+    sealed.rename(original)
+    shutil.copytree(original, sealed)
+
+    assert adapter.validate_sources(str(sealed), decoded["bundle_digest"]) is False
+    assert decoded["claims"][str(source)]["sha256"] is not None
+
+
+def test_destination_replacement_cannot_modify_outside_file(tmp_path, monkeypatch):
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    source = safe / "save.srm"
+    source.write_bytes(b"save")
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"outside")
+    outside.chmod(0o600)
+    adapter = _adapter(tmp_path)
+    original = adapter._copy_opened_source
+
+    def replace_copied_destination(source_path, safe_root, parent_fd, name):
+        result = original(source_path, safe_root, parent_fd, name)
+        os.unlink(name, dir_fd=parent_fd)
+        os.symlink(outside, name, dir_fd=parent_fd)
+        return result
+
+    monkeypatch.setattr(adapter, "_copy_opened_source", replace_copied_destination)
+
+    with pytest.raises(OSError):
+        adapter.seal_bundle(
+            "20260724T120000Z_7_destination",
+            _snapshot(),
+            [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
+            "readme",
+            "playtime",
+        )
+
+    assert outside.read_bytes() == b"outside"
+    assert stat.S_IMODE(outside.stat().st_mode) == 0o600

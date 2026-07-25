@@ -142,9 +142,10 @@ action and failure message. A confirmed shortcut removal is reconciled to an unb
 remains bound to the new Default. If Steam removal succeeded but every completion report was lost, the result is marked
 ambiguous and source data stays retained; the same applies when Steam removal was attempted but its absence could not be
 confirmed. Retrying confirms an already-absent shortcut instead of removing it twice. Save ownership warnings are shown
-in a focusable terminal-detail region. If bounded warning or message text was omitted/shortened, the detail explicitly
-says so rather than presenting a partial list as complete. These outcomes are intentional and retryable rather than
-being reported as unchanged.
+in a focusable terminal-detail region even when the group was removed successfully, and a run-level cancellation or
+failure message remains visible after earlier groups committed. If bounded warning or message text was omitted or
+shortened, the detail distinguishes omitted warnings from shortened displayed text and never reports zero additional
+warnings. These outcomes are intentional and retryable rather than being reported as unchanged.
 
 ### Region and Languages
 

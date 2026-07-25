@@ -25,7 +25,7 @@ import { detach } from "../utils/detach";
 import { getEventTarget } from "../utils/events";
 import { buildEmulatorMenu } from "../utils/emulatorMenu";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
-import { releasePruneLease } from "../utils/pruneLease";
+import { withPruneLease } from "../utils/pruneLease";
 
 /**
  * Build the per-platform summary label/description from the backend BIOS
@@ -216,7 +216,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
         // Mirrors the migration_relaunch_options fan-out in index.tsx
         // (bounded-concurrency batches so a platform with many ROMs doesn't
         // serialize worst-case per-shortcut confirm-poll timeouts).
-        try {
+        await withPruneLease(result.prune_lease_token, "setSystemCore", async () => {
           const items = result.rebake_items ?? [];
           const CONCURRENCY = 10;
           for (let i = 0; i < items.length; i += CONCURRENCY) {
@@ -234,11 +234,7 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
               }),
             );
           }
-        } finally {
-          if (result.prune_lease_token) {
-            await releasePruneLease(result.prune_lease_token, "setSystemCore");
-          }
-        }
+        });
         await refreshSystem();
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", {

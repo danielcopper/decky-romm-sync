@@ -38,7 +38,7 @@ import type { RegistryPlatform } from "../types";
 import { detach } from "../utils/detach";
 import { fuzzyMatch } from "../utils/fuzzyMatch";
 import { RemovedGamesCleanupSection } from "./RemovedGamesCleanup";
-import { releasePruneLease } from "../utils/pruneLease";
+import { maintainPruneLease, withPruneLease } from "../utils/pruneLease";
 import { withTimeout } from "../utils/withTimeout";
 
 const REMOVAL_REPORT_TIMEOUT_MS = 15000;
@@ -204,9 +204,11 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     runRemoval(async (onProgress) => {
       setActionStatus(`Removing ${p.name} shortcuts...`);
       let leaseToken: string | undefined;
+      let finishLease: (() => Promise<void>) | undefined;
       try {
         const result = await removePlatformShortcuts(p.slug);
         leaseToken = result.prune_lease_token;
+        if (leaseToken) finishLease = maintainPruneLease(leaseToken, "Platform shortcut removal");
         // The @migration_blocked / @sync_active_blocked gates short-circuit to
         // { success: false, message, ... } with no app_ids/rom_ids — surface
         // that message instead of cosmetically reporting a removal.
@@ -217,6 +219,8 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
         await removeShortcutsPaced(result.app_ids ?? [], onProgress);
         if (result.rom_ids?.length || leaseToken) {
           await withTimeout(reportRemovalResults(result.rom_ids ?? [], leaseToken ?? null), REMOVAL_REPORT_TIMEOUT_MS);
+          await finishLease?.();
+          finishLease = undefined;
           leaseToken = undefined;
         }
         await clearPlatformCollection(result.platform_name || p.name);
@@ -226,7 +230,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
       } catch {
         setActionStatus("Failed to remove shortcuts");
       } finally {
-        if (leaseToken) await releasePruneLease(leaseToken, "Platform shortcut removal");
+        await finishLease?.();
       }
     });
 
@@ -283,9 +287,11 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
       setStatus("Removing all shortcuts...");
       let removedCount = 0;
       let leaseToken: string | undefined;
+      let finishLease: (() => Promise<void>) | undefined;
       try {
         const result = await removeAllShortcuts();
         leaseToken = result.prune_lease_token;
+        if (leaseToken) finishLease = maintainPruneLease(leaseToken, "All-shortcut removal");
         if (!result.success) {
           // A gate refusal (@sync_active_blocked / @migration_blocked) carries
           // no app_ids/rom_ids — surface its message and remove nothing.
@@ -322,6 +328,8 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
               reportRemovalResults(result.rom_ids ?? [], leaseToken ?? null),
               REMOVAL_REPORT_TIMEOUT_MS,
             );
+            await finishLease?.();
+            finishLease = undefined;
             leaseToken = undefined;
           }
           await clearAllRomMCollections();
@@ -330,7 +338,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
       } catch {
         setStatus("Failed to remove shortcuts");
       } finally {
-        if (leaseToken) await releasePruneLease(leaseToken, "All-shortcut removal");
+        await finishLease?.();
       }
       await refreshPlatforms();
       await recountAfterStoreSettles(removedCount, loadNonSteamApps);
@@ -357,9 +365,11 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
         // `flatpak run … "<deleted path>"` into a deleted path (#1146, mirrors the
         // single-ROM fix in #1051). Batched to avoid serializing the per-shortcut
         // confirm-poll timeouts; best-effort — a failed confirm is logged, not fatal.
-        await batchConfirmLaunchOptions(
-          (result.app_ids ?? []).map((appId) => ({ app_id: appId, launch_options: "" })),
-          "uninstall-all",
+        await withPruneLease(result.prune_lease_token, "Bulk uninstall", () =>
+          batchConfirmLaunchOptions(
+            (result.app_ids ?? []).map((appId) => ({ app_id: appId, launch_options: "" })),
+            "uninstall-all",
+          ),
         );
         setUninstallStatus(formatUninstallStatus(result.removed_count ?? 0, (result.errors ?? []).length));
       }

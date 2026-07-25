@@ -18,7 +18,14 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractContextManager
 
-    from models.prune import MutationOutcome, RecoveryArtifact, SourceClaim, SourceIdentity, SteamRecoverySnapshot
+    from models.prune import (
+        MutationOutcome,
+        RecoveryArtifact,
+        SealedSourceClaims,
+        SourceClaim,
+        SourceIdentity,
+        SteamRecoverySnapshot,
+    )
 
 
 class DirectoryFileListerFn(Protocol):
@@ -556,8 +563,8 @@ class RecoveryBundleStore(Protocol):
     def root(self) -> str: ...
     def free_bytes(self) -> int: ...
     def measure_path(self, path: str, safe_root: str) -> int: ...
-    def validate_sources(self, bundle_path: str) -> bool: ...
-    def source_claims(self, bundle_path: str) -> dict[str, SourceClaim]: ...
+    def validate_sources(self, bundle_path: str, bundle_digest: str | None = None) -> bool: ...
+    def source_claims(self, bundle_path: str) -> SealedSourceClaims: ...
     def seal_bundle(
         self,
         bundle_id: str,

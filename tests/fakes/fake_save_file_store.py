@@ -126,6 +126,7 @@ class FakeSaveFileStore:
             "safe_root": safe_root,
             "source_identity": {
                 "exists": exists,
+                "mount_id": 1 if exists else 0,
                 "device": 1 if exists else 0,
                 "inode": 1 if exists else 0,
                 "mode": 1 if exists else 0,
@@ -133,6 +134,7 @@ class FakeSaveFileStore:
                 "mtime_ns": 0,
                 "ctime_ns": 0,
             },
+            "sha256": hashlib.sha256(self.files[path]).hexdigest() if exists else None,
             "entries": {},
         }
 
@@ -141,6 +143,10 @@ class FakeSaveFileStore:
         self.make_dirs(path)
 
     def rename_claimed(self, src: str, dst: str, safe_root: str, claim: SourceClaim) -> MutationOutcome:
+        if not claim["source_identity"]["exists"]:
+            if src in self.files:
+                raise RuntimeError(f"Recovery source appeared after sealing: {src}")
+            return {"success": True, "changed": False, "ambiguous": False, "message": "Source was already absent"}
         changed = self.rename_exact(src, dst, safe_root, claim["source_identity"])
         return {"success": True, "changed": changed, "ambiguous": False, "message": "Source renamed"}
 

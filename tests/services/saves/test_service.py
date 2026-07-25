@@ -5,6 +5,7 @@ import hashlib
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -1489,10 +1490,9 @@ class TestPruneSaveInventory:
         inventory = svc.inventory_prune_saves([42])
 
         artifact_paths = {item["source_path"] for item in inventory["artifacts"]}
-        assert artifact_paths == {str(historical), str(matching_backup)}
-        assert inventory["exclusive"] == [
-            {"path": str(historical), "filename": "old-name.srm", "saves_dir": str(saves_dir)}
-        ]
+        expected_current = {str(saves_dir / f"renamed.{extension}") for extension in ("srm", "rtc", "sav")}
+        assert artifact_paths == {str(historical), str(matching_backup), *expected_current}
+        assert {item["path"] for item in inventory["exclusive"]} == {str(historical), *expected_current}
 
     def test_shared_save_expands_lock_owners_and_is_never_quarantined(self, tmp_path):
         svc, _ = make_service(tmp_path)
@@ -1505,3 +1505,24 @@ class TestPruneSaveInventory:
         assert inventory["exclusive"] == []
         assert inventory["shared"] == [str(shared)]
         assert inventory["lock_rom_ids"] == [1, 2]
+
+    def test_missing_exclusive_save_is_claimed_absent_and_late_creation_is_retained(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="late.gba")
+        expected = str(tmp_path / "saves" / "gba" / "late.srm")
+
+        inventory = svc.inventory_prune_saves([42])
+
+        expected_paths = {str(tmp_path / "saves" / "gba" / f"late.{extension}") for extension in ("srm", "rtc", "sav")}
+        assert {item["path"] for item in inventory["exclusive"]} == expected_paths
+        assert {item["source_path"] for item in inventory["artifacts"]} == expected_paths
+        assert set(inventory["source_claims"]) == expected_paths
+        assert inventory["source_claims"][expected]["source_identity"]["exists"] is False
+
+        Path(expected).parent.mkdir(parents=True, exist_ok=True)
+        Path(expected).write_bytes(b"created by emulator")
+        result = svc.quarantine_prune_saves(inventory["exclusive"], inventory["source_claims"])
+
+        assert result["success"] is False
+        assert "appeared after sealing" in result["message"]
+        assert Path(expected).read_bytes() == b"created by emulator"

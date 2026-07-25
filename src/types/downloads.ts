@@ -50,6 +50,7 @@ export interface DownloadCompleteEvent {
   launch_options: string;
   /** Whether the just-finished transfer was resumable (carried for store parity). */
   resumable?: boolean;
+  prune_lease_token?: string;
 }
 
 export interface DownloadFailedEvent {

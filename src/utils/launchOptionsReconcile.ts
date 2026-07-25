@@ -1,5 +1,6 @@
 import { getRomRelaunchOptions, logError } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "./steamShortcuts";
+import { withPruneLease } from "./pruneLease";
 
 // Apply in bounded-concurrency batches (mirrors getExistingRomMShortcuts) so a
 // reconcile touching many ROMs doesn't serialize worst-case per-shortcut
@@ -28,7 +29,11 @@ export async function reconfirmLaunchOptions(romId: number, appId: number, conte
         setTimeout(() => reject(new Error("get_rom_relaunch_options timed out")), RECONFIRM_FETCH_TIMEOUT_MS),
       ),
     ]);
-    if (item) await setLaunchOptionsConfirmed(appId, item.launch_options);
+    if (item?.success) {
+      await withPruneLease(item.prune_lease_token, context, () =>
+        setLaunchOptionsConfirmed(appId, item.launch_options).then(() => undefined),
+      );
+    }
   } catch (e) {
     logError(`${context}: launch_options re-confirm failed (launching anyway): ${e}`);
   }

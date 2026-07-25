@@ -6,22 +6,25 @@ import {
   type SwitchVersionSuccess,
 } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "./steamShortcuts";
+import { withPruneLease } from "./pruneLease";
 
 export async function applyCommittedVersionSwitch(
   result: SwitchVersionSuccess,
   onCover?: (romId: number, cover: string) => void,
 ): Promise<boolean> {
-  let confirmed = false;
-  try {
-    confirmed = await setLaunchOptionsConfirmed(result.app_id, result.launch_options);
-  } catch (e) {
-    logError(`Version switch: launch-options confirm threw for rom ${result.rom_id} (appId ${result.app_id}): ${e}`);
-  }
-  if (!confirmed) {
-    logError(`Version switch: could not confirm launch options for rom ${result.rom_id} (appId ${result.app_id})`);
-  }
-  await publishCommittedVersionSwitch(result.app_id, result.rom_id, onCover);
-  return confirmed;
+  return withPruneLease(result.prune_lease_token, "Version switch", async () => {
+    let confirmed = false;
+    try {
+      confirmed = await setLaunchOptionsConfirmed(result.app_id, result.launch_options);
+    } catch (e) {
+      logError(`Version switch: launch-options confirm threw for rom ${result.rom_id} (appId ${result.app_id}): ${e}`);
+    }
+    if (!confirmed) {
+      logError(`Version switch: could not confirm launch options for rom ${result.rom_id} (appId ${result.app_id})`);
+    }
+    await publishCommittedVersionSwitch(result.app_id, result.rom_id, onCover);
+    return confirmed;
+  });
 }
 
 export async function publishCommittedVersionSwitch(

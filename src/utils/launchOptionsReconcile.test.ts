@@ -70,7 +70,12 @@ describe("reconfirmLaunchOptions", () => {
   });
 
   it("confirm-sets the resolved command onto the appId when an item is returned", async () => {
-    vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({ app_id: 100, launch_options: RELAUNCH_COMMAND });
+    vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({
+      success: true,
+      app_id: 100,
+      launch_options: RELAUNCH_COMMAND,
+      prune_lease_token: "launch-lease",
+    });
 
     await reconfirmLaunchOptions(42, 100, "CustomPlayButton");
 

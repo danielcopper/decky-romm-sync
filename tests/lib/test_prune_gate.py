@@ -9,6 +9,7 @@ from lib.prune_gate import (
     prune_active_blocked,
     prune_exclusive_start,
     release_prune_conflict_lease,
+    renew_prune_conflict_lease,
     retain_prune_conflict,
 )
 
@@ -135,3 +136,24 @@ async def test_abandoned_multicall_lease_expires_before_prune_admission(monkeypa
     await acquire_prune_conflict_lease(owner, "shortcut_removal")
 
     assert await owner.start_prune() == {"success": True}
+
+
+@pytest.mark.asyncio
+async def test_renewed_frontend_lease_cannot_expire_while_heartbeats_continue(monkeypatch) -> None:
+    class Owner(_Owner):
+        @prune_exclusive_start
+        async def start_prune(self):
+            return {"success": True}
+
+    owner = Owner(False)
+    monkeypatch.setattr("lib.prune_gate._LEASE_SECONDS", 0.05)
+    token = await acquire_prune_conflict_lease(owner, "long_rebake")
+    await asyncio.sleep(0.03)
+
+    assert await renew_prune_conflict_lease(owner, token) is True
+    await asyncio.sleep(0.03)
+    assert (await owner.start_prune())["reason"] == "operation_active"
+
+    await asyncio.sleep(0.03)
+    assert await owner.start_prune() == {"success": True}
+    assert await renew_prune_conflict_lease(owner, token) is False

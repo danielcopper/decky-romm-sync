@@ -162,7 +162,12 @@ describe("launchInterceptor — full funnel watcher", () => {
     // The shared relaunch re-confirm (#1152) runs on every relaunch; default it
     // to a resolved command + a clean confirm-set so the existing verdict tests
     // exercise the happy path without per-test wiring.
-    vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({ app_id: 1234, launch_options: "flatpak run x" });
+    vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({
+      success: true,
+      app_id: 1234,
+      launch_options: "flatpak run x",
+      prune_lease_token: "launch-lease",
+    });
     vi.mocked(steamShortcuts.setLaunchOptionsConfirmed).mockResolvedValue(true);
   });
 
@@ -535,7 +540,12 @@ describe("launchInterceptor — full funnel watcher", () => {
 
     it("allow → re-confirms (getRomRelaunchOptions → setLaunchOptionsConfirmed) BEFORE RunGame", async () => {
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "allow" });
-      vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({ app_id: 1234, launch_options: RELAUNCH_COMMAND });
+      vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({
+        success: true,
+        app_id: 1234,
+        launch_options: RELAUNCH_COMMAND,
+        prune_lease_token: "launch-lease",
+      });
 
       registerLaunchInterceptor();
       const handler = captureHandler();
@@ -555,7 +565,12 @@ describe("launchInterceptor — full funnel watcher", () => {
 
     it("markLaunchSkipped fires immediately before RunGame (re-confirm doesn't disturb the skip→run order)", async () => {
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "allow" });
-      vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({ app_id: 1234, launch_options: RELAUNCH_COMMAND });
+      vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({
+        success: true,
+        app_id: 1234,
+        launch_options: RELAUNCH_COMMAND,
+        prune_lease_token: "launch-lease",
+      });
 
       registerLaunchInterceptor();
       const handler = captureHandler();
@@ -603,7 +618,12 @@ describe("launchInterceptor — full funnel watcher", () => {
     it("conflict resolved → re-confirms then relaunches (shared path covers every relaunch branch)", async () => {
       vi.mocked(launchGate.runLaunchGate).mockResolvedValue({ decision: "conflict", conflicts: [conflict()] });
       vi.mocked(syncConflictModal.handleConflicts).mockResolvedValue("resolved");
-      vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({ app_id: 1234, launch_options: RELAUNCH_COMMAND });
+      vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({
+        success: true,
+        app_id: 1234,
+        launch_options: RELAUNCH_COMMAND,
+        prune_lease_token: "launch-lease",
+      });
 
       registerLaunchInterceptor();
       const handler = captureHandler();

@@ -2,7 +2,7 @@ import asyncio
 import os
 import sys
 from dataclasses import asdict
-from typing import Any
+from typing import Any, cast
 
 plugin_dir = os.path.dirname(__file__)
 sys.path.insert(0, os.path.join(plugin_dir, "py_modules"))
@@ -25,6 +25,9 @@ from lib.prune_gate import (
 )
 from lib.prune_gate import (
     release_prune_conflict_lease as release_prune_gate_lease,
+)
+from lib.prune_gate import (
+    renew_prune_conflict_lease as renew_prune_gate_lease,
 )
 from lib.sync_gate import sync_active_blocked
 
@@ -78,6 +81,20 @@ class Plugin:
         """
         self._debug_logger(msg)
 
+    async def _emit_with_prune_continuation(self, event, /, *args):
+        """Attach a prune lease to events whose Steam writes outlive backend work."""
+        payload = cast("dict[str, Any]", args[0]) if args and isinstance(args[0], dict) else None
+        needs_lease = payload is not None and (
+            event == "sync_complete"
+            or (event == "download_complete" and payload.get("app_id") is not None)
+            or (event == "migration_relaunch_options" and bool(payload.get("items")))
+        )
+        if needs_lease and payload is not None:
+            payload = dict(payload)
+            payload["prune_lease_token"] = await acquire_prune_conflict_lease(self, event)
+            args = (payload, *args[1:])
+        await decky.emit(event, *args)
+
     async def _main(self):  # Decky lifecycle — must be async
         self.loop = asyncio.get_event_loop()
 
@@ -111,7 +128,7 @@ class Plugin:
                     logger=decky.logger,
                     plugin_dir=decky.DECKY_PLUGIN_DIR,
                     runtime_dir=decky.DECKY_PLUGIN_RUNTIME_DIR,
-                    emit=decky.emit,
+                    emit=self._emit_with_prune_continuation,
                     clock=result.runtime_adapters.clock,
                     uuid_gen=result.runtime_adapters.uuid_gen,
                     sleeper=result.runtime_adapters.sleeper,
@@ -201,18 +218,23 @@ class Plugin:
     async def test_connection(self):
         return await self._connection_service.test_connection()
 
+    @prune_active_blocked
     async def connect_with_credentials(self, romm_url, username, password, allow_insecure_ssl=None):
         return await self._connection_service.establish_token(romm_url, username, password, allow_insecure_ssl)
 
+    @prune_active_blocked
     async def connect_with_token(self, romm_url, token, allow_insecure_ssl=None):
         return await self._connection_service.establish_user_token(romm_url, token, allow_insecure_ssl)
 
+    @prune_active_blocked
     async def connect_with_pairing_code(self, romm_url, code, allow_insecure_ssl=None):
         return await self._connection_service.establish_paired_token(romm_url, code, allow_insecure_ssl)
 
+    @prune_active_blocked
     async def sign_out(self):
         return self._connection_service.sign_out()
 
+    @prune_active_blocked
     async def save_server_url(self, romm_url, allow_insecure_ssl=None):
         return self._settings_service.save_server_url(romm_url, allow_insecure_ssl)
 
@@ -315,7 +337,10 @@ class Plugin:
     @migration_blocked
     @prune_active_blocked
     async def switch_version(self, app_id, target_rom_id, allow_stranded):
-        return await self._version_switch_service.switch_version(app_id, target_rom_id, allow_stranded)
+        result = await self._version_switch_service.switch_version(app_id, target_rom_id, allow_stranded)
+        if result.get("success"):
+            result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "version_switch")
+        return result
 
     @migration_blocked
     @sync_active_blocked
@@ -340,6 +365,16 @@ class Plugin:
     async def release_prune_conflict_lease(self, lease_token):
         await release_prune_gate_lease(self, str(lease_token))
         return {"success": True, "message": "Operation lease released."}
+
+    async def renew_prune_conflict_lease(self, lease_token):
+        renewed = await renew_prune_gate_lease(self, str(lease_token))
+        if not renewed:
+            return {
+                "success": False,
+                "reason": "stale_lease",
+                "message": "Operation lease is no longer active.",
+            }
+        return {"success": True, "message": "Operation lease renewed."}
 
     # ── Firmware delegation to FirmwareService ──────────────
 
@@ -503,14 +538,19 @@ class Plugin:
     async def check_local_drift(self, rom_id):
         return await self._launch_gate_service.check_local_drift(rom_id)
 
+    @prune_active_blocked
     async def get_rom_relaunch_options(self, rom_id):
-        """Return ``{app_id, launch_options}`` for one installed+bound ROM, or None.
+        """Return one lease-bearing relaunch item, a gate failure, or ``None``.
 
         The Play-button funnel re-confirms the shortcut's launch command from
         this just before launch to heal mid-session ``launch_options`` drift
-        (#1150). Read-only — no migration gate, no canonical failure shape.
+        (#1150). The lease covers the subsequent frontend Steam write.
         """
-        return await self.loop.run_in_executor(None, self._relaunch_options_resolver.relaunch_item_for_rom, int(rom_id))
+        item = await self.loop.run_in_executor(None, self._relaunch_options_resolver.relaunch_item_for_rom, int(rom_id))
+        if item is not None:
+            item["success"] = True
+            item["prune_lease_token"] = await acquire_prune_conflict_lease(self, "launch_reconfirm")
+        return item
 
     async def probe_reachability(self):
         return await self._connection_service.probe_reachability()
@@ -581,13 +621,19 @@ class Plugin:
     @migration_blocked
     @prune_active_blocked
     async def remove_rom(self, rom_id):
-        return await self._rom_removal_service.remove_rom(rom_id)
+        result = await self._rom_removal_service.remove_rom(rom_id)
+        if result.get("success"):
+            result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "rom_uninstall")
+        return result
 
     @migration_blocked
     @sync_active_blocked
     @prune_active_blocked
     async def uninstall_all_roms(self):
-        return await self._rom_removal_service.uninstall_all_roms()
+        result = await self._rom_removal_service.uninstall_all_roms()
+        if result.get("app_ids"):
+            result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "bulk_uninstall")
+        return result
 
     # ── Save Sync / Playtime delegation to services ──────────
 
@@ -774,11 +820,15 @@ class Plugin:
     async def get_app_id_rom_id_map(self):
         return self._metadata_service.get_app_id_rom_id_map()
 
+    @prune_active_blocked
     async def get_installed_relaunch_options(self):
-        """Return [{app_id, launch_options}] for every installed+bound ROM so the
-        frontend can re-confirm drifted Steam-shortcut launch commands at startup
-        (#1043). Read-only — not migration-gated."""
-        return await self.loop.run_in_executor(None, self._startup_healing_service.get_installed_relaunch_options)
+        """Return lease-bearing relaunch items for installed and bound ROMs.
+
+        The frontend uses them to heal Steam-shortcut drift at startup (#1043).
+        """
+        items = await self.loop.run_in_executor(None, self._startup_healing_service.get_installed_relaunch_options)
+        token = await acquire_prune_conflict_lease(self, "installed_reconcile") if items else None
+        return {"success": True, "items": items, "prune_lease_token": token}
 
     # ── Achievements delegation to AchievementsService ───────
 

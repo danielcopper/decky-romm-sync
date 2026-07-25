@@ -53,6 +53,7 @@ export interface BackendResult {
   romm_version?: string;
   /** Set when a callable was rejected because a RetroDECK migration is pending. */
   blocked_by_migration?: boolean;
+  prune_lease_token?: string;
 }
 
 export interface CachedGameDetail {
@@ -145,9 +146,11 @@ export const clearCompletedDownloads = callable<[], { success: boolean; cleared:
 export const getInstalledRom = callable<[number], InstalledRom | null>("get_installed_rom");
 export const evaluateLaunch = callable<[number], LaunchVerdict>("evaluate_launch");
 export const checkLocalDrift = callable<[number], { drifted: boolean; rom_id: number }>("check_local_drift");
-export const getRomRelaunchOptions = callable<[number], { app_id: number; launch_options: string } | null>(
-  "get_rom_relaunch_options",
-);
+export type RelaunchOptionsResult =
+  | { success: true; app_id: number; launch_options: string; prune_lease_token: string }
+  | { success: false; reason: string; message: string }
+  | null;
+export const getRomRelaunchOptions = callable<[number], RelaunchOptionsResult>("get_rom_relaunch_options");
 /**
  * `stop_running_game` result. On success the counts describe what the backend's
  * stop ladder did to the instance running the ROM it was called for: `stopped`
@@ -312,6 +315,10 @@ export const reportRemovalResults = callable<
 export const releasePruneConflictLease = callable<[string], { success: boolean; message: string }>(
   "release_prune_conflict_lease",
 );
+export const renewPruneConflictLease = callable<
+  [string],
+  { success: boolean; reason?: "stale_lease"; message: string }
+>("renew_prune_conflict_lease");
 export const reconcileShortcuts = callable<
   [number[]],
   { success: boolean; reason?: string; message: string; unbound_count?: number }
@@ -331,6 +338,7 @@ export const uninstallAllRoms = callable<
     reason?: string;
     message?: string;
     blocked_by_migration?: boolean;
+    prune_lease_token?: string;
   }
 >("uninstall_all_roms");
 export const saveSgdbApiKey = callable<[string], { success: boolean; message: string }>("save_sgdb_api_key");
@@ -516,6 +524,7 @@ export interface SwitchVersionSuccess {
   target_installed: boolean;
   launch_options: string;
   app_id: number;
+  prune_lease_token?: string;
 }
 
 /**
@@ -717,7 +726,14 @@ export const getMetadataCachePage = callable<[number, number], { items: Record<s
   "get_metadata_cache_page",
 );
 export const getAppIdRomIdMap = callable<[], Record<string, number>>("get_app_id_rom_id_map");
-export const getInstalledRelaunchOptions = callable<[], { app_id: number; launch_options: string }[]>(
+export type InstalledRelaunchOptionsResult =
+  | {
+      success: true;
+      items: { app_id: number; launch_options: string }[];
+      prune_lease_token: string | null;
+    }
+  | { success: false; reason: string; message: string };
+export const getInstalledRelaunchOptions = callable<[], InstalledRelaunchOptionsResult>(
   "get_installed_relaunch_options",
 );
 
@@ -832,7 +848,8 @@ export const getAllPlaytime = callable<
 // means the server was unreachable and these are the local fallback.
 export const reconcilePlaytime = callable<
   [number],
-  { total_seconds: number; session_count: number; last_played: string | null; server_query_failed: boolean }
+  | { total_seconds: number; session_count: number; last_played: string | null; server_query_failed: boolean }
+  | { success: false; reason: string; message: string }
 >("reconcile_playtime");
 
 // RetroDECK path-resolution health for the QAM banner — discriminated status

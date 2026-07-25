@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -88,6 +89,7 @@ class FakeRomFileStore:
             "safe_root": safe_root,
             "source_identity": {
                 "exists": exists,
+                "mount_id": 1 if exists else 0,
                 "device": 1 if exists else 0,
                 "inode": 1 if exists else 0,
                 "mode": 1 if exists else 0,
@@ -95,6 +97,7 @@ class FakeRomFileStore:
                 "mtime_ns": 0,
                 "ctime_ns": 0,
             },
+            "sha256": hashlib.sha256(self.files[path]).hexdigest() if path in self.files else None,
             "entries": {},
         }
 

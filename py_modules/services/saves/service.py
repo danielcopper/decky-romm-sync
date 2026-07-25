@@ -308,6 +308,7 @@ class SaveService:
         exclusive: list[dict[str, str]] = []
         shared: list[str] = []
         warnings: list[str] = []
+        source_claims: dict[str, SourceClaim] = {}
         lock_ids = set(purge_ids)
         for rom_id in sorted(purge_ids):
             expected = expected_by_id.get(rom_id, [])
@@ -321,14 +322,18 @@ class SaveService:
                     continue
                 owners = ownership.get(self._save_file_store.canonical_path(path), {rom_id})
                 lock_ids.update(owners)
-                if self._save_file_store.is_file(path):
+                exists = self._save_file_store.is_file(path)
+                if owners <= purge_ids:
                     artifacts.append(
                         {"source_path": path, "safe_root": saves_root, "kind": "current_save", "rom_id": rom_id}
                     )
-                    if owners <= purge_ids:
-                        exclusive.append(item)
-                    else:
-                        shared.append(path)
+                    exclusive.append(item)
+                    source_claims[path] = self._save_file_store.claim_source(path, saves_root)
+                elif exists:
+                    artifacts.append(
+                        {"source_path": path, "safe_root": saves_root, "kind": "current_save", "rom_id": rom_id}
+                    )
+                    shared.append(path)
                 backup_dir = os.path.join(item["saves_dir"], ".romm-backup")
                 if self._save_file_store.is_symlink(backup_dir) or not self._save_file_store.is_within(
                     backup_dir, saves_root
@@ -351,6 +356,7 @@ class SaveService:
             "shared": sorted(set(shared)),
             "warnings": warnings,
             "lock_rom_ids": sorted(lock_ids),
+            "source_claims": source_claims,
         }
 
     def quarantine_prune_saves(

@@ -69,6 +69,7 @@ import type {
 import { setLaunchOptionsConfirmed } from "./utils/steamShortcuts";
 import { removeShortcutsPaced } from "./utils/shortcutRemoval";
 import { batchConfirmLaunchOptions } from "./utils/launchOptionsReconcile";
+import { withPruneLease } from "./utils/pruneLease";
 import { withTimeout } from "./utils/withTimeout";
 import { fetchMetadataCachePages } from "./utils/metadataCache";
 import { cancelPruneActions, handlePruneAction } from "./utils/pruneActions";
@@ -268,8 +269,12 @@ export default definePlugin(() => {
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `initDone` is flipped to true inside the awaited `loadAppIdsAndMetadata()`; TS's control-flow analysis can't see that cross-function mutation and narrows it to the `false` literal here. The guard is real: it gates the reconcile on the loop having actually reached a reachable backend.
       if (initDone) {
         try {
-          const items = await getInstalledRelaunchOptions();
-          await batchConfirmLaunchOptions(items, "startup_reconcile");
+          const result = await getInstalledRelaunchOptions();
+          if (result.success) {
+            await withPruneLease(result.prune_lease_token, "Startup reconcile", () =>
+              batchConfirmLaunchOptions(result.items, "startup_reconcile"),
+            );
+          }
         } catch (e) {
           logError(`startup_reconcile: failed to reconcile launch options: ${e}`);
         }
@@ -382,6 +387,7 @@ export default definePlugin(() => {
      * "restart Steam" nudge to the completion toast (#1383).
      */
     restart_recommended?: boolean;
+    prune_lease_token?: string;
   }) => {
     logInfo(`sync_complete received: ${data.total_games} games, cancelled=${data.cancelled ?? false}`);
 
@@ -424,8 +430,14 @@ export default definePlugin(() => {
     detach(
       (async () => {
         try {
-          const items = await getInstalledRelaunchOptions();
-          await batchConfirmLaunchOptions(items, "sync_reconcile");
+          await withPruneLease(data.prune_lease_token, "Post-sync reconcile", async () => {
+            const result = await getInstalledRelaunchOptions();
+            if (result.success) {
+              await withPruneLease(result.prune_lease_token, "Installed reconcile", () =>
+                batchConfirmLaunchOptions(result.items, "sync_reconcile"),
+              );
+            }
+          });
         } catch (e) {
           logError(`sync_reconcile: failed to reconcile launch options: ${e}`);
         }
@@ -724,7 +736,9 @@ export default definePlugin(() => {
         detach(
           (async () => {
             try {
-              const ok = await setLaunchOptionsConfirmed(appId, data.launch_options);
+              const ok = await withPruneLease(data.prune_lease_token, "Download completion", () =>
+                setLaunchOptionsConfirmed(appId, data.launch_options),
+              );
               if (!ok) {
                 logError(`download_complete: failed to confirm launch options for rom ${data.rom_id} (appId ${appId})`);
               }
@@ -785,12 +799,15 @@ export default definePlugin(() => {
   // After a RetroDECK-home migration the backend rewrites each installed ROM's
   // launch command to the new path and emits the new command per shortcut.
   // Confirm-set each so existing shortcuts launch from the migrated location.
-  const migrationRelaunchListener = addEventListener<[{ items: { app_id: number; launch_options: string }[] }]>(
-    "migration_relaunch_options",
-    (data) => {
-      detach(batchConfirmLaunchOptions(data.items, "migration_relaunch_options"));
-    },
-  );
+  const migrationRelaunchListener = addEventListener<
+    [{ items: { app_id: number; launch_options: string }[]; prune_lease_token?: string }]
+  >("migration_relaunch_options", (data) => {
+    detach(
+      withPruneLease(data.prune_lease_token, "RetroDECK migration", () =>
+        batchConfirmLaunchOptions(data.items, "migration_relaunch_options"),
+      ),
+    );
+  });
 
   // Server retry-ladder progress (#1345): the backend emits one frame per HTTP
   // retry so the saves surfaces can show "Connecting to RomM… (attempt N/M)".
@@ -841,18 +858,18 @@ export default definePlugin(() => {
 
   const pruneCompleteListener = addEventListener<[PruneComplete]>("prune_complete", (result: PruneComplete) => {
     const completed = setPruneComplete(result);
-    for (const appId of result.affected_app_ids) invalidateCachedGameDetail(appId);
-    for (const appId of result.removed_app_ids ?? []) unregisterRomMAppId(appId);
+    if (!completed) return;
+    for (const appId of completed.affected_app_ids) invalidateCachedGameDetail(appId);
+    for (const appId of completed.removed_app_ids ?? []) unregisterRomMAppId(appId);
     globalThis.dispatchEvent(
       new CustomEvent("romm_data_changed", {
         detail: {
           type: "rom_pruned",
-          app_ids: result.affected_app_ids,
-          rom_ids: result.removed_rom_ids,
+          app_ids: completed.affected_app_ids,
+          rom_ids: completed.removed_rom_ids,
         },
       }),
     );
-    if (!completed) return;
     cancelPruneActions();
     const publications: Array<{ appId: number; romId: number }> = [];
     for (const item of completed.results) {
@@ -881,7 +898,7 @@ export default definePlugin(() => {
           : removed
             ? `Removed ${removed} local entr${removed === 1 ? "y" : "ies"}${skipped ? `; ${skipped} group(s) skipped` : ""}.`
             : completed.message || "No removed RomM games were cleaned up.",
-      subtext: ambiguousPartial?.message ?? committedPartial?.message,
+      subtext: ambiguousPartial?.message ?? committedPartial?.message ?? completed.message,
     });
   });
 

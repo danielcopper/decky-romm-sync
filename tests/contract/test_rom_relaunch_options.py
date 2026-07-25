@@ -58,7 +58,9 @@ async def test_installed_bound_rom_returns_item(harness):
     item = await harness.plugin.get_rom_relaunch_options(42)
 
     assert item is not None
-    assert set(item.keys()) == {"app_id", "launch_options"}
+    assert set(item.keys()) == {"success", "app_id", "launch_options", "prune_lease_token"}
+    assert item["success"] is True
+    assert item["prune_lease_token"].startswith("launch_reconfirm:")
     assert item["app_id"] == 42
     assert isinstance(item["launch_options"], str)
     assert item["launch_options"]  # non-empty — the full launch command

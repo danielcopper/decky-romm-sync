@@ -114,6 +114,17 @@ async def release_prune_conflict_lease(owner: object, token: str) -> None:
             gate.conflicting_operations -= 1
 
 
+async def renew_prune_conflict_lease(owner: object, token: str) -> bool:
+    """Extend a live frontend continuation lease; never revive an expired owner."""
+    gate = _gate(owner)
+    async with gate.lock:
+        _expire_leases(gate)
+        if token not in gate.leases:
+            return False
+        gate.leases[token] = asyncio.get_running_loop().time() + _LEASE_SECONDS
+        return True
+
+
 def _expire_leases(gate: _PruneAdmissionGate) -> None:
     now = asyncio.get_running_loop().time()
     expired = [token for token, deadline in gate.leases.items() if deadline <= now]

@@ -314,10 +314,46 @@ describe("RemovedGamesCleanup", () => {
     });
 
     expect(modal.container.textContent).toContain("Warning: Shared save was retained.");
-    expect(modal.container.textContent).toContain("6 additional warning(s) omitted or shortened.");
+    expect(modal.container.textContent).toContain("6 additional warning(s) omitted.");
+    expect(modal.container.textContent).toContain("One or more displayed warnings were shortened.");
     expect(modal.container.textContent).toContain("Detail was shortened");
     const details = modal.getByRole("region", { name: "Cleanup details" });
     expect(details.getAttribute("tabindex")).toBe("0");
     expect(modal.getByRole("status").textContent).not.toContain("Shared save was retained");
+  });
+
+  it("surfaces warnings from successful removals and a run-level terminal error", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("Cleanup running..."));
+
+    act(() => {
+      setPruneComplete({
+        success: false,
+        partial: true,
+        run_id: "run-1",
+        reason: "unknown",
+        message: "The run stopped after committed work.",
+        removed_rom_ids: [7],
+        affected_app_ids: [],
+        results: [
+          {
+            group_id: "group-1",
+            rom_ids: [7],
+            status: "removed",
+            message: "Removed.",
+            warnings: ["A shared save was retained."],
+            warning_count: 1,
+            warnings_truncated: true,
+          },
+        ],
+      });
+    });
+
+    expect(modal.container.textContent).toContain("unknown: The run stopped after committed work.");
+    expect(modal.container.textContent).toContain("Warning: A shared save was retained.");
+    expect(modal.container.textContent).toContain("One or more displayed warnings were shortened.");
+    expect(modal.container.textContent).not.toContain("0 additional warning(s)");
   });
 });

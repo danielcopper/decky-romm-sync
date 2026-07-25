@@ -56,7 +56,7 @@ import {
   logError,
 } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
-import { releasePruneLease } from "../utils/pruneLease";
+import { withPruneLease } from "../utils/pruneLease";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import { buildEmulatorMenu } from "../utils/emulatorMenu";
 import type { BiosStatus, DownloadCompleteEvent, EmulatorOption, SaveStatus } from "../types";
@@ -567,6 +567,10 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       try {
         const result = await reconcilePlaytime(rid);
         if (isCancelled()) return;
+        if ("success" in result) {
+          detach(debugLog(`RomMPlaySection: playtime reconcile deferred: ${result.message}`));
+          return;
+        }
         if (!result.server_query_failed) {
           // Connected: adopt the restored cross-device last_played (#1294) and
           // refresh the display from it. Set BEFORE updatePlaytimeDisplay so the
@@ -927,7 +931,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     platformSlug: string,
     successBody: string,
   ) => {
-    try {
+    await withPruneLease(result.prune_lease_token, "Core selection", async () => {
       if (!result.success) {
         toaster.toast({ title: "RomM Sync", body: result.message || "Failed to set core" });
         return;
@@ -946,11 +950,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       // Confirmed (or uninstalled/unbound: nothing to confirm) → success.
       toaster.toast({ title: "RomM Sync", body: successBody });
       await refreshCoreDisplay(romId, platformSlug);
-    } finally {
-      if (result.prune_lease_token) {
-        await releasePruneLease(result.prune_lease_token, "Core selection");
-      }
-    }
+    });
   };
 
   const handleChangeGameCore = async (coreLabel: string) => {

@@ -560,17 +560,20 @@ class TestDownloadCallableDelegation:
 class TestRomRemovalCallableDelegation:
     @pytest.mark.asyncio
     async def test_remove_rom_delegates(self, plugin):
-        plugin._rom_removal_service.remove_rom = AsyncMock(return_value={"removed": True})
+        plugin._rom_removal_service.remove_rom = AsyncMock(return_value={"success": True})
         result = await plugin.remove_rom(42)
         plugin._rom_removal_service.remove_rom.assert_awaited_once_with(42)
-        assert result == {"removed": True}
+        assert result["success"] is True
+        assert result["prune_lease_token"].startswith("rom_uninstall:")
 
     @pytest.mark.asyncio
     async def test_uninstall_all_roms_delegates(self, plugin):
-        plugin._rom_removal_service.uninstall_all_roms = AsyncMock(return_value={"removed": 3})
+        plugin._rom_removal_service.uninstall_all_roms = AsyncMock(return_value={"success": True, "app_ids": [42]})
         result = await plugin.uninstall_all_roms()
         plugin._rom_removal_service.uninstall_all_roms.assert_awaited_once_with()
-        assert result == {"removed": 3}
+        assert result["success"] is True
+        assert result["app_ids"] == [42]
+        assert result["prune_lease_token"].startswith("bulk_uninstall:")
 
 
 # ── Saves callables ───────────────────────────────────────────────────

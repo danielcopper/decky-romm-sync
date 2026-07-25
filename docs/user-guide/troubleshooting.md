@@ -224,22 +224,25 @@ local state changes, recovery cannot seal, or Steam cannot confirm its action.
 While cleanup is starting or running, library sync, downloads/resumes, migrations, version switches, save mutations,
 session finalization, launch evaluation, core/disc changes, Steam Input application, uninstalls, and relevant cache
 cleanup are refused. Frontend Steam continuations hold bounded expiring leases until acknowledged, so a lost page or
-bridge response cannot block cleanup forever. Cancel or finish the cleanup before retrying those actions. This
-reciprocal block prevents newly downloaded content or recovered state from appearing after recovery was captured and
-then being removed by finalization.
+bridge response cannot block cleanup forever. Active work renews its lease while applying Steam changes; a lease expires
+only after five minutes without a successful renewal. Server, sign-in, token, and user changes are refused during the
+run, and every exact-id check also verifies the same server/user namespace captured by the preview. Cancel or finish the
+cleanup before retrying those actions. This reciprocal block prevents newly downloaded content or recovered state from
+appearing after recovery was captured and then being removed by finalization.
 
 Recovery bundles are under `~/decky-romm-sync-recovery/bundles/`. A directory appears there only after every required
 copy and checksum succeeds, directory durability succeeds where supported, and the staging directory is atomically
 sealed. A post-rename durability failure preserves the directory with a `.durability-uncertain` suffix instead of making
 it look successfully sealed. Before the Steam action and again before local finalization, the backend verifies the seal,
-manifest/checksums, source root/descendant identities and bytes, database state, save ownership, and captured
-Steam/controller state. Filesystem mutation then claims the sealed root through anchored descriptors and re-inventories
-the claimed subtree before recursive deletion; replacing a path or changing a child after validation does not authorize
-deleting it. Recovery destination directories stay attached to held descriptors through sealing and validation, so a
-swapped symlink is not re-authorized. A failed attempt may report `recovery_failed`; it leaves the local game unchanged
-and cleans incomplete staging best-effort. Free-space blocking in the modal covers the installed ROM content you
-selected. The backend checks actual source size and free space again at copy time, so a later disk-space change can
-still stop the group safely.
+manifest/checksums, bundle-bound source claims, source root/descendant identities, mount IDs and bytes, expected absence
+of currently missing saves, database state, save ownership, and captured Steam/controller state. Filesystem mutation
+then consumes held descriptors; replacing a path, writing through an older open descriptor, crossing a nested mount, or
+creating a previously absent save after sealing does not authorize deletion. Recovery destination directories and files
+stay attached to held descriptors through metadata updates, hashing, sealing, and validation, so a swapped symlink is
+not re-authorized. A failed attempt may report `recovery_failed`; it leaves the local game unchanged and cleans
+incomplete staging best-effort. Free-space blocking in the modal covers the installed ROM content you selected. The
+backend checks actual source size and free space again at copy time, so a later disk-space change can still stop the
+group safely.
 
 The cleanup report is per group: unrelated groups continue after a skip or failure. Large runs deliver terminal details
 in serialized-byte-bounded chunks, which the UI assembles only after every earlier chunk arrives. A **partial** result

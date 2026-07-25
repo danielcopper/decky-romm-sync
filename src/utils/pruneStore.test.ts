@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { beginPruneRun, getPruneState, resetPruneState, setPruneComplete, setPruneProgress } from "./pruneStore";
+import {
+  beginPrunePreview,
+  beginPruneRun,
+  getPruneState,
+  resetPruneState,
+  setPruneComplete,
+  setPruneProgress,
+} from "./pruneStore";
 
 describe("pruneStore", () => {
   beforeEach(resetPruneState);
@@ -8,6 +15,26 @@ describe("pruneStore", () => {
     beginPruneRun("new");
     setPruneProgress({ run_id: "old", current: 1, total: 1, stage: "removed", rom_ids: [1], name: "old" });
     expect(getPruneState().progress).toBeNull();
+  });
+
+  it("a fresh preview cannot be occupied by a late terminal frame", () => {
+    beginPrunePreview();
+
+    expect(
+      setPruneComplete({
+        success: true,
+        partial: false,
+        run_id: "old",
+        removed_rom_ids: [1],
+        affected_app_ids: [101],
+        results: [],
+      }),
+    ).toBeNull();
+    expect(getPruneState()).toEqual({ runId: null, progress: null, complete: null });
+
+    beginPruneRun("new");
+    setPruneProgress({ run_id: "new", current: 1, total: 1, stage: "checking", rom_ids: [2], name: "new" });
+    expect(getPruneState().runId).toBe("new");
   });
 
   it("assembles bounded completion chunks and ignores duplicate chunks", () => {

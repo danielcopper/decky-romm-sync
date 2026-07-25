@@ -18,6 +18,7 @@ class SourceIdentity(TypedDict):
     """Exact no-follow source identity sealed before destructive mutation."""
 
     exists: bool
+    mount_id: int
     device: int
     inode: int
     mode: int
@@ -39,7 +40,15 @@ class SourceClaim(TypedDict):
     source_path: str
     safe_root: str
     source_identity: SourceIdentity
+    sha256: str | None
     entries: dict[str, SourceEntry]
+
+
+class SealedSourceClaims(TypedDict):
+    """Claims decoded from one identity-bound validation of a sealed bundle."""
+
+    claims: dict[str, SourceClaim]
+    bundle_digest: str
 
 
 class MutationOutcome(TypedDict):

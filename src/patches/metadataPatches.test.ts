@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { registerMetadataPatches, applyAllMetadata } from "./metadataPatches";
+import { registerMetadataPatches, applyAllMetadata, updatePlaytimeDisplay } from "./metadataPatches";
 import type { RomMetadata } from "../types";
 
 // RomMetadata has several required fields; build a full object and override the
@@ -85,5 +85,18 @@ describe("applyAllMetadata (#1203 readiness retry)", () => {
 
     expect([...ov.m_setStoreCategories].sort((a, b) => a - b)).toEqual([5, 7]);
     expect(ov.controller_support).toBe(2);
+  });
+});
+
+describe("updatePlaytimeDisplay", () => {
+  it("rejects non-finite totals without mutating the Steam overview", () => {
+    const overview = { minutes_playtime_forever: 12, rt_last_time_played: 34 };
+    vi.stubGlobal("appStore", {
+      GetAppOverviewByAppID: vi.fn().mockReturnValue(overview),
+      allApps: [],
+    });
+
+    expect(updatePlaytimeDisplay(100, Number.NaN, false)).toBe(false);
+    expect(overview).toEqual({ minutes_playtime_forever: 12, rt_last_time_played: 34 });
   });
 });

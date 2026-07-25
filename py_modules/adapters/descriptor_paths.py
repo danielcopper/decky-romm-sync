@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import os
-import shutil
 import stat
 from typing import TYPE_CHECKING
 
@@ -13,9 +12,10 @@ if TYPE_CHECKING:
     from models.prune import MutationOutcome, SourceClaim, SourceEntry, SourceIdentity
 
 
-def identity_for_stat(value: os.stat_result) -> SourceIdentity:
+def identity_for_stat(value: os.stat_result, mount_id: int = 0) -> SourceIdentity:
     return {
         "exists": True,
+        "mount_id": mount_id,
         "device": value.st_dev,
         "inode": value.st_ino,
         "mode": value.st_mode,
@@ -26,7 +26,16 @@ def identity_for_stat(value: os.stat_result) -> SourceIdentity:
 
 
 def missing_identity() -> SourceIdentity:
-    return {"exists": False, "device": 0, "inode": 0, "mode": 0, "size": 0, "mtime_ns": 0, "ctime_ns": 0}
+    return {
+        "exists": False,
+        "mount_id": 0,
+        "device": 0,
+        "inode": 0,
+        "mode": 0,
+        "size": 0,
+        "mtime_ns": 0,
+        "ctime_ns": 0,
+    }
 
 
 def stat_beneath(path: str, safe_root: str) -> os.stat_result | None:
@@ -48,24 +57,36 @@ def claim_source(path: str, safe_root: str) -> SourceClaim:
     try:
         parent_fd, name = _open_parent(path, safe_root)
     except FileNotFoundError:
-        return _claim(path, safe_root, missing_identity(), {})
+        return _claim(path, safe_root, missing_identity(), None, {})
     try:
         current = _stat_name(parent_fd, name)
         if current is None:
-            return _claim(path, safe_root, missing_identity(), {})
-        identity = identity_for_stat(current)
+            return _claim(path, safe_root, missing_identity(), None, {})
         if stat.S_ISREG(current.st_mode):
-            return _claim(path, safe_root, identity, {})
+            file_fd = _open_child_regular(parent_fd, name)
+            try:
+                _require_same_mount(parent_fd, file_fd, path)
+                identity = _identity_for_fd(file_fd)
+                _require_entry_matches_fd(path, current, identity)
+                digest = _sha256_fd(file_fd)
+                if _identity_for_fd(file_fd) != identity:
+                    raise RuntimeError(f"Recovery source changed while it was claimed: {path}")
+            finally:
+                os.close(file_fd)
+            return _claim(path, safe_root, identity, digest, {})
+        if stat.S_ISLNK(current.st_mode):
+            raise ValueError(f"Recovery source may not be a symlink: {path}")
         if not stat.S_ISDIR(current.st_mode):
             raise ValueError(f"Recovery source has unsupported type: {path}")
         directory_fd = _open_child_directory(parent_fd, name)
         try:
-            if identity_for_stat(os.fstat(directory_fd)) != identity:
-                raise RuntimeError(f"Recovery source identity changed while it was claimed: {path}")
-            entries = _inventory_directory(directory_fd)
+            _require_same_mount(parent_fd, directory_fd, path)
+            identity = _identity_for_fd(directory_fd)
+            _require_entry_matches_fd(path, current, identity)
+            entries = _inventory_directory(directory_fd, identity["mount_id"])
         finally:
             os.close(directory_fd)
-        return _claim(path, safe_root, identity, entries)
+        return _claim(path, safe_root, identity, None, entries)
     finally:
         os.close(parent_fd)
 
@@ -95,13 +116,26 @@ def remove_claimed(path: str, safe_root: str, claim: SourceClaim) -> MutationOut
             if stat.S_ISDIR(current.st_mode):
                 directory_fd = _open_child_directory(parent_fd, temporary)
                 try:
-                    actual_entries = _inventory_directory(directory_fd)
+                    _require_same_mount(parent_fd, directory_fd, path)
+                    actual_entries = _inventory_directory(directory_fd, expected["mount_id"])
                 finally:
                     os.close(directory_fd)
                 if actual_entries != claim["entries"]:
                     raise RuntimeError(f"Recovery source subtree changed after sealing: {path}")
+                directory_fd = _open_child_directory(parent_fd, temporary)
+                try:
+                    _validate_claimed_directory(directory_fd, claim["entries"], expected["mount_id"])
+                finally:
+                    os.close(directory_fd)
             elif claim["entries"]:
                 raise ValueError(f"Regular-file recovery claim has descendants: {path}")
+            else:
+                file_fd = _open_child_regular(parent_fd, temporary)
+                try:
+                    _require_same_mount(parent_fd, file_fd, path)
+                    _require_file_claim(path, file_fd, expected, claim["sha256"], claimed=True)
+                finally:
+                    os.close(file_fd)
         except Exception:
             try:
                 _restore_claim(parent_fd, name, temporary)
@@ -115,9 +149,19 @@ def remove_claimed(path: str, safe_root: str, claim: SourceClaim) -> MutationOut
             raise
         try:
             if stat.S_ISDIR(current.st_mode):
-                shutil.rmtree(temporary, dir_fd=parent_fd)
+                directory_fd = _open_child_directory(parent_fd, temporary)
+                try:
+                    _delete_claimed_directory(directory_fd, claim["entries"], expected["mount_id"])
+                finally:
+                    os.close(directory_fd)
+                os.rmdir(temporary, dir_fd=parent_fd)
             else:
-                os.unlink(temporary, dir_fd=parent_fd)
+                file_fd = _open_child_regular(parent_fd, temporary)
+                try:
+                    _require_file_claim(path, file_fd, expected, claim["sha256"], claimed=True)
+                    os.unlink(temporary, dir_fd=parent_fd)
+                finally:
+                    os.close(file_fd)
         except Exception as exc:
             return _outcome(
                 success=False,
@@ -141,7 +185,12 @@ def remove_claimed(path: str, safe_root: str, claim: SourceClaim) -> MutationOut
 
 def remove_exact(path: str, safe_root: str, expected: SourceIdentity) -> MutationOutcome:
     """Compatibility wrapper for an exact non-directory identity."""
-    return remove_claimed(path, safe_root, _claim(path, safe_root, expected, {}))
+    try:
+        claim = claim_source(path, safe_root)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"Recovery source identity changed after sealing: {path}") from exc
+    _require_compatible_expected(path, claim["source_identity"], expected)
+    return remove_claimed(path, safe_root, claim)
 
 
 def remove_current(path: str, safe_root: str) -> MutationOutcome:
@@ -163,12 +212,20 @@ def rename_claimed(src: str, dst: str, safe_root: str, claim: SourceClaim) -> Mu
         if stat.S_ISDIR(current.st_mode):
             directory_fd = _open_child_directory(source_fd, source_name)
             try:
-                if _inventory_directory(directory_fd) != claim["entries"]:
+                _require_same_mount(source_fd, directory_fd, src)
+                if _inventory_directory(directory_fd, expected["mount_id"]) != claim["entries"]:
                     raise RuntimeError(f"Recovery source subtree changed after sealing: {src}")
             finally:
                 os.close(directory_fd)
         elif claim["entries"]:
             raise ValueError(f"Regular-file recovery claim has descendants: {src}")
+        else:
+            file_fd = _open_child_regular(source_fd, source_name)
+            try:
+                _require_same_mount(source_fd, file_fd, src)
+                _require_file_claim(src, file_fd, expected, claim["sha256"], claimed=False)
+            finally:
+                os.close(file_fd)
         if _stat_name(destination_fd, destination_name) is not None:
             raise FileExistsError(f"Recovery destination already exists: {dst}")
         os.rename(
@@ -180,6 +237,21 @@ def rename_claimed(src: str, dst: str, safe_root: str, claim: SourceClaim) -> Mu
         claimed = _stat_name(destination_fd, destination_name)
         try:
             _require_claimed_identity(src, claimed, expected)
+            if stat.S_ISDIR(current.st_mode):
+                directory_fd = _open_child_directory(destination_fd, destination_name)
+                try:
+                    _require_same_mount(destination_fd, directory_fd, src)
+                    if _inventory_directory(directory_fd, expected["mount_id"]) != claim["entries"]:
+                        raise RuntimeError(f"Recovery source subtree changed while it was renamed: {src}")
+                finally:
+                    os.close(directory_fd)
+            else:
+                file_fd = _open_child_regular(destination_fd, destination_name)
+                try:
+                    _require_same_mount(destination_fd, file_fd, src)
+                    _require_file_claim(src, file_fd, expected, claim["sha256"], claimed=True)
+                finally:
+                    os.close(file_fd)
         except Exception:
             try:
                 if _stat_name(source_fd, source_name) is None:
@@ -219,7 +291,12 @@ def rename_claimed(src: str, dst: str, safe_root: str, claim: SourceClaim) -> Mu
 
 def rename_exact(src: str, dst: str, safe_root: str, expected: SourceIdentity) -> MutationOutcome:
     """Compatibility wrapper for an exact non-directory identity."""
-    return rename_claimed(src, dst, safe_root, _claim(src, safe_root, expected, {}))
+    try:
+        claim = claim_source(src, safe_root)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"Recovery source identity changed after sealing: {src}") from exc
+    _require_compatible_expected(src, claim["source_identity"], expected)
+    return rename_claimed(src, dst, safe_root, claim)
 
 
 def ensure_directory(path: str, safe_root: str, mode: int = 0o700) -> None:
@@ -264,6 +341,11 @@ def open_regular_fd(path: str, safe_root: str) -> int:
         os.close(parent_fd)
 
 
+def mount_id_for_fd(fd: int) -> int:
+    """Return Linux's descriptor-bound mount identity, failing closed if unavailable."""
+    return _mount_id(fd)
+
+
 def _open_parent(path: str, safe_root: str) -> tuple[int, str]:
     parts = _relative_parts(path, safe_root)
     if not parts:
@@ -277,9 +359,13 @@ def _open_directory(path: str, safe_root: str) -> int:
     parts = _relative_parts(path, safe_root)
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(root, flags)
+    root_mount_id = _mount_id(fd)
     try:
         for component in parts:
             next_fd = os.open(component, flags, dir_fd=fd)
+            if _mount_id(next_fd) != root_mount_id:
+                os.close(next_fd)
+                raise ValueError(f"Path crosses a mount boundary: {path}")
             os.close(fd)
             fd = next_fd
         return fd
@@ -318,28 +404,33 @@ def _open_child_directory(parent_fd: int, name: str) -> int:
     return os.open(name, flags, dir_fd=parent_fd)
 
 
-def _inventory_directory(directory_fd: int, prefix: str = "") -> dict[str, SourceEntry]:
+def _open_child_regular(parent_fd: int, name: str) -> int:
+    return os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+
+
+def _inventory_directory(directory_fd: int, mount_id: int, prefix: str = "") -> dict[str, SourceEntry]:
     entries: dict[str, SourceEntry] = {}
     for name in sorted(os.listdir(directory_fd)):
         current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
         relative = f"{prefix}/{name}" if prefix else name
-        identity = identity_for_stat(current)
         if stat.S_ISDIR(current.st_mode):
-            entries[relative] = {"identity": identity}
             child_fd = _open_child_directory(directory_fd, name)
             try:
-                if identity_for_stat(os.fstat(child_fd)) != identity:
-                    raise RuntimeError(f"Recovery source changed while inventorying: {relative}")
-                entries.update(_inventory_directory(child_fd, relative))
+                _require_mount_id(child_fd, mount_id, relative)
+                identity = _identity_for_fd(child_fd)
+                _require_entry_matches_fd(relative, current, identity)
+                entries[relative] = {"identity": identity}
+                entries.update(_inventory_directory(child_fd, mount_id, relative))
             finally:
                 os.close(child_fd)
         elif stat.S_ISREG(current.st_mode):
-            file_fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
+            file_fd = _open_child_regular(directory_fd, name)
             try:
-                if identity_for_stat(os.fstat(file_fd)) != identity:
-                    raise RuntimeError(f"Recovery source changed while inventorying: {relative}")
+                _require_mount_id(file_fd, mount_id, relative)
+                identity = _identity_for_fd(file_fd)
+                _require_entry_matches_fd(relative, current, identity)
                 digest = _sha256_fd(file_fd)
-                if identity_for_stat(os.fstat(file_fd)) != identity:
+                if _identity_for_fd(file_fd) != identity:
                     raise RuntimeError(f"Recovery source changed while inventorying: {relative}")
                 entries[relative] = {"identity": identity, "sha256": digest}
             finally:
@@ -357,11 +448,18 @@ def _sha256_fd(fd: int) -> str:
     return digest.hexdigest()
 
 
-def _claim(path: str, safe_root: str, identity: SourceIdentity, entries: dict[str, SourceEntry]) -> SourceClaim:
+def _claim(
+    path: str,
+    safe_root: str,
+    identity: SourceIdentity,
+    sha256: str | None,
+    entries: dict[str, SourceEntry],
+) -> SourceClaim:
     return {
         "source_path": path,
         "safe_root": safe_root,
         "source_identity": identity,
+        "sha256": sha256,
         "entries": entries,
     }
 
@@ -389,15 +487,145 @@ def _require_identity(path: str, current: os.stat_result | None, expected: Sourc
         return
     if current is None:
         raise RuntimeError(f"Recovery source disappeared after sealing: {path}")
-    actual = identity_for_stat(current)
-    if actual != expected:
+    actual = identity_for_stat(current, expected["mount_id"])
+    fields = ("device", "inode", "mode", "size", "mtime_ns", "ctime_ns")
+    if any(actual[field] != expected[field] for field in fields):
         raise RuntimeError(f"Recovery source identity changed after sealing: {path}")
 
 
 def _require_claimed_identity(path: str, current: os.stat_result | None, expected: SourceIdentity) -> None:
     if current is None or not expected["exists"]:
         raise RuntimeError(f"Recovery source identity changed while it was claimed: {path}")
-    actual = identity_for_stat(current)
-    stable_fields = ("device", "inode", "mode", "size", "mtime_ns")
+    actual = identity_for_stat(current, expected["mount_id"])
+    stable_fields = ("mount_id", "device", "inode", "mode", "size", "mtime_ns")
     if any(actual[field] != expected[field] for field in stable_fields):
         raise RuntimeError(f"Recovery source identity changed while it was claimed: {path}")
+
+
+def _identity_for_fd(fd: int) -> SourceIdentity:
+    return identity_for_stat(os.fstat(fd), _mount_id(fd))
+
+
+def _mount_id(fd: int) -> int:
+    with open(f"/proc/self/fdinfo/{fd}", encoding="ascii") as info:
+        for line in info:
+            key, separator, value = line.partition(":")
+            if key == "mnt_id" and separator:
+                return int(value.strip())
+    raise OSError(f"Mount identity is unavailable for descriptor {fd}")
+
+
+def _require_same_mount(parent_fd: int, child_fd: int, path: str) -> None:
+    _require_mount_id(child_fd, _mount_id(parent_fd), path)
+
+
+def _require_mount_id(fd: int, expected: int, path: str) -> None:
+    if _mount_id(fd) != expected:
+        raise ValueError(f"Recovery source crosses a mount boundary: {path}")
+
+
+def _require_entry_matches_fd(path: str, entry: os.stat_result, identity: SourceIdentity) -> None:
+    fields = ("device", "inode", "mode", "size", "mtime_ns", "ctime_ns")
+    entry_identity = identity_for_stat(entry, identity["mount_id"])
+    if any(entry_identity[field] != identity[field] for field in fields):
+        raise RuntimeError(f"Recovery source changed while opening: {path}")
+
+
+def _require_file_claim(
+    path: str,
+    fd: int,
+    expected: SourceIdentity,
+    expected_hash: str | None,
+    *,
+    claimed: bool,
+) -> None:
+    if expected_hash is None:
+        raise ValueError(f"Regular-file recovery claim has no content hash: {path}")
+    before = _identity_for_fd(fd)
+    stable_fields = ("mount_id", "device", "inode", "mode", "size", "mtime_ns") if claimed else tuple(expected)
+    if any(before[field] != expected[field] for field in stable_fields if field != "exists"):
+        raise RuntimeError(f"Recovery source identity changed after sealing: {path}")
+    if _sha256_fd(fd) != expected_hash or _identity_for_fd(fd) != before:
+        raise RuntimeError(f"Recovery source content changed after sealing: {path}")
+
+
+def _delete_claimed_directory(
+    directory_fd: int, entries: dict[str, SourceEntry], mount_id: int, prefix: str = ""
+) -> None:
+    expected_names = {
+        relative[len(prefix) + 1 :].split("/", 1)[0] if prefix else relative.split("/", 1)[0]
+        for relative in entries
+        if not prefix or relative.startswith(prefix + "/")
+    }
+    actual_names = set(os.listdir(directory_fd))
+    if actual_names != expected_names:
+        raise RuntimeError("Recovery source subtree changed while it was consumed")
+    for name in sorted(actual_names):
+        relative = f"{prefix}/{name}" if prefix else name
+        expected = entries.get(relative)
+        if expected is None:
+            raise RuntimeError(f"Recovery source subtree changed while it was consumed: {relative}")
+        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if stat.S_ISDIR(current.st_mode):
+            child_fd = _open_child_directory(directory_fd, name)
+            try:
+                _require_mount_id(child_fd, mount_id, relative)
+                if _identity_for_fd(child_fd) != expected["identity"]:
+                    raise RuntimeError(f"Recovery source changed while it was consumed: {relative}")
+                _delete_claimed_directory(child_fd, entries, mount_id, relative)
+            finally:
+                os.close(child_fd)
+            os.rmdir(name, dir_fd=directory_fd)
+        elif stat.S_ISREG(current.st_mode):
+            file_fd = _open_child_regular(directory_fd, name)
+            try:
+                _require_mount_id(file_fd, mount_id, relative)
+                _require_file_claim(relative, file_fd, expected["identity"], expected.get("sha256"), claimed=False)
+                os.unlink(name, dir_fd=directory_fd)
+            finally:
+                os.close(file_fd)
+        else:
+            raise ValueError(f"Recovery source contains unsupported entry: {relative}")
+
+
+def _validate_claimed_directory(
+    directory_fd: int, entries: dict[str, SourceEntry], mount_id: int, prefix: str = ""
+) -> None:
+    expected_names = {
+        relative[len(prefix) + 1 :].split("/", 1)[0] if prefix else relative.split("/", 1)[0]
+        for relative in entries
+        if not prefix or relative.startswith(prefix + "/")
+    }
+    actual_names = set(os.listdir(directory_fd))
+    if actual_names != expected_names:
+        raise RuntimeError("Recovery source subtree changed while it was consumed")
+    for name in sorted(actual_names):
+        relative = f"{prefix}/{name}" if prefix else name
+        expected = entries.get(relative)
+        if expected is None:
+            raise RuntimeError(f"Recovery source subtree changed while it was consumed: {relative}")
+        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if stat.S_ISDIR(current.st_mode):
+            child_fd = _open_child_directory(directory_fd, name)
+            try:
+                _require_mount_id(child_fd, mount_id, relative)
+                if _identity_for_fd(child_fd) != expected["identity"]:
+                    raise RuntimeError(f"Recovery source changed while it was consumed: {relative}")
+                _validate_claimed_directory(child_fd, entries, mount_id, relative)
+            finally:
+                os.close(child_fd)
+        elif stat.S_ISREG(current.st_mode):
+            file_fd = _open_child_regular(directory_fd, name)
+            try:
+                _require_mount_id(file_fd, mount_id, relative)
+                _require_file_claim(relative, file_fd, expected["identity"], expected.get("sha256"), claimed=False)
+            finally:
+                os.close(file_fd)
+        else:
+            raise ValueError(f"Recovery source contains unsupported entry: {relative}")
+
+
+def _require_compatible_expected(path: str, actual: SourceIdentity, expected: SourceIdentity) -> None:
+    fields = ("exists", "device", "inode", "mode", "size", "mtime_ns", "ctime_ns")
+    if any(actual[field] != expected[field] for field in fields):
+        raise RuntimeError(f"Recovery source identity changed after sealing: {path}")

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from domain.fetch_generation import prune_candidate_ids
 from domain.prune import group_rows
+from lib.url_host import romm_namespace
 from services.prune._models import PrunePreview
 
 _PREVIEW_TEXT_CHARS = 512
@@ -25,6 +26,7 @@ class PreviewBuilderConfig:
     uow_factory: UnitOfWorkFactory
     recovery_store: RecoveryBundleStore
     retrodeck_paths: RetroDeckPaths
+    settings: dict[str, Any]
 
 
 class PreviewBuilder:
@@ -34,6 +36,7 @@ class PreviewBuilder:
         self._uow_factory = config.uow_factory
         self._recovery_store = config.recovery_store
         self._retrodeck_paths = config.retrodeck_paths
+        self._settings = config.settings
 
     def build(self, preview_id: str, scope: Literal["bulk", "rom"], explicit_rom_id: int | None) -> PrunePreview:
         with self._uow_factory() as uow:
@@ -102,6 +105,7 @@ class PreviewBuilder:
             fingerprint=fingerprint,
             entries=tuple(entries),
             free_bytes=self._recovery_store.free_bytes(),
+            server_namespace=romm_namespace(self._settings),
         )
 
     def page(self, preview: PrunePreview, offset: int, limit: int) -> dict[str, Any]:

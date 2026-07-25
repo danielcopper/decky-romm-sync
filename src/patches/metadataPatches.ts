@@ -134,6 +134,10 @@ export function unregisterMetadataPatches() {
  * Returns true if the write succeeded, false if the overview wasn't available.
  */
 export function updatePlaytimeDisplay(appId: number, totalSeconds: number, updateLastPlayed = true): boolean {
+  if (!Number.isFinite(totalSeconds) || totalSeconds < 0) {
+    detach(debugLog(`updatePlaytimeDisplay: appId=${appId} invalid total=${totalSeconds}, skipping`));
+    return false;
+  }
   const overview = appStore.GetAppOverviewByAppID(appId);
   if (!overview) {
     detach(debugLog(`updatePlaytimeDisplay: appId=${appId} overview=null, skipping`));

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from lib.list_result import ErrorCode
+from lib.url_host import romm_namespace
 from services.prune._models import InstalledSelection, PendingAction, PruneOptions, PrunePreview
 from services.prune.executor import PruneExecutor, PruneExecutorConfig
 from services.prune.preview import PreviewBuilder, PreviewBuilderConfig
@@ -69,12 +70,14 @@ class PruneService:
         self._clock = config.clock
         self._uuid_gen = config.uuid_gen
         self._emit = config.emit
+        self._settings = config.settings
         self._recovery_store = config.recovery_store
         self._preview_builder = PreviewBuilder(
             config=PreviewBuilderConfig(
                 uow_factory=config.uow_factory,
                 recovery_store=config.recovery_store,
                 retrodeck_paths=config.retrodeck_paths,
+                settings=config.settings,
             )
         )
         recovery = RecoveryCoordinator(
@@ -150,6 +153,7 @@ class PruneService:
                 or preview.preview_id != preview_id
                 or preview.scope != scope
                 or preview.explicit_rom_id != explicit_rom_id
+                or preview.server_namespace != romm_namespace(self._settings)
             ):
                 return self._failure("stale_preview", "This cleanup preview is stale. Scan again before confirming.")
             result = self._preview_builder.page(preview, offset, limit)
@@ -235,7 +239,11 @@ class PruneService:
             async with self._admission_lock:
                 if self._closed:
                     return self._failure("service_stopping", "Removed-game cleanup is shutting down.")
-                if refreshed.candidate_ids != preview.candidate_ids or refreshed.fingerprint != preview.fingerprint:
+                if (
+                    refreshed.candidate_ids != preview.candidate_ids
+                    or refreshed.fingerprint != preview.fingerprint
+                    or refreshed.server_namespace != preview.server_namespace
+                ):
                     self._preview = refreshed
                     self._selection = None
                     return self._failure("stale_preview", "Local game state changed. Review a fresh cleanup preview.")
