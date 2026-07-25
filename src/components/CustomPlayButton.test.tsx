@@ -1326,6 +1326,23 @@ describe("CustomPlayButton — resolve conflict reads the known conflict (#1276)
     );
     await utils.findByText("Resolve Conflict");
   });
+
+  it("a prune-active getSaveStatus failure keeps the visible conflict", async () => {
+    vi.mocked(backend.getSaveStatus).mockResolvedValue({
+      success: false,
+      reason: "prune_active",
+      message: "Cleanup is active.",
+    });
+
+    const utils = await renderInConflict();
+    await act(async () => {
+      (await utils.findByText("Resolve Conflict")).click();
+    });
+
+    expect(vi.mocked(handleConflicts)).not.toHaveBeenCalled();
+    expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Cleanup is active." });
+    await utils.findByText("Resolve Conflict");
+  });
 });
 
 // ---------------------------------------------------------------------------

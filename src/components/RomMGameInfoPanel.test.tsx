@@ -948,6 +948,65 @@ describe("RomMGameInfoPanel", () => {
       expect(latest?.saveStatus?.files[0]?.filename).toBe("FROM_DISPATCH.srm");
     });
 
+    it("save_sync: prune-active status preserves the previously displayed save state", async () => {
+      vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "main" });
+      await mountWithRomId(33);
+      const knownStatus = {
+        rom_id: 33,
+        files: [
+          {
+            filename: "KNOWN_CONFLICT.srm",
+            status: "conflict" as const,
+            local_path: null,
+            local_hash: null,
+            local_mtime: null,
+            local_size: null,
+            server_save_id: null,
+            server_file_name: null,
+            server_emulator: null,
+            server_updated_at: null,
+            server_size: null,
+            last_sync_at: null,
+          },
+        ],
+        playtime: {
+          total_seconds: 0,
+          session_count: 0,
+          last_session_start: null,
+          last_session_duration_sec: null,
+          last_played: null,
+        },
+        device_id: "d",
+        last_sync_check_at: null,
+        conflicts: [],
+      };
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "save_sync", rom_id: 33, save_status: knownStatus },
+          }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      vi.mocked(backend.getSaveStatus).mockResolvedValue({
+        success: false,
+        reason: "prune_active",
+        message: "Cleanup is active.",
+      });
+
+      await act(async () => {
+        globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: 33 } }));
+        await Promise.resolve();
+        await Promise.resolve();
+        globalThis.dispatchEvent(new CustomEvent("romm_tab_switch", { detail: { tab: "saves" } }));
+        await Promise.resolve();
+      });
+
+      const latest = capturedSavesTab[capturedSavesTab.length - 1];
+      expect(latest?.saveStatus?.files[0]?.filename).toBe("KNOWN_CONFLICT.srm");
+    });
+
     it("save_sync: mismatching rom_id → early return", async () => {
       await mountWithRomId(33);
       vi.mocked(backend.getSaveStatus).mockClear();

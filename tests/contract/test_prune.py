@@ -139,6 +139,7 @@ async def test_action_report_rejects_stale_token_with_canonical_shape(harness):
     ("method", "args"),
     [
         ("start_sync", ()),
+        ("test_connection", ()),
         ("connect_with_credentials", ("https://server.example", "user", "pass", None)),
         ("connect_with_token", ("https://server.example", "token", None)),
         ("connect_with_pairing_code", ("https://server.example", "code", None)),

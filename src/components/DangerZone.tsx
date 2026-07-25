@@ -217,13 +217,13 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
           return;
         }
         await removeShortcutsPaced(result.app_ids ?? [], onProgress);
+        await clearPlatformCollection(result.platform_name || p.name);
         if (result.rom_ids?.length || leaseToken) {
           await withTimeout(reportRemovalResults(result.rom_ids ?? [], leaseToken ?? null), REMOVAL_REPORT_TIMEOUT_MS);
           await finishLease?.();
           finishLease = undefined;
           leaseToken = undefined;
         }
-        await clearPlatformCollection(result.platform_name || p.name);
         setActionStatus(`Removed ${p.count} ${p.name} game${p.count === 1 ? "" : "s"}`);
         await refreshPlatforms();
         loadNonSteamApps();
@@ -321,6 +321,7 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
             for (const appId of orphans) removed.add(appId);
           }
           removedCount = removed.size;
+          await clearAllRomMCollections();
           // rom_ids are backend DB rows — orphans have none, so report only the
           // backend set exactly as before.
           if (result.rom_ids?.length || leaseToken) {
@@ -332,7 +333,6 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
             finishLease = undefined;
             leaseToken = undefined;
           }
-          await clearAllRomMCollections();
           setStatus(result.message ?? "All shortcuts removed");
         }
       } catch {

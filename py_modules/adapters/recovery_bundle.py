@@ -8,11 +8,10 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import stat
 from typing import TYPE_CHECKING, Any
 
-from adapters.descriptor_paths import claim_source, identity_for_stat, mount_id_for_fd
+from adapters.descriptor_paths import claim_source, identity_for_stat, mount_id_for_fd, remove_current
 from domain.prune import sanitize_package_name
 
 if TYPE_CHECKING:
@@ -252,12 +251,19 @@ class RecoveryBundleAdapter:
                 uncertain = os.path.join(bundles_parent, uncertain_name)
                 raise OSError(f"Recovery bundle durability is uncertain: {uncertain}") from exc
             return sealed
-        except BaseException:
-            with contextlib.suppress(OSError):
-                if renamed:
-                    shutil.rmtree(bundle_id, dir_fd=bundles_parent_fd)
-                else:
-                    shutil.rmtree(staging_name, dir_fd=staging_parent_fd)
+        except BaseException as primary:
+            cleanup_path = os.path.join(
+                bundles_parent if renamed else os.path.join(self._root, "staging"),
+                bundle_id if renamed else staging_name,
+            )
+            try:
+                cleanup = remove_current(cleanup_path, self._root)
+                if not cleanup["success"]:
+                    raise RuntimeError(cleanup["message"])
+            except BaseException as cleanup_exc:
+                raise RuntimeError(
+                    f"Recovery bundle failed and unsafe staging was preserved because cleanup failed: {cleanup_exc}"
+                ) from primary
             raise
         finally:
             if staging_fd is not None:

@@ -233,6 +233,7 @@ class PruneSaveCoordinator(Protocol):
     def quarantine_prune_saves(
         self, files: list[dict[str, str]], claims: dict[str, SourceClaim] | None = None
     ) -> dict[str, Any]: ...
+    def validate_prune_absences(self, claims: dict[str, SourceClaim]) -> bool: ...
 
 
 class AchievementsReader(Protocol):

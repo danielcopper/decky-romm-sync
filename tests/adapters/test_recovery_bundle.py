@@ -287,10 +287,40 @@ def test_recovery_bundle_parent_replacement_is_not_reauthorized(tmp_path, monkey
 
     monkeypatch.setattr(adapter, "_copy_artifacts", swap_parent)
 
-    with pytest.raises(OSError, match="durability is uncertain"):
+    with pytest.raises(RuntimeError, match="unsafe staging was preserved"):
         adapter.seal_bundle("20260724T120000Z_7_swapped", _snapshot(), [], "readme", "playtime")
 
     assert list(outside.iterdir()) == []
+
+
+def test_failed_seal_preserves_staging_instead_of_crossing_nested_mount(tmp_path, monkeypatch):
+    adapter = _adapter(tmp_path)
+    adapter.free_bytes()
+    module = __import__("adapters.descriptor_paths", fromlist=["_mount_id"])
+    original_mount_id = module._mount_id
+    staging_path: Path | None = None
+
+    def fake_mount_id(fd: int) -> int:
+        target = os.readlink(f"/proc/self/fd/{fd}")
+        return original_mount_id(fd) + (1 if target.endswith("/mounted") else 0)
+
+    def add_mount_transition_then_fail(staging_fd: int, checksums) -> None:
+        nonlocal staging_path
+        del checksums
+        staging_path = Path(os.readlink(f"/proc/self/fd/{staging_fd}"))
+        mounted = staging_path / "mounted"
+        mounted.mkdir()
+        (mounted / "outside-marker").write_bytes(b"keep")
+        raise OSError("injected seal failure")
+
+    monkeypatch.setattr("adapters.descriptor_paths._mount_id", fake_mount_id)
+    monkeypatch.setattr(adapter, "_verify_staging_checksums", add_mount_transition_then_fail)
+
+    with pytest.raises(RuntimeError, match="unsafe staging was preserved"):
+        adapter.seal_bundle("20260724T120000Z_7_mounted", _snapshot(), [], "readme", "playtime")
+
+    assert staging_path is not None
+    assert (staging_path / "mounted" / "outside-marker").read_bytes() == b"keep"
 
 
 def test_claim_digest_rejects_same_name_bundle_replacement(tmp_path):
@@ -336,7 +366,7 @@ def test_destination_replacement_cannot_modify_outside_file(tmp_path, monkeypatc
 
     monkeypatch.setattr(adapter, "_copy_opened_source", replace_copied_destination)
 
-    with pytest.raises(OSError):
+    with pytest.raises(RuntimeError, match="unsafe staging was preserved"):
         adapter.seal_bundle(
             "20260724T120000Z_7_destination",
             _snapshot(),

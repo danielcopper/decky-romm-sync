@@ -89,11 +89,18 @@ class Plugin:
             or (event == "download_complete" and payload.get("app_id") is not None)
             or (event == "migration_relaunch_options" and bool(payload.get("items")))
         )
+        lease_token = None
         if needs_lease and payload is not None:
             payload = dict(payload)
-            payload["prune_lease_token"] = await acquire_prune_conflict_lease(self, event)
+            lease_token = await acquire_prune_conflict_lease(self, event)
+            payload["prune_lease_token"] = lease_token
             args = (payload, *args[1:])
-        await decky.emit(event, *args)
+        try:
+            await decky.emit(event, *args)
+        except BaseException:
+            if lease_token is not None:
+                await release_prune_gate_lease(self, lease_token)
+            raise
 
     async def _main(self):  # Decky lifecycle — must be async
         self.loop = asyncio.get_event_loop()
@@ -215,6 +222,7 @@ class Plugin:
     # framework, which requires `async def` even when no `await` is used.
     # S7503 warnings are suppressed in sonar-project.properties (fp1).
 
+    @prune_active_blocked
     async def test_connection(self):
         return await self._connection_service.test_connection()
 
@@ -786,7 +794,10 @@ class Plugin:
 
     @prune_active_blocked
     async def get_sgdb_artwork_base64(self, rom_id, asset_type_num):
-        return await self._sgdb_service.get_sgdb_artwork_base64(rom_id, asset_type_num)
+        result = await self._sgdb_service.get_sgdb_artwork_base64(rom_id, asset_type_num)
+        if result.get("base64") is not None:
+            result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "sgdb_artwork")
+        return result
 
     async def verify_sgdb_api_key(self, api_key=None):
         return await self._sgdb_service.verify_sgdb_api_key(api_key)

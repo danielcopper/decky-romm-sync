@@ -123,6 +123,7 @@ class PruneExecutor:
         self._registry = config.registry
         self._request_action = config.request_action
         self._run_namespace: str | None = None
+        self._run_preview_id: str | None = None
 
     async def run(self, run_id: str, preview: PrunePreview, options: PruneOptions) -> None:
         """Execute every candidate group and emit bounded terminal chunks."""
@@ -131,6 +132,7 @@ class PruneExecutor:
         terminal_reason: str | None = None
         terminal_message: str | None = None
         self._run_namespace = preview.server_namespace
+        self._run_preview_id = preview.preview_id
         try:
             if romm_namespace(self._settings) != preview.server_namespace:
                 raise RuntimeError("The RomM server or user changed after cleanup preview.")
@@ -176,6 +178,7 @@ class PruneExecutor:
             )
         finally:
             self._run_namespace = None
+            self._run_preview_id = None
         if cancelled:
             raise asyncio.CancelledError
 
@@ -770,6 +773,8 @@ class PruneExecutor:
             await self._emit_progress(
                 run_id, index, total, "removed", rows, bundle_path=handle.bundle_path if handle else None
             )
+        except asyncio.CancelledError as exc:
+            raise _CancelledWithResult(result) from exc
         except Exception as exc:
             self._logger.warning(f"Removed-game cleanup final progress delivery failed: {exc}")
         return result
@@ -872,6 +877,25 @@ class PruneExecutor:
                 "partial" if ledger.has_commit() else "failed",
                 "artifact_cleanup_failed",
                 str(exc),
+                app_id=acted_app_id,
+                removed_app_id=app_id if committed_action == "remove_shortcut" else None,
+                bundle_path=handle.bundle_path if handle else None,
+                committed_action=committed_action,
+                mutations=ledger.mutations,
+                ambiguous_mutations=ledger.ambiguous_mutations,
+                warnings=warnings,
+                target_rom_id=target_id,
+            )
+
+        absence_claims = delete_inventory.get("source_claims")
+        if not isinstance(absence_claims, dict) or not await self._loop.run_in_executor(
+            None, self._save_coordinator.validate_prune_absences, absence_claims
+        ):
+            return self._group_result(
+                rows,
+                "partial" if ledger.has_commit() else "failed",
+                "save_state_changed",
+                "A previously absent save appeared before finalization; the aggregate was retained.",
                 app_id=acted_app_id,
                 removed_app_id=app_id if committed_action == "remove_shortcut" else None,
                 bundle_path=handle.bundle_path if handle else None,
@@ -1155,6 +1179,7 @@ class PruneExecutor:
     ) -> None:
         payload: dict[str, object] = {
             "run_id": run_id,
+            "preview_id": self._run_preview_id,
             "current": current,
             "total": total,
             "stage": stage,
@@ -1230,8 +1255,8 @@ class PruneExecutor:
             )
             await self._emit("prune_complete", payload)
 
-    @staticmethod
     def _completion_payload(
+        self,
         run_id: str,
         chunk: list[dict[str, Any]],
         *,
@@ -1248,6 +1273,7 @@ class PruneExecutor:
             "success": success,
             "partial": partial,
             "run_id": run_id,
+            "preview_id": self._run_preview_id,
             "chunk_index": chunk_index,
             "final": final,
             "removed_count": removed_count,

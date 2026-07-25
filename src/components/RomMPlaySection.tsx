@@ -29,7 +29,7 @@ import { DiscSelector } from "./DiscSelector";
 import { VersionPicker } from "./VersionPicker";
 import { WarningCard } from "./WarningCard";
 import { SgdbGamePickerModalContent } from "./SgdbGamePickerModal";
-import { applyArtwork } from "../utils/artwork";
+import { applyArtwork, cancelArtworkApply } from "../utils/artwork";
 import { hasAnySaveConflict } from "../utils/saveStatus";
 import { saveSyncToastBody } from "../utils/saveSyncToast";
 import { scrollToTop } from "../utils/scrollHelpers";
@@ -40,6 +40,7 @@ import {
   testConnection,
   probeReachability,
   getSaveStatus,
+  isCallableFailure,
   getBiosStatus,
   getPlatformCoreInfo,
   getSgdbResolution,
@@ -56,7 +57,7 @@ import {
   logError,
 } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
-import { withPruneLease } from "../utils/pruneLease";
+import { releasePruneLeasesByOwner, withPruneLease } from "../utils/pruneLease";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import { buildEmulatorMenu } from "../utils/emulatorMenu";
 import type { BiosStatus, DownloadCompleteEvent, EmulatorOption, SaveStatus } from "../types";
@@ -312,7 +313,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       if (enabled) {
         const rid = romIdRef.current;
         if (rid) {
-          const saveStatus = await getSaveStatus(rid).catch((): SaveStatus | null => null);
+          const result = await getSaveStatus(rid).catch(() => null);
+          if (result && isCallableFailure(result)) return;
+          const saveStatus: SaveStatus | null = result;
           const { status: ss, label: sl } = applySaveSyncDisplay(saveStatus?.save_sync_display, saveStatus);
           setInfo((prev) => ({
             ...prev,
@@ -363,8 +366,9 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       if (!romId) return;
       // If event specifies a rom_id, skip if it's not for this game
       if (detail.rom_id && romIdRef.current && detail.rom_id !== romIdRef.current) return;
-      const saveStatus: SaveStatus | null =
-        detail.save_status ?? (await getSaveStatus(romId).catch((): SaveStatus | null => null));
+      const fetched = detail.save_status ?? (await getSaveStatus(romId).catch(() => null));
+      if (fetched && isCallableFailure(fetched)) return;
+      const saveStatus: SaveStatus | null = fetched;
       const { status: saveSyncStatus, label: saveSyncLabel } = applySaveSyncDisplay(
         saveStatus?.save_sync_display,
         saveStatus,
@@ -442,6 +446,8 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
 
     return () => {
       cancelled = true;
+      detach(cancelArtworkApply(appId));
+      detach(releasePruneLeasesByOwner(`game-detail:${appId}`));
       globalThis.removeEventListener("romm_data_changed", onDataChanged);
       removeEventListener("download_complete", onDownloadComplete);
       globalThis.removeEventListener("romm_rom_uninstalled", onUninstalled);
@@ -462,6 +468,10 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       try {
         const saveStatus = await getSaveStatus(romId);
         if (isCancelled) return;
+        if (isCallableFailure(saveStatus)) {
+          detach(debugLog(`RomMPlaySection: background save check deferred: ${saveStatus.message}`));
+          return;
+        }
         const hasConflict = hasAnySaveConflict(saveStatus);
         globalThis.dispatchEvent(
           new CustomEvent("romm_data_changed", {
@@ -615,6 +625,10 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       try {
         const saveStatus = await getSaveStatus(rid);
         if (isCancelled()) return;
+        if (isCallableFailure(saveStatus)) {
+          detach(debugLog(`RomMPlaySection: content-dir probe deferred: ${saveStatus.message}`));
+          return;
+        }
         const inContentDir = saveStatus.savefiles_in_content_dir === true;
         setInfo((prev) => ({ ...prev, savefilesInContentDir: inContentDir }));
       } catch (e) {
@@ -838,7 +852,15 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     try {
       const result = await removeRom(info.romId);
       if (result.success) {
-        globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: info.romId } }));
+        await withPruneLease(
+          result.prune_lease_token,
+          "Game detail uninstall",
+          async () => {
+            await setLaunchOptionsConfirmed(appId, "").catch(() => false);
+            globalThis.dispatchEvent(new CustomEvent("romm_rom_uninstalled", { detail: { rom_id: info.romId } }));
+          },
+          `game-detail:${appId}`,
+        );
         toaster.toast({ title: "RomM Sync", body: `${info.romName || "ROM"} uninstalled` });
       } else {
         toaster.toast({ title: "RomM Sync", body: result.message || "Uninstall failed" });
@@ -950,7 +972,7 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
       // Confirmed (or uninstalled/unbound: nothing to confirm) → success.
       toaster.toast({ title: "RomM Sync", body: successBody });
       await refreshCoreDisplay(romId, platformSlug);
-    });
+    }, `game-detail:${appId}`);
   };
 
   const handleChangeGameCore = async (coreLabel: string) => {

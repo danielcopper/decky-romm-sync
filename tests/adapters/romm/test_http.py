@@ -71,6 +71,8 @@ def plugin():
         p.settings, decky.DECKY_PLUGIN_DIR, logging.getLogger("test"), "decky-romm-sync/9.9.9"
     )
     p._romm_api = MagicMock()
+    p._prune_service = MagicMock()
+    p._prune_service.is_active.return_value = False
 
     steam_config = SteamConfigAdapter(user_home=decky.DECKY_USER_HOME, logger=decky.logger)
     p._steam_config = steam_config

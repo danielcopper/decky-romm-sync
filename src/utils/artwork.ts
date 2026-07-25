@@ -8,6 +8,7 @@
 
 import { getSgdbArtworkBase64, saveShortcutIcon, debugLog } from "../api/backend";
 import { detach } from "./detach";
+import { releasePruneLeasesByOwner, withPruneLeases } from "./pruneLease";
 
 /**
  * Newest-apply-wins guard. Each appId's most recent applyArtwork call claims a
@@ -50,35 +51,51 @@ export async function applyArtwork(romId: number, appId: number): Promise<number
     getSgdbArtworkBase64(romId, 4).catch(() => ({ base64: null, no_api_key: false })),
   ]);
 
-  if (results.some((r) => r.no_api_key)) return -1;
-
-  let applied = 0;
-  // A later apply for this appId can start during any of the awaits above/below,
-  // so re-check before every Steam write. Once superseded, go silent (log once,
-  // keep whatever this call already wrote) instead of overwriting the newer art.
-  const bail = (): number => {
-    detach(debugLog(`applyArtwork: superseded for appId ${appId}, skipping stale writes`));
-    return applied;
-  };
-
-  // SGDB types 1-3 (hero / logo / wide grid) map 1:1 to Steam capsule assetTypes 1-3.
-  const customArt: Array<[base64: string | null, assetType: number]> = [
-    [results[0].base64, 1],
-    [results[1].base64, 2],
-    [results[2].base64, 3],
-  ];
-  for (const [base64, assetType] of customArt) {
-    if (!base64) continue;
-    if (superseded()) return bail();
-    await SteamClient.Apps.SetCustomArtworkForApp(appId, base64, "png", assetType);
-    applied++;
+  const leaseTokens = results.map((result) => ("prune_lease_token" in result ? result.prune_lease_token : undefined));
+  const leaseOwner = `artwork:${appId}`;
+  if (results.some((r) => r.no_api_key)) {
+    return withPruneLeases(leaseTokens, "Artwork apply", async () => -1, leaseOwner);
   }
 
-  // Type 4 = icon (a distinct apply path — see applyIcon).
-  if (results[3].base64) {
-    if (superseded()) return bail();
-    if (await applyIcon(appId, results[3].base64)) applied++;
-  }
+  return withPruneLeases(
+    leaseTokens,
+    "Artwork apply",
+    async () => {
+      let applied = 0;
+      // A later apply for this appId can start during any of the awaits above/below,
+      // so re-check before every Steam write. Once superseded, go silent (log once,
+      // keep whatever this call already wrote) instead of overwriting the newer art.
+      const bail = (): number => {
+        detach(debugLog(`applyArtwork: superseded for appId ${appId}, skipping stale writes`));
+        return applied;
+      };
 
-  return applied;
+      // SGDB types 1-3 (hero / logo / wide grid) map 1:1 to Steam capsule assetTypes 1-3.
+      const customArt: Array<[base64: string | null, assetType: number]> = [
+        [results[0].base64, 1],
+        [results[1].base64, 2],
+        [results[2].base64, 3],
+      ];
+      for (const [base64, assetType] of customArt) {
+        if (!base64) continue;
+        if (superseded()) return bail();
+        await SteamClient.Apps.SetCustomArtworkForApp(appId, base64, "png", assetType);
+        applied++;
+      }
+
+      // Type 4 = icon (a distinct apply path — see applyIcon).
+      if (results[3].base64) {
+        if (superseded()) return bail();
+        if (await applyIcon(appId, results[3].base64)) applied++;
+      }
+
+      return applied;
+    },
+    leaseOwner,
+  );
+}
+
+export async function cancelArtworkApply(appId: number): Promise<void> {
+  artworkGenerations.set(appId, (artworkGenerations.get(appId) ?? 0) + 1);
+  await releasePruneLeasesByOwner(`artwork:${appId}`);
 }

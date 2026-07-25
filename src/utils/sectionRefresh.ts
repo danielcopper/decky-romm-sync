@@ -8,7 +8,14 @@
  */
 
 import type { Dispatch, SetStateAction } from "react";
-import { getSaveStatus, getBiosStatus, getPlatformCoreInfo, getAchievementProgress, debugLog } from "../api/backend";
+import {
+  getSaveStatus,
+  getBiosStatus,
+  getPlatformCoreInfo,
+  getAchievementProgress,
+  debugLog,
+  isCallableFailure,
+} from "../api/backend";
 import { extractBiosInfo, extractCoreInfo, type BiosInfoFields, type CoreInfoFields } from "./playSection";
 
 interface ActiveSlotFields {
@@ -27,7 +34,7 @@ export function refreshActiveSlotInBackground<S extends ActiveSlotFields>(
 ): void {
   getSaveStatus(romId)
     .then((saveStatus) => {
-      if (!cancelled() && "active_slot" in saveStatus) {
+      if (!cancelled() && !isCallableFailure(saveStatus) && "active_slot" in saveStatus) {
         setter((prev) => ({ ...prev, activeSlot: saveStatus.active_slot ?? null }));
       }
     })

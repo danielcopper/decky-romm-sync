@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import * as backend from "../api/backend";
-import { applyArtwork } from "./artwork";
+import { applyArtwork, cancelArtworkApply } from "./artwork";
 
 describe("applyArtwork", () => {
   beforeEach(() => {
@@ -49,6 +49,49 @@ describe("applyArtwork", () => {
     expect(vi.mocked(backend.saveShortcutIcon)).toHaveBeenCalledWith(5000, "DD==");
     // The returned grid path is applied to the shortcut live via SteamClient.
     expect(vi.mocked(SteamClient.Apps.SetShortcutIcon)).toHaveBeenCalledWith(5000, "/grid/5000_icon.png");
+  });
+
+  it("holds every SGDB fetch lease through the final Steam artwork write", async () => {
+    const write = deferred<void>();
+    vi.mocked(backend.getSgdbArtworkBase64)
+      .mockResolvedValueOnce({ base64: "AA==", no_api_key: false, prune_lease_token: "lease-1" })
+      .mockResolvedValueOnce({ base64: null, no_api_key: false, prune_lease_token: "lease-2" })
+      .mockResolvedValueOnce({ base64: null, no_api_key: false, prune_lease_token: "lease-3" })
+      .mockResolvedValueOnce({ base64: null, no_api_key: false, prune_lease_token: "lease-4" });
+    vi.mocked(backend.releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
+    vi.mocked(SteamClient.Apps.SetCustomArtworkForApp).mockImplementationOnce(() => write.promise);
+
+    const applying = applyArtwork(42, 5000);
+    await vi.waitFor(() => expect(SteamClient.Apps.SetCustomArtworkForApp).toHaveBeenCalled());
+    expect(backend.releasePruneConflictLease).not.toHaveBeenCalled();
+
+    write.resolve(undefined);
+    await expect(applying).resolves.toBe(1);
+    expect(
+      vi
+        .mocked(backend.releasePruneConflictLease)
+        .mock.calls.map(([token]) => token)
+        .sort(),
+    ).toEqual(["lease-1", "lease-2", "lease-3", "lease-4"]);
+  });
+
+  it("component cancellation releases artwork leases even while a Steam write is pending", async () => {
+    const write = deferred<void>();
+    vi.mocked(backend.getSgdbArtworkBase64).mockResolvedValue({
+      base64: "AA==",
+      no_api_key: false,
+      prune_lease_token: "artwork-lease",
+    });
+    vi.mocked(backend.releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
+    vi.mocked(SteamClient.Apps.SetCustomArtworkForApp).mockImplementationOnce(() => write.promise);
+
+    const applying = applyArtwork(42, 5000);
+    await vi.waitFor(() => expect(SteamClient.Apps.SetCustomArtworkForApp).toHaveBeenCalled());
+    await cancelArtworkApply(5000);
+    expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("artwork-lease");
+
+    write.resolve(undefined);
+    await applying;
   });
 
   it("does not call SetShortcutIcon when saveShortcutIcon reports failure", async () => {

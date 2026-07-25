@@ -22,6 +22,7 @@ import {
   getInstalledRelaunchOptions,
   invalidateCachedGameDetail,
   getMetadataCachePage,
+  releasePruneConflictLease,
   waitForPruneRelease,
 } from "./api/backend";
 import { getSettingsResetState, setSettingsResetState } from "./utils/settingsResetStore";
@@ -31,7 +32,7 @@ import { estimateApplySeconds } from "./utils/syncEstimate";
 import { resetEta, weightedCoarseFraction } from "./utils/syncEta";
 import { recordSyncCreated, resetSyncDelta, getSyncDelta } from "./utils/syncDeltaStore";
 import { resetSyncCancel } from "./utils/syncManager";
-import { beginPruneRun, getPruneState, resetPruneState } from "./utils/pruneStore";
+import { beginPrunePreview, beginPruneRun, getPruneState, resetPruneState } from "./utils/pruneStore";
 import type {
   DownloadCompleteEvent,
   DownloadProgressEvent,
@@ -138,6 +139,7 @@ beforeEach(() => {
     success: true,
     message: "Cleanup claim is released.",
   });
+  vi.mocked(releasePruneConflictLease).mockReset().mockResolvedValue({ success: true, message: "released" });
   vi.mocked(invalidateCachedGameDetail).mockClear();
   // The global afterEach's vi.unstubAllGlobals wipes the Steam ambient globals
   // after the file's first test; several sync_complete paths read SteamClient /
@@ -149,8 +151,10 @@ beforeEach(() => {
 describe("index.tsx — persistent prune listeners", () => {
   it("handles tokenized Steam actions at the plugin root and unregisters on dismount", async () => {
     const plugin = pluginFactory();
+    beginPrunePreview("preview-1");
     const action = {
       run_id: "run-1",
+      preview_id: "preview-1",
       action_token: "token-1",
       action: "remove_shortcut" as const,
       app_id: 9001,
@@ -171,12 +175,14 @@ describe("index.tsx — persistent prune listeners", () => {
 
   it("stores progress and completion, invalidates affected details, and emits a refresh", async () => {
     const plugin = pluginFactory();
+    beginPrunePreview("preview-1");
     const changed = vi.fn();
     globalThis.addEventListener("romm_data_changed", changed);
 
     act(() => {
       emitDeckyEvent("prune_progress", {
         run_id: "run-1",
+        preview_id: "preview-1",
         current: 1,
         total: 2,
         stage: "checking",
@@ -187,6 +193,7 @@ describe("index.tsx — persistent prune listeners", () => {
         success: true,
         partial: false,
         run_id: "run-1",
+        preview_id: "preview-1",
         removed_rom_ids: [7],
         affected_app_ids: [9001],
         removed_app_ids: [9001],
@@ -210,11 +217,13 @@ describe("index.tsx — persistent prune listeners", () => {
     const changed = vi.fn();
     globalThis.addEventListener("romm_data_changed", changed);
     vi.mocked(unregisterRomMAppId).mockClear();
-    beginPruneRun("current");
+    beginPrunePreview("preview-current");
+    beginPruneRun("current", "preview-current");
     const frame = {
       success: true,
       partial: false,
       run_id: "old",
+      preview_id: "preview-old",
       chunk_index: 0,
       final: true,
       removed_rom_ids: [7],
@@ -238,12 +247,14 @@ describe("index.tsx — persistent prune listeners", () => {
 
   it("surfaces a zero-row committed partial instead of reporting that nothing changed", () => {
     const plugin = pluginFactory();
+    beginPrunePreview("preview-partial");
 
     act(() => {
       emitDeckyEvent("prune_complete", {
         success: false,
         partial: true,
         run_id: "run-partial",
+        preview_id: "preview-partial",
         removed_count: 0,
         problem_count: 1,
         removed_rom_ids: [],
@@ -271,6 +282,7 @@ describe("index.tsx — persistent prune listeners", () => {
 
   it("publishes a known committed partial repoint after terminal completion", async () => {
     const plugin = pluginFactory();
+    beginPrunePreview("preview-repoint");
     let release: ((value: { success: true; message: string }) => void) | undefined;
     vi.mocked(waitForPruneRelease).mockImplementationOnce(
       () =>
@@ -284,6 +296,7 @@ describe("index.tsx — persistent prune listeners", () => {
         success: false,
         partial: true,
         run_id: "run-repoint-partial",
+        preview_id: "preview-repoint",
         removed_rom_ids: [],
         affected_app_ids: [9001],
         results: [
@@ -310,12 +323,14 @@ describe("index.tsx — persistent prune listeners", () => {
 
   it("does not publish an ambiguous repoint outcome", async () => {
     const plugin = pluginFactory();
+    beginPrunePreview("preview-ambiguous");
 
     act(() => {
       emitDeckyEvent("prune_complete", {
         success: false,
         partial: true,
         run_id: "run-repoint-ambiguous",
+        preview_id: "preview-ambiguous",
         removed_rom_ids: [],
         affected_app_ids: [9001],
         results: [
@@ -692,6 +707,7 @@ describe("index.tsx — sync_complete launch-options reconcile (#1151)", () => {
     platform_app_ids: Record<string, number[]>;
     total_games: number;
     cancelled?: boolean;
+    prune_lease_token?: string;
   };
 
   const relaunchOptions = (items: { app_id: number; launch_options: string }[]) => ({
@@ -780,6 +796,33 @@ describe("index.tsx — sync_complete launch-options reconcile (#1151)", () => {
     expect(logError).toHaveBeenCalledWith(
       expect.stringContaining("sync_reconcile: failed to reconcile launch options"),
     );
+    plugin.onDismount();
+  });
+
+  it("holds the sync event lease until collection and sibling Steam continuations settle", async () => {
+    let finishCollections: (() => void) | undefined;
+    createOrUpdateCollections.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCollections = resolve;
+        }),
+    );
+    const plugin = pluginFactory();
+    await flush();
+    vi.mocked(releasePruneConflictLease).mockClear();
+
+    act(() => {
+      emitDeckyEvent<[SyncCompletePayload]>("sync_complete", {
+        platform_app_ids: { SNES: [100] },
+        total_games: 1,
+        prune_lease_token: "sync-complete-lease",
+      });
+    });
+    await vi.waitFor(() => expect(createOrUpdateCollections).toHaveBeenCalledWith({ SNES: [100] }));
+    expect(releasePruneConflictLease).not.toHaveBeenCalledWith("sync-complete-lease");
+
+    finishCollections?.();
+    await vi.waitFor(() => expect(releasePruneConflictLease).toHaveBeenCalledWith("sync-complete-lease"));
     plugin.onDismount();
   });
 });

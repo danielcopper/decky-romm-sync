@@ -26,6 +26,7 @@ import {
   debugLog,
   preLaunchSync,
   getSaveStatus,
+  isCallableFailure,
   logError,
   isSaveTrackingConfigured,
   getSaveSetupInfo,
@@ -857,6 +858,13 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         getSaveStatus(romId),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 15000)),
       ]);
+
+      if (isCallableFailure(result)) {
+        detach(debugLog(`CustomPlayButton: resolve conflict deferred: ${result.message}`));
+        toaster.toast({ title: "RomM Sync", body: result.message });
+        setState("conflict");
+        return;
+      }
 
       // A failed status read leaves every file "unknown" and an empty server
       // list; treating that as "resolved" would drop the user back to Play

@@ -672,7 +672,19 @@ class TestSgdbCallableDelegation:
         plugin._sgdb_service.get_sgdb_artwork_base64 = AsyncMock(return_value={"base64": "data"})
         result = await plugin.get_sgdb_artwork_base64(42, 1)
         plugin._sgdb_service.get_sgdb_artwork_base64.assert_awaited_once_with(42, 1)
+        token = result.pop("prune_lease_token")
+        assert token.startswith("sgdb_artwork:")
         assert result == {"base64": "data"}
+        assert (await plugin.release_prune_conflict_lease(token))["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_get_sgdb_artwork_without_image_creates_no_continuation_lease(self, plugin):
+        plugin._sgdb_service.get_sgdb_artwork_base64 = AsyncMock(return_value={"base64": None})
+
+        result = await plugin.get_sgdb_artwork_base64(42, 1)
+
+        assert result == {"base64": None}
+        assert plugin._prune_admission_gate.conflicting_operations == 0
 
     @pytest.mark.asyncio
     async def test_verify_sgdb_api_key_delegates(self, plugin):

@@ -198,6 +198,13 @@ a later run can confirm the appId is already absent and reconcile the binding wi
 unreadable/foreign store before mutation, stale claim, or unclaimed timeout is failure, and no row/source finalization
 follows an uncommitted action.
 
+The same reciprocal exclusion covers ordinary frontend Steam continuations outside an action event. SGDB fetch results
+carry leases through hero/logo/grid/icon writes; `sync_complete` keeps one shared lease until launch-option, collection,
+playtime, and overview-metadata branches all settle; and bulk shortcut removal clears its collections before
+acknowledging and releasing the removal lease. Leases live in one frontend registry, renew only for a bounded active
+continuation, and receive a cooperative cancellation signal before their component owner or plugin dismount releases
+them. A backend emit failure rolls back a token the frontend never received.
+
 Recovery records the Steam-assigned appId and playtime, but there is no automatic restore and Steam cannot currently
 reattach those values to a newly created shortcut.
 

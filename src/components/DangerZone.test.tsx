@@ -355,6 +355,7 @@ describe("DangerZone", () => {
         app_ids: [11, 12],
         rom_ids: [1, 2],
         platform_name: "Super Nintendo",
+        prune_lease_token: "platform-removal-lease",
       });
       const { getByText } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
@@ -371,8 +372,11 @@ describe("DangerZone", () => {
       expect(vi.mocked(backend.removePlatformShortcuts)).toHaveBeenCalledWith("snes");
       expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(11);
       expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(12);
-      expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2], null);
+      expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2], "platform-removal-lease");
       expect(vi.mocked(clearPlatformCollection)).toHaveBeenCalledWith("Super Nintendo");
+      expect(vi.mocked(clearPlatformCollection).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(backend.reportRemovalResults).mock.invocationCallOrder[0]!,
+      );
     });
 
     it("falls back to p.name for clearPlatformCollection when platform_name is empty", async () => {
@@ -677,6 +681,7 @@ describe("DangerZone", () => {
         message: "Removed 5",
         app_ids: [10, 20],
         rom_ids: [1, 2],
+        prune_lease_token: "all-removal-lease",
       });
       const { getByText, container } = render(<DangerZone onBack={vi.fn()} />);
       await flushAsync();
@@ -695,8 +700,11 @@ describe("DangerZone", () => {
       expect(vi.mocked(backend.removeAllShortcuts)).toHaveBeenCalledTimes(1);
       expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(10);
       expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(20);
-      expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2], null);
+      expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2], "all-removal-lease");
       expect(vi.mocked(clearAllRomMCollections)).toHaveBeenCalled();
+      expect(vi.mocked(clearAllRomMCollections).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(backend.reportRemovalResults).mock.invocationCallOrder[0]!,
+      );
       expect(container.textContent).toContain("Removed 5");
     });
 

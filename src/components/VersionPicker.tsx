@@ -46,6 +46,7 @@ import { applyCommittedVersionSwitch } from "../utils/versionSwitchApplication";
 import { showUnsyncedSavesModal } from "./UnsyncedSavesSwitchModal";
 import { getEventTarget } from "../utils/events";
 import { detach } from "../utils/detach";
+import { releasePruneLeasesByOwner } from "../utils/pruneLease";
 import type { RommDataChangedDetail, RommRomUninstalledDetail } from "../types/events";
 import type { DownloadCompleteEvent, DownloadFailedEvent } from "../types";
 import { openRemovedGamesCleanupModal } from "./RemovedGamesCleanup";
@@ -182,6 +183,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
 
     return () => {
       cancelled = true;
+      detach(releasePruneLeasesByOwner(`version-picker:${appId}`));
       if (loadVersionListRef.current?.load === load) loadVersionListRef.current = null;
       globalThis.removeEventListener("romm_data_changed", onDataChanged);
       removeEventListener("download_complete", dlComplete);

@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import hashlib
 import os
+import signal
 import stat
+import struct
+import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from models.prune import MutationOutcome, SourceClaim, SourceEntry, SourceIdentity
+
+_F_SETOWN_EX = 15
+_F_OWNER_TID = 0
 
 
 def identity_for_stat(value: os.stat_result, mount_id: int = 0) -> SourceIdentity:
@@ -111,6 +118,8 @@ def remove_claimed(path: str, safe_root: str, claim: SourceClaim) -> MutationOut
             raise FileExistsError(f"Prune staging entry already exists: {temporary}")
         os.rename(name, temporary, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         claimed = _stat_name(parent_fd, temporary)
+        lease_stack = contextlib.ExitStack()
+        leased_files: dict[str, int] = {}
         try:
             _require_claimed_identity(path, claimed, expected)
             if stat.S_ISDIR(current.st_mode):
@@ -124,19 +133,25 @@ def remove_claimed(path: str, safe_root: str, claim: SourceClaim) -> MutationOut
                     raise RuntimeError(f"Recovery source subtree changed after sealing: {path}")
                 directory_fd = _open_child_directory(parent_fd, temporary)
                 try:
+                    _acquire_directory_leases(
+                        directory_fd,
+                        claim["entries"],
+                        expected["mount_id"],
+                        lease_stack,
+                        leased_files,
+                    )
                     _validate_claimed_directory(directory_fd, claim["entries"], expected["mount_id"])
                 finally:
                     os.close(directory_fd)
             elif claim["entries"]:
                 raise ValueError(f"Regular-file recovery claim has descendants: {path}")
             else:
-                file_fd = _open_child_regular(parent_fd, temporary)
-                try:
-                    _require_same_mount(parent_fd, file_fd, path)
-                    _require_file_claim(path, file_fd, expected, claim["sha256"], claimed=True)
-                finally:
-                    os.close(file_fd)
+                file_fd = lease_stack.enter_context(_leased_regular(parent_fd, temporary, path))
+                leased_files[""] = file_fd
+                _require_same_mount(parent_fd, file_fd, path)
+                _require_file_claim(path, file_fd, expected, claim["sha256"], claimed=True)
         except Exception:
+            lease_stack.close()
             try:
                 _restore_claim(parent_fd, name, temporary)
             except Exception as restore_exc:
@@ -151,17 +166,21 @@ def remove_claimed(path: str, safe_root: str, claim: SourceClaim) -> MutationOut
             if stat.S_ISDIR(current.st_mode):
                 directory_fd = _open_child_directory(parent_fd, temporary)
                 try:
-                    _delete_claimed_directory(directory_fd, claim["entries"], expected["mount_id"])
+                    _delete_claimed_directory(
+                        directory_fd,
+                        claim["entries"],
+                        expected["mount_id"],
+                        leased_files=leased_files,
+                    )
                 finally:
                     os.close(directory_fd)
                 os.rmdir(temporary, dir_fd=parent_fd)
             else:
-                file_fd = _open_child_regular(parent_fd, temporary)
-                try:
-                    _require_file_claim(path, file_fd, expected, claim["sha256"], claimed=True)
-                    os.unlink(temporary, dir_fd=parent_fd)
-                finally:
-                    os.close(file_fd)
+                file_fd = leased_files[""]
+                _require_file_claim(path, file_fd, expected, claim["sha256"], claimed=True)
+                current_claim = os.stat(temporary, dir_fd=parent_fd, follow_symlinks=False)
+                _require_entry_matches_fd(path, current_claim, _identity_for_fd(file_fd))
+                os.unlink(temporary, dir_fd=parent_fd)
         except Exception as exc:
             return _outcome(
                 success=False,
@@ -169,6 +188,8 @@ def remove_claimed(path: str, safe_root: str, claim: SourceClaim) -> MutationOut
                 ambiguous=True,
                 message=f"Source removal stopped after the source was claimed: {exc}",
             )
+        finally:
+            lease_stack.close()
         try:
             os.fsync(parent_fd)
         except OSError as exc:
@@ -408,6 +429,35 @@ def _open_child_regular(parent_fd: int, name: str) -> int:
     return os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
 
 
+@contextlib.contextmanager
+def _leased_regular(parent_fd: int, name: str, path: str):
+    """Exclude every external writer at the kernel until the caller unlinks the file."""
+    fd = _open_child_regular(parent_fd, name)
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGIO})
+    leased = False
+    try:
+        fcntl.fcntl(
+            fd,
+            _F_SETOWN_EX,
+            struct.pack("=ii", _F_OWNER_TID, threading.get_native_id()),
+        )
+        fcntl.fcntl(fd, fcntl.F_SETSIG, signal.SIGIO)
+        try:
+            fcntl.fcntl(fd, fcntl.F_SETLEASE, fcntl.F_RDLCK)
+        except OSError as exc:
+            raise RuntimeError(f"Recovery source has an active writer and was retained: {path}") from exc
+        leased = True
+        yield fd
+    finally:
+        if leased:
+            with contextlib.suppress(OSError):
+                fcntl.fcntl(fd, fcntl.F_SETLEASE, fcntl.F_UNLCK)
+        if signal.SIGIO in signal.sigpending():
+            signal.sigwait({signal.SIGIO})
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+        os.close(fd)
+
+
 def _inventory_directory(directory_fd: int, mount_id: int, prefix: str = "") -> dict[str, SourceEntry]:
     entries: dict[str, SourceEntry] = {}
     for name in sorted(os.listdir(directory_fd)):
@@ -549,8 +599,54 @@ def _require_file_claim(
         raise RuntimeError(f"Recovery source content changed after sealing: {path}")
 
 
+def _acquire_directory_leases(
+    directory_fd: int,
+    entries: dict[str, SourceEntry],
+    mount_id: int,
+    lease_stack: contextlib.ExitStack,
+    leased_files: dict[str, int],
+    prefix: str = "",
+) -> None:
+    expected_names = {
+        relative[len(prefix) + 1 :].split("/", 1)[0] if prefix else relative.split("/", 1)[0]
+        for relative in entries
+        if not prefix or relative.startswith(prefix + "/")
+    }
+    actual_names = set(os.listdir(directory_fd))
+    if actual_names != expected_names:
+        raise RuntimeError("Recovery source subtree changed before writer exclusion")
+    for name in sorted(actual_names):
+        relative = f"{prefix}/{name}" if prefix else name
+        expected = entries.get(relative)
+        if expected is None:
+            raise RuntimeError(f"Recovery source subtree changed before writer exclusion: {relative}")
+        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if stat.S_ISDIR(current.st_mode):
+            child_fd = _open_child_directory(directory_fd, name)
+            try:
+                _require_mount_id(child_fd, mount_id, relative)
+                if _identity_for_fd(child_fd) != expected["identity"]:
+                    raise RuntimeError(f"Recovery source changed before writer exclusion: {relative}")
+                _acquire_directory_leases(child_fd, entries, mount_id, lease_stack, leased_files, relative)
+            finally:
+                os.close(child_fd)
+        elif stat.S_ISREG(current.st_mode):
+            file_fd = lease_stack.enter_context(_leased_regular(directory_fd, name, relative))
+            _require_mount_id(file_fd, mount_id, relative)
+            _require_entry_matches_fd(relative, current, _identity_for_fd(file_fd))
+            _require_file_claim(relative, file_fd, expected["identity"], expected.get("sha256"), claimed=False)
+            leased_files[relative] = file_fd
+        else:
+            raise ValueError(f"Recovery source contains unsupported entry: {relative}")
+
+
 def _delete_claimed_directory(
-    directory_fd: int, entries: dict[str, SourceEntry], mount_id: int, prefix: str = ""
+    directory_fd: int,
+    entries: dict[str, SourceEntry],
+    mount_id: int,
+    prefix: str = "",
+    *,
+    leased_files: dict[str, int],
 ) -> None:
     expected_names = {
         relative[len(prefix) + 1 :].split("/", 1)[0] if prefix else relative.split("/", 1)[0]
@@ -572,18 +668,22 @@ def _delete_claimed_directory(
                 _require_mount_id(child_fd, mount_id, relative)
                 if _identity_for_fd(child_fd) != expected["identity"]:
                     raise RuntimeError(f"Recovery source changed while it was consumed: {relative}")
-                _delete_claimed_directory(child_fd, entries, mount_id, relative)
+                _delete_claimed_directory(
+                    child_fd,
+                    entries,
+                    mount_id,
+                    relative,
+                    leased_files=leased_files,
+                )
             finally:
                 os.close(child_fd)
             os.rmdir(name, dir_fd=directory_fd)
         elif stat.S_ISREG(current.st_mode):
-            file_fd = _open_child_regular(directory_fd, name)
-            try:
-                _require_mount_id(file_fd, mount_id, relative)
-                _require_file_claim(relative, file_fd, expected["identity"], expected.get("sha256"), claimed=False)
-                os.unlink(name, dir_fd=directory_fd)
-            finally:
-                os.close(file_fd)
+            file_fd = leased_files[relative]
+            _require_mount_id(file_fd, mount_id, relative)
+            _require_entry_matches_fd(relative, current, _identity_for_fd(file_fd))
+            _require_file_claim(relative, file_fd, expected["identity"], expected.get("sha256"), claimed=False)
+            os.unlink(name, dir_fd=directory_fd)
         else:
             raise ValueError(f"Recovery source contains unsupported entry: {relative}")
 

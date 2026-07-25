@@ -56,6 +56,16 @@ export interface BackendResult {
   prune_lease_token?: string;
 }
 
+export interface CallableFailure {
+  success: false;
+  reason: string;
+  message: string;
+}
+
+export function isCallableFailure(value: object): value is CallableFailure {
+  return "success" in value && value.success === false;
+}
+
 export interface CachedGameDetail {
   found: boolean;
   rom_id?: number;
@@ -277,9 +287,10 @@ export const cleanupOrphanedGridImages = callable<
     blocked_by_migration?: boolean;
   }
 >("cleanup_orphaned_grid_images");
-export const getSgdbArtworkBase64 = callable<[number, number], { base64: string | null; no_api_key?: boolean }>(
-  "get_sgdb_artwork_base64",
-);
+export const getSgdbArtworkBase64 = callable<
+  [number, number],
+  { base64: string | null; no_api_key?: boolean; prune_lease_token?: string }
+>("get_sgdb_artwork_base64");
 
 /** A single SGDB game candidate for the manual picker. */
 export interface SgdbCandidate {
@@ -749,7 +760,8 @@ export const ensureDeviceRegistered = callable<[], { success: boolean; device_id
 );
 
 export const listDevices = callable<[], ListDevicesResponse>("list_devices");
-export const getSaveStatus = callable<[number], SaveStatus>("get_save_status");
+export type SaveStatusResult = SaveStatus | CallableFailure;
+export const getSaveStatus = callable<[number], SaveStatusResult>("get_save_status");
 export const preLaunchSync = callable<
   [number],
   {

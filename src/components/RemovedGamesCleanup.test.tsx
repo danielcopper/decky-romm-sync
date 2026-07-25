@@ -139,6 +139,7 @@ describe("RemovedGamesCleanup", () => {
     act(() => {
       setPruneProgress({
         run_id: "run-1",
+        preview_id: "preview-1",
         current: 1,
         total: 2,
         stage: "creating_recovery",
@@ -153,6 +154,7 @@ describe("RemovedGamesCleanup", () => {
         success: true,
         partial: false,
         run_id: "run-1",
+        preview_id: "preview-1",
         removed_rom_ids: [7],
         affected_app_ids: [],
         results: [{ group_id: "group-1", rom_ids: [7], status: "removed", message: "Removed." }],
@@ -160,6 +162,38 @@ describe("RemovedGamesCleanup", () => {
     });
     expect(modal.container.textContent).toContain("1 removed; 0 skipped, partial, or failed.");
     expect(modal.getByRole("button", { name: "Close" })).toBeTruthy();
+  });
+
+  it("adopts a matching run frame when the successful start response is lost", async () => {
+    vi.useFakeTimers();
+    vi.mocked(backend.startPrune).mockImplementation(() => new Promise(() => {}));
+    try {
+      await openRemovedGamesCleanupModal();
+      const modal = render(shownModal());
+      fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+      await act(async () => Promise.resolve());
+
+      act(() => {
+        setPruneProgress({
+          run_id: "adopted-run",
+          preview_id: "preview-1",
+          current: 1,
+          total: 2,
+          stage: "checking",
+          rom_ids: [7],
+          name: "Removed Game",
+        });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+
+      expect(modal.container.textContent).toContain("Cleanup running...");
+      expect(modal.container.textContent).toContain("checking · 1 of 2 · Removed Game");
+      expect(modal.container.textContent).not.toContain("Cleanup could not start");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("surfaces scan rejection and re-enables the Danger Zone action", async () => {
@@ -222,6 +256,7 @@ describe("RemovedGamesCleanup", () => {
       success: true,
       partial: false,
       run_id: "old",
+      preview_id: "preview-old",
       removed_rom_ids: [99],
       affected_app_ids: [],
       results: [],
@@ -296,6 +331,7 @@ describe("RemovedGamesCleanup", () => {
         success: false,
         partial: true,
         run_id: "run-1",
+        preview_id: "preview-1",
         removed_rom_ids: [],
         affected_app_ids: [],
         results: [
@@ -333,6 +369,7 @@ describe("RemovedGamesCleanup", () => {
         success: false,
         partial: true,
         run_id: "run-1",
+        preview_id: "preview-1",
         reason: "unknown",
         message: "The run stopped after committed work.",
         removed_rom_ids: [7],

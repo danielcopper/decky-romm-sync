@@ -145,7 +145,9 @@ confirmed. Retrying confirms an already-absent shortcut instead of removing it t
 in a focusable terminal-detail region even when the group was removed successfully, and a run-level cancellation or
 failure message remains visible after earlier groups committed. If bounded warning or message text was omitted or
 shortened, the detail distinguishes omitted warnings from shortened displayed text and never reports zero additional
-warnings. These outcomes are intentional and retryable rather than being reported as unchanged.
+warnings. Progress is tied to the preview that you confirmed, so a matching run is still shown if only the successful
+start response is delayed or lost; frames from an older preview are ignored. These outcomes are intentional and
+retryable rather than being reported as unchanged.
 
 ### Region and Languages
 

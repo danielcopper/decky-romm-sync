@@ -93,7 +93,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   const allEntriesLoaded = items.length === total;
   const progress = pruneState.progress;
   const complete = pruneState.complete;
-  const runInFlight = starting || (runStarted && complete === null);
+  const runInFlight = starting || (pruneState.runId !== null && complete === null);
   const canStart =
     !runInFlight &&
     complete === null &&
@@ -203,11 +203,17 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
         setStatus(result.message ?? "Cleanup could not start.");
         return;
       }
-      beginPruneRun(result.run_id!);
+      beginPruneRun(result.run_id!, initial.preview_id);
       setRunStarted(true);
       setStatus("Cleanup running...");
     } catch (e) {
-      setStatus(`Cleanup could not start: ${e}`);
+      const adopted = getPruneState();
+      if (adopted.runId !== null) {
+        setRunStarted(true);
+        setStatus(adopted.complete ? "Cleanup completed." : "Cleanup running...");
+      } else {
+        setStatus(`Cleanup could not start: ${e}`);
+      }
     } finally {
       setStarting(false);
     }
@@ -402,7 +408,7 @@ export async function openRemovedGamesCleanupModal(romId?: number): Promise<bool
   );
   if (!result.success) throw new Error(result.message ?? "Cleanup scan failed.");
   if ((result.total ?? 0) === 0) return false;
-  beginPrunePreview();
+  beginPrunePreview(result.preview_id!);
   showModal(<CleanupModal initial={result} scope={scope} romId={romId ?? null} />);
   return true;
 }

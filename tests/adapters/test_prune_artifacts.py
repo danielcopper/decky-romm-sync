@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from adapters.prune_artifacts import PruneArtifactAdapter
@@ -37,3 +38,22 @@ def test_unsealed_cleanup_does_not_follow_symlinked_cache_directory(tmp_path):
 
     assert result["success"] is False
     assert target.read_bytes() == b"keep"
+
+
+def test_preopened_cache_writer_prevents_artifact_deletion(tmp_path):
+    covers = tmp_path / "covers"
+    artwork = tmp_path / "artwork"
+    covers.mkdir()
+    artwork.mkdir()
+    target = covers / "7.png"
+    target.write_bytes(b"cached")
+    adapter = PruneArtifactAdapter(runtime_dir=str(tmp_path))
+    writer = os.open(target, os.O_WRONLY)
+    try:
+        result = adapter.remove([7])
+    finally:
+        os.close(writer)
+
+    assert result["success"] is False
+    assert "active writer" in result["message"]
+    assert target.read_bytes() == b"cached"

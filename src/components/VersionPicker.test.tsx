@@ -593,6 +593,44 @@ describe("VersionPicker — per-version covers (#1346)", () => {
       logWarnSpy.mockRestore();
     }
   });
+
+  it("unmount releases the lease and ignores a delayed post-switch cover", async () => {
+    const setArt = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("SteamClient", { Apps: { SetCustomArtworkForApp: setArt } });
+    vi.mocked(backend.switchVersion).mockResolvedValue({
+      success: true,
+      rom_id: 2,
+      target_installed: true,
+      launch_options: "cmd",
+      app_id: APP_ID,
+      prune_lease_token: "version-lease",
+    });
+    vi.mocked(backend.releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
+    vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
+    const { r, menu } = await renderAndOpen();
+    await waitFor(() => expect(backend.fetchCoverBase64).toHaveBeenCalledTimes(3));
+    let resolveCover!: (value: { base64: string }) => void;
+    vi.mocked(backend.fetchCoverBase64)
+      .mockReset()
+      .mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveCover = resolve;
+          }),
+      );
+
+    fireEvent.click(within(menu.container).getByText("Game (Japan)"));
+    await waitFor(() => expect(backend.fetchCoverBase64).toHaveBeenCalledWith(2));
+    r.unmount();
+    await waitFor(() => expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("version-lease"));
+    resolveCover({ base64: "LATE" });
+    await act(async () => {
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    });
+
+    expect(setArt).not.toHaveBeenCalled();
+    expect(invalidateCachedGameDetail).not.toHaveBeenCalled();
+  });
 });
 
 /** Capture the events dispatched on `romm_data_changed` while `fn` runs. */

@@ -117,6 +117,20 @@ describe("refreshActiveSlotInBackground", () => {
     expect(setter).not.toHaveBeenCalled();
   });
 
+  it("preserves the active slot on a prune-active callable failure", async () => {
+    vi.mocked(backend.getSaveStatus).mockResolvedValueOnce({
+      success: false,
+      reason: "prune_active",
+      message: "Cleanup is active.",
+    });
+    const setter = vi.fn();
+
+    refreshActiveSlotInBackground(1, () => false, setter);
+    await flushMicrotasks();
+
+    expect(setter).not.toHaveBeenCalled();
+  });
+
   it("falls back to null when active_slot is missing", async () => {
     vi.mocked(backend.getSaveStatus).mockResolvedValueOnce({
       active_slot: null,

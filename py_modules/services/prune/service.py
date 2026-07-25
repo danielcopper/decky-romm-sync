@@ -123,6 +123,7 @@ class PruneService:
         self._pending_action: PendingAction | None = None
         self._completed_action_tokens: set[str] = set()
         self._release_run_id: str | None = None
+        self._run_preview_id: str | None = None
         self._release_event = asyncio.Event()
         self._admission_lock = asyncio.Lock()
         self._action_lock = asyncio.Lock()
@@ -251,6 +252,7 @@ class PruneService:
                 self._selection = None
                 run_id = self._uuid_gen.uuid4()
                 self._run_id = run_id
+                self._run_preview_id = refreshed.preview_id
                 self._release_run_id = run_id
                 self._release_event = asyncio.Event()
                 self._completed_action_tokens.clear()
@@ -392,6 +394,7 @@ class PruneService:
                     future.cancel()
             self._pending_action = None
             self._run_id = None
+            self._run_preview_id = None
             self._release_event.set()
 
     async def _request_action(
@@ -423,7 +426,13 @@ class PruneService:
         self._pending_action = pending
         await self._emit(
             "prune_action_required",
-            {"run_id": run_id, "action_token": token, "action": kind, **data},
+            {
+                "run_id": run_id,
+                "preview_id": self._run_preview_id,
+                "action_token": token,
+                "action": kind,
+                **data,
+            },
         )
         try:
             await asyncio.wait_for(claim_event.wait(), timeout=_ACTION_TIMEOUT_SECONDS)

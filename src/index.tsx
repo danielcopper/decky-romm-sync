@@ -69,12 +69,12 @@ import type {
 import { setLaunchOptionsConfirmed } from "./utils/steamShortcuts";
 import { removeShortcutsPaced } from "./utils/shortcutRemoval";
 import { batchConfirmLaunchOptions } from "./utils/launchOptionsReconcile";
-import { withPruneLease } from "./utils/pruneLease";
+import { releaseAllPruneLeases, withPruneLease } from "./utils/pruneLease";
 import { withTimeout } from "./utils/withTimeout";
 import { fetchMetadataCachePages } from "./utils/metadataCache";
 import { cancelPruneActions, handlePruneAction } from "./utils/pruneActions";
 import type { PruneActionRequired } from "./utils/pruneActions";
-import { setPruneComplete, setPruneProgress } from "./utils/pruneStore";
+import { admitPruneFrame, setPruneComplete, setPruneProgress } from "./utils/pruneStore";
 import type { PruneComplete, PruneProgress } from "./utils/pruneStore";
 import { publishCommittedVersionSwitch } from "./utils/versionSwitchApplication";
 
@@ -421,139 +421,88 @@ export default definePlugin(() => {
     registerAppIds(data.platform_app_ids);
     registerAppIds(data.romm_collection_app_ids ?? {});
 
-    // Re-confirm launch_options for every installed+bound ROM after a sync. A
-    // normal sync skips unchanged platforms (no per-unit sync_apply_unit emit),
-    // so a shortcut whose launch_options drifted on an unchanged platform is
-    // otherwise healed only on the next plugin reload (startup reconcile) or
-    // Play press — never by the sync itself (#1151). Reuse the startup-reconcile
-    // mechanism: idempotent + appId-safe, runs regardless of cancellation.
-    detach(
-      (async () => {
-        try {
-          await withPruneLease(data.prune_lease_token, "Post-sync reconcile", async () => {
-            const result = await getInstalledRelaunchOptions();
-            if (result.success) {
-              await withPruneLease(result.prune_lease_token, "Installed reconcile", () =>
-                batchConfirmLaunchOptions(result.items, "sync_reconcile"),
-              );
-            }
-          });
-        } catch (e) {
-          logError(`sync_reconcile: failed to reconcile launch options: ${e}`);
+    const reconcileLaunchOptions = async (): Promise<void> => {
+      try {
+        const result = await getInstalledRelaunchOptions();
+        if (result.success) {
+          await withPruneLease(result.prune_lease_token, "Installed reconcile", () =>
+            batchConfirmLaunchOptions(result.items, "sync_reconcile"),
+          );
         }
-      })(),
-    );
+      } catch (e) {
+        logError(`sync_reconcile: failed to reconcile launch options: ${e}`);
+      }
+    };
 
-    // Create/update platform and RomM Steam collections + clean stale ones
-    detach(
-      (async () => {
-        try {
-          // Create/update platform collections
-          if (Object.keys(data.platform_app_ids).length > 0) {
-            await createOrUpdateCollections(data.platform_app_ids);
+    const reconcileCollections = async (): Promise<void> => {
+      try {
+        if (Object.keys(data.platform_app_ids).length > 0) await createOrUpdateCollections(data.platform_app_ids);
+        if (data.romm_collection_app_ids && Object.keys(data.romm_collection_app_ids).length > 0) {
+          await createOrUpdateRomMCollections(data.romm_collection_app_ids);
+        }
+        if (!data.cancelled && typeof collectionStore !== "undefined") {
+          const hostname = await getHostname();
+          const suffix = ` (${hostname})`;
+          const activePlatforms = new Set(Object.keys(data.platform_app_ids).map((name) => name.toLowerCase()));
+          for (const collection of collectionStore.userCollections.filter((candidate) => {
+            if (!candidate.displayName.startsWith("RomM: ") || candidate.displayName.slice(6).startsWith("["))
+              return false;
+            if (!candidate.displayName.endsWith(suffix)) return false;
+            return !activePlatforms.has(
+              candidate.displayName
+                .slice(6)
+                .replace(/\s\([^)]+\)$/, "")
+                .toLowerCase(),
+            );
+          })) {
+            const platformName = collection.displayName.slice(6).replace(/\s\([^)]+\)$/, "");
+            logInfo(`Removing stale platform collection "${collection.displayName}"`);
+            await clearPlatformCollection(platformName);
           }
-
-          if (data.romm_collection_app_ids && Object.keys(data.romm_collection_app_ids).length > 0) {
-            await createOrUpdateRomMCollections(data.romm_collection_app_ids);
+          const activeNames = new Set(
+            Object.keys(data.romm_collection_app_ids ?? {}).map((name) => name.toLowerCase()),
+          );
+          const pattern = /^RomM: \[([^\]]+)\]/;
+          for (const collection of collectionStore.userCollections.filter((candidate) => {
+            if (!candidate.displayName.startsWith("RomM: [") || !candidate.displayName.endsWith(suffix)) return false;
+            const match = pattern.exec(candidate.displayName);
+            return match ? !activeNames.has(match[1]!.toLowerCase()) : false;
+          })) {
+            logInfo(`Removing stale RomM collection "${collection.displayName}"`);
+            await collection.Delete();
           }
-
-          // Stale-collection cleanup deletes any RomM collection not in
-          // data.platform_app_ids / romm_collection_app_ids. On a cancelled run
-          // those maps are PARTIAL (only the platforms reached before the cancel,
-          // empty if the cancel fired before unit 1), so treating them as the
-          // authoritative active-set would delete collections for unreached
-          // platforms — wiping library organization. Only run cleanup on a
-          // completed sync. The additive create/update above stays safe on a
-          // partial run. (#1040)
-          if (!data.cancelled && typeof collectionStore !== "undefined") {
-            const hostname = await getHostname();
-            const suffix = ` (${hostname})`;
-
-            // Clean stale platform collections. Name comparison is
-            // case-insensitive: Steam's collection identity is case-insensitive,
-            // so a case-variant that IS active must not be treated as stale and
-            // deleted (which would orphan its games, #1569).
-            const activePlatforms = new Set(Object.keys(data.platform_app_ids).map((n) => n.toLowerCase()));
-            const stalePlatform = collectionStore.userCollections.filter((c) => {
-              if (!c.displayName.startsWith("RomM: ")) return false;
-              const afterPrefix = c.displayName.slice(6);
-              if (afterPrefix.startsWith("[")) return false; // Skip RomM collections
-              if (!c.displayName.endsWith(suffix)) return false; // Only this machine
-              const platformName = afterPrefix.replace(/\s\([^)]+\)$/, "");
-              return !activePlatforms.has(platformName.toLowerCase());
-            });
-            for (const c of stalePlatform) {
-              const afterPrefix = c.displayName.slice(6);
-              const platformName = afterPrefix.replace(/\s\([^)]+\)$/, "");
-              logInfo(`Removing stale platform collection "${c.displayName}"`);
-              await clearPlatformCollection(platformName);
-            }
-
-            // Clean stale RomM collection-based collections. Name comparison is
-            // case-insensitive (Steam's case-insensitive collection identity), so a
-            // case-variant that IS active is kept, not deleted/orphaned (#1569).
-            const activeNames = new Set(Object.keys(data.romm_collection_app_ids ?? {}).map((n) => n.toLowerCase()));
-            const rommCollectionPattern = /^RomM: \[([^\]]+)\]/;
-            const staleRomm = collectionStore.userCollections.filter((c) => {
-              if (!c.displayName.startsWith("RomM: [")) return false;
-              if (!c.displayName.endsWith(suffix)) return false;
-              const match = rommCollectionPattern.exec(c.displayName);
-              return match ? !activeNames.has(match[1]!.toLowerCase()) : false; // group 1 present whenever match is non-null
-            });
-            for (const c of staleRomm) {
-              logInfo(`Removing stale RomM collection "${c.displayName}"`);
-              await c.Delete();
-            }
-          }
-        } catch (e) {
-          logError(`Failed to manage RomM collections: ${e}`);
         }
-      })(),
-    );
+      } catch (e) {
+        logError(`Failed to manage RomM collections: ${e}`);
+      }
+    };
 
-    // Re-apply playtime to Steam UI (app IDs may have changed after re-sync)
+    const reconcilePlaytime = async (): Promise<void> => {
+      try {
+        const [{ playtime }, appIdMap] = await Promise.all([getAllPlaytime(), getAppIdRomIdMap()]);
+        await applyAllPlaytime(playtime, appIdMap);
+      } catch (e) {
+        logError(`Failed to re-apply playtime after sync: ${e}`);
+      }
+    };
+
+    const reconcileMetadata = async (): Promise<void> => {
+      try {
+        const [cache, appIdMap] = await Promise.all([
+          fetchMetadataCachePages(METADATA_PAGE_SIZE, CALLABLE_TIMEOUT),
+          getAppIdRomIdMap(),
+        ]);
+        registerMetadataPatches(cache, appIdMap);
+        await applyAllMetadata();
+      } catch (e) {
+        logError(`Failed to re-apply metadata after sync: ${e}`);
+      }
+    };
+
     detach(
-      (async () => {
-        try {
-          const [{ playtime }, appIdMap] = await Promise.all([getAllPlaytime(), getAppIdRomIdMap()]);
-          await applyAllPlaytime(playtime, appIdMap);
-        } catch (e) {
-          logError(`Failed to re-apply playtime after sync: ${e}`);
-        }
-      })(),
-    );
-
-    // Re-apply overview metadata (controller badge / metacritic score / store
-    // categories) to the freshly-synced ROMs. Init runs this pass once on mount,
-    // but onSyncComplete otherwise never re-runs it or refreshes the module-level
-    // metadata cache — so a ROM synced this session misses those overview fields
-    // until the next plugin mount (#1207). Re-fetch the full paged cache + the
-    // appId map, re-register the patches with the fresh data (replacing the
-    // init-time state), and re-apply. Mirrors the playtime re-apply above and
-    // runs on EVERY sync_complete, cancelled included: a partial run's committed
-    // units still have fresh metadata and applyAllMetadata is idempotent.
-    // Detached with its own try/catch so a re-fetch failure never breaks the
-    // toast, collections, or playtime paths.
-    //
-    // Known last-writer-wins (deliberately no generation guard): if init is still
-    // on its #1206 retry ladder when a sync completes, a late init registration
-    // can land after this one and overwrite the fresher sync-time cache — a ROM
-    // synced this session then falls back to pre-fix behavior until the next
-    // sync_complete or mount. Self-healing and never below the old baseline, so
-    // it isn't worth the guard.
-    detach(
-      (async () => {
-        try {
-          const [cache, appIdMap] = await Promise.all([
-            fetchMetadataCachePages(METADATA_PAGE_SIZE, CALLABLE_TIMEOUT),
-            getAppIdRomIdMap(),
-          ]);
-          registerMetadataPatches(cache, appIdMap);
-          await applyAllMetadata();
-        } catch (e) {
-          logError(`Failed to re-apply metadata after sync: ${e}`);
-        }
-      })(),
+      withPruneLease(data.prune_lease_token, "Sync completion", async () => {
+        await Promise.all([reconcileLaunchOptions(), reconcileCollections(), reconcilePlaytime(), reconcileMetadata()]);
+      }),
     );
   };
 
@@ -848,6 +797,7 @@ export default definePlugin(() => {
   const pruneActionListener = addEventListener<[PruneActionRequired]>(
     "prune_action_required",
     (action: PruneActionRequired) => {
+      if (!admitPruneFrame(action.preview_id, action.run_id)) return;
       detach(handlePruneAction(action));
     },
   );
@@ -928,6 +878,7 @@ export default definePlugin(() => {
       removeEventListener("server_retry_progress", serverRetryListener);
       removeEventListener("prune_action_required", pruneActionListener);
       cancelPruneActions();
+      detach(releaseAllPruneLeases());
       removeEventListener("prune_progress", pruneProgressListener);
       removeEventListener("prune_complete", pruneCompleteListener);
     },

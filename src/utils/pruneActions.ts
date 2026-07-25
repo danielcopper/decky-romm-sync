@@ -13,7 +13,7 @@ import {
 } from "./steamShortcuts";
 import { withTimeout } from "./withTimeout";
 
-export type PruneActionRequired =
+type PruneAction =
   | { run_id: string; action_token: string; action: "capture_shortcut_snapshot"; app_id: number }
   | {
       run_id: string;
@@ -32,6 +32,8 @@ export type PruneActionRequired =
       expected_snapshot?: PruneSteamSnapshot;
     };
 
+export type PruneActionRequired = PruneAction & { preview_id: string };
+
 const SNAPSHOT_BUDGET_BYTES = 56 * 1024;
 const REPORT_ATTEMPTS = 3;
 const REPORT_TIMEOUT_MS = 5000;
@@ -48,7 +50,7 @@ function asciiJsonSize(value: unknown): number {
   return bytes;
 }
 
-function isPruneAction(value: unknown): value is PruneActionRequired {
+function isPruneAction(value: unknown): value is PruneAction {
   if (!value || typeof value !== "object") return false;
   const item = value as Record<string, unknown>;
   if (typeof item.run_id !== "string" || typeof item.action_token !== "string" || typeof item.app_id !== "number") {
@@ -128,7 +130,7 @@ async function reportWithRetry(request: ReportPruneActionRequest): Promise<boole
   return false;
 }
 
-function claimAction(action: PruneActionRequired): Promise<boolean> {
+function claimAction(action: PruneAction): Promise<boolean> {
   return reportWithRetry({
     phase: "claim",
     run_id: action.run_id,
@@ -143,7 +145,7 @@ function assertCurrent(generation: number): void {
   if (generation !== actionGeneration) throw new Error("Cleanup action was cancelled before Steam mutation");
 }
 
-async function executePruneAction(action: PruneActionRequired, generation: number): Promise<void> {
+async function executePruneAction(action: PruneAction, generation: number): Promise<void> {
   let claimed = false;
   let mutationAttempted = false;
   const claim = async (): Promise<boolean> => {
@@ -258,7 +260,7 @@ async function executePruneAction(action: PruneActionRequired, generation: numbe
   await reportWithRetry(report);
 }
 
-export function handlePruneAction(value: PruneActionRequired): Promise<void> {
+export function handlePruneAction(value: PruneAction): Promise<void> {
   if (!isPruneAction(value)) {
     logError("Ignored an invalid prune action event.");
     return Promise.resolve();

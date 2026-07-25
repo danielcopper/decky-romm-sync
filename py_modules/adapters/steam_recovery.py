@@ -286,7 +286,8 @@ class SteamRecoveryAdapter:
                     try:
                         if source_claimed and SteamRecoveryAdapter._stat_at(config_fd, claimed) is not None:
                             if replacement_installed:
-                                os.unlink(claimed, dir_fd=config_fd)
+                                # The claimed inode may contain a newer unrelated Steam edit.
+                                # If rollback could not restore it, retain that only good copy.
                                 os.fsync(config_fd)
                             else:
                                 SteamRecoveryAdapter._restore_or_discard_claim(config_fd, claimed)
@@ -302,7 +303,10 @@ class SteamRecoveryAdapter:
                             "success": False,
                             "changed": True,
                             "ambiguous": True,
-                            "message": f"Controller setting changed but cleanup was incomplete: {exc}",
+                            "message": (
+                                "Controller setting changed but cleanup was incomplete; "
+                                f"the newer source was preserved as {os.path.join(config_dir, claimed)}: {exc}"
+                            ),
                         }
                     raise
             raise RuntimeError("Steam controller config kept changing during cleanup")

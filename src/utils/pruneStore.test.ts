@@ -11,20 +11,34 @@ import {
 describe("pruneStore", () => {
   beforeEach(resetPruneState);
 
+  function begin(runId: string, previewId = "preview-1"): void {
+    beginPrunePreview(previewId);
+    beginPruneRun(runId, previewId);
+  }
+
   it("ignores late frames from an older run", () => {
-    beginPruneRun("new");
-    setPruneProgress({ run_id: "old", current: 1, total: 1, stage: "removed", rom_ids: [1], name: "old" });
+    begin("new");
+    setPruneProgress({
+      run_id: "old",
+      preview_id: "preview-1",
+      current: 1,
+      total: 1,
+      stage: "removed",
+      rom_ids: [1],
+      name: "old",
+    });
     expect(getPruneState().progress).toBeNull();
   });
 
-  it("a fresh preview cannot be occupied by a late terminal frame", () => {
-    beginPrunePreview();
+  it("a fresh preview adopts only a matching backend run before the start response", () => {
+    beginPrunePreview("preview-new");
 
     expect(
       setPruneComplete({
         success: true,
         partial: false,
         run_id: "old",
+        preview_id: "preview-old",
         removed_rom_ids: [1],
         affected_app_ids: [101],
         results: [],
@@ -32,17 +46,25 @@ describe("pruneStore", () => {
     ).toBeNull();
     expect(getPruneState()).toEqual({ runId: null, progress: null, complete: null });
 
-    beginPruneRun("new");
-    setPruneProgress({ run_id: "new", current: 1, total: 1, stage: "checking", rom_ids: [2], name: "new" });
+    setPruneProgress({
+      run_id: "new",
+      preview_id: "preview-new",
+      current: 1,
+      total: 1,
+      stage: "checking",
+      rom_ids: [2],
+      name: "new",
+    });
     expect(getPruneState().runId).toBe("new");
   });
 
   it("assembles bounded completion chunks and ignores duplicate chunks", () => {
-    beginPruneRun("run-1");
+    begin("run-1");
     const first = {
       success: true,
       partial: false,
       run_id: "run-1",
+      preview_id: "preview-1",
       chunk_index: 0,
       final: false,
       removed_count: 2,
@@ -68,24 +90,27 @@ describe("pruneStore", () => {
   });
 
   it("a new run clears a previous completion", () => {
+    begin("old", "preview-old");
     setPruneComplete({
       success: true,
       partial: false,
       run_id: "old",
+      preview_id: "preview-old",
       removed_rom_ids: [],
       affected_app_ids: [],
       results: [],
     });
-    beginPruneRun("new");
+    begin("new", "preview-new");
     expect(getPruneState()).toEqual({ runId: "new", progress: null, complete: null });
   });
 
   it("waits for every earlier chunk when the final chunk arrives first", () => {
-    beginPruneRun("run-2");
+    begin("run-2");
     const final = {
       success: true,
       partial: false,
       run_id: "run-2",
+      preview_id: "preview-1",
       chunk_index: 1,
       final: true,
       removed_rom_ids: [2],

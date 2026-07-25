@@ -135,6 +135,8 @@ class FakeSaveCoordinator:
         self.inventory_failure_ids: set[int] = set()
         self.lock_id_sequence: list[list[int]] = []
         self.warnings: list[str] = []
+        self.absences_valid = True
+        self.absence_validations = 0
 
     @contextlib.asynccontextmanager
     async def lock_prune_roms(self, rom_ids: list[int]):
@@ -151,6 +153,7 @@ class FakeSaveCoordinator:
             "shared": [],
             "warnings": list(self.warnings),
             "lock_rom_ids": lock_ids,
+            "source_claims": {},
         }
 
     def quarantine_prune_saves(
@@ -159,6 +162,11 @@ class FakeSaveCoordinator:
         del claims
         self.quarantined.append(files)
         return {"success": True, "moved": []}
+
+    def validate_prune_absences(self, claims: dict[str, SourceClaim]) -> bool:
+        del claims
+        self.absence_validations += 1
+        return self.absences_valid
 
 
 class FakeInstalledFilesRemover:
@@ -483,6 +491,37 @@ async def test_unbound_confirmed_404_row_is_deleted_after_final_reprobes(harness
     assert complete["results"][0]["mutations"] == ["plugin_artifacts", "database_rows"]
     assert harness.romm.calls == [1, 1, 1]
     assert harness.saves.locked == [[1]]
+    frames = [payload for name, payload in harness.events.events if name in {"prune_progress", "prune_complete"}]
+    assert frames
+    assert all(frame["preview_id"] == preview["preview_id"] for frame in frames)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("create_recovery_bundle", [False, True])
+async def test_save_appearing_after_artifact_cleanup_blocks_final_cascade(harness, monkeypatch, create_recovery_bundle):
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    original = harness.artifacts.remove
+
+    def appear_after_cleanup(*args):
+        outcome = original(*args)
+        harness.saves.absences_valid = False
+        return outcome
+
+    monkeypatch.setattr(harness.artifacts, "remove", appear_after_cleanup)
+    preview = await _preview(harness)
+    await _start(
+        harness,
+        preview["preview_id"],
+        remove_fully_vanished=True,
+        create_recovery_bundle=create_recovery_bundle,
+    )
+    complete = await _finish(harness)
+
+    assert complete["results"][0]["reason"] == "save_state_changed"
+    assert complete["removed_rom_ids"] == []
+    assert harness.saves.absence_validations == 1
+    assert harness.uow.roms.get(1) is not None
 
 
 @pytest.mark.asyncio
@@ -534,6 +573,7 @@ async def test_bound_live_group_repoints_then_deletes_old_row(harness):
     preview = await _preview(harness)
     await _start(harness, preview["preview_id"])
     action = await _wait_action(harness, "repoint_shortcut")
+    assert action["preview_id"] == preview["preview_id"]
     assert action["target_rom_id"] == 2
     assert (await _claim_action(harness, action))["success"] is True
     accepted = await _complete_action(harness, action)
@@ -866,6 +906,35 @@ async def test_shutdown_waits_for_inflight_filesystem_finalization(harness):
     assert complete["reason"] == "cancelled"
     assert complete["partial"] is True
     assert complete["removed_count"] == 1
+    assert complete["results"][0]["status"] == "removed"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_during_final_removed_progress_preserves_committed_ids(harness, monkeypatch):
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    entered = asyncio.Event()
+    original = harness.service._executor._emit_progress
+
+    async def block_final_progress(run_id, index, total, stage, rows, **kwargs):
+        if stage == "removed":
+            entered.set()
+            await asyncio.Future()
+        await original(run_id, index, total, stage, rows, **kwargs)
+
+    monkeypatch.setattr(harness.service._executor, "_emit_progress", block_final_progress)
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    await entered.wait()
+    assert harness.uow.roms.get(1) is None
+
+    await harness.service.shutdown()
+
+    complete = [payload for name, payload in harness.events.events if name == "prune_complete"][-1]
+    assert complete["reason"] == "cancelled"
+    assert complete["partial"] is True
+    assert complete["removed_count"] == 1
+    assert complete["removed_rom_ids"] == [1]
     assert complete["results"][0]["status"] == "removed"
 
 

@@ -1526,3 +1526,19 @@ class TestPruneSaveInventory:
         assert result["success"] is False
         assert "appeared after sealing" in result["message"]
         assert Path(expected).read_bytes() == b"created by emulator"
+
+    def test_expected_absence_is_rechecked_after_quarantine_before_cascade(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="late.gba")
+        expected = Path(tmp_path / "saves" / "gba" / "late.srm")
+        expected.parent.mkdir(parents=True)
+        inventory = svc.inventory_prune_saves([42])
+
+        result = svc.quarantine_prune_saves(inventory["exclusive"], inventory["source_claims"])
+        assert result["success"] is True
+
+        expected.parent.mkdir(parents=True, exist_ok=True)
+        expected.write_bytes(b"created after absence was consumed")
+
+        assert svc.validate_prune_absences(inventory["source_claims"]) is False
+        assert expected.read_bytes() == b"created after absence was consumed"

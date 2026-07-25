@@ -27,6 +27,7 @@ import {
   checkPlatformBios,
   getPlatformCoreInfo,
   getSaveStatus,
+  isCallableFailure,
   getArtworkBase64,
   getAchievements,
   getAchievementProgress,
@@ -495,7 +496,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       }
       const romId = romIdRef.current;
       if (!romId) return;
-      const updatedStatus = await getSaveStatus(romId).catch((): SaveStatus | null => null);
+      const result = await getSaveStatus(romId).catch(() => null);
+      if (result && isCallableFailure(result)) return;
+      const updatedStatus: SaveStatus | null = result;
       const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
       setState((prev) => ({
         ...prev,
@@ -509,8 +512,9 @@ export const RomMGameInfoPanel: FC<RomMGameInfoPanelProps> = ({ appId }) => { //
       if (detail.rom_id && detail.rom_id !== romIdRef.current) return;
       const romId = romIdRef.current;
       if (!romId) return;
-      const updatedStatus: SaveStatus | null =
-        detail.save_status ?? (await getSaveStatus(romId).catch((): SaveStatus | null => null));
+      const result = detail.save_status ?? (await getSaveStatus(romId).catch(() => null));
+      if (result && isCallableFailure(result)) return;
+      const updatedStatus: SaveStatus | null = result;
       const conflicts: SyncConflict[] = updatedStatus?.conflicts ?? [];
       setState((prev) => ({
         ...prev,

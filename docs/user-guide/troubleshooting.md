@@ -225,10 +225,12 @@ While cleanup is starting or running, library sync, downloads/resumes, migration
 session finalization, launch evaluation, core/disc changes, Steam Input application, uninstalls, and relevant cache
 cleanup are refused. Frontend Steam continuations hold bounded expiring leases until acknowledged, so a lost page or
 bridge response cannot block cleanup forever. Active work renews its lease while applying Steam changes; a lease expires
-only after five minutes without a successful renewal. Server, sign-in, token, and user changes are refused during the
-run, and every exact-id check also verifies the same server/user namespace captured by the preview. Cancel or finish the
-cleanup before retrying those actions. This reciprocal block prevents newly downloaded content or recovered state from
-appearing after recovery was captured and then being removed by finalization.
+only after five minutes without a successful renewal. Component/plugin teardown releases registered leases, and an
+unresolved continuation stops renewing after its bounded frontend lifetime. Server, sign-in, token, and user changes
+(including a connection test that can backfill user identity) are refused during the run, and every exact-id check also
+verifies the same server/user namespace captured by the preview. Cancel or finish the cleanup before retrying those
+actions. This reciprocal block prevents newly downloaded content or recovered state from appearing after recovery was
+captured and then being removed by finalization.
 
 Recovery bundles are under `~/decky-romm-sync-recovery/bundles/`. A directory appears there only after every required
 copy and checksum succeeds, directory durability succeeds where supported, and the staging directory is atomically
@@ -236,11 +238,13 @@ sealed. A post-rename durability failure preserves the directory with a `.durabi
 it look successfully sealed. Before the Steam action and again before local finalization, the backend verifies the seal,
 manifest/checksums, bundle-bound source claims, source root/descendant identities, mount IDs and bytes, expected absence
 of currently missing saves, database state, save ownership, and captured Steam/controller state. Filesystem mutation
-then consumes held descriptors; replacing a path, writing through an older open descriptor, crossing a nested mount, or
-creating a previously absent save after sealing does not authorize deletion. Recovery destination directories and files
-stay attached to held descriptors through metadata updates, hashing, sealing, and validation, so a swapped symlink is
-not re-authorized. A failed attempt may report `recovery_failed`; it leaves the local game unchanged and cleans
-incomplete staging best-effort. Free-space blocking in the modal covers the installed ROM content you selected. The
+then holds kernel writer-exclusion leases through descriptor-relative removal; replacing a path, keeping a writable file
+descriptor open, crossing a nested mount, or creating a previously absent save after sealing does not authorize
+deletion. Recovery destination directories and files stay attached to held descriptors through metadata updates,
+hashing, sealing, and validation, so a swapped symlink is not re-authorized. A failed attempt may report
+`recovery_failed`; it leaves the local game unchanged. Incomplete staging is removed only when descriptor-relative,
+mount-aware cleanup proves the tree safe. Otherwise the error names that preserved staging so mounted or uncertain data
+is never traversed recursively. Free-space blocking in the modal covers the installed ROM content you selected. The
 backend checks actual source size and free space again at copy time, so a later disk-space change can still stop the
 group safely.
 

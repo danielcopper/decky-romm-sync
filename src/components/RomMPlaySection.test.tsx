@@ -1412,6 +1412,31 @@ describe("RomMPlaySection", () => {
       );
     });
 
+    it("save_sync_settings: prune-active status leaves the existing display untouched", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({ found: true, rom_id: 55 });
+      render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      vi.mocked(playSectionUtils.applySaveSyncDisplay).mockClear();
+      vi.mocked(backend.getSaveStatus).mockResolvedValue({
+        success: false,
+        reason: "prune_active",
+        message: "Cleanup is active.",
+      });
+
+      await act(async () => {
+        globalThis.dispatchEvent(
+          new CustomEvent("romm_data_changed", {
+            detail: { type: "save_sync_settings", save_sync_enabled: true },
+          }),
+        );
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(backend.getSaveStatus).toHaveBeenCalledWith(55);
+      expect(playSectionUtils.applySaveSyncDisplay).not.toHaveBeenCalled();
+    });
+
     it("save_sync_settings: enabled=true with no rom_id → skips getSaveStatus", async () => {
       // cached.found=false → romIdRef stays null
       render(<RomMPlaySection appId={testAppId} />);
@@ -2321,7 +2346,10 @@ describe("RomMPlaySection", () => {
       vi.mocked(backend.removeRom).mockResolvedValue({
         success: true,
         message: "removed",
+        prune_lease_token: "uninstall-lease",
       });
+      vi.mocked(backend.releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
+      vi.mocked(setLaunchOptionsConfirmed).mockClear();
       vi.mocked(toaster.toast).mockClear();
       const listener = vi.fn();
       globalThis.addEventListener("romm_rom_uninstalled", listener);
@@ -2337,6 +2365,11 @@ describe("RomMPlaySection", () => {
           await uninstall.props.onClick?.();
         });
         expect(vi.mocked(backend.removeRom)).toHaveBeenCalledWith(42);
+        expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(testAppId, "");
+        expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("uninstall-lease");
+        expect(vi.mocked(setLaunchOptionsConfirmed).mock.invocationCallOrder[0]).toBeLessThan(
+          vi.mocked(backend.releasePruneConflictLease).mock.invocationCallOrder[0]!,
+        );
         const ev = listener.mock.calls[0]?.[0] as CustomEvent;
         expect(ev.detail).toEqual({ rom_id: 42 });
         expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Mario uninstalled" }));

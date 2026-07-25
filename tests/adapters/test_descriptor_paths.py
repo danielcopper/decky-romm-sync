@@ -110,7 +110,7 @@ def test_regular_root_hash_rejects_held_fd_write_after_rename(tmp_path, monkeypa
 
     monkeypatch.setattr("adapters.descriptor_paths._require_claimed_identity", mutate_after_rename)
     try:
-        with pytest.raises(RuntimeError, match="changed after sealing"):
+        with pytest.raises(RuntimeError, match=r"active writer.*retained"):
             remove_claimed(str(source), str(safe), claim)
     finally:
         os.close(writer)
@@ -140,7 +140,7 @@ def test_directory_child_write_after_post_rename_inventory_is_restored(tmp_path,
 
     monkeypatch.setattr("adapters.descriptor_paths._inventory_directory", mutate_after_inventory)
     try:
-        with pytest.raises(RuntimeError, match="changed after sealing"):
+        with pytest.raises(RuntimeError, match=r"active writer.*retained"):
             remove_claimed(str(source), str(safe), claim)
     finally:
         os.close(writer)

@@ -58,6 +58,21 @@ async def test_continuation_events_hold_a_renewable_prune_lease(plugin, event, p
 
 
 @pytest.mark.asyncio
+async def test_rejected_continuation_event_releases_its_unreachable_lease(plugin):
+    import decky
+
+    decky.emit.reset_mock()
+    decky.emit.side_effect = RuntimeError("bridge rejected event")
+
+    with pytest.raises(RuntimeError, match="bridge rejected event"):
+        await plugin._emit_with_prune_continuation("download_complete", {"app_id": 42})
+
+    assert plugin._prune_admission_gate.conflicting_operations == 0
+    assert plugin._prune_admission_gate.leases == {}
+    decky.emit.side_effect = None
+
+
+@pytest.mark.asyncio
 async def test_download_without_a_bound_shortcut_emits_no_continuation_lease(plugin):
     import decky
 

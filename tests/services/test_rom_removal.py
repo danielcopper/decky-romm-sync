@@ -234,6 +234,33 @@ class TestDeleteRomFiles:
         assert "identity changed" in result["message"]
         assert rom_path.read_bytes() == b"replacement"
 
+    def test_preopened_rom_writer_prevents_installed_file_deletion(self, tmp_path, logger):
+        roms = tmp_path / "roms"
+        rom_path = roms / "n64" / "game.z64"
+        rom_path.parent.mkdir(parents=True)
+        rom_path.write_bytes(b"installed")
+        uow = FakeUnitOfWork()
+        _seed_install(uow, _make_install(1, file_path=str(rom_path)))
+        real_service = RomRemovalService(
+            config=RomRemovalServiceConfig(
+                logger=logger,
+                loop=asyncio.new_event_loop(),
+                rom_file_store=RomFileAdapter(),
+                retrodeck_paths=FakeRetroDeckPaths(roms=str(roms)),
+                download_queue_cleanup=None,
+                uow_factory=FakeUnitOfWorkFactory(uow),
+            )
+        )
+        writer = os.open(rom_path, os.O_WRONLY)
+        try:
+            result = real_service.delete_rom_files(1)
+        finally:
+            os.close(writer)
+
+        assert result["success"] is False
+        assert "active writer" in result["message"]
+        assert rom_path.read_bytes() == b"installed"
+
     def test_selected_directory_child_change_is_retained_at_mutation_time(self, tmp_path, logger):
         roms = tmp_path / "roms"
         rom_dir = roms / "psx" / "Game"

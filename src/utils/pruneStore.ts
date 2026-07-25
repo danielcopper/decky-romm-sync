@@ -1,5 +1,6 @@
 export interface PruneProgress {
   run_id: string;
+  preview_id: string;
   current: number;
   total: number;
   stage: string;
@@ -40,6 +41,7 @@ export interface PruneComplete {
   success: boolean;
   partial: boolean;
   run_id: string;
+  preview_id: string;
   chunk_index?: number;
   final?: boolean;
   removed_count?: number;
@@ -58,7 +60,7 @@ let progress: PruneProgress | null = null;
 let complete: PruneComplete | null = null;
 const receivedChunks = new Map<number, PruneComplete>();
 let terminalChunkIndex: number | null = null;
-let previewAdmissionPending = false;
+let pendingPreviewId: string | null = null;
 const listeners = new Set<Listener>();
 
 function notify(): void {
@@ -69,10 +71,11 @@ function unique(values: number[]): number[] {
   return [...new Set(values)].sort((a, b) => a - b);
 }
 
-export function beginPruneRun(runId: string): void {
+export function beginPruneRun(runId: string, previewId: string): void {
   if (activeRunId === runId) return;
+  if (pendingPreviewId !== previewId) return;
   activeRunId = runId;
-  previewAdmissionPending = false;
+  pendingPreviewId = null;
   progress = null;
   complete = null;
   receivedChunks.clear();
@@ -80,19 +83,24 @@ export function beginPruneRun(runId: string): void {
   notify();
 }
 
+export function admitPruneFrame(previewId: string, runId: string): boolean {
+  if (activeRunId !== null) return activeRunId === runId;
+  if (pendingPreviewId === null || pendingPreviewId !== previewId) return false;
+  activeRunId = runId;
+  pendingPreviewId = null;
+  notify();
+  return true;
+}
+
 export function setPruneProgress(value: PruneProgress): void {
-  if (previewAdmissionPending && activeRunId === null) return;
-  if (activeRunId !== null && activeRunId !== value.run_id) return;
-  activeRunId = value.run_id;
+  if (!admitPruneFrame(value.preview_id, value.run_id)) return;
   progress = value;
   complete = null;
   notify();
 }
 
 export function setPruneComplete(value: PruneComplete): PruneComplete | null {
-  if (previewAdmissionPending && activeRunId === null) return null;
-  if (activeRunId !== null && activeRunId !== value.run_id) return null;
-  activeRunId = value.run_id;
+  if (!admitPruneFrame(value.preview_id, value.run_id)) return null;
   const chunkIndex = value.chunk_index ?? 0;
   if (receivedChunks.has(chunkIndex)) return null;
   receivedChunks.set(chunkIndex, value);
@@ -134,16 +142,16 @@ export function resetPruneState(): void {
   complete = null;
   receivedChunks.clear();
   terminalChunkIndex = null;
-  previewAdmissionPending = false;
+  pendingPreviewId = null;
   notify();
 }
 
-export function beginPrunePreview(): void {
+export function beginPrunePreview(previewId: string): void {
   activeRunId = null;
   progress = null;
   complete = null;
   receivedChunks.clear();
   terminalChunkIndex = null;
-  previewAdmissionPending = true;
+  pendingPreviewId = previewId;
   notify();
 }

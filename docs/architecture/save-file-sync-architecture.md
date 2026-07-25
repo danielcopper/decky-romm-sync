@@ -268,7 +268,9 @@ save is copied and checksum-verified when recovery is enabled, then moved throug
 history instead of enforcing the normal newest-ten cap. Cleanup always takes a final no-follow source claim and creates
 the backup directory through anchored parents before a directory-durable rename, including recovery-off runs. A
 post-rename fsync failure is returned as an actual but durability-ambiguous move rather than disappearing from the group
-ledger.
+ledger. Because an expected-absent path can appear after its individual quarantine check, cleanup collectively rechecks
+every absent save claim after later filesystem cleanup and immediately before deleting the owning aggregate. Any newly
+created save retains the aggregate, with or without a recovery bundle.
 
 Recovery also copies matching `.romm-backup` files while leaving the originals untouched. If an uninstalled ROM or an
 unsupported layout has no resolvable exact path, the manifest preserves known save-sync filenames/state and records a
