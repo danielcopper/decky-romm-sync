@@ -22,6 +22,7 @@ import {
   getInstalledRelaunchOptions,
   invalidateCachedGameDetail,
   getMetadataCachePage,
+  waitForPruneRelease,
 } from "./api/backend";
 import { getSettingsResetState, setSettingsResetState } from "./utils/settingsResetStore";
 import { getDownloadState, setDownloads } from "./utils/downloadStore";
@@ -133,6 +134,10 @@ beforeEach(() => {
   resetPruneState();
   handlePruneAction.mockClear();
   publishCommittedVersionSwitch.mockClear();
+  vi.mocked(waitForPruneRelease).mockReset().mockResolvedValue({
+    success: true,
+    message: "Cleanup claim is released.",
+  });
   vi.mocked(invalidateCachedGameDetail).mockClear();
   // The global afterEach's vi.unstubAllGlobals wipes the Steam ambient globals
   // after the file's first test; several sync_complete paths read SteamClient /
@@ -235,6 +240,13 @@ describe("index.tsx — persistent prune listeners", () => {
 
   it("publishes a known committed partial repoint after terminal completion", async () => {
     const plugin = pluginFactory();
+    let release: ((value: { success: true; message: string }) => void) | undefined;
+    vi.mocked(waitForPruneRelease).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
 
     act(() => {
       emitDeckyEvent("prune_complete", {
@@ -258,6 +270,9 @@ describe("index.tsx — persistent prune listeners", () => {
     });
     await flush();
 
+    expect(publishCommittedVersionSwitch).not.toHaveBeenCalled();
+    release?.({ success: true, message: "released" });
+    await flush();
     expect(publishCommittedVersionSwitch).toHaveBeenCalledWith(9001, 8);
     plugin.onDismount();
   });

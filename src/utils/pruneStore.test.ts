@@ -52,4 +52,32 @@ describe("pruneStore", () => {
     beginPruneRun("new");
     expect(getPruneState()).toEqual({ runId: "new", progress: null, complete: null });
   });
+
+  it("waits for every earlier chunk when the final chunk arrives first", () => {
+    beginPruneRun("run-2");
+    const final = {
+      success: true,
+      partial: false,
+      run_id: "run-2",
+      chunk_index: 1,
+      final: true,
+      removed_rom_ids: [2],
+      affected_app_ids: [102],
+      results: [{ group_id: "two", rom_ids: [2], status: "removed" as const, message: "removed" }],
+    };
+
+    expect(setPruneComplete(final)).toBeNull();
+    expect(getPruneState().complete).toBeNull();
+    const complete = setPruneComplete({
+      ...final,
+      chunk_index: 0,
+      final: false,
+      removed_rom_ids: [1],
+      affected_app_ids: [101],
+      results: [{ group_id: "one", rom_ids: [1], status: "removed", message: "removed" }],
+    });
+
+    expect(complete?.removed_rom_ids).toEqual([1, 2]);
+    expect(complete?.results.map((item) => item.group_id)).toEqual(["one", "two"]);
+  });
 });

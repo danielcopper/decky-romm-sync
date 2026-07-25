@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -11,6 +12,7 @@ from services.prune._models import PrunePreview
 
 _PREVIEW_TEXT_CHARS = 512
 _PREVIEW_WARNING_CHARS = 1024
+_PREVIEW_BUDGET_BYTES = 48 * 1024
 
 if TYPE_CHECKING:
     from services.protocols import RecoveryBundleStore, RetroDeckPaths, UnitOfWorkFactory
@@ -103,19 +105,30 @@ class PreviewBuilder:
         )
 
     def page(self, preview: PrunePreview, offset: int, limit: int) -> dict[str, Any]:
-        end = offset + limit
-        items = list(preview.entries[offset:end]) if limit else []
-        return {
+        result: dict[str, Any] = {
             "success": True,
             "preview_id": preview.preview_id,
             "scope": preview.scope,
-            "items": items,
+            "items": [],
             "offset": offset,
             "limit": limit,
             "total": len(preview.entries),
             "free_bytes": self._recovery_store.free_bytes(),
-            "recovery_root": None,
+            "recovery_root": self._recovery_store.root(),
         }
+        if not limit:
+            return result
+        items: list[dict[str, Any]] = []
+        for entry in preview.entries[offset : offset + limit]:
+            candidate = [*items, entry]
+            result["items"] = candidate
+            if len(json.dumps(result, ensure_ascii=True).encode("utf-8")) > _PREVIEW_BUDGET_BYTES:
+                if not items:
+                    raise ValueError("One cleanup preview entry exceeds the Decky wire budget")
+                break
+            items = candidate
+        result["items"] = items
+        return result
 
     @staticmethod
     def _fingerprint(groups: list[list[Any]], installs: dict[int, Any]) -> tuple[tuple[object, ...], ...]:

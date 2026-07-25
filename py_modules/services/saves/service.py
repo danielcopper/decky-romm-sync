@@ -38,7 +38,7 @@ from services.saves.versions import VersionsService, VersionsServiceConfig
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from models.prune import SourceIdentity
+    from models.prune import SourceClaim
     from models.sync import ClientSaveState
 
     from services.protocols import UnitOfWorkFactory
@@ -354,7 +354,7 @@ class SaveService:
         }
 
     def quarantine_prune_saves(
-        self, files: list[dict[str, str]], identities: dict[str, SourceIdentity] | None = None
+        self, files: list[dict[str, str]], claims: dict[str, SourceClaim] | None = None
     ) -> dict[str, Any]:
         """Move exclusive current saves through the sanctioned backup funnel."""
         moved: list[str] = []
@@ -368,18 +368,31 @@ class SaveService:
                     or self._save_file_store.is_symlink(backup_dir)
                 ):
                     raise ValueError(f"Unsafe save quarantine destination: {backup_dir}")
-                identity = identities.get(item["path"]) if identities is not None else None
-                if self._sync_engine.quarantine_local_file(
-                    item["saves_dir"],
-                    item["filename"],
-                    preserve_history=True,
-                    expected_identity=identity,
-                    safe_root=saves_root if identity is not None else None,
-                ):
+                claim = claims.get(item["path"]) if claims is not None else None
+                if claim is None:
+                    claim = self._save_file_store.claim_source(item["path"], saves_root)
+                outcome = self._sync_engine.quarantine_claimed_file(
+                    item["saves_dir"], item["filename"], claim=claim, safe_root=saves_root
+                )
+                if outcome["changed"]:
                     moved += [item["path"]]
+                if not outcome["success"]:
+                    return {
+                        "success": False,
+                        "reason": "save_quarantine_failed",
+                        "message": outcome["message"],
+                        "moved": moved,
+                        "ambiguous": outcome["ambiguous"],
+                    }
         except Exception as exc:
-            return {"success": False, "reason": "save_quarantine_failed", "message": str(exc), "moved": moved}
-        return {"success": True, "moved": moved}
+            return {
+                "success": False,
+                "reason": "save_quarantine_failed",
+                "message": str(exc),
+                "moved": moved,
+                "ambiguous": False,
+            }
+        return {"success": True, "moved": moved, "ambiguous": False}
 
     # ------------------------------------------------------------------
     # Sync orchestration (delegated to SyncEngine)

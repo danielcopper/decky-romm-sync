@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 from adapters.prune_artifacts import PruneArtifactAdapter
 
 
@@ -21,7 +19,7 @@ def test_discovers_and_removes_only_named_rom_cache_files(tmp_path):
     sources = {Path(item["source_path"]) for item in artifacts}
     assert set(expected) <= sources
     assert artwork / "7_icon.png" in sources
-    adapter.remove([7])
+    assert adapter.remove([7])["success"] is True
     assert all(not path.exists() for path in expected)
     assert unrelated.exists()
 
@@ -35,7 +33,7 @@ def test_unsealed_cleanup_does_not_follow_symlinked_cache_directory(tmp_path):
     (tmp_path / "artwork").mkdir()
     adapter = PruneArtifactAdapter(runtime_dir=str(tmp_path))
 
-    with pytest.raises(OSError):
-        adapter.remove([7])
+    result = adapter.remove([7])
 
+    assert result["success"] is False
     assert target.read_bytes() == b"keep"

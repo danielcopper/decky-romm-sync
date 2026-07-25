@@ -102,10 +102,11 @@ switching straight back before the list has caught up).
 
 Normal library sync never deletes retained local rows, installed files, saves, or playtime just because a game
 disappears from RomM. To remove that state explicitly, open **Danger Zone → Clean Up Removed RomM Games**. The first
-scan is local and finds groups containing rows absent from a completed platform fetch. The modal pages every member of
-those affected groups, marking which rows are candidates; load every page before confirmation. The confirmation run
-checks every exact RomM id again. Only a confirmed 404 can be removed. Offline, timeout, authentication, server,
-malformed-response, active-download, and ambiguous multi-shortcut cases are skipped and reported without deleting data.
+scan is local and finds groups containing rows absent from a completed platform fetch. The modal byte-budgets every page
+for the Decky bridge and pages every member of those affected groups, marking which rows are candidates; load every page
+before confirmation. The confirmation run checks every exact RomM id again. Only a confirmed 404 can be removed.
+Offline, timeout, authentication, server, malformed-response, active-download, and ambiguous multi-shortcut cases are
+skipped and reported without deleting data.
 
 The confirmation options apply to this run only:
 
@@ -139,9 +140,11 @@ confirmation scoped to that one row; the vanished version itself remains non-swi
 If Steam changes before local cleanup can finish, the report can show a **partial** group with the concrete committed
 action and failure message. A confirmed shortcut removal is reconciled to an unbound retained row; a committed repoint
 remains bound to the new Default. If Steam removal succeeded but every completion report was lost, the result is marked
-ambiguous and source data stays retained; retrying confirms the already-absent shortcut instead of removing it twice.
-Save ownership warnings are shown in the terminal group details. These outcomes are intentional and retryable rather
-than being reported as unchanged.
+ambiguous and source data stays retained; the same applies when Steam removal was attempted but its absence could not be
+confirmed. Retrying confirms an already-absent shortcut instead of removing it twice. Save ownership warnings are shown
+in a focusable terminal-detail region. If bounded warning or message text was omitted/shortened, the detail explicitly
+says so rather than presenting a partial list as complete. These outcomes are intentional and retryable rather than
+being reported as unchanged.
 
 ### Region and Languages
 

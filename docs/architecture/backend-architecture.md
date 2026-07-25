@@ -178,25 +178,29 @@ resolution, event, cache invalidation, sync, or completion-stamp update.
 `PruneService` is the only path that deliberately deletes retained `roms` aggregate roots. A bulk preview is local-only:
 for each platform it requires a non-empty completed fetch generation and selects rows whose `last_fetch_id` differs,
 including NULL row generations. An inline preview may nominate one concrete retained ROM without generation evidence.
-Both forms return bounded pages plus an ephemeral fingerprint. Pages include every member of an affected sibling group,
-with generation candidates marked separately, so whole-game deletion cannot reach an undisclosed row. `start_prune`
-consumes a finalized preview-bound installed-content selection. The frontend stages that selection in bounded pages, so
-wire bounds do not cap the total selected set. Start atomically refuses any registered conflicting callable and reserves
-the run before rebuilding the preview; concurrent starts cannot consume one token twice, and shutdown owns/cancels an
-admitted refresh before it can spawn a run. Each sync, download, migration, version-switch, save-write, session,
-uninstall, or cache-mutation callable registers for its full lifetime before its first await. Detached status, download,
-and playtime tasks transfer the claim to their task lifetime; multi-call shortcut removal holds a reference-counted
-lease through acknowledgement. This closes the reciprocal admission race, and each path refuses while a prune claim is
-active. Migration and active-library-sync decorators additionally guard preview and start.
+Both forms return serialized-byte-budgeted pages plus an ephemeral fingerprint. A page may therefore contain fewer than
+the requested row limit, and the next offset advances by the rows actually returned. Pages include every member of an
+affected sibling group, with generation candidates marked separately, so whole-game deletion cannot reach an undisclosed
+row. `start_prune` consumes a finalized preview-bound installed-content selection. The frontend stages that selection in
+bounded pages, so wire bounds do not cap the total selected set. Start atomically refuses any registered conflicting
+callable and reserves the run before rebuilding the preview; concurrent starts cannot consume one token twice, and
+shutdown owns/cancels an admitted refresh before it can spawn a run. Each sync, download, migration, version-switch,
+save-write, session, uninstall, or cache-mutation callable registers for its full lifetime before its first await.
+Detached status, download, and playtime tasks transfer the claim to their task lifetime. Core/disc writes, launch
+evaluation, and Steam Input application are included because they mutate recovered state. Frontend-owned shortcut
+removal and core/disc Steam writes hold tokenized conflict leases through acknowledgement; abandoned leases expire, and
+cancellation starts a fresh bounded frontend action queue. This closes the reciprocal admission race, and each path
+refuses while a prune claim is active. Migration and active-library-sync decorators additionally guard preview and
+start.
 
 The executor processes sibling groups serially and catches ordinary exceptions per group. It rejects multiple shortcut
 bindings and active downloads, probes every local group member with the single-attempt three-second `get_rom_once`, and
 treats only a typed `RommNotFoundError` as destructive authority. Live, malformed, wrong-id, transport, authentication,
 timeout, server, and unknown outcomes retain data. Long recovery and frontend round trips are followed by another
-exact-ID proof before local source removal; repoint-only runs re-prove both the vanished source and live target after
-the frontend action. The natural live repoint target uses the same filename-stem projection and
-`resolve_group_representative` ranking as the version picker with empty installed/bound preference sets. Repoint
-selection is independent of row deletion.
+exact-ID proof before local source removal; every repoint re-proves both the vanished source and live target after the
+frontend action, including a vanished source that is not itself a generation candidate. The natural live repoint target
+uses the same filename-stem projection and `resolve_group_representative` ranking as the version picker with empty
+installed/bound preference sets. Repoint selection is independent of row deletion.
 
 Recovery is coordinated through ordered ROM save locks, acquired with no UoW open. The lock set is retried until shared
 save ownership is stable. Short read UoWs close before filesystem work, and no RomM request, event emission, or frontend
@@ -204,23 +208,31 @@ wait runs under those locks. The bundle is sealed before mutation. Aggregate, sa
 and fresh frontend Steam state are validated before the irreversible Steam action. After that action the service
 reacquires the same recovery-set locks and repeats the guards immediately before local finalization; quarantine
 ownership is separately projected only for rows being deleted. The locks remain held through save quarantine,
-filesystem-only installed-content removal, and the final parent cascade. Source sets record expected absence and sealed
-no-follow identity. Deletion/quarantine claims the exact entry through anchored descriptors, verifies the claimed
-identity after rename, then mutates it; a replacement is retained rather than reached through a later path lookup. The
-final SQLite delete is one short UoW that revalidates complete row/binding state, invalidates intersecting collection
-stamps, and clears platform stamps only for fully vanished games.
+filesystem-only installed-content removal, and the final parent cascade. Source sets record expected absence, the root's
+sealed no-follow identity, and every descendant identity and regular-file hash. Directory deletion first renames the
+root through an anchored parent, re-inventories that claimed tree, and restores it on any descendant mismatch. Content
+excluded from the bundle and recovery-off saves still receive a final complete no-follow claim; their remove/quarantine
+uses anchored parents and directory-durable rename rather than a raw path fallback. Recovery root, staging, bundles, and
+the sealed bundle remain descriptor-anchored through copy, cross-directory rename, validation, and both-parent fsync.
+Adapter outcomes carry actual and durability-ambiguous changes into the mutation ledger even when a later item or parent
+fsync fails. The final SQLite delete is one short UoW that revalidates complete row/binding state, invalidates
+intersecting collection stamps, and clears platform stamps only for fully vanished games.
 
 Frontend Steam events use a claim/complete protocol. A claim checks the run, token, discriminant, appId, target, exact
 single-binding group, and current binding before the frontend rechecks the live `rom-launcher` executable and mutates
 Steam. The lease is monotonic-clock bounded and rechecked after asynchronous validation; an identical repeat claim is
 idempotent, while mismatched or expired claims cannot authorize a mutation. Repoint commits through the normal
 version-switch authority first; shortcut removal is immediately reconciled to an unbound local row after Steam confirms
-absence. A claimed removal whose completion is lost is an explicit ambiguous partial. A later run can confirm the
-shortcut is already absent and reconcile without repeating Steam removal. A later guard failure is likewise an explicit
-`partial` result with the committed action and actual mutation categories recorded, not a claim that the group was
-unchanged. Cancellation can stop final guards and every later group; shielding starts only with the first irreversible
-local mutation and awaits that phase to a known result. Terminal result strings/arrays are bounded and chunks are built
-to a serialized byte budget; mixed runs continue unrelated groups.
+absence. A claimed action whose completion is lost, or a `RemoveShortcut`/launch-options write that was attempted but
+could not be confirmed, is an explicit ambiguous partial. A pre-mutation refusal remains an ordinary failure. A later
+run can confirm a shortcut is already absent and reconcile without repeating Steam removal. A later guard failure is
+likewise an explicit `partial` result with the committed action and actual mutation categories recorded, not a claim
+that the group was unchanged. Cancellation can stop final guards and every later group; shielding starts only with the
+first irreversible local mutation and awaits that phase to a known result. Cancellation remains authoritative if that
+shielded child faults: the current group's truthful fault/ledger result is recorded and no later group starts. Terminal
+result strings/arrays are bounded and chunks are built to a serialized byte budget; the frontend finalizes only a
+contiguous chunk sequence. Committed repoint publication performs a bounded/retried backend release acknowledgement
+before gated cover/status work. Mixed runs continue unrelated groups.
 
 #### LibraryService decomposition (`services/library/`)
 

@@ -5,11 +5,11 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from adapters.descriptor_paths import remove_current, remove_exact
+from adapters.descriptor_paths import claim_source, remove_claimed
 from domain.artwork_paths import cache_filename, cover_meta_filename
 
 if TYPE_CHECKING:
-    from models.prune import RecoveryArtifact, SourceIdentity
+    from models.prune import MutationOutcome, RecoveryArtifact, SourceClaim
 
 _SGDB_TYPES = ("hero", "logo", "grid", "icon")
 
@@ -27,16 +27,33 @@ class PruneArtifactAdapter:
                 artifacts.append({"source_path": path, "safe_root": self._runtime_dir, "kind": kind, "rom_id": rom_id})
         return artifacts
 
-    def remove(self, rom_ids: list[int], identities: dict[str, SourceIdentity] | None = None) -> int:
-        removed = 0
+    def remove(self, rom_ids: list[int], claims: dict[str, SourceClaim] | None = None) -> MutationOutcome:
+        changed = False
+        ambiguous = False
         for rom_id in rom_ids:
             for path, _kind in self._paths(rom_id):
-                identity = identities.get(path) if identities is not None else None
-                if identity is not None:
-                    removed += int(remove_exact(path, self._runtime_dir, identity))
-                else:
-                    removed += int(remove_current(path, self._runtime_dir))
-        return removed
+                try:
+                    claim = claims.get(path) if claims is not None else None
+                    if claim is None:
+                        claim = claim_source(path, self._runtime_dir)
+                    outcome = remove_claimed(path, self._runtime_dir, claim)
+                except Exception as exc:
+                    return {
+                        "success": False,
+                        "changed": changed,
+                        "ambiguous": ambiguous,
+                        "message": str(exc),
+                    }
+                changed |= outcome["changed"]
+                ambiguous |= outcome["ambiguous"]
+                if not outcome["success"]:
+                    return {
+                        "success": False,
+                        "changed": changed,
+                        "ambiguous": ambiguous,
+                        "message": outcome["message"],
+                    }
+        return {"success": True, "changed": changed, "ambiguous": ambiguous, "message": "Artifacts removed"}
 
     def _paths(self, rom_id: int) -> list[tuple[str, str]]:
         covers = os.path.join(self._runtime_dir, "covers")

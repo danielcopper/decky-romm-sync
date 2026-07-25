@@ -4,14 +4,14 @@ import { cancelPruneActions, handlePruneAction } from "./pruneActions";
 import {
   getAppDetails,
   isRomMShortcutDetails,
-  removeShortcutConfirmed,
+  removeShortcutConfirmedOutcome,
   setLaunchOptionsConfirmed,
 } from "./steamShortcuts";
 
 vi.mock("./steamShortcuts", () => ({
   getAppDetails: vi.fn(),
   isRomMShortcutDetails: vi.fn(),
-  removeShortcutConfirmed: vi.fn(),
+  removeShortcutConfirmedOutcome: vi.fn(),
   setLaunchOptionsConfirmed: vi.fn(),
 }));
 
@@ -22,7 +22,7 @@ describe("handlePruneAction", () => {
     vi.mocked(backend.fetchCoverBase64).mockReset();
     vi.mocked(getAppDetails).mockReset();
     vi.mocked(isRomMShortcutDetails).mockReset();
-    vi.mocked(removeShortcutConfirmed).mockReset();
+    vi.mocked(removeShortcutConfirmedOutcome).mockReset();
     vi.mocked(setLaunchOptionsConfirmed).mockReset();
     vi.mocked(backend.reportPruneAction).mockResolvedValue({ success: true, message: "accepted" });
     vi.mocked(isRomMShortcutDetails).mockReturnValue(true);
@@ -192,7 +192,7 @@ describe("handlePruneAction", () => {
   });
 
   it("reports shortcut-removal confirmation failure instead of finalizing", async () => {
-    vi.mocked(removeShortcutConfirmed).mockResolvedValue(false);
+    vi.mocked(removeShortcutConfirmedOutcome).mockResolvedValue({ status: "attempted_unconfirmed" });
 
     await handlePruneAction({
       run_id: "run-1",
@@ -208,11 +208,12 @@ describe("handlePruneAction", () => {
       success: false,
       reason: "steam_action_failed",
       message: "Steam did not confirm owned-shortcut removal",
+      mutation_attempted: true,
     });
   });
 
   it("logs a rejected action report after preserving the failure payload", async () => {
-    vi.mocked(removeShortcutConfirmed).mockResolvedValue(false);
+    vi.mocked(removeShortcutConfirmedOutcome).mockResolvedValue({ status: "attempted_unconfirmed" });
     vi.mocked(backend.reportPruneAction).mockRejectedValue(new Error("bridge offline"));
     const log = vi.spyOn(backend, "logError").mockImplementation(() => {});
 
@@ -228,7 +229,7 @@ describe("handlePruneAction", () => {
   });
 
   it("deduplicates duplicate action delivery before Steam mutation", async () => {
-    vi.mocked(removeShortcutConfirmed).mockResolvedValue(true);
+    vi.mocked(removeShortcutConfirmedOutcome).mockResolvedValue({ status: "confirmed" });
     const action = {
       run_id: "run-1",
       action_token: "token-duplicate",
@@ -238,7 +239,7 @@ describe("handlePruneAction", () => {
 
     await Promise.all([handlePruneAction(action), handlePruneAction(action)]);
 
-    expect(removeShortcutConfirmed).toHaveBeenCalledTimes(1);
+    expect(removeShortcutConfirmedOutcome).toHaveBeenCalledTimes(1);
     expect(backend.reportPruneAction).toHaveBeenCalledTimes(2);
   });
 
@@ -256,12 +257,12 @@ describe("handlePruneAction", () => {
       app_id: 9001,
     });
 
-    expect(removeShortcutConfirmed).not.toHaveBeenCalled();
+    expect(removeShortcutConfirmedOutcome).not.toHaveBeenCalled();
     expect(backend.reportPruneAction).toHaveBeenCalledTimes(1);
   });
 
   it("retries only the report after a successful Steam mutation", async () => {
-    vi.mocked(removeShortcutConfirmed).mockResolvedValue(true);
+    vi.mocked(removeShortcutConfirmedOutcome).mockResolvedValue({ status: "confirmed" });
     vi.mocked(backend.reportPruneAction)
       .mockResolvedValueOnce({ success: true, message: "claimed" })
       .mockRejectedValueOnce(new Error("bridge reset"))
@@ -274,7 +275,7 @@ describe("handlePruneAction", () => {
       app_id: 9001,
     });
 
-    expect(removeShortcutConfirmed).toHaveBeenCalledTimes(1);
+    expect(removeShortcutConfirmedOutcome).toHaveBeenCalledTimes(1);
     expect(backend.reportPruneAction).toHaveBeenCalledTimes(3);
     expect(vi.mocked(backend.reportPruneAction).mock.calls[1]?.[0]).toEqual(
       vi.mocked(backend.reportPruneAction).mock.calls[2]?.[0],
@@ -282,7 +283,7 @@ describe("handlePruneAction", () => {
   });
 
   it("recovers when the first successful claim response is lost", async () => {
-    vi.mocked(removeShortcutConfirmed).mockResolvedValue(true);
+    vi.mocked(removeShortcutConfirmedOutcome).mockResolvedValue({ status: "confirmed" });
     vi.mocked(backend.reportPruneAction)
       .mockRejectedValueOnce(new Error("claim response lost"))
       .mockResolvedValue({ success: true, message: "accepted" });
@@ -294,7 +295,7 @@ describe("handlePruneAction", () => {
       app_id: 9001,
     });
 
-    expect(removeShortcutConfirmed).toHaveBeenCalledTimes(1);
+    expect(removeShortcutConfirmedOutcome).toHaveBeenCalledTimes(1);
     expect(backend.reportPruneAction).toHaveBeenCalledTimes(3);
     expect(vi.mocked(backend.reportPruneAction).mock.calls[0]?.[0].phase).toBe("claim");
     expect(vi.mocked(backend.reportPruneAction).mock.calls[1]?.[0].phase).toBe("claim");
@@ -310,7 +311,7 @@ describe("handlePruneAction", () => {
       app_id: 9001,
     });
 
-    expect(removeShortcutConfirmed).not.toHaveBeenCalled();
+    expect(removeShortcutConfirmedOutcome).not.toHaveBeenCalled();
     expect(backend.reportPruneAction).toHaveBeenLastCalledWith({
       phase: "complete",
       run_id: "run-retry",
@@ -340,7 +341,7 @@ describe("handlePruneAction", () => {
       },
     });
 
-    expect(removeShortcutConfirmed).not.toHaveBeenCalled();
+    expect(removeShortcutConfirmedOutcome).not.toHaveBeenCalled();
     expect(backend.reportPruneAction).toHaveBeenLastCalledWith(
       expect.objectContaining({
         phase: "complete",
@@ -360,7 +361,7 @@ describe("handlePruneAction", () => {
             resolveClaim = resolve;
           }),
       );
-      vi.mocked(removeShortcutConfirmed).mockResolvedValue(true);
+      vi.mocked(removeShortcutConfirmedOutcome).mockResolvedValue({ status: "confirmed" });
       vi.mocked(setLaunchOptionsConfirmed).mockResolvedValue(true);
       const action =
         kind === "remove_shortcut"
@@ -381,7 +382,7 @@ describe("handlePruneAction", () => {
       await pending;
 
       expect(getAppDetails).toHaveBeenCalledTimes(1);
-      expect(removeShortcutConfirmed).not.toHaveBeenCalled();
+      expect(removeShortcutConfirmedOutcome).not.toHaveBeenCalled();
       expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
       expect(backend.reportPruneAction).toHaveBeenLastCalledWith(
         expect.objectContaining({ phase: "complete", success: false, message: expect.stringContaining("not owned") }),
@@ -390,7 +391,7 @@ describe("handlePruneAction", () => {
   );
 
   it("reports ambiguity safely when every completion attempt is lost after Steam removal", async () => {
-    vi.mocked(removeShortcutConfirmed).mockResolvedValue(true);
+    vi.mocked(removeShortcutConfirmedOutcome).mockResolvedValue({ status: "confirmed" });
     vi.mocked(backend.reportPruneAction)
       .mockResolvedValueOnce({ success: true, message: "claimed" })
       .mockRejectedValue(new Error("bridge offline"));
@@ -403,7 +404,7 @@ describe("handlePruneAction", () => {
       app_id: 9001,
     });
 
-    expect(removeShortcutConfirmed).toHaveBeenCalledTimes(1);
+    expect(removeShortcutConfirmedOutcome).toHaveBeenCalledTimes(1);
     expect(backend.reportPruneAction).toHaveBeenCalledTimes(4);
     expect(log).toHaveBeenCalledWith(expect.stringContaining("token-all-completions-lost"));
   });
@@ -429,7 +430,35 @@ describe("handlePruneAction", () => {
     vi.mocked(backend.reportPruneAction).mockResolvedValue({ success: true, message: "accepted" });
     await pending;
 
-    expect(removeShortcutConfirmed).not.toHaveBeenCalled();
+    expect(removeShortcutConfirmedOutcome).not.toHaveBeenCalled();
+  });
+
+  it("starts a fresh queue generation when an earlier callable never settles", async () => {
+    vi.useFakeTimers();
+    vi.mocked(backend.reportPruneAction).mockImplementationOnce(() => new Promise(() => {}));
+    vi.mocked(removeShortcutConfirmedOutcome).mockResolvedValue({ status: "confirmed" });
+    const wedged = handlePruneAction({
+      run_id: "run-old",
+      action_token: "token-wedged",
+      action: "remove_shortcut",
+      app_id: 9001,
+    });
+    await Promise.resolve();
+    expect(backend.reportPruneAction).toHaveBeenCalledTimes(1);
+
+    cancelPruneActions();
+    vi.mocked(backend.reportPruneAction).mockResolvedValue({ success: true, message: "accepted" });
+    await handlePruneAction({
+      run_id: "run-new",
+      action_token: "token-fresh",
+      action: "remove_shortcut",
+      app_id: 9001,
+    });
+
+    expect(removeShortcutConfirmedOutcome).toHaveBeenCalledTimes(1);
+    await vi.runAllTimersAsync();
+    await wedged;
+    vi.useRealTimers();
   });
 
   it("rejects an unknown runtime discriminant without claiming or mutating", async () => {
@@ -443,7 +472,7 @@ describe("handlePruneAction", () => {
     } as never);
 
     expect(backend.reportPruneAction).not.toHaveBeenCalled();
-    expect(removeShortcutConfirmed).not.toHaveBeenCalled();
+    expect(removeShortcutConfirmedOutcome).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("Ignored an invalid prune action event.");
   });
 });

@@ -213,12 +213,13 @@ Format: **invariant** — tier — enforced by.
   `record_applied_launch_options` call-site audit
 - **An abandoned-chunk stash's whole-unit apply staging (`pending_sync` / `pending_all_roms` / `pending_cover_sources`)
   is never mutated while the stash is pending (box IDLE) — every run-entry path passes `try_begin_run`, which clears the
-  stash before any staging write** — prompt-only — the invariant holds today rather than being aspirational; mechanize
-  via a staging-writer call-site audit
-- **A prune claim excludes library sync, downloads/resumes, migrations, version switches, save mutations, session
-  writes, uninstalls, and affected cache cleanup; each conflicting callable registers before its first await, detached
-  work retains that claim for the task lifetime, and frontend-owned multi-call work holds a reference-counted lease; run
-  admission atomically refuses those registrations before reserving the prune claim and refreshing the preview** — test
+  stash before any staging write (#1367)** — prompt-only — verified closed in #1367 review; mechanize via a
+  staging-writer call-site audit
+- **A prune claim excludes library sync, downloads/resumes, migrations, version switches, core/disc/controller writes,
+  launch evaluation, save mutations, session writes, uninstalls, and affected cache cleanup; each conflicting callable
+  registers before its first await, detached work retains that claim for the task lifetime, and frontend-owned
+  multi-call work holds a tokenized expiring lease; run admission atomically refuses those registrations before
+  reserving the prune claim and refreshing the preview** — test
   - prompt-only — prune service/gate race tests + contract callable-entry matrix; new conflicting entry points are
     prompt-only
 - **A prune frontend action mutates Steam only after atomically claiming its exact run/token/discriminant/binding;
@@ -226,10 +227,11 @@ Format: **invariant** — tier — enforced by.
   the Steam operation, and a claimed outcome lost in transit is reported as ambiguous until live Steam absence is
   reconciled** — test + prompt-only — prune service claim tests + `src/utils/pruneActions.test.ts`; new action kinds are
   prompt-only
-- **Every recovery-backed prune source carries its sealed no-follow `(device, inode, mode, size, mtime, ctime)` identity
-  through descriptor-relative claim and mutation; path re-lookup alone never authorizes delete/quarantine** — test +
-  prompt-only — descriptor-path, recovery-adapter, real RomRemovalService, and prune contract tests; new recovery-backed
-  mutation adapters are prompt-only
+- **Every prune source carries a no-follow claim (root `(device, inode, mode, size, mtime, ctime)` plus every descendant
+  identity and regular-file hash) through descriptor-relative mutation; selected sources consume the sealed claim,
+  unselected/recovery-off sources take a final claim, directory deletion re-inventories the renamed root, and path
+  re-lookup alone never authorizes delete/quarantine** — test + prompt-only — descriptor-path, recovery-adapter, real
+  RomRemovalService, and prune contract tests; new mutation adapters are prompt-only
 
 When a change applies a guard / sanitize / backup / grouping pattern, sweep for sibling sites of the same pattern — the
 register is what that sweep checks against.

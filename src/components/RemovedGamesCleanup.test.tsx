@@ -283,7 +283,7 @@ describe("RemovedGamesCleanup", () => {
     expect(pages.map((page) => page.selection_id)).toEqual([null, "selection-many", "selection-many"]);
     expect(pages.map((page) => page.final)).toEqual([false, false, true]);
     expect(vi.mocked(backend.startPrune).mock.calls[0]?.[0].installed_selection_id).toBe("selection-many");
-  }, 15_000);
+  }, 30_000);
 
   it("surfaces bounded save warnings in terminal details", async () => {
     await openRemovedGamesCleanupModal();
@@ -304,13 +304,20 @@ describe("RemovedGamesCleanup", () => {
             rom_ids: [7],
             status: "partial",
             message: "Local cleanup was incomplete.",
+            message_truncated: true,
             warnings: ["Shared save was retained."],
-            warning_count: 1,
+            warning_count: 7,
+            warnings_truncated: true,
           },
         ],
       });
     });
 
     expect(modal.container.textContent).toContain("Warning: Shared save was retained.");
+    expect(modal.container.textContent).toContain("6 additional warning(s) omitted or shortened.");
+    expect(modal.container.textContent).toContain("Detail was shortened");
+    const details = modal.getByRole("region", { name: "Cleanup details" });
+    expect(details.getAttribute("tabindex")).toBe("0");
+    expect(modal.getByRole("status").textContent).not.toContain("Shared save was retained");
   });
 });

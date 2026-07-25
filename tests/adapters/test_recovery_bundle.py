@@ -116,6 +116,25 @@ def test_sealed_bundle_revalidates_manifest_and_source_bytes(tmp_path):
     assert adapter.validate_sources(sealed) is True
     source.write_bytes(b"after")
     assert adapter.validate_sources(sealed) is False
+
+
+def test_same_byte_source_replacement_fails_sealed_identity_validation(tmp_path):
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    source = safe / "save.srm"
+    source.write_bytes(b"same bytes")
+    adapter = _adapter(tmp_path)
+    sealed = adapter.seal_bundle(
+        "20260724T120000Z_7_identity",
+        _snapshot(),
+        [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
+        "readme",
+        "playtime",
+    )
+    source.unlink()
+    source.write_bytes(b"same bytes")
+
+    assert adapter.validate_sources(sealed) is False
     source.write_bytes(b"before")
     (Path(sealed) / "manifest.json").write_text("{}")
     assert adapter.validate_sources(sealed) is False
@@ -210,31 +229,64 @@ def test_seal_contract_fields_are_revalidated(tmp_path, field, value):
 
 def test_new_recovery_directories_fsync_each_parent(tmp_path, monkeypatch):
     adapter = _adapter(tmp_path)
-    synced: list[str] = []
-    monkeypatch.setattr(adapter, "_fsync_dir", synced.append)
+    synced: list[int] = []
+    original = os.fsync
+
+    def track(fd: int) -> None:
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            synced.append(os.fstat(fd).st_ino)
+        original(fd)
+
+    monkeypatch.setattr("adapters.recovery_bundle.os.fsync", track)
 
     adapter.seal_bundle("20260724T120000Z_7_new-parents", _snapshot(), [], "readme", "playtime")
 
     root = Path(adapter.root())
-    assert str(tmp_path) in synced
-    assert synced.count(str(root)) >= 2
-    assert str(root / "bundles") in synced
+    assert tmp_path.stat().st_ino in synced
+    assert root.stat().st_ino in synced
+    assert (root / "staging").stat().st_ino in synced
+    assert (root / "bundles").stat().st_ino in synced
 
 
 def test_post_rename_fsync_failure_marks_bundle_durability_uncertain(tmp_path, monkeypatch):
     adapter = _adapter(tmp_path)
+    adapter.free_bytes()
     bundles = Path(adapter.root()) / "bundles"
-    original = adapter._fsync_dir
+    bundles_inode = bundles.stat().st_ino
+    original = os.fsync
 
-    def fail_final_sync(path: str) -> None:
-        if path == str(bundles):
+    def fail_final_sync(fd: int) -> None:
+        if os.fstat(fd).st_ino == bundles_inode:
             raise OSError(errno.EIO, "directory fsync failed")
-        original(path)
+        original(fd)
 
-    monkeypatch.setattr(adapter, "_fsync_dir", fail_final_sync)
+    monkeypatch.setattr("adapters.recovery_bundle.os.fsync", fail_final_sync)
     bundle_id = "20260724T120000Z_7_uncertain"
     with pytest.raises(OSError, match="durability is uncertain"):
         adapter.seal_bundle(bundle_id, _snapshot(), [], "readme", "playtime")
 
     assert not (bundles / bundle_id).exists()
     assert (bundles / f"{bundle_id}.durability-uncertain").is_dir()
+
+
+def test_recovery_bundle_parent_replacement_is_not_reauthorized(tmp_path, monkeypatch):
+    adapter = _adapter(tmp_path)
+    adapter.free_bytes()
+    bundles = Path(adapter.root()) / "bundles"
+    detached = Path(adapter.root()) / "detached-bundles"
+    outside = tmp_path / "outside-bundles"
+    outside.mkdir()
+    original = adapter._copy_artifacts
+
+    def swap_parent(staging, artifacts, free_bytes):
+        result = original(staging, artifacts, free_bytes)
+        bundles.rename(detached)
+        bundles.symlink_to(outside, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(adapter, "_copy_artifacts", swap_parent)
+
+    with pytest.raises(OSError, match="durability is uncertain"):
+        adapter.seal_bundle("20260724T120000Z_7_swapped", _snapshot(), [], "readme", "playtime")
+
+    assert list(outside.iterdir()) == []

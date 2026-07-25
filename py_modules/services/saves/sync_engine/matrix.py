@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Iterator
 
-    from models.prune import SourceIdentity
+    from models.prune import MutationOutcome, SourceClaim, SourceIdentity
 
     from services.protocols import (
         Clock,
@@ -364,6 +364,27 @@ class MatrixExecutor:
                     continue  # never prune the backup just created this call (#974 — would destroy the save)
                 self._save_file_store.remove_file(os.path.join(backup_dir, stale))
         return True
+
+    def quarantine_claimed_file(
+        self,
+        saves_dir: str,
+        filename: str,
+        *,
+        claim: SourceClaim,
+        safe_root: str,
+    ) -> MutationOutcome:
+        """Durably quarantine one exact claimed save through anchored directories."""
+        local_path = os.path.join(saves_dir, filename)
+        backup_dir = os.path.join(saves_dir, ".romm-backup")
+        self._save_file_store.ensure_directory(backup_dir, safe_root)
+        ts = self._clock.now().strftime("%Y%m%d_%H%M%S")
+        backup = backup_name(filename, ts, set(self._save_file_store.listdir(backup_dir)))
+        return self._save_file_store.rename_claimed(
+            local_path,
+            os.path.join(backup_dir, backup),
+            safe_root,
+            claim,
+        )
 
     @staticmethod
     def _resolve_upload_slot(save_state: RomSaveSyncState, default_slot: str | None = None) -> str | None:

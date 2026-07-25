@@ -114,10 +114,24 @@ async def test_concurrent_multicall_leases_are_reference_counted() -> None:
             return {"success": True}
 
     owner = Owner(False)
-    await acquire_prune_conflict_lease(owner, "shortcut_removal")
-    await acquire_prune_conflict_lease(owner, "shortcut_removal")
-    await release_prune_conflict_lease(owner, "shortcut_removal")
+    first = await acquire_prune_conflict_lease(owner, "shortcut_removal")
+    second = await acquire_prune_conflict_lease(owner, "shortcut_removal")
+    await release_prune_conflict_lease(owner, first)
     assert (await owner.start_prune())["reason"] == "operation_active"
 
-    await release_prune_conflict_lease(owner, "shortcut_removal")
+    await release_prune_conflict_lease(owner, second)
+    assert await owner.start_prune() == {"success": True}
+
+
+@pytest.mark.asyncio
+async def test_abandoned_multicall_lease_expires_before_prune_admission(monkeypatch) -> None:
+    class Owner(_Owner):
+        @prune_exclusive_start
+        async def start_prune(self):
+            return {"success": True}
+
+    owner = Owner(False)
+    monkeypatch.setattr("lib.prune_gate._LEASE_SECONDS", 0.0)
+    await acquire_prune_conflict_lease(owner, "shortcut_removal")
+
     assert await owner.start_prune() == {"success": True}

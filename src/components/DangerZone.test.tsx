@@ -371,7 +371,7 @@ describe("DangerZone", () => {
       expect(vi.mocked(backend.removePlatformShortcuts)).toHaveBeenCalledWith("snes");
       expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(11);
       expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(12);
-      expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2]);
+      expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2], null);
       expect(vi.mocked(clearPlatformCollection)).toHaveBeenCalledWith("Super Nintendo");
     });
 
@@ -695,7 +695,7 @@ describe("DangerZone", () => {
       expect(vi.mocked(backend.removeAllShortcuts)).toHaveBeenCalledTimes(1);
       expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(10);
       expect(vi.mocked(removeShortcut)).toHaveBeenCalledWith(20);
-      expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2]);
+      expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2], null);
       expect(vi.mocked(clearAllRomMCollections)).toHaveBeenCalled();
       expect(container.textContent).toContain("Removed 5");
     });
@@ -748,7 +748,7 @@ describe("DangerZone", () => {
       // 2 is in both lists → removed once, not twice: three calls total.
       expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(3);
       // rom_ids stay the backend set exactly — orphans have no DB row.
-      expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([50, 51]);
+      expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([50, 51], null);
       // Non-vacuous: the one orphan not in the backend list is logged.
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("1 live-scanned RomM shortcut"));
       logSpy.mockRestore();
@@ -946,7 +946,7 @@ describe("DangerZone", () => {
         });
         // The breather elapsed → the last removal ran, THEN the post-removal steps.
         expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(26);
-        expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2]);
+        expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([1, 2], null);
         expect(vi.mocked(clearPlatformCollection)).toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
@@ -985,7 +985,7 @@ describe("DangerZone", () => {
         });
         expect(vi.mocked(removeShortcut)).toHaveBeenCalledTimes(26);
         expect(vi.mocked(getLiveRomMShortcutAppIds)).toHaveBeenCalled();
-        expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([7]);
+        expect(vi.mocked(backend.reportRemovalResults)).toHaveBeenCalledWith([7], null);
         expect(vi.mocked(clearAllRomMCollections)).toHaveBeenCalled();
       } finally {
         vi.useRealTimers();

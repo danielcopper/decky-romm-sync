@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
-    from models.prune import SourceIdentity, SteamRecoverySnapshot
+    from models.prune import SourceClaim, SteamRecoverySnapshot
 
 
 @dataclass(frozen=True)
@@ -68,4 +68,4 @@ class RecoveryHandle:
     snapshot: dict[str, object]
     save_inventory: dict[str, Any]
     steam_backend: SteamRecoverySnapshot | None
-    source_identities: dict[str, SourceIdentity]
+    source_claims: dict[str, SourceClaim]

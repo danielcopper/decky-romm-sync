@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from _vendor import vdf
 
-from adapters.descriptor_paths import identity_for_stat, missing_identity, stat_beneath
+from adapters.descriptor_paths import claim_source
 from adapters.steam_recovery import SteamRecoveryAdapter
 
 
@@ -31,13 +31,12 @@ def _layout(tmp_path, app_id: int):
     return first, second, grid
 
 
-def _source_identities(snapshot):
-    identities = {}
+def _source_claims(snapshot):
+    claims = {}
     for artifact in snapshot["artifacts"]:
         source = artifact["source_path"]
-        current = stat_beneath(source, artifact["safe_root"])
-        identities[source] = identity_for_stat(current) if current is not None else missing_identity()
-    return identities
+        claims[source] = claim_source(source, artifact["safe_root"])
+    return claims
 
 
 def test_snapshots_controller_setting_grid_and_both_input_roots(tmp_path):
@@ -50,7 +49,7 @@ def test_snapshots_controller_setting_grid_and_both_input_roots(tmp_path):
     assert {grid / f"{app_id}p.png", first, second} <= sources
     assert grid / f"{app_id}.png" in sources
 
-    adapter.remove_state(app_id, snapshot, _source_identities(snapshot))
+    assert adapter.remove_state(app_id, snapshot, _source_claims(snapshot))["success"] is True
     assert not (grid / f"{app_id}p.png").exists()
     assert not first.exists()
     assert not second.exists()
@@ -102,7 +101,7 @@ def test_cleanup_uses_captured_login_identity_when_active_user_changes(tmp_path)
             },
             output,
         )
-    adapter.remove_state(app_id, snapshot, _source_identities(snapshot))
+    assert adapter.remove_state(app_id, snapshot, _source_claims(snapshot))["success"] is True
 
     assert not (grid / f"{app_id}p.png").exists()
     assert not first.exists()
@@ -155,6 +154,37 @@ def test_controller_replacement_fsyncs_its_containing_directory(tmp_path, monkey
         original(fd)
 
     monkeypatch.setattr("adapters.steam_recovery.os.fsync", track)
-    adapter.remove_state(app_id, snapshot, _source_identities(snapshot))
+    assert adapter.remove_state(app_id, snapshot, _source_claims(snapshot))["success"] is True
 
     assert synced_directory_inodes == [config_inode]
+
+
+def test_controller_cleanup_retries_and_preserves_unrelated_concurrent_write(tmp_path, monkeypatch):
+    app_id = 0x80000007
+    _first, _second, grid = _layout(tmp_path, app_id)
+    adapter = SteamRecoveryAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+    snapshot = adapter.snapshot(app_id)
+    localconfig = grid.parent / "localconfig.vdf"
+    original = os.rename
+    injected = False
+
+    def write_then_rename(src, dst, *args, **kwargs):
+        nonlocal injected
+        if src == "localconfig.vdf" and not injected:
+            injected = True
+            with localconfig.open() as source:
+                payload = vdf.load(source)
+            payload["UserLocalConfigStore"]["Unrelated"] = {"Fresh": "value"}
+            with localconfig.open("w") as output:
+                vdf.dump(payload, output, pretty=True)
+        return original(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr("adapters.steam_recovery.os.rename", write_then_rename)
+
+    outcome = adapter.remove_state(app_id, snapshot, _source_claims(snapshot))
+
+    assert outcome["success"] is True
+    with localconfig.open() as source:
+        payload = vdf.load(source)
+    assert payload["UserLocalConfigStore"]["Unrelated"] == {"Fresh": "value"}
+    assert str(app_id) not in payload["UserLocalConfigStore"]["Apps"]

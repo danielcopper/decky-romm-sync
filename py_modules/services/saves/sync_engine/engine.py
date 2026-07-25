@@ -71,7 +71,7 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Iterator
 
-    from models.prune import SourceIdentity
+    from models.prune import MutationOutcome, SourceClaim, SourceIdentity
 
     from domain.save_layout import SaveLayout
     from services.protocols import (
@@ -333,6 +333,22 @@ class SyncEngine:
             filename,
             preserve_history=preserve_history,
             expected_identity=expected_identity,
+            safe_root=safe_root,
+        )
+
+    def quarantine_claimed_file(
+        self,
+        saves_dir: str,
+        filename: str,
+        *,
+        claim: SourceClaim,
+        safe_root: str,
+    ) -> MutationOutcome:
+        """Durably quarantine an exact save claim (delegate to :class:`MatrixExecutor`)."""
+        return self._matrix.quarantine_claimed_file(
+            saves_dir,
+            filename,
+            claim=claim,
             safe_root=safe_root,
         )
 

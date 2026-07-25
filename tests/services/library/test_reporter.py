@@ -110,7 +110,7 @@ class TestGetSyncStats:
         _seed_rom(uow, 10, app_id=1001, platform_slug="n64", name="Game A")
         _seed_rom(uow, 20, app_id=1002, platform_slug="snes", name="Game B")
 
-        await plugin.report_removal_results([10, 20])
+        await plugin.report_removal_results([10, 20], None)
 
         stats = await plugin.get_sync_stats()
         assert stats["roms"] == 0

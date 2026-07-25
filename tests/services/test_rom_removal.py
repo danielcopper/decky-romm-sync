@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import shutil
 import sys
 
 import pytest
@@ -211,7 +212,7 @@ class TestDeleteRomFiles:
             "readme",
             "playtime",
         )
-        identities = recovery.source_identities(bundle)
+        claims = recovery.source_claims(bundle)
         rom_path.unlink()
         rom_path.write_bytes(b"replacement")
         uow = FakeUnitOfWork()
@@ -227,11 +228,86 @@ class TestDeleteRomFiles:
             )
         )
 
-        result = real_service.delete_rom_files(1, identities)
+        result = real_service.delete_rom_files(1, claims)
 
         assert result["success"] is False
         assert "identity changed" in result["message"]
         assert rom_path.read_bytes() == b"replacement"
+
+    def test_selected_directory_child_change_is_retained_at_mutation_time(self, tmp_path, logger):
+        roms = tmp_path / "roms"
+        rom_dir = roms / "psx" / "Game"
+        rom_dir.mkdir(parents=True)
+        child = rom_dir / "disc.bin"
+        child.write_bytes(b"sealed")
+        recovery = RecoveryBundleAdapter(user_home=str(tmp_path), package_name="decky-romm-sync", plugin_version="test")
+        bundle = recovery.seal_bundle(
+            "20260724T120000Z_1_directory",
+            {"roms": [{"rom_id": 1}]},
+            [{"source_path": str(rom_dir), "safe_root": str(roms), "kind": "installed_rom", "rom_id": 1}],
+            "readme",
+            "playtime",
+        )
+        claims = recovery.source_claims(bundle)
+        child.write_bytes(b"replacement")
+        uow = FakeUnitOfWork()
+        _seed_install(uow, _make_install(1, file_path=str(child), rom_dir=str(rom_dir), system="psx"))
+        real_service = RomRemovalService(
+            config=RomRemovalServiceConfig(
+                logger=logger,
+                loop=asyncio.new_event_loop(),
+                rom_file_store=RomFileAdapter(),
+                retrodeck_paths=FakeRetroDeckPaths(roms=str(roms)),
+                download_queue_cleanup=None,
+                uow_factory=FakeUnitOfWorkFactory(uow),
+            )
+        )
+
+        result = real_service.delete_rom_files(1, claims)
+
+        assert result["success"] is False
+        assert "subtree changed" in result["message"]
+        assert child.read_bytes() == b"replacement"
+
+    def test_unselected_directory_replacement_after_final_claim_is_retained(self, tmp_path, logger, monkeypatch):
+        roms = tmp_path / "roms"
+        rom_dir = roms / "psx" / "Game"
+        rom_dir.mkdir(parents=True)
+        (rom_dir / "disc.bin").write_bytes(b"original")
+        replacement = roms / "psx" / "Replacement"
+        replacement.mkdir()
+        (replacement / "disc.bin").write_bytes(b"replacement")
+        store = RomFileAdapter()
+        original_claim = store.claim_source
+
+        def claim_then_replace(path: str, safe_root: str):
+            claim = original_claim(path, safe_root)
+            shutil.rmtree(path)
+            replacement.rename(path)
+            return claim
+
+        monkeypatch.setattr(store, "claim_source", claim_then_replace)
+        uow = FakeUnitOfWork()
+        _seed_install(
+            uow,
+            _make_install(1, file_path=str(rom_dir / "disc.bin"), rom_dir=str(rom_dir), system="psx"),
+        )
+        real_service = RomRemovalService(
+            config=RomRemovalServiceConfig(
+                logger=logger,
+                loop=asyncio.new_event_loop(),
+                rom_file_store=store,
+                retrodeck_paths=FakeRetroDeckPaths(roms=str(roms)),
+                download_queue_cleanup=None,
+                uow_factory=FakeUnitOfWorkFactory(uow),
+            )
+        )
+
+        result = real_service.delete_rom_files(1)
+
+        assert result["success"] is False
+        assert "identity changed" in result["message"]
+        assert (rom_dir / "disc.bin").read_bytes() == b"replacement"
 
 
 class TestRemoveRom:

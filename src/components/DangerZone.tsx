@@ -38,6 +38,10 @@ import type { RegistryPlatform } from "../types";
 import { detach } from "../utils/detach";
 import { fuzzyMatch } from "../utils/fuzzyMatch";
 import { RemovedGamesCleanupSection } from "./RemovedGamesCleanup";
+import { releasePruneLease } from "../utils/pruneLease";
+import { withTimeout } from "../utils/withTimeout";
+
+const REMOVAL_REPORT_TIMEOUT_MS = 15000;
 
 const DEFAULT_WHITELIST_PATTERNS: string[] = [
   "retrodeck",
@@ -199,8 +203,10 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
   const handleRemoveShortcuts = (p: RegistryPlatform) =>
     runRemoval(async (onProgress) => {
       setActionStatus(`Removing ${p.name} shortcuts...`);
+      let leaseToken: string | undefined;
       try {
         const result = await removePlatformShortcuts(p.slug);
+        leaseToken = result.prune_lease_token;
         // The @migration_blocked / @sync_active_blocked gates short-circuit to
         // { success: false, message, ... } with no app_ids/rom_ids — surface
         // that message instead of cosmetically reporting a removal.
@@ -209,8 +215,9 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
           return;
         }
         await removeShortcutsPaced(result.app_ids ?? [], onProgress);
-        if (result.rom_ids?.length) {
-          await reportRemovalResults(result.rom_ids);
+        if (result.rom_ids?.length || leaseToken) {
+          await withTimeout(reportRemovalResults(result.rom_ids ?? [], leaseToken ?? null), REMOVAL_REPORT_TIMEOUT_MS);
+          leaseToken = undefined;
         }
         await clearPlatformCollection(result.platform_name || p.name);
         setActionStatus(`Removed ${p.count} ${p.name} game${p.count === 1 ? "" : "s"}`);
@@ -218,6 +225,8 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
         loadNonSteamApps();
       } catch {
         setActionStatus("Failed to remove shortcuts");
+      } finally {
+        if (leaseToken) await releasePruneLease(leaseToken, "Platform shortcut removal");
       }
     });
 
@@ -273,8 +282,10 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     await runRemoval(async (onProgress) => {
       setStatus("Removing all shortcuts...");
       let removedCount = 0;
+      let leaseToken: string | undefined;
       try {
         const result = await removeAllShortcuts();
+        leaseToken = result.prune_lease_token;
         if (!result.success) {
           // A gate refusal (@sync_active_blocked / @migration_blocked) carries
           // no app_ids/rom_ids — surface its message and remove nothing.
@@ -306,14 +317,20 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
           removedCount = removed.size;
           // rom_ids are backend DB rows — orphans have none, so report only the
           // backend set exactly as before.
-          if (result.rom_ids?.length) {
-            await reportRemovalResults(result.rom_ids);
+          if (result.rom_ids?.length || leaseToken) {
+            await withTimeout(
+              reportRemovalResults(result.rom_ids ?? [], leaseToken ?? null),
+              REMOVAL_REPORT_TIMEOUT_MS,
+            );
+            leaseToken = undefined;
           }
           await clearAllRomMCollections();
           setStatus(result.message ?? "All shortcuts removed");
         }
       } catch {
         setStatus("Failed to remove shortcuts");
+      } finally {
+        if (leaseToken) await releasePruneLease(leaseToken, "All-shortcut removal");
       }
       await refreshPlatforms();
       await recountAfterStoreSettles(removedCount, loadNonSteamApps);

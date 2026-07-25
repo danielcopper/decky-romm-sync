@@ -39,6 +39,7 @@ import {
   invalidateCachedGameDetail,
   logError,
   logInfo,
+  waitForPruneRelease,
 } from "./api/backend";
 import {
   createOrUpdateCollections,
@@ -806,6 +807,27 @@ export default definePlugin(() => {
   // game-detail picker unmounts. The backend emits one tokenized action at a
   // time; this root handler owns every Steam API mutation and reports the exact
   // token outcome before backend filesystem/SQLite finalization can proceed.
+  const publishPruneSwitches = async (
+    runId: string,
+    pending: Array<{ appId: number; romId: number }>,
+  ): Promise<void> => {
+    let lastMessage = "Cleanup claim release was not confirmed.";
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const released = await withTimeout(waitForPruneRelease(runId), 6000);
+        if (released.success) {
+          for (const item of pending) await publishCommittedVersionSwitch(item.appId, item.romId);
+          return;
+        }
+        lastMessage = released.message;
+      } catch (e) {
+        lastMessage = e instanceof Error ? e.message : String(e);
+      }
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 100));
+    }
+    logError(`Cleanup publication could not confirm claim release: ${lastMessage}`);
+  };
+
   const pruneActionListener = addEventListener<[PruneActionRequired]>(
     "prune_action_required",
     (action: PruneActionRequired) => {
@@ -832,6 +854,7 @@ export default definePlugin(() => {
     );
     if (!completed) return;
     cancelPruneActions();
+    const publications: Array<{ appId: number; romId: number }> = [];
     for (const item of completed.results) {
       if (
         item.committed_action === "repoint_shortcut" &&
@@ -839,9 +862,10 @@ export default definePlugin(() => {
         item.app_id !== undefined &&
         item.target_rom_id !== undefined
       ) {
-        setTimeout(() => detach(publishCommittedVersionSwitch(item.app_id!, item.target_rom_id!)), 0);
+        publications.push({ appId: item.app_id, romId: item.target_rom_id });
       }
     }
+    if (publications.length) detach(publishPruneSwitches(completed.run_id, publications));
     const removed = completed.removed_count ?? completed.removed_rom_ids.length;
     const skipped =
       completed.problem_count ??

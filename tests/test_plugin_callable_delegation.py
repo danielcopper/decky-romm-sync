@@ -227,7 +227,12 @@ class TestCoreCallableDelegation:
         )
         result = await plugin.set_game_core(42, "Snes9x")
         plugin._core_service.set_game_core.assert_awaited_once_with(42, "Snes9x")
-        assert result == {"success": True, "launch_options": "flatpak run …", "app_id": 99}
+        assert result == {
+            "success": True,
+            "launch_options": "flatpak run …",
+            "app_id": 99,
+            "prune_lease_token": "game_core:1",
+        }
 
     @pytest.mark.asyncio
     async def test_clear_game_core_delegates(self, plugin):
@@ -238,7 +243,12 @@ class TestCoreCallableDelegation:
         )
         result = await plugin.clear_game_core(42)
         plugin._core_service.clear_game_core.assert_awaited_once_with(42)
-        assert result == {"success": True, "launch_options": "flatpak run …", "app_id": 99}
+        assert result == {
+            "success": True,
+            "launch_options": "flatpak run …",
+            "app_id": 99,
+            "prune_lease_token": "game_core:1",
+        }
 
     @pytest.mark.asyncio
     async def test_get_platform_core_info_delegates(self, plugin):
@@ -434,7 +444,7 @@ class TestShortcutRemovalCallableDelegation:
     @pytest.mark.asyncio
     async def test_report_removal_results_delegates(self, plugin):
         plugin._shortcut_removal_service.report_removal_results = AsyncMock(return_value={"ok": True})
-        result = await plugin.report_removal_results([1, 2])
+        result = await plugin.report_removal_results([1, 2], None)
         plugin._shortcut_removal_service.report_removal_results.assert_awaited_once_with([1, 2])
         assert result == {"ok": True}
 

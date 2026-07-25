@@ -25,6 +25,7 @@ import { detach } from "../utils/detach";
 import { getEventTarget } from "../utils/events";
 import { buildEmulatorMenu } from "../utils/emulatorMenu";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
+import { releasePruneLease } from "../utils/pruneLease";
 
 /**
  * Build the per-platform summary label/description from the backend BIOS
@@ -215,22 +216,28 @@ export const SystemPage: FC<SystemPageProps> = ({ onBack }) => {
         // Mirrors the migration_relaunch_options fan-out in index.tsx
         // (bounded-concurrency batches so a platform with many ROMs doesn't
         // serialize worst-case per-shortcut confirm-poll timeouts).
-        const items = result.rebake_items ?? [];
-        const CONCURRENCY = 10;
-        for (let i = 0; i < items.length; i += CONCURRENCY) {
-          const batch = items.slice(i, i + CONCURRENCY);
-          await Promise.all(
-            batch.map(async (item) => {
-              try {
-                const ok = await setLaunchOptionsConfirmed(item.app_id, item.launch_options);
-                if (!ok) {
-                  logError(`setSystemCore: failed to confirm launch options for appId ${item.app_id}`);
+        try {
+          const items = result.rebake_items ?? [];
+          const CONCURRENCY = 10;
+          for (let i = 0; i < items.length; i += CONCURRENCY) {
+            const batch = items.slice(i, i + CONCURRENCY);
+            await Promise.all(
+              batch.map(async (item) => {
+                try {
+                  const ok = await setLaunchOptionsConfirmed(item.app_id, item.launch_options);
+                  if (!ok) {
+                    logError(`setSystemCore: failed to confirm launch options for appId ${item.app_id}`);
+                  }
+                } catch (e) {
+                  logError(`setSystemCore: failed to set launch options for appId ${item.app_id}: ${e}`);
                 }
-              } catch (e) {
-                logError(`setSystemCore: failed to set launch options for appId ${item.app_id}: ${e}`);
-              }
-            }),
-          );
+              }),
+            );
+          }
+        } finally {
+          if (result.prune_lease_token) {
+            await releasePruneLease(result.prune_lease_token, "setSystemCore");
+          }
         }
         await refreshSystem();
         globalThis.dispatchEvent(

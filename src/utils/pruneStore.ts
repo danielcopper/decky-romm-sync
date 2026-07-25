@@ -29,6 +29,7 @@ export interface PruneGroupResult {
   committed_action?: "repoint_shortcut" | "remove_shortcut";
   action_ambiguous?: boolean;
   mutations?: string[];
+  ambiguous_mutations?: string[];
   warnings?: string[];
   warning_count?: number;
   warnings_truncated?: boolean;
@@ -55,8 +56,8 @@ type Listener = () => void;
 let activeRunId: string | null = null;
 let progress: PruneProgress | null = null;
 let complete: PruneComplete | null = null;
-let accumulating: PruneComplete | null = null;
-const receivedChunks = new Set<number>();
+const receivedChunks = new Map<number, PruneComplete>();
+let terminalChunkIndex: number | null = null;
 const listeners = new Set<Listener>();
 
 function notify(): void {
@@ -72,8 +73,8 @@ export function beginPruneRun(runId: string): void {
   activeRunId = runId;
   progress = null;
   complete = null;
-  accumulating = null;
   receivedChunks.clear();
+  terminalChunkIndex = null;
   notify();
 }
 
@@ -90,18 +91,22 @@ export function setPruneComplete(value: PruneComplete): PruneComplete | null {
   activeRunId = value.run_id;
   const chunkIndex = value.chunk_index ?? 0;
   if (receivedChunks.has(chunkIndex)) return null;
-  receivedChunks.add(chunkIndex);
-  const previous = accumulating;
-  accumulating = {
-    ...value,
-    removed_rom_ids: unique([...(previous?.removed_rom_ids ?? []), ...value.removed_rom_ids]),
-    affected_app_ids: unique([...(previous?.affected_app_ids ?? []), ...value.affected_app_ids]),
-    removed_app_ids: unique([...(previous?.removed_app_ids ?? []), ...(value.removed_app_ids ?? [])]),
-    results: [...(previous?.results ?? []), ...value.results],
-  };
-  if (value.final === false) return null;
+  receivedChunks.set(chunkIndex, value);
+  if (value.final !== false) terminalChunkIndex = chunkIndex;
+  if (terminalChunkIndex === null) return null;
+  for (let index = 0; index <= terminalChunkIndex; index++) {
+    if (!receivedChunks.has(index)) return null;
+  }
+  const chunks = Array.from({ length: terminalChunkIndex + 1 }, (_, index) => receivedChunks.get(index)!);
+  const terminal = receivedChunks.get(terminalChunkIndex)!;
   progress = null;
-  complete = accumulating;
+  complete = {
+    ...terminal,
+    removed_rom_ids: unique(chunks.flatMap((chunk) => chunk.removed_rom_ids)),
+    affected_app_ids: unique(chunks.flatMap((chunk) => chunk.affected_app_ids)),
+    removed_app_ids: unique(chunks.flatMap((chunk) => chunk.removed_app_ids ?? [])),
+    results: chunks.flatMap((chunk) => chunk.results),
+  };
   notify();
   return complete;
 }
@@ -123,7 +128,7 @@ export function resetPruneState(): void {
   activeRunId = null;
   progress = null;
   complete = null;
-  accumulating = null;
   receivedChunks.clear();
+  terminalChunkIndex = null;
   notify();
 }

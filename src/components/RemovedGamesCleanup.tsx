@@ -4,6 +4,7 @@ import {
   ButtonItem,
   DialogButton,
   Field,
+  Focusable,
   ModalRoot,
   PanelSection,
   PanelSectionRow,
@@ -23,9 +24,11 @@ import {
 import { detach } from "../utils/detach";
 import { beginPruneRun, getPruneState, onPruneStateChange, resetPruneState } from "../utils/pruneStore";
 import { getSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
+import { withTimeout } from "../utils/withTimeout";
 
 const PAGE_SIZE = 50;
 const SELECTION_PAGE_SIZE = 100;
+const PRUNE_CALLABLE_TIMEOUT_MS = 15000;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -112,7 +115,10 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
     if (!initial.preview_id || items.length >= total) return;
     setLoadingMore(true);
     try {
-      const next = await getPrunePreview(requestFor(scope, romId, initial.preview_id, items.length));
+      const next = await withTimeout(
+        getPrunePreview(requestFor(scope, romId, initial.preview_id, items.length)),
+        PRUNE_CALLABLE_TIMEOUT_MS,
+      );
       if (!next.success) {
         setStatus(next.message ?? "Could not load more candidates.");
         return;
@@ -129,13 +135,16 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   const refreshFreeSpace = async (): Promise<void> => {
     if (!initial.preview_id) return;
     try {
-      const refreshed = await getPrunePreview({
-        scope,
-        rom_id: romId,
-        preview_id: initial.preview_id,
-        offset: 0,
-        limit: 0,
-      });
+      const refreshed = await withTimeout(
+        getPrunePreview({
+          scope,
+          rom_id: romId,
+          preview_id: initial.preview_id,
+          offset: 0,
+          limit: 0,
+        }),
+        PRUNE_CALLABLE_TIMEOUT_MS,
+      );
       if (!refreshed.success || typeof refreshed.free_bytes !== "number") {
         setStatus(refreshed.message ?? "Could not refresh recovery space.");
         return;
@@ -159,27 +168,37 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
       const selected = [...includedContent];
       for (let offset = 0; offset < selected.length; offset += SELECTION_PAGE_SIZE) {
         const page = selected.slice(offset, offset + SELECTION_PAGE_SIZE);
-        const staged = await stagePruneInstalledSelection({
-          preview_id: initial.preview_id,
-          selection_id: selectionId,
-          rom_ids: page,
-          final: offset + page.length >= selected.length,
-        });
+        const staged: {
+          success: boolean;
+          selection_id?: string;
+          message?: string;
+        } = await withTimeout(
+          stagePruneInstalledSelection({
+            preview_id: initial.preview_id,
+            selection_id: selectionId,
+            rom_ids: page,
+            final: offset + page.length >= selected.length,
+          }),
+          PRUNE_CALLABLE_TIMEOUT_MS,
+        );
         if (!staged.success || !staged.selection_id) {
           setStatus(staged.message ?? "Installed-content selections could not be staged.");
           return;
         }
         selectionId = staged.selection_id;
       }
-      const result = await startPrune({
-        preview_id: initial.preview_id,
-        confirmed: true,
-        repoint_shortcuts: repoint,
-        remove_rows: removeRows,
-        remove_fully_vanished: removeDeadGames,
-        create_recovery_bundle: recovery,
-        installed_selection_id: selectionId,
-      });
+      const result = await withTimeout(
+        startPrune({
+          preview_id: initial.preview_id,
+          confirmed: true,
+          repoint_shortcuts: repoint,
+          remove_rows: removeRows,
+          remove_fully_vanished: removeDeadGames,
+          create_recovery_bundle: recovery,
+          installed_selection_id: selectionId,
+        }),
+        PRUNE_CALLABLE_TIMEOUT_MS,
+      );
       if (!result.success) {
         setStatus(result.message ?? "Cleanup could not start.");
         return;
@@ -313,27 +332,37 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
           </div>
         )}
         {complete && (
-          <div
-            role="status"
-            aria-live="polite"
-            style={{ marginTop: "10px", color: complete.success ? "#8fd18b" : "#ffcc66" }}
-          >
-            {complete.removed_count ?? complete.removed_rom_ids.length} removed;{" "}
-            {complete.problem_count ??
-              complete.results.filter((item) => ["partial", "failed", "skipped"].includes(item.status)).length}{" "}
-            skipped, partial, or failed.
-            <div style={{ maxHeight: "180px", overflowY: "auto", marginTop: "6px" }}>
+          <div style={{ marginTop: "10px", color: complete.success ? "#8fd18b" : "#ffcc66" }}>
+            <div role="status" aria-live="polite">
+              {complete.removed_count ?? complete.removed_rom_ids.length} removed;{" "}
+              {complete.problem_count ??
+                complete.results.filter((item) => ["partial", "failed", "skipped"].includes(item.status)).length}{" "}
+              skipped, partial, or failed.
+            </div>
+            <Focusable
+              role="region"
+              aria-label="Cleanup details"
+              tabIndex={0}
+              style={{ maxHeight: "180px", overflowY: "auto", marginTop: "6px" }}
+            >
               {complete.results
                 .filter((item) => ["partial", "failed", "skipped"].includes(item.status))
                 .map((item) => (
                   <div key={item.group_id} style={{ fontSize: "12px", marginTop: "4px" }}>
                     {item.group_id}: {item.message}
+                    {item.message_truncated && <div>Detail was shortened to fit the Decky wire limit.</div>}
                     {item.warnings?.map((warning) => (
                       <div key={warning}>Warning: {warning}</div>
                     ))}
+                    {(item.warnings_truncated || (item.warning_count ?? 0) > (item.warnings?.length ?? 0)) && (
+                      <div>
+                        {Math.max(0, (item.warning_count ?? item.warnings?.length ?? 0) - (item.warnings?.length ?? 0))}{" "}
+                        additional warning(s) omitted or shortened.
+                      </div>
+                    )}
                   </div>
                 ))}
-            </div>
+            </Focusable>
           </div>
         )}
         {status && !complete && (
@@ -356,7 +385,10 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
 
 export async function openRemovedGamesCleanupModal(romId?: number): Promise<boolean> {
   const scope: PruneScope = romId === undefined ? "bulk" : "rom";
-  const result = await getPrunePreview(requestFor(scope, romId ?? null, null, 0));
+  const result = await withTimeout(
+    getPrunePreview(requestFor(scope, romId ?? null, null, 0)),
+    PRUNE_CALLABLE_TIMEOUT_MS,
+  );
   if (!result.success) throw new Error(result.message ?? "Cleanup scan failed.");
   if ((result.total ?? 0) === 0) return false;
   resetPruneState();

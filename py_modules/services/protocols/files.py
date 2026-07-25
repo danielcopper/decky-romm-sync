@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractContextManager
 
-    from models.prune import RecoveryArtifact, SourceIdentity, SteamRecoverySnapshot
+    from models.prune import MutationOutcome, RecoveryArtifact, SourceClaim, SourceIdentity, SteamRecoverySnapshot
 
 
 class DirectoryFileListerFn(Protocol):
@@ -367,6 +367,14 @@ class RomFileStore(Protocol):
         """Remove only the exact sealed no-follow source identity."""
         ...
 
+    def claim_source(self, path: str, safe_root: str) -> SourceClaim:
+        """Capture the current no-follow source and complete subtree identity."""
+        ...
+
+    def remove_claimed(self, path: str, safe_root: str, claim: SourceClaim) -> MutationOutcome:
+        """Remove only the complete claimed source tree and report durable progress."""
+        ...
+
 
 class SaveFileStore(Protocol):
     """Filesystem seam for local save file operations.
@@ -427,6 +435,18 @@ class SaveFileStore(Protocol):
 
     def rename_exact(self, src: str, dst: str, safe_root: str, identity: SourceIdentity) -> bool:
         """Rename only the exact sealed no-follow source identity."""
+        ...
+
+    def claim_source(self, path: str, safe_root: str) -> SourceClaim:
+        """Capture the current no-follow source and complete subtree identity."""
+        ...
+
+    def ensure_directory(self, path: str, safe_root: str) -> None:
+        """Create a directory through anchored no-follow parents and fsync each creation."""
+        ...
+
+    def rename_claimed(self, src: str, dst: str, safe_root: str, claim: SourceClaim) -> MutationOutcome:
+        """Rename only the complete claimed source and report durable progress."""
         ...
 
     def get_mtime(self, path: str) -> float:
@@ -537,7 +557,7 @@ class RecoveryBundleStore(Protocol):
     def free_bytes(self) -> int: ...
     def measure_path(self, path: str, safe_root: str) -> int: ...
     def validate_sources(self, bundle_path: str) -> bool: ...
-    def source_identities(self, bundle_path: str) -> dict[str, SourceIdentity]: ...
+    def source_claims(self, bundle_path: str) -> dict[str, SourceClaim]: ...
     def seal_bundle(
         self,
         bundle_id: str,
@@ -552,7 +572,7 @@ class PruneArtifactStore(Protocol):
     """Own per-ROM cover and SteamGridDB cache artifacts during cleanup."""
 
     def recovery_artifacts(self, rom_ids: list[int]) -> list[RecoveryArtifact]: ...
-    def remove(self, rom_ids: list[int], identities: dict[str, SourceIdentity] | None = None) -> int: ...
+    def remove(self, rom_ids: list[int], claims: dict[str, SourceClaim] | None = None) -> MutationOutcome: ...
 
 
 class SteamRecoveryStore(Protocol):
@@ -564,5 +584,5 @@ class SteamRecoveryStore(Protocol):
         self,
         app_id: int,
         snapshot: SteamRecoverySnapshot,
-        identities: dict[str, SourceIdentity],
-    ) -> int: ...
+        claims: dict[str, SourceClaim],
+    ) -> MutationOutcome: ...

@@ -56,6 +56,7 @@ import {
   logError,
 } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
+import { releasePruneLease } from "../utils/pruneLease";
 import { updatePlaytimeDisplay } from "../patches/metadataPatches";
 import { buildEmulatorMenu } from "../utils/emulatorMenu";
 import type { BiosStatus, DownloadCompleteEvent, EmulatorOption, SaveStatus } from "../types";
@@ -926,24 +927,30 @@ export const RomMPlaySection: FC<RomMPlaySectionProps> = ({ appId }) => { // NOS
     platformSlug: string,
     successBody: string,
   ) => {
-    if (!result.success) {
-      toaster.toast({ title: "RomM Sync", body: result.message || "Failed to set core" });
-      return;
-    }
-    // Installed + bound: confirm the re-baked launch_options landed before
-    // claiming success. app_id can be null/undefined for an unbound ROM.
-    if (result.launch_options !== undefined && result.app_id != null) {
-      const confirmed = await setLaunchOptionsConfirmed(result.app_id, result.launch_options);
-      if (!confirmed) {
-        // Never toast success on an unconfirmed bake. Keep the DB row — a Steam
-        // restart (or the next migration/re-sync) re-bakes from the override.
-        toaster.toast({ title: "RomM Sync", body: "Core saved — restart Steam to apply" });
+    try {
+      if (!result.success) {
+        toaster.toast({ title: "RomM Sync", body: result.message || "Failed to set core" });
         return;
       }
+      // Installed + bound: confirm the re-baked launch_options landed before
+      // claiming success. app_id can be null/undefined for an unbound ROM.
+      if (result.launch_options !== undefined && result.app_id != null) {
+        const confirmed = await setLaunchOptionsConfirmed(result.app_id, result.launch_options);
+        if (!confirmed) {
+          // Never toast success on an unconfirmed bake. Keep the DB row — a Steam
+          // restart (or the next migration/re-sync) re-bakes from the override.
+          toaster.toast({ title: "RomM Sync", body: "Core saved — restart Steam to apply" });
+          return;
+        }
+      }
+      // Confirmed (or uninstalled/unbound: nothing to confirm) → success.
+      toaster.toast({ title: "RomM Sync", body: successBody });
+      await refreshCoreDisplay(romId, platformSlug);
+    } finally {
+      if (result.prune_lease_token) {
+        await releasePruneLease(result.prune_lease_token, "Core selection");
+      }
     }
-    // Confirmed (or uninstalled/unbound: nothing to confirm) → success.
-    toaster.toast({ title: "RomM Sync", body: successBody });
-    await refreshCoreDisplay(romId, platformSlug);
   };
 
   const handleChangeGameCore = async (coreLabel: string) => {

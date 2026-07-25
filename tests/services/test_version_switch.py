@@ -214,11 +214,14 @@ class TestGetVersionList:
     def test_solo_group_not_multi(self, event_loop, service, uow, romm):
         _seed_rom(uow, rom_id=1, app_id=_APP_ID)
         romm.roms[1] = {"id": 1, "sibling_roms": []}
-        assert _run(event_loop, service.get_version_list(_APP_ID)) == {
-            "multi_version": False,
-            "server_query_failed": False,
-            "bound_vanished": False,
-        }
+        result = _run(event_loop, service.get_version_list(_APP_ID))
+
+        assert result["multi_version"] is False
+        assert result["server_query_failed"] is False
+        assert result["bound_vanished"] is False
+        assert result["bound_version"]["rom_id"] == 1
+        assert result["bound_version"]["active"] is True
+        assert result["bound_version"]["is_default"] is True
 
     def test_local_members_listed_with_markers(self, event_loop, service, uow, romm):
         _seed_rom(uow, rom_id=1, app_id=_APP_ID, regions=("USA",))
@@ -499,11 +502,15 @@ class TestGetVersionList:
         _seed_rom(uow, rom_id=1, app_id=_APP_ID)
         romm.get_rom_side_effect = RommNotFoundError("bound gone")
 
-        assert _run(event_loop, service.get_version_list(_APP_ID)) == {
-            "multi_version": False,
-            "server_query_failed": False,
-            "bound_vanished": True,
-        }
+        result = _run(event_loop, service.get_version_list(_APP_ID))
+
+        assert result["multi_version"] is False
+        assert result["server_query_failed"] is False
+        assert result["bound_vanished"] is True
+        assert result["bound_version"]["rom_id"] == 1
+        assert result["bound_version"]["active"] is True
+        assert result["bound_version"]["vanished"] is True
+        assert result["bound_version"]["is_default"] is False
 
     def test_vanished_stale_main_sibling_never_receives_default_badge(self, event_loop, service, uow, romm):
         _seed_rom(uow, rom_id=1, app_id=None, is_main_sibling=True)

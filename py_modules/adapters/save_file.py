@@ -19,14 +19,14 @@ import zipfile
 import zlib
 from typing import TYPE_CHECKING
 
-from adapters.descriptor_paths import rename_exact
+from adapters.descriptor_paths import claim_source, ensure_directory, rename_claimed, rename_exact
 from domain.save_hash import combine_zip_entry_hashes
 
 if TYPE_CHECKING:
     import logging
     from collections.abc import Iterator
 
-    from models.prune import SourceIdentity
+    from models.prune import MutationOutcome, SourceClaim, SourceIdentity
 
 _MD5_CHUNK_SIZE = 8192
 
@@ -108,7 +108,16 @@ class SaveFileAdapter:
         os.replace(src, dst)
 
     def rename_exact(self, src: str, dst: str, safe_root: str, identity: SourceIdentity) -> bool:
-        return rename_exact(src, dst, safe_root, identity)
+        return bool(rename_exact(src, dst, safe_root, identity)["changed"])
+
+    def claim_source(self, path: str, safe_root: str) -> SourceClaim:
+        return claim_source(path, safe_root)
+
+    def ensure_directory(self, path: str, safe_root: str) -> None:
+        ensure_directory(path, safe_root)
+
+    def rename_claimed(self, src: str, dst: str, safe_root: str, claim: SourceClaim) -> MutationOutcome:
+        return rename_claimed(src, dst, safe_root, claim)
 
     def get_mtime(self, path: str) -> float:
         """Return the mtime of *path* as a Unix timestamp."""

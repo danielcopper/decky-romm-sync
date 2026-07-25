@@ -46,6 +46,8 @@ def plugin():
     # to exercise the @migration_blocked gate override this.
     p._migration_service = MagicMock()
     p._migration_service.is_retrodeck_migration_pending.return_value = False
+    p._prune_service = MagicMock()
+    p._prune_service.is_active.return_value = False
 
     import decky
 
@@ -780,6 +782,9 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "report_unit_results",
     "get_registry_platforms",
     "report_removal_results",
+    "stage_prune_installed_selection",
+    "release_prune_conflict_lease",
+    "wait_for_prune_release",
     # Ack for an already-started cleanup run must remain available while the
     # run waits on its exact Steam action token; gating it would deadlock the
     # recovery-backed operation if migration state changed mid-run.

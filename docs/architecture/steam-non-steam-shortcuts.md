@@ -192,9 +192,11 @@ backend, re-reads the live shortcut, and requires the appId to exist with an exe
 then does shortcut removal capture a fresh complete snapshot, compare it with the sealed snapshot, call
 `RemoveShortcut(appId)` once, and poll the live store until absence. Identical claim retries are idempotent. Completion
 reporting uses bounded retries of the same payload without repeating the Steam operation. If every completion report is
-lost, the claimed lease expires as an ambiguous partial and retains source data; a later run can confirm the appId is
-already absent and reconcile the binding without calling removal again. An unreadable/foreign store, stale claim, or
-unclaimed timeout is failure, and no row/source finalization follows an uncommitted action.
+lost, the claimed lease expires as an ambiguous partial and retains source data. A `RemoveShortcut` call followed by an
+unreadable store or settle timeout is also explicitly attempted-but-unconfirmed, never reported as an unchanged failure;
+a later run can confirm the appId is already absent and reconcile the binding without calling removal again. An
+unreadable/foreign store before mutation, stale claim, or unclaimed timeout is failure, and no row/source finalization
+follows an uncommitted action.
 
 Recovery records the Steam-assigned appId and playtime, but there is no automatic restore and Steam cannot currently
 reattach those values to a newly created shortcut.

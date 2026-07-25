@@ -8,9 +8,10 @@ import type {
 import {
   getAppDetails,
   isRomMShortcutDetails,
-  removeShortcutConfirmed,
+  removeShortcutConfirmedOutcome,
   setLaunchOptionsConfirmed,
 } from "./steamShortcuts";
+import { withTimeout } from "./withTimeout";
 
 export type PruneActionRequired =
   | { run_id: string; action_token: string; action: "capture_shortcut_snapshot"; app_id: number }
@@ -33,6 +34,7 @@ export type PruneActionRequired =
 
 const SNAPSHOT_BUDGET_BYTES = 56 * 1024;
 const REPORT_ATTEMPTS = 3;
+const REPORT_TIMEOUT_MS = 5000;
 const handledTokens = new Set<string>();
 let actionQueue: Promise<void> = Promise.resolve();
 let actionGeneration = 0;
@@ -111,7 +113,7 @@ async function reportWithRetry(request: ReportPruneActionRequest): Promise<boole
   let lastMessage = "Action report was rejected.";
   for (let attempt = 1; attempt <= REPORT_ATTEMPTS; attempt++) {
     try {
-      const result = await reportPruneAction(request);
+      const result = await withTimeout(reportPruneAction(request), REPORT_TIMEOUT_MS);
       if (result.success) return true;
       lastMessage = result.message;
       if (result.reason === "stale_action" || result.reason === "local_state_changed") break;
@@ -143,6 +145,7 @@ function assertCurrent(generation: number): void {
 
 async function executePruneAction(action: PruneActionRequired, generation: number): Promise<void> {
   let claimed = false;
+  let mutationAttempted = false;
   const claim = async (): Promise<boolean> => {
     if (claimed) return true;
     claimed = await claimAction(action);
@@ -190,6 +193,7 @@ async function executePruneAction(action: PruneActionRequired, generation: numbe
         target_installed: action.target_installed,
         launch_options: action.launch_options,
       };
+      mutationAttempted = true;
       if (!(await setLaunchOptionsConfirmed(result.app_id, result.launch_options))) {
         throw new Error("Steam did not confirm the target launch command");
       }
@@ -226,7 +230,9 @@ async function executePruneAction(action: PruneActionRequired, generation: numbe
         throw new Error("Steam shortcut state changed after recovery was sealed");
       }
       assertCurrent(generation);
-      if (!(await removeShortcutConfirmed(action.app_id, 3000, true))) {
+      const removal = await removeShortcutConfirmedOutcome(action.app_id, 3000, true);
+      mutationAttempted = removal.status === "attempted_unconfirmed" || removal.status === "confirmed";
+      if (removal.status !== "confirmed") {
         throw new Error("Steam did not confirm owned-shortcut removal");
       }
       report = {
@@ -245,6 +251,7 @@ async function executePruneAction(action: PruneActionRequired, generation: numbe
       success: false,
       reason: "steam_action_failed",
       message: e instanceof Error ? e.message : String(e),
+      ...(mutationAttempted ? { mutation_attempted: true } : {}),
     };
   }
   if (!(await claim())) return;
@@ -267,4 +274,5 @@ export function handlePruneAction(value: PruneActionRequired): Promise<void> {
 export function cancelPruneActions(): void {
   actionGeneration++;
   handledTokens.clear();
+  actionQueue = Promise.resolve();
 }

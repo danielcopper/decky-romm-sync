@@ -21,8 +21,10 @@ from lib.prune_gate import (
     acquire_prune_conflict_lease,
     prune_active_blocked,
     prune_exclusive_start,
-    release_prune_conflict_lease,
     retain_prune_conflict,
+)
+from lib.prune_gate import (
+    release_prune_conflict_lease as release_prune_gate_lease,
 )
 from lib.sync_gate import sync_active_blocked
 
@@ -232,6 +234,7 @@ class Plugin:
     async def get_known_regions(self):
         return self._settings_service.get_known_regions()
 
+    @prune_active_blocked
     async def apply_steam_input_setting(self):
         return self._settings_service.apply_steam_input_setting()
 
@@ -265,16 +268,28 @@ class Plugin:
         return self._game_detail_service.get_cached_game_detail(app_id)
 
     @migration_blocked
+    @prune_active_blocked
     async def set_system_core(self, platform_slug, core_label):
-        return await self._core_service.set_system_core(platform_slug, core_label)
+        result = await self._core_service.set_system_core(platform_slug, core_label)
+        if result.get("success") and result.get("rebake_items"):
+            result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "system_core")
+        return result
 
     @migration_blocked
+    @prune_active_blocked
     async def set_game_core(self, rom_id, label):
-        return await self._core_service.set_game_core(rom_id, label)
+        result = await self._core_service.set_game_core(rom_id, label)
+        if result.get("success") and result.get("launch_options") is not None and result.get("app_id") is not None:
+            result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "game_core")
+        return result
 
     @migration_blocked
+    @prune_active_blocked
     async def clear_game_core(self, rom_id):
-        return await self._core_service.clear_game_core(rom_id)
+        result = await self._core_service.clear_game_core(rom_id)
+        if result.get("success") and result.get("launch_options") is not None and result.get("app_id") is not None:
+            result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "game_core")
+        return result
 
     async def get_platform_core_info(self, rom_id):
         return await self._core_service.get_platform_core_info(rom_id)
@@ -285,8 +300,12 @@ class Plugin:
         return await self._disc_service.get_disc_selection(rom_id)
 
     @migration_blocked
+    @prune_active_blocked
     async def select_disc(self, rom_id, filename):
-        return await self._disc_service.select_disc(rom_id, filename)
+        result = await self._disc_service.select_disc(rom_id, filename)
+        if result.get("success") and result.get("launch_options") is not None:
+            result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "disc_selection")
+        return result
 
     # ── Version picker delegation to VersionSwitchService ──────────────
 
@@ -314,6 +333,13 @@ class Plugin:
 
     async def report_prune_action(self, request):
         return await self._prune_service.report_prune_action(request)
+
+    async def wait_for_prune_release(self, run_id):
+        return await self._prune_service.wait_for_prune_release(run_id)
+
+    async def release_prune_conflict_lease(self, lease_token):
+        await release_prune_gate_lease(self, str(lease_token))
+        return {"success": True, "message": "Operation lease released."}
 
     # ── Firmware delegation to FirmwareService ──────────────
 
@@ -420,7 +446,7 @@ class Plugin:
     async def remove_platform_shortcuts(self, platform_slug):
         result = await self._shortcut_removal_service.remove_platform_shortcuts(platform_slug)
         if result.get("success") and result.get("app_ids"):
-            await acquire_prune_conflict_lease(self, "shortcut_removal")
+            result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "shortcut_removal")
         return result
 
     @migration_blocked
@@ -429,15 +455,15 @@ class Plugin:
     async def remove_all_shortcuts(self):
         result = self._shortcut_removal_service.remove_all_shortcuts()
         if result.get("success") and result.get("app_ids"):
-            await acquire_prune_conflict_lease(self, "shortcut_removal")
+            result["prune_lease_token"] = await acquire_prune_conflict_lease(self, "shortcut_removal")
         return result
 
     @prune_active_blocked
-    async def report_removal_results(self, removed_rom_ids):
+    async def report_removal_results(self, removed_rom_ids, lease_token):
         try:
             return await self._shortcut_removal_service.report_removal_results(removed_rom_ids)
         finally:
-            await release_prune_conflict_lease(self, "shortcut_removal")
+            await release_prune_gate_lease(self, str(lease_token))
 
     @prune_active_blocked
     async def reconcile_shortcuts(self, live_app_ids):
@@ -469,6 +495,7 @@ class Plugin:
     async def get_sync_stats(self):
         return self._sync_service.get_sync_stats()
 
+    @prune_active_blocked
     async def evaluate_launch(self, steam_app_id):
         verdict = await self._launch_gate_service.evaluate(steam_app_id)
         return asdict(verdict)

@@ -119,12 +119,18 @@ vi.mock("@decky/ui", () => {
       children,
       style,
       onButtonDown,
+      role,
+      tabIndex,
+      "aria-label": ariaLabel,
     }: AnyProps & { style?: unknown; onButtonDown?: (evt: unknown) => void }) =>
       createElement(
         "div",
         {
           "data-testid": "focusable",
           style,
+          role,
+          tabIndex,
+          "aria-label": ariaLabel,
           ref: (el: HTMLDivElement | null) => {
             if (!el) return;
             const prev = (el as unknown as { _deckyButtonDown?: EventListener })._deckyButtonDown;

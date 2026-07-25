@@ -26,6 +26,31 @@ class SourceIdentity(TypedDict):
     ctime_ns: int
 
 
+class SourceEntry(TypedDict):
+    """One descendant held by a no-follow source claim."""
+
+    identity: SourceIdentity
+    sha256: NotRequired[str]
+
+
+class SourceClaim(TypedDict):
+    """A source root and its complete descriptor-inventoried subtree."""
+
+    source_path: str
+    safe_root: str
+    source_identity: SourceIdentity
+    entries: dict[str, SourceEntry]
+
+
+class MutationOutcome(TypedDict):
+    """Truthful result of a durable filesystem mutation attempt."""
+
+    success: bool
+    changed: bool
+    ambiguous: bool
+    message: str
+
+
 class SteamRecoverySnapshot(TypedDict):
     """Backend-owned Steam Input state and files for one shortcut."""
 

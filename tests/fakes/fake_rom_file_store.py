@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from models.prune import SourceIdentity
+    from models.prune import MutationOutcome, SourceClaim, SourceIdentity
 
 
 class FakeRomFileStore:
@@ -80,3 +80,24 @@ class FakeRomFileStore:
             self.remove_file(path)
             return True
         return False
+
+    def claim_source(self, path: str, safe_root: str) -> SourceClaim:
+        exists = self.exists(path)
+        return {
+            "source_path": path,
+            "safe_root": safe_root,
+            "source_identity": {
+                "exists": exists,
+                "device": 1 if exists else 0,
+                "inode": 1 if exists else 0,
+                "mode": 1 if exists else 0,
+                "size": 0,
+                "mtime_ns": 0,
+                "ctime_ns": 0,
+            },
+            "entries": {},
+        }
+
+    def remove_claimed(self, path: str, safe_root: str, claim: SourceClaim) -> MutationOutcome:
+        changed = self.remove_exact(path, safe_root, claim["source_identity"])
+        return {"success": True, "changed": changed, "ambiguous": False, "message": "Source removed"}

@@ -14,10 +14,10 @@ import os
 import shutil
 from typing import TYPE_CHECKING
 
-from adapters.descriptor_paths import remove_exact
+from adapters.descriptor_paths import claim_source, remove_claimed, remove_exact
 
 if TYPE_CHECKING:
-    from models.prune import SourceIdentity
+    from models.prune import MutationOutcome, SourceClaim, SourceIdentity
 
 
 class RomFileAdapter:
@@ -46,4 +46,10 @@ class RomFileAdapter:
         shutil.rmtree(path)
 
     def remove_exact(self, path: str, safe_root: str, identity: SourceIdentity) -> bool:
-        return remove_exact(path, safe_root, identity)
+        return bool(remove_exact(path, safe_root, identity)["changed"])
+
+    def claim_source(self, path: str, safe_root: str) -> SourceClaim:
+        return claim_source(path, safe_root)
+
+    def remove_claimed(self, path: str, safe_root: str, claim: SourceClaim) -> MutationOutcome:
+        return remove_claimed(path, safe_root, claim)

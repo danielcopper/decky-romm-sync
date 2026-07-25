@@ -8,13 +8,19 @@ from typing import TYPE_CHECKING, Any
 
 from _vendor import vdf
 
-from adapters.descriptor_paths import open_directory_fd, open_regular_fd, remove_exact, require_directory
+from adapters.descriptor_paths import (
+    identity_for_stat,
+    open_directory_fd,
+    open_regular_fd,
+    remove_claimed,
+    require_directory,
+)
 from domain.artwork_paths import grid_image_filenames
 
 if TYPE_CHECKING:
     import logging
 
-    from models.prune import RecoveryArtifact, SourceIdentity, SteamRecoverySnapshot
+    from models.prune import MutationOutcome, RecoveryArtifact, SourceClaim, SteamRecoverySnapshot
 
 
 class SteamRecoveryAdapter:
@@ -61,25 +67,34 @@ class SteamRecoveryAdapter:
         self,
         app_id: int,
         snapshot: SteamRecoverySnapshot,
-        identities: dict[str, SourceIdentity],
-    ) -> int:
+        claims: dict[str, SourceClaim],
+    ) -> MutationOutcome:
         """Remove only state belonging to the exact user captured in *snapshot*."""
-        user_dir, steam_root, user_id = self._validate_identity(snapshot)
-        changed = int(self._clear_controller_setting(app_id, user_dir, snapshot["controller_setting"]))
-        grid = os.path.join(user_dir, "config", "grid")
-        for filename in grid_image_filenames(app_id):
-            path = os.path.join(grid, filename)
-            identity = identities.get(path)
-            if identity is None:
-                raise ValueError(f"Sealed Steam source identity is missing: {path}")
-            changed += int(remove_exact(path, user_dir, identity))
-        first_input, second_input = self._input_roots(user_dir, steam_root, user_id, app_id)
-        for path, root in ((first_input, user_dir), (second_input, steam_root)):
-            identity = identities.get(path)
-            if identity is None:
-                raise ValueError(f"Sealed Steam source identity is missing: {path}")
-            changed += int(remove_exact(path, root, identity))
-        return changed
+        changed = False
+        ambiguous = False
+        try:
+            user_dir, steam_root, user_id = self._validate_identity(snapshot)
+            controller = self._clear_controller_setting(app_id, user_dir, snapshot["controller_setting"])
+            changed |= controller["changed"]
+            ambiguous |= controller["ambiguous"]
+            if not controller["success"]:
+                return {**controller, "changed": changed, "ambiguous": ambiguous}
+            grid = os.path.join(user_dir, "config", "grid")
+            paths = [(os.path.join(grid, filename), user_dir) for filename in grid_image_filenames(app_id)]
+            first_input, second_input = self._input_roots(user_dir, steam_root, user_id, app_id)
+            paths.extend(((first_input, user_dir), (second_input, steam_root)))
+            for path, root in paths:
+                claim = claims.get(path)
+                if claim is None:
+                    raise ValueError(f"Sealed Steam source claim is missing: {path}")
+                outcome = remove_claimed(path, root, claim)
+                changed |= outcome["changed"]
+                ambiguous |= outcome["ambiguous"]
+                if not outcome["success"]:
+                    return {**outcome, "changed": changed, "ambiguous": ambiguous}
+        except Exception as exc:
+            return {"success": False, "changed": changed, "ambiguous": ambiguous, "message": str(exc)}
+        return {"success": True, "changed": changed, "ambiguous": ambiguous, "message": "Steam state removed"}
 
     def _resolve_user(self) -> tuple[str, str, str]:
         candidates = (
@@ -158,40 +173,132 @@ class SteamRecoveryAdapter:
         return str(value) if value is not None else None
 
     @staticmethod
-    def _clear_controller_setting(app_id: int, user_dir: str, expected: str | None) -> bool:
+    def _clear_controller_setting(app_id: int, user_dir: str, expected: str | None) -> MutationOutcome:
         if expected is None:
-            return False
-        path = os.path.join(user_dir, "config", "localconfig.vdf")
-        if not os.path.isfile(path):
-            raise OSError(f"Captured Steam controller config is missing: {path}")
-        fd = open_regular_fd(path, user_dir)
-        with os.fdopen(fd, encoding="utf-8") as source:
-            payload: dict[str, Any] = vdf.load(source)
-        apps = payload.get("UserLocalConfigStore", {}).get("Apps", {})
-        app = apps.get(str(app_id)) if isinstance(apps, dict) else None
-        if not isinstance(app, dict) or str(app.get("UseSteamControllerConfig")) != expected:
-            raise RuntimeError("Steam controller setting changed after recovery capture")
-        del app["UseSteamControllerConfig"]
-        if not app:
-            del apps[str(app_id)]
+            return {"success": True, "changed": False, "ambiguous": False, "message": "No controller setting"}
         config_dir = os.path.join(user_dir, "config")
         config_fd = open_directory_fd(config_dir, user_dir)
-        temporary = "localconfig.vdf.prune.tmp"
         try:
-            temporary_fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=config_fd)
-            with os.fdopen(temporary_fd, "w", encoding="utf-8") as output:
-                vdf.dump(payload, output, pretty=True)
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temporary, "localconfig.vdf", src_dir_fd=config_fd, dst_dir_fd=config_fd)
-            os.fsync(config_fd)
-        except BaseException:
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(temporary, dir_fd=config_fd)
-            raise
+            for attempt in range(3):
+                source_fd = os.open(
+                    "localconfig.vdf",
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=config_fd,
+                )
+                source_identity = identity_for_stat(os.fstat(source_fd))
+                with os.fdopen(source_fd, encoding="utf-8") as source:
+                    payload: dict[str, Any] = vdf.load(source)
+                apps = payload.get("UserLocalConfigStore", {}).get("Apps", {})
+                app = apps.get(str(app_id)) if isinstance(apps, dict) else None
+                if not isinstance(app, dict) or str(app.get("UseSteamControllerConfig")) != expected:
+                    raise RuntimeError("Steam controller setting changed after recovery capture")
+                del app["UseSteamControllerConfig"]
+                if not app:
+                    del apps[str(app_id)]
+
+                temporary = f".localconfig.vdf.prune-new-{source_identity['inode']}-{attempt}"
+                claimed = f".localconfig.vdf.prune-old-{source_identity['inode']}-{attempt}"
+                source_claimed = False
+                replacement_installed = False
+                try:
+                    temporary_fd = os.open(
+                        temporary,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=config_fd,
+                    )
+                    with os.fdopen(temporary_fd, "w", encoding="utf-8") as output:
+                        vdf.dump(payload, output, pretty=True)
+                        output.flush()
+                        os.fsync(output.fileno())
+                    os.rename(
+                        "localconfig.vdf",
+                        claimed,
+                        src_dir_fd=config_fd,
+                        dst_dir_fd=config_fd,
+                    )
+                    source_claimed = True
+                    claimed_stat = os.stat(claimed, dir_fd=config_fd, follow_symlinks=False)
+                    stable = ("device", "inode", "mode", "size", "mtime_ns")
+                    claimed_identity = identity_for_stat(claimed_stat)
+                    if any(claimed_identity[field] != source_identity[field] for field in stable):
+                        SteamRecoveryAdapter._restore_or_discard_claim(config_fd, claimed)
+                        os.unlink(temporary, dir_fd=config_fd)
+                        continue
+                    try:
+                        os.link(
+                            temporary,
+                            "localconfig.vdf",
+                            src_dir_fd=config_fd,
+                            dst_dir_fd=config_fd,
+                            follow_symlinks=False,
+                        )
+                        replacement_installed = True
+                    except FileExistsError:
+                        os.unlink(claimed, dir_fd=config_fd)
+                        os.unlink(temporary, dir_fd=config_fd)
+                        os.fsync(config_fd)
+                        continue
+                    os.unlink(temporary, dir_fd=config_fd)
+                    try:
+                        os.unlink(claimed, dir_fd=config_fd)
+                        os.fsync(config_fd)
+                    except OSError as exc:
+                        return {
+                            "success": False,
+                            "changed": True,
+                            "ambiguous": True,
+                            "message": f"Controller setting changed but durability is uncertain: {exc}",
+                        }
+                    return {
+                        "success": True,
+                        "changed": True,
+                        "ambiguous": False,
+                        "message": "Controller setting removed",
+                    }
+                except BaseException as exc:
+                    with contextlib.suppress(FileNotFoundError):
+                        os.unlink(temporary, dir_fd=config_fd)
+                    try:
+                        if source_claimed and SteamRecoveryAdapter._stat_at(config_fd, claimed) is not None:
+                            if replacement_installed:
+                                os.unlink(claimed, dir_fd=config_fd)
+                                os.fsync(config_fd)
+                            else:
+                                SteamRecoveryAdapter._restore_or_discard_claim(config_fd, claimed)
+                    except OSError as cleanup_exc:
+                        return {
+                            "success": False,
+                            "changed": source_claimed,
+                            "ambiguous": True,
+                            "message": f"Controller rewrite rollback is uncertain: {cleanup_exc}",
+                        }
+                    if replacement_installed:
+                        return {
+                            "success": False,
+                            "changed": True,
+                            "ambiguous": True,
+                            "message": f"Controller setting changed but cleanup was incomplete: {exc}",
+                        }
+                    raise
+            raise RuntimeError("Steam controller config kept changing during cleanup")
         finally:
             os.close(config_fd)
-        return True
+
+    @staticmethod
+    def _restore_or_discard_claim(config_fd: int, claimed: str) -> None:
+        if SteamRecoveryAdapter._stat_at(config_fd, "localconfig.vdf") is None:
+            os.rename(claimed, "localconfig.vdf", src_dir_fd=config_fd, dst_dir_fd=config_fd)
+        else:
+            os.unlink(claimed, dir_fd=config_fd)
+        os.fsync(config_fd)
+
+    @staticmethod
+    def _stat_at(directory_fd: int, name: str) -> os.stat_result | None:
+        try:
+            return os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return None
 
     @staticmethod
     def _input_roots(user_dir: str, steam_root: str, user_id: str, app_id: int) -> tuple[str, str]:

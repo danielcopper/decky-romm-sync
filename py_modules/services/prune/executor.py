@@ -74,6 +74,12 @@ class _CancelledWithResult(asyncio.CancelledError):
         self.result = result
 
 
+class _ChildFaultAfterCancellation(asyncio.CancelledError):
+    def __init__(self, error: BaseException) -> None:
+        super().__init__()
+        self.error = error
+
+
 @dataclass
 class _MutationLedger:
     rows: list[Rom]
@@ -83,9 +89,15 @@ class _MutationLedger:
     committed_action: str | None = None
     action_ambiguous: bool = False
     mutations: list[str] = field(default_factory=list)
+    ambiguous_mutations: list[str] = field(default_factory=list)
 
     def has_commit(self) -> bool:
-        return self.committed_action is not None or self.action_ambiguous or bool(self.mutations)
+        return (
+            self.committed_action is not None
+            or self.action_ambiguous
+            or bool(self.mutations)
+            or bool(self.ambiguous_mutations)
+        )
 
 
 class PruneExecutor:
@@ -172,6 +184,8 @@ class PruneExecutor:
             return await self._run_group_inner(
                 run_id, initial_rows, preview_candidate_ids, options, index, total, ledger
             )
+        except _ChildFaultAfterCancellation as exc:
+            raise _CancelledWithResult(self._fault_result(ledger, initial_rows, exc.error)) from exc
         except _CancelledWithResult:
             raise
         except asyncio.CancelledError as exc:
@@ -340,10 +354,8 @@ class PruneExecutor:
                         )
                     )
                     bundle_path, steam_backend = sealed
-                    identities = await self._loop.run_in_executor(
-                        None, self._recovery_store.source_identities, bundle_path
-                    )
-                    handle = RecoveryHandle(bundle_path, snapshot, save_inventory, steam_backend, identities)
+                    claims = await self._loop.run_in_executor(None, self._recovery_store.source_claims, bundle_path)
+                    handle = RecoveryHandle(bundle_path, snapshot, save_inventory, steam_backend, claims)
                     ledger.bundle_path = bundle_path
                     if seal_cancelled:
                         raise asyncio.CancelledError
@@ -458,16 +470,19 @@ class PruneExecutor:
             )
             cancel_requested |= bool(action.pop("_cancelled", False))
             if not action.get("success"):
-                result = self._group_result(
-                    rows,
-                    "partial",
-                    "steam_action_failed",
-                    action.get("message", "The binding changed but Steam confirmation failed."),
-                    app_id=app_id,
-                    bundle_path=handle.bundle_path if handle else None,
-                    committed_action=committed_action,
-                    target_rom_id=target_id,
-                )
+                if action.get("mutation_attempted") is True or action.get("reason") == "action_ambiguous":
+                    ledger.action_ambiguous = True
+                    result = self._ledger_result(
+                        ledger,
+                        "action_ambiguous",
+                        action.get("message", "The binding changed but Steam confirmation is unknown."),
+                    )
+                else:
+                    result = self._ledger_result(
+                        ledger,
+                        "steam_action_failed",
+                        action.get("message", "The binding changed but Steam confirmation failed."),
+                    )
                 return self._cancel_or_return(result, cancel_requested)
         elif whole_game_action and app_id is not None and bound_row is not None:
             await self._emit_progress(
@@ -491,7 +506,7 @@ class PruneExecutor:
             )
             cancel_requested |= bool(action.pop("_cancelled", False))
             if not action.get("success"):
-                if action.get("claimed"):
+                if action.get("mutation_attempted") is True or action.get("reason") == "action_ambiguous":
                     ledger.app_id = app_id
                     ledger.committed_action = "remove_shortcut"
                     ledger.action_ambiguous = True
@@ -572,7 +587,10 @@ class PruneExecutor:
                 total=total,
                 launch_options=launch_options,
                 ledger=ledger,
+                vanished_source_id=bound_row.rom_id if target_id is not None and bound_row is not None else None,
             )
+        except _ChildFaultAfterCancellation as exc:
+            raise _CancelledWithResult(self._fault_result(ledger, initial_rows, exc.error)) from exc
         except _CancelledWithResult:
             raise
         except asyncio.CancelledError as exc:
@@ -603,9 +621,14 @@ class PruneExecutor:
         total: int,
         launch_options: str | None,
         ledger: _MutationLedger,
+        vanished_source_id: int | None,
     ) -> dict[str, Any]:
-        refreshed = await self._probe_many(delete_ids | ({target_id} if target_id is not None else set()))
-        guard = self._fresh_guard(refreshed, delete_ids, target_id, None)
+        refreshed = await self._probe_many(
+            delete_ids
+            | ({target_id} if target_id is not None else set())
+            | ({vanished_source_id} if vanished_source_id is not None else set())
+        )
+        guard = self._fresh_guard(refreshed, delete_ids, target_id, vanished_source_id)
         if guard is not None:
             return self._ledger_or_guard_result(ledger, initial_rows, guard, handle, app_id)
         if self._active_downloads() & delete_ids:
@@ -745,12 +768,14 @@ class PruneExecutor:
             None,
             self._save_coordinator.quarantine_prune_saves,
             delete_inventory["exclusive"],
-            handle.source_identities if handle is not None else None,
+            handle.source_claims if handle is not None else None,
         )
         raw_moved = quarantine.get("moved")
         moved = [str(path) for path in raw_moved] if isinstance(raw_moved, list) else []
         if moved:
             ledger.mutations.append("save_quarantine")
+        if quarantine.get("ambiguous") and "save_quarantine" not in ledger.ambiguous_mutations:
+            ledger.ambiguous_mutations.append("save_quarantine")
         if not quarantine.get("success"):
             return self._group_result(
                 rows,
@@ -762,16 +787,19 @@ class PruneExecutor:
                 bundle_path=handle.bundle_path if handle else None,
                 committed_action=committed_action,
                 mutations=ledger.mutations,
+                ambiguous_mutations=ledger.ambiguous_mutations,
                 warnings=warnings,
                 target_rom_id=target_id,
             )
 
         for rom_id in sorted(delete_ids):
-            identities = handle.source_identities if handle is not None else None
-            removal = await self._loop.run_in_executor(None, self._remove_installed_files, rom_id, identities)
+            claims = handle.source_claims if handle is not None else None
+            removal = await self._loop.run_in_executor(None, self._remove_installed_files, rom_id, claims)
+            if removal.get("changed") and "installed_rom_content" not in ledger.mutations:
+                ledger.mutations.append("installed_rom_content")
+            if removal.get("ambiguous") and "installed_rom_content" not in ledger.ambiguous_mutations:
+                ledger.ambiguous_mutations.append("installed_rom_content")
             if removal.get("success"):
-                if removal.get("changed") and "installed_rom_content" not in ledger.mutations:
-                    ledger.mutations.append("installed_rom_content")
                 continue
             if removal.get("reason") == "not_installed":
                 continue
@@ -785,24 +813,33 @@ class PruneExecutor:
                 bundle_path=handle.bundle_path if handle else None,
                 committed_action=committed_action,
                 mutations=ledger.mutations,
+                ambiguous_mutations=ledger.ambiguous_mutations,
                 warnings=warnings,
                 target_rom_id=target_id,
             )
         try:
-            identities = handle.source_identities if handle is not None else None
-            removed_artifacts = await self._loop.run_in_executor(
-                None, self._prune_artifacts.remove, sorted(delete_ids), identities
+            claims = handle.source_claims if handle is not None else None
+            artifact_outcome = await self._loop.run_in_executor(
+                None, self._prune_artifacts.remove, sorted(delete_ids), claims
             )
-            if removed_artifacts:
+            if artifact_outcome.get("changed"):
                 ledger.mutations.append("plugin_artifacts")
+            if artifact_outcome.get("ambiguous"):
+                ledger.ambiguous_mutations.append("plugin_artifacts")
+            if not artifact_outcome.get("success"):
+                raise RuntimeError(artifact_outcome.get("message", "Plugin artifact cleanup failed"))
             if committed_action == "remove_shortcut" and app_id is not None and handle is not None:
                 if handle.steam_backend is None:
                     raise RuntimeError("Steam recovery identity was not captured")
-                steam_changes = await self._loop.run_in_executor(
-                    None, self._steam_recovery.remove_state, app_id, handle.steam_backend, handle.source_identities
+                steam_outcome = await self._loop.run_in_executor(
+                    None, self._steam_recovery.remove_state, app_id, handle.steam_backend, handle.source_claims
                 )
-                if steam_changes:
+                if steam_outcome.get("changed"):
                     ledger.mutations.append("steam_files")
+                if steam_outcome.get("ambiguous"):
+                    ledger.ambiguous_mutations.append("steam_files")
+                if not steam_outcome.get("success"):
+                    raise RuntimeError(steam_outcome.get("message", "Steam state cleanup failed"))
         except Exception as exc:
             return self._group_result(
                 rows,
@@ -814,6 +851,7 @@ class PruneExecutor:
                 bundle_path=handle.bundle_path if handle else None,
                 committed_action=committed_action,
                 mutations=ledger.mutations,
+                ambiguous_mutations=ledger.ambiguous_mutations,
                 warnings=warnings,
                 target_rom_id=target_id,
             )
@@ -836,6 +874,7 @@ class PruneExecutor:
                 bundle_path=handle.bundle_path if handle else None,
                 committed_action=committed_action,
                 mutations=ledger.mutations,
+                ambiguous_mutations=ledger.ambiguous_mutations,
                 warnings=warnings,
                 target_rom_id=target_id,
             )
@@ -852,6 +891,7 @@ class PruneExecutor:
             bundle_path=handle.bundle_path if handle else None,
             committed_action=committed_action,
             mutations=ledger.mutations,
+            ambiguous_mutations=ledger.ambiguous_mutations,
             warnings=warnings,
             target_rom_id=target_id,
         )
@@ -999,6 +1039,7 @@ class PruneExecutor:
             bundle_path=ledger.bundle_path,
             committed_action=ledger.committed_action,
             mutations=ledger.mutations,
+            ambiguous_mutations=ledger.ambiguous_mutations,
             warnings=warnings,
             action_ambiguous=ledger.action_ambiguous,
             target_rom_id=ledger.target_rom_id,
@@ -1038,7 +1079,17 @@ class PruneExecutor:
         try:
             return await asyncio.shield(task), False
         except asyncio.CancelledError:
-            return await task, True
+            try:
+                return await task, True
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                raise _ChildFaultAfterCancellation(exc) from exc
+
+    def _fault_result(self, ledger: _MutationLedger, rows: list[Rom], error: BaseException) -> dict[str, Any]:
+        if ledger.has_commit():
+            return self._ledger_result(ledger, ErrorCode.UNKNOWN.value, str(error))
+        return self._group_result(rows, "failed", ErrorCode.UNKNOWN.value, str(error))
 
     @staticmethod
     def _cancel_or_return(result: dict[str, Any], cancelled: bool) -> dict[str, Any]:
@@ -1173,6 +1224,7 @@ class PruneExecutor:
         bundle_path: str | None = None,
         committed_action: str | None = None,
         mutations: list[str] | None = None,
+        ambiguous_mutations: list[str] | None = None,
         warnings: list[str] | None = None,
         action_ambiguous: bool = False,
         target_rom_id: int | None = None,
@@ -1210,6 +1262,8 @@ class PruneExecutor:
             result["committed_action"] = committed_action
         if mutations:
             result["mutations"] = [str(item)[:_COMPLETION_REASON_CHARS] for item in mutations]
+        if ambiguous_mutations:
+            result["ambiguous_mutations"] = [str(item)[:_COMPLETION_REASON_CHARS] for item in ambiguous_mutations]
         if warnings:
             bounded_warnings = [
                 str(item)[:_COMPLETION_WARNING_CHARS] for item in warnings[:_COMPLETION_WARNINGS_PER_GROUP]

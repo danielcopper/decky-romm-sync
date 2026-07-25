@@ -273,21 +273,36 @@ export async function removeShortcutConfirmed(
   timeoutMs = 3000,
   ownershipAlreadyChecked = false,
 ): Promise<boolean> {
+  return (await removeShortcutConfirmedOutcome(appId, timeoutMs, ownershipAlreadyChecked)).status === "confirmed";
+}
+
+export interface ShortcutRemovalOutcome {
+  status: "confirmed" | "not_attempted" | "attempted_unconfirmed";
+}
+
+/** Distinguish a pre-mutation refusal from an unconfirmed mutation attempt. */
+export async function removeShortcutConfirmedOutcome(
+  appId: number,
+  timeoutMs = 3000,
+  ownershipAlreadyChecked = false,
+): Promise<ShortcutRemovalOutcome> {
   const store = readDesktopAppStore();
-  if (!store?.has(appId)) return false;
-  if (!ownershipAlreadyChecked && !isRomMShortcutDetails(await getAppDetails(appId))) return false;
+  if (!store?.has(appId)) return { status: "not_attempted" };
+  if (!ownershipAlreadyChecked && !isRomMShortcutDetails(await getAppDetails(appId))) {
+    return { status: "not_attempted" };
+  }
   try {
     SteamClient.Apps.RemoveShortcut(appId);
   } catch (e) {
     logError(`Failed to remove shortcut ${appId}: ${e}`);
-    return false;
+    return { status: "not_attempted" };
   }
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const apps = readDesktopAppStore();
-    if (!apps) return false;
-    if (!apps.has(appId)) return true;
-    if (Date.now() >= deadline) return false;
+    if (!apps) return { status: "attempted_unconfirmed" };
+    if (!apps.has(appId)) return { status: "confirmed" };
+    if (Date.now() >= deadline) return { status: "attempted_unconfirmed" };
     await delay(100);
   }
 }

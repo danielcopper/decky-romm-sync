@@ -11,13 +11,15 @@ _BLOCKED_MESSAGE = "A removed-game cleanup is in progress; wait for it to finish
 _OPERATION_BLOCKED_MESSAGE = (
     "Another local-data operation is in progress; wait for it to finish before starting cleanup."
 )
+_LEASE_SECONDS = 300.0
 
 
 @dataclass
 class _PruneAdmissionGate:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     conflicting_operations: int = 0
-    leases: dict[str, int] = field(default_factory=dict)
+    leases: dict[str, float] = field(default_factory=dict)
+    next_lease_id: int = 1
 
 
 def _gate(owner: object) -> _PruneAdmissionGate:
@@ -40,6 +42,7 @@ def prune_active_blocked(method):
             )
         gate = _gate(self)
         async with gate.lock:
+            _expire_leases(gate)
             if service.is_active():
                 return {"success": False, "reason": "prune_active", "message": _BLOCKED_MESSAGE}
             gate.conflicting_operations += 1
@@ -60,6 +63,7 @@ def prune_exclusive_start(method):
     async def wrapper(self, *args: Any, **kwargs: Any):
         gate = _gate(self)
         async with gate.lock:
+            _expire_leases(gate)
             if gate.conflicting_operations:
                 return {
                     "success": False,
@@ -88,22 +92,31 @@ async def retain_prune_conflict(owner: object, task: asyncio.Task[Any]) -> None:
     task.add_done_callback(done)
 
 
-async def acquire_prune_conflict_lease(owner: object, key: str) -> None:
-    """Hold a conflict claim across a frontend-owned multi-call operation."""
+async def acquire_prune_conflict_lease(owner: object, key: str) -> str:
+    """Hold a bounded tokenized claim across a frontend-owned operation."""
     gate = _gate(owner)
     async with gate.lock:
-        gate.leases[key] = gate.leases.get(key, 0) + 1
+        _expire_leases(gate)
+        token = f"{key}:{gate.next_lease_id}"
+        gate.next_lease_id += 1
+        gate.leases[token] = asyncio.get_running_loop().time() + _LEASE_SECONDS
         gate.conflicting_operations += 1
+        return token
 
 
-async def release_prune_conflict_lease(owner: object, key: str) -> None:
+async def release_prune_conflict_lease(owner: object, token: str) -> None:
     """Release a previously acquired frontend-operation conflict claim."""
     gate = _gate(owner)
     async with gate.lock:
-        count = gate.leases.get(key, 0)
-        if count:
-            if count == 1:
-                del gate.leases[key]
-            else:
-                gate.leases[key] = count - 1
+        _expire_leases(gate)
+        if token in gate.leases:
+            del gate.leases[token]
             gate.conflicting_operations -= 1
+
+
+def _expire_leases(gate: _PruneAdmissionGate) -> None:
+    now = asyncio.get_running_loop().time()
+    expired = [token for token, deadline in gate.leases.items() if deadline <= now]
+    for token in expired:
+        del gate.leases[token]
+        gate.conflicting_operations -= 1

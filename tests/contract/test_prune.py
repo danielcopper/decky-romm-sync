@@ -144,7 +144,7 @@ async def test_action_report_rejects_stale_token_with_canonical_shape(harness):
         ("sync_rom_saves", (41,)),
         ("switch_version", (0x80000001, 41, False)),
         ("report_unit_results", ({}, "run", "unit", 0)),
-        ("report_removal_results", ([],)),
+        ("report_removal_results", ([], None)),
         ("reconcile_shortcuts", ([],)),
         ("refresh_save_status", (41,)),
         ("get_save_status", (41,)),
@@ -156,6 +156,12 @@ async def test_action_report_rejects_stale_token_with_canonical_shape(harness):
         ("apply_sgdb_game_id", (41, 7)),
         ("save_shortcut_icon", (0x80000001, "")),
         ("clear_sync_cache", ()),
+        ("apply_steam_input_setting", ()),
+        ("set_system_core", ("n64", "")),
+        ("set_game_core", (41, "core")),
+        ("clear_game_core", (41,)),
+        ("select_disc", (41, None)),
+        ("evaluate_launch", (0x80000001,)),
     ],
 )
 async def test_prune_claim_reciprocally_blocks_conflicting_callable_entries(harness, method, args):
@@ -231,6 +237,46 @@ async def test_detached_writer_lifetime_blocks_prune_admission(harness, monkeypa
     running = harness.plugin._prune_service._task
     assert running is not None
     await running
+
+
+async def test_frontend_core_continuation_lease_blocks_prune_until_ack(harness, monkeypatch):
+    _seed_bulk_candidate(harness)
+    preview = await harness.plugin.get_prune_preview(_preview_request())
+
+    async def set_game_core(_rom_id, _label):
+        return {"success": True, "app_id": 0x80000001, "launch_options": "launch"}
+
+    monkeypatch.setattr(harness.plugin._core_service, "set_game_core", set_game_core)
+    result = await harness.plugin.set_game_core(41, "core")
+    token = result["prune_lease_token"]
+
+    blocked = await harness.plugin.start_prune(
+        {
+            "preview_id": preview["preview_id"],
+            "confirmed": True,
+            "repoint_shortcuts": True,
+            "remove_rows": True,
+            "remove_fully_vanished": True,
+            "create_recovery_bundle": False,
+            "installed_selection_id": None,
+        }
+    )
+    assert blocked["reason"] == "operation_active"
+
+    assert (await harness.plugin.release_prune_conflict_lease(token))["success"] is True
+    started = await harness.plugin.start_prune(
+        {
+            "preview_id": preview["preview_id"],
+            "confirmed": True,
+            "repoint_shortcuts": True,
+            "remove_rows": True,
+            "remove_fully_vanished": True,
+            "create_recovery_bundle": False,
+            "installed_selection_id": None,
+        }
+    )
+    assert started["success"] is True
+    await harness.plugin._prune_service.shutdown()
 
 
 async def _wait_for_prune_action(harness, action: str):

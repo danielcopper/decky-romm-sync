@@ -921,7 +921,7 @@ class TestReportRemovalResults:
         _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Game A")
         _seed_rom(plugin._uow, 20, app_id=1002, platform_slug="n64", name="Game B")
 
-        result = await plugin.report_removal_results([10, 20])
+        result = await plugin.report_removal_results([10, 20], None)
         assert result["success"] is True
         with plugin._uow as uow:
             assert uow.roms.get(10).shortcut_app_id is None
@@ -941,7 +941,7 @@ class TestReportRemovalResults:
             uow.roms.save(rom)
         plugin._steam_config.grid_dir = lambda: str(tmp_path)
 
-        result = await plugin.report_removal_results([10])
+        result = await plugin.report_removal_results([10], None)
         assert result["success"] is True
         assert not art_file.exists()
 
@@ -954,7 +954,7 @@ class TestReportRemovalResults:
         _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Game A")
         plugin._steam_config.grid_dir = lambda: str(grid_dir)
 
-        result = await plugin.report_removal_results([10])
+        result = await plugin.report_removal_results([10], None)
         assert result["success"] is True
         assert not art_file.exists()
 
@@ -963,7 +963,7 @@ class TestReportRemovalResults:
         _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Game A")
         _seed_rom(plugin._uow, 20, app_id=1002, platform_slug="n64", name="Game B")
 
-        result = await plugin.report_removal_results([10])
+        result = await plugin.report_removal_results([10], None)
         assert result["success"] is True
         with plugin._uow as uow:
             assert uow.roms.get(10).shortcut_app_id is None
@@ -1029,7 +1029,7 @@ class TestRemovalCleansUpAppIdArtwork:
         _seed_rom(plugin._uow, 10, app_id=100001, platform_slug="n64", name="Game A")
         plugin._steam_config.grid_dir = lambda: str(grid_dir)
 
-        await plugin.report_removal_results([10])
+        await plugin.report_removal_results([10], None)
         assert not art_file.exists()
 
     @pytest.mark.asyncio
@@ -1041,7 +1041,7 @@ class TestRemovalCleansUpAppIdArtwork:
         _seed_rom(plugin._uow, 10, app_id=100001, platform_slug="n64", name="Game A")
         plugin._steam_config.grid_dir = lambda: str(grid_dir)
 
-        await plugin.report_removal_results([10])
+        await plugin.report_removal_results([10], None)
         assert not staging.exists()
 
 
@@ -1055,7 +1055,7 @@ class TestReportRemovalSteamInputCleanup:
         _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Game A")
         _seed_rom(plugin._uow, 20, app_id=1002, platform_slug="n64", name="Game B")
 
-        await plugin.report_removal_results([10, 20])
+        await plugin.report_removal_results([10, 20], None)
         plugin._steam_config.set_steam_input_config.assert_called_once_with([1001, 1002], mode="default")
 
     @pytest.mark.asyncio
@@ -1064,7 +1064,7 @@ class TestReportRemovalSteamInputCleanup:
         plugin._steam_config.set_steam_input_config = MagicMock(side_effect=Exception("VDF error"))
         _seed_rom(plugin._uow, 10, app_id=1001, platform_slug="n64", name="Game A")
 
-        result = await plugin.report_removal_results([10])
+        result = await plugin.report_removal_results([10], None)
         assert result["success"] is True  # Should not crash
         with plugin._uow as uow:
             assert uow.roms.get(10).shortcut_app_id is None

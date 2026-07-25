@@ -265,7 +265,10 @@ canonicalizes those paths for the purge set and every remaining installed ROM. A
 purge set is copied into an enabled recovery bundle but left in the emulator directory. An exclusively owned current
 save is copied and checksum-verified when recovery is enabled, then moved through
 `quarantine_local_file(..., preserve_history=True)`. This operation deliberately keeps all existing `.romm-backup`
-history instead of enforcing the normal newest-ten cap.
+history instead of enforcing the normal newest-ten cap. Cleanup always takes a final no-follow source claim and creates
+the backup directory through anchored parents before a directory-durable rename, including recovery-off runs. A
+post-rename fsync failure is returned as an actual but durability-ambiguous move rather than disappearing from the group
+ledger.
 
 Recovery also copies matching `.romm-backup` files while leaving the originals untouched. If an uninstalled ROM or an
 unsupported layout has no resolvable exact path, the manifest preserves known save-sync filenames/state and records a

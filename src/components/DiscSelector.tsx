@@ -25,6 +25,7 @@ import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { getEventTarget } from "../utils/events";
 import { detach } from "../utils/detach";
 import type { DownloadCompleteEvent } from "../types";
+import { releasePruneLease } from "../utils/pruneLease";
 
 interface DiscSelectorProps {
   appId: number;
@@ -129,13 +130,19 @@ export const DiscSelector: FC<DiscSelectorProps> = ({ appId }) => {
     if (rid == null) return;
     try {
       const result = await selectDisc(rid, data);
-      if (result.success) {
-        if (result.launch_options !== undefined) {
-          await setLaunchOptionsConfirmed(appId, result.launch_options);
+      try {
+        if (result.success) {
+          if (result.launch_options !== undefined) {
+            await setLaunchOptionsConfirmed(appId, result.launch_options);
+          }
+          setSelected(result.selected ?? null);
+        } else {
+          toaster.toast({ title: "RomM Sync", body: result.message || "Failed to select disc" });
         }
-        setSelected(result.selected ?? null);
-      } else {
-        toaster.toast({ title: "RomM Sync", body: result.message || "Failed to select disc" });
+      } finally {
+        if (result.prune_lease_token) {
+          await releasePruneLease(result.prune_lease_token, "DiscSelector");
+        }
       }
     } catch (e) {
       // Observable catch effect: surface the failure so the user knows the pick

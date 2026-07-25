@@ -119,12 +119,14 @@ class PruneService:
         self._selection: InstalledSelection | None = None
         self._pending_action: PendingAction | None = None
         self._completed_action_tokens: set[str] = set()
+        self._release_run_id: str | None = None
+        self._release_event = asyncio.Event()
         self._admission_lock = asyncio.Lock()
         self._action_lock = asyncio.Lock()
 
     def is_active(self) -> bool:
         """Return whether admission or execution currently owns the prune claim."""
-        return self._starting or (self._task is not None and not self._task.done())
+        return self._starting or self._run_id is not None
 
     async def get_prune_preview(self, request: object) -> dict[str, Any]:
         """Create or page an ephemeral local-only candidate preview."""
@@ -241,6 +243,8 @@ class PruneService:
                 self._selection = None
                 run_id = self._uuid_gen.uuid4()
                 self._run_id = run_id
+                self._release_run_id = run_id
+                self._release_event = asyncio.Event()
                 self._completed_action_tokens.clear()
                 self._task = self._loop.create_task(self._run(run_id, refreshed, options))
                 started_run = True
@@ -266,6 +270,18 @@ class PruneService:
         except Exception as exc:
             self._logger.exception("Removed-game cleanup action report failed")
             return self._failure(ErrorCode.UNKNOWN.value, str(exc))
+
+    async def wait_for_prune_release(self, run_id: object) -> dict[str, Any]:
+        """Boundedly acknowledge that one terminal run released its exclusive claim."""
+        if not isinstance(run_id, str) or not run_id:
+            return self._failure("invalid_run_id", "Cleanup run id must be a non-empty string.")
+        if self._release_run_id != run_id or self._release_event.is_set():
+            return {"success": True, "message": "Cleanup claim is released."}
+        try:
+            await asyncio.wait_for(self._release_event.wait(), timeout=5.0)
+        except TimeoutError:
+            return self._failure("release_timeout", "Cleanup claim release was not observed in time.")
+        return {"success": True, "message": "Cleanup claim is released."}
 
     async def _report_prune_action(self, request: object) -> dict[str, Any]:
         if not isinstance(request, dict):
@@ -317,6 +333,9 @@ class PruneService:
                 return self._failure("action_not_claimed", "Claim the action token before reporting its result.")
             if type(request.get("success")) is not bool or not isinstance(request.get("message"), str):
                 return self._failure("invalid_action_result", "Action success and message fields are required.")
+            mutation_attempted = request.get("mutation_attempted")
+            if mutation_attempted is not None and type(mutation_attempted) is not bool:
+                return self._failure("invalid_action_result", "Action mutation-attempted must be a boolean.")
             snapshot = request.get("snapshot")
             shortcut_absent = request.get("shortcut_absent") is True
             snapshot_required = (
@@ -333,7 +352,9 @@ class PruneService:
             future = cast("asyncio.Future[dict[str, Any]]", pending.future)
             if future.done():
                 return {"success": True, "ignored": True, "message": "Action result was already received."}
-            future.set_result(dict(request))
+            result = dict(request)
+            result["claimed"] = pending.claimed
+            future.set_result(result)
             self._completed_action_tokens.add(pending.token)
             return {"success": True, "message": "Action result accepted."}
 
@@ -363,6 +384,7 @@ class PruneService:
                     future.cancel()
             self._pending_action = None
             self._run_id = None
+            self._release_event.set()
 
     async def _request_action(
         self,

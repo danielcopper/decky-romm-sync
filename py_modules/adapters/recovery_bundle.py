@@ -12,11 +12,11 @@ import shutil
 import stat
 from typing import TYPE_CHECKING, Any
 
-from adapters.descriptor_paths import identity_for_stat, missing_identity, stat_beneath
+from adapters.descriptor_paths import claim_source, identity_for_stat, missing_identity, stat_beneath
 from domain.prune import sanitize_package_name
 
 if TYPE_CHECKING:
-    from models.prune import RecoveryArtifact, SourceIdentity
+    from models.prune import RecoveryArtifact, SourceClaim, SourceEntry, SourceIdentity
 
 _SAFE_BUNDLE_ID = re.compile(r"^[0-9TZ]+_[1-9][0-9]*_[A-Za-z0-9-]+$", re.ASCII)
 
@@ -25,16 +25,20 @@ class RecoveryBundleAdapter:
     """Single owner of recovery staging, verification, and atomic sealing."""
 
     def __init__(self, *, user_home: str, package_name: str, plugin_version: str) -> None:
-        self._root = os.path.join(user_home, f"{sanitize_package_name(package_name)}-recovery")
+        self._home = os.path.abspath(user_home)
+        self._root = os.path.join(self._home, f"{sanitize_package_name(package_name)}-recovery")
         self._plugin_version = plugin_version
 
     def root(self) -> str:
         return self._root
 
     def free_bytes(self) -> int:
-        os.makedirs(os.path.dirname(self._root), exist_ok=True)
-        self._ensure_dir(self._root)
-        return shutil.disk_usage(self._root).free
+        descriptors = self._open_layout(create=True)
+        try:
+            stats = os.fstatvfs(descriptors[1])
+            return stats.f_bavail * stats.f_frsize
+        finally:
+            self._close_layout(descriptors)
 
     def measure_path(self, path: str, safe_root: str) -> int:
         total = 0
@@ -48,12 +52,12 @@ class RecoveryBundleAdapter:
 
     def validate_sources(self, bundle_path: str) -> bool:
         """Verify that every sealed source set and source byte stream is unchanged."""
-        bundles_parent = os.path.join(self._root, "bundles")
-        expected_parent = os.path.realpath(bundles_parent)
-        if os.path.dirname(os.path.realpath(bundle_path)) != expected_parent or os.path.islink(bundle_path):
-            return False
+        descriptors: tuple[int, int, int, int] | None = None
+        bundle_fd: int | None = None
         try:
-            seal = json.loads(self._read_beneath(os.path.join(bundle_path, "SEAL.json"), bundle_path))
+            descriptors, bundle_fd = self._open_bundle(bundle_path)
+            bundle_anchor = self._fd_path(bundle_fd)
+            seal = json.loads(self._read_beneath(os.path.join(bundle_anchor, "SEAL.json"), bundle_anchor))
             if not isinstance(seal, dict):
                 return False
             if (
@@ -62,7 +66,7 @@ class RecoveryBundleAdapter:
                 or type(seal.get("file_count")) is not int
             ):
                 return False
-            checksum_bytes = self._read_beneath(os.path.join(bundle_path, "checksums.sha256"), bundle_path)
+            checksum_bytes = self._read_beneath(os.path.join(bundle_anchor, "checksums.sha256"), bundle_anchor)
             if hashlib.sha256(checksum_bytes).hexdigest() != seal.get("checksums_sha256"):
                 return False
             checksums: dict[str, str] = {}
@@ -72,13 +76,13 @@ class RecoveryBundleAdapter:
                     return False
                 checksums[relative] = digest
             for relative, digest in checksums.items():
-                fd = self._open_regular_beneath(os.path.join(bundle_path, *relative.split("/")), bundle_path)
+                fd = self._open_regular_beneath(os.path.join(bundle_anchor, *relative.split("/")), bundle_anchor)
                 try:
                     if self._sha256_fd(fd) != digest:
                         return False
                 finally:
                     os.close(fd)
-            manifest = json.loads(self._read_beneath(os.path.join(bundle_path, "manifest.json"), bundle_path))
+            manifest = json.loads(self._read_beneath(os.path.join(bundle_anchor, "manifest.json"), bundle_anchor))
             if not isinstance(manifest, dict):
                 return False
             source_sets = manifest.get("source_sets")
@@ -93,9 +97,20 @@ class RecoveryBundleAdapter:
                 source_path = source_set.get("source_path")
                 safe_root = source_set.get("safe_root")
                 files = source_set.get("files")
-                if not isinstance(source_path, str) or not isinstance(safe_root, str) or not isinstance(files, list):
+                raw_identity = source_set.get("source_identity")
+                raw_entries = source_set.get("entries")
+                if (
+                    not isinstance(source_path, str)
+                    or not isinstance(safe_root, str)
+                    or not isinstance(files, list)
+                    or not isinstance(raw_identity, dict)
+                    or not isinstance(raw_entries, dict)
+                ):
                     return False
                 if self._regular_files(source_path, safe_root) != files:
+                    return False
+                expected_claim = self._decode_claim(source_path, safe_root, raw_identity, raw_entries)
+                if claim_source(source_path, safe_root) != expected_claim:
                     return False
             for record in records:
                 if not isinstance(record, dict):
@@ -103,7 +118,15 @@ class RecoveryBundleAdapter:
                 source_path = record.get("source_path")
                 safe_root = record.get("safe_root")
                 digest = record.get("sha256")
-                if not isinstance(source_path, str) or not isinstance(safe_root, str) or not isinstance(digest, str):
+                raw_identity = record.get("source_identity")
+                if (
+                    not isinstance(source_path, str)
+                    or not isinstance(safe_root, str)
+                    or not isinstance(digest, str)
+                    or not isinstance(raw_identity, dict)
+                ):
+                    return False
+                if claim_source(source_path, safe_root)["source_identity"] != self._decode_identity(raw_identity):
                     return False
                 fd = self._open_regular_beneath(source_path, safe_root)
                 try:
@@ -111,37 +134,46 @@ class RecoveryBundleAdapter:
                         return False
                 finally:
                     os.close(fd)
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
             return False
+        finally:
+            if bundle_fd is not None:
+                os.close(bundle_fd)
+            if descriptors is not None:
+                self._close_layout(descriptors)
         return True
 
-    def source_identities(self, bundle_path: str) -> dict[str, SourceIdentity]:
-        """Return the sealed no-follow identity for every artifact source root."""
-        manifest = json.loads(self._read_beneath(os.path.join(bundle_path, "manifest.json"), bundle_path))
-        if not isinstance(manifest, dict) or not self.validate_sources(bundle_path):
+    def source_claims(self, bundle_path: str) -> dict[str, SourceClaim]:
+        """Return every complete sealed source claim after full validation."""
+        if not self.validate_sources(bundle_path):
             raise ValueError("Recovery bundle is not valid")
-        identities: dict[str, SourceIdentity] = {}
-        source_sets = manifest.get("source_sets")
-        records = manifest.get("artifacts")
-        if not isinstance(source_sets, list) or not isinstance(records, list):
-            raise ValueError("Recovery manifest source identities are missing")
-        for item in [*source_sets, *records]:
-            if not isinstance(item, dict) or not isinstance(item.get("source_path"), str):
-                raise ValueError("Recovery manifest source identity is invalid")
-            raw = item.get("source_identity")
-            if not isinstance(raw, dict):
-                raise ValueError("Recovery manifest source identity is missing")
-            identity: SourceIdentity = {
-                "exists": raw.get("exists") is True,
-                "device": int(raw.get("device", 0)),
-                "inode": int(raw.get("inode", 0)),
-                "mode": int(raw.get("mode", 0)),
-                "size": int(raw.get("size", 0)),
-                "mtime_ns": int(raw.get("mtime_ns", 0)),
-                "ctime_ns": int(raw.get("ctime_ns", 0)),
-            }
-            identities[item["source_path"]] = identity
-        return identities
+        descriptors, bundle_fd = self._open_bundle(bundle_path)
+        try:
+            anchor = self._fd_path(bundle_fd)
+            manifest = json.loads(self._read_beneath(os.path.join(anchor, "manifest.json"), anchor))
+        finally:
+            os.close(bundle_fd)
+            self._close_layout(descriptors)
+        source_sets = manifest.get("source_sets") if isinstance(manifest, dict) else None
+        if not isinstance(source_sets, list):
+            raise ValueError("Recovery manifest source claims are missing")
+        claims: dict[str, SourceClaim] = {}
+        for item in source_sets:
+            if not isinstance(item, dict):
+                raise ValueError("Recovery manifest source claim is invalid")
+            source_path = item.get("source_path")
+            safe_root = item.get("safe_root")
+            raw_identity = item.get("source_identity")
+            raw_entries = item.get("entries")
+            if (
+                not isinstance(source_path, str)
+                or not isinstance(safe_root, str)
+                or not isinstance(raw_identity, dict)
+                or not isinstance(raw_entries, dict)
+            ):
+                raise ValueError("Recovery manifest source claim is invalid")
+            claims[source_path] = self._decode_claim(source_path, safe_root, raw_identity, raw_entries)
+        return claims
 
     @classmethod
     def _read_beneath(cls, path: str, safe_root: str) -> bytes:
@@ -165,63 +197,91 @@ class RecoveryBundleAdapter:
     ) -> str:
         if _SAFE_BUNDLE_ID.fullmatch(bundle_id) is None:
             raise ValueError("unsafe recovery bundle id")
-        staging_parent = os.path.join(self._root, "staging")
         bundles_parent = os.path.join(self._root, "bundles")
-        staging = os.path.join(staging_parent, f".{bundle_id}.staging")
+        staging_name = f".{bundle_id}.staging"
         sealed = os.path.join(bundles_parent, bundle_id)
-        self._ensure_dir(self._root)
-        self._ensure_dir(staging_parent)
-        self._ensure_dir(bundles_parent)
-        if os.path.lexists(staging) or os.path.lexists(sealed):
-            raise FileExistsError(f"Recovery bundle already exists: {bundle_id}")
-
+        descriptors = self._open_layout(create=True)
+        home_fd, root_fd, staging_parent_fd, bundles_parent_fd = descriptors
+        staging_fd: int | None = None
+        renamed = False
         try:
-            os.mkdir(staging, 0o700)
-            records, source_sets, checksums = self._copy_artifacts(staging, artifacts)
+            if (
+                self._stat_at(staging_parent_fd, staging_name) is not None
+                or self._stat_at(bundles_parent_fd, bundle_id) is not None
+            ):
+                raise FileExistsError(f"Recovery bundle already exists: {bundle_id}")
+            os.mkdir(staging_name, 0o700, dir_fd=staging_parent_fd)
+            staging_fd = self._open_dir_at(staging_parent_fd, staging_name)
+            staging_anchor = self._fd_path(staging_fd)
+            free_bytes = self._free_bytes_fd(root_fd)
+            records, source_sets, checksums = self._copy_artifacts(staging_anchor, artifacts, free_bytes)
             enriched = dict(snapshot)
             enriched["plugin_version"] = self._plugin_version
             enriched["bundle_id"] = bundle_id
             enriched["artifacts"] = records
             enriched["source_sets"] = source_sets
-            self._write_rom_states(staging, enriched, checksums)
-            self._write_verified_text(staging, "README.txt", readme, checksums)
-            self._write_verified_text(staging, "playtime.txt", playtime_text, checksums)
+            self._write_rom_states(staging_anchor, enriched, checksums)
+            self._write_verified_text(staging_anchor, "README.txt", readme, checksums)
+            self._write_verified_text(staging_anchor, "playtime.txt", playtime_text, checksums)
             self._write_verified_text(
-                staging,
+                staging_anchor,
                 "manifest.json",
                 json.dumps(enriched, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
                 checksums,
             )
             checksum_text = "".join(f"{digest}  {name}\n" for name, digest in sorted(checksums.items()))
-            self._write_verified_text(staging, "checksums.sha256", checksum_text, checksums=None)
+            self._write_verified_text(staging_anchor, "checksums.sha256", checksum_text, checksums=None)
             seal = {
                 "bundle_id": bundle_id,
-                "checksums_sha256": self._sha256(os.path.join(staging, "checksums.sha256")),
+                "checksums_sha256": self._sha256(os.path.join(staging_anchor, "checksums.sha256")),
                 "file_count": len(records),
                 "sealed": True,
             }
             self._write_verified_text(
-                staging,
+                staging_anchor,
                 "SEAL.json",
                 json.dumps(seal, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
                 checksums=None,
             )
-            self._fsync_dir(staging)
-            os.replace(staging, sealed)
+            os.fsync(staging_fd)
+            os.rename(
+                staging_name,
+                bundle_id,
+                src_dir_fd=staging_parent_fd,
+                dst_dir_fd=bundles_parent_fd,
+            )
+            renamed = True
             try:
-                self._fsync_dir(bundles_parent)
-            except OSError as exc:
-                uncertain = sealed + ".durability-uncertain"
-                os.replace(sealed, uncertain)
+                os.fsync(staging_parent_fd)
+                os.fsync(bundles_parent_fd)
+                self._require_layout_attached(home_fd, root_fd, staging_parent_fd, bundles_parent_fd)
+            except (OSError, ValueError) as exc:
+                uncertain_name = bundle_id + ".durability-uncertain"
+                with contextlib.suppress(OSError):
+                    os.rename(
+                        bundle_id,
+                        uncertain_name,
+                        src_dir_fd=bundles_parent_fd,
+                        dst_dir_fd=bundles_parent_fd,
+                    )
+                    os.fsync(bundles_parent_fd)
+                uncertain = os.path.join(bundles_parent, uncertain_name)
                 raise OSError(f"Recovery bundle durability is uncertain: {uncertain}") from exc
             return sealed
         except BaseException:
             with contextlib.suppress(OSError):
-                shutil.rmtree(staging)
+                if renamed:
+                    shutil.rmtree(bundle_id, dir_fd=bundles_parent_fd)
+                else:
+                    shutil.rmtree(staging_name, dir_fd=staging_parent_fd)
             raise
+        finally:
+            if staging_fd is not None:
+                os.close(staging_fd)
+            self._close_layout(descriptors)
 
     def _copy_artifacts(
-        self, staging: str, artifacts: list[RecoveryArtifact]
+        self, staging: str, artifacts: list[RecoveryArtifact], free_bytes: int
     ) -> tuple[list[dict[str, Any]], list[dict[str, object]], dict[str, str]]:
         expanded: list[tuple[RecoveryArtifact, str]] = []
         source_sets: list[dict[str, object]] = []
@@ -254,7 +314,7 @@ class RecoveryBundleAdapter:
                 required += os.fstat(fd).st_size
             finally:
                 os.close(fd)
-        if self.free_bytes() < required:
+        if free_bytes < required:
             raise OSError(f"Insufficient recovery space: need {required} bytes")
 
         files_dir = os.path.join(staging, "files")
@@ -288,6 +348,14 @@ class RecoveryBundleAdapter:
                 record["rom_id"] = artifact["rom_id"]
             records.append(record)
         self._fsync_dir(files_dir)
+        for source_set in source_sets:
+            source_path = source_set["source_path"]
+            safe_root = source_set["safe_root"]
+            if not isinstance(source_path, str) or not isinstance(safe_root, str):
+                raise ValueError("Recovery source set is invalid")
+            claim = claim_source(source_path, safe_root)
+            source_set["source_identity"] = claim["source_identity"]
+            source_set["entries"] = claim["entries"]
         return records, source_sets, checksums
 
     @classmethod
@@ -433,6 +501,146 @@ class RecoveryBundleAdapter:
         while block := os.read(fd, 1024 * 1024):
             digest.update(block)
         return digest.hexdigest()
+
+    def _open_layout(self, *, create: bool) -> tuple[int, int, int, int]:
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        if create:
+            os.makedirs(self._home, exist_ok=True)
+        home_fd = os.open(self._home, flags)
+        root_fd: int | None = None
+        staging_fd: int | None = None
+        bundles_fd: int | None = None
+        try:
+            root_name = os.path.basename(self._root)
+            root_fd = self._open_or_create_dir(home_fd, root_name, create=create)
+            staging_fd = self._open_or_create_dir(root_fd, "staging", create=create)
+            bundles_fd = self._open_or_create_dir(root_fd, "bundles", create=create)
+            return home_fd, root_fd, staging_fd, bundles_fd
+        except BaseException:
+            for fd in (bundles_fd, staging_fd, root_fd, home_fd):
+                if fd is not None:
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
+            raise
+
+    @staticmethod
+    def _close_layout(descriptors: tuple[int, int, int, int]) -> None:
+        for fd in reversed(descriptors):
+            os.close(fd)
+
+    @staticmethod
+    def _open_or_create_dir(parent_fd: int, name: str, *, create: bool) -> int:
+        try:
+            return RecoveryBundleAdapter._open_dir_at(parent_fd, name)
+        except FileNotFoundError:
+            if not create:
+                raise
+            os.mkdir(name, 0o700, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+            return RecoveryBundleAdapter._open_dir_at(parent_fd, name)
+        except OSError as exc:
+            raise ValueError(f"Recovery directory is not a trusted directory: {name}") from exc
+
+    @staticmethod
+    def _open_dir_at(parent_fd: int, name: str) -> int:
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        return os.open(name, flags, dir_fd=parent_fd)
+
+    def _open_bundle(self, bundle_path: str) -> tuple[tuple[int, int, int, int], int]:
+        expected_parent = os.path.join(self._root, "bundles")
+        absolute = os.path.abspath(bundle_path)
+        bundle_id = os.path.basename(absolute)
+        if os.path.dirname(absolute) != expected_parent or _SAFE_BUNDLE_ID.fullmatch(bundle_id) is None:
+            raise ValueError("Recovery bundle path is outside the anchored bundle directory")
+        descriptors = self._open_layout(create=False)
+        try:
+            self._require_layout_attached(*descriptors)
+            return descriptors, self._open_dir_at(descriptors[3], bundle_id)
+        except BaseException:
+            self._close_layout(descriptors)
+            raise
+
+    def _require_layout_attached(
+        self,
+        home_fd: int,
+        root_fd: int,
+        staging_fd: int,
+        bundles_fd: int,
+    ) -> None:
+        root_name = os.path.basename(self._root)
+        checks = (
+            (home_fd, root_name, root_fd),
+            (root_fd, "staging", staging_fd),
+            (root_fd, "bundles", bundles_fd),
+        )
+        for parent_fd, name, held_fd in checks:
+            current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            held = os.fstat(held_fd)
+            if (current.st_dev, current.st_ino, current.st_mode) != (held.st_dev, held.st_ino, held.st_mode):
+                raise ValueError("Recovery directory identity changed while the bundle was open")
+
+    @staticmethod
+    def _stat_at(parent_fd: int, name: str) -> os.stat_result | None:
+        try:
+            return os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+
+    @staticmethod
+    def _fd_path(fd: int) -> str:
+        return f"/proc/self/fd/{fd}"
+
+    @staticmethod
+    def _free_bytes_fd(fd: int) -> int:
+        stats = os.fstatvfs(fd)
+        return stats.f_bavail * stats.f_frsize
+
+    @staticmethod
+    def _decode_identity(raw: dict[str, object]) -> SourceIdentity:
+        def integer(key: str) -> int:
+            value = raw.get(key, 0)
+            if type(value) is not int:
+                raise ValueError(f"Recovery source identity field is invalid: {key}")
+            return value
+
+        return {
+            "exists": raw.get("exists") is True,
+            "device": integer("device"),
+            "inode": integer("inode"),
+            "mode": integer("mode"),
+            "size": integer("size"),
+            "mtime_ns": integer("mtime_ns"),
+            "ctime_ns": integer("ctime_ns"),
+        }
+
+    @classmethod
+    def _decode_claim(
+        cls,
+        source_path: str,
+        safe_root: str,
+        raw_identity: dict[str, object],
+        raw_entries: dict[str, object],
+    ) -> SourceClaim:
+        entries: dict[str, SourceEntry] = {}
+        for relative, raw_entry in raw_entries.items():
+            if not isinstance(raw_entry, dict):
+                raise ValueError("Recovery source claim entry is invalid")
+            identity = raw_entry.get("identity")
+            if not isinstance(identity, dict):
+                raise ValueError("Recovery source claim identity is invalid")
+            entry: SourceEntry = {"identity": cls._decode_identity(identity)}
+            digest = raw_entry.get("sha256")
+            if digest is not None:
+                if not isinstance(digest, str):
+                    raise ValueError("Recovery source claim checksum is invalid")
+                entry["sha256"] = digest
+            entries[relative] = entry
+        return {
+            "source_path": source_path,
+            "safe_root": safe_root,
+            "source_identity": cls._decode_identity(raw_identity),
+            "entries": entries,
+        }
 
     def _ensure_dir(self, path: str) -> None:
         if os.path.lexists(path):

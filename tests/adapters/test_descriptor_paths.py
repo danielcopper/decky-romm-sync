@@ -4,7 +4,14 @@ import os
 
 import pytest
 
-from adapters.descriptor_paths import identity_for_stat, remove_exact, stat_beneath
+from adapters.descriptor_paths import (
+    claim_source,
+    identity_for_stat,
+    remove_claimed,
+    remove_exact,
+    rename_claimed,
+    stat_beneath,
+)
 
 
 def test_inside_root_symlink_replacement_is_not_removed(tmp_path):
@@ -66,3 +73,55 @@ def test_replacement_in_pre_rename_window_is_verified_and_rolled_back(tmp_path, 
         remove_exact(str(source), str(safe), identity)
 
     assert source.read_bytes() == b"replacement"
+
+
+def test_claimed_directory_revalidates_descendants_and_restores_root_on_change(tmp_path):
+    safe = tmp_path / "safe"
+    source = safe / "game"
+    source.mkdir(parents=True)
+    child = source / "disc.bin"
+    child.write_bytes(b"sealed")
+    claim = claim_source(str(source), str(safe))
+    child.write_bytes(b"replacement")
+
+    with pytest.raises(RuntimeError, match="subtree changed"):
+        remove_claimed(str(source), str(safe), claim)
+
+    assert source.is_dir()
+    assert child.read_bytes() == b"replacement"
+
+
+def test_remove_reports_post_unlink_fsync_uncertainty(tmp_path, monkeypatch):
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    source = safe / "save.srm"
+    source.write_bytes(b"save")
+    claim = claim_source(str(source), str(safe))
+    monkeypatch.setattr("adapters.descriptor_paths.os.fsync", lambda _fd: (_ for _ in ()).throw(OSError("EIO")))
+
+    outcome = remove_claimed(str(source), str(safe), claim)
+
+    assert outcome == {
+        "success": False,
+        "changed": True,
+        "ambiguous": True,
+        "message": "Source was removed but directory durability is uncertain: EIO",
+    }
+    assert not source.exists()
+
+
+def test_rename_reports_post_move_fsync_uncertainty(tmp_path, monkeypatch):
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    source = safe / "save.srm"
+    destination = safe / "backup.srm"
+    source.write_bytes(b"save")
+    claim = claim_source(str(source), str(safe))
+    monkeypatch.setattr("adapters.descriptor_paths.os.fsync", lambda _fd: (_ for _ in ()).throw(OSError("EIO")))
+
+    outcome = rename_claimed(str(source), str(destination), str(safe), claim)
+
+    assert outcome["success"] is False
+    assert outcome["changed"] is True
+    assert outcome["ambiguous"] is True
+    assert destination.read_bytes() == b"save"

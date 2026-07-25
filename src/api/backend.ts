@@ -221,6 +221,7 @@ export const removePlatformShortcuts = callable<
     app_ids?: number[];
     rom_ids?: (string | number)[];
     platform_name?: string;
+    prune_lease_token?: string;
     reason?: string;
     message?: string;
     blocked_by_migration?: boolean;
@@ -239,6 +240,7 @@ export const removeAllShortcuts = callable<
     message?: string;
     app_ids?: number[];
     rom_ids?: (string | number)[];
+    prune_lease_token?: string;
     blocked_by_migration?: boolean;
   }
 >("remove_all_shortcuts");
@@ -303,8 +305,12 @@ export const reportUnitResults = callable<
   [Record<string, number>, string, number | string, number],
   { success: boolean; count: number; ignored?: boolean }
 >("report_unit_results");
-export const reportRemovalResults = callable<[(string | number)[]], { success: boolean; message: string }>(
-  "report_removal_results",
+export const reportRemovalResults = callable<
+  [(string | number)[], string | null],
+  { success: boolean; message: string }
+>("report_removal_results");
+export const releasePruneConflictLease = callable<[string], { success: boolean; message: string }>(
+  "release_prune_conflict_lease",
 );
 export const reconcileShortcuts = callable<
   [number[]],
@@ -356,7 +362,13 @@ export interface RebakeItem {
 
 export const setSystemCore = callable<
   [string, string],
-  { success: boolean; message?: string; bios_status?: BiosStatus; rebake_items?: RebakeItem[] }
+  {
+    success: boolean;
+    message?: string;
+    bios_status?: BiosStatus;
+    rebake_items?: RebakeItem[];
+    prune_lease_token?: string;
+  }
 >("set_system_core");
 
 /**
@@ -372,6 +384,7 @@ export interface GameCoreApplyResult {
   success: boolean;
   launch_options?: string;
   app_id?: number | null;
+  prune_lease_token?: string;
   reason?: string;
   message?: string;
 }
@@ -425,6 +438,7 @@ export interface SelectDiscResult {
   selected?: string | null;
   reason?: string;
   message?: string;
+  prune_lease_token?: string;
 }
 
 // Per-game disc pick (#865). Keyed by rom_id — the DB pin survives
@@ -651,6 +665,7 @@ export interface CompletePruneActionRequest {
   message: string;
   snapshot?: PruneSteamSnapshot;
   shortcut_absent?: boolean;
+  mutation_attempted?: boolean;
 }
 
 export type ReportPruneActionRequest = ClaimPruneActionRequest | CompletePruneActionRequest;
@@ -672,6 +687,9 @@ export const reportPruneAction = callable<
   [ReportPruneActionRequest],
   { success: boolean; ignored?: boolean; reason?: string; message: string }
 >("report_prune_action");
+export const waitForPruneRelease = callable<[string], { success: boolean; reason?: string; message: string }>(
+  "wait_for_prune_release",
+);
 
 export const saveLogLevel = callable<[string], { success: boolean }>("save_log_level");
 // Preferred sibling-group region (ADR-0021 §3). "auto" = build-time default

@@ -5,6 +5,7 @@ import {
   getExistingRomMShortcuts,
   getLiveRomMShortcutAppIds,
   removeShortcutConfirmed,
+  removeShortcutConfirmedOutcome,
   setLaunchOptionsConfirmed,
 } from "./steamShortcuts";
 import type { SyncAddItem } from "../types";
@@ -143,6 +144,21 @@ describe("removeShortcutConfirmed", () => {
 
     await expect(result).resolves.toBe(false);
     expect(apps.has(77)).toBe(true);
+  });
+
+  it("reports an attempted-but-unconfirmed outcome when the store becomes unreadable", async () => {
+    const apps = new Map<number, object>([[77, {}]]);
+    const store: { deckDesktopApps?: { apps: Map<number, object> } } = { deckDesktopApps: { apps } };
+    const remove = vi.fn(() => {
+      delete store.deckDesktopApps;
+    });
+    vi.stubGlobal("collectionStore", store);
+    vi.stubGlobal("SteamClient", { Apps: { RemoveShortcut: remove } });
+
+    await expect(removeShortcutConfirmedOutcome(77, 200, true)).resolves.toEqual({
+      status: "attempted_unconfirmed",
+    });
+    expect(remove).toHaveBeenCalledWith(77);
   });
 });
 
