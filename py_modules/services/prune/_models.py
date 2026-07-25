@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from models.prune import SteamRecoverySnapshot
 
 
 @dataclass(frozen=True)
@@ -30,7 +33,7 @@ class PruneOptions:
     include_installed_rom_ids: frozenset[int]
 
 
-@dataclass(frozen=True)
+@dataclass
 class PendingAction:
     """The one frontend Steam action the backend is awaiting."""
 
@@ -38,4 +41,19 @@ class PendingAction:
     token: str
     kind: str
     app_id: int | None
+    expected_bound_rom_id: int | None
+    target_rom_id: int | None
     future: object
+    claimed: bool = False
+    claim_event: object | None = None
+    expires_at: float = 0.0
+
+
+@dataclass(frozen=True)
+class RecoveryHandle:
+    """Sealed recovery state that finalization must revalidate and consume."""
+
+    bundle_path: str
+    snapshot: dict[str, object]
+    save_inventory: dict[str, Any]
+    steam_backend: SteamRecoverySnapshot | None

@@ -88,9 +88,22 @@ class RomRemovalService:
             if not is_safe_rom_path(file_path, roms_base):
                 raise ValueError(f"Refusing to delete path outside roms directory: {file_path}")
             if self._rom_file_store.is_dir(file_path):
-                self._rom_file_store.remove_tree(file_path)
-            elif self._rom_file_store.exists(file_path):
+                raise ValueError(f"Expected installed ROM file, found a directory: {file_path}")
+            if self._rom_file_store.exists(file_path):
                 self._rom_file_store.remove_file(file_path)
+
+    def delete_rom_files(self, rom_id: int) -> dict[str, Any]:
+        """Delete only installed content, leaving every database row untouched."""
+        with self._uow_factory() as uow:
+            install = uow.rom_installs.get(int(rom_id))
+        if install is None:
+            return {"success": False, "reason": "not_installed", "message": "ROM not installed"}
+        try:
+            self._delete_rom_files(install)
+        except Exception as exc:
+            self._logger.error(f"Failed to delete ROM files: {exc}")
+            return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": str(exc)}
+        return {"success": True, "message": "ROM files removed"}
 
     def _remove_rom_io(self, rom_id: int, install: RomInstall) -> None:
         """Sync helper for remove_rom — file deletion (outside UoW) then row delete in a short write UoW.

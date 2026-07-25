@@ -19,6 +19,11 @@ class FakePluginMetadataReader:
         self.last_plugin_dir: str | None = None
         self.read_count = 0
 
+    def read_metadata(self, plugin_dir: str) -> tuple[str, str]:
+        self.last_plugin_dir = plugin_dir
+        self.read_count += 1
+        return self.name, self.version
+
     def read_version(self, plugin_dir: str) -> str:
         self.last_plugin_dir = plugin_dir
         self.read_count += 1

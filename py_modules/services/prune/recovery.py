@@ -88,6 +88,41 @@ class RecoveryCoordinator:
             "warnings": [],
         }
 
+    def state_matches(
+        self,
+        expected: dict[str, object],
+        rom_ids: list[int],
+        committed_action: str | None = None,
+        app_id: int | None = None,
+        target_id: int | None = None,
+        launch_options: str | None = None,
+    ) -> bool:
+        """Compare all database state represented by a sealed recovery snapshot."""
+        current = self.snapshot_state(rom_ids, None)
+        keys = (
+            "roms",
+            "installs",
+            "metadata",
+            "save_sync",
+            "playtime",
+            "platform_sync_state",
+            "collection_sync_state",
+        )
+        projected = {key: expected.get(key) for key in keys}
+        raw_roms = projected.get("roms")
+        if isinstance(raw_roms, list) and committed_action is not None and app_id is not None:
+            roms = [dict(row) if isinstance(row, dict) else row for row in raw_roms]
+            for row in roms:
+                if not isinstance(row, dict):
+                    continue
+                if row.get("shortcut_app_id") == app_id:
+                    row["shortcut_app_id"] = None
+                if committed_action == "repoint_shortcut" and row.get("rom_id") == target_id:
+                    row["shortcut_app_id"] = app_id
+                    row["applied_launch_options"] = launch_options
+            projected["roms"] = roms
+        return all(current.get(key) == projected.get(key) for key in keys)
+
     def seal(
         self,
         *,
@@ -95,11 +130,12 @@ class RecoveryCoordinator:
         snapshot: dict[str, object],
         save_inventory: dict[str, Any],
         include_installed_rom_ids: set[int],
+        delete_ids: set[int],
         app_id: int | None,
     ) -> tuple[str, SteamRecoverySnapshot | None]:
         rom_ids = [row.rom_id for row in rows]
         artifacts: list[RecoveryArtifact] = list(save_inventory["artifacts"])
-        artifacts.extend(self._prune_artifacts.recovery_artifacts(rom_ids))
+        artifacts.extend(self._prune_artifacts.recovery_artifacts(sorted(delete_ids)))
         roms_root = self._retrodeck_paths.roms_path()
         raw_installs = snapshot.get("installs")
         installs = raw_installs if isinstance(raw_installs, list) else []
@@ -122,6 +158,9 @@ class RecoveryCoordinator:
             steam_artifacts = steam_backend["artifacts"]
             artifacts.extend(steam_artifacts)
             snapshot["steam_backend"] = {
+                "user_id": steam_backend["user_id"],
+                "user_dir": steam_backend["user_dir"],
+                "steam_root": steam_backend["steam_root"],
                 "controller_setting": steam_backend["controller_setting"],
                 "artifact_count": len(steam_artifacts),
             }

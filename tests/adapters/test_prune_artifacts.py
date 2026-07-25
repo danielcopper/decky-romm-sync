@@ -16,7 +16,9 @@ def test_discovers_and_removes_only_named_rom_cache_files(tmp_path):
     adapter = PruneArtifactAdapter(runtime_dir=str(tmp_path))
 
     artifacts = adapter.recovery_artifacts([7])
-    assert {Path(item["source_path"]) for item in artifacts} == set(expected)
+    sources = {Path(item["source_path"]) for item in artifacts}
+    assert set(expected) <= sources
+    assert artwork / "7_icon.png" in sources
     adapter.remove([7])
     assert all(not path.exists() for path in expected)
     assert unrelated.exists()

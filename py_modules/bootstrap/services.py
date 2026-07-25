@@ -494,12 +494,12 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             recovery_store=cfg.adapters.recovery_store,
             prune_artifacts=cfg.adapters.prune_artifacts,
             steam_recovery=cfg.adapters.steam_recovery,
-            steam_config=cfg.adapters.steam_config,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
             save_coordinator=save_sync_service,
             active_downloads=download_service.active_download_rom_ids,
             drift_probe=launch_gate_service.check_local_drift,
-            remove_installed_rom=rom_removal_service.remove_rom,
+            remove_installed_files=rom_removal_service.delete_rom_files,
+            switch_version=version_switch_service.switch_version,
             settings=cfg.stores.settings,
         )
     )

@@ -17,7 +17,7 @@ _SAFE_UUID = re.compile(r"^[A-Za-z0-9-]+$", re.ASCII)
 def sanitize_package_name(name: object) -> str:
     """Return an ASCII path component suitable for the recovery-root name."""
     raw = name if isinstance(name, str) else ""
-    cleaned = _UNSAFE_PACKAGE_RUN.sub("-", raw.encode("ascii", "ignore").decode("ascii")).strip("-._")
+    cleaned = _UNSAFE_PACKAGE_RUN.sub("-", raw).strip("-._")
     return cleaned or "decky-plugin"
 
 

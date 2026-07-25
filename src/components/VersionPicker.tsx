@@ -31,7 +31,6 @@ import {
   syncRomSaves,
   refreshSaveStatus,
   fetchCoverBase64,
-  invalidateCachedGameDetail,
   logError,
   logWarn,
 } from "../api/backend";
@@ -43,7 +42,7 @@ import type {
   SwitchVersionUnsyncedSaves,
 } from "../api/backend";
 import { reportServerReachable } from "../utils/connectionState";
-import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
+import { applyCommittedVersionSwitch } from "../utils/versionSwitchApplication";
 import { showUnsyncedSavesModal } from "./UnsyncedSavesSwitchModal";
 import { getEventTarget } from "../utils/events";
 import { detach } from "../utils/detach";
@@ -230,35 +229,12 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   // command; it self-heals at the next startup/sync reconcile, so we warn and
   // nudge the user rather than reporting the whole switch as failed.
   const applySwitchSuccess = async (result: SwitchVersionSuccess): Promise<void> => {
-    let confirmed = false;
-    try {
-      confirmed = await setLaunchOptionsConfirmed(result.app_id, result.launch_options);
-    } catch (e) {
-      logError(`VersionPicker: launch-options confirm threw for rom ${result.rom_id} (appId ${result.app_id}): ${e}`);
-    }
+    const confirmed = await applyCommittedVersionSwitch(result, (romId, cover) =>
+      setCovers((prev) => ({ ...prev, [romId]: cover })),
+    );
     if (!confirmed) {
-      logError(`VersionPicker: could not confirm launch options for rom ${result.rom_id} (appId ${result.app_id})`);
       toaster.toast({ title: "RomM Sync", body: "Switched — re-switch if launch fails" });
     }
-    // Publish the newly active version's cover onto the Steam shortcut so the
-    // grid art tracks the binding (#1346). Cache-first and best-effort — a
-    // missing/unfetchable cover leaves the old art in place and never disturbs
-    // the already-committed switch.
-    try {
-      const cover = await fetchCoverBase64(result.rom_id);
-      if (cover.base64) {
-        setCovers((prev) => ({ ...prev, [result.rom_id]: cover.base64! }));
-        await SteamClient.Apps.SetCustomArtworkForApp(result.app_id, cover.base64, "png", 0);
-      }
-    } catch (e) {
-      logWarn(`VersionPicker: cover apply after switch failed for rom ${result.rom_id}: ${e}`);
-    }
-    invalidateCachedGameDetail(appId);
-    globalThis.dispatchEvent(
-      new CustomEvent("romm_data_changed", {
-        detail: { type: "version_switched", app_id: appId, rom_id: result.rom_id },
-      }),
-    );
   };
 
   const refreshAfterVanishedRefusal = (): Promise<void> => {

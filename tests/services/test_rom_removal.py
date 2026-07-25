@@ -141,6 +141,28 @@ class TestDeleteRomFiles:
         assert system_dir in rom_files.dirs  # the system dir itself survives
         assert rom_files.remove_tree_calls == []
 
+    def test_single_file_record_pointing_at_nested_directory_fails_closed(self, service, rom_files):
+        nested = f"{_ROMS_BASE}/n64/shared-content"
+        rom_files.dirs.add(nested)
+        rom_files.files[f"{nested}/other.z64"] = b"keep"
+
+        with pytest.raises(ValueError, match="Expected installed ROM file"):
+            service._delete_rom_files(_make_install(1, file_path=nested, rom_dir=None))
+
+        assert f"{nested}/other.z64" in rom_files.files
+        assert rom_files.remove_tree_calls == []
+
+    def test_filesystem_only_removal_leaves_install_and_rom_rows(self, service, uow, rom_files):
+        rom_path = f"{_ROMS_BASE}/n64/game.z64"
+        rom_files.files[rom_path] = b"rom"
+        _seed_install(uow, _make_install(7, file_path=rom_path))
+
+        result = service.delete_rom_files(7)
+
+        assert result["success"] is True
+        assert uow.roms.get(7) is not None
+        assert uow.rom_installs.get(7) is not None
+
     def test_refuses_file_outside_roms_dir(self, service, rom_files):
         evil = "/evil/important.txt"
         rom_files.files[evil] = b"do not delete"

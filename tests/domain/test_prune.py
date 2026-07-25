@@ -21,7 +21,8 @@ def _rom(rom_id: int, group: str | None) -> Rom:
 
 def test_package_name_sanitization_and_fallback():
     assert sanitize_package_name("decky romm/../sync") == "decky-romm-..-sync"
-    assert sanitize_package_name("dëcky") == "dcky"
+    assert sanitize_package_name("dëcky") == "d-cky"
+    assert sanitize_package_name("aéb") == "a-b"
     assert sanitize_package_name("///") == "decky-plugin"
     assert sanitize_package_name(None) == "decky-plugin"
 

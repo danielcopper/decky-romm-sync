@@ -158,6 +158,10 @@ export function registerRomMAppId(appId: number) {
   rommAppIds.add(appId);
 }
 
+export function unregisterRomMAppId(appId: number) {
+  rommAppIds.delete(appId);
+}
+
 export function isRomMAppId(appId: number): boolean {
   return rommAppIds.has(appId);
 }

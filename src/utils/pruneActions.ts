@@ -1,6 +1,12 @@
-import { fetchCoverBase64, logError, reportPruneAction, switchVersion } from "../api/backend";
-import type { PruneSteamSnapshot, ReportPruneActionRequest } from "../api/backend";
-import { getAppDetails, removeShortcutConfirmed, setLaunchOptionsConfirmed } from "./steamShortcuts";
+import { logError, reportPruneAction } from "../api/backend";
+import type {
+  CompletePruneActionRequest,
+  PruneSteamSnapshot,
+  ReportPruneActionRequest,
+  SwitchVersionSuccess,
+} from "../api/backend";
+import { getAppDetails, isRomMShortcutDetails, removeShortcutConfirmed } from "./steamShortcuts";
+import { applyCommittedVersionSwitch } from "./versionSwitchApplication";
 
 export type PruneActionRequired =
   | { run_id: string; action_token: string; action: "capture_shortcut_snapshot"; app_id: number }
@@ -10,17 +16,16 @@ export type PruneActionRequired =
       action: "repoint_shortcut";
       app_id: number;
       target_rom_id: number;
-      allow_stranded: boolean;
+      launch_options: string;
+      target_installed: boolean;
     }
   | { run_id: string; action_token: string; action: "remove_shortcut"; app_id: number };
 
-const SNAPSHOT_STRING_CHARS = 1024;
-const SNAPSHOT_COLLECTION_CHARS = 512;
 const SNAPSHOT_BUDGET_BYTES = 56 * 1024;
-
-function bounded(value: string | undefined, limit = SNAPSHOT_STRING_CHARS): string {
-  return (value ?? "").slice(0, limit);
-}
+const REPORT_ATTEMPTS = 3;
+const handledTokens = new Set<string>();
+let actionQueue: Promise<void> = Promise.resolve();
+let actionGeneration = 0;
 
 function asciiJsonSize(value: unknown): number {
   let bytes = 0;
@@ -31,75 +36,148 @@ function asciiJsonSize(value: unknown): number {
   return bytes;
 }
 
-async function captureShortcutSnapshot(appId: number): Promise<PruneSteamSnapshot | null> {
-  if (typeof collectionStore === "undefined") return null;
+function isPruneAction(value: unknown): value is PruneActionRequired {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  if (typeof item.run_id !== "string" || typeof item.action_token !== "string" || typeof item.app_id !== "number") {
+    return false;
+  }
+  if (item.action === "capture_shortcut_snapshot" || item.action === "remove_shortcut") return true;
+  return (
+    item.action === "repoint_shortcut" &&
+    typeof item.target_rom_id === "number" &&
+    typeof item.launch_options === "string" &&
+    typeof item.target_installed === "boolean"
+  );
+}
+
+function requireString(value: unknown, field: string): string {
+  if (typeof value !== "string") throw new Error(`Steam shortcut ${field} was unavailable`);
+  return value;
+}
+
+async function captureShortcutSnapshot(appId: number): Promise<PruneSteamSnapshot> {
+  if (typeof collectionStore === "undefined" || typeof appStore === "undefined") {
+    throw new Error("Steam shortcut, collection, or playtime state was unavailable");
+  }
   const details = await getAppDetails(appId);
-  if (!details) return null;
-  const overview = typeof appStore === "undefined" ? null : appStore.GetAppOverviewByAppID(appId);
+  if (!isRomMShortcutDetails(details)) throw new Error("The live shortcut is not owned by RomM Sync");
+  const overview = appStore.GetAppOverviewByAppID(appId);
+  if (!details || !overview) throw new Error("Steam shortcut playtime state was unavailable");
   const collections = collectionStore.userCollections
     .filter((collection) => collection.apps.has(appId))
-    .slice(0, 256)
     .map((collection) => ({
-      id: bounded(collection.id, SNAPSHOT_COLLECTION_CHARS),
-      name: bounded(collection.displayName, SNAPSHOT_COLLECTION_CHARS),
+      id: requireString(collection.id, "collection id"),
+      name: requireString(collection.displayName, "collection name"),
     }));
   const snapshot: PruneSteamSnapshot = {
     app_id: appId,
-    name: bounded(details.strDisplayName ?? overview?.strDisplayName),
-    exe: bounded(details.strShortcutExe),
-    start_dir: bounded(details.strShortcutStartDir),
-    launch_options: bounded(details.strLaunchOptions ?? details.LaunchOptions),
-    minutes_playtime_forever: overview?.minutes_playtime_forever ?? null,
-    minutes_playtime_last_two_weeks: overview?.minutes_playtime_last_two_weeks ?? null,
-    last_played: overview?.rt_last_time_played ?? null,
+    name: requireString(details.strDisplayName ?? overview.strDisplayName, "name"),
+    exe: requireString(details.strShortcutExe, "executable"),
+    start_dir: requireString(details.strShortcutStartDir, "start directory"),
+    launch_options: requireString(details.strLaunchOptions ?? details.LaunchOptions, "launch options"),
+    minutes_playtime_forever: overview.minutes_playtime_forever ?? null,
+    minutes_playtime_last_two_weeks: overview.minutes_playtime_last_two_weeks ?? null,
+    last_played: overview.rt_last_time_played ?? null,
     collections,
   };
-  while (snapshot.collections.length > 0 && asciiJsonSize(snapshot) > SNAPSHOT_BUDGET_BYTES) {
-    snapshot.collections.pop();
+  if (asciiJsonSize(snapshot) > SNAPSHOT_BUDGET_BYTES) {
+    throw new Error("Complete Steam shortcut state is too large for a safe recovery snapshot");
   }
   return snapshot;
 }
 
-async function applyRepoint(action: Extract<PruneActionRequired, { action: "repoint_shortcut" }>): Promise<string> {
-  const result = await switchVersion(action.app_id, action.target_rom_id, action.allow_stranded);
-  if (!result.success || result.rom_id !== action.target_rom_id || result.app_id !== action.app_id) {
-    throw new Error(result.success ? "Version switch returned the wrong target" : result.message);
+async function reportWithRetry(request: ReportPruneActionRequest): Promise<boolean> {
+  let lastMessage = "Action report was rejected.";
+  for (let attempt = 1; attempt <= REPORT_ATTEMPTS; attempt++) {
+    try {
+      const result = await reportPruneAction(request);
+      if (result.success) return true;
+      lastMessage = result.message;
+      if (
+        result.reason === "stale_action" ||
+        result.reason === "local_state_changed" ||
+        result.reason === "action_already_claimed"
+      )
+        break;
+    } catch (e) {
+      lastMessage = e instanceof Error ? e.message : String(e);
+    }
+    if (attempt < REPORT_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, attempt * 100));
+    }
   }
-  if (!(await setLaunchOptionsConfirmed(result.app_id, result.launch_options))) {
-    throw new Error("Steam did not confirm the target launch command");
-  }
-  const cover = await fetchCoverBase64(result.rom_id);
-  if (cover.base64) {
-    await SteamClient.Apps.SetCustomArtworkForApp(result.app_id, cover.base64, "png", 0);
-  }
-  return "Shortcut repointed and launch command confirmed.";
+  logError(`Failed to report prune action ${request.action_token}: ${lastMessage}`);
+  return false;
 }
 
-export async function handlePruneAction(action: PruneActionRequired): Promise<void> {
-  let report: ReportPruneActionRequest;
+function claimAction(action: PruneActionRequired): Promise<boolean> {
+  return reportWithRetry({
+    phase: "claim",
+    run_id: action.run_id,
+    action_token: action.action_token,
+  });
+}
+
+function assertCurrent(generation: number): void {
+  if (generation !== actionGeneration) throw new Error("Cleanup action was cancelled before Steam mutation");
+}
+
+async function executePruneAction(action: PruneActionRequired, generation: number): Promise<void> {
+  let claimed = false;
+  const claim = async (): Promise<boolean> => {
+    if (claimed) return true;
+    claimed = await claimAction(action);
+    return claimed;
+  };
+  let report: CompletePruneActionRequest;
   try {
+    assertCurrent(generation);
     if (action.action === "capture_shortcut_snapshot") {
-      const snapshot = await captureShortcutSnapshot(action.app_id);
-      if (!snapshot) throw new Error("Steam shortcut details or collection state were unavailable");
+      if (!(await claim())) return;
+      assertCurrent(generation);
       report = {
+        phase: "complete",
         run_id: action.run_id,
         action_token: action.action_token,
         success: true,
         message: "Steam shortcut state captured.",
-        snapshot,
+        snapshot: await captureShortcutSnapshot(action.app_id),
       };
     } else if (action.action === "repoint_shortcut") {
+      const details = await getAppDetails(action.app_id);
+      if (!isRomMShortcutDetails(details)) throw new Error("The live shortcut is not owned by RomM Sync");
+      assertCurrent(generation);
+      if (!(await claim())) return;
+      assertCurrent(generation);
+      const result: SwitchVersionSuccess = {
+        success: true,
+        app_id: action.app_id,
+        rom_id: action.target_rom_id,
+        target_installed: action.target_installed,
+        launch_options: action.launch_options,
+      };
+      if (!(await applyCommittedVersionSwitch(result))) {
+        throw new Error("Steam did not confirm the target launch command");
+      }
       report = {
+        phase: "complete",
         run_id: action.run_id,
         action_token: action.action_token,
         success: true,
-        message: await applyRepoint(action),
+        message: "Shortcut repointed and launch command confirmed.",
       };
     } else {
-      if (!(await removeShortcutConfirmed(action.app_id))) {
-        throw new Error("Steam did not confirm shortcut removal");
+      const details = await getAppDetails(action.app_id);
+      if (!isRomMShortcutDetails(details)) throw new Error("The live shortcut is not owned by RomM Sync");
+      assertCurrent(generation);
+      if (!(await claim())) return;
+      assertCurrent(generation);
+      if (!(await removeShortcutConfirmed(action.app_id, 3000, true))) {
+        throw new Error("Steam did not confirm owned-shortcut removal");
       }
       report = {
+        phase: "complete",
         run_id: action.run_id,
         action_token: action.action_token,
         success: true,
@@ -108,6 +186,7 @@ export async function handlePruneAction(action: PruneActionRequired): Promise<vo
     }
   } catch (e) {
     report = {
+      phase: "complete",
       run_id: action.run_id,
       action_token: action.action_token,
       success: false,
@@ -115,9 +194,24 @@ export async function handlePruneAction(action: PruneActionRequired): Promise<vo
       message: e instanceof Error ? e.message : String(e),
     };
   }
-  try {
-    await reportPruneAction(report);
-  } catch (e) {
-    logError(`Failed to report prune action ${action.action_token}: ${e}`);
+  if (!(await claim())) return;
+  await reportWithRetry(report);
+}
+
+export function handlePruneAction(value: PruneActionRequired): Promise<void> {
+  if (!isPruneAction(value)) {
+    logError("Ignored an invalid prune action event.");
+    return Promise.resolve();
   }
+  if (handledTokens.has(value.action_token)) return Promise.resolve();
+  handledTokens.add(value.action_token);
+  const generation = actionGeneration;
+  const queued = actionQueue.then(() => executePruneAction(value, generation));
+  actionQueue = queued.catch(() => {});
+  return queued;
+}
+
+export function cancelPruneActions(): void {
+  actionGeneration++;
+  handledTokens.clear();
 }

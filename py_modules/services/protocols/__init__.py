@@ -32,6 +32,7 @@ from services.protocols.cross_service import (
     DeviceForgetFn,
     DeviceIdProvider,
     DiscResolver,
+    InstalledRomFilesRemoverFn,
     InstalledRomRemoverFn,
     LaunchGateDriftReader,
     LaunchGateInstalledChecker,
@@ -53,6 +54,7 @@ from services.protocols.cross_service import (
     SessionMigrationReader,
     SessionPlaytimeRecorder,
     SessionPostExitSync,
+    VersionSwitcherFn,
 )
 from services.protocols.determinism import Clock, Sleeper, UuidGen
 from services.protocols.files import (
@@ -154,6 +156,7 @@ __all__ = [
     "FirmwareFileStore",
     "GameProcessControl",
     "HostnameReader",
+    "InstalledRomFilesRemoverFn",
     "InstalledRomRemoverFn",
     "KvConfigRepository",
     "LaunchGateDriftReader",
@@ -225,4 +228,5 @@ __all__ = [
     "UnitOfWork",
     "UnitOfWorkFactory",
     "UuidGen",
+    "VersionSwitcherFn",
 ]

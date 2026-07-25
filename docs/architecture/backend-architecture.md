@@ -165,33 +165,51 @@ resolution, event, cache invalidation, sync, or completion-stamp update.
 
 #### Explicit removed-game cleanup (`services/prune/`)
 
-| Module        | Role                                                                                         |
-| ------------- | -------------------------------------------------------------------------------------------- |
-| `service.py`  | Callable facade, one-run state, liveness probes, and serial group execution                  |
-| `preview.py`  | Local generation-gated candidate snapshot, fingerprint, size measurement, and paging         |
-| `recovery.py` | Lossless aggregate snapshots, recovery artifact assembly, and human-readable bundle metadata |
-| `registry.py` | Short SQLite reads, pre-mutation race validation, and final cascade delete                   |
-| `requests.py` | Preview/option decoding and bounded Steam snapshot validation                                |
+| Module        | Role                                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------------- |
+| `service.py`  | Callable facade, atomic preview/run admission, and claimed frontend action leases                 |
+| `executor.py` | Serial per-group liveness, recovery, Steam-action, reconciliation, and finalization state machine |
+| `preview.py`  | Local generation-gated candidate snapshot, complete affected-group disclosure, sizing, and paging |
+| `recovery.py` | Lossless aggregate snapshots, recovery artifact assembly, and sealed-state comparison             |
+| `registry.py` | Short SQLite reads, action/final race validation, reconciliation, and final cascade delete        |
+| `requests.py` | Preview/option decoding, bounded selections, and lossless bounded Steam snapshot validation       |
 
 `PruneService` is the only path that deliberately deletes retained `roms` aggregate roots. A bulk preview is local-only:
 for each platform it requires a non-empty completed fetch generation and selects rows whose `last_fetch_id` differs,
 including NULL row generations. An inline preview may nominate one concrete retained ROM without generation evidence.
-Both forms return bounded pages plus an ephemeral fingerprint; `start_prune` rebuilds the preview and rejects stale
-local state. Migration and active-library-sync decorators guard preview and start.
+Both forms return bounded pages plus an ephemeral fingerprint. Pages include every member of an affected sibling group,
+with generation candidates marked separately, so whole-game deletion cannot reach an undisclosed row. `start_prune`
+atomically refuses any registered conflicting callable and reserves the run before rebuilding the preview; concurrent
+starts cannot consume one token twice. Each sync, download, migration, version-switch, save-write, session, uninstall,
+or cache-mutation callable registers for its full lifetime before its first await, closing the reciprocal admission
+race, and refuses while a prune claim is active. Migration and active-library-sync decorators additionally guard preview
+and start.
 
-The executor processes sibling groups serially. It rejects multiple shortcut bindings and active downloads, probes every
-local group member with the single-attempt three-second `get_rom_once`, and treats only a typed `RommNotFoundError` as
-destructive authority. Live, malformed, wrong-id, transport, authentication, timeout, server, and unknown outcomes
-retain data. Long recovery and frontend round trips are followed by another exact-ID proof before local source removal.
-The natural live repoint target uses the same `resolve_group_representative` ranking as the version picker with empty
-installed/bound preference sets.
+The executor processes sibling groups serially and catches ordinary exceptions per group. It rejects multiple shortcut
+bindings and active downloads, probes every local group member with the single-attempt three-second `get_rom_once`, and
+treats only a typed `RommNotFoundError` as destructive authority. Live, malformed, wrong-id, transport, authentication,
+timeout, server, and unknown outcomes retain data. Long recovery and frontend round trips are followed by another
+exact-ID proof before local source removal. The natural live repoint target uses the same filename-stem projection and
+`resolve_group_representative` ranking as the version picker with empty installed/bound preference sets. Repoint
+selection is independent of row deletion.
 
-Recovery is coordinated through ordered ROM save locks, acquired with no UoW open. Short read UoWs close before
-filesystem work, and no RomM request or frontend wait runs under those locks. The bundle is sealed before mutation;
-after the frontend action the service reacquires the relevant locks, re-inventories exact save ownership, and
-quarantines exclusive current saves through the existing history-preserving funnel. The final SQLite delete is one short
-UoW that revalidates bindings/group membership, invalidates intersecting collection stamps, and clears platform stamps
-only for fully vanished games. Mixed runs emit per-group reasons and continue unrelated groups.
+Recovery is coordinated through ordered ROM save locks, acquired with no UoW open. The lock set is retried until shared
+save ownership is stable. Short read UoWs close before filesystem work, and no RomM request, event emission, or frontend
+wait runs under those locks. The bundle is sealed before mutation; after the frontend action the service reacquires and
+holds the stable locks through save quarantine, filesystem-only installed-content removal, and the final parent cascade.
+It first re-inventories exact save ownership and verifies the current aggregate/source bytes against the sealed
+manifest; source sets also record expected absence, so an attributable cache or Steam file that appears after sealing
+invalidates finalization. The final SQLite delete is one short UoW that revalidates complete row/binding state,
+invalidates intersecting collection stamps, and clears platform stamps only for fully vanished games.
+
+Frontend Steam events use a claim/complete protocol. A claim checks the run, token, discriminant, appId, and current
+binding before the frontend rechecks the live `rom-launcher` executable and mutates Steam. The lease is monotonic-clock
+bounded and rechecked after asynchronous validation; duplicate or expired claims cannot authorize a mutation. Repoint
+commits through the normal version-switch authority first; shortcut removal is immediately reconciled to an unbound
+local row after Steam confirms absence. A later guard failure is therefore an explicit `partial` result with the
+committed action recorded, not a claim that the group was unchanged. Once filesystem finalization begins it is shielded
+from task cancellation and awaited to a known result. Terminal results are emitted in bounded chunks; mixed runs
+continue unrelated groups.
 
 #### LibraryService decomposition (`services/library/`)
 

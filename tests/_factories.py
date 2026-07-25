@@ -79,5 +79,7 @@ def _make_testable_plugin():
     instance = TestablePlugin()
     instance._migration_service = MagicMock()
     instance._migration_service.is_retrodeck_migration_pending.return_value = False
+    instance._prune_service = MagicMock()
+    instance._prune_service.is_active.return_value = False
     instance._debug_logger = lambda msg: None
     return instance

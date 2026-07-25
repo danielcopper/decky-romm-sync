@@ -333,6 +333,8 @@ class MatrixExecutor:
         if not self._save_file_store.is_file(local_path):
             return False
         backup_dir = os.path.join(saves_dir, ".romm-backup")
+        if self._save_file_store.is_symlink(backup_dir) or not self._save_file_store.is_within(backup_dir, saves_dir):
+            raise ValueError(f"Unsafe save backup directory: {backup_dir}")
         self._save_file_store.make_dirs(backup_dir)
         ts = self._clock.now().strftime("%Y%m%d_%H%M%S")
         existing = set(self._save_file_store.listdir(backup_dir))

@@ -215,6 +215,14 @@ Format: **invariant** — tier — enforced by.
   is never mutated while the stash is pending (box IDLE) — every run-entry path passes `try_begin_run`, which clears the
   stash before any staging write** — prompt-only — the invariant holds today rather than being aspirational; mechanize
   via a staging-writer call-site audit
+- **A prune claim excludes library sync, downloads/resumes, migrations, version switches, save mutations, session
+  writes, uninstalls, and affected cache cleanup; each conflicting callable registers before its first await, and run
+  admission atomically refuses those registrations before reserving the prune claim and refreshing the preview** —
+  test + prompt-only — prune service/gate race tests + contract callable-entry matrix; new conflicting entry points are
+  prompt-only
+- **A prune frontend action mutates Steam only after atomically claiming its exact run/token/discriminant/binding;
+  action delivery is serialized/deduplicated and completion retries never repeat the Steam operation** — test +
+  prompt-only — prune service claim tests + `src/utils/pruneActions.test.ts`; new action kinds are prompt-only
 
 When a change applies a guard / sanitize / backup / grouping pattern, sweep for sibling sites of the same pattern — the
 register is what that sweep checks against.

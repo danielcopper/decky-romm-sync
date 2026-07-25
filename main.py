@@ -17,6 +17,7 @@ from bootstrap import (
 )
 
 from lib.migration_gate import migration_blocked
+from lib.prune_gate import prune_active_blocked, prune_exclusive_start
 from lib.sync_gate import sync_active_blocked
 
 
@@ -287,6 +288,7 @@ class Plugin:
         return await self._version_switch_service.get_version_list(app_id)
 
     @migration_blocked
+    @prune_active_blocked
     async def switch_version(self, app_id, target_rom_id, allow_stranded):
         return await self._version_switch_service.switch_version(app_id, target_rom_id, allow_stranded)
 
@@ -295,6 +297,7 @@ class Plugin:
     async def get_prune_preview(self, request):
         return await self._prune_service.get_prune_preview(request)
 
+    @prune_exclusive_start
     @migration_blocked
     @sync_active_blocked
     async def start_prune(self, request):
@@ -366,6 +369,7 @@ class Plugin:
         return self._settings_service.set_collection_naming_mode(mode)
 
     @migration_blocked
+    @prune_active_blocked
     async def start_sync(self):
         return self._sync_service.start_sync()
 
@@ -376,10 +380,12 @@ class Plugin:
         return self._sync_service.sync_heartbeat()
 
     @migration_blocked
+    @prune_active_blocked
     async def sync_preview(self):
         return await self._sync_service.sync_preview()
 
     @migration_blocked
+    @prune_active_blocked
     async def sync_apply_delta(self, preview_id):
         return await self._sync_service.sync_apply_delta(preview_id)
 
@@ -400,11 +406,13 @@ class Plugin:
 
     @migration_blocked
     @sync_active_blocked
+    @prune_active_blocked
     async def remove_platform_shortcuts(self, platform_slug):
         return await self._shortcut_removal_service.remove_platform_shortcuts(platform_slug)
 
     @migration_blocked
     @sync_active_blocked
+    @prune_active_blocked
     async def remove_all_shortcuts(self):
         return self._shortcut_removal_service.remove_all_shortcuts()
 
@@ -421,11 +429,13 @@ class Plugin:
         return await self._artwork_service.fetch_cover_base64(rom_id)
 
     @migration_blocked
+    @prune_active_blocked
     async def refresh_cover_artwork(self, rom_id):
         return await self._artwork_service.refresh_cover(int(rom_id))
 
     @migration_blocked
     @sync_active_blocked
+    @prune_active_blocked
     async def cleanup_orphaned_grid_images(self, live_app_ids, dry_run):
         return await self._artwork_service.cleanup_orphaned_grid_images(live_app_ids, dry_run)
 
@@ -476,6 +486,7 @@ class Plugin:
         """
         return await self._game_process_service.stop_running_game(int(rom_id))
 
+    @prune_active_blocked
     async def finalize_game_session(self, rom_id):
         result = await self._session_lifecycle_service.finalize(rom_id)
         return asdict(result)
@@ -483,6 +494,7 @@ class Plugin:
     # ── Download delegation to DownloadService ──────────────
 
     @migration_blocked
+    @prune_active_blocked
     async def start_download(self, rom_id):
         return await self._download_service.start_download(rom_id)
 
@@ -493,6 +505,7 @@ class Plugin:
         return self._download_service.pause_download(rom_id)
 
     @migration_blocked
+    @prune_active_blocked
     async def resume_download(self, rom_id):
         return await self._download_service.resume_download(rom_id)
 
@@ -506,11 +519,13 @@ class Plugin:
         return self._download_service.get_installed_rom(rom_id)
 
     @migration_blocked
+    @prune_active_blocked
     async def remove_rom(self, rom_id):
         return await self._rom_removal_service.remove_rom(rom_id)
 
     @migration_blocked
     @sync_active_blocked
+    @prune_active_blocked
     async def uninstall_all_roms(self):
         return await self._rom_removal_service.uninstall_all_roms()
 
@@ -529,10 +544,12 @@ class Plugin:
         return self._save_sync_service.check_core_change(rom_id)
 
     @migration_blocked
+    @prune_active_blocked
     async def pre_launch_sync(self, rom_id):
         return await self._save_sync_service.pre_launch_sync(rom_id)
 
     @migration_blocked
+    @prune_active_blocked
     async def sync_rom_saves(self, rom_id):
         return await self._save_sync_service.sync_rom_saves(rom_id)
 
@@ -543,6 +560,7 @@ class Plugin:
         return await self._save_sync_service.get_slot_saves(rom_id, slot)
 
     @migration_blocked
+    @prune_active_blocked
     async def switch_slot(self, rom_id, new_slot):
         return await self._save_sync_service.switch_slot(rom_id, new_slot)
 
@@ -550,6 +568,7 @@ class Plugin:
         return await self._save_sync_service.get_slot_delete_info(rom_id, slot)
 
     @migration_blocked
+    @prune_active_blocked
     async def delete_slot(self, rom_id, slot):
         return await self._save_sync_service.delete_slot(rom_id, slot)
 
@@ -560,6 +579,7 @@ class Plugin:
         return await self._save_sync_service.get_save_setup_info(rom_id)
 
     @migration_blocked
+    @prune_active_blocked
     async def confirm_slot_choice(
         self, rom_id, chosen_slot, migrate=False, migrate_from_slot=None, use_server_on_conflict=False
     ):
@@ -568,10 +588,12 @@ class Plugin:
         )
 
     @migration_blocked
+    @prune_active_blocked
     async def sync_all_saves(self):
         return await self._save_sync_service.sync_all_saves()
 
     @migration_blocked
+    @prune_active_blocked
     async def resolve_sync_conflict(self, rom_id, filename, server_save_id, action):
         return await self._save_sync_service.resolve_sync_conflict(rom_id, filename, server_save_id, action)
 
@@ -583,10 +605,12 @@ class Plugin:
         return self._save_sync_service.update_save_sync_settings(settings)
 
     @migration_blocked
+    @prune_active_blocked
     async def delete_local_saves(self, rom_id):
         return self._save_sync_service.delete_local_saves(rom_id)
 
     @migration_blocked
+    @prune_active_blocked
     async def delete_platform_saves(self, platform_slug):
         return self._save_sync_service.delete_platform_saves(platform_slug)
 
@@ -594,13 +618,16 @@ class Plugin:
         return await self._save_sync_service.list_file_versions(rom_id, slot, filename)
 
     @migration_blocked
+    @prune_active_blocked
     async def saves_rollback_to_version(self, rom_id, slot, save_id):
         return await self._save_sync_service.rollback_to_version(rom_id, slot, save_id)
 
     @migration_blocked
+    @prune_active_blocked
     async def copy_save_to_slot(self, rom_id, save_id, target_slot):
         return await self._save_sync_service.copy_save_to_slot(rom_id, save_id, target_slot)
 
+    @prune_active_blocked
     async def record_session_start(self, rom_id):
         result = self._playtime_service.record_session_start(rom_id)
         # Fire-and-forget: drain any offline play-session backlog into RomM's
@@ -694,6 +721,7 @@ class Plugin:
 
     # ── Migration delegation to MigrationService ──────────────
 
+    @prune_active_blocked
     async def migrate_retrodeck_files(self, conflict_strategy=None):
         return await self._migration_service.migrate_retrodeck_files(conflict_strategy)
 
@@ -703,6 +731,7 @@ class Plugin:
     async def get_save_sort_migration_status(self):
         return await self._migration_service.get_save_sort_migration_status()
 
+    @prune_active_blocked
     async def migrate_save_sort_files(self, conflict_strategy=None):
         return await self._migration_service.migrate_save_sort_files(conflict_strategy)
 

@@ -55,6 +55,7 @@ def plugin():
     p._session_lifecycle_service = MagicMock()
     p._game_process_service = MagicMock()
     p._prune_service = MagicMock()
+    p._prune_service.is_active.return_value = False
     return p
 
 

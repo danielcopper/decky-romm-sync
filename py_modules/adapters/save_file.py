@@ -72,6 +72,9 @@ class SaveFileAdapter:
         """Return True when *path* exists and is a directory."""
         return os.path.isdir(path)
 
+    def is_symlink(self, path: str) -> bool:
+        return os.path.islink(path)
+
     def canonical_path(self, path: str) -> str:
         return os.path.realpath(path)
 

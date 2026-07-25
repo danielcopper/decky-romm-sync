@@ -20,7 +20,7 @@ import {
   type PruneScope,
 } from "../api/backend";
 import { detach } from "../utils/detach";
-import { getPruneState, onPruneStateChange, resetPruneState } from "../utils/pruneStore";
+import { beginPruneRun, getPruneState, onPruneStateChange, resetPruneState } from "../utils/pruneStore";
 import { getSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
 
 const PAGE_SIZE = 50;
@@ -65,6 +65,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   const [recovery, setRecovery] = useState(true);
   const [confirmWithoutRecovery, setConfirmWithoutRecovery] = useState(false);
   const [includedContent, setIncludedContent] = useState<Set<number>>(new Set());
+  const [freeBytes, setFreeBytes] = useState(initial.free_bytes ?? 0);
   const [pruneState, setPruneState] = useState(getPruneState());
 
   useEffect(() => {
@@ -79,17 +80,24 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
     (sum, item) => sum + (includedContent.has(item.rom_id) ? (item.installed_bytes ?? 0) : 0),
     0,
   );
-  const freeBytes = initial.free_bytes ?? 0;
   const unknownSelectedSize = items.some(
     (item) => includedContent.has(item.rom_id) && item.installed && item.installed_bytes === null,
   );
   const insufficientSpace = recovery && (unknownSelectedSize || selectedBytes > freeBytes);
   const destructiveConfirmed = recovery || confirmWithoutRecovery;
+  const allEntriesLoaded = items.length === total;
+  const selectionTooLarge = includedContent.size > 256;
   const progress = pruneState.progress;
   const complete = pruneState.complete;
   const runInFlight = starting || (runStarted && complete === null);
   const canStart =
-    !runInFlight && complete === null && !insufficientSpace && destructiveConfirmed && (removeRows || removeDeadGames);
+    !runInFlight &&
+    complete === null &&
+    allEntriesLoaded &&
+    !insufficientSpace &&
+    !selectionTooLarge &&
+    destructiveConfirmed &&
+    (repoint || removeRows || removeDeadGames);
 
   const toggleContent = (romIdToToggle: number, checked: boolean): void => {
     setIncludedContent((current) => {
@@ -110,6 +118,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
         return;
       }
       setItems((current) => [...current, ...(next.items ?? [])]);
+      if (typeof next.free_bytes === "number") setFreeBytes(next.free_bytes);
     } catch (e) {
       setStatus(`Could not load more candidates: ${e}`);
     } finally {
@@ -117,11 +126,30 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
     }
   };
 
+  const refreshFreeSpace = async (): Promise<void> => {
+    if (!initial.preview_id) return;
+    try {
+      const refreshed = await getPrunePreview({
+        scope,
+        rom_id: romId,
+        preview_id: initial.preview_id,
+        offset: 0,
+        limit: 0,
+      });
+      if (!refreshed.success || typeof refreshed.free_bytes !== "number") {
+        setStatus(refreshed.message ?? "Could not refresh recovery space.");
+        return;
+      }
+      setFreeBytes(refreshed.free_bytes);
+    } catch (e) {
+      setStatus(`Could not refresh recovery space: ${e}`);
+    }
+  };
+
   const start = async (): Promise<void> => {
     if (!canStart || !initial.preview_id) return;
     setStarting(true);
     setStatus("Starting cleanup...");
-    resetPruneState();
     try {
       const result = await startPrune({
         preview_id: initial.preview_id,
@@ -136,6 +164,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
         setStatus(result.message ?? "Cleanup could not start.");
         return;
       }
+      beginPruneRun(result.run_id!);
       setRunStarted(true);
       setStatus("Cleanup running...");
     } catch (e) {
@@ -150,8 +179,10 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
       <div style={{ minWidth: "440px", maxWidth: "720px", padding: "18px" }}>
         <div style={{ fontSize: "20px", fontWeight: 700, marginBottom: "6px" }}>Clean Up Removed RomM Games</div>
         <div style={{ color: "#c7d5e0", marginBottom: "14px" }}>
-          {total} local entr{total === 1 ? "y" : "ies"} were absent from a completed RomM fetch. Every entry is checked
-          again by exact ID; only a confirmed 404 can be removed.
+          {scope === "bulk"
+            ? `${total} local group entr${total === 1 ? "y" : "ies"} may be affected by candidates absent from a completed RomM fetch.`
+            : `${total} local group entr${total === 1 ? "y" : "ies"} may be affected by cleanup of the selected unavailable ROM.`}{" "}
+          Every entry is checked again by exact ID; only a confirmed 404 can be removed.
         </div>
 
         <div style={{ maxHeight: "62vh", overflowY: "auto", paddingRight: "10px" }}>
@@ -182,6 +213,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
             onChange={(checked: boolean) => {
               setRecovery(checked);
               if (checked) setConfirmWithoutRecovery(false);
+              else setIncludedContent(new Set());
             }}
           />
           {!recovery && (
@@ -197,19 +229,25 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
           {items.map((item) => (
             <div key={item.rom_id} style={{ padding: "10px 0", borderTop: "1px solid rgba(255,255,255,0.10)" }}>
               <div style={{ fontWeight: 600 }}>{item.name || item.fs_name || `ROM ${item.rom_id}`}</div>
+              {(item.name_truncated || item.fs_name_truncated || item.group_id_truncated || item.warning_truncated) && (
+                <div style={{ color: "#e5a43b", fontSize: "12px" }}>
+                  One or more display fields were shortened to keep this preview page within the Decky wire limit.
+                </div>
+              )}
               <div style={{ fontSize: "12px", color: "#8f98a0" }}>
-                {item.platform_slug} · ROM {item.rom_id} · group of {item.group_size}
+                {item.platform_slug} · ROM {item.rom_id} · group of {item.group_size} ·{" "}
+                {item.candidate ? "cleanup candidate" : "group member disclosed for whole-game removal"}
               </div>
               {item.warning && <div style={{ color: "#e5a43b", fontSize: "12px" }}>{item.warning}</div>}
               {item.installed && (
                 <ToggleField
                   label={`Include installed ROM content (${item.installed_bytes === null ? "size unavailable" : formatBytes(item.installed_bytes)})`}
                   checked={includedContent.has(item.rom_id)}
-                  disabled={runInFlight}
+                  disabled={runInFlight || !recovery}
                   onChange={(checked: boolean) => toggleContent(item.rom_id, checked)}
                 />
               )}
-              {item.installed && !includedContent.has(item.rom_id) && (
+              {item.installed && (!recovery || !includedContent.has(item.rom_id)) && (
                 <div style={{ color: "#e5a43b", fontSize: "12px" }}>
                   Installed content is not backed up but will still be deleted if this row is removed.
                 </div>
@@ -221,10 +259,24 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
               {loadingMore ? "Loading..." : `Load more (${items.length} of ${total})`}
             </DialogButton>
           )}
+          {!allEntriesLoaded && (
+            <div style={{ color: "#ff8c6a", fontSize: "12px", marginTop: "8px" }}>
+              Load every page before confirming so all potentially removed group members and installed content are
+              disclosed.
+            </div>
+          )}
         </div>
 
         <div style={{ marginTop: "14px", padding: "10px", background: "rgba(0,0,0,0.20)" }}>
-          Selected ROM-content recovery: {formatBytes(selectedBytes)} · Free at target: {formatBytes(freeBytes)}
+          Selected ROM-content recovery estimate: {formatBytes(selectedBytes)} · Free at target:{" "}
+          {formatBytes(freeBytes)}
+          <div style={{ color: "#8f98a0", fontSize: "12px", marginTop: "4px" }}>
+            This is a lower bound. The backend remeasures mandatory saves, histories, caches, and Steam files before any
+            mutation.
+          </div>
+          <DialogButton disabled={runInFlight} onClick={() => detach(refreshFreeSpace())}>
+            Refresh free space
+          </DialogButton>
           {insufficientSpace && (
             <div style={{ color: "#ff8c6a", marginTop: "4px" }}>
               {unknownSelectedSize ? "A selected installed ROM has no safe measurable size." : "Not enough free space."}
@@ -232,17 +284,34 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
           )}
         </div>
         {progress && (
-          <div style={{ marginTop: "10px", color: "#c7d5e0" }}>
+          <div role="status" aria-live="polite" style={{ marginTop: "10px", color: "#c7d5e0" }}>
             {progress.stage.replace(/_/g, " ")} · {progress.current} of {progress.total} · {progress.name}
           </div>
         )}
         {complete && (
-          <div style={{ marginTop: "10px", color: complete.success ? "#8fd18b" : "#ffcc66" }}>
-            {complete.removed_rom_ids.length} removed;{" "}
-            {complete.results.filter((item) => item.status !== "removed").length} skipped or failed.
+          <div
+            role="status"
+            aria-live="polite"
+            style={{ marginTop: "10px", color: complete.success ? "#8fd18b" : "#ffcc66" }}
+          >
+            {complete.removed_count ?? complete.removed_rom_ids.length} removed;{" "}
+            {complete.problem_count ??
+              complete.results.filter((item) => ["partial", "failed", "skipped"].includes(item.status)).length}{" "}
+            skipped, partial, or failed.
+            {complete.results
+              .filter((item) => ["partial", "failed", "skipped"].includes(item.status))
+              .map((item) => (
+                <div key={item.group_id} style={{ fontSize: "12px", marginTop: "4px" }}>
+                  {item.group_id}: {item.message}
+                </div>
+              ))}
           </div>
         )}
-        {status && !complete && <div style={{ marginTop: "10px", color: "#ffcc66" }}>{status}</div>}
+        {status && !complete && (
+          <div role="status" aria-live="polite" style={{ marginTop: "10px", color: "#ffcc66" }}>
+            {status}
+          </div>
+        )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "16px" }}>
           <DialogButton disabled={starting} onClick={() => closeModal?.()}>
             {runStarted ? "Close" : "Cancel"}
@@ -261,6 +330,7 @@ export async function openRemovedGamesCleanupModal(romId?: number): Promise<bool
   const result = await getPrunePreview(requestFor(scope, romId ?? null, null, 0));
   if (!result.success) throw new Error(result.message ?? "Cleanup scan failed.");
   if ((result.total ?? 0) === 0) return false;
+  resetPruneState();
   showModal(<CleanupModal initial={result} scope={scope} romId={romId ?? null} />);
   return true;
 }
@@ -318,7 +388,7 @@ export const RemovedGamesCleanupSection: FC = () => {
       {complete && (
         <PanelSectionRow>
           <Field
-            label={`${complete.removed_rom_ids.length} removed; ${complete.results.filter((item) => item.status !== "removed").length} skipped or failed`}
+            label={`${complete.removed_count ?? complete.removed_rom_ids.length} removed; ${complete.problem_count ?? complete.results.filter((item) => ["partial", "failed", "skipped"].includes(item.status)).length} skipped, partial, or failed`}
             description={complete.results
               .filter((item) => item.status !== "removed")
               .map((item) => item.message)

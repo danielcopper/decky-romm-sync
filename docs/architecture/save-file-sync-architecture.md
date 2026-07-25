@@ -268,8 +268,11 @@ moved through `quarantine_local_file(..., preserve_history=True)`. This operatio
 Recovery also copies matching `.romm-backup` files while leaving the originals untouched. If an uninstalled ROM or an
 unsupported layout has no resolvable exact path, the manifest preserves known save-sync filenames/state and records a
 warning, but physical files are not guessed or removed. Save states are outside this workflow. Save locks are acquired
-in ascending ROM-id order, including remaining owners of shared paths, with no UoW open while lock acquisition waits.
-Short read UoWs close before filesystem work, and network/frontend waits run outside the locks.
+in ascending ROM-id order, including remaining owners of shared paths, and retried if ownership expands. A symlinked or
+out-of-root `.romm-backup` is rejected both during inventory and immediately before quarantine. No UoW is open while
+lock acquisition waits. Short read UoWs close before filesystem work, network/frontend waits run outside the locks, and
+the final stable lock set remains held through quarantine and the aggregate cascade so a newer save baseline cannot be
+deleted after the lock is released.
 
 ### The `none` slot (legacy) — a migration source, no longer a target
 

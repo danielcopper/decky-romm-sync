@@ -82,7 +82,15 @@ describe("removeShortcutConfirmed", () => {
     const apps = new Map<number, object>([[77, {}]]);
     const remove = vi.fn((appId: number) => apps.delete(appId));
     vi.stubGlobal("collectionStore", { deckDesktopApps: { apps } });
-    vi.stubGlobal("SteamClient", { Apps: { RemoveShortcut: remove } });
+    vi.stubGlobal("SteamClient", {
+      Apps: {
+        RemoveShortcut: remove,
+        RegisterForAppDetails: (_appId: number, callback: (details: SteamAppDetails) => void) => {
+          queueMicrotask(() => callback({ strShortcutExe: "/plugin/bin/rom-launcher" }));
+          return { unregister: vi.fn() };
+        },
+      },
+    });
 
     await expect(removeShortcutConfirmed(77)).resolves.toBe(true);
     expect(remove).toHaveBeenCalledWith(77);
@@ -97,12 +105,38 @@ describe("removeShortcutConfirmed", () => {
     expect(remove).not.toHaveBeenCalled();
   });
 
+  it("refuses a live appId whose executable is not RomM-owned", async () => {
+    const apps = new Map<number, object>([[77, {}]]);
+    const remove = vi.fn();
+    vi.stubGlobal("collectionStore", { deckDesktopApps: { apps } });
+    vi.stubGlobal("SteamClient", {
+      Apps: {
+        RemoveShortcut: remove,
+        RegisterForAppDetails: (_appId: number, callback: (details: SteamAppDetails) => void) => {
+          queueMicrotask(() => callback({ strShortcutExe: "/usr/bin/foreign-game" }));
+          return { unregister: vi.fn() };
+        },
+      },
+    });
+
+    await expect(removeShortcutConfirmed(77)).resolves.toBe(false);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
   it("times out when Steam never removes the shortcut from its live store", async () => {
     vi.useFakeTimers();
     const apps = new Map<number, object>([[77, {}]]);
     const remove = vi.fn();
     vi.stubGlobal("collectionStore", { deckDesktopApps: { apps } });
-    vi.stubGlobal("SteamClient", { Apps: { RemoveShortcut: remove } });
+    vi.stubGlobal("SteamClient", {
+      Apps: {
+        RemoveShortcut: remove,
+        RegisterForAppDetails: (_appId: number, callback: (details: SteamAppDetails) => void) => {
+          queueMicrotask(() => callback({ strShortcutExe: "/plugin/bin/rom-launcher" }));
+          return { unregister: vi.fn() };
+        },
+      },
+    });
 
     const result = removeShortcutConfirmed(77, 200);
     await vi.advanceTimersByTimeAsync(200);

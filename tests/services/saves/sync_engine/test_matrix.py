@@ -2714,3 +2714,20 @@ class TestQuarantineBackupRetention:
         saves_dir.mkdir(parents=True, exist_ok=True)
 
         assert matrix.quarantine_local_file(str(saves_dir), "absent.srm") is False
+
+    def test_symlinked_backup_directory_fails_closed(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        matrix = svc._sync_engine._matrix
+        saves_dir = tmp_path / "saves" / "gba"
+        outside = tmp_path / "outside"
+        saves_dir.mkdir(parents=True, exist_ok=True)
+        outside.mkdir()
+        save = saves_dir / "game.srm"
+        save.write_bytes(b"keep")
+        (saves_dir / ".romm-backup").symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(ValueError, match="Unsafe save backup directory"):
+            matrix.quarantine_local_file(str(saves_dir), "game.srm", preserve_history=True)
+
+        assert save.read_bytes() == b"keep"
+        assert list(outside.iterdir()) == []

@@ -13,7 +13,12 @@ import { estimatePlanSeconds } from "./utils/syncEstimate";
 import { beginEtaRun } from "./utils/syncEta";
 import { updateDownload, getDownloadState, removeDownload } from "./utils/downloadStore";
 import { handleGlobalDownloadFailure } from "./utils/downloadFailure";
-import { registerGameDetailPatch, unregisterGameDetailPatch, registerRomMAppId } from "./patches/gameDetailPatch";
+import {
+  registerGameDetailPatch,
+  unregisterGameDetailPatch,
+  registerRomMAppId,
+  unregisterRomMAppId,
+} from "./patches/gameDetailPatch";
 import {
   registerMetadataPatches,
   unregisterMetadataPatches,
@@ -65,7 +70,7 @@ import { removeShortcutsPaced } from "./utils/shortcutRemoval";
 import { batchConfirmLaunchOptions } from "./utils/launchOptionsReconcile";
 import { withTimeout } from "./utils/withTimeout";
 import { fetchMetadataCachePages } from "./utils/metadataCache";
-import { handlePruneAction } from "./utils/pruneActions";
+import { cancelPruneActions, handlePruneAction } from "./utils/pruneActions";
 import type { PruneActionRequired } from "./utils/pruneActions";
 import { setPruneComplete, setPruneProgress } from "./utils/pruneStore";
 import type { PruneComplete, PruneProgress } from "./utils/pruneStore";
@@ -812,8 +817,9 @@ export default definePlugin(() => {
   );
 
   const pruneCompleteListener = addEventListener<[PruneComplete]>("prune_complete", (result: PruneComplete) => {
-    setPruneComplete(result);
+    const completed = setPruneComplete(result);
     for (const appId of result.affected_app_ids) invalidateCachedGameDetail(appId);
+    for (const appId of result.removed_app_ids ?? []) unregisterRomMAppId(appId);
     globalThis.dispatchEvent(
       new CustomEvent("romm_data_changed", {
         detail: {
@@ -823,13 +829,17 @@ export default definePlugin(() => {
         },
       }),
     );
-    const removed = result.removed_rom_ids.length;
-    const skipped = result.results.filter((item) => item.status !== "removed").length;
+    if (!completed) return;
+    cancelPruneActions();
+    const removed = completed.removed_count ?? completed.removed_rom_ids.length;
+    const skipped =
+      completed.problem_count ??
+      completed.results.filter((item) => ["failed", "skipped", "partial"].includes(item.status)).length;
     toaster.toast({
       title: "RomM Sync",
       body: removed
         ? `Removed ${removed} local entr${removed === 1 ? "y" : "ies"}${skipped ? `; ${skipped} group(s) skipped` : ""}.`
-        : result.message || "No removed RomM games were cleaned up.",
+        : completed.message || "No removed RomM games were cleaned up.",
     });
   });
 
@@ -858,6 +868,7 @@ export default definePlugin(() => {
       removeEventListener("migration_relaunch_options", migrationRelaunchListener);
       removeEventListener("server_retry_progress", serverRetryListener);
       removeEventListener("prune_action_required", pruneActionListener);
+      cancelPruneActions();
       removeEventListener("prune_progress", pruneProgressListener);
       removeEventListener("prune_complete", pruneCompleteListener);
     },

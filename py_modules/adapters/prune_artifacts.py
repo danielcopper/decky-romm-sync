@@ -24,10 +24,7 @@ class PruneArtifactAdapter:
         artifacts: list[RecoveryArtifact] = []
         for rom_id in rom_ids:
             for path, kind in self._paths(rom_id):
-                if os.path.isfile(path):
-                    artifacts.append(
-                        {"source_path": path, "safe_root": self._runtime_dir, "kind": kind, "rom_id": rom_id}
-                    )
+                artifacts.append({"source_path": path, "safe_root": self._runtime_dir, "kind": kind, "rom_id": rom_id})
         return artifacts
 
     def remove(self, rom_ids: list[int]) -> None:

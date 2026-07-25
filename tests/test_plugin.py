@@ -1147,6 +1147,8 @@ class TestPlaytimeFlushTaskLifecycle:
         p.loop = asyncio.get_event_loop()
         p._playtime_service = MagicMock()
         p._playtime_service.record_session_start.return_value = {"success": True}
+        p._prune_service = MagicMock()
+        p._prune_service.is_active.return_value = False
         return p
 
     @pytest.mark.asyncio

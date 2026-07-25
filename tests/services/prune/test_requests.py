@@ -51,6 +51,17 @@ def test_options_require_explicit_booleans_and_positive_content_ids() -> None:
     )
     assert isinstance(invalid, dict)
     assert invalid["reason"] == "invalid_options"
+    too_many = parse_options(
+        {
+            "repoint_shortcuts": True,
+            "remove_rows": True,
+            "remove_fully_vanished": False,
+            "create_recovery_bundle": True,
+            "include_installed_rom_ids": list(range(1, 258)),
+        }
+    )
+    assert isinstance(too_many, dict)
+    assert too_many["reason"] == "invalid_options"
 
 
 def test_snapshot_requires_exact_app_complete_shape_and_no_base64() -> None:
@@ -62,6 +73,9 @@ def test_snapshot_requires_exact_app_complete_shape_and_no_base64() -> None:
     encoded = _snapshot()
     encoded["cover_base64"] = "AAAA"
     assert valid_snapshot(encoded, 9001) is False
+    foreign = _snapshot()
+    foreign["exe"] = "/usr/bin/foreign-game"
+    assert valid_snapshot(foreign, 9001) is False
 
 
 def test_snapshot_rejects_oversized_payload() -> None:

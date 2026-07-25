@@ -562,14 +562,19 @@ export interface PrunePreviewRequest {
 export interface PrunePreviewItem {
   rom_id: number;
   name: string;
+  name_truncated: boolean;
   fs_name: string;
+  fs_name_truncated: boolean;
   platform_slug: string;
   group_id: string;
+  group_id_truncated: boolean;
   group_size: number;
   bound_count: number;
+  candidate: boolean;
   installed: boolean;
   installed_bytes: number | null;
   warning: string | null;
+  warning_truncated: boolean;
 }
 
 export interface PrunePreviewResult {
@@ -618,7 +623,14 @@ export interface PruneSteamSnapshot {
   collections: Array<{ id: string; name: string }>;
 }
 
-export interface ReportPruneActionRequest {
+export interface ClaimPruneActionRequest {
+  phase: "claim";
+  run_id: string;
+  action_token: string;
+}
+
+export interface CompletePruneActionRequest {
+  phase: "complete";
   run_id: string;
   action_token: string;
   success: boolean;
@@ -626,6 +638,8 @@ export interface ReportPruneActionRequest {
   message: string;
   snapshot?: PruneSteamSnapshot;
 }
+
+export type ReportPruneActionRequest = ClaimPruneActionRequest | CompletePruneActionRequest;
 
 export const getPrunePreview = callable<[PrunePreviewRequest], PrunePreviewResult>("get_prune_preview");
 export const startPrune = callable<[StartPruneRequest], StartPruneResult>("start_prune");

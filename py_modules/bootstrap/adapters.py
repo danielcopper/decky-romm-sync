@@ -317,8 +317,7 @@ def bootstrap(
     # version once at boot and thread the string to every HTTP-talking
     # adapter. Bot Fight Mode on Cloudflare blocks the default
     # ``Python-urllib`` UA before requests reach self-hosted RomM (#249).
-    plugin_version = plugin_metadata.read_version(plugin_dir)
-    package_name = plugin_metadata.read_name(plugin_dir)
+    package_name, plugin_version = plugin_metadata.read_metadata(plugin_dir)
     user_agent = f"decky-romm-sync/{plugin_version}"
     recovery_store = RecoveryBundleAdapter(
         user_home=user_home,

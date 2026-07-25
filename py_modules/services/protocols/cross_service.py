@@ -184,6 +184,18 @@ class InstalledRomRemoverFn(Protocol):
     async def __call__(self, rom_id: int) -> dict[str, Any]: ...
 
 
+class InstalledRomFilesRemoverFn(Protocol):
+    """Filesystem-only installed-ROM removal consumed by explicit prune."""
+
+    def __call__(self, rom_id: int) -> dict[str, Any]: ...
+
+
+class VersionSwitcherFn(Protocol):
+    """Version-switch authority consumed by explicit prune repointing."""
+
+    async def __call__(self, app_id: int, target_rom_id: int, allow_stranded: bool) -> dict[str, Any]: ...
+
+
 class RomRemoverProvider(Protocol):
     """Deferred access to the installed-ROM remover consumed by DownloadService.
 

@@ -221,15 +221,24 @@ show a candidate, but deletion still requires a fresh exact-id 404 during the co
 recovery or Steam work. A skip is therefore expected if RomM comes back, the response is uncertain, a download starts,
 local state changes, recovery cannot seal, or Steam cannot confirm its action.
 
-Recovery bundles are under `~/decky-romm-sync-recovery/bundles/`. A directory appears there only after every required
-copy and checksum succeeds and the staging directory is atomically sealed. A failed attempt may report
-`recovery_failed`; it leaves the local game unchanged and cleans incomplete staging best-effort. Free-space blocking in
-the modal covers the installed ROM content you selected. The backend checks actual source size and free space again at
-copy time, so a later disk-space change can still stop the group safely.
+While cleanup is starting or running, library sync, downloads/resumes, migrations, version switches, save mutations,
+session finalization, uninstalls, and relevant cache cleanup are refused. Cancel or finish the cleanup before retrying
+those actions. This reciprocal block prevents newly downloaded content or save state from appearing after recovery was
+captured and then being removed by finalization.
 
-The cleanup report is per group: unrelated groups continue after a skip or failure. If a recovery bundle was sealed but
-a later liveness or Steam check aborted, keep the bundle; it is a valid pre-action snapshot even though no local row was
-deleted. Recovery has no automatic import flow.
+Recovery bundles are under `~/decky-romm-sync-recovery/bundles/`. A directory appears there only after every required
+copy and checksum succeeds, directory durability succeeds where supported, and the staging directory is atomically
+sealed. Before deletion, the backend verifies the sealed manifest/checksums and confirms every source set and byte
+stream still matches. A failed attempt may report `recovery_failed`; it leaves the local game unchanged and cleans
+incomplete staging best-effort. Free-space blocking in the modal covers the installed ROM content you selected. The
+backend checks actual source size and free space again at copy time, so a later disk-space change can still stop the
+group safely.
+
+The cleanup report is per group: unrelated groups continue after a skip or failure. Large runs deliver terminal details
+in bounded chunks, which the UI assembles into one report. A **partial** result means the report lists a Steam or
+filesystem action that committed before a later guard failed; read that group's concrete message before retrying. If a
+recovery bundle was sealed but a later liveness or Steam check aborted, keep the bundle; it is a valid pre-action
+snapshot even though no local row was deleted. Recovery has no automatic import flow.
 
 A bulk shortcut removal is paced so it never freezes the interface, so on a large library it can take a few seconds.
 While one is running, all the removal buttons are disabled and a spinner with a live **Removing x of y** counter shows

@@ -9,6 +9,9 @@ from domain.fetch_generation import prune_candidate_ids
 from domain.prune import group_rows
 from services.prune._models import PrunePreview
 
+_PREVIEW_TEXT_CHARS = 512
+_PREVIEW_WARNING_CHARS = 1024
+
 if TYPE_CHECKING:
     from services.protocols import RecoveryBundleStore, RetroDeckPaths, UnitOfWorkFactory
 
@@ -57,8 +60,6 @@ class PreviewBuilder:
             group_id = group[0].sibling_group_key or f"rom:{group[0].rom_id}"
             bound_count = sum(row.shortcut_app_id is not None for row in group)
             for row in group:
-                if row.rom_id not in candidate_ids:
-                    continue
                 install = installs.get(row.rom_id)
                 size: int | None = None
                 warning: str | None = None
@@ -68,18 +69,26 @@ class PreviewBuilder:
                         size = self._recovery_store.measure_path(source, roms_root)
                     except (OSError, ValueError) as exc:
                         warning = str(exc)
+                raw_name = row.name
+                raw_fs_name = row.fs_name
+                raw_group_id = str(group_id)
                 entries.append(
                     {
                         "rom_id": row.rom_id,
-                        "name": row.name,
-                        "fs_name": row.fs_name,
+                        "name": raw_name[:_PREVIEW_TEXT_CHARS],
+                        "name_truncated": len(raw_name) > _PREVIEW_TEXT_CHARS,
+                        "fs_name": raw_fs_name[:_PREVIEW_TEXT_CHARS],
+                        "fs_name_truncated": len(raw_fs_name) > _PREVIEW_TEXT_CHARS,
                         "platform_slug": row.platform_slug,
-                        "group_id": group_id,
+                        "group_id": raw_group_id[:_PREVIEW_TEXT_CHARS],
+                        "group_id_truncated": len(raw_group_id) > _PREVIEW_TEXT_CHARS,
                         "group_size": len(group),
                         "bound_count": bound_count,
+                        "candidate": row.rom_id in candidate_ids,
                         "installed": install is not None,
                         "installed_bytes": size,
-                        "warning": warning,
+                        "warning": warning[:_PREVIEW_WARNING_CHARS] if warning is not None else None,
+                        "warning_truncated": warning is not None and len(warning) > _PREVIEW_WARNING_CHARS,
                     }
                 )
         entries.sort(key=lambda entry: (str(entry["platform_slug"]), str(entry["name"]), int(entry["rom_id"])))
@@ -93,8 +102,7 @@ class PreviewBuilder:
             free_bytes=self._recovery_store.free_bytes(),
         )
 
-    @staticmethod
-    def page(preview: PrunePreview, offset: int, limit: int) -> dict[str, Any]:
+    def page(self, preview: PrunePreview, offset: int, limit: int) -> dict[str, Any]:
         end = offset + limit
         items = list(preview.entries[offset:end]) if limit else []
         return {
@@ -105,7 +113,7 @@ class PreviewBuilder:
             "offset": offset,
             "limit": limit,
             "total": len(preview.entries),
-            "free_bytes": preview.free_bytes,
+            "free_bytes": self._recovery_store.free_bytes(),
             "recovery_root": None,
         }
 

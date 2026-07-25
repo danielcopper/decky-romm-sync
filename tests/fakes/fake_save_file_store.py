@@ -72,6 +72,10 @@ class FakeSaveFileStore:
         prefix = path.rstrip("/") + "/"
         return any(stored.startswith(prefix) for stored in self.files)
 
+    def is_symlink(self, path: str) -> bool:
+        del path
+        return False
+
     def canonical_path(self, path: str) -> str:
         return path
 

@@ -29,14 +29,13 @@ RomM and SQLite as one unit.
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from domain.rom import Rom
 from domain.shortcut_data import extract_version_metadata
 from domain.sibling_group import compute_sibling_group_key, target_in_sibling_group
-from domain.sibling_resolution import AUTO_REGION, resolve_group_representative
+from domain.sibling_resolution import AUTO_REGION, fs_name_stem, resolve_group_representative
 from domain.version_metadata import VersionMetadata
 from lib.errors import RommNotFoundError, classify_error
 from lib.list_result import ErrorCode
@@ -134,11 +133,6 @@ class _SwitchContext:
     target_group_key: str | None
     target_app_id: int | None
     group_member_ids: frozenset[int]
-
-
-def _fs_name_no_ext(fs_name: str) -> str:
-    """Filename stem for a local row — ``fs_name_no_ext`` is not a DB column."""
-    return os.path.splitext(fs_name)[0]
 
 
 class VersionSwitchService:
@@ -322,7 +316,7 @@ class VersionSwitchService:
                 _MemberView(
                     rom_id=r.rom_id,
                     name=r.name,
-                    label=_fs_name_no_ext(r.fs_name),
+                    label=fs_name_stem(r.fs_name),
                     regions=list(r.regions),
                     languages=list(r.languages),
                     revision=r.revision,
@@ -778,7 +772,7 @@ class VersionSwitchService:
             return _SwitchContext(
                 bound_rom_id=bound.rom_id,
                 bound_installed=uow.rom_installs.get(bound.rom_id) is not None,
-                bound_label=_fs_name_no_ext(bound.fs_name),
+                bound_label=fs_name_stem(bound.fs_name),
                 group_key=group_key,
                 platform_slug=bound.platform_slug,
                 target_is_local=target_local is not None,

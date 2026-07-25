@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import errno
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -83,7 +86,7 @@ def test_failed_copy_cleans_staging_without_touching_existing_bundle(tmp_path, m
     def fail_copy(*_args, **_kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr("adapters.recovery_bundle.shutil.copyfile", fail_copy)
+    monkeypatch.setattr(adapter, "_copy_opened_source", fail_copy)
     with pytest.raises(OSError, match="disk full"):
         adapter.seal_bundle(
             "20260724T120000Z_7_failure",
@@ -94,3 +97,97 @@ def test_failed_copy_cleans_staging_without_touching_existing_bundle(tmp_path, m
         )
     staging = Path(adapter.root()) / "staging"
     assert list(staging.iterdir()) == []
+
+
+def test_sealed_bundle_revalidates_manifest_and_source_bytes(tmp_path):
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    source = safe / "save.srm"
+    source.write_bytes(b"before")
+    adapter = _adapter(tmp_path)
+    sealed = adapter.seal_bundle(
+        "20260724T120000Z_7_validate",
+        _snapshot(),
+        [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
+        "readme",
+        "playtime",
+    )
+
+    assert adapter.validate_sources(sealed) is True
+    source.write_bytes(b"after")
+    assert adapter.validate_sources(sealed) is False
+    source.write_bytes(b"before")
+    (Path(sealed) / "manifest.json").write_text("{}")
+    assert adapter.validate_sources(sealed) is False
+
+
+def test_sealed_bundle_rejects_file_that_appears_in_an_initially_empty_source_set(tmp_path):
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    source = safe / "late-grid.png"
+    adapter = _adapter(tmp_path)
+    sealed = adapter.seal_bundle(
+        "20260724T120000Z_7_late",
+        _snapshot(),
+        [{"source_path": str(source), "safe_root": str(safe), "kind": "steam_grid"}],
+        "readme",
+        "playtime",
+    )
+
+    assert adapter.validate_sources(sealed) is True
+    source.write_bytes(b"new")
+    assert adapter.validate_sources(sealed) is False
+
+
+def test_source_replacement_with_symlink_fails_at_open_time(tmp_path, monkeypatch):
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    source = safe / "save.srm"
+    source.write_bytes(b"inside")
+    outside = tmp_path / "outside.srm"
+    outside.write_bytes(b"outside")
+    adapter = _adapter(tmp_path)
+    original = adapter._open_regular_beneath
+    replaced = False
+
+    def replace_before_open(path: str, safe_root: str) -> int:
+        nonlocal replaced
+        if path == str(source) and not replaced:
+            replaced = True
+            source.unlink()
+            source.symlink_to(outside)
+        return original(path, safe_root)
+
+    monkeypatch.setattr(adapter, "_open_regular_beneath", replace_before_open)
+    with pytest.raises((OSError, ValueError)):
+        adapter.seal_bundle(
+            "20260724T120000Z_7_replaced",
+            _snapshot(),
+            [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
+            "readme",
+            "playtime",
+        )
+
+
+def test_real_directory_fsync_failure_aborts_sealing(tmp_path, monkeypatch):
+    adapter = _adapter(tmp_path)
+    original = os.fsync
+
+    def fail_directory(fd: int) -> None:
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(errno.EIO, "directory fsync failed")
+        original(fd)
+
+    monkeypatch.setattr("adapters.recovery_bundle.os.fsync", fail_directory)
+    with pytest.raises(OSError, match="directory fsync failed"):
+        adapter.seal_bundle("20260724T120000Z_7_fsync", _snapshot(), [], "readme", "playtime")
+
+
+def test_symlinked_recovery_root_is_rejected(tmp_path):
+    adapter = _adapter(tmp_path)
+    target = tmp_path / "outside"
+    target.mkdir()
+    Path(adapter.root()).symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="trusted directory"):
+        adapter.free_bytes()

@@ -10,6 +10,13 @@ import { delay } from "./pacedOps";
  */
 const ROM_LAUNCHER_SUFFIX = "/bin/rom-launcher";
 
+export function isRomMShortcutDetails(details: SteamAppDetails | null): boolean {
+  return (
+    typeof details?.strShortcutExe === "string" &&
+    details.strShortcutExe.replace(/^"|"$/g, "").endsWith(ROM_LAUNCHER_SUFFIX)
+  );
+}
+
 const HEARTBEAT_INTERVAL_MS = 10_000;
 
 /**
@@ -261,8 +268,14 @@ function readDesktopAppStore(): Map<number, unknown> | null {
   return collectionStore.deckDesktopApps?.apps ?? null;
 }
 
-export async function removeShortcutConfirmed(appId: number, timeoutMs = 3000): Promise<boolean> {
-  if (!readDesktopAppStore()) return false;
+export async function removeShortcutConfirmed(
+  appId: number,
+  timeoutMs = 3000,
+  ownershipAlreadyChecked = false,
+): Promise<boolean> {
+  const store = readDesktopAppStore();
+  if (!store?.has(appId)) return false;
+  if (!ownershipAlreadyChecked && !isRomMShortcutDetails(await getAppDetails(appId))) return false;
   try {
     SteamClient.Apps.RemoveShortcut(appId);
   } catch (e) {

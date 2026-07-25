@@ -44,6 +44,7 @@ vi.mock("./patches/gameDetailPatch", () => ({
   registerGameDetailPatch: vi.fn(),
   unregisterGameDetailPatch: vi.fn(),
   registerRomMAppId: vi.fn(),
+  unregisterRomMAppId: vi.fn(),
 }));
 vi.mock("./patches/metadataPatches", () => ({
   registerMetadataPatches: vi.fn(),
@@ -63,6 +64,7 @@ vi.mock("./utils/sessionManager", () => ({
 const handlePruneAction = vi.fn().mockResolvedValue(undefined);
 vi.mock("./utils/pruneActions", () => ({
   handlePruneAction: (...args: unknown[]) => handlePruneAction(...args),
+  cancelPruneActions: vi.fn(),
 }));
 vi.mock("./utils/syncManager", () => ({
   initUnitSyncManager: vi.fn(() => () => {}),
@@ -103,7 +105,7 @@ vi.mock("./api/backend", async () => {
 });
 
 import { applyAllPlaytime, registerMetadataPatches, applyAllMetadata } from "./patches/metadataPatches";
-import { registerRomMAppId } from "./patches/gameDetailPatch";
+import { registerRomMAppId, unregisterRomMAppId } from "./patches/gameDetailPatch";
 import definePluginResult from "./index";
 
 // `definePlugin` is stubbed in test-setup to return its factory unchanged, so
@@ -177,6 +179,7 @@ describe("index.tsx — persistent prune listeners", () => {
         run_id: "run-1",
         removed_rom_ids: [7],
         affected_app_ids: [9001],
+        removed_app_ids: [9001],
         results: [{ group_id: "group-1", rom_ids: [7], status: "removed", message: "Removed." }],
       });
     });
@@ -184,6 +187,7 @@ describe("index.tsx — persistent prune listeners", () => {
     expect(getPruneState().progress).toBeNull();
     expect(getPruneState().complete?.removed_rom_ids).toEqual([7]);
     expect(invalidateCachedGameDetail).toHaveBeenCalledWith(9001);
+    expect(unregisterRomMAppId).toHaveBeenCalledWith(9001);
     expect(changed).toHaveBeenCalledTimes(1);
     expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Removed 1 local entry." });
 

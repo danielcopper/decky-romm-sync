@@ -54,7 +54,27 @@ class TestPluginMetadataAdapter:
         adapter = PluginMetadataAdapter()
         assert adapter.read_name(str(plugin_dir)) == "custom-plugin"
         (plugin_dir / "package.json").write_text(json.dumps({"name": None}))
-        assert adapter.read_name(str(plugin_dir)) == "decky-plugin"
+        assert adapter.read_name(str(plugin_dir)) == "custom-plugin"
+        assert PluginMetadataAdapter().read_name(str(plugin_dir)) == "decky-plugin"
+
+    def test_name_and_version_share_one_package_read(self, tmp_path, monkeypatch):
+        plugin_dir = tmp_path / "plugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "package.json").write_text(json.dumps({"name": "plugin", "version": "1.2.3"}))
+        adapter = PluginMetadataAdapter()
+        original = adapter._read
+        calls = 0
+
+        def counted(path):
+            nonlocal calls
+            calls += 1
+            return original(path)
+
+        monkeypatch.setattr(adapter, "_read", counted)
+        assert adapter.read_metadata(str(plugin_dir)) == ("plugin", "1.2.3")
+        assert adapter.read_name(str(plugin_dir)) == "plugin"
+        assert adapter.read_version(str(plugin_dir)) == "1.2.3"
+        assert calls == 1
 
     @pytest.mark.parametrize("empty_value", ["", None])
     def test_read_version_empty_version_returned_as_is(self, tmp_path, empty_value):

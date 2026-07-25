@@ -17,5 +17,8 @@ class RecoveryArtifact(TypedDict):
 class SteamRecoverySnapshot(TypedDict):
     """Backend-owned Steam Input state and files for one shortcut."""
 
+    user_id: str
+    user_dir: str
+    steam_root: str
     controller_setting: str | None
     artifacts: list[RecoveryArtifact]

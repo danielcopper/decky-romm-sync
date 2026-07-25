@@ -9,6 +9,7 @@ from services.prune._models import PruneOptions
 
 _MAX_PREVIEW_PAGE = 100
 _MAX_STEAM_SNAPSHOT_BYTES = 64 * 1024
+_MAX_INSTALLED_SELECTIONS = 256
 
 
 def parse_preview_request(
@@ -42,7 +43,11 @@ def parse_options(request: dict[str, Any]) -> PruneOptions | dict[str, Any]:
     if any(type(request.get(key)) is not bool for key in keys):
         return _failure("invalid_options", "Every cleanup option must be explicitly true or false.")
     raw_ids = request.get("include_installed_rom_ids", [])
-    if not isinstance(raw_ids, list) or any(type(value) is not int or value <= 0 for value in raw_ids):
+    if (
+        not isinstance(raw_ids, list)
+        or len(raw_ids) > _MAX_INSTALLED_SELECTIONS
+        or any(type(value) is not int or value <= 0 for value in raw_ids)
+    ):
         return _failure("invalid_options", "Installed-content selections must be positive ROM ids.")
     return PruneOptions(
         repoint_shortcuts=request["repoint_shortcuts"],
@@ -61,6 +66,12 @@ def valid_snapshot(snapshot: object, expected_app_id: int | None) -> bool:
         return False
     if any(not isinstance(snapshot.get(key), str) for key in ("name", "exe", "start_dir", "launch_options")):
         return False
+    if not snapshot["name"] or not snapshot["exe"].rstrip('"').endswith("/bin/rom-launcher"):
+        return False
+    if any(
+        key not in snapshot for key in ("minutes_playtime_forever", "minutes_playtime_last_two_weeks", "last_played")
+    ):
+        return False
     if any(
         value is not None and type(value) is not int
         for value in (
@@ -71,7 +82,7 @@ def valid_snapshot(snapshot: object, expected_app_id: int | None) -> bool:
     ):
         return False
     collections = snapshot.get("collections")
-    if not isinstance(collections, list) or len(collections) > 256:
+    if not isinstance(collections, list):
         return False
     if any(
         not isinstance(item, dict) or not isinstance(item.get("id"), str) or not isinstance(item.get("name"), str)

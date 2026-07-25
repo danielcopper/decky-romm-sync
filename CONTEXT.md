@@ -284,7 +284,20 @@ Three deliberately-distinct ROM-removal notions (see [ADR-0007](docs/adr/0007-ro
   delete: a stale signal may be a transient server blip or a reversible RomM change, and local playtime/saves must
   survive.
 - **Prune** — an explicit, opt-in purge that `DELETE`s the `roms` row, cascading every per-ROM child away atomically.
-  The **only** thing that deletes rows; not built yet (the cascade FKs exist for it).
+  The **only** thing that deletes rows. **Clean Up Removed RomM Games** performs it only after fresh exact-ID 404s,
+  explicit options, and any enabled recovery bundle have passed their final guards.
+
+### Recovery bundle
+
+A checksum-verified, atomically sealed pre-mutation snapshot created by explicit Prune. It records the affected local
+aggregate state and selected/mandatory recoverable files for manual recovery; it is not a database export or an
+automatic restore point. Finalization revalidates both the sealed bytes and their source state before deleting anything.
+
+### Action token
+
+A one-run, one-action lease for a frontend-owned Steam operation during Prune. The frontend must claim the exact token
+before touching Steam and complete that same token afterward. Duplicate, stale, unknown, and late unclaimed tokens are
+non-authoritative and cannot mutate Steam.
 
 ### Collection kind (Standard / Smart / Virtual)
 

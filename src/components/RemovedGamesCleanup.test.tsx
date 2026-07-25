@@ -15,14 +15,19 @@ const preview: backend.PrunePreviewResult = {
     {
       rom_id: 7,
       name: "Removed Game",
+      name_truncated: false,
       fs_name: "Removed Game.gba",
+      fs_name_truncated: false,
       platform_slug: "gba",
       group_id: "group-1",
+      group_id_truncated: false,
       group_size: 1,
       bound_count: 0,
+      candidate: true,
       installed: true,
       installed_bytes: 200,
       warning: null,
+      warning_truncated: false,
     },
   ],
   offset: 0,
@@ -146,7 +151,7 @@ describe("RemovedGamesCleanup", () => {
         results: [{ group_id: "group-1", rom_ids: [7], status: "removed", message: "Removed." }],
       });
     });
-    expect(modal.container.textContent).toContain("1 removed; 0 skipped or failed.");
+    expect(modal.container.textContent).toContain("1 removed; 0 skipped, partial, or failed.");
     expect(modal.getByRole("button", { name: "Close" })).toBeTruthy();
   });
 
@@ -166,5 +171,79 @@ describe("RemovedGamesCleanup", () => {
     );
 
     expect(button.disabled).toBe(false);
+  });
+
+  it("requires every preview page to be disclosed before confirmation", async () => {
+    vi.mocked(backend.getPrunePreview)
+      .mockResolvedValueOnce({ ...preview, total: 2 })
+      .mockResolvedValueOnce({
+        ...preview,
+        offset: 1,
+        total: 2,
+        items: [{ ...preview.items![0]!, rom_id: 8, candidate: false, name: "Current sibling" }],
+      });
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    const confirm = modal.getByRole("button", { name: "Confirm Cleanup" }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    expect(modal.container.textContent).toContain("Load every page before confirming");
+
+    fireEvent.click(modal.getByRole("button", { name: "Load more (1 of 2)" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("Current sibling"));
+    expect(confirm.disabled).toBe(false);
+  });
+
+  it("clears and disables installed-content selections when recovery is off", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    let toggles = modal.getAllByTestId("toggle-input") as HTMLInputElement[];
+    fireEvent.click(toggles[4]!);
+    expect(toggles[4]!.checked).toBe(true);
+
+    fireEvent.click(toggles[3]!);
+    await waitFor(() => {
+      toggles = modal.getAllByTestId("toggle-input") as HTMLInputElement[];
+      const content = toggles[toggles.length - 1]!;
+      expect(content.checked).toBe(false);
+      expect(modal.container.textContent).toContain("Selected ROM-content recovery estimate: 0 B");
+    });
+    expect(modal.container.textContent).toContain("Installed content is not backed up");
+  });
+
+  it("allows a repoint-only run and resets an old completion when opening", async () => {
+    setPruneComplete({
+      success: true,
+      partial: false,
+      run_id: "old",
+      removed_rom_ids: [99],
+      affected_app_ids: [],
+      results: [],
+    });
+    await openRemovedGamesCleanupModal(7);
+    const modal = render(shownModal());
+    const toggles = modal.getAllByTestId("toggle-input") as HTMLInputElement[];
+    fireEvent.click(toggles[1]!);
+    const confirm = modal.getByRole("button", { name: "Confirm Cleanup" }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(false);
+
+    fireEvent.click(confirm);
+    await waitFor(() => expect(backend.startPrune).toHaveBeenCalled());
+    expect(vi.mocked(backend.startPrune).mock.calls[0]?.[0].remove_rows).toBe(false);
+    expect(modal.container.textContent).toContain("selected unavailable ROM");
+  });
+
+  it("refreshes the free-space snapshot without replacing the preview", async () => {
+    vi.mocked(backend.getPrunePreview)
+      .mockResolvedValueOnce(preview)
+      .mockResolvedValueOnce({ ...preview, items: [], limit: 0, free_bytes: 500 });
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+
+    fireEvent.click(modal.getByRole("button", { name: "Refresh free space" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("Free at target: 500 B"));
+    expect(vi.mocked(backend.getPrunePreview).mock.calls[1]?.[0]).toMatchObject({
+      preview_id: "preview-1",
+      limit: 0,
+    });
   });
 });

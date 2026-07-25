@@ -29,6 +29,10 @@ class PluginMetadataReader(Protocol):
     documented fallback (``"0.0.0"`` for ``read_version``).
     """
 
+    def read_metadata(self, plugin_dir: str) -> tuple[str, str]:
+        """Return ``(name, version)`` from one canonical package read."""
+        ...
+
     def read_version(self, plugin_dir: str) -> str:
         """Return the plugin's declared semantic version.
 

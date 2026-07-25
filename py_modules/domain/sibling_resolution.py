@@ -36,6 +36,7 @@ stdlib only, with no I/O and no service/adapter imports.
 from __future__ import annotations
 
 import functools
+import os
 import re
 from typing import Any
 
@@ -55,6 +56,12 @@ _DEFAULT_REGION_INDEX: dict[str, int] = {name.casefold(): i for i, name in enume
 # Sentinel the ``preferred_region`` setting holds when the user expressed no
 # preference — the ranking is then the pure build-time order.
 AUTO_REGION = "auto"
+
+
+def fs_name_stem(fs_name: str) -> str:
+    """Return the canonical filename label used by sibling ranking."""
+    return os.path.splitext(fs_name)[0]
+
 
 # Region-rank buckets (lower wins), the first element of a region's sort key:
 # 0 = the user's preferred region, 1 = a build-time default region, 2 = any

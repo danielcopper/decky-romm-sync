@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -41,6 +42,7 @@ class FakeRecoveryStore:
     def __init__(self) -> None:
         self.sealed: list[dict[str, object]] = []
         self.failure: Exception | None = None
+        self.sources_valid = True
 
     def root(self) -> str:
         return "/recovery"
@@ -51,6 +53,10 @@ class FakeRecoveryStore:
     def measure_path(self, path: str, safe_root: str) -> int:
         del path, safe_root
         return 123
+
+    def validate_sources(self, bundle_path: str) -> bool:
+        del bundle_path
+        return self.sources_valid
 
     def seal_bundle(self, bundle_id, snapshot, artifacts, readme, playtime_text):
         if self.failure is not None:
@@ -85,24 +91,25 @@ class FakeSteamRecovery:
 
     def snapshot(self, app_id: int) -> SteamRecoverySnapshot:
         del app_id
-        return {"controller_setting": "2", "artifacts": []}
+        return {
+            "user_id": "123",
+            "user_dir": "/steam/userdata/123",
+            "steam_root": "/steam",
+            "controller_setting": "2",
+            "artifacts": [],
+        }
 
-    def remove_files(self, app_id: int) -> None:
+    def remove_state(self, app_id: int, snapshot: SteamRecoverySnapshot) -> None:
+        assert snapshot["user_id"] == "123"
         self.removed.append(app_id)
-
-
-class FakeSteamConfig:
-    def __init__(self) -> None:
-        self.reset: list[tuple[list[int], str]] = []
-
-    def set_steam_input_config(self, app_ids: list[int], mode: str = "default") -> None:
-        self.reset.append((app_ids, mode))
 
 
 class FakeSaveCoordinator:
     def __init__(self) -> None:
         self.locked: list[list[int]] = []
         self.quarantined: list[list[dict[str, str]]] = []
+        self.inventory_failure_ids: set[int] = set()
+        self.lock_id_sequence: list[list[int]] = []
 
     @contextlib.asynccontextmanager
     async def lock_prune_roms(self, rom_ids: list[int]):
@@ -110,17 +117,40 @@ class FakeSaveCoordinator:
         yield
 
     def inventory_prune_saves(self, purge_rom_ids: list[int]):
+        if self.inventory_failure_ids.intersection(purge_rom_ids):
+            raise OSError("save inventory failed")
+        lock_ids = self.lock_id_sequence.pop(0) if self.lock_id_sequence else purge_rom_ids
         return {
             "artifacts": [],
             "exclusive": [],
             "shared": [],
             "warnings": [],
-            "lock_rom_ids": purge_rom_ids,
+            "lock_rom_ids": lock_ids,
         }
 
     def quarantine_prune_saves(self, files: list[dict[str, str]]):
         self.quarantined.append(files)
         return {"success": True, "moved": []}
+
+
+class FakeInstalledFilesRemover:
+    def __init__(self) -> None:
+        self.installed_ids: set[int] = set()
+        self.block_ids: set[int] = set()
+        self.failure_ids: set[int] = set()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def __call__(self, rom_id: int) -> dict[str, Any]:
+        if rom_id in self.block_ids:
+            self.entered.set()
+            if not self.release.wait(timeout=5):
+                raise TimeoutError("test did not release installed-file removal")
+        if rom_id in self.installed_ids:
+            return {"success": True, "message": "removed"}
+        if rom_id in self.failure_ids:
+            return {"success": False, "reason": "unknown", "message": "delete failed"}
+        return {"success": False, "reason": "not_installed", "message": "not installed"}
 
 
 class EventSink:
@@ -141,18 +171,27 @@ class Harness:
     recovery: FakeRecoveryStore
     artifacts: FakePruneArtifacts
     steam_recovery: FakeSteamRecovery
-    steam_config: FakeSteamConfig
     saves: FakeSaveCoordinator
     events: EventSink
     active: set[int]
+    drifted: set[int]
+    installed_remover: FakeInstalledFilesRemover
+    clock: FakeClock
 
 
-def _rom(rom_id: int, *, fetch: str | None, group: str | None = None, app_id: int | None = None) -> Rom:
+def _rom(
+    rom_id: int,
+    *,
+    fetch: str | None,
+    group: str | None = None,
+    app_id: int | None = None,
+    fs_name: str | None = None,
+) -> Rom:
     rom = Rom.synced(
         rom_id=rom_id,
         platform_slug="dc",
         name=f"Game {rom_id}",
-        fs_name=f"Game {rom_id}.gdi",
+        fs_name=fs_name or f"Game {rom_id}.gdi",
         shortcut_app_id=app_id,
         synced_at="now",
         version=VersionMetadata(sibling_group_key=group, regions=("USA",)),
@@ -179,24 +218,37 @@ async def harness() -> Harness:
     recovery = FakeRecoveryStore()
     artifacts = FakePruneArtifacts()
     steam_recovery = FakeSteamRecovery()
-    steam_config = FakeSteamConfig()
     saves = FakeSaveCoordinator()
     events = EventSink()
     active: set[int] = set()
+    drifted: set[int] = set()
+    installed_remover = FakeInstalledFilesRemover()
 
     async def drift(rom_id: int) -> dict[str, Any]:
-        del rom_id
-        return {"drifted": False}
+        return {"drifted": rom_id in drifted}
 
-    async def remove_installed(rom_id: int) -> dict[str, Any]:
-        del rom_id
-        return {"success": False, "reason": "not_installed", "message": "not installed"}
+    async def switch_version(app_id: int, target_rom_id: int, allow_stranded: bool) -> dict[str, Any]:
+        del allow_stranded
+        with uow:
+            target = uow.roms.get(target_rom_id)
+            assert target is not None
+            target.bind_shortcut(app_id)
+            target.record_applied_launch_options(f"launch-{target_rom_id}")
+            uow.roms.save(target)
+        return {
+            "success": True,
+            "app_id": app_id,
+            "rom_id": target_rom_id,
+            "target_installed": False,
+            "launch_options": f"launch-{target_rom_id}",
+        }
 
+    clock = FakeClock()
     service = PruneService(
         config=PruneServiceConfig(
             loop=loop,
             logger=logging.getLogger("test-prune"),
-            clock=FakeClock(),
+            clock=clock,
             uuid_gen=FakeUuidGen(
                 [
                     "00000000-0000-4000-8000-000000000001",
@@ -212,16 +264,29 @@ async def harness() -> Harness:
             recovery_store=recovery,
             prune_artifacts=artifacts,
             steam_recovery=steam_recovery,
-            steam_config=cast("Any", steam_config),
             retrodeck_paths=FakeRetroDeckPaths(saves="/saves", roms="/roms", bios="/bios", home="/retrodeck"),
             save_coordinator=saves,
             active_downloads=lambda: set(active),
             drift_probe=drift,
-            remove_installed_rom=remove_installed,
+            remove_installed_files=installed_remover,
+            switch_version=switch_version,
             settings={"preferred_region": "USA"},
         )
     )
-    return Harness(service, uow, romm, recovery, artifacts, steam_recovery, steam_config, saves, events, active)
+    return Harness(
+        service,
+        uow,
+        romm,
+        recovery,
+        artifacts,
+        steam_recovery,
+        saves,
+        events,
+        active,
+        drifted,
+        installed_remover,
+        clock,
+    )
 
 
 async def _preview(harness: Harness, *, scope: str = "bulk", rom_id: int | None = None):
@@ -272,6 +337,36 @@ async def _wait_action(harness: Harness, action: str) -> dict[str, Any]:
                 return payload
         await asyncio.sleep(0.001)
     raise AssertionError(f"action {action} was not emitted")
+
+
+async def _claim_action(harness: Harness, action: dict[str, Any]) -> dict[str, Any]:
+    return await harness.service.report_prune_action(
+        {
+            "phase": "claim",
+            "run_id": action["run_id"],
+            "action_token": action["action_token"],
+        }
+    )
+
+
+async def _complete_action(
+    harness: Harness,
+    action: dict[str, Any],
+    *,
+    success: bool = True,
+    message: str = "confirmed",
+    snapshot: dict[str, object] | None = None,
+) -> dict[str, Any]:
+    request: dict[str, Any] = {
+        "phase": "complete",
+        "run_id": action["run_id"],
+        "action_token": action["action_token"],
+        "success": success,
+        "message": message,
+    }
+    if snapshot is not None:
+        request["snapshot"] = snapshot
+    return await harness.service.report_prune_action(request)
 
 
 @pytest.mark.asyncio
@@ -354,7 +449,7 @@ async def test_unbound_confirmed_404_row_is_deleted_after_final_reprobes(harness
     assert harness.uow.roms.get(1) is None
     assert complete["removed_rom_ids"] == [1]
     assert harness.romm.calls == [1, 1, 1]
-    assert harness.saves.locked == [[1], [1]]
+    assert harness.saves.locked == [[1]]
 
 
 @pytest.mark.asyncio
@@ -407,22 +502,12 @@ async def test_bound_live_group_repoints_then_deletes_old_row(harness):
     await _start(harness, preview["preview_id"])
     action = await _wait_action(harness, "repoint_shortcut")
     assert action["target_rom_id"] == 2
-    with harness.uow:
-        target = harness.uow.roms.get(2)
-        assert target is not None
-        target.bind_shortcut(app_id)
-        harness.uow.roms.save(target)
-    accepted = await harness.service.report_prune_action(
-        {
-            "run_id": action["run_id"],
-            "action_token": action["action_token"],
-            "success": True,
-            "message": "confirmed",
-        }
-    )
+    assert (await _claim_action(harness, action))["success"] is True
+    accepted = await _complete_action(harness, action)
     assert accepted["success"] is True
     duplicate = await harness.service.report_prune_action(
         {
+            "phase": "complete",
             "run_id": action["run_id"],
             "action_token": action["action_token"],
             "success": True,
@@ -445,21 +530,20 @@ async def test_fully_dead_shortcut_requires_confirmed_removal_action(harness):
     await _start(harness, preview["preview_id"], remove_fully_vanished=True)
     action = await _wait_action(harness, "remove_shortcut")
     stale = await harness.service.report_prune_action(
-        {"run_id": "wrong", "action_token": action["action_token"], "success": True, "message": "wrong"}
-    )
-    assert stale["reason"] == "stale_action"
-    await harness.service.report_prune_action(
         {
-            "run_id": action["run_id"],
+            "phase": "claim",
+            "run_id": "wrong",
             "action_token": action["action_token"],
-            "success": True,
-            "message": "removed",
         }
     )
+    assert stale["reason"] == "stale_action"
+    await _claim_action(harness, action)
+    duplicate_claim = await _claim_action(harness, action)
+    assert duplicate_claim["reason"] == "action_already_claimed"
+    await _complete_action(harness, action, message="removed")
     complete = await _finish(harness)
     assert complete["removed_rom_ids"] == [1]
-    assert harness.steam_recovery.removed == [app_id]
-    assert harness.steam_config.reset == [([app_id], "default")]
+    assert harness.steam_recovery.removed == []
 
 
 @pytest.mark.asyncio
@@ -470,16 +554,10 @@ async def test_binding_change_after_shortcut_action_blocks_source_removal(harnes
     preview = await _preview(harness)
     await _start(harness, preview["preview_id"], remove_fully_vanished=True)
     action = await _wait_action(harness, "remove_shortcut")
+    await _claim_action(harness, action)
     with harness.uow:
         harness.uow.roms.save(_rom(1, fetch="old", app_id=0x80000002))
-    await harness.service.report_prune_action(
-        {
-            "run_id": action["run_id"],
-            "action_token": action["action_token"],
-            "success": True,
-            "message": "removed",
-        }
-    )
+    await _complete_action(harness, action, message="removed")
 
     complete = await _finish(harness)
 
@@ -532,8 +610,10 @@ async def test_recovery_snapshot_rejects_wire_base64_before_accepting_bounded_js
         create_recovery_bundle=True,
     )
     capture = await _wait_action(harness, "capture_shortcut_snapshot")
+    await _claim_action(harness, capture)
     invalid = await harness.service.report_prune_action(
         {
+            "phase": "complete",
             "run_id": capture["run_id"],
             "action_token": capture["action_token"],
             "success": True,
@@ -544,6 +624,7 @@ async def test_recovery_snapshot_rejects_wire_base64_before_accepting_bounded_js
     assert invalid["reason"] == "invalid_snapshot"
     wrong_app = await harness.service.report_prune_action(
         {
+            "phase": "complete",
             "run_id": capture["run_id"],
             "action_token": capture["action_token"],
             "success": True,
@@ -552,23 +633,432 @@ async def test_recovery_snapshot_rejects_wire_base64_before_accepting_bounded_js
         }
     )
     assert wrong_app["reason"] == "invalid_snapshot"
-    await harness.service.report_prune_action(
-        {
-            "run_id": capture["run_id"],
-            "action_token": capture["action_token"],
-            "success": True,
-            "message": "captured",
-            "snapshot": _steam_snapshot(app_id),
-        }
-    )
+    await _complete_action(harness, capture, message="captured", snapshot=_steam_snapshot(app_id))
     removal = await _wait_action(harness, "remove_shortcut")
-    await harness.service.report_prune_action(
-        {
-            "run_id": removal["run_id"],
-            "action_token": removal["action_token"],
-            "success": True,
-            "message": "removed",
-        }
-    )
+    await _claim_action(harness, removal)
+    await _complete_action(harness, removal, message="removed")
     complete = await _finish(harness)
     assert complete["removed_rom_ids"] == [1]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_starts_atomically_consume_one_preview(harness, monkeypatch):
+    _seed(harness.uow, _rom(1, fetch="old"))
+    preview = await _preview(harness)
+    entered = threading.Event()
+    release = threading.Event()
+    original = harness.service._preview_builder.build
+
+    def blocked_refresh(*args):
+        entered.set()
+        if not release.wait(timeout=5):
+            raise TimeoutError("test did not release preview refresh")
+        return original(*args)
+
+    monkeypatch.setattr(harness.service._preview_builder, "build", blocked_refresh)
+    first = asyncio.create_task(_start(harness, preview["preview_id"]))
+    while not entered.is_set():
+        await asyncio.sleep(0)
+    second = await _start(harness, preview["preview_id"])
+    assert second["reason"] == "prune_active"
+    release.set()
+    assert (await first)["success"] is True
+    await _finish(harness)
+    complete_events = [event for event, _payload in harness.events.events if event == "prune_complete"]
+    assert complete_events == ["prune_complete"]
+
+
+@pytest.mark.asyncio
+async def test_preview_and_start_io_failures_use_canonical_shape(harness, monkeypatch):
+    monkeypatch.setattr(
+        harness.service._preview_builder, "build", lambda *_args: (_ for _ in ()).throw(OSError("disk"))
+    )
+    preview = await _preview(harness)
+    assert preview == {"success": False, "reason": "unknown", "message": "disk"}
+
+    _seed(harness.uow, _rom(1, fetch="old"))
+    monkeypatch.undo()
+    valid = await _preview(harness)
+    monkeypatch.setattr(harness.service._preview_builder, "build", lambda *_args: (_ for _ in ()).throw(OSError("db")))
+    started = await _start(harness, valid["preview_id"])
+    assert started == {"success": False, "reason": "unknown", "message": "db"}
+    assert harness.service.is_active() is False
+
+
+@pytest.mark.asyncio
+async def test_preview_discloses_non_candidate_group_members(harness):
+    _seed(harness.uow, _rom(1, fetch="old", group="g"), _rom(2, fetch="new", group="g"))
+    preview = await _preview(harness)
+    assert preview["total"] == 2
+    assert {item["rom_id"]: item["candidate"] for item in preview["items"]} == {1: True, 2: False}
+
+
+@pytest.mark.asyncio
+async def test_repoint_option_is_independent_of_row_removal(harness):
+    app_id = 0x80000001
+    _seed(
+        harness.uow,
+        _rom(1, fetch="old", group="g", app_id=app_id),
+        _rom(2, fetch="new", group="g"),
+    )
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")]
+    harness.romm.outcomes[2] = [{"id": 2}]
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_rows=False)
+    action = await _wait_action(harness, "repoint_shortcut")
+    await _claim_action(harness, action)
+    await _complete_action(harness, action)
+    complete = await _finish(harness)
+    assert complete["results"][0]["status"] == "repointed"
+    assert harness.uow.roms.get(1) is not None
+    assert harness.uow.roms.get(2).shortcut_app_id == app_id
+
+
+@pytest.mark.asyncio
+async def test_repoint_uses_version_picker_filename_stem_ranking(harness):
+    app_id = 0x80000001
+    _seed(
+        harness.uow,
+        _rom(9, fetch="old", group="g", app_id=app_id, fs_name="Gone.gdi"),
+        _rom(1, fetch="new", group="g", fs_name="Game (Europe).zip"),
+        _rom(2, fetch="new", group="g", fs_name="Game.iso"),
+    )
+    harness.romm.outcomes[9] = [RommNotFoundError("gone")]
+    harness.romm.outcomes[1] = [{"id": 1}]
+    harness.romm.outcomes[2] = [{"id": 2}]
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_rows=False)
+    action = await _wait_action(harness, "repoint_shortcut")
+    assert action["target_rom_id"] == 2
+    await _claim_action(harness, action)
+    await _complete_action(harness, action)
+    await _finish(harness)
+
+
+@pytest.mark.asyncio
+async def test_fully_dead_bound_group_with_drift_requires_recovery(harness):
+    app_id = 0x80000001
+    _seed(harness.uow, _rom(1, fetch="old", app_id=app_id))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")]
+    harness.drifted.add(1)
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    complete = await _finish(harness)
+    assert complete["results"][0]["reason"] == "unsynced_saves"
+    assert not any(name == "prune_action_required" for name, _payload in harness.events.events)
+    assert harness.uow.roms.get(1) is not None
+
+
+@pytest.mark.asyncio
+async def test_action_claim_rejects_binding_drift_before_steam_mutation(harness):
+    app_id = 0x80000001
+    _seed(harness.uow, _rom(1, fetch="old", app_id=app_id))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")]
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    action = await _wait_action(harness, "remove_shortcut")
+    with harness.uow:
+        harness.uow.roms.save(_rom(1, fetch="old", app_id=app_id + 1))
+    claim = await _claim_action(harness, action)
+    assert claim["reason"] == "local_state_changed"
+    await harness.service.shutdown()
+    assert harness.uow.roms.get(1) is not None
+
+
+@pytest.mark.asyncio
+async def test_recovery_source_drift_aborts_before_mutation(harness):
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    harness.recovery.sources_valid = False
+    preview = await _preview(harness)
+    await _start(
+        harness,
+        preview["preview_id"],
+        remove_fully_vanished=True,
+        create_recovery_bundle=True,
+    )
+    complete = await _finish(harness)
+    assert complete["results"][0]["reason"] == "recovery_state_changed"
+    assert harness.uow.roms.get(1) is not None
+    assert harness.artifacts.removed == []
+
+
+@pytest.mark.asyncio
+async def test_group_exception_is_reported_and_unrelated_group_continues(harness):
+    _seed(harness.uow, _rom(1, fetch="old"), _rom(2, fetch="old"), stamp_count=2)
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    harness.romm.outcomes[2] = [RommNotFoundError("gone")] * 3
+    harness.saves.inventory_failure_ids.add(1)
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    complete = await _finish(harness)
+    assert [result["status"] for result in complete["results"]] == ["failed", "removed"]
+    assert harness.uow.roms.get(1) is not None
+    assert harness.uow.roms.get(2) is None
+    assert complete["partial"] is True
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_inflight_filesystem_finalization(harness):
+    row = _rom(1, fetch="old")
+    _seed(harness.uow, row)
+    with harness.uow:
+        harness.uow.rom_installs.save(
+            RomInstall.mark_installed(
+                rom_id=1,
+                file_path="/roms/dc/game.gdi",
+                rom_dir=None,
+                platform_slug="dc",
+                system="dc",
+                installed_at="now",
+            )
+        )
+    harness.installed_remover.installed_ids.add(1)
+    harness.installed_remover.block_ids.add(1)
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    while not harness.installed_remover.entered.is_set():
+        await asyncio.sleep(0)
+
+    shutdown = asyncio.create_task(harness.service.shutdown())
+    await asyncio.sleep(0.01)
+    assert shutdown.done() is False
+    harness.installed_remover.release.set()
+    await shutdown
+
+    assert harness.uow.roms.get(1) is None
+    complete = [payload for name, payload in harness.events.events if name == "prune_complete"][-1]
+    assert complete["reason"] == "cancelled"
+    assert complete["results"][0]["status"] == "removed"
+
+
+@pytest.mark.asyncio
+async def test_completion_results_are_emitted_in_bounded_chunks(harness):
+    rows = [_rom(rom_id, fetch="old") for rom_id in range(1, 27)]
+    _seed(harness.uow, *rows, stamp_count=26)
+    for row in rows:
+        harness.romm.outcomes[row.rom_id] = [RommNotFoundError("gone")] * 3
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    await _finish(harness)
+
+    completions = [payload for name, payload in harness.events.events if name == "prune_complete"]
+    assert [len(payload["results"]) for payload in completions] == [25, 1]
+    assert [payload["final"] for payload in completions] == [False, True]
+    assert all(len(payload["removed_rom_ids"]) <= 25 for payload in completions)
+
+
+def test_one_large_group_result_is_explicitly_bounded(harness):
+    rows = [_rom(rom_id, fetch="old", group="g") for rom_id in range(1, 61)]
+    result = harness.service._executor._group_result(
+        rows,
+        "removed",
+        None,
+        "x" * 2000,
+        removed_rom_ids=list(range(1, 61)),
+    )
+    assert len(result["rom_ids"]) == 50
+    assert result["rom_count"] == 60
+    assert result["rom_ids_truncated"] is True
+    assert len(result["removed_rom_ids"]) == 50
+    assert result["removed_count"] == 60
+    assert result["removed_rom_ids_truncated"] is True
+    assert len(result["message"]) == 1024
+    assert result["message_truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_save_owner_lock_set_retries_until_stable(harness):
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    harness.saves.lock_id_sequence = [[1], [1, 2], [1, 2], [1, 2]]
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    complete = await _finish(harness)
+    assert complete["results"][0]["status"] == "removed"
+    assert harness.saves.locked == [[1], [1, 2]]
+
+
+@pytest.mark.asyncio
+async def test_installed_file_failure_preserves_all_rows_and_reports_prior_mutation(harness):
+    _seed(harness.uow, _rom(1, fetch="old", group="g"), _rom(2, fetch="old", group="g"))
+    for rom_id in (1, 2):
+        harness.romm.outcomes[rom_id] = [RommNotFoundError("gone")] * 3
+        with harness.uow:
+            harness.uow.rom_installs.save(
+                RomInstall.mark_installed(
+                    rom_id=rom_id,
+                    file_path=f"/roms/dc/{rom_id}.gdi",
+                    rom_dir=None,
+                    platform_slug="dc",
+                    system="dc",
+                    installed_at="now",
+                )
+            )
+    harness.installed_remover.installed_ids.add(1)
+    harness.installed_remover.failure_ids.add(2)
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    complete = await _finish(harness)
+
+    result = complete["results"][0]
+    assert result["status"] == "partial"
+    assert result["reason"] == "rom_removal_failed"
+    assert result["mutations"] == ["installed_rom_content"]
+    assert harness.uow.roms.get(1) is not None and harness.uow.roms.get(2) is not None
+    assert harness.uow.rom_installs.get(1) is not None and harness.uow.rom_installs.get(2) is not None
+
+
+@pytest.mark.asyncio
+async def test_post_seal_database_drift_after_shortcut_removal_is_explicit_partial(harness):
+    app_id = 0x80000001
+    _seed(harness.uow, _rom(1, fetch="old", app_id=app_id))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    preview = await _preview(harness)
+    await _start(
+        harness,
+        preview["preview_id"],
+        remove_fully_vanished=True,
+        create_recovery_bundle=True,
+    )
+    capture = await _wait_action(harness, "capture_shortcut_snapshot")
+    await _claim_action(harness, capture)
+    await _complete_action(harness, capture, snapshot=_steam_snapshot(app_id))
+    removal = await _wait_action(harness, "remove_shortcut")
+    with harness.uow:
+        row = harness.uow.roms.get(1)
+        assert row is not None
+        row.record_fetch_generation("changed-after-seal")
+        harness.uow.roms.save(row)
+    await _claim_action(harness, removal)
+    await _complete_action(harness, removal)
+    complete = await _finish(harness)
+
+    result = complete["results"][0]
+    assert result["status"] == "partial"
+    assert result["reason"] == "recovery_state_changed"
+    assert result["committed_action"] == "remove_shortcut"
+    assert harness.uow.roms.get(1).shortcut_app_id is None
+    assert harness.artifacts.removed == []
+
+
+@pytest.mark.asyncio
+async def test_unclaimed_action_timeout_makes_late_claim_harmless(harness, monkeypatch):
+    monkeypatch.setattr("services.prune.service._ACTION_TIMEOUT_SECONDS", 0.01)
+    app_id = 0x80000001
+    _seed(harness.uow, _rom(1, fetch="old", app_id=app_id))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")]
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    action = await _wait_action(harness, "remove_shortcut")
+    complete = await _finish(harness)
+    assert complete["results"][0]["reason"] == "steam_action_failed"
+
+    late = await _claim_action(harness, action)
+    assert late["reason"] == "stale_action"
+    assert harness.uow.roms.get(1) is not None
+
+
+@pytest.mark.asyncio
+async def test_action_claim_expiring_during_validation_is_rejected(harness, monkeypatch):
+    app_id = 0x80000001
+    entered = threading.Event()
+    release = threading.Event()
+    _seed(harness.uow, _rom(1, fetch="old", app_id=app_id))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")]
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    action = await _wait_action(harness, "remove_shortcut")
+    original = harness.service._registry.validate_action_state
+
+    def delayed_validation(*args):
+        entered.set()
+        assert release.wait(timeout=5)
+        return original(*args)
+
+    monkeypatch.setattr(harness.service._registry, "validate_action_state", delayed_validation)
+    claim_task = asyncio.create_task(_claim_action(harness, action))
+    assert await asyncio.get_running_loop().run_in_executor(None, entered.wait, 5)
+    harness.clock.advance(61)
+    release.set()
+
+    claim = await claim_task
+    assert claim["reason"] == "stale_action"
+    await harness.service.shutdown()
+    assert harness.uow.roms.get(1) is not None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_after_snapshot_claim_does_not_begin_recovery(harness):
+    app_id = 0x80000001
+    _seed(harness.uow, _rom(1, fetch="old", app_id=app_id))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")]
+    preview = await _preview(harness)
+    await _start(
+        harness,
+        preview["preview_id"],
+        remove_fully_vanished=True,
+        create_recovery_bundle=True,
+    )
+    capture = await _wait_action(harness, "capture_shortcut_snapshot")
+    await _claim_action(harness, capture)
+    shutdown = asyncio.create_task(harness.service.shutdown())
+    while harness.service._task is not None and harness.service._task.cancelling() == 0:
+        await asyncio.sleep(0)
+    await _complete_action(harness, capture, snapshot=_steam_snapshot(app_id))
+    await shutdown
+
+    assert harness.recovery.sealed == []
+    assert harness.artifacts.removed == []
+    assert harness.uow.roms.get(1) is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["quarantine", "artifacts", "database"])
+async def test_shutdown_waits_for_each_executor_backed_finalization_phase(harness, monkeypatch, phase):
+    entered = threading.Event()
+    release = threading.Event()
+    if phase == "quarantine":
+        original = harness.saves.quarantine_prune_saves
+
+        def blocked(*args):
+            entered.set()
+            assert release.wait(timeout=5)
+            return original(*args)
+
+        monkeypatch.setattr(harness.saves, "quarantine_prune_saves", blocked)
+    elif phase == "artifacts":
+        original = harness.artifacts.remove
+
+        def blocked(*args):
+            entered.set()
+            assert release.wait(timeout=5)
+            return original(*args)
+
+        monkeypatch.setattr(harness.artifacts, "remove", blocked)
+    else:
+        original = harness.service._registry.delete_rows
+
+        def blocked(*args):
+            entered.set()
+            assert release.wait(timeout=5)
+            return original(*args)
+
+        monkeypatch.setattr(harness.service._registry, "delete_rows", blocked)
+
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    while not entered.is_set():
+        await asyncio.sleep(0)
+    shutdown = asyncio.create_task(harness.service.shutdown())
+    await asyncio.sleep(0.01)
+    assert shutdown.done() is False
+    release.set()
+    await shutdown
+
+    assert harness.uow.roms.get(1) is None
+    complete = [payload for name, payload in harness.events.events if name == "prune_complete"][-1]
+    assert complete["reason"] == "cancelled"

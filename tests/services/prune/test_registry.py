@@ -63,7 +63,8 @@ def test_repointed_group_delete_revalidates_and_invalidates_collection_only() ->
     with uow:
         uow.roms.save(target)
 
-    deleted = _registry(uow).delete_rows([old, _rom(2, group="g")], {1}, 2, app_id, False)
+    current = _registry(uow).reread_group(1)
+    deleted = _registry(uow).delete_rows(current, {1}, 2, app_id, False)
 
     assert deleted is True
     assert uow.roms.get(1) is None

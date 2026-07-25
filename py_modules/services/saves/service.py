@@ -311,6 +311,10 @@ class SaveService:
                     else:
                         shared.append(path)
                 backup_dir = os.path.join(item["saves_dir"], ".romm-backup")
+                if self._save_file_store.is_symlink(backup_dir) or not self._save_file_store.is_within(
+                    backup_dir, saves_root
+                ):
+                    raise ValueError(f"ROM {rom_id}: save backup directory is unsafe: {backup_dir}")
                 for entry in self._save_file_store.listdir(backup_dir):
                     backup_path = os.path.join(backup_dir, entry)
                     if is_backup_for(item["filename"], entry) and self._save_file_store.is_file(backup_path):
@@ -333,8 +337,16 @@ class SaveService:
     def quarantine_prune_saves(self, files: list[dict[str, str]]) -> dict[str, Any]:
         """Move exclusive current saves through the sanctioned backup funnel."""
         moved: list[str] = []
+        saves_root = self._config.retrodeck_paths.saves_path()
         try:
             for item in files:
+                backup_dir = os.path.join(item["saves_dir"], ".romm-backup")
+                if (
+                    not self._save_file_store.is_within(item["path"], saves_root)
+                    or not self._save_file_store.is_within(backup_dir, saves_root)
+                    or self._save_file_store.is_symlink(backup_dir)
+                ):
+                    raise ValueError(f"Unsafe save quarantine destination: {backup_dir}")
                 if self._sync_engine.quarantine_local_file(item["saves_dir"], item["filename"], preserve_history=True):
                     moved += [item["path"]]
         except Exception as exc:

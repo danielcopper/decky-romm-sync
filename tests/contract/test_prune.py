@@ -113,6 +113,7 @@ async def test_unbound_exact_404_cleanup_deletes_real_aggregate_and_emits_comple
 async def test_action_report_rejects_stale_token_with_canonical_shape(harness):
     result = await harness.plugin.report_prune_action(
         {
+            "phase": "complete",
             "run_id": "old-run",
             "action_token": "old-token",
             "success": True,
@@ -125,3 +126,23 @@ async def test_action_report_rejects_stale_token_with_canonical_shape(harness):
         "reason": "stale_action",
         "message": "This cleanup action token is no longer active.",
     }
+
+
+@pytest.mark.parametrize(
+    ("method", "args"),
+    [
+        ("start_sync", ()),
+        ("start_download", (41,)),
+        ("migrate_retrodeck_files", (None,)),
+        ("sync_rom_saves", (41,)),
+        ("switch_version", (0x80000001, 41, False)),
+    ],
+)
+async def test_prune_claim_reciprocally_blocks_conflicting_callable_entries(harness, method, args):
+    harness.plugin._prune_service._starting = True
+
+    result = await getattr(harness.plugin, method)(*args)
+
+    assert result["success"] is False
+    assert result["reason"] == "prune_active"
+    assert result["message"]

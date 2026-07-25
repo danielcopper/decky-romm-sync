@@ -48,6 +48,25 @@ class PruneRegistry:
         with self._uow_factory() as uow:
             return self._deletion_state_matches(uow, expected_rows, delete_ids, target_id, app_id, fully_dead)
 
+    def validate_action_state(self, kind: str, expected_bound_rom_id: int, app_id: int, target_id: int | None) -> bool:
+        """Require the exact expected binding immediately before a frontend action."""
+        with self._uow_factory() as uow:
+            bound = uow.roms.get_by_app_id(app_id)
+            if bound is None:
+                return False
+            expected_id = target_id if kind == "repoint_shortcut" else expected_bound_rom_id
+            return bound.rom_id == expected_id
+
+    def reconcile_removed_shortcut(self, expected_bound_rom_id: int, app_id: int) -> bool:
+        """Persist Steam's confirmed shortcut absence without deleting source data."""
+        with self._uow_factory() as uow:
+            bound = uow.roms.get_by_app_id(app_id)
+            if bound is None or bound.rom_id != expected_bound_rom_id:
+                return False
+            bound.unbind_shortcut()
+            uow.roms.save(bound)
+        return True
+
     def delete_rows(
         self,
         expected_rows: list[Rom],
@@ -100,7 +119,7 @@ class PruneRegistry:
         current_rows: list[Rom] = []
         for rom_id in delete_ids:
             row = uow.roms.get(rom_id)
-            if row is None or row.sibling_group_key != expected[rom_id].sibling_group_key:
+            if row is None or row != expected[rom_id]:
                 return False
             current_rows.append(row)
         bound_app_ids = {row.shortcut_app_id for row in current_rows if row.shortcut_app_id is not None}
