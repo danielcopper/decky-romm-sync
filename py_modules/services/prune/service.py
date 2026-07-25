@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from lib.list_result import ErrorCode
 from lib.url_host import romm_namespace
-from services.prune._models import InstalledSelection, PendingAction, PruneOptions, PrunePreview
+from services.prune._models import InstalledSelection, PendingAction, PruneOptions, PrunePreview, cancellation_state
 from services.prune.executor import PruneExecutor, PruneExecutorConfig
 from services.prune.preview import PreviewBuilder, PreviewBuilderConfig
 from services.prune.recovery import RecoveryCoordinator, RecoveryCoordinatorConfig
@@ -436,40 +436,42 @@ class PruneService:
         )
         try:
             await asyncio.wait_for(claim_event.wait(), timeout=_ACTION_TIMEOUT_SECONDS)
-            try:
-                result = await asyncio.wait_for(asyncio.shield(future), timeout=_ACTION_TIMEOUT_SECONDS)
-                return self._with_cancellation_state(result)
-            except asyncio.CancelledError:
-                result = await asyncio.wait_for(asyncio.shield(future), timeout=_ACTION_TIMEOUT_SECONDS)
-                result["_cancelled"] = True
-                return result
-        except asyncio.CancelledError:
+            result = await asyncio.wait_for(asyncio.shield(future), timeout=_ACTION_TIMEOUT_SECONDS)
+            return self._action_result_or_cancel(result)
+        except asyncio.CancelledError as exc:
             if pending.claimed:
-                result = await asyncio.wait_for(asyncio.shield(future), timeout=_ACTION_TIMEOUT_SECONDS)
-                result["_cancelled"] = True
-                return result
+                try:
+                    result = await asyncio.wait_for(asyncio.shield(future), timeout=_ACTION_TIMEOUT_SECONDS)
+                except TimeoutError:
+                    result = self._action_timeout_result(pending)
+                cancellation_state(exc).action_result = result
             raise
         except TimeoutError:
-            result: dict[str, Any] = {
-                "success": False,
-                "reason": "action_ambiguous" if pending.claimed else "action_timeout",
-                "message": (
-                    "Steam action was claimed but its outcome is unknown."
-                    if pending.claimed
-                    else "Steam did not claim the action in time."
-                ),
-                "claimed": pending.claimed,
-            }
-            return self._with_cancellation_state(result)
+            return self._action_result_or_cancel(self._action_timeout_result(pending))
         finally:
             if self._pending_action is pending:
                 self._pending_action = None
 
     @staticmethod
-    def _with_cancellation_state(result: dict[str, Any]) -> dict[str, Any]:
+    def _action_timeout_result(pending: PendingAction) -> dict[str, Any]:
+        return {
+            "success": False,
+            "reason": "action_ambiguous" if pending.claimed else "action_timeout",
+            "message": (
+                "Steam action was claimed but its outcome is unknown."
+                if pending.claimed
+                else "Steam did not claim the action in time."
+            ),
+            "claimed": pending.claimed,
+        }
+
+    @staticmethod
+    def _action_result_or_cancel(result: dict[str, Any]) -> dict[str, Any]:
         task = asyncio.current_task()
         if task is not None and task.cancelling():
-            result["_cancelled"] = True
+            cancellation = asyncio.CancelledError()
+            cancellation_state(cancellation).action_result = result
+            raise cancellation
         return result
 
     @staticmethod

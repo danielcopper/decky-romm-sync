@@ -71,3 +71,27 @@ class RecoveryHandle:
     steam_backend: SteamRecoverySnapshot | None
     source_claims: dict[str, SourceClaim]
     bundle_digest: str
+
+
+@dataclass
+class PruneCancellationState:
+    """Result state captured while propagating one cleanup cancellation."""
+
+    action_result: dict[str, Any] | None = None
+    group_result: dict[str, Any] | None = None
+    child_result: Any = None
+    child_completed: bool = False
+    child_fault: BaseException | None = None
+
+
+_CANCELLATION_STATE_ATTR = "_prune_cancellation_state"
+
+
+def cancellation_state(error: BaseException) -> PruneCancellationState:
+    """Return the cleanup state attached to the original cancellation."""
+    state = getattr(error, _CANCELLATION_STATE_ATTR, None)
+    if isinstance(state, PruneCancellationState):
+        return state
+    state = PruneCancellationState()
+    setattr(error, _CANCELLATION_STATE_ATTR, state)
+    return state

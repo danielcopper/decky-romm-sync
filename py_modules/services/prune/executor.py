@@ -8,14 +8,14 @@ import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from functools import partial
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from domain.prune import selected_prune_ids
 from domain.sibling_resolution import AUTO_REGION, fs_name_stem, resolve_group_representative
 from lib.errors import RommNotFoundError, classify_error
 from lib.list_result import ErrorCode
 from lib.url_host import romm_namespace
-from services.prune._models import PruneOptions, PrunePreview, RecoveryHandle
+from services.prune._models import PruneOptions, PrunePreview, RecoveryHandle, cancellation_state
 
 if TYPE_CHECKING:
     import logging
@@ -70,18 +70,6 @@ class PruneExecutorConfig:
     request_action: ActionRequester
 
 
-class _CancelledWithResult(asyncio.CancelledError):
-    def __init__(self, result: dict[str, Any]) -> None:
-        super().__init__()
-        self.result = result
-
-
-class _ChildFaultAfterCancellation(asyncio.CancelledError):
-    def __init__(self, error: BaseException) -> None:
-        super().__init__()
-        self.error = error
-
-
 @dataclass
 class _MutationLedger:
     rows: list[Rom]
@@ -128,9 +116,6 @@ class PruneExecutor:
     async def run(self, run_id: str, preview: PrunePreview, options: PruneOptions) -> None:
         """Execute every candidate group and emit bounded terminal chunks."""
         results: list[dict[str, Any]] = []
-        cancelled = False
-        terminal_reason: str | None = None
-        terminal_message: str | None = None
         self._run_namespace = preview.server_namespace
         self._run_preview_id = preview.preview_id
         try:
@@ -151,36 +136,50 @@ class PruneExecutor:
                         index,
                         total,
                     )
-                except _CancelledWithResult as exc:
-                    results.append(exc.result)
-                    raise asyncio.CancelledError from exc
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
                     self._logger.exception(f"Vanished-ROM cleanup group {rows[0].rom_id} failed")
                     result = self._group_result(rows, "failed", ErrorCode.UNKNOWN.value, str(exc))
                 results.append(result)
-        except asyncio.CancelledError:
-            cancelled = True
-            terminal_reason = "cancelled"
-            terminal_message = "Cleanup was cancelled; no unstarted destructive phase was run."
-        except Exception as exc:
-            self._logger.exception("Vanished-ROM cleanup failed")
-            terminal_reason = ErrorCode.UNKNOWN.value
-            terminal_message = str(exc)
-        try:
-            await self._emit_completion(
+        except asyncio.CancelledError as exc:
+            result = cancellation_state(exc).group_result
+            if result is not None:
+                results.append(result)
+            await self._finish_run(
                 run_id,
                 results,
-                cancelled=cancelled,
-                reason=terminal_reason,
-                message=terminal_message,
+                cancelled=True,
+                reason="cancelled",
+                message="Cleanup was cancelled; no unstarted destructive phase was run.",
             )
+            raise
+        except Exception as exc:
+            self._logger.exception("Vanished-ROM cleanup failed")
+            await self._finish_run(
+                run_id,
+                results,
+                cancelled=False,
+                reason=ErrorCode.UNKNOWN.value,
+                message=str(exc),
+            )
+        else:
+            await self._finish_run(run_id, results, cancelled=False, reason=None, message=None)
+
+    async def _finish_run(
+        self,
+        run_id: str,
+        results: list[dict[str, Any]],
+        *,
+        cancelled: bool,
+        reason: str | None,
+        message: str | None,
+    ) -> None:
+        try:
+            await self._emit_completion(run_id, results, cancelled=cancelled, reason=reason, message=message)
         finally:
             self._run_namespace = None
             self._run_preview_id = None
-        if cancelled:
-            raise asyncio.CancelledError
 
     async def _run_group(
         self,
@@ -196,19 +195,16 @@ class PruneExecutor:
             return await self._run_group_inner(
                 run_id, initial_rows, preview_candidate_ids, options, index, total, ledger
             )
-        except _ChildFaultAfterCancellation as exc:
-            raise _CancelledWithResult(self._fault_result(ledger, initial_rows, exc.error)) from exc
-        except _CancelledWithResult:
-            raise
         except asyncio.CancelledError as exc:
-            if ledger.has_commit():
-                raise _CancelledWithResult(
-                    self._ledger_result(
-                        ledger,
-                        "cancelled",
-                        "Cleanup was cancelled after a committed or ambiguous action; later groups were not started.",
-                    )
-                ) from exc
+            state = cancellation_state(exc)
+            if state.child_fault is not None:
+                state.group_result = self._fault_result(ledger, initial_rows, state.child_fault)
+            elif state.group_result is None and ledger.has_commit():
+                state.group_result = self._ledger_result(
+                    ledger,
+                    "cancelled",
+                    "Cleanup was cancelled after a committed or ambiguous action; later groups were not started.",
+                )
             raise
         except Exception as exc:
             if ledger.has_commit():
@@ -295,50 +291,28 @@ class PruneExecutor:
 
         app_id = bound_row.shortcut_app_id if bound_row is not None else None
         frontend_steam: dict[str, object] | None = None
-        cancel_requested = False
         if whole_game_action and app_id is not None and options.create_recovery_bundle:
             if bound_row is None:
                 raise RuntimeError("Bound shortcut state disappeared before snapshot capture")
-            capture = await self._request_action(
-                run_id,
-                "capture_shortcut_snapshot",
-                {"app_id": app_id},
-                bound_row.rom_id,
-                None,
-                group_ids,
-            )
-            cancel_requested |= bool(capture.pop("_cancelled", False))
-            if capture.get("success") and capture.get("shortcut_absent") is True:
-                ledger.app_id = app_id
-                ledger.committed_action = "remove_shortcut"
-                reconciled, cancelled = await self._shielded(
-                    self._loop.run_in_executor(
-                        None, self._registry.reconcile_removed_shortcut, bound_row.rom_id, app_id
+            try:
+                capture = await self._request_action(
+                    run_id,
+                    "capture_shortcut_snapshot",
+                    {"app_id": app_id},
+                    bound_row.rom_id,
+                    None,
+                    group_ids,
+                )
+            except asyncio.CancelledError as exc:
+                state = cancellation_state(exc)
+                if state.action_result is not None:
+                    _, state.group_result = await self._snapshot_outcome(
+                        state.action_result, rows, ledger, bound_row.rom_id, app_id
                     )
-                )
-                if reconciled:
-                    ledger.mutations.append("shortcut_binding")
-                result = self._ledger_result(
-                    ledger,
-                    "shortcut_absence_reconciled" if reconciled else "local_state_changed",
-                    (
-                        "Steam already lacked this shortcut; its local binding was reconciled. Run cleanup again."
-                        if reconciled
-                        else "Steam lacked the shortcut, but its local binding changed before reconciliation."
-                    ),
-                    removed_app_id=app_id if reconciled else None,
-                )
-                return self._cancel_or_return(result, cancel_requested or cancelled)
-            if not capture.get("success") or not isinstance(capture.get("snapshot"), dict):
-                return self._group_result(
-                    rows,
-                    "failed",
-                    "steam_snapshot_failed",
-                    capture.get("message", "Steam snapshot failed."),
-                )
-            frontend_steam = capture["snapshot"]
-            if cancel_requested:
-                raise asyncio.CancelledError
+                raise
+            frontend_steam, result = await self._snapshot_outcome(capture, rows, ledger, bound_row.rom_id, app_id)
+            if result is not None:
+                return result
 
         recovery_ids = set(delete_ids)
         if target_id is not None and bound_row is not None:
@@ -359,7 +333,7 @@ class PruneExecutor:
                     snapshot = await self._loop.run_in_executor(
                         None, self._recovery.snapshot_state, sorted(recovery_ids), frontend_steam
                     )
-                    sealed, seal_cancelled = await self._shielded(
+                    sealed = await self._shielded(
                         self._loop.run_in_executor(
                             None,
                             lambda: self._recovery.seal(
@@ -385,8 +359,6 @@ class PruneExecutor:
                         sealed_claims["bundle_digest"],
                     )
                     ledger.bundle_path = bundle_path
-                    if seal_cancelled:
-                        raise asyncio.CancelledError
             except Exception as exc:
                 self._logger.error(f"Recovery bundle failed for group {min(group_ids)}: {exc}")
                 return self._group_result(rows, "failed", "recovery_failed", str(exc))
@@ -446,72 +418,60 @@ class PruneExecutor:
             ledger.app_id = app_id
             ledger.committed_action = "repoint_shortcut"
             ledger.action_ambiguous = True
-            switch, cancelled = await self._shielded(
-                self._switch_version(app_id, target_id, drifted and handle is not None)
-            )
-            cancel_requested |= cancelled
-            if not switch.get("success"):
-                ledger.committed_action = None
-                ledger.action_ambiguous = False
-                result = self._group_result(
-                    rows,
-                    "failed",
-                    switch.get("reason", "repoint_failed"),
-                    switch.get("message", "Repoint failed."),
-                    bundle_path=handle.bundle_path if handle else None,
-                )
-                return self._cancel_or_return(result, cancel_requested)
-            if (
-                switch.get("rom_id") != target_id
-                or switch.get("app_id") != app_id
-                or not isinstance(switch.get("launch_options"), str)
-            ):
-                result = self._ledger_result(
-                    ledger,
-                    "repoint_result_invalid",
-                    "The binding changed but the switch result was incomplete.",
-                )
-                return self._cancel_or_return(result, cancel_requested)
-            launch_options = switch["launch_options"]
+            try:
+                switch = await self._shielded(self._switch_version(app_id, target_id, drifted and handle is not None))
+            except asyncio.CancelledError as exc:
+                state = cancellation_state(exc)
+                if state.child_completed and isinstance(state.child_result, dict):
+                    _, state.group_result = self._switch_outcome(
+                        state.child_result, rows, ledger, target_id, app_id, handle
+                    )
+                    if state.group_result is None:
+                        state.group_result = self._ledger_result(
+                            ledger,
+                            "cancelled",
+                            "Cleanup was cancelled after the version binding changed; later groups were not started.",
+                        )
+                raise
+            launch_options, result = self._switch_outcome(switch, rows, ledger, target_id, app_id, handle)
+            if result is not None:
+                return result
+            if launch_options is None:
+                raise RuntimeError("Successful version switch did not produce launch options")
             committed_action = "repoint_shortcut"
-            ledger.target_rom_id = target_id
-            ledger.action_ambiguous = False
-            ledger.mutations.append("shortcut_binding")
-            _, cancelled = await self._shielded(
+            await self._shielded(
                 self._emit_progress(
                     run_id, index, total, "repointing", rows, bundle_path=handle.bundle_path if handle else None
                 )
             )
-            cancel_requested |= cancelled
-            action = await self._request_action(
-                run_id,
-                "repoint_shortcut",
-                {
-                    "app_id": app_id,
-                    "target_rom_id": target_id,
-                    "launch_options": launch_options,
-                    "target_installed": bool(switch.get("target_installed")),
-                },
-                bound_row.rom_id,
-                target_id,
-                group_ids,
-            )
-            cancel_requested |= bool(action.pop("_cancelled", False))
-            if not action.get("success"):
-                if action.get("mutation_attempted") is True or action.get("reason") == "action_ambiguous":
-                    ledger.action_ambiguous = True
-                    result = self._ledger_result(
-                        ledger,
-                        "action_ambiguous",
-                        action.get("message", "The binding changed but Steam confirmation is unknown."),
-                    )
-                else:
-                    result = self._ledger_result(
-                        ledger,
-                        "steam_action_failed",
-                        action.get("message", "The binding changed but Steam confirmation failed."),
-                    )
-                return self._cancel_or_return(result, cancel_requested)
+            try:
+                action = await self._request_action(
+                    run_id,
+                    "repoint_shortcut",
+                    {
+                        "app_id": app_id,
+                        "target_rom_id": target_id,
+                        "launch_options": launch_options,
+                        "target_installed": bool(switch.get("target_installed")),
+                    },
+                    bound_row.rom_id,
+                    target_id,
+                    group_ids,
+                )
+            except asyncio.CancelledError as exc:
+                state = cancellation_state(exc)
+                if state.action_result is not None:
+                    state.group_result = self._repoint_action_outcome(state.action_result, ledger)
+                    if state.group_result is None:
+                        state.group_result = self._ledger_result(
+                            ledger,
+                            "cancelled",
+                            "Cleanup was cancelled after Steam confirmed the repoint; later groups were not started.",
+                        )
+                raise
+            result = self._repoint_action_outcome(action, ledger)
+            if result is not None:
+                return result
         elif whole_game_action and app_id is not None and bound_row is not None:
             await self._emit_progress(
                 run_id,
@@ -521,59 +481,37 @@ class PruneExecutor:
                 rows,
                 bundle_path=handle.bundle_path if handle else None,
             )
-            action = await self._request_action(
-                run_id,
-                "remove_shortcut",
-                {
-                    "app_id": app_id,
-                    **({"expected_snapshot": frontend_steam} if isinstance(frontend_steam, dict) else {}),
-                },
-                bound_row.rom_id,
-                None,
-                group_ids,
-            )
-            cancel_requested |= bool(action.pop("_cancelled", False))
-            if not action.get("success"):
-                if action.get("mutation_attempted") is True or action.get("reason") == "action_ambiguous":
-                    ledger.app_id = app_id
-                    ledger.committed_action = "remove_shortcut"
-                    ledger.action_ambiguous = True
-                    result = self._ledger_result(
-                        ledger,
-                        "action_ambiguous",
-                        "Steam removal was claimed but its outcome is unknown; source data was retained.",
-                    )
-                else:
-                    result = self._group_result(
-                        rows,
-                        "failed",
-                        "steam_action_failed",
-                        action.get("message", "Shortcut removal failed."),
-                        bundle_path=handle.bundle_path if handle else None,
-                    )
-                return self._cancel_or_return(result, cancel_requested)
-            ledger.app_id = app_id
-            ledger.committed_action = "remove_shortcut"
-            ledger.action_ambiguous = False
-            reconciled, cancelled = await self._shielded(
-                self._loop.run_in_executor(None, self._registry.reconcile_removed_shortcut, bound_row.rom_id, app_id)
-            )
-            cancel_requested |= cancelled
-            committed_action = "remove_shortcut"
-            if reconciled:
-                ledger.mutations.append("shortcut_binding")
-            if not reconciled:
-                result = self._group_result(
-                    rows,
-                    "partial",
-                    "local_state_changed",
-                    "Steam removed the shortcut, but its local binding changed before reconciliation.",
-                    app_id=app_id,
-                    removed_app_id=app_id,
-                    bundle_path=handle.bundle_path if handle else None,
-                    committed_action=committed_action,
+            try:
+                action = await self._request_action(
+                    run_id,
+                    "remove_shortcut",
+                    {
+                        "app_id": app_id,
+                        **({"expected_snapshot": frontend_steam} if isinstance(frontend_steam, dict) else {}),
+                    },
+                    bound_row.rom_id,
+                    None,
+                    group_ids,
                 )
-                return self._cancel_or_return(result, cancel_requested)
+            except asyncio.CancelledError as exc:
+                state = cancellation_state(exc)
+                if state.action_result is not None:
+                    _, state.group_result = await self._remove_action_outcome(
+                        state.action_result, rows, ledger, bound_row.rom_id, app_id, handle
+                    )
+                    if state.group_result is None:
+                        state.group_result = self._ledger_result(
+                            ledger,
+                            "cancelled",
+                            "Cleanup was cancelled after Steam confirmed removal; later groups were not started.",
+                            removed_app_id=app_id,
+                        )
+                raise
+            committed_action, result = await self._remove_action_outcome(
+                action, rows, ledger, bound_row.rom_id, app_id, handle
+            )
+            if result is not None:
+                return result
 
         if target_id is not None and not delete_ids:
             final_proof = await self._probe_many(
@@ -586,9 +524,8 @@ class PruneExecutor:
                 bound_row.rom_id if bound_row is not None else None,
             )
             if final_guard is not None:
-                result = self._ledger_result(ledger, final_guard[0], final_guard[1])
-                return self._cancel_or_return(result, cancel_requested)
-            result = self._group_result(
+                return self._ledger_result(ledger, final_guard[0], final_guard[1])
+            return self._group_result(
                 rows,
                 "repointed",
                 None,
@@ -598,40 +535,188 @@ class PruneExecutor:
                 committed_action=committed_action,
                 target_rom_id=target_id,
             )
-            return self._cancel_or_return(result, cancel_requested)
 
-        try:
-            result = await self._finish_group(
-                run_id=run_id,
-                initial_rows=initial_rows,
-                delete_ids=delete_ids,
-                target_id=target_id,
-                app_id=app_id,
-                fully_dead=fully_dead,
-                committed_action=committed_action,
-                handle=handle,
-                recovery_ids=recovery_ids,
-                index=index,
-                total=total,
-                launch_options=launch_options,
-                ledger=ledger,
-                vanished_source_id=bound_row.rom_id if target_id is not None and bound_row is not None else None,
+        return await self._finish_group(
+            run_id=run_id,
+            initial_rows=initial_rows,
+            delete_ids=delete_ids,
+            target_id=target_id,
+            app_id=app_id,
+            fully_dead=fully_dead,
+            committed_action=committed_action,
+            handle=handle,
+            recovery_ids=recovery_ids,
+            index=index,
+            total=total,
+            launch_options=launch_options,
+            ledger=ledger,
+            vanished_source_id=bound_row.rom_id if target_id is not None and bound_row is not None else None,
+        )
+
+    async def _snapshot_outcome(
+        self,
+        capture: dict[str, Any],
+        rows: list[Rom],
+        ledger: _MutationLedger,
+        bound_rom_id: int,
+        app_id: int,
+    ) -> tuple[dict[str, object] | None, dict[str, Any] | None]:
+        if capture.get("success") and capture.get("shortcut_absent") is True:
+            ledger.app_id = app_id
+            ledger.committed_action = "remove_shortcut"
+            try:
+                reconciled = await self._shielded(
+                    self._loop.run_in_executor(None, self._registry.reconcile_removed_shortcut, bound_rom_id, app_id)
+                )
+            except asyncio.CancelledError as exc:
+                state = cancellation_state(exc)
+                if state.child_completed and type(state.child_result) is bool:
+                    state.group_result = self._shortcut_absence_result(ledger, state.child_result, app_id)
+                raise
+            return None, self._shortcut_absence_result(ledger, bool(reconciled), app_id)
+        snapshot = capture.get("snapshot")
+        if not capture.get("success") or not isinstance(snapshot, dict):
+            return None, self._group_result(
+                rows,
+                "failed",
+                "steam_snapshot_failed",
+                capture.get("message", "Steam snapshot failed."),
             )
-        except _ChildFaultAfterCancellation as exc:
-            raise _CancelledWithResult(self._fault_result(ledger, initial_rows, exc.error)) from exc
-        except _CancelledWithResult:
-            raise
+        return cast("dict[str, object]", snapshot), None
+
+    def _shortcut_absence_result(self, ledger: _MutationLedger, reconciled: bool, app_id: int) -> dict[str, Any]:
+        if reconciled and "shortcut_binding" not in ledger.mutations:
+            ledger.mutations.append("shortcut_binding")
+        return self._ledger_result(
+            ledger,
+            "shortcut_absence_reconciled" if reconciled else "local_state_changed",
+            (
+                "Steam already lacked this shortcut; its local binding was reconciled. Run cleanup again."
+                if reconciled
+                else "Steam lacked the shortcut, but its local binding changed before reconciliation."
+            ),
+            removed_app_id=app_id if reconciled else None,
+        )
+
+    def _switch_outcome(
+        self,
+        switch: dict[str, Any],
+        rows: list[Rom],
+        ledger: _MutationLedger,
+        target_id: int,
+        app_id: int,
+        handle: RecoveryHandle | None,
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        if not switch.get("success"):
+            ledger.committed_action = None
+            ledger.action_ambiguous = False
+            return None, self._group_result(
+                rows,
+                "failed",
+                switch.get("reason", "repoint_failed"),
+                switch.get("message", "Repoint failed."),
+                bundle_path=handle.bundle_path if handle else None,
+            )
+        launch_options = switch.get("launch_options")
+        if switch.get("rom_id") != target_id or switch.get("app_id") != app_id or not isinstance(launch_options, str):
+            return None, self._ledger_result(
+                ledger,
+                "repoint_result_invalid",
+                "The binding changed but the switch result was incomplete.",
+            )
+        ledger.target_rom_id = target_id
+        ledger.action_ambiguous = False
+        if "shortcut_binding" not in ledger.mutations:
+            ledger.mutations.append("shortcut_binding")
+        return launch_options, None
+
+    def _repoint_action_outcome(self, action: dict[str, Any], ledger: _MutationLedger) -> dict[str, Any] | None:
+        if action.get("success"):
+            return None
+        if action.get("mutation_attempted") is True or action.get("reason") == "action_ambiguous":
+            ledger.action_ambiguous = True
+            return self._ledger_result(
+                ledger,
+                "action_ambiguous",
+                action.get("message", "The binding changed but Steam confirmation is unknown."),
+            )
+        return self._ledger_result(
+            ledger,
+            "steam_action_failed",
+            action.get("message", "The binding changed but Steam confirmation failed."),
+        )
+
+    async def _remove_action_outcome(
+        self,
+        action: dict[str, Any],
+        rows: list[Rom],
+        ledger: _MutationLedger,
+        bound_rom_id: int,
+        app_id: int,
+        handle: RecoveryHandle | None,
+    ) -> tuple[Literal["remove_shortcut"] | None, dict[str, Any] | None]:
+        if not action.get("success"):
+            if action.get("mutation_attempted") is True or action.get("reason") == "action_ambiguous":
+                ledger.app_id = app_id
+                ledger.committed_action = "remove_shortcut"
+                ledger.action_ambiguous = True
+                return None, self._ledger_result(
+                    ledger,
+                    "action_ambiguous",
+                    "Steam removal was claimed but its outcome is unknown; source data was retained.",
+                )
+            return None, self._group_result(
+                rows,
+                "failed",
+                "steam_action_failed",
+                action.get("message", "Shortcut removal failed."),
+                bundle_path=handle.bundle_path if handle else None,
+            )
+        ledger.app_id = app_id
+        ledger.committed_action = "remove_shortcut"
+        ledger.action_ambiguous = False
+        try:
+            reconciled = await self._shielded(
+                self._loop.run_in_executor(None, self._registry.reconcile_removed_shortcut, bound_rom_id, app_id)
+            )
         except asyncio.CancelledError as exc:
-            if ledger.has_commit():
-                raise _CancelledWithResult(
-                    self._ledger_result(
+            state = cancellation_state(exc)
+            if state.child_completed and type(state.child_result) is bool:
+                _, state.group_result = self._removed_shortcut_reconcile_result(
+                    ledger, state.child_result, rows, app_id, handle
+                )
+                if state.group_result is None:
+                    state.group_result = self._ledger_result(
                         ledger,
                         "cancelled",
-                        "Cleanup was cancelled before local finalization; later groups were not started.",
+                        "Cleanup was cancelled after Steam confirmed removal; later groups were not started.",
+                        removed_app_id=app_id,
                     )
-                ) from exc
             raise
-        return self._cancel_or_return(result, cancel_requested)
+        return self._removed_shortcut_reconcile_result(ledger, bool(reconciled), rows, app_id, handle)
+
+    def _removed_shortcut_reconcile_result(
+        self,
+        ledger: _MutationLedger,
+        reconciled: bool,
+        rows: list[Rom],
+        app_id: int,
+        handle: RecoveryHandle | None,
+    ) -> tuple[Literal["remove_shortcut"], dict[str, Any] | None]:
+        if reconciled:
+            if "shortcut_binding" not in ledger.mutations:
+                ledger.mutations.append("shortcut_binding")
+            return "remove_shortcut", None
+        return "remove_shortcut", self._group_result(
+            rows,
+            "partial",
+            "local_state_changed",
+            "Steam removed the shortcut, but its local binding changed before reconciliation.",
+            app_id=app_id,
+            removed_app_id=app_id,
+            bundle_path=handle.bundle_path if handle else None,
+            committed_action="remove_shortcut",
+        )
 
     async def _finish_group(
         self,
@@ -765,16 +850,21 @@ class PruneExecutor:
                 delete_inventory=delete_inventory,
                 ledger=ledger,
             )
-            result, cancelled = await self._shielded(commit)
-            if cancelled:
-                raise _CancelledWithResult(result)
+            try:
+                result = await self._shielded(commit)
+            except asyncio.CancelledError as exc:
+                state = cancellation_state(exc)
+                if state.child_completed and isinstance(state.child_result, dict):
+                    state.group_result = state.child_result
+                raise
 
         try:
             await self._emit_progress(
                 run_id, index, total, "removed", rows, bundle_path=handle.bundle_path if handle else None
             )
         except asyncio.CancelledError as exc:
-            raise _CancelledWithResult(result) from exc
+            cancellation_state(exc).group_result = result
+            raise
         except Exception as exc:
             self._logger.warning(f"Removed-game cleanup final progress delivery failed: {exc}")
         return result
@@ -1144,28 +1234,25 @@ class PruneExecutor:
             warnings=warnings,
         )
 
-    async def _shielded(self, awaitable: Awaitable[Any]) -> tuple[Any, bool]:
+    async def _shielded(self, awaitable: Awaitable[Any]) -> Any:
         task = asyncio.ensure_future(awaitable)
         try:
-            return await asyncio.shield(task), False
-        except asyncio.CancelledError:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            state = cancellation_state(exc)
             try:
-                return await task, True
+                state.child_result = await task
+                state.child_completed = True
             except asyncio.CancelledError:
                 raise
-            except BaseException as exc:
-                raise _ChildFaultAfterCancellation(exc) from exc
+            except BaseException as child_fault:
+                state.child_fault = child_fault
+            raise
 
     def _fault_result(self, ledger: _MutationLedger, rows: list[Rom], error: BaseException) -> dict[str, Any]:
         if ledger.has_commit():
             return self._ledger_result(ledger, ErrorCode.UNKNOWN.value, str(error))
         return self._group_result(rows, "failed", ErrorCode.UNKNOWN.value, str(error))
-
-    @staticmethod
-    def _cancel_or_return(result: dict[str, Any], cancelled: bool) -> dict[str, Any]:
-        if cancelled:
-            raise _CancelledWithResult(result)
-        return result
 
     async def _emit_progress(
         self,

@@ -21,6 +21,7 @@ from domain.rom_install import RomInstall
 from domain.version_metadata import VersionMetadata
 from lib.errors import RommConnectionError, RommNotFoundError
 from services.prune import PruneService, PruneServiceConfig
+from services.prune._models import cancellation_state
 
 if TYPE_CHECKING:
     from models.prune import MutationOutcome, RecoveryArtifact, SourceClaim, SteamRecoverySnapshot
@@ -365,6 +366,18 @@ async def _finish(harness: Harness) -> dict[str, Any]:
     assert task is not None
     await task
     return [payload for name, payload in harness.events.events if name == "prune_complete"][-1]
+
+
+def _active_run_task(harness: Harness) -> asyncio.Task[None]:
+    task = harness.service._task
+    assert task is not None
+    return task
+
+
+async def _assert_task_cancelled(task: asyncio.Task[None]) -> None:
+    assert task.cancelled()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 async def _wait_action(harness: Harness, action: str) -> dict[str, Any]:
@@ -874,6 +887,60 @@ async def test_group_exception_is_reported_and_unrelated_group_continues(harness
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fault", [False, True])
+async def test_shielded_child_finishes_then_reraises_cancellation_with_fault_state(harness, fault):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def child():
+        entered.set()
+        await release.wait()
+        if fault:
+            raise OSError("child failed after cancellation")
+        return "finished"
+
+    task = asyncio.create_task(harness.service._executor._shielded(child()))
+    await entered.wait()
+    task.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await task
+
+    state = cancellation_state(caught.value)
+    assert task.cancelled()
+    if fault:
+        assert isinstance(state.child_fault, OSError)
+        assert str(state.child_fault) == "child failed after cancellation"
+    else:
+        assert state.child_fault is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resume_after_claim", [False, True])
+async def test_claimed_action_result_is_attached_before_request_task_reraises_cancellation(harness, resume_after_claim):
+    request_task = asyncio.create_task(
+        harness.service._request_action("run", "remove_shortcut", {"app_id": None}, None, None, {1})
+    )
+    action = await _wait_action(harness, "remove_shortcut")
+    assert (await _claim_action(harness, action))["success"] is True
+    if resume_after_claim:
+        await asyncio.sleep(0)
+    assert request_task.cancel()
+    await asyncio.sleep(0)
+    assert (await _complete_action(harness, action))["success"] is True
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await request_task
+
+    state = cancellation_state(caught.value)
+    assert request_task.cancelled()
+    assert state.action_result is not None
+    assert state.action_result["success"] is True
+    assert state.action_result["claimed"] is True
+
+
+@pytest.mark.asyncio
 async def test_shutdown_waits_for_inflight_filesystem_finalization(harness):
     row = _rom(1, fetch="old")
     _seed(harness.uow, row)
@@ -896,11 +963,13 @@ async def test_shutdown_waits_for_inflight_filesystem_finalization(harness):
     while not harness.installed_remover.entered.is_set():
         await asyncio.sleep(0)
 
+    run_task = _active_run_task(harness)
     shutdown = asyncio.create_task(harness.service.shutdown())
     await asyncio.sleep(0.01)
     assert shutdown.done() is False
     harness.installed_remover.release.set()
     await shutdown
+    await _assert_task_cancelled(run_task)
 
     assert harness.uow.roms.get(1) is None
     complete = [payload for name, payload in harness.events.events if name == "prune_complete"][-1]
@@ -929,7 +998,9 @@ async def test_shutdown_during_final_removed_progress_preserves_committed_ids(ha
     await entered.wait()
     assert harness.uow.roms.get(1) is None
 
+    run_task = _active_run_task(harness)
     await harness.service.shutdown()
+    await _assert_task_cancelled(run_task)
 
     complete = [payload for name, payload in harness.events.events if name == "prune_complete"][-1]
     assert complete["reason"] == "cancelled"
@@ -1109,11 +1180,13 @@ async def test_shutdown_after_snapshot_claim_does_not_begin_recovery(harness):
     )
     capture = await _wait_action(harness, "capture_shortcut_snapshot")
     await _claim_action(harness, capture)
+    run_task = _active_run_task(harness)
     shutdown = asyncio.create_task(harness.service.shutdown())
     while harness.service._task is not None and harness.service._task.cancelling() == 0:
         await asyncio.sleep(0)
     await _complete_action(harness, capture, snapshot=_steam_snapshot(app_id))
     await shutdown
+    await _assert_task_cancelled(run_task)
 
     assert harness.recovery.sealed == []
     assert harness.artifacts.removed == []
@@ -1190,11 +1263,13 @@ async def test_shutdown_waits_for_each_executor_backed_finalization_phase(harnes
     await _start(harness, preview["preview_id"], remove_fully_vanished=True)
     while not entered.is_set():
         await asyncio.sleep(0)
+    run_task = _active_run_task(harness)
     shutdown = asyncio.create_task(harness.service.shutdown())
     await asyncio.sleep(0.01)
     assert shutdown.done() is False
     release.set()
     await shutdown
+    await _assert_task_cancelled(run_task)
 
     assert harness.uow.roms.get(1) is None
     complete = [payload for name, payload in harness.events.events if name == "prune_complete"][-1]
@@ -1219,10 +1294,12 @@ async def test_shutdown_preserves_cancellation_when_shielded_finalization_faults
     await _start(harness, preview["preview_id"], remove_fully_vanished=True)
     assert await asyncio.get_running_loop().run_in_executor(None, entered.wait, 5)
 
+    run_task = _active_run_task(harness)
     shutdown = asyncio.create_task(harness.service.shutdown())
     await asyncio.sleep(0)
     release.set()
     await shutdown
+    await _assert_task_cancelled(run_task)
 
     complete = [payload for name, payload in harness.events.events if name == "prune_complete"][-1]
     assert complete["reason"] == "cancelled"
@@ -1257,10 +1334,12 @@ async def test_cancellation_during_final_liveness_guard_starts_no_local_mutation
     await _start(harness, preview["preview_id"], remove_fully_vanished=True)
     assert await asyncio.get_running_loop().run_in_executor(None, entered.wait, 5)
 
+    run_task = _active_run_task(harness)
     shutdown = asyncio.create_task(harness.service.shutdown())
     await asyncio.sleep(0)
     release.set()
     await shutdown
+    await _assert_task_cancelled(run_task)
 
     assert harness.uow.roms.get(1) is not None
     assert harness.uow.roms.get(2) is not None
@@ -1309,7 +1388,9 @@ async def test_shutdown_of_claimed_uncompleted_action_reports_ambiguity_and_halt
     action = await _wait_action(harness, "remove_shortcut")
     assert (await _claim_action(harness, action))["success"] is True
 
+    run_task = _active_run_task(harness)
     await harness.service.shutdown()
+    await _assert_task_cancelled(run_task)
 
     assert harness.uow.roms.get(1) is not None
     assert harness.uow.roms.get(2) is not None
@@ -1573,11 +1654,13 @@ async def test_shutdown_waits_for_recovery_copy_worker_and_starts_no_mutation(ha
     )
     assert await asyncio.get_running_loop().run_in_executor(None, entered.wait, 5)
 
+    run_task = _active_run_task(harness)
     shutdown = asyncio.create_task(harness.service.shutdown())
     await asyncio.sleep(0.01)
     assert shutdown.done() is False
     release.set()
     await shutdown
+    await _assert_task_cancelled(run_task)
 
     assert harness.recovery.sealed
     assert harness.uow.roms.get(1) is not None
