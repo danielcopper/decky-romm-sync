@@ -38,6 +38,7 @@ from services.saves.versions import VersionsService, VersionsServiceConfig
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from models.prune import SourceIdentity
     from models.sync import ClientSaveState
 
     from services.protocols import UnitOfWorkFactory
@@ -275,11 +276,29 @@ class SaveService:
         purge_ids = {int(value) for value in purge_rom_ids}
         with self._uow_factory() as uow:
             installed_ids = [install.rom_id for install in uow.rom_installs.iter_all()]
+            persisted_names = {
+                rom_id: list(state.files)
+                for rom_id, state in uow.rom_save_sync_states.iter_all()
+                if rom_id in installed_ids
+            }
 
         ownership: dict[str, set[int]] = {}
         expected_by_id: dict[int, list[dict[str, str]]] = {}
         for rom_id in installed_ids:
             expected = self._rom_info.expected_save_files(rom_id)
+            if expected:
+                saves_dir = expected[0]["saves_dir"]
+                known = {item["filename"] for item in expected}
+                for filename in persisted_names.get(rom_id, []):
+                    if (
+                        filename not in known
+                        and filename not in {"", ".", ".."}
+                        and os.path.basename(filename) == filename
+                        and "\x00" not in filename
+                    ):
+                        expected.append(
+                            {"path": os.path.join(saves_dir, filename), "filename": filename, "saves_dir": saves_dir}
+                        )
             expected_by_id[rom_id] = expected
             for item in expected:
                 ownership.setdefault(self._save_file_store.canonical_path(item["path"]), set()).add(rom_id)
@@ -334,7 +353,9 @@ class SaveService:
             "lock_rom_ids": sorted(lock_ids),
         }
 
-    def quarantine_prune_saves(self, files: list[dict[str, str]]) -> dict[str, Any]:
+    def quarantine_prune_saves(
+        self, files: list[dict[str, str]], identities: dict[str, SourceIdentity] | None = None
+    ) -> dict[str, Any]:
         """Move exclusive current saves through the sanctioned backup funnel."""
         moved: list[str] = []
         saves_root = self._config.retrodeck_paths.saves_path()
@@ -347,7 +368,14 @@ class SaveService:
                     or self._save_file_store.is_symlink(backup_dir)
                 ):
                     raise ValueError(f"Unsafe save quarantine destination: {backup_dir}")
-                if self._sync_engine.quarantine_local_file(item["saves_dir"], item["filename"], preserve_history=True):
+                identity = identities.get(item["path"]) if identities is not None else None
+                if self._sync_engine.quarantine_local_file(
+                    item["saves_dir"],
+                    item["filename"],
+                    preserve_history=True,
+                    expected_identity=identity,
+                    safe_root=saves_root if identity is not None else None,
+                ):
                     moved += [item["path"]]
         except Exception as exc:
             return {"success": False, "reason": "save_quarantine_failed", "message": str(exc), "moved": moved}

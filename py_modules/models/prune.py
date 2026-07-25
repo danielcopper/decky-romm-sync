@@ -14,6 +14,18 @@ class RecoveryArtifact(TypedDict):
     rom_id: NotRequired[int]
 
 
+class SourceIdentity(TypedDict):
+    """Exact no-follow source identity sealed before destructive mutation."""
+
+    exists: bool
+    device: int
+    inode: int
+    mode: int
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+
+
 class SteamRecoverySnapshot(TypedDict):
     """Backend-owned Steam Input state and files for one shortcut."""
 

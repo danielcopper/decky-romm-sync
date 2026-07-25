@@ -474,13 +474,16 @@ export interface VersionInfo {
  * live `sibling_roms` view could not be fetched, so the list is local-only
  * (partial-success carve-out). `bound_vanished` is required even on a
  * single-version/unknown result so a bound-id 404 is never lost when the picker
- * itself does not render. A 404 on the bound id is NOT a query failure — the
+ * itself does not render. A synced singleton vanished binding carries
+ * `bound_version` so the frontend can render its focused cleanup action without
+ * inventing a version menu. A 404 on the bound id is NOT a query failure — the
  * server answered — and the picker does not feed that entity verdict into the
  * global connection state (#1570).
  */
 export interface VersionList {
   multi_version: boolean;
   versions?: VersionInfo[];
+  bound_version?: VersionInfo | null;
   server_query_failed?: boolean;
   bound_vanished: boolean;
 }
@@ -599,7 +602,14 @@ export interface StartPruneRequest {
   remove_rows: boolean;
   remove_fully_vanished: boolean;
   create_recovery_bundle: boolean;
-  include_installed_rom_ids: number[];
+  installed_selection_id: string | null;
+}
+
+export interface StagePruneInstalledSelectionRequest {
+  preview_id: string;
+  selection_id: string | null;
+  rom_ids: number[];
+  final: boolean;
 }
 
 export interface StartPruneResult {
@@ -627,6 +637,9 @@ export interface ClaimPruneActionRequest {
   phase: "claim";
   run_id: string;
   action_token: string;
+  action: "capture_shortcut_snapshot" | "repoint_shortcut" | "remove_shortcut";
+  app_id: number;
+  target_rom_id: number | null;
 }
 
 export interface CompletePruneActionRequest {
@@ -637,11 +650,23 @@ export interface CompletePruneActionRequest {
   reason?: string;
   message: string;
   snapshot?: PruneSteamSnapshot;
+  shortcut_absent?: boolean;
 }
 
 export type ReportPruneActionRequest = ClaimPruneActionRequest | CompletePruneActionRequest;
 
 export const getPrunePreview = callable<[PrunePreviewRequest], PrunePreviewResult>("get_prune_preview");
+export const stagePruneInstalledSelection = callable<
+  [StagePruneInstalledSelectionRequest],
+  {
+    success: boolean;
+    selection_id?: string;
+    selected_count?: number;
+    finalized?: boolean;
+    reason?: string;
+    message?: string;
+  }
+>("stage_prune_installed_selection");
 export const startPrune = callable<[StartPruneRequest], StartPruneResult>("start_prune");
 export const reportPruneAction = callable<
   [ReportPruneActionRequest],

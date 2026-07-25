@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
-    from models.prune import SteamRecoverySnapshot
+    from models.prune import SourceIdentity, SteamRecoverySnapshot
 
 
 @dataclass(frozen=True)
@@ -43,10 +43,21 @@ class PendingAction:
     app_id: int | None
     expected_bound_rom_id: int | None
     target_rom_id: int | None
+    group_rom_ids: frozenset[int]
     future: object
     claimed: bool = False
     claim_event: object | None = None
     expires_at: float = 0.0
+
+
+@dataclass
+class InstalledSelection:
+    """One preview-bound, incrementally staged installed-content selection."""
+
+    preview_id: str
+    selection_id: str
+    rom_ids: set[int]
+    finalized: bool = False
 
 
 @dataclass(frozen=True)
@@ -57,3 +68,4 @@ class RecoveryHandle:
     snapshot: dict[str, object]
     save_inventory: dict[str, Any]
     steam_backend: SteamRecoverySnapshot | None
+    source_identities: dict[str, SourceIdentity]

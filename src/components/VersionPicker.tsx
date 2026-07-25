@@ -348,8 +348,29 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     }
   };
 
-  // Single-version / unknown / unbound → render nothing (zero footprint).
-  if (!versionList?.multi_version || !versionList.versions || versionList.versions.length === 0) return null;
+  const openCleanup = (romId: number): void => {
+    detach(
+      openRemovedGamesCleanupModal(romId)
+        .then((opened) => {
+          if (!opened) toaster.toast({ title: "RomM Sync", body: "This local entry already changed." });
+        })
+        .catch((error) => {
+          logError(`VersionPicker: cleanup preview failed for rom ${romId}: ${error}`);
+          toaster.toast({ title: "RomM Sync", body: "Could not prepare local cleanup." });
+        }),
+    );
+  };
+
+  if (!versionList?.multi_version) {
+    const bound = versionList?.bound_version;
+    if (!versionList?.bound_vanished || !bound?.synced) return null;
+    return (
+      <DialogButton className="romm-disc-btn" onClick={() => openCleanup(bound.rom_id)}>
+        Remove local data...
+      </DialogButton>
+    );
+  }
+  if (!versionList.versions || versionList.versions.length === 0) return null;
 
   const versions = versionList.versions;
   const active = versions.find((v) => v.active);
@@ -416,20 +437,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
               </span>
             </MenuItem>
             {v.vanished && v.synced ? (
-              <MenuItem
-                onClick={() =>
-                  detach(
-                    openRemovedGamesCleanupModal(v.rom_id)
-                      .then((opened) => {
-                        if (!opened) toaster.toast({ title: "RomM Sync", body: "This local entry already changed." });
-                      })
-                      .catch((error) => {
-                        logError(`VersionPicker: cleanup preview failed for rom ${v.rom_id}: ${error}`);
-                        toaster.toast({ title: "RomM Sync", body: "Could not prepare local cleanup." });
-                      }),
-                  )
-                }
-              >
+              <MenuItem onClick={() => openCleanup(v.rom_id)}>
                 <span style={{ color: "#ffb15c", paddingLeft: "38px" }}>Remove local data...</span>
               </MenuItem>
             ) : null}

@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import contextlib
 import os
-import shutil
 from typing import TYPE_CHECKING, Any
 
 from _vendor import vdf
 
+from adapters.descriptor_paths import open_directory_fd, open_regular_fd, remove_exact, require_directory
 from domain.artwork_paths import grid_image_filenames
 
 if TYPE_CHECKING:
     import logging
 
-    from models.prune import RecoveryArtifact, SteamRecoverySnapshot
+    from models.prune import RecoveryArtifact, SourceIdentity, SteamRecoverySnapshot
 
 
 class SteamRecoveryAdapter:
@@ -26,25 +26,21 @@ class SteamRecoveryAdapter:
 
     def snapshot(self, app_id: int) -> SteamRecoverySnapshot:
         user_dir, steam_root, user_id = self._resolve_user()
-        localconfig = os.path.join(user_dir, "config", "localconfig.vdf")
-        controller_setting: str | None = None
-        if os.path.exists(localconfig):
-            with open(localconfig, encoding="utf-8") as source:
-                data: dict[str, Any] = vdf.load(source)
-            apps = data.get("UserLocalConfigStore", {}).get("Apps", {})
-            app = apps.get(str(app_id), {}) if isinstance(apps, dict) else {}
-            value = app.get("UseSteamControllerConfig") if isinstance(app, dict) else None
-            controller_setting = str(value) if value is not None else None
+        controller_setting = self._controller_setting(app_id, user_dir)
 
         artifacts: list[RecoveryArtifact] = []
         grid = os.path.join(user_dir, "config", "grid")
+        if os.path.lexists(grid):
+            require_directory(grid, user_dir)
         for filename in grid_image_filenames(app_id):
             path = os.path.join(grid, filename)
-            artifacts.append({"source_path": path, "safe_root": grid, "kind": "steam_grid"})
-        artifacts.extend(
-            {"source_path": path, "safe_root": os.path.dirname(path), "kind": "steam_input"}
-            for path in self._input_roots(user_dir, steam_root, user_id, app_id)
-        )
+            artifacts.append({"source_path": path, "safe_root": user_dir, "kind": "steam_grid"})
+        first_input, second_input = self._input_roots(user_dir, steam_root, user_id, app_id)
+        for path, root in ((first_input, user_dir), (second_input, steam_root)):
+            if os.path.lexists(path):
+                require_directory(path, root)
+        artifacts.append({"source_path": first_input, "safe_root": user_dir, "kind": "steam_input"})
+        artifacts.append({"source_path": second_input, "safe_root": steam_root, "kind": "steam_input"})
         return {
             "user_id": user_id,
             "user_dir": user_dir,
@@ -53,19 +49,37 @@ class SteamRecoveryAdapter:
             "artifacts": artifacts,
         }
 
-    def remove_state(self, app_id: int, snapshot: SteamRecoverySnapshot) -> None:
+    def validate_state(self, app_id: int, snapshot: SteamRecoverySnapshot) -> bool:
+        """Require the exact captured user and controller value before mutation."""
+        try:
+            user_dir, _steam_root, _user_id = self._validate_identity(snapshot)
+            return self._controller_setting(app_id, user_dir) == snapshot["controller_setting"]
+        except (OSError, ValueError, TypeError, KeyError):
+            return False
+
+    def remove_state(
+        self,
+        app_id: int,
+        snapshot: SteamRecoverySnapshot,
+        identities: dict[str, SourceIdentity],
+    ) -> int:
         """Remove only state belonging to the exact user captured in *snapshot*."""
         user_dir, steam_root, user_id = self._validate_identity(snapshot)
-        self._clear_controller_setting(app_id, user_dir, snapshot["controller_setting"])
+        changed = int(self._clear_controller_setting(app_id, user_dir, snapshot["controller_setting"]))
         grid = os.path.join(user_dir, "config", "grid")
         for filename in grid_image_filenames(app_id):
-            with contextlib.suppress(FileNotFoundError):
-                os.remove(os.path.join(grid, filename))
-        for path in self._input_roots(user_dir, steam_root, user_id, app_id):
-            if os.path.isdir(path):
-                shutil.rmtree(path)
-            elif os.path.exists(path):
-                os.remove(path)
+            path = os.path.join(grid, filename)
+            identity = identities.get(path)
+            if identity is None:
+                raise ValueError(f"Sealed Steam source identity is missing: {path}")
+            changed += int(remove_exact(path, user_dir, identity))
+        first_input, second_input = self._input_roots(user_dir, steam_root, user_id, app_id)
+        for path, root in ((first_input, user_dir), (second_input, steam_root)):
+            identity = identities.get(path)
+            if identity is None:
+                raise ValueError(f"Sealed Steam source identity is missing: {path}")
+            changed += int(remove_exact(path, root, identity))
+        return changed
 
     def _resolve_user(self) -> tuple[str, str, str]:
         candidates = (
@@ -77,6 +91,7 @@ class SteamRecoveryAdapter:
             userdata = os.path.join(steam_root, "userdata")
             if not os.path.isdir(userdata):
                 continue
+            require_directory(userdata, steam_root)
             users = sorted(name for name in os.listdir(userdata) if name.isdigit())
             if not users:
                 continue
@@ -84,15 +99,19 @@ class SteamRecoveryAdapter:
             if user_id is None and len(users) == 1:
                 user_id = users[0]
             if user_id is not None and user_id in users:
-                return os.path.realpath(os.path.join(userdata, user_id)), steam_root, user_id
+                user_dir = os.path.join(userdata, user_id)
+                require_directory(user_dir, steam_root)
+                return user_dir, steam_root, user_id
         raise RuntimeError("Cannot locate the active Steam user directory")
 
     @staticmethod
     def _most_recent_login(steam_root: str) -> str | None:
         path = os.path.join(steam_root, "config", "loginusers.vdf")
-        if not os.path.isfile(path):
+        try:
+            fd = open_regular_fd(path, steam_root)
+        except FileNotFoundError:
             return None
-        with open(path, encoding="utf-8") as source:
+        with os.fdopen(fd, encoding="utf-8") as source:
             payload: dict[str, Any] = vdf.load(source)
         users = payload.get("users")
         if not isinstance(users, dict):
@@ -122,16 +141,31 @@ class SteamRecoveryAdapter:
             or not os.path.isdir(expected_user)
         ):
             raise ValueError("Steam recovery identity no longer matches the captured user")
+        require_directory(expected_user, real_root)
         return expected_user, real_root, user_id
 
+    @classmethod
+    def _controller_setting(cls, app_id: int, user_dir: str) -> str | None:
+        path = os.path.join(user_dir, "config", "localconfig.vdf")
+        if not os.path.exists(path):
+            return None
+        fd = open_regular_fd(path, user_dir)
+        with os.fdopen(fd, encoding="utf-8") as source:
+            payload: dict[str, Any] = vdf.load(source)
+        apps = payload.get("UserLocalConfigStore", {}).get("Apps", {})
+        app = apps.get(str(app_id)) if isinstance(apps, dict) else None
+        value = app.get("UseSteamControllerConfig") if isinstance(app, dict) else None
+        return str(value) if value is not None else None
+
     @staticmethod
-    def _clear_controller_setting(app_id: int, user_dir: str, expected: str | None) -> None:
+    def _clear_controller_setting(app_id: int, user_dir: str, expected: str | None) -> bool:
         if expected is None:
-            return
+            return False
         path = os.path.join(user_dir, "config", "localconfig.vdf")
         if not os.path.isfile(path):
             raise OSError(f"Captured Steam controller config is missing: {path}")
-        with open(path, encoding="utf-8") as source:
+        fd = open_regular_fd(path, user_dir)
+        with os.fdopen(fd, encoding="utf-8") as source:
             payload: dict[str, Any] = vdf.load(source)
         apps = payload.get("UserLocalConfigStore", {}).get("Apps", {})
         app = apps.get(str(app_id)) if isinstance(apps, dict) else None
@@ -140,17 +174,24 @@ class SteamRecoveryAdapter:
         del app["UseSteamControllerConfig"]
         if not app:
             del apps[str(app_id)]
-        temporary = path + ".prune.tmp"
+        config_dir = os.path.join(user_dir, "config")
+        config_fd = open_directory_fd(config_dir, user_dir)
+        temporary = "localconfig.vdf.prune.tmp"
         try:
-            with open(temporary, "x", encoding="utf-8") as output:
+            temporary_fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=config_fd)
+            with os.fdopen(temporary_fd, "w", encoding="utf-8") as output:
                 vdf.dump(payload, output, pretty=True)
                 output.flush()
                 os.fsync(output.fileno())
-            os.replace(temporary, path)
+            os.replace(temporary, "localconfig.vdf", src_dir_fd=config_fd, dst_dir_fd=config_fd)
+            os.fsync(config_fd)
         except BaseException:
             with contextlib.suppress(FileNotFoundError):
-                os.remove(temporary)
+                os.unlink(temporary, dir_fd=config_fd)
             raise
+        finally:
+            os.close(config_fd)
+        return True
 
     @staticmethod
     def _input_roots(user_dir: str, steam_root: str, user_id: str, app_id: int) -> tuple[str, str]:

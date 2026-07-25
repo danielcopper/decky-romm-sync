@@ -12,10 +12,11 @@ import shutil
 import stat
 from typing import TYPE_CHECKING, Any
 
+from adapters.descriptor_paths import identity_for_stat, missing_identity, stat_beneath
 from domain.prune import sanitize_package_name
 
 if TYPE_CHECKING:
-    from models.prune import RecoveryArtifact
+    from models.prune import RecoveryArtifact, SourceIdentity
 
 _SAFE_BUNDLE_ID = re.compile(r"^[0-9TZ]+_[1-9][0-9]*_[A-Za-z0-9-]+$", re.ASCII)
 
@@ -55,6 +56,12 @@ class RecoveryBundleAdapter:
             seal = json.loads(self._read_beneath(os.path.join(bundle_path, "SEAL.json"), bundle_path))
             if not isinstance(seal, dict):
                 return False
+            if (
+                seal.get("sealed") is not True
+                or seal.get("bundle_id") != os.path.basename(bundle_path)
+                or type(seal.get("file_count")) is not int
+            ):
+                return False
             checksum_bytes = self._read_beneath(os.path.join(bundle_path, "checksums.sha256"), bundle_path)
             if hashlib.sha256(checksum_bytes).hexdigest() != seal.get("checksums_sha256"):
                 return False
@@ -77,6 +84,8 @@ class RecoveryBundleAdapter:
             source_sets = manifest.get("source_sets")
             records = manifest.get("artifacts")
             if not isinstance(source_sets, list) or not isinstance(records, list):
+                return False
+            if seal["file_count"] != len(records):
                 return False
             for source_set in source_sets:
                 if not isinstance(source_set, dict):
@@ -105,6 +114,34 @@ class RecoveryBundleAdapter:
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             return False
         return True
+
+    def source_identities(self, bundle_path: str) -> dict[str, SourceIdentity]:
+        """Return the sealed no-follow identity for every artifact source root."""
+        manifest = json.loads(self._read_beneath(os.path.join(bundle_path, "manifest.json"), bundle_path))
+        if not isinstance(manifest, dict) or not self.validate_sources(bundle_path):
+            raise ValueError("Recovery bundle is not valid")
+        identities: dict[str, SourceIdentity] = {}
+        source_sets = manifest.get("source_sets")
+        records = manifest.get("artifacts")
+        if not isinstance(source_sets, list) or not isinstance(records, list):
+            raise ValueError("Recovery manifest source identities are missing")
+        for item in [*source_sets, *records]:
+            if not isinstance(item, dict) or not isinstance(item.get("source_path"), str):
+                raise ValueError("Recovery manifest source identity is invalid")
+            raw = item.get("source_identity")
+            if not isinstance(raw, dict):
+                raise ValueError("Recovery manifest source identity is missing")
+            identity: SourceIdentity = {
+                "exists": raw.get("exists") is True,
+                "device": int(raw.get("device", 0)),
+                "inode": int(raw.get("inode", 0)),
+                "mode": int(raw.get("mode", 0)),
+                "size": int(raw.get("size", 0)),
+                "mtime_ns": int(raw.get("mtime_ns", 0)),
+                "ctime_ns": int(raw.get("ctime_ns", 0)),
+            }
+            identities[item["source_path"]] = identity
+        return identities
 
     @classmethod
     def _read_beneath(cls, path: str, safe_root: str) -> bytes:
@@ -171,7 +208,12 @@ class RecoveryBundleAdapter:
             )
             self._fsync_dir(staging)
             os.replace(staging, sealed)
-            self._fsync_dir(bundles_parent)
+            try:
+                self._fsync_dir(bundles_parent)
+            except OSError as exc:
+                uncertain = sealed + ".durability-uncertain"
+                os.replace(sealed, uncertain)
+                raise OSError(f"Recovery bundle durability is uncertain: {uncertain}") from exc
             return sealed
         except BaseException:
             with contextlib.suppress(OSError):
@@ -186,12 +228,16 @@ class RecoveryBundleAdapter:
         seen: set[str] = set()
         for artifact in artifacts:
             files = self._regular_files(artifact["source_path"], artifact["safe_root"])
+            source_stat = stat_beneath(artifact["source_path"], artifact["safe_root"])
             source_sets.append(
                 {
                     "source_path": artifact["source_path"],
                     "safe_root": artifact["safe_root"],
                     "files": files,
                     "kind": artifact["kind"],
+                    "source_identity": identity_for_stat(source_stat)
+                    if source_stat is not None
+                    else missing_identity(),
                     **({"rom_id": artifact["rom_id"]} if "rom_id" in artifact else {}),
                 }
             )
@@ -236,6 +282,7 @@ class RecoveryBundleAdapter:
                 "mode": stat.S_IMODE(source_stat.st_mode),
                 "mtime_ns": source_stat.st_mtime_ns,
                 "sha256": destination_hash,
+                "source_identity": identity_for_stat(source_stat),
             }
             if "rom_id" in artifact:
                 record["rom_id"] = artifact["rom_id"]
@@ -302,19 +349,20 @@ class RecoveryBundleAdapter:
 
     @staticmethod
     def _open_regular_beneath(path: str, safe_root: str) -> int:
-        real_root = os.path.realpath(safe_root)
-        real_path = os.path.realpath(path)
+        absolute_root = os.path.abspath(safe_root)
+        absolute_path = os.path.abspath(path)
         try:
-            if os.path.commonpath((real_root, real_path)) != real_root:
+            if os.path.commonpath((absolute_root, absolute_path)) != absolute_root:
                 raise ValueError(f"Recovery source is outside its safe root: {path}")
         except ValueError as exc:
             raise ValueError(f"Recovery source is outside its safe root: {path}") from exc
-        relative = os.path.relpath(real_path, real_root)
+        relative = os.path.relpath(absolute_path, absolute_root)
         if relative in {".", ".."} or relative.startswith(".." + os.sep):
             raise ValueError(f"Recovery source is not a file below its safe root: {path}")
         parts = relative.split(os.sep)
         nofollow = getattr(os, "O_NOFOLLOW", 0)
-        directory_fd = os.open(real_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow)
+        canonical_root = os.path.realpath(absolute_root)
+        directory_fd = os.open(canonical_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow)
         try:
             for component in parts[:-1]:
                 next_fd = os.open(
@@ -386,13 +434,15 @@ class RecoveryBundleAdapter:
             digest.update(block)
         return digest.hexdigest()
 
-    @staticmethod
-    def _ensure_dir(path: str) -> None:
+    def _ensure_dir(self, path: str) -> None:
         if os.path.lexists(path):
             if os.path.islink(path) or not os.path.isdir(path):
                 raise ValueError(f"Recovery directory is not a trusted directory: {path}")
             return
         os.mkdir(path, 0o700)
+        parent = os.path.dirname(path)
+        if parent:
+            self._fsync_dir(parent)
 
     @staticmethod
     def _fsync_dir(path: str) -> None:

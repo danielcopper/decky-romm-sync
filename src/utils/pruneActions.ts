@@ -5,8 +5,12 @@ import type {
   ReportPruneActionRequest,
   SwitchVersionSuccess,
 } from "../api/backend";
-import { getAppDetails, isRomMShortcutDetails, removeShortcutConfirmed } from "./steamShortcuts";
-import { applyCommittedVersionSwitch } from "./versionSwitchApplication";
+import {
+  getAppDetails,
+  isRomMShortcutDetails,
+  removeShortcutConfirmed,
+  setLaunchOptionsConfirmed,
+} from "./steamShortcuts";
 
 export type PruneActionRequired =
   | { run_id: string; action_token: string; action: "capture_shortcut_snapshot"; app_id: number }
@@ -19,7 +23,13 @@ export type PruneActionRequired =
       launch_options: string;
       target_installed: boolean;
     }
-  | { run_id: string; action_token: string; action: "remove_shortcut"; app_id: number };
+  | {
+      run_id: string;
+      action_token: string;
+      action: "remove_shortcut";
+      app_id: number;
+      expected_snapshot?: PruneSteamSnapshot;
+    };
 
 const SNAPSHOT_BUDGET_BYTES = 56 * 1024;
 const REPORT_ATTEMPTS = 3;
@@ -42,7 +52,13 @@ function isPruneAction(value: unknown): value is PruneActionRequired {
   if (typeof item.run_id !== "string" || typeof item.action_token !== "string" || typeof item.app_id !== "number") {
     return false;
   }
-  if (item.action === "capture_shortcut_snapshot" || item.action === "remove_shortcut") return true;
+  if (item.action === "capture_shortcut_snapshot") return true;
+  if (item.action === "remove_shortcut") {
+    return (
+      item.expected_snapshot === undefined ||
+      (item.expected_snapshot !== null && typeof item.expected_snapshot === "object")
+    );
+  }
   return (
     item.action === "repoint_shortcut" &&
     typeof item.target_rom_id === "number" &&
@@ -60,6 +76,9 @@ async function captureShortcutSnapshot(appId: number): Promise<PruneSteamSnapsho
   if (typeof collectionStore === "undefined" || typeof appStore === "undefined") {
     throw new Error("Steam shortcut, collection, or playtime state was unavailable");
   }
+  const liveApps = collectionStore.deckDesktopApps?.apps;
+  if (!liveApps) throw new Error("Steam shortcut store was unavailable");
+  if (!liveApps.has(appId)) throw new Error("Steam shortcut is absent");
   const details = await getAppDetails(appId);
   if (!isRomMShortcutDetails(details)) throw new Error("The live shortcut is not owned by RomM Sync");
   const overview = appStore.GetAppOverviewByAppID(appId);
@@ -69,7 +88,8 @@ async function captureShortcutSnapshot(appId: number): Promise<PruneSteamSnapsho
     .map((collection) => ({
       id: requireString(collection.id, "collection id"),
       name: requireString(collection.displayName, "collection name"),
-    }));
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
   const snapshot: PruneSteamSnapshot = {
     app_id: appId,
     name: requireString(details.strDisplayName ?? overview.strDisplayName, "name"),
@@ -94,12 +114,7 @@ async function reportWithRetry(request: ReportPruneActionRequest): Promise<boole
       const result = await reportPruneAction(request);
       if (result.success) return true;
       lastMessage = result.message;
-      if (
-        result.reason === "stale_action" ||
-        result.reason === "local_state_changed" ||
-        result.reason === "action_already_claimed"
-      )
-        break;
+      if (result.reason === "stale_action" || result.reason === "local_state_changed") break;
     } catch (e) {
       lastMessage = e instanceof Error ? e.message : String(e);
     }
@@ -116,6 +131,9 @@ function claimAction(action: PruneActionRequired): Promise<boolean> {
     phase: "claim",
     run_id: action.run_id,
     action_token: action.action_token,
+    action: action.action,
+    app_id: action.app_id,
+    target_rom_id: action.action === "repoint_shortcut" ? action.target_rom_id : null,
   });
 }
 
@@ -136,19 +154,34 @@ async function executePruneAction(action: PruneActionRequired, generation: numbe
     if (action.action === "capture_shortcut_snapshot") {
       if (!(await claim())) return;
       assertCurrent(generation);
-      report = {
-        phase: "complete",
-        run_id: action.run_id,
-        action_token: action.action_token,
-        success: true,
-        message: "Steam shortcut state captured.",
-        snapshot: await captureShortcutSnapshot(action.app_id),
-      };
+      try {
+        report = {
+          phase: "complete",
+          run_id: action.run_id,
+          action_token: action.action_token,
+          success: true,
+          message: "Steam shortcut state captured.",
+          snapshot: await captureShortcutSnapshot(action.app_id),
+        };
+      } catch (error) {
+        if (error instanceof Error && error.message === "Steam shortcut is absent") {
+          report = {
+            phase: "complete",
+            run_id: action.run_id,
+            action_token: action.action_token,
+            success: true,
+            message: "Steam confirmed the shortcut is already absent.",
+            shortcut_absent: true,
+          };
+        } else {
+          throw error;
+        }
+      }
     } else if (action.action === "repoint_shortcut") {
+      if (!(await claim())) return;
+      assertCurrent(generation);
       const details = await getAppDetails(action.app_id);
       if (!isRomMShortcutDetails(details)) throw new Error("The live shortcut is not owned by RomM Sync");
-      assertCurrent(generation);
-      if (!(await claim())) return;
       assertCurrent(generation);
       const result: SwitchVersionSuccess = {
         success: true,
@@ -157,7 +190,7 @@ async function executePruneAction(action: PruneActionRequired, generation: numbe
         target_installed: action.target_installed,
         launch_options: action.launch_options,
       };
-      if (!(await applyCommittedVersionSwitch(result))) {
+      if (!(await setLaunchOptionsConfirmed(result.app_id, result.launch_options))) {
         throw new Error("Steam did not confirm the target launch command");
       }
       report = {
@@ -168,10 +201,30 @@ async function executePruneAction(action: PruneActionRequired, generation: numbe
         message: "Shortcut repointed and launch command confirmed.",
       };
     } else {
-      const details = await getAppDetails(action.app_id);
-      if (!isRomMShortcutDetails(details)) throw new Error("The live shortcut is not owned by RomM Sync");
-      assertCurrent(generation);
       if (!(await claim())) return;
+      assertCurrent(generation);
+      let fresh: PruneSteamSnapshot;
+      try {
+        fresh = await captureShortcutSnapshot(action.app_id);
+      } catch (error) {
+        if (error instanceof Error && error.message === "Steam shortcut is absent") {
+          report = {
+            phase: "complete",
+            run_id: action.run_id,
+            action_token: action.action_token,
+            success: true,
+            message: "Steam confirmed the shortcut is already absent.",
+            shortcut_absent: true,
+          };
+          if (!(await claim())) return;
+          await reportWithRetry(report);
+          return;
+        }
+        throw error;
+      }
+      if (action.expected_snapshot && JSON.stringify(fresh) !== JSON.stringify(action.expected_snapshot)) {
+        throw new Error("Steam shortcut state changed after recovery was sealed");
+      }
       assertCurrent(generation);
       if (!(await removeShortcutConfirmed(action.app_id, 3000, true))) {
         throw new Error("Steam did not confirm owned-shortcut removal");

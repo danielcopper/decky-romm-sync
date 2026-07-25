@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from services.prune._models import PruneOptions
-from services.prune.requests import parse_options, parse_preview_request, valid_snapshot
+from services.prune.requests import parse_options, parse_preview_request, parse_selection_page, valid_snapshot
 
 
 def _snapshot(app_id: int = 9001) -> dict[str, object]:
@@ -29,15 +29,15 @@ def test_preview_request_defaults_and_rejects_bad_pages() -> None:
     }
 
 
-def test_options_require_explicit_booleans_and_positive_content_ids() -> None:
+def test_options_require_explicit_booleans_and_recovery_for_content_selection() -> None:
     parsed = parse_options(
         {
             "repoint_shortcuts": True,
             "remove_rows": True,
             "remove_fully_vanished": False,
             "create_recovery_bundle": True,
-            "include_installed_rom_ids": [7],
-        }
+        },
+        frozenset({7}),
     )
     assert parsed == PruneOptions(True, True, False, True, frozenset({7}))
     invalid = parse_options(
@@ -45,23 +45,24 @@ def test_options_require_explicit_booleans_and_positive_content_ids() -> None:
             "repoint_shortcuts": True,
             "remove_rows": True,
             "remove_fully_vanished": False,
-            "create_recovery_bundle": True,
-            "include_installed_rom_ids": [0],
-        }
+            "create_recovery_bundle": False,
+        },
+        frozenset({7}),
     )
     assert isinstance(invalid, dict)
     assert invalid["reason"] == "invalid_options"
-    too_many = parse_options(
-        {
-            "repoint_shortcuts": True,
-            "remove_rows": True,
-            "remove_fully_vanished": False,
-            "create_recovery_bundle": True,
-            "include_installed_rom_ids": list(range(1, 258)),
-        }
+
+
+def test_installed_selection_pages_are_wire_bounded_without_total_selection_cap() -> None:
+    page = parse_selection_page(
+        {"preview_id": "preview", "selection_id": None, "rom_ids": list(range(1, 101)), "final": False}
     )
-    assert isinstance(too_many, dict)
-    assert too_many["reason"] == "invalid_options"
+    assert page == ("preview", None, list(range(1, 101)), False)
+    too_large = parse_selection_page(
+        {"preview_id": "preview", "selection_id": None, "rom_ids": list(range(1, 102)), "final": True}
+    )
+    assert isinstance(too_large, dict)
+    assert too_large["reason"] == "invalid_selection"
 
 
 def test_snapshot_requires_exact_app_complete_shape_and_no_base64() -> None:

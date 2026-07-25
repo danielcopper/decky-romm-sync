@@ -408,10 +408,15 @@ class VersionSwitchService:
         ]
 
         if len(entries) <= 1:
+            bound_version = entries[0] if entries and entries[0]["rom_id"] == local.bound_rom_id else None
+            if bound_version is not None:
+                bound_version["active"] = True
+                bound_version["is_default"] = not bound_version["vanished"]
             return {
                 "multi_version": False,
                 "server_query_failed": server_query_failed,
                 "bound_vanished": bound_vanished,
+                "bound_version": bound_version,
             }
 
         default_candidate_ids = {e["rom_id"] for e in entries if e["switchable"] and not e["vanished"]}

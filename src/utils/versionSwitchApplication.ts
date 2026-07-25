@@ -20,20 +20,28 @@ export async function applyCommittedVersionSwitch(
   if (!confirmed) {
     logError(`Version switch: could not confirm launch options for rom ${result.rom_id} (appId ${result.app_id})`);
   }
+  await publishCommittedVersionSwitch(result.app_id, result.rom_id, onCover);
+  return confirmed;
+}
+
+export async function publishCommittedVersionSwitch(
+  appId: number,
+  romId: number,
+  onCover?: (romId: number, cover: string) => void,
+): Promise<void> {
   try {
-    const cover = await fetchCoverBase64(result.rom_id);
+    const cover = await fetchCoverBase64(romId);
     if (cover.base64) {
-      onCover?.(result.rom_id, cover.base64);
-      await SteamClient.Apps.SetCustomArtworkForApp(result.app_id, cover.base64, "png", 0);
+      onCover?.(romId, cover.base64);
+      await SteamClient.Apps.SetCustomArtworkForApp(appId, cover.base64, "png", 0);
     }
   } catch (e) {
-    logWarn(`Version switch: cover apply after switch failed for rom ${result.rom_id}: ${e}`);
+    logWarn(`Version switch: cover apply after switch failed for rom ${romId}: ${e}`);
   }
-  invalidateCachedGameDetail(result.app_id);
+  invalidateCachedGameDetail(appId);
   globalThis.dispatchEvent(
     new CustomEvent("romm_data_changed", {
-      detail: { type: "version_switched", app_id: result.app_id, rom_id: result.rom_id },
+      detail: { type: "version_switched", app_id: appId, rom_id: romId },
     }),
   );
-  return confirmed;
 }

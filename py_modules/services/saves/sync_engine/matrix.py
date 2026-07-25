@@ -40,6 +40,8 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Iterator
 
+    from models.prune import SourceIdentity
+
     from services.protocols import (
         Clock,
         DebugLogger,
@@ -311,7 +313,15 @@ class MatrixExecutor:
         self.update_file_sync_state(save_state, filename, server_save, local_path, system, default_slot=default_slot)
         self._log_debug(f"Downloaded save: {filename}")
 
-    def quarantine_local_file(self, saves_dir: str, filename: str, *, preserve_history: bool = False) -> bool:
+    def quarantine_local_file(
+        self,
+        saves_dir: str,
+        filename: str,
+        *,
+        preserve_history: bool = False,
+        expected_identity: SourceIdentity | None = None,
+        safe_root: str | None = None,
+    ) -> bool:
         """Move a local save file aside into ``.romm-backup`` before it is destroyed.
 
         The single source of truth for the save-file backup discipline: both the
@@ -330,7 +340,7 @@ class MatrixExecutor:
         ``False`` when there was nothing at *filename* to back up.
         """
         local_path = os.path.join(saves_dir, filename)
-        if not self._save_file_store.is_file(local_path):
+        if expected_identity is None and not self._save_file_store.is_file(local_path):
             return False
         backup_dir = os.path.join(saves_dir, ".romm-backup")
         if self._save_file_store.is_symlink(backup_dir) or not self._save_file_store.is_within(backup_dir, saves_dir):
@@ -339,7 +349,13 @@ class MatrixExecutor:
         ts = self._clock.now().strftime("%Y%m%d_%H%M%S")
         existing = set(self._save_file_store.listdir(backup_dir))
         backup = backup_name(filename, ts, existing)
-        self._save_file_store.rename(local_path, os.path.join(backup_dir, backup))
+        backup_path = os.path.join(backup_dir, backup)
+        if expected_identity is not None:
+            if safe_root is None:
+                raise ValueError("A safe root is required for exact save quarantine")
+            self._save_file_store.rename_exact(local_path, backup_path, safe_root, expected_identity)
+        else:
+            self._save_file_store.rename(local_path, backup_path)
         # Bound the recovery net: keep only the newest N backups per save file (#974).
         existing.add(backup)
         if not preserve_history:

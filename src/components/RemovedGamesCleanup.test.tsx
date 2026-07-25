@@ -47,11 +47,18 @@ function shownModal(): ReactElement {
 describe("RemovedGamesCleanup", () => {
   beforeEach(() => {
     vi.mocked(backend.getPrunePreview).mockReset();
+    vi.mocked(backend.stagePruneInstalledSelection).mockReset();
     vi.mocked(backend.startPrune).mockReset();
     vi.mocked(showModal).mockReset();
     vi.mocked(toaster.toast).mockReset();
     resetPruneState();
     vi.mocked(backend.getPrunePreview).mockResolvedValue(preview);
+    vi.mocked(backend.stagePruneInstalledSelection).mockResolvedValue({
+      success: true,
+      selection_id: "selection-1",
+      selected_count: 1,
+      finalized: true,
+    });
     vi.mocked(backend.startPrune).mockResolvedValue({ success: true, run_id: "run-1", status: "running" });
   });
 
@@ -116,7 +123,7 @@ describe("RemovedGamesCleanup", () => {
       remove_rows: true,
       remove_fully_vanished: false,
       create_recovery_bundle: true,
-      include_installed_rom_ids: [],
+      installed_selection_id: null,
     });
   });
 
@@ -245,5 +252,65 @@ describe("RemovedGamesCleanup", () => {
       preview_id: "preview-1",
       limit: 0,
     });
+  });
+
+  it("stages every installed selection above 256 in bounded pages", async () => {
+    const items = Array.from({ length: 257 }, (_, index) => ({
+      ...preview.items![0]!,
+      rom_id: index + 1,
+      installed_bytes: 0,
+      name: `Game ${index + 1}`,
+    }));
+    vi.mocked(backend.getPrunePreview).mockResolvedValue({ ...preview, items, total: items.length, free_bytes: 1 });
+    vi.mocked(backend.stagePruneInstalledSelection).mockImplementation(async (request) => ({
+      success: true,
+      selection_id: "selection-many",
+      selected_count: request.rom_ids[request.rom_ids.length - 1] ?? 0,
+      finalized: request.final,
+    }));
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    const toggles = modal.getAllByTestId("toggle-input") as HTMLInputElement[];
+    act(() => {
+      for (const toggle of toggles.slice(4)) toggle.click();
+    });
+
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(backend.startPrune).toHaveBeenCalled());
+
+    const pages = vi.mocked(backend.stagePruneInstalledSelection).mock.calls.map(([request]) => request);
+    expect(pages.map((page) => page.rom_ids.length)).toEqual([100, 100, 57]);
+    expect(pages.map((page) => page.selection_id)).toEqual([null, "selection-many", "selection-many"]);
+    expect(pages.map((page) => page.final)).toEqual([false, false, true]);
+    expect(vi.mocked(backend.startPrune).mock.calls[0]?.[0].installed_selection_id).toBe("selection-many");
+  }, 15_000);
+
+  it("surfaces bounded save warnings in terminal details", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("Cleanup running..."));
+
+    act(() => {
+      setPruneComplete({
+        success: false,
+        partial: true,
+        run_id: "run-1",
+        removed_rom_ids: [],
+        affected_app_ids: [],
+        results: [
+          {
+            group_id: "group-1",
+            rom_ids: [7],
+            status: "partial",
+            message: "Local cleanup was incomplete.",
+            warnings: ["Shared save was retained."],
+            warning_count: 1,
+          },
+        ],
+      });
+    });
+
+    expect(modal.container.textContent).toContain("Warning: Shared save was retained.");
   });
 });

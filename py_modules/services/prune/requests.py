@@ -9,7 +9,7 @@ from services.prune._models import PruneOptions
 
 _MAX_PREVIEW_PAGE = 100
 _MAX_STEAM_SNAPSHOT_BYTES = 64 * 1024
-_MAX_INSTALLED_SELECTIONS = 256
+_MAX_SELECTION_PAGE = 100
 
 
 def parse_preview_request(
@@ -37,25 +37,45 @@ def parse_preview_request(
     return scope, explicit, preview_id, offset, limit
 
 
-def parse_options(request: dict[str, Any]) -> PruneOptions | dict[str, Any]:
+def parse_options(request: dict[str, Any], include_installed_rom_ids: frozenset[int]) -> PruneOptions | dict[str, Any]:
     """Validate explicit one-run destructive options."""
     keys = ("repoint_shortcuts", "remove_rows", "remove_fully_vanished", "create_recovery_bundle")
     if any(type(request.get(key)) is not bool for key in keys):
         return _failure("invalid_options", "Every cleanup option must be explicitly true or false.")
-    raw_ids = request.get("include_installed_rom_ids", [])
-    if (
-        not isinstance(raw_ids, list)
-        or len(raw_ids) > _MAX_INSTALLED_SELECTIONS
-        or any(type(value) is not int or value <= 0 for value in raw_ids)
-    ):
-        return _failure("invalid_options", "Installed-content selections must be positive ROM ids.")
+    if not request["create_recovery_bundle"] and include_installed_rom_ids:
+        return _failure("invalid_options", "Installed content cannot be selected when recovery is disabled.")
     return PruneOptions(
         repoint_shortcuts=request["repoint_shortcuts"],
         remove_rows=request["remove_rows"],
         remove_fully_vanished=request["remove_fully_vanished"],
         create_recovery_bundle=request["create_recovery_bundle"],
-        include_installed_rom_ids=frozenset(raw_ids),
+        include_installed_rom_ids=include_installed_rom_ids,
     )
+
+
+def parse_selection_page(request: object) -> tuple[str, str | None, list[int], bool] | dict[str, Any]:
+    """Validate one bounded page of a preview-bound installed-content selection."""
+    if not isinstance(request, dict):
+        return _failure("invalid_request", "Installed-content selection must be an object.")
+    preview_id = request.get("preview_id")
+    selection_id = request.get("selection_id")
+    rom_ids = request.get("rom_ids")
+    final = request.get("final")
+    if not isinstance(preview_id, str) or not preview_id:
+        return _failure("invalid_preview_id", "Preview id must be a non-empty string.")
+    if selection_id is not None and (not isinstance(selection_id, str) or not selection_id):
+        return _failure("invalid_selection_id", "Selection id must be a non-empty string or null.")
+    if (
+        not isinstance(rom_ids, list)
+        or len(rom_ids) > _MAX_SELECTION_PAGE
+        or any(type(value) is not int or value <= 0 for value in rom_ids)
+    ):
+        return _failure(
+            "invalid_selection", f"Each selection page may contain 0-{_MAX_SELECTION_PAGE} positive ROM ids."
+        )
+    if type(final) is not bool:
+        return _failure("invalid_selection", "Selection final must be explicitly true or false.")
+    return preview_id, selection_id, rom_ids, final
 
 
 def valid_snapshot(snapshot: object, expected_app_id: int | None) -> bool:

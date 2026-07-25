@@ -12,6 +12,12 @@ from __future__ import annotations
 import contextlib
 import os
 import shutil
+from typing import TYPE_CHECKING
+
+from adapters.descriptor_paths import remove_exact
+
+if TYPE_CHECKING:
+    from models.prune import SourceIdentity
 
 
 class RomFileAdapter:
@@ -38,3 +44,6 @@ class RomFileAdapter:
     def remove_tree(self, path: str) -> None:
         """Recursively delete *path* and all contents."""
         shutil.rmtree(path)
+
+    def remove_exact(self, path: str, safe_root: str, identity: SourceIdentity) -> bool:
+        return remove_exact(path, safe_root, identity)

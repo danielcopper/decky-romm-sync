@@ -27,7 +27,12 @@ export interface PruneGroupResult {
   removed_app_id?: number;
   bundle_path?: string;
   committed_action?: "repoint_shortcut" | "remove_shortcut";
+  action_ambiguous?: boolean;
   mutations?: string[];
+  warnings?: string[];
+  warning_count?: number;
+  warnings_truncated?: boolean;
+  target_rom_id?: number;
 }
 
 export interface PruneComplete {

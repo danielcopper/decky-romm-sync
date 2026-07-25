@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from domain.prune import selected_prune_ids
@@ -34,11 +35,15 @@ if TYPE_CHECKING:
     from services.prune.registry import PruneRegistry
 
 _LIVENESS_CONCURRENCY = 4
-_COMPLETION_CHUNK_SIZE = 25
 _COMPLETION_IDS_PER_GROUP = 50
-_COMPLETION_TEXT_CHARS = 1024
+_COMPLETION_TEXT_CHARS = 512
+_COMPLETION_PATH_CHARS = 2048
+_COMPLETION_REASON_CHARS = 128
+_COMPLETION_WARNING_CHARS = 256
+_COMPLETION_WARNINGS_PER_GROUP = 5
+_COMPLETION_BUDGET_BYTES = 48 * 1024
 
-ActionRequester = Callable[[str, str, dict[str, object], int | None, int | None], Awaitable[dict[str, Any]]]
+ActionRequester = Callable[[str, str, dict[str, object], int | None, int | None, set[int]], Awaitable[dict[str, Any]]]
 
 
 @dataclass(frozen=True)
@@ -67,6 +72,20 @@ class _CancelledWithResult(asyncio.CancelledError):
     def __init__(self, result: dict[str, Any]) -> None:
         super().__init__()
         self.result = result
+
+
+@dataclass
+class _MutationLedger:
+    rows: list[Rom]
+    app_id: int | None = None
+    target_rom_id: int | None = None
+    bundle_path: str | None = None
+    committed_action: str | None = None
+    action_ambiguous: bool = False
+    mutations: list[str] = field(default_factory=list)
+
+    def has_commit(self) -> bool:
+        return self.committed_action is not None or self.action_ambiguous or bool(self.mutations)
 
 
 class PruneExecutor:
@@ -148,7 +167,41 @@ class PruneExecutor:
         index: int,
         total: int,
     ) -> dict[str, Any]:
+        ledger = _MutationLedger(initial_rows)
+        try:
+            return await self._run_group_inner(
+                run_id, initial_rows, preview_candidate_ids, options, index, total, ledger
+            )
+        except _CancelledWithResult:
+            raise
+        except asyncio.CancelledError as exc:
+            if ledger.has_commit():
+                raise _CancelledWithResult(
+                    self._ledger_result(
+                        ledger,
+                        "cancelled",
+                        "Cleanup was cancelled after a committed or ambiguous action; later groups were not started.",
+                    )
+                ) from exc
+            raise
+        except Exception as exc:
+            if ledger.has_commit():
+                self._logger.exception(f"Vanished-ROM cleanup group {initial_rows[0].rom_id} failed after mutation")
+                return self._ledger_result(ledger, ErrorCode.UNKNOWN.value, str(exc))
+            raise
+
+    async def _run_group_inner(
+        self,
+        run_id: str,
+        initial_rows: list[Rom],
+        preview_candidate_ids: set[int],
+        options: PruneOptions,
+        index: int,
+        total: int,
+        ledger: _MutationLedger,
+    ) -> dict[str, Any]:
         rows = await self._loop.run_in_executor(None, self._registry.reread_group, initial_rows[0].rom_id)
+        ledger.rows = rows or initial_rows
         if not rows:
             return self._group_result(initial_rows, "skipped", "local_state_changed", "The local group changed.")
         group_ids = {row.rom_id for row in rows}
@@ -219,8 +272,30 @@ class PruneExecutor:
                 {"app_id": app_id},
                 bound_row.rom_id,
                 None,
+                group_ids,
             )
             cancel_requested |= bool(capture.pop("_cancelled", False))
+            if capture.get("success") and capture.get("shortcut_absent") is True:
+                ledger.app_id = app_id
+                ledger.committed_action = "remove_shortcut"
+                reconciled, cancelled = await self._shielded(
+                    self._loop.run_in_executor(
+                        None, self._registry.reconcile_removed_shortcut, bound_row.rom_id, app_id
+                    )
+                )
+                if reconciled:
+                    ledger.mutations.append("shortcut_binding")
+                result = self._ledger_result(
+                    ledger,
+                    "shortcut_absence_reconciled" if reconciled else "local_state_changed",
+                    (
+                        "Steam already lacked this shortcut; its local binding was reconciled. Run cleanup again."
+                        if reconciled
+                        else "Steam lacked the shortcut, but its local binding changed before reconciliation."
+                    ),
+                    removed_app_id=app_id if reconciled else None,
+                )
+                return self._cancel_or_return(result, cancel_requested or cancelled)
             if not capture.get("success") or not isinstance(capture.get("snapshot"), dict):
                 return self._group_result(
                     rows,
@@ -251,18 +326,27 @@ class PruneExecutor:
                     snapshot = await self._loop.run_in_executor(
                         None, self._recovery.snapshot_state, sorted(recovery_ids), frontend_steam
                     )
-                    bundle_path, steam_backend = await self._loop.run_in_executor(
-                        None,
-                        lambda: self._recovery.seal(
-                            rows=[row for row in locked_rows if row.rom_id in recovery_ids],
-                            snapshot=snapshot,
-                            save_inventory=save_inventory,
-                            include_installed_rom_ids=set(options.include_installed_rom_ids),
-                            delete_ids=delete_ids,
-                            app_id=app_id if whole_game_action else None,
-                        ),
+                    sealed, seal_cancelled = await self._shielded(
+                        self._loop.run_in_executor(
+                            None,
+                            lambda: self._recovery.seal(
+                                rows=[row for row in locked_rows if row.rom_id in recovery_ids],
+                                snapshot=snapshot,
+                                save_inventory=save_inventory,
+                                include_installed_rom_ids=set(options.include_installed_rom_ids),
+                                delete_ids=delete_ids,
+                                app_id=app_id if whole_game_action else None,
+                            ),
+                        )
                     )
-                    handle = RecoveryHandle(bundle_path, snapshot, save_inventory, steam_backend)
+                    bundle_path, steam_backend = sealed
+                    identities = await self._loop.run_in_executor(
+                        None, self._recovery_store.source_identities, bundle_path
+                    )
+                    handle = RecoveryHandle(bundle_path, snapshot, save_inventory, steam_backend, identities)
+                    ledger.bundle_path = bundle_path
+                    if seal_cancelled:
+                        raise asyncio.CancelledError
             except Exception as exc:
                 self._logger.error(f"Recovery bundle failed for group {min(group_ids)}: {exc}")
                 return self._group_result(rows, "failed", "recovery_failed", str(exc))
@@ -277,8 +361,18 @@ class PruneExecutor:
 
         if self._active_downloads() & delete_ids:
             return self._group_result(rows, "skipped", "download_in_progress", "Cancel active downloads first.")
-        refreshed = await self._probe_many(delete_ids | ({target_id} if target_id is not None else set()))
-        guard = self._fresh_guard(refreshed, delete_ids, target_id)
+        proof_ids = set(delete_ids)
+        if target_id is not None:
+            proof_ids.add(target_id)
+            if bound_row is not None:
+                proof_ids.add(bound_row.rom_id)
+        refreshed = await self._probe_many(proof_ids)
+        guard = self._fresh_guard(
+            refreshed,
+            delete_ids,
+            target_id,
+            bound_row.rom_id if target_id is not None and bound_row is not None else None,
+        )
         if guard is not None:
             return self._group_result(
                 rows,
@@ -288,14 +382,37 @@ class PruneExecutor:
                 bundle_path=handle.bundle_path if handle else None,
             )
 
+        if handle is not None:
+            recovery_guard = await self._recovery_guard(
+                handle,
+                recovery_ids,
+                committed_action=None,
+                app_id=app_id,
+                target_id=target_id,
+                launch_options=None,
+            )
+            if recovery_guard is not None:
+                return self._group_result(
+                    rows,
+                    "skipped",
+                    "recovery_state_changed",
+                    recovery_guard,
+                    bundle_path=handle.bundle_path,
+                )
+
         committed_action: Literal["repoint_shortcut", "remove_shortcut"] | None = None
         launch_options: str | None = None
         if target_id is not None and app_id is not None and bound_row is not None:
+            ledger.app_id = app_id
+            ledger.committed_action = "repoint_shortcut"
+            ledger.action_ambiguous = True
             switch, cancelled = await self._shielded(
                 self._switch_version(app_id, target_id, drifted and handle is not None)
             )
             cancel_requested |= cancelled
             if not switch.get("success"):
+                ledger.committed_action = None
+                ledger.action_ambiguous = False
                 result = self._group_result(
                     rows,
                     "failed",
@@ -309,18 +426,17 @@ class PruneExecutor:
                 or switch.get("app_id") != app_id
                 or not isinstance(switch.get("launch_options"), str)
             ):
-                result = self._group_result(
-                    rows,
-                    "partial",
+                result = self._ledger_result(
+                    ledger,
                     "repoint_result_invalid",
                     "The binding changed but the switch result was incomplete.",
-                    app_id=app_id,
-                    bundle_path=handle.bundle_path if handle else None,
-                    committed_action="repoint_shortcut",
                 )
                 return self._cancel_or_return(result, cancel_requested)
             launch_options = switch["launch_options"]
             committed_action = "repoint_shortcut"
+            ledger.target_rom_id = target_id
+            ledger.action_ambiguous = False
+            ledger.mutations.append("shortcut_binding")
             _, cancelled = await self._shielded(
                 self._emit_progress(
                     run_id, index, total, "repointing", rows, bundle_path=handle.bundle_path if handle else None
@@ -338,6 +454,7 @@ class PruneExecutor:
                 },
                 bound_row.rom_id,
                 target_id,
+                group_ids,
             )
             cancel_requested |= bool(action.pop("_cancelled", False))
             if not action.get("success"):
@@ -349,6 +466,7 @@ class PruneExecutor:
                     app_id=app_id,
                     bundle_path=handle.bundle_path if handle else None,
                     committed_action=committed_action,
+                    target_rom_id=target_id,
                 )
                 return self._cancel_or_return(result, cancel_requested)
         elif whole_game_action and app_id is not None and bound_row is not None:
@@ -363,25 +481,44 @@ class PruneExecutor:
             action = await self._request_action(
                 run_id,
                 "remove_shortcut",
-                {"app_id": app_id},
+                {
+                    "app_id": app_id,
+                    **({"expected_snapshot": frontend_steam} if isinstance(frontend_steam, dict) else {}),
+                },
                 bound_row.rom_id,
                 None,
+                group_ids,
             )
             cancel_requested |= bool(action.pop("_cancelled", False))
             if not action.get("success"):
-                result = self._group_result(
-                    rows,
-                    "failed",
-                    "steam_action_failed",
-                    action.get("message", "Shortcut removal failed."),
-                    bundle_path=handle.bundle_path if handle else None,
-                )
+                if action.get("claimed"):
+                    ledger.app_id = app_id
+                    ledger.committed_action = "remove_shortcut"
+                    ledger.action_ambiguous = True
+                    result = self._ledger_result(
+                        ledger,
+                        "action_ambiguous",
+                        "Steam removal was claimed but its outcome is unknown; source data was retained.",
+                    )
+                else:
+                    result = self._group_result(
+                        rows,
+                        "failed",
+                        "steam_action_failed",
+                        action.get("message", "Shortcut removal failed."),
+                        bundle_path=handle.bundle_path if handle else None,
+                    )
                 return self._cancel_or_return(result, cancel_requested)
+            ledger.app_id = app_id
+            ledger.committed_action = "remove_shortcut"
+            ledger.action_ambiguous = False
             reconciled, cancelled = await self._shielded(
                 self._loop.run_in_executor(None, self._registry.reconcile_removed_shortcut, bound_row.rom_id, app_id)
             )
             cancel_requested |= cancelled
             committed_action = "remove_shortcut"
+            if reconciled:
+                ledger.mutations.append("shortcut_binding")
             if not reconciled:
                 result = self._group_result(
                     rows,
@@ -396,6 +533,18 @@ class PruneExecutor:
                 return self._cancel_or_return(result, cancel_requested)
 
         if target_id is not None and not delete_ids:
+            final_proof = await self._probe_many(
+                {bound_row.rom_id, target_id} if bound_row is not None else {target_id}
+            )
+            final_guard = self._fresh_guard(
+                final_proof,
+                set(),
+                target_id,
+                bound_row.rom_id if bound_row is not None else None,
+            )
+            if final_guard is not None:
+                result = self._ledger_result(ledger, final_guard[0], final_guard[1])
+                return self._cancel_or_return(result, cancel_requested)
             result = self._group_result(
                 rows,
                 "repointed",
@@ -404,25 +553,38 @@ class PruneExecutor:
                 app_id=app_id,
                 bundle_path=handle.bundle_path if handle else None,
                 committed_action=committed_action,
+                target_rom_id=target_id,
             )
             return self._cancel_or_return(result, cancel_requested)
 
-        post_action = self._finish_group(
-            run_id=run_id,
-            initial_rows=initial_rows,
-            delete_ids=delete_ids,
-            target_id=target_id,
-            app_id=app_id,
-            fully_dead=fully_dead,
-            committed_action=committed_action,
-            handle=handle,
-            recovery_ids=recovery_ids,
-            index=index,
-            total=total,
-            launch_options=launch_options,
-        )
-        result, cancelled = await self._shielded(post_action)
-        cancel_requested |= cancelled
+        try:
+            result = await self._finish_group(
+                run_id=run_id,
+                initial_rows=initial_rows,
+                delete_ids=delete_ids,
+                target_id=target_id,
+                app_id=app_id,
+                fully_dead=fully_dead,
+                committed_action=committed_action,
+                handle=handle,
+                recovery_ids=recovery_ids,
+                index=index,
+                total=total,
+                launch_options=launch_options,
+                ledger=ledger,
+            )
+        except _CancelledWithResult:
+            raise
+        except asyncio.CancelledError as exc:
+            if ledger.has_commit():
+                raise _CancelledWithResult(
+                    self._ledger_result(
+                        ledger,
+                        "cancelled",
+                        "Cleanup was cancelled before local finalization; later groups were not started.",
+                    )
+                ) from exc
+            raise
         return self._cancel_or_return(result, cancel_requested)
 
     async def _finish_group(
@@ -440,57 +602,38 @@ class PruneExecutor:
         index: int,
         total: int,
         launch_options: str | None,
+        ledger: _MutationLedger,
     ) -> dict[str, Any]:
-        acted_app_id = app_id if committed_action is not None else None
         refreshed = await self._probe_many(delete_ids | ({target_id} if target_id is not None else set()))
-        guard = self._fresh_guard(refreshed, delete_ids, target_id)
+        guard = self._fresh_guard(refreshed, delete_ids, target_id, None)
         if guard is not None:
-            return self._group_result(
-                initial_rows,
-                "partial" if committed_action else "skipped",
-                guard[0],
-                guard[1],
-                app_id=acted_app_id,
-                removed_app_id=app_id if committed_action == "remove_shortcut" else None,
-                bundle_path=handle.bundle_path if handle else None,
-                committed_action=committed_action,
-            )
+            return self._ledger_or_guard_result(ledger, initial_rows, guard, handle, app_id)
         if self._active_downloads() & delete_ids:
-            return self._group_result(
+            return self._ledger_or_guard_result(
+                ledger,
                 initial_rows,
-                "partial" if committed_action else "skipped",
-                "download_in_progress",
-                "A download became active; source data was retained.",
-                app_id=acted_app_id,
-                removed_app_id=app_id if committed_action == "remove_shortcut" else None,
-                bundle_path=handle.bundle_path if handle else None,
-                committed_action=committed_action,
+                ("download_in_progress", "A download became active; source data was retained."),
+                handle,
+                app_id,
             )
 
         rows = await self._loop.run_in_executor(None, self._registry.reread_group, initial_rows[0].rom_id)
         if not rows or not delete_ids <= {row.rom_id for row in rows}:
-            return self._group_result(
+            return self._ledger_or_guard_result(
+                ledger,
                 initial_rows,
-                "partial" if committed_action else "skipped",
-                "local_state_changed",
-                "Local state changed; source data was retained.",
-                app_id=acted_app_id,
-                removed_app_id=app_id if committed_action == "remove_shortcut" else None,
-                bundle_path=handle.bundle_path if handle else None,
-                committed_action=committed_action,
+                ("local_state_changed", "Local state changed; source data was retained."),
+                handle,
+                app_id,
             )
-
+        ledger.rows = rows
         await self._emit_progress(
-            run_id,
-            index,
-            total,
-            "removing",
-            rows,
-            bundle_path=handle.bundle_path if handle else None,
+            run_id, index, total, "removing", rows, bundle_path=handle.bundle_path if handle else None
         )
-        mutations: list[str] = []
-        async with self._stable_save_locks(delete_ids) as save_inventory:
+
+        async with self._stable_save_locks(recovery_ids) as recovery_inventory:
             rows = await self._loop.run_in_executor(None, self._registry.reread_group, initial_rows[0].rom_id)
+            ledger.rows = rows or initial_rows
             expected_app_id = app_id if target_id is not None else None
             if not rows or not await self._loop.run_in_executor(
                 None,
@@ -501,15 +644,12 @@ class PruneExecutor:
                 expected_app_id,
                 fully_dead,
             ):
-                return self._group_result(
+                return self._ledger_or_guard_result(
+                    ledger,
                     initial_rows,
-                    "partial" if committed_action else "skipped",
-                    "local_state_changed",
-                    "Final local revalidation failed before source removal.",
-                    app_id=acted_app_id,
-                    removed_app_id=app_id if committed_action == "remove_shortcut" else None,
-                    bundle_path=handle.bundle_path if handle else None,
-                    committed_action=committed_action,
+                    ("local_state_changed", "Final local revalidation failed before source removal."),
+                    handle,
+                    app_id,
                 )
             if handle is not None:
                 state_matches = await self._loop.run_in_executor(
@@ -525,105 +665,182 @@ class PruneExecutor:
                 sources_match = await self._loop.run_in_executor(
                     None, self._recovery_store.validate_sources, handle.bundle_path
                 )
-                if save_inventory != handle.save_inventory or not state_matches or not sources_match:
-                    return self._group_result(
+                backend_matches = True
+                if committed_action == "remove_shortcut" and app_id is not None and handle.steam_backend is not None:
+                    backend_matches = await self._loop.run_in_executor(
+                        None, self._steam_recovery.validate_state, app_id, handle.steam_backend
+                    )
+                if (
+                    recovery_inventory != handle.save_inventory
+                    or not state_matches
+                    or not sources_match
+                    or not backend_matches
+                ):
+                    return self._ledger_or_guard_result(
+                        ledger,
                         rows,
-                        "partial" if committed_action else "skipped",
-                        "recovery_state_changed",
-                        "Local state no longer matches the sealed recovery bundle; source data was retained.",
-                        app_id=acted_app_id,
-                        removed_app_id=app_id if committed_action == "remove_shortcut" else None,
-                        bundle_path=handle.bundle_path,
-                        committed_action=committed_action,
+                        (
+                            "recovery_state_changed",
+                            "Local state no longer matches the sealed recovery bundle; source data was retained.",
+                        ),
+                        handle,
+                        app_id,
                     )
 
-            quarantine = await self._loop.run_in_executor(
-                None, self._save_coordinator.quarantine_prune_saves, save_inventory["exclusive"]
+            delete_inventory = await self._loop.run_in_executor(
+                None, self._save_coordinator.inventory_prune_saves, sorted(delete_ids)
             )
-            raw_moved = quarantine.get("moved")
-            moved = [str(path) for path in raw_moved] if isinstance(raw_moved, list) else []
-            if moved:
-                mutations.append("save_quarantine")
-            if not quarantine.get("success"):
-                return self._group_result(
+            delete_locks = {int(value) for value in delete_inventory.get("lock_rom_ids", delete_ids)}
+            held_locks = {int(value) for value in recovery_inventory.get("lock_rom_ids", recovery_ids)}
+            if not delete_locks <= held_locks:
+                return self._ledger_or_guard_result(
+                    ledger,
                     rows,
-                    "partial" if mutations or committed_action else "failed",
-                    "save_quarantine_failed",
-                    quarantine.get("message", "Save quarantine failed."),
-                    app_id=acted_app_id,
-                    removed_app_id=app_id if committed_action == "remove_shortcut" else None,
-                    bundle_path=handle.bundle_path if handle else None,
-                    committed_action=committed_action,
-                    mutations=mutations,
+                    ("save_ownership_changed", "Save ownership expanded; source data was retained."),
+                    handle,
+                    app_id,
+                    warnings=self._inventory_warnings(delete_inventory),
                 )
-
-            for rom_id in sorted(delete_ids):
-                removal = await self._loop.run_in_executor(None, self._remove_installed_files, rom_id)
-                if removal.get("success"):
-                    if "installed_rom_content" not in mutations:
-                        mutations.append("installed_rom_content")
-                    continue
-                if removal.get("reason") == "not_installed":
-                    continue
-                return self._group_result(
-                    rows,
-                    "partial" if mutations or committed_action else "failed",
-                    "rom_removal_failed",
-                    removal.get("message", "ROM removal failed."),
-                    app_id=acted_app_id,
-                    removed_app_id=app_id if committed_action == "remove_shortcut" else None,
-                    bundle_path=handle.bundle_path if handle else None,
-                    committed_action=committed_action,
-                    mutations=mutations,
-                )
-            try:
-                await self._loop.run_in_executor(None, self._prune_artifacts.remove, sorted(delete_ids))
-                mutations.append("plugin_artifacts")
-                if committed_action == "remove_shortcut" and app_id is not None and handle is not None:
-                    if handle.steam_backend is None:
-                        raise RuntimeError("Steam recovery identity was not captured")
-                    await self._loop.run_in_executor(
-                        None, self._steam_recovery.remove_state, app_id, handle.steam_backend
-                    )
-                    mutations.append("steam_files")
-            except Exception as exc:
-                return self._group_result(
-                    rows,
-                    "partial",
-                    "artifact_cleanup_failed",
-                    str(exc),
-                    app_id=acted_app_id,
-                    removed_app_id=app_id if committed_action == "remove_shortcut" else None,
-                    bundle_path=handle.bundle_path if handle else None,
-                    committed_action=committed_action,
-                    mutations=mutations,
-                )
-
-            deleted = await self._loop.run_in_executor(
-                None,
-                self._registry.delete_rows,
-                rows,
-                delete_ids,
-                target_id,
-                expected_app_id,
-                fully_dead,
+            commit = self._commit_group(
+                rows=rows,
+                delete_ids=delete_ids,
+                target_id=target_id,
+                app_id=app_id,
+                fully_dead=fully_dead,
+                committed_action=committed_action,
+                handle=handle,
+                expected_app_id=expected_app_id,
+                delete_inventory=delete_inventory,
+                ledger=ledger,
             )
-            if not deleted:
-                return self._group_result(
-                    rows,
-                    "partial",
-                    "local_state_changed",
-                    "Final local revalidation failed after filesystem cleanup.",
-                    app_id=acted_app_id,
-                    removed_app_id=app_id if committed_action == "remove_shortcut" else None,
-                    bundle_path=handle.bundle_path if handle else None,
-                    committed_action=committed_action,
-                    mutations=mutations,
-                )
+            result, cancelled = await self._shielded(commit)
+            if cancelled:
+                raise _CancelledWithResult(result)
 
-        await self._emit_progress(
-            run_id, index, total, "removed", rows, bundle_path=handle.bundle_path if handle else None
+        try:
+            await self._emit_progress(
+                run_id, index, total, "removed", rows, bundle_path=handle.bundle_path if handle else None
+            )
+        except Exception as exc:
+            self._logger.warning(f"Removed-game cleanup final progress delivery failed: {exc}")
+        return result
+
+    async def _commit_group(
+        self,
+        *,
+        rows: list[Rom],
+        delete_ids: set[int],
+        target_id: int | None,
+        app_id: int | None,
+        fully_dead: bool,
+        committed_action: str | None,
+        handle: RecoveryHandle | None,
+        expected_app_id: int | None,
+        delete_inventory: dict[str, Any],
+        ledger: _MutationLedger,
+    ) -> dict[str, Any]:
+        acted_app_id = app_id if committed_action is not None else None
+        warnings = self._inventory_warnings(delete_inventory)
+        quarantine = await self._loop.run_in_executor(
+            None,
+            self._save_coordinator.quarantine_prune_saves,
+            delete_inventory["exclusive"],
+            handle.source_identities if handle is not None else None,
         )
+        raw_moved = quarantine.get("moved")
+        moved = [str(path) for path in raw_moved] if isinstance(raw_moved, list) else []
+        if moved:
+            ledger.mutations.append("save_quarantine")
+        if not quarantine.get("success"):
+            return self._group_result(
+                rows,
+                "partial" if ledger.has_commit() else "failed",
+                "save_quarantine_failed",
+                quarantine.get("message", "Save quarantine failed."),
+                app_id=acted_app_id,
+                removed_app_id=app_id if committed_action == "remove_shortcut" else None,
+                bundle_path=handle.bundle_path if handle else None,
+                committed_action=committed_action,
+                mutations=ledger.mutations,
+                warnings=warnings,
+                target_rom_id=target_id,
+            )
+
+        for rom_id in sorted(delete_ids):
+            identities = handle.source_identities if handle is not None else None
+            removal = await self._loop.run_in_executor(None, self._remove_installed_files, rom_id, identities)
+            if removal.get("success"):
+                if removal.get("changed") and "installed_rom_content" not in ledger.mutations:
+                    ledger.mutations.append("installed_rom_content")
+                continue
+            if removal.get("reason") == "not_installed":
+                continue
+            return self._group_result(
+                rows,
+                "partial" if ledger.has_commit() else "failed",
+                "rom_removal_failed",
+                removal.get("message", "ROM removal failed."),
+                app_id=acted_app_id,
+                removed_app_id=app_id if committed_action == "remove_shortcut" else None,
+                bundle_path=handle.bundle_path if handle else None,
+                committed_action=committed_action,
+                mutations=ledger.mutations,
+                warnings=warnings,
+                target_rom_id=target_id,
+            )
+        try:
+            identities = handle.source_identities if handle is not None else None
+            removed_artifacts = await self._loop.run_in_executor(
+                None, self._prune_artifacts.remove, sorted(delete_ids), identities
+            )
+            if removed_artifacts:
+                ledger.mutations.append("plugin_artifacts")
+            if committed_action == "remove_shortcut" and app_id is not None and handle is not None:
+                if handle.steam_backend is None:
+                    raise RuntimeError("Steam recovery identity was not captured")
+                steam_changes = await self._loop.run_in_executor(
+                    None, self._steam_recovery.remove_state, app_id, handle.steam_backend, handle.source_identities
+                )
+                if steam_changes:
+                    ledger.mutations.append("steam_files")
+        except Exception as exc:
+            return self._group_result(
+                rows,
+                "partial" if ledger.has_commit() else "failed",
+                "artifact_cleanup_failed",
+                str(exc),
+                app_id=acted_app_id,
+                removed_app_id=app_id if committed_action == "remove_shortcut" else None,
+                bundle_path=handle.bundle_path if handle else None,
+                committed_action=committed_action,
+                mutations=ledger.mutations,
+                warnings=warnings,
+                target_rom_id=target_id,
+            )
+
+        try:
+            deleted = await self._loop.run_in_executor(
+                None, self._registry.delete_rows, rows, delete_ids, target_id, expected_app_id, fully_dead
+            )
+        except Exception:
+            ledger.mutations.append("database_rows_ambiguous")
+            raise
+        if not deleted:
+            return self._group_result(
+                rows,
+                "partial" if ledger.has_commit() else "skipped",
+                "local_state_changed",
+                "Final local revalidation failed after filesystem cleanup.",
+                app_id=acted_app_id,
+                removed_app_id=app_id if committed_action == "remove_shortcut" else None,
+                bundle_path=handle.bundle_path if handle else None,
+                committed_action=committed_action,
+                mutations=ledger.mutations,
+                warnings=warnings,
+                target_rom_id=target_id,
+            )
+        ledger.mutations.append("database_rows")
+
         return self._group_result(
             rows,
             "removed",
@@ -634,7 +851,9 @@ class PruneExecutor:
             removed_app_id=app_id if committed_action == "remove_shortcut" else None,
             bundle_path=handle.bundle_path if handle else None,
             committed_action=committed_action,
-            mutations=mutations,
+            mutations=ledger.mutations,
+            warnings=warnings,
+            target_rom_id=target_id,
         )
 
     @contextlib.asynccontextmanager
@@ -705,7 +924,10 @@ class PruneExecutor:
 
     @staticmethod
     def _fresh_guard(
-        verdicts: dict[int, dict[str, str]], delete_ids: set[int], target_id: int | None
+        verdicts: dict[int, dict[str, str]],
+        delete_ids: set[int],
+        target_id: int | None,
+        vanished_source_id: int | None,
     ) -> tuple[str, str] | None:
         for rom_id in sorted(delete_ids):
             verdict = verdicts[rom_id]
@@ -714,7 +936,102 @@ class PruneExecutor:
         if target_id is not None and verdicts[target_id]["status"] != "live":
             verdict = verdicts[target_id]
             return verdict["reason"], f"Default target {target_id}: {verdict['message']}"
+        if vanished_source_id is not None and verdicts[vanished_source_id]["status"] != "vanished":
+            verdict = verdicts[vanished_source_id]
+            return verdict["reason"], f"Vanished source {vanished_source_id}: {verdict['message']}"
         return None
+
+    async def _recovery_guard(
+        self,
+        handle: RecoveryHandle,
+        recovery_ids: set[int],
+        *,
+        committed_action: str | None,
+        app_id: int | None,
+        target_id: int | None,
+        launch_options: str | None,
+    ) -> str | None:
+        """Revalidate the sealed intended state before any irreversible action."""
+        async with self._stable_save_locks(recovery_ids) as inventory:
+            state_matches = await self._loop.run_in_executor(
+                None,
+                self._recovery.state_matches,
+                handle.snapshot,
+                sorted(recovery_ids),
+                committed_action,
+                app_id,
+                target_id,
+                launch_options,
+            )
+            sources_match = await self._loop.run_in_executor(
+                None, self._recovery_store.validate_sources, handle.bundle_path
+            )
+            backend_matches = True
+            if app_id is not None and handle.steam_backend is not None:
+                backend_matches = await self._loop.run_in_executor(
+                    None, self._steam_recovery.validate_state, app_id, handle.steam_backend
+                )
+        if inventory != handle.save_inventory or not state_matches or not sources_match or not backend_matches:
+            return "Local state no longer matches the sealed recovery bundle; no Steam action was started."
+        return None
+
+    @staticmethod
+    def _inventory_warnings(inventory: dict[str, Any]) -> list[str]:
+        raw = inventory.get("warnings")
+        return [str(item) for item in raw] if isinstance(raw, list) else []
+
+    def _ledger_result(
+        self,
+        ledger: _MutationLedger,
+        reason: str,
+        message: object,
+        *,
+        removed_app_id: int | None = None,
+        warnings: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return self._group_result(
+            ledger.rows,
+            "partial",
+            reason,
+            message,
+            app_id=ledger.app_id,
+            removed_app_id=removed_app_id,
+            bundle_path=ledger.bundle_path,
+            committed_action=ledger.committed_action,
+            mutations=ledger.mutations,
+            warnings=warnings,
+            action_ambiguous=ledger.action_ambiguous,
+            target_rom_id=ledger.target_rom_id,
+        )
+
+    def _ledger_or_guard_result(
+        self,
+        ledger: _MutationLedger,
+        rows: list[Rom],
+        guard: tuple[str, str],
+        handle: RecoveryHandle | None,
+        app_id: int | None,
+        *,
+        warnings: list[str] | None = None,
+    ) -> dict[str, Any]:
+        if ledger.has_commit():
+            return self._ledger_result(
+                ledger,
+                guard[0],
+                guard[1],
+                removed_app_id=app_id
+                if ledger.committed_action == "remove_shortcut" and not ledger.action_ambiguous
+                else None,
+                warnings=warnings,
+            )
+        return self._group_result(
+            rows,
+            "skipped",
+            guard[0],
+            guard[1],
+            bundle_path=handle.bundle_path if handle else None,
+            warnings=warnings,
+        )
 
     async def _shielded(self, awaitable: Awaitable[Any]) -> tuple[Any, bool]:
         task = asyncio.ensure_future(awaitable)
@@ -750,7 +1067,7 @@ class PruneExecutor:
             "name": (rows[0].name if rows else "")[:_COMPLETION_TEXT_CHARS],
         }
         if bundle_path is not None:
-            payload["bundle_path"] = bundle_path
+            payload["bundle_path"] = bundle_path[:_COMPLETION_PATH_CHARS]
         await self._emit("prune_progress", payload)
 
     async def _emit_completion(
@@ -767,36 +1084,81 @@ class PruneExecutor:
             int(result.get("removed_count", len(result.get("removed_rom_ids", [])))) for result in results
         )
         partial = any(result["status"] == "partial" for result in results) or bool(removed_count and failures)
-        chunks = [
-            results[index : index + _COMPLETION_CHUNK_SIZE] for index in range(0, len(results), _COMPLETION_CHUNK_SIZE)
-        ]
-        if not chunks:
-            chunks = [[]]
+        bounded_reason = reason[:_COMPLETION_REASON_CHARS] if reason is not None else None
+        bounded_message = message[:_COMPLETION_TEXT_CHARS] if message is not None else None
+        chunks: list[list[dict[str, Any]]] = []
+        current: list[dict[str, Any]] = []
+        for result in results:
+            candidate = [*current, result]
+            probe = self._completion_payload(
+                run_id,
+                candidate,
+                chunk_index=len(chunks),
+                final=False,
+                success=not failures and not cancelled and reason is None,
+                partial=partial,
+                removed_count=removed_count,
+                problem_count=len(failures),
+                reason=bounded_reason,
+                message=bounded_message,
+            )
+            if current and len(json.dumps(probe, ensure_ascii=True).encode("utf-8")) > _COMPLETION_BUDGET_BYTES:
+                chunks.append(current)
+                current = [result]
+            else:
+                current = candidate
+        chunks.append(current)
         for chunk_index, chunk in enumerate(chunks):
-            payload: dict[str, Any] = {
-                "success": not failures and not cancelled and reason is None,
-                "partial": partial,
-                "run_id": run_id,
-                "chunk_index": chunk_index,
-                "final": chunk_index == len(chunks) - 1,
-                "removed_count": removed_count,
-                "problem_count": len(failures),
-                "removed_rom_ids": sorted(
-                    {int(value) for result in chunk for value in result.get("removed_rom_ids", [])}
-                ),
-                "affected_app_ids": sorted(
-                    {int(result["app_id"]) for result in chunk if type(result.get("app_id")) is int}
-                ),
-                "removed_app_ids": sorted(
-                    {int(result["removed_app_id"]) for result in chunk if type(result.get("removed_app_id")) is int}
-                ),
-                "results": chunk,
-            }
-            if reason is not None:
-                payload["reason"] = reason[:_COMPLETION_TEXT_CHARS]
-            if message is not None:
-                payload["message"] = message[:_COMPLETION_TEXT_CHARS]
+            payload = self._completion_payload(
+                run_id,
+                chunk,
+                chunk_index=chunk_index,
+                final=chunk_index == len(chunks) - 1,
+                success=not failures and not cancelled and reason is None,
+                partial=partial,
+                removed_count=removed_count,
+                problem_count=len(failures),
+                reason=bounded_reason,
+                message=bounded_message,
+            )
             await self._emit("prune_complete", payload)
+
+    @staticmethod
+    def _completion_payload(
+        run_id: str,
+        chunk: list[dict[str, Any]],
+        *,
+        chunk_index: int,
+        final: bool,
+        success: bool,
+        partial: bool,
+        removed_count: int,
+        problem_count: int,
+        reason: str | None,
+        message: str | None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "success": success,
+            "partial": partial,
+            "run_id": run_id,
+            "chunk_index": chunk_index,
+            "final": final,
+            "removed_count": removed_count,
+            "problem_count": problem_count,
+            "removed_rom_ids": sorted({int(value) for result in chunk for value in result.get("removed_rom_ids", [])}),
+            "affected_app_ids": sorted(
+                {int(result["app_id"]) for result in chunk if type(result.get("app_id")) is int}
+            ),
+            "removed_app_ids": sorted(
+                {int(result["removed_app_id"]) for result in chunk if type(result.get("removed_app_id")) is int}
+            ),
+            "results": chunk,
+        }
+        if reason is not None:
+            payload["reason"] = reason
+        if message is not None:
+            payload["message"] = message
+        return payload
 
     @staticmethod
     def _group_result(
@@ -811,6 +1173,9 @@ class PruneExecutor:
         bundle_path: str | None = None,
         committed_action: str | None = None,
         mutations: list[str] | None = None,
+        warnings: list[str] | None = None,
+        action_ambiguous: bool = False,
+        target_rom_id: int | None = None,
     ) -> dict[str, Any]:
         raw_group_id = rows[0].sibling_group_key or f"rom:{rows[0].rom_id}"
         all_rom_ids = [row.rom_id for row in rows]
@@ -827,7 +1192,9 @@ class PruneExecutor:
             "message_truncated": len(raw_message) > _COMPLETION_TEXT_CHARS,
         }
         if reason is not None:
-            result["reason"] = reason
+            raw_reason = str(reason)
+            result["reason"] = raw_reason[:_COMPLETION_REASON_CHARS]
+            result["reason_truncated"] = len(raw_reason) > _COMPLETION_REASON_CHARS
         if removed_rom_ids is not None:
             result["removed_rom_ids"] = bounded_removed
             result["removed_count"] = len(removed_rom_ids)
@@ -837,9 +1204,23 @@ class PruneExecutor:
         if removed_app_id is not None:
             result["removed_app_id"] = removed_app_id
         if bundle_path is not None:
-            result["bundle_path"] = bundle_path
+            result["bundle_path"] = bundle_path[:_COMPLETION_PATH_CHARS]
+            result["bundle_path_truncated"] = len(bundle_path) > _COMPLETION_PATH_CHARS
         if committed_action is not None:
             result["committed_action"] = committed_action
         if mutations:
-            result["mutations"] = mutations
+            result["mutations"] = [str(item)[:_COMPLETION_REASON_CHARS] for item in mutations]
+        if warnings:
+            bounded_warnings = [
+                str(item)[:_COMPLETION_WARNING_CHARS] for item in warnings[:_COMPLETION_WARNINGS_PER_GROUP]
+            ]
+            result["warnings"] = bounded_warnings
+            result["warning_count"] = len(warnings)
+            result["warnings_truncated"] = len(warnings) > len(bounded_warnings) or any(
+                len(str(item)) > _COMPLETION_WARNING_CHARS for item in warnings[:_COMPLETION_WARNINGS_PER_GROUP]
+            )
+        if action_ambiguous:
+            result["action_ambiguous"] = True
+        if target_rom_id is not None:
+            result["target_rom_id"] = target_rom_id
         return result

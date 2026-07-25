@@ -475,6 +475,10 @@ class DownloadService:
         self._control_tokens[rom_id] = control
         return {"success": True, "message": "Download started"}
 
+    def task_for_rom(self, rom_id: int) -> asyncio.Task[None] | None:
+        """Return the detached task whose lifetime owns this ROM's install write."""
+        return self._download_tasks.get(int(rom_id))
+
     def _partial_tmp_size(self, target_path, rom_detail) -> int:
         """Bytes already on disk in the partial ``.tmp`` for *target_path*.
 

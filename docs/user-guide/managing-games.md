@@ -118,24 +118,30 @@ The confirmation options apply to this run only:
 - **Create recovery bundle** is on. Bundles are sealed under `~/decky-romm-sync-recovery/bundles/` before mutation.
 - **Include installed ROM content** is off for every disclosed installed row. Its exact recursive size is shown;
   selecting more than the currently free recovery space blocks confirmation. Turning recovery off clears and disables
-  these selections. Unselected installed content is still deleted if the row is removed.
+  these selections. Large selections are staged in bounded pages before the run without a total selection cap.
+  Unselected installed content is still deleted if the row is removed.
 
 The displayed selected-content total is a lower-bound preflight, not the complete bundle size. Use **Refresh free
 space** after freeing disk space. The backend remeasures selected ROMs plus mandatory saves, backup history, caches, and
 Steam files before mutation and safely fails the group if the complete bundle does not fit.
 
 Recovery always records the affected database state, local playtime and pending sessions, exact attributable current
-saves and backup history, and relevant plugin caches. Fully vanished shortcut recovery also records bounded Steam
-details, collections/playtime fields, grid art, Steam Input files, and the controller setting. It contains no settings,
-credentials, tokens, whole database, BIOS, or save states. Recovery is manual only: there is no restore UI, and a new
-Steam shortcut cannot inherit the recorded Steam-assigned appId or playtime.
+saves (including path-safe filenames retained in prior save-sync state) and backup history, and relevant plugin caches.
+Fully vanished shortcut recovery also records bounded Steam details, collections/playtime fields, grid art, Steam Input
+files, and the controller setting. It contains no settings, credentials, tokens, whole database, BIOS, or save states.
+Recovery is manual only: there is no restore UI, and a new Steam shortcut cannot inherit the recorded Steam-assigned
+appId or playtime.
 
-A synced vanished row also has **Remove local data...** directly below it in the version picker. That opens the same
+A synced vanished row also has **Remove local data...** directly below it in the version picker. A synced singleton
+vanished binding shows the same focused action without opening an otherwise empty picker. Both open the same
 confirmation scoped to that one row; the vanished version itself remains non-switchable.
 
 If Steam changes before local cleanup can finish, the report can show a **partial** group with the concrete committed
 action and failure message. A confirmed shortcut removal is reconciled to an unbound retained row; a committed repoint
-remains bound to the new Default. This is intentional and retryable rather than being reported as unchanged.
+remains bound to the new Default. If Steam removal succeeded but every completion report was lost, the result is marked
+ambiguous and source data stays retained; retrying confirms the already-absent shortcut instead of removing it twice.
+Save ownership warnings are shown in the terminal group details. These outcomes are intentional and retryable rather
+than being reported as unchanged.
 
 ### Region and Languages
 

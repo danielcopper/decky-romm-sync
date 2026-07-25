@@ -17,7 +17,13 @@ from bootstrap import (
 )
 
 from lib.migration_gate import migration_blocked
-from lib.prune_gate import prune_active_blocked, prune_exclusive_start
+from lib.prune_gate import (
+    acquire_prune_conflict_lease,
+    prune_active_blocked,
+    prune_exclusive_start,
+    release_prune_conflict_lease,
+    retain_prune_conflict,
+)
 from lib.sync_gate import sync_active_blocked
 
 
@@ -297,6 +303,9 @@ class Plugin:
     async def get_prune_preview(self, request):
         return await self._prune_service.get_prune_preview(request)
 
+    async def stage_prune_installed_selection(self, request):
+        return await self._prune_service.stage_prune_installed_selection(request)
+
     @prune_exclusive_start
     @migration_blocked
     @sync_active_blocked
@@ -398,6 +407,7 @@ class Plugin:
     async def get_session_budget_status(self):
         return await self._sync_service.get_session_budget_status()
 
+    @prune_active_blocked
     async def report_unit_results(self, rom_id_to_app_id, run_id, unit_id, chunk_index):
         return await self._sync_service.report_unit_results(rom_id_to_app_id, run_id, unit_id, chunk_index)
 
@@ -408,23 +418,35 @@ class Plugin:
     @sync_active_blocked
     @prune_active_blocked
     async def remove_platform_shortcuts(self, platform_slug):
-        return await self._shortcut_removal_service.remove_platform_shortcuts(platform_slug)
+        result = await self._shortcut_removal_service.remove_platform_shortcuts(platform_slug)
+        if result.get("success") and result.get("app_ids"):
+            await acquire_prune_conflict_lease(self, "shortcut_removal")
+        return result
 
     @migration_blocked
     @sync_active_blocked
     @prune_active_blocked
     async def remove_all_shortcuts(self):
-        return self._shortcut_removal_service.remove_all_shortcuts()
+        result = self._shortcut_removal_service.remove_all_shortcuts()
+        if result.get("success") and result.get("app_ids"):
+            await acquire_prune_conflict_lease(self, "shortcut_removal")
+        return result
 
+    @prune_active_blocked
     async def report_removal_results(self, removed_rom_ids):
-        return await self._shortcut_removal_service.report_removal_results(removed_rom_ids)
+        try:
+            return await self._shortcut_removal_service.report_removal_results(removed_rom_ids)
+        finally:
+            await release_prune_conflict_lease(self, "shortcut_removal")
 
+    @prune_active_blocked
     async def reconcile_shortcuts(self, live_app_ids):
         return await self._shortcut_removal_service.reconcile_live_shortcuts(live_app_ids)
 
     async def get_artwork_base64(self, rom_id):
         return await self._artwork_service.get_artwork_base64(rom_id)
 
+    @prune_active_blocked
     async def fetch_cover_base64(self, rom_id):
         return await self._artwork_service.fetch_cover_base64(rom_id)
 
@@ -440,6 +462,7 @@ class Plugin:
         return await self._artwork_service.cleanup_orphaned_grid_images(live_app_ids, dry_run)
 
     @migration_blocked
+    @prune_active_blocked
     async def clear_sync_cache(self):
         return self._sync_service.clear_sync_cache()
 
@@ -465,13 +488,15 @@ class Plugin:
     async def probe_reachability(self):
         return await self._connection_service.probe_reachability()
 
+    @prune_active_blocked
     async def refresh_save_status(self, rom_id):
         # Fire-and-forget: schedule the background status check (which re-reads
         # the conflict state and emits ``save_status_updated``) and return
         # immediately so the frontend never blocks on the round-trip. Mirrors the
         # create_task pattern in services/saves/slots/switching.py (same call,
         # same target); check_save_status_background owns its own error handling.
-        self.loop.create_task(self._save_sync_service.check_save_status_background(int(rom_id)))
+        task = self.loop.create_task(self._save_sync_service.check_save_status_background(int(rom_id)))
+        await retain_prune_conflict(self, task)
         return {"success": True}
 
     async def stop_running_game(self, rom_id):
@@ -496,7 +521,11 @@ class Plugin:
     @migration_blocked
     @prune_active_blocked
     async def start_download(self, rom_id):
-        return await self._download_service.start_download(rom_id)
+        result = await self._download_service.start_download(rom_id)
+        task = self._download_service.task_for_rom(int(rom_id)) if result.get("success") else None
+        if task is not None:
+            await retain_prune_conflict(self, task)
+        return result
 
     async def cancel_download(self, rom_id):
         return self._download_service.cancel_download(rom_id)
@@ -507,7 +536,11 @@ class Plugin:
     @migration_blocked
     @prune_active_blocked
     async def resume_download(self, rom_id):
-        return await self._download_service.resume_download(rom_id)
+        result = await self._download_service.resume_download(rom_id)
+        task = self._download_service.task_for_rom(int(rom_id)) if result.get("success") else None
+        if task is not None:
+            await retain_prune_conflict(self, task)
+        return result
 
     async def get_download_queue(self):
         return self._download_service.get_download_queue()
@@ -537,6 +570,7 @@ class Plugin:
     async def list_devices(self):
         return await self._save_sync_service.list_devices()
 
+    @prune_active_blocked
     async def get_save_status(self, rom_id):
         return await self._save_sync_service.get_save_status(rom_id)
 
@@ -553,6 +587,7 @@ class Plugin:
     async def sync_rom_saves(self, rom_id):
         return await self._save_sync_service.sync_rom_saves(rom_id)
 
+    @prune_active_blocked
     async def get_save_slots(self, rom_id):
         return await self._save_sync_service.get_save_slots(rom_id)
 
@@ -634,7 +669,8 @@ class Plugin:
         # native ingest on the next launch; returns immediately so the launch is
         # never blocked on the round-trip. flush_pending_sessions owns its own
         # error handling (best-effort, offline-safe).
-        self._schedule_playtime_flush()
+        task = self._schedule_playtime_flush()
+        await retain_prune_conflict(self, task)
         return result
 
     def _schedule_playtime_flush(self):
@@ -651,10 +687,12 @@ class Plugin:
         task = self.loop.create_task(self._playtime_service.flush_pending_sessions())
         tasks.add(task)
         task.add_done_callback(tasks.discard)
+        return task
 
     async def get_all_playtime(self):
         return self._playtime_service.get_all_playtime()
 
+    @prune_active_blocked
     async def reconcile_playtime(self, rom_id):
         return await self._playtime_service.reconcile_playtime(int(rom_id))
 
@@ -673,6 +711,7 @@ class Plugin:
 
     # ── SGDB delegation to SteamGridService ───────────────────────
 
+    @prune_active_blocked
     async def get_sgdb_artwork_base64(self, rom_id, asset_type_num):
         return await self._sgdb_service.get_sgdb_artwork_base64(rom_id, asset_type_num)
 
@@ -682,15 +721,18 @@ class Plugin:
     async def save_sgdb_api_key(self, api_key):
         return self._sgdb_service.save_sgdb_api_key(api_key)
 
+    @prune_active_blocked
     async def save_shortcut_icon(self, app_id, icon_base64):
         return await self._sgdb_service.save_shortcut_icon(app_id, icon_base64)
 
+    @prune_active_blocked
     async def get_sgdb_resolution(self, rom_id):
         return await self._sgdb_service.get_sgdb_resolution(rom_id)
 
     async def search_sgdb_games(self, term):
         return await self._sgdb_service.search_sgdb_games(term)
 
+    @prune_active_blocked
     async def apply_sgdb_game_id(self, rom_id, sgdb_id):
         return await self._sgdb_service.apply_sgdb_game_id(rom_id, sgdb_id)
 

@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import contextlib
 import os
 from typing import TYPE_CHECKING
 
+from adapters.descriptor_paths import remove_current, remove_exact
 from domain.artwork_paths import cache_filename, cover_meta_filename
 
 if TYPE_CHECKING:
-    from models.prune import RecoveryArtifact
+    from models.prune import RecoveryArtifact, SourceIdentity
 
 _SGDB_TYPES = ("hero", "logo", "grid", "icon")
 
@@ -27,11 +27,16 @@ class PruneArtifactAdapter:
                 artifacts.append({"source_path": path, "safe_root": self._runtime_dir, "kind": kind, "rom_id": rom_id})
         return artifacts
 
-    def remove(self, rom_ids: list[int]) -> None:
+    def remove(self, rom_ids: list[int], identities: dict[str, SourceIdentity] | None = None) -> int:
+        removed = 0
         for rom_id in rom_ids:
             for path, _kind in self._paths(rom_id):
-                with contextlib.suppress(FileNotFoundError):
-                    os.remove(path)
+                identity = identities.get(path) if identities is not None else None
+                if identity is not None:
+                    removed += int(remove_exact(path, self._runtime_dir, identity))
+                else:
+                    removed += int(remove_current(path, self._runtime_dir))
+        return removed
 
     def _paths(self, rom_id: int) -> list[tuple[str, str]]:
         covers = os.path.join(self._runtime_dir, "covers")

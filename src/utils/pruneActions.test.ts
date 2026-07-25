@@ -26,6 +26,17 @@ describe("handlePruneAction", () => {
     vi.mocked(setLaunchOptionsConfirmed).mockReset();
     vi.mocked(backend.reportPruneAction).mockResolvedValue({ success: true, message: "accepted" });
     vi.mocked(isRomMShortcutDetails).mockReturnValue(true);
+    vi.mocked(getAppDetails).mockResolvedValue({
+      strDisplayName: "Removed Game",
+      strShortcutExe: "/plugin/bin/rom-launcher",
+      strShortcutStartDir: "/plugin",
+      strLaunchOptions: "launch-command",
+    });
+    vi.stubGlobal("collectionStore", {
+      userCollections: [],
+      deckDesktopApps: { apps: new Map([[9001, {}]]) },
+    });
+    vi.stubGlobal("appStore", { GetAppOverviewByAppID: vi.fn(() => ({})) });
   });
 
   it("captures bounded Steam state without file bytes", async () => {
@@ -36,6 +47,7 @@ describe("handlePruneAction", () => {
       strLaunchOptions: "launch-command",
     });
     vi.stubGlobal("collectionStore", {
+      deckDesktopApps: { apps: new Map([[9001, {}]]) },
       userCollections: [
         { id: "favorites", displayName: "Favorites", apps: new Set([9001]) },
         { id: "other", displayName: "Other", apps: new Set([42]) },
@@ -85,6 +97,7 @@ describe("handlePruneAction", () => {
       strLaunchOptions: "é".repeat(2048),
     });
     vi.stubGlobal("collectionStore", {
+      deckDesktopApps: { apps: new Map([[9001, {}]]) },
       userCollections: Array.from({ length: 256 }, (_, index) => ({
         id: `id-${index}-${"é".repeat(512)}`,
         displayName: `name-${index}-${"é".repeat(512)}`,
@@ -119,7 +132,7 @@ describe("handlePruneAction", () => {
       strShortcutStartDir: "/plugin",
       strLaunchOptions: "launch-command",
     });
-    vi.stubGlobal("collectionStore", { userCollections: [] });
+    vi.stubGlobal("collectionStore", { userCollections: [], deckDesktopApps: { apps: new Map([[9001, {}]]) } });
     vi.stubGlobal("appStore", undefined);
 
     await handlePruneAction({
@@ -137,7 +150,7 @@ describe("handlePruneAction", () => {
     ).toMatchObject({ success: false, message: expect.stringContaining("unavailable") });
   });
 
-  it("confirms the exact repoint launch command and artwork before acknowledging", async () => {
+  it("confirms the exact repoint launch command and defers writer side effects until completion", async () => {
     vi.mocked(backend.switchVersion).mockResolvedValue({
       success: true,
       app_id: 9001,
@@ -165,10 +178,9 @@ describe("handlePruneAction", () => {
 
     expect(backend.switchVersion).not.toHaveBeenCalled();
     expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(9001, "target-command");
-    expect(setArtwork).toHaveBeenCalledWith(9001, "cover", "png", 0);
-    expect(changed).toHaveBeenCalledWith(
-      expect.objectContaining({ detail: { type: "version_switched", app_id: 9001, rom_id: 8 } }),
-    );
+    expect(setArtwork).not.toHaveBeenCalled();
+    expect(backend.fetchCoverBase64).not.toHaveBeenCalled();
+    expect(changed).not.toHaveBeenCalled();
     expect(backend.reportPruneAction).toHaveBeenCalledWith({
       phase: "complete",
       run_id: "run-1",
@@ -267,6 +279,133 @@ describe("handlePruneAction", () => {
     expect(vi.mocked(backend.reportPruneAction).mock.calls[1]?.[0]).toEqual(
       vi.mocked(backend.reportPruneAction).mock.calls[2]?.[0],
     );
+  });
+
+  it("recovers when the first successful claim response is lost", async () => {
+    vi.mocked(removeShortcutConfirmed).mockResolvedValue(true);
+    vi.mocked(backend.reportPruneAction)
+      .mockRejectedValueOnce(new Error("claim response lost"))
+      .mockResolvedValue({ success: true, message: "accepted" });
+
+    await handlePruneAction({
+      run_id: "run-1",
+      action_token: "token-lost-claim-response",
+      action: "remove_shortcut",
+      app_id: 9001,
+    });
+
+    expect(removeShortcutConfirmed).toHaveBeenCalledTimes(1);
+    expect(backend.reportPruneAction).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(backend.reportPruneAction).mock.calls[0]?.[0].phase).toBe("claim");
+    expect(vi.mocked(backend.reportPruneAction).mock.calls[1]?.[0].phase).toBe("claim");
+  });
+
+  it("reports a confirmed already-absent shortcut without repeating removal", async () => {
+    vi.stubGlobal("collectionStore", { userCollections: [], deckDesktopApps: { apps: new Map() } });
+
+    await handlePruneAction({
+      run_id: "run-retry",
+      action_token: "token-already-absent",
+      action: "remove_shortcut",
+      app_id: 9001,
+    });
+
+    expect(removeShortcutConfirmed).not.toHaveBeenCalled();
+    expect(backend.reportPruneAction).toHaveBeenLastCalledWith({
+      phase: "complete",
+      run_id: "run-retry",
+      action_token: "token-already-absent",
+      success: true,
+      message: "Steam confirmed the shortcut is already absent.",
+      shortcut_absent: true,
+    });
+  });
+
+  it("does not remove a shortcut whose complete sealed snapshot drifted", async () => {
+    await handlePruneAction({
+      run_id: "run-1",
+      action_token: "token-snapshot-drift",
+      action: "remove_shortcut",
+      app_id: 9001,
+      expected_snapshot: {
+        app_id: 9001,
+        name: "Earlier Name",
+        exe: "/plugin/bin/rom-launcher",
+        start_dir: "/plugin",
+        launch_options: "launch-command",
+        minutes_playtime_forever: null,
+        minutes_playtime_last_two_weeks: null,
+        last_played: null,
+        collections: [],
+      },
+    });
+
+    expect(removeShortcutConfirmed).not.toHaveBeenCalled();
+    expect(backend.reportPruneAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        phase: "complete",
+        success: false,
+        message: "Steam shortcut state changed after recovery was sealed",
+      }),
+    );
+  });
+
+  it.each(["remove_shortcut", "repoint_shortcut"] as const)(
+    "reads ownership after the %s claim resolves",
+    async (kind) => {
+      let resolveClaim: ((value: { success: true; message: string }) => void) | undefined;
+      vi.mocked(backend.reportPruneAction).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveClaim = resolve;
+          }),
+      );
+      vi.mocked(removeShortcutConfirmed).mockResolvedValue(true);
+      vi.mocked(setLaunchOptionsConfirmed).mockResolvedValue(true);
+      const action =
+        kind === "remove_shortcut"
+          ? ({ run_id: "run-1", action_token: `token-${kind}`, action: kind, app_id: 9001 } as const)
+          : ({
+              run_id: "run-1",
+              action_token: `token-${kind}`,
+              action: kind,
+              app_id: 9001,
+              target_rom_id: 8,
+              launch_options: "target-command",
+              target_installed: true,
+            } as const);
+      const pending = handlePruneAction(action);
+      await vi.waitFor(() => expect(resolveClaim).toBeDefined());
+      vi.mocked(isRomMShortcutDetails).mockReturnValue(false);
+      resolveClaim?.({ success: true, message: "claimed" });
+      await pending;
+
+      expect(getAppDetails).toHaveBeenCalledTimes(1);
+      expect(removeShortcutConfirmed).not.toHaveBeenCalled();
+      expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+      expect(backend.reportPruneAction).toHaveBeenLastCalledWith(
+        expect.objectContaining({ phase: "complete", success: false, message: expect.stringContaining("not owned") }),
+      );
+    },
+  );
+
+  it("reports ambiguity safely when every completion attempt is lost after Steam removal", async () => {
+    vi.mocked(removeShortcutConfirmed).mockResolvedValue(true);
+    vi.mocked(backend.reportPruneAction)
+      .mockResolvedValueOnce({ success: true, message: "claimed" })
+      .mockRejectedValue(new Error("bridge offline"));
+    const log = vi.spyOn(backend, "logError").mockImplementation(() => {});
+
+    await handlePruneAction({
+      run_id: "run-1",
+      action_token: "token-all-completions-lost",
+      action: "remove_shortcut",
+      app_id: 9001,
+    });
+
+    expect(removeShortcutConfirmed).toHaveBeenCalledTimes(1);
+    expect(backend.reportPruneAction).toHaveBeenCalledTimes(4);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("token-all-completions-lost"));
   });
 
   it("cancels queued actions before they can mutate Steam", async () => {

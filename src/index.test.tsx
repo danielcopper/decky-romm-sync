@@ -66,6 +66,10 @@ vi.mock("./utils/pruneActions", () => ({
   handlePruneAction: (...args: unknown[]) => handlePruneAction(...args),
   cancelPruneActions: vi.fn(),
 }));
+const publishCommittedVersionSwitch = vi.fn().mockResolvedValue(undefined);
+vi.mock("./utils/versionSwitchApplication", () => ({
+  publishCommittedVersionSwitch: (...args: unknown[]) => publishCommittedVersionSwitch(...args),
+}));
 vi.mock("./utils/syncManager", () => ({
   initUnitSyncManager: vi.fn(() => () => {}),
   resetSyncCancel: vi.fn(),
@@ -128,6 +132,7 @@ beforeEach(() => {
   setSyncProgress({ running: false, stage: "", current: 0, total: 0, message: "" });
   resetPruneState();
   handlePruneAction.mockClear();
+  publishCommittedVersionSwitch.mockClear();
   vi.mocked(invalidateCachedGameDetail).mockClear();
   // The global afterEach's vi.unstubAllGlobals wipes the Steam ambient globals
   // after the file's first test; several sync_complete paths read SteamClient /
@@ -192,6 +197,103 @@ describe("index.tsx — persistent prune listeners", () => {
     expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Removed 1 local entry." });
 
     globalThis.removeEventListener("romm_data_changed", changed);
+    plugin.onDismount();
+  });
+
+  it("surfaces a zero-row committed partial instead of reporting that nothing changed", () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent("prune_complete", {
+        success: false,
+        partial: true,
+        run_id: "run-partial",
+        removed_count: 0,
+        problem_count: 1,
+        removed_rom_ids: [],
+        affected_app_ids: [9001],
+        removed_app_ids: [9001],
+        results: [
+          {
+            group_id: "group-1",
+            rom_ids: [7],
+            status: "partial",
+            committed_action: "remove_shortcut",
+            message: "Steam removed the shortcut, but local cleanup was retained.",
+          },
+        ],
+      });
+    });
+
+    expect(toaster.toast).toHaveBeenCalledWith({
+      title: "RomM Sync",
+      body: "Shortcut removal committed; local cleanup incomplete.",
+      subtext: "Steam removed the shortcut, but local cleanup was retained.",
+    });
+    plugin.onDismount();
+  });
+
+  it("publishes a known committed partial repoint after terminal completion", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent("prune_complete", {
+        success: false,
+        partial: true,
+        run_id: "run-repoint-partial",
+        removed_rom_ids: [],
+        affected_app_ids: [9001],
+        results: [
+          {
+            group_id: "group-1",
+            rom_ids: [7, 8],
+            status: "partial",
+            committed_action: "repoint_shortcut",
+            app_id: 9001,
+            target_rom_id: 8,
+            message: "The shortcut changed; source data was retained.",
+          },
+        ],
+      });
+    });
+    await flush();
+
+    expect(publishCommittedVersionSwitch).toHaveBeenCalledWith(9001, 8);
+    plugin.onDismount();
+  });
+
+  it("does not publish an ambiguous repoint outcome", async () => {
+    const plugin = pluginFactory();
+
+    act(() => {
+      emitDeckyEvent("prune_complete", {
+        success: false,
+        partial: true,
+        run_id: "run-repoint-ambiguous",
+        removed_rom_ids: [],
+        affected_app_ids: [9001],
+        results: [
+          {
+            group_id: "group-1",
+            rom_ids: [7, 8],
+            status: "partial",
+            committed_action: "repoint_shortcut",
+            action_ambiguous: true,
+            app_id: 9001,
+            target_rom_id: 8,
+            message: "The repoint outcome is unknown.",
+          },
+        ],
+      });
+    });
+    await flush();
+
+    expect(publishCommittedVersionSwitch).not.toHaveBeenCalled();
+    expect(toaster.toast).toHaveBeenCalledWith({
+      title: "RomM Sync",
+      body: "Shortcut repoint outcome is uncertain; source data was retained.",
+      subtext: "The repoint outcome is unknown.",
+    });
     plugin.onDismount();
   });
 });

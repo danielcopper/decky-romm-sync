@@ -258,12 +258,14 @@ backup.
 
 #### Removed-game cleanup and save recovery
 
-Explicit cleanup of a retained RomM 404 projects the same exact per-ROM save paths used by sync; it never broad-scans a
-save directory. Before a row can be purged, the service canonicalizes those paths for the purge set and every remaining
-installed ROM. A current save with any owner outside the purge set is copied into an enabled recovery bundle but left in
-the emulator directory. An exclusively owned current save is copied and checksum-verified when recovery is enabled, then
-moved through `quarantine_local_file(..., preserve_history=True)`. This operation deliberately keeps all existing
-`.romm-backup` history instead of enforcing the normal newest-ten cap.
+Explicit cleanup of a retained RomM 404 starts with the same exact per-ROM save paths used by sync and unions path-safe
+filenames already retained in `RomSaveSyncState.files`; it never broad-scans a save directory. This preserves exact
+historical filenames after a ROM rename or layout change without guessing. Before a row can be purged, the service
+canonicalizes those paths for the purge set and every remaining installed ROM. A current save with any owner outside the
+purge set is copied into an enabled recovery bundle but left in the emulator directory. An exclusively owned current
+save is copied and checksum-verified when recovery is enabled, then moved through
+`quarantine_local_file(..., preserve_history=True)`. This operation deliberately keeps all existing `.romm-backup`
+history instead of enforcing the normal newest-ten cap.
 
 Recovery also copies matching `.romm-backup` files while leaving the originals untouched. If an uninstalled ROM or an
 unsupported layout has no resolvable exact path, the manifest preserves known save-sync filenames/state and records a

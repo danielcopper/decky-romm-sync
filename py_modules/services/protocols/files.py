@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from contextlib import AbstractContextManager
 
-    from models.prune import RecoveryArtifact, SteamRecoverySnapshot
+    from models.prune import RecoveryArtifact, SourceIdentity, SteamRecoverySnapshot
 
 
 class DirectoryFileListerFn(Protocol):
@@ -363,6 +363,10 @@ class RomFileStore(Protocol):
         """Recursively delete *path* and all contents."""
         ...
 
+    def remove_exact(self, path: str, safe_root: str, identity: SourceIdentity) -> bool:
+        """Remove only the exact sealed no-follow source identity."""
+        ...
+
 
 class SaveFileStore(Protocol):
     """Filesystem seam for local save file operations.
@@ -419,6 +423,10 @@ class SaveFileStore(Protocol):
 
         Uses ``os.replace`` semantics — same-filesystem only.
         """
+        ...
+
+    def rename_exact(self, src: str, dst: str, safe_root: str, identity: SourceIdentity) -> bool:
+        """Rename only the exact sealed no-follow source identity."""
         ...
 
     def get_mtime(self, path: str) -> float:
@@ -529,6 +537,7 @@ class RecoveryBundleStore(Protocol):
     def free_bytes(self) -> int: ...
     def measure_path(self, path: str, safe_root: str) -> int: ...
     def validate_sources(self, bundle_path: str) -> bool: ...
+    def source_identities(self, bundle_path: str) -> dict[str, SourceIdentity]: ...
     def seal_bundle(
         self,
         bundle_id: str,
@@ -543,11 +552,17 @@ class PruneArtifactStore(Protocol):
     """Own per-ROM cover and SteamGridDB cache artifacts during cleanup."""
 
     def recovery_artifacts(self, rom_ids: list[int]) -> list[RecoveryArtifact]: ...
-    def remove(self, rom_ids: list[int]) -> None: ...
+    def remove(self, rom_ids: list[int], identities: dict[str, SourceIdentity] | None = None) -> int: ...
 
 
 class SteamRecoveryStore(Protocol):
     """Own per-shortcut Steam Input/grid recovery files and controller state."""
 
     def snapshot(self, app_id: int) -> SteamRecoverySnapshot: ...
-    def remove_state(self, app_id: int, snapshot: SteamRecoverySnapshot) -> None: ...
+    def validate_state(self, app_id: int, snapshot: SteamRecoverySnapshot) -> bool: ...
+    def remove_state(
+        self,
+        app_id: int,
+        snapshot: SteamRecoverySnapshot,
+        identities: dict[str, SourceIdentity],
+    ) -> int: ...

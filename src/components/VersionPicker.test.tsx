@@ -350,6 +350,22 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
     expect(within(menu.container).getAllByText("Remove local data...")).toHaveLength(1);
   });
 
+  it("offers local cleanup for a synced singleton vanished binding", async () => {
+    const bound = multiVersionList().versions![0]!;
+    vi.mocked(backend.getVersionList).mockResolvedValue({
+      multi_version: false,
+      server_query_failed: false,
+      bound_vanished: true,
+      bound_version: { ...bound, vanished: true },
+    });
+    vi.mocked(openRemovedGamesCleanupModal).mockResolvedValue(true);
+    const picker = render(<VersionPicker appId={APP_ID} />);
+    const cleanup = await picker.findByRole("button", { name: "Remove local data..." });
+
+    fireEvent.click(cleanup);
+    await waitFor(() => expect(openRemovedGamesCleanupModal).toHaveBeenCalledWith(1));
+  });
+
   it("surfaces an inline cleanup-preview failure", async () => {
     vi.mocked(backend.getVersionList).mockResolvedValue(listWithBoundVanished());
     vi.mocked(openRemovedGamesCleanupModal).mockRejectedValue(new Error("offline"));

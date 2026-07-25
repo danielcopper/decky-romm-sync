@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "py_modules"))
 sys.path.insert(0, os.path.dirname(__file__))
 
 # conftest.py patches decky before this import
+from adapters.recovery_bundle import RecoveryBundleAdapter
+from adapters.rom_files import RomFileAdapter
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
@@ -191,6 +193,45 @@ class TestDeleteRomFiles:
     def test_empty_paths_no_crash(self, service):
         # No file_path, no rom_dir
         service._delete_rom_files(_make_install(1, file_path="", rom_dir=None))
+
+    def test_sealed_file_replacement_is_retained_at_mutation_time(self, tmp_path, logger):
+        roms = tmp_path / "roms"
+        rom_path = roms / "n64" / "game.z64"
+        rom_path.parent.mkdir(parents=True)
+        rom_path.write_bytes(b"sealed")
+        recovery = RecoveryBundleAdapter(
+            user_home=str(tmp_path),
+            package_name="decky-romm-sync",
+            plugin_version="test",
+        )
+        bundle = recovery.seal_bundle(
+            "20260724T120000Z_1_rom",
+            {"roms": [{"rom_id": 1}]},
+            [{"source_path": str(rom_path), "safe_root": str(roms), "kind": "installed_rom", "rom_id": 1}],
+            "readme",
+            "playtime",
+        )
+        identities = recovery.source_identities(bundle)
+        rom_path.unlink()
+        rom_path.write_bytes(b"replacement")
+        uow = FakeUnitOfWork()
+        _seed_install(uow, _make_install(1, file_path=str(rom_path)))
+        real_service = RomRemovalService(
+            config=RomRemovalServiceConfig(
+                logger=logger,
+                loop=asyncio.new_event_loop(),
+                rom_file_store=RomFileAdapter(),
+                retrodeck_paths=FakeRetroDeckPaths(roms=str(roms)),
+                download_queue_cleanup=None,
+                uow_factory=FakeUnitOfWorkFactory(uow),
+            )
+        )
+
+        result = real_service.delete_rom_files(1, identities)
+
+        assert result["success"] is False
+        assert "identity changed" in result["message"]
+        assert rom_path.read_bytes() == b"replacement"
 
 
 class TestRemoveRom:

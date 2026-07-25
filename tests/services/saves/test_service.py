@@ -1467,3 +1467,41 @@ class TestBuildSaveInventory:
         _seed_save_state(svc, 42, state)
 
         assert svc.build_save_inventory(rom_id=42) == []
+
+
+class TestPruneSaveInventory:
+    def test_persisted_known_filename_and_matching_history_are_recovery_artifacts(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="renamed.gba")
+        saves_dir = tmp_path / "saves" / "gba"
+        saves_dir.mkdir(parents=True)
+        historical = saves_dir / "old-name.srm"
+        historical.write_bytes(b"save")
+        backup_dir = saves_dir / ".romm-backup"
+        backup_dir.mkdir()
+        matching_backup = backup_dir / "old-name_20260101_120000.srm"
+        matching_backup.write_bytes(b"history")
+        (backup_dir / "other_20260101_120000.srm").write_bytes(b"other")
+        state = RomSaveSyncState(system="gba", files={"old-name.srm": FileSyncState(last_sync_hash="known")})
+        with svc._uow_factory() as uow:
+            uow.rom_save_sync_states.save(42, state)
+
+        inventory = svc.inventory_prune_saves([42])
+
+        artifact_paths = {item["source_path"] for item in inventory["artifacts"]}
+        assert artifact_paths == {str(historical), str(matching_backup)}
+        assert inventory["exclusive"] == [
+            {"path": str(historical), "filename": "old-name.srm", "saves_dir": str(saves_dir)}
+        ]
+
+    def test_shared_save_expands_lock_owners_and_is_never_quarantined(self, tmp_path):
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="shared.gba")
+        _install_rom(svc, tmp_path, rom_id=2, system="gba", file_name="shared.gba")
+        shared = _create_save(tmp_path, system="gba", rom_name="shared", content=b"shared")
+
+        inventory = svc.inventory_prune_saves([1])
+
+        assert inventory["exclusive"] == []
+        assert inventory["shared"] == [str(shared)]
+        assert inventory["lock_rom_ids"] == [1, 2]

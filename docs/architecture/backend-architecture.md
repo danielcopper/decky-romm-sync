@@ -137,9 +137,10 @@ adapter's single-attempt short-timeout `request_once` path, concurrently on the 
 `RommNotFoundError` produces `vanished: true`. All other probe failures and malformed/falsy responses fail open. No
 result is persisted.
 
-The response carries `vanished` on every version and `bound_vanished` even when `multi_version` is false. Retained
-vanished rows remain in the payload and keep the independently-computed `switchable` membership verdict, but are
-excluded from default ranking. A bound-id 404 is a successful entity verdict (`bound_vanished: true`,
+The response carries `vanished` on every version and `bound_vanished` even when `multi_version` is false. A singleton
+also carries its `bound_version`, which lets a definitively vanished synced binding expose scoped cleanup without
+inventing a multi-version picker. Retained vanished rows keep the independently-computed `switchable` membership verdict
+but are excluded from default ranking. A bound-id 404 is a successful entity verdict (`bound_vanished: true`,
 `server_query_failed: false`), not a global reachability signal. Artwork and save reads do not contribute availability
 evidence; `fetch_cover_base64` remains a nullable data callable.
 
@@ -179,37 +180,47 @@ for each platform it requires a non-empty completed fetch generation and selects
 including NULL row generations. An inline preview may nominate one concrete retained ROM without generation evidence.
 Both forms return bounded pages plus an ephemeral fingerprint. Pages include every member of an affected sibling group,
 with generation candidates marked separately, so whole-game deletion cannot reach an undisclosed row. `start_prune`
-atomically refuses any registered conflicting callable and reserves the run before rebuilding the preview; concurrent
-starts cannot consume one token twice. Each sync, download, migration, version-switch, save-write, session, uninstall,
-or cache-mutation callable registers for its full lifetime before its first await, closing the reciprocal admission
-race, and refuses while a prune claim is active. Migration and active-library-sync decorators additionally guard preview
-and start.
+consumes a finalized preview-bound installed-content selection. The frontend stages that selection in bounded pages, so
+wire bounds do not cap the total selected set. Start atomically refuses any registered conflicting callable and reserves
+the run before rebuilding the preview; concurrent starts cannot consume one token twice, and shutdown owns/cancels an
+admitted refresh before it can spawn a run. Each sync, download, migration, version-switch, save-write, session,
+uninstall, or cache-mutation callable registers for its full lifetime before its first await. Detached status, download,
+and playtime tasks transfer the claim to their task lifetime; multi-call shortcut removal holds a reference-counted
+lease through acknowledgement. This closes the reciprocal admission race, and each path refuses while a prune claim is
+active. Migration and active-library-sync decorators additionally guard preview and start.
 
 The executor processes sibling groups serially and catches ordinary exceptions per group. It rejects multiple shortcut
 bindings and active downloads, probes every local group member with the single-attempt three-second `get_rom_once`, and
 treats only a typed `RommNotFoundError` as destructive authority. Live, malformed, wrong-id, transport, authentication,
 timeout, server, and unknown outcomes retain data. Long recovery and frontend round trips are followed by another
-exact-ID proof before local source removal. The natural live repoint target uses the same filename-stem projection and
+exact-ID proof before local source removal; repoint-only runs re-prove both the vanished source and live target after
+the frontend action. The natural live repoint target uses the same filename-stem projection and
 `resolve_group_representative` ranking as the version picker with empty installed/bound preference sets. Repoint
 selection is independent of row deletion.
 
 Recovery is coordinated through ordered ROM save locks, acquired with no UoW open. The lock set is retried until shared
 save ownership is stable. Short read UoWs close before filesystem work, and no RomM request, event emission, or frontend
-wait runs under those locks. The bundle is sealed before mutation; after the frontend action the service reacquires and
-holds the stable locks through save quarantine, filesystem-only installed-content removal, and the final parent cascade.
-It first re-inventories exact save ownership and verifies the current aggregate/source bytes against the sealed
-manifest; source sets also record expected absence, so an attributable cache or Steam file that appears after sealing
-invalidates finalization. The final SQLite delete is one short UoW that revalidates complete row/binding state,
-invalidates intersecting collection stamps, and clears platform stamps only for fully vanished games.
+wait runs under those locks. The bundle is sealed before mutation. Aggregate, save-inventory, bundle/source, controller,
+and fresh frontend Steam state are validated before the irreversible Steam action. After that action the service
+reacquires the same recovery-set locks and repeats the guards immediately before local finalization; quarantine
+ownership is separately projected only for rows being deleted. The locks remain held through save quarantine,
+filesystem-only installed-content removal, and the final parent cascade. Source sets record expected absence and sealed
+no-follow identity. Deletion/quarantine claims the exact entry through anchored descriptors, verifies the claimed
+identity after rename, then mutates it; a replacement is retained rather than reached through a later path lookup. The
+final SQLite delete is one short UoW that revalidates complete row/binding state, invalidates intersecting collection
+stamps, and clears platform stamps only for fully vanished games.
 
-Frontend Steam events use a claim/complete protocol. A claim checks the run, token, discriminant, appId, and current
-binding before the frontend rechecks the live `rom-launcher` executable and mutates Steam. The lease is monotonic-clock
-bounded and rechecked after asynchronous validation; duplicate or expired claims cannot authorize a mutation. Repoint
-commits through the normal version-switch authority first; shortcut removal is immediately reconciled to an unbound
-local row after Steam confirms absence. A later guard failure is therefore an explicit `partial` result with the
-committed action recorded, not a claim that the group was unchanged. Once filesystem finalization begins it is shielded
-from task cancellation and awaited to a known result. Terminal results are emitted in bounded chunks; mixed runs
-continue unrelated groups.
+Frontend Steam events use a claim/complete protocol. A claim checks the run, token, discriminant, appId, target, exact
+single-binding group, and current binding before the frontend rechecks the live `rom-launcher` executable and mutates
+Steam. The lease is monotonic-clock bounded and rechecked after asynchronous validation; an identical repeat claim is
+idempotent, while mismatched or expired claims cannot authorize a mutation. Repoint commits through the normal
+version-switch authority first; shortcut removal is immediately reconciled to an unbound local row after Steam confirms
+absence. A claimed removal whose completion is lost is an explicit ambiguous partial. A later run can confirm the
+shortcut is already absent and reconcile without repeating Steam removal. A later guard failure is likewise an explicit
+`partial` result with the committed action and actual mutation categories recorded, not a claim that the group was
+unchanged. Cancellation can stop final guards and every later group; shielding starts only with the first irreversible
+local mutation and awaits that phase to a known result. Terminal result strings/arrays are bounded and chunks are built
+to a serialized byte budget; mixed runs continue unrelated groups.
 
 #### LibraryService decomposition (`services/library/`)
 

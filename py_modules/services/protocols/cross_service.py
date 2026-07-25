@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
+    from models.prune import SourceIdentity
     from models.state import InstalledRomEntry, ShortcutRegistryEntry
     from models.sync import ClientSaveState
 
@@ -187,7 +188,7 @@ class InstalledRomRemoverFn(Protocol):
 class InstalledRomFilesRemoverFn(Protocol):
     """Filesystem-only installed-ROM removal consumed by explicit prune."""
 
-    def __call__(self, rom_id: int) -> dict[str, Any]: ...
+    def __call__(self, rom_id: int, identities: dict[str, SourceIdentity] | None = None) -> dict[str, Any]: ...
 
 
 class VersionSwitcherFn(Protocol):
@@ -229,7 +230,9 @@ class PruneSaveCoordinator(Protocol):
 
     def lock_prune_roms(self, rom_ids: list[int]) -> AbstractAsyncContextManager[None]: ...
     def inventory_prune_saves(self, purge_rom_ids: list[int]) -> dict[str, Any]: ...
-    def quarantine_prune_saves(self, files: list[dict[str, str]]) -> dict[str, Any]: ...
+    def quarantine_prune_saves(
+        self, files: list[dict[str, str]], identities: dict[str, SourceIdentity] | None = None
+    ) -> dict[str, Any]: ...
 
 
 class AchievementsReader(Protocol):

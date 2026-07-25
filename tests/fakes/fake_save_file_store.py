@@ -13,6 +13,8 @@ from domain.save_hash import combine_zip_entry_hashes
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from models.prune import SourceIdentity
+
 
 class FakeSaveFileStore:
     """In-memory ``SaveFileStore`` for tests.
@@ -111,6 +113,11 @@ class FakeSaveFileStore:
             self.mtimes[dst] = self.mtimes.pop(src)
         else:
             self._ensure_mtime(dst)
+
+    def rename_exact(self, src: str, dst: str, safe_root: str, identity: SourceIdentity) -> bool:
+        del safe_root, identity
+        self.rename(src, dst)
+        return True
 
     def get_mtime(self, path: str) -> float:
         if path not in self.files:

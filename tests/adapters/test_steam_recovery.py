@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import logging
+import os
+import shutil
 from pathlib import Path
 
+import pytest
 from _vendor import vdf
 
+from adapters.descriptor_paths import identity_for_stat, missing_identity, stat_beneath
 from adapters.steam_recovery import SteamRecoveryAdapter
 
 
@@ -27,6 +31,15 @@ def _layout(tmp_path, app_id: int):
     return first, second, grid
 
 
+def _source_identities(snapshot):
+    identities = {}
+    for artifact in snapshot["artifacts"]:
+        source = artifact["source_path"]
+        current = stat_beneath(source, artifact["safe_root"])
+        identities[source] = identity_for_stat(current) if current is not None else missing_identity()
+    return identities
+
+
 def test_snapshots_controller_setting_grid_and_both_input_roots(tmp_path):
     app_id = 0x80000007
     first, second, grid = _layout(tmp_path, app_id)
@@ -37,7 +50,7 @@ def test_snapshots_controller_setting_grid_and_both_input_roots(tmp_path):
     assert {grid / f"{app_id}p.png", first, second} <= sources
     assert grid / f"{app_id}.png" in sources
 
-    adapter.remove_state(app_id, snapshot)
+    adapter.remove_state(app_id, snapshot, _source_identities(snapshot))
     assert not (grid / f"{app_id}p.png").exists()
     assert not first.exists()
     assert not second.exists()
@@ -89,8 +102,59 @@ def test_cleanup_uses_captured_login_identity_when_active_user_changes(tmp_path)
             },
             output,
         )
-    adapter.remove_state(app_id, snapshot)
+    adapter.remove_state(app_id, snapshot, _source_identities(snapshot))
 
     assert not (grid / f"{app_id}p.png").exists()
     assert not first.exists()
     assert (other_grid / f"{app_id}p.png").read_bytes() == b"other-cover"
+
+
+@pytest.mark.parametrize("subtree", ["grid", "user", "input"])
+def test_symlinked_steam_subtrees_are_rejected_without_touching_target(tmp_path, subtree):
+    app_id = 0x80000007
+    first, _second, grid = _layout(tmp_path, app_id)
+    steam = tmp_path / ".local" / "share" / "Steam"
+    user = steam / "userdata" / "123"
+    outside = tmp_path / f"outside-{subtree}"
+    outside.mkdir()
+    marker = outside / "marker"
+    marker.write_text("keep")
+
+    if subtree == "grid":
+        for child in grid.iterdir():
+            child.unlink()
+        grid.rmdir()
+        grid.symlink_to(outside, target_is_directory=True)
+    elif subtree == "user":
+        shutil.rmtree(user)
+        user.symlink_to(outside, target_is_directory=True)
+    else:
+        shutil.rmtree(first)
+        first.symlink_to(outside, target_is_directory=True)
+
+    adapter = SteamRecoveryAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+    with pytest.raises((OSError, ValueError)):
+        adapter.snapshot(app_id)
+
+    assert marker.read_text() == "keep"
+
+
+def test_controller_replacement_fsyncs_its_containing_directory(tmp_path, monkeypatch):
+    app_id = 0x80000007
+    _first, _second, grid = _layout(tmp_path, app_id)
+    adapter = SteamRecoveryAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+    snapshot = adapter.snapshot(app_id)
+    config_inode = grid.parent.stat().st_ino
+    synced_directory_inodes: list[int] = []
+    original = os.fsync
+
+    def track(fd: int) -> None:
+        current = os.fstat(fd)
+        if current.st_ino == config_inode:
+            synced_directory_inodes.append(current.st_ino)
+        original(fd)
+
+    monkeypatch.setattr("adapters.steam_recovery.os.fsync", track)
+    adapter.remove_state(app_id, snapshot, _source_identities(snapshot))
+
+    assert synced_directory_inodes == [config_inode]

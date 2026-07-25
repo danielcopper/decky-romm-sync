@@ -48,9 +48,29 @@ class PruneRegistry:
         with self._uow_factory() as uow:
             return self._deletion_state_matches(uow, expected_rows, delete_ids, target_id, app_id, fully_dead)
 
-    def validate_action_state(self, kind: str, expected_bound_rom_id: int, app_id: int, target_id: int | None) -> bool:
-        """Require the exact expected binding immediately before a frontend action."""
+    def validate_action_state(
+        self,
+        kind: str,
+        expected_bound_rom_id: int,
+        app_id: int,
+        target_id: int | None,
+        group_rom_ids: frozenset[int],
+    ) -> bool:
+        """Require the exact action binding and one-binding group immediately before claim."""
         with self._uow_factory() as uow:
+            anchor = uow.roms.get(expected_bound_rom_id)
+            if anchor is None:
+                return False
+            current = (
+                list(uow.roms.iter_by_group_key(anchor.sibling_group_key))
+                if anchor.sibling_group_key is not None
+                else [anchor]
+            )
+            if {row.rom_id for row in current} != set(group_rom_ids):
+                return False
+            bindings = [row for row in current if row.shortcut_app_id is not None]
+            if len(bindings) != 1 or bindings[0].shortcut_app_id != app_id:
+                return False
             bound = uow.roms.get_by_app_id(app_id)
             if bound is None:
                 return False

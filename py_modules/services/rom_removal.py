@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     import asyncio
     import logging
 
+    from models.prune import SourceIdentity
+
     from domain.rom_install import RomInstall
     from services.protocols import (
         DownloadQueueCleanup,
@@ -62,7 +64,7 @@ class RomRemovalService:
         self._download_queue_cleanup = config.download_queue_cleanup
         self._uow_factory = config.uow_factory
 
-    def _delete_rom_files(self, install: RomInstall) -> None:
+    def _delete_rom_files(self, install: RomInstall, identities: dict[str, SourceIdentity] | None = None) -> bool:
         """Delete ROM files for an install record. Handles both single-file and multi-file ROMs.
 
         A multi-file ROM owns a dedicated per-ROM directory (``rom_dir`` is set)
@@ -79,31 +81,40 @@ class RomRemovalService:
         if rom_dir:
             if not is_safe_rom_path(rom_dir, roms_base):
                 raise ValueError(f"Refusing to delete path outside roms directory: {rom_dir}")
+            identity = identities.get(rom_dir) if identities is not None else None
+            if identity is not None:
+                return self._rom_file_store.remove_exact(rom_dir, roms_base, identity)
             if self._rom_file_store.is_dir(rom_dir):
                 self._rom_file_store.remove_tree(rom_dir)
-            elif self._rom_file_store.exists(rom_dir):
+                return True
+            if self._rom_file_store.exists(rom_dir):
                 raise ValueError(f"Expected installed ROM directory, found another file type: {rom_dir}")
-            return
+            return False
         if file_path:
             if not is_safe_rom_path(file_path, roms_base):
                 raise ValueError(f"Refusing to delete path outside roms directory: {file_path}")
+            identity = identities.get(file_path) if identities is not None else None
+            if identity is not None:
+                return self._rom_file_store.remove_exact(file_path, roms_base, identity)
             if self._rom_file_store.is_dir(file_path):
                 raise ValueError(f"Expected installed ROM file, found a directory: {file_path}")
             if self._rom_file_store.exists(file_path):
                 self._rom_file_store.remove_file(file_path)
+                return True
+        return False
 
-    def delete_rom_files(self, rom_id: int) -> dict[str, Any]:
+    def delete_rom_files(self, rom_id: int, identities: dict[str, SourceIdentity] | None = None) -> dict[str, Any]:
         """Delete only installed content, leaving every database row untouched."""
         with self._uow_factory() as uow:
             install = uow.rom_installs.get(int(rom_id))
         if install is None:
             return {"success": False, "reason": "not_installed", "message": "ROM not installed"}
         try:
-            self._delete_rom_files(install)
+            changed = self._delete_rom_files(install, identities)
         except Exception as exc:
             self._logger.error(f"Failed to delete ROM files: {exc}")
             return {"success": False, "reason": ErrorCode.UNKNOWN.value, "message": str(exc)}
-        return {"success": True, "message": "ROM files removed"}
+        return {"success": True, "changed": changed, "message": "ROM files removed"}
 
     def _remove_rom_io(self, rom_id: int, install: RomInstall) -> None:
         """Sync helper for remove_rom — file deletion (outside UoW) then row delete in a short write UoW.

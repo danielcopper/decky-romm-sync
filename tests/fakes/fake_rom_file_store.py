@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from models.prune import SourceIdentity
+
 
 class FakeRomFileStore:
     """In-memory ``RomFileStore`` for tests.
@@ -65,3 +70,13 @@ class FakeRomFileStore:
         for d in list(self.dirs):
             if d.startswith(prefix):
                 self.dirs.discard(d)
+
+    def remove_exact(self, path: str, safe_root: str, identity: SourceIdentity) -> bool:
+        del safe_root, identity
+        if self.is_dir(path):
+            self.remove_tree(path)
+            return True
+        if path in self.files:
+            self.remove_file(path)
+            return True
+        return False

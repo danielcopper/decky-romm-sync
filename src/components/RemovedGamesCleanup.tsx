@@ -13,6 +13,7 @@ import {
 import {
   getPrunePreview,
   startPrune,
+  stagePruneInstalledSelection,
   logError,
   type PrunePreviewItem,
   type PrunePreviewRequest,
@@ -24,6 +25,7 @@ import { beginPruneRun, getPruneState, onPruneStateChange, resetPruneState } fro
 import { getSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
 
 const PAGE_SIZE = 50;
+const SELECTION_PAGE_SIZE = 100;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -86,7 +88,6 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   const insufficientSpace = recovery && (unknownSelectedSize || selectedBytes > freeBytes);
   const destructiveConfirmed = recovery || confirmWithoutRecovery;
   const allEntriesLoaded = items.length === total;
-  const selectionTooLarge = includedContent.size > 256;
   const progress = pruneState.progress;
   const complete = pruneState.complete;
   const runInFlight = starting || (runStarted && complete === null);
@@ -95,7 +96,6 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
     complete === null &&
     allEntriesLoaded &&
     !insufficientSpace &&
-    !selectionTooLarge &&
     destructiveConfirmed &&
     (repoint || removeRows || removeDeadGames);
 
@@ -149,8 +149,28 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   const start = async (): Promise<void> => {
     if (!canStart || !initial.preview_id) return;
     setStarting(true);
-    setStatus("Starting cleanup...");
+    setStatus(
+      includedContent.size
+        ? `Staging ${includedContent.size} installed-content selection(s)...`
+        : "Starting cleanup...",
+    );
     try {
+      let selectionId: string | null = null;
+      const selected = [...includedContent];
+      for (let offset = 0; offset < selected.length; offset += SELECTION_PAGE_SIZE) {
+        const page = selected.slice(offset, offset + SELECTION_PAGE_SIZE);
+        const staged = await stagePruneInstalledSelection({
+          preview_id: initial.preview_id,
+          selection_id: selectionId,
+          rom_ids: page,
+          final: offset + page.length >= selected.length,
+        });
+        if (!staged.success || !staged.selection_id) {
+          setStatus(staged.message ?? "Installed-content selections could not be staged.");
+          return;
+        }
+        selectionId = staged.selection_id;
+      }
       const result = await startPrune({
         preview_id: initial.preview_id,
         confirmed: true,
@@ -158,7 +178,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
         remove_rows: removeRows,
         remove_fully_vanished: removeDeadGames,
         create_recovery_bundle: recovery,
-        include_installed_rom_ids: [...includedContent],
+        installed_selection_id: selectionId,
       });
       if (!result.success) {
         setStatus(result.message ?? "Cleanup could not start.");
@@ -274,6 +294,10 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
             This is a lower bound. The backend remeasures mandatory saves, histories, caches, and Steam files before any
             mutation.
           </div>
+          <div style={{ color: "#8f98a0", fontSize: "12px", marginTop: "4px" }}>
+            Large installed-content selections are staged in bounded pages before cleanup; every checked item remains
+            part of this run.
+          </div>
           <DialogButton disabled={runInFlight} onClick={() => detach(refreshFreeSpace())}>
             Refresh free space
           </DialogButton>
@@ -298,13 +322,18 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
             {complete.problem_count ??
               complete.results.filter((item) => ["partial", "failed", "skipped"].includes(item.status)).length}{" "}
             skipped, partial, or failed.
-            {complete.results
-              .filter((item) => ["partial", "failed", "skipped"].includes(item.status))
-              .map((item) => (
-                <div key={item.group_id} style={{ fontSize: "12px", marginTop: "4px" }}>
-                  {item.group_id}: {item.message}
-                </div>
-              ))}
+            <div style={{ maxHeight: "180px", overflowY: "auto", marginTop: "6px" }}>
+              {complete.results
+                .filter((item) => ["partial", "failed", "skipped"].includes(item.status))
+                .map((item) => (
+                  <div key={item.group_id} style={{ fontSize: "12px", marginTop: "4px" }}>
+                    {item.group_id}: {item.message}
+                    {item.warnings?.map((warning) => (
+                      <div key={warning}>Warning: {warning}</div>
+                    ))}
+                  </div>
+                ))}
+            </div>
           </div>
         )}
         {status && !complete && (

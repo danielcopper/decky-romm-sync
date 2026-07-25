@@ -7,12 +7,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from lib.list_result import ErrorCode
-from services.prune._models import PendingAction, PruneOptions, PrunePreview
+from services.prune._models import InstalledSelection, PendingAction, PruneOptions, PrunePreview
 from services.prune.executor import PruneExecutor, PruneExecutorConfig
 from services.prune.preview import PreviewBuilder, PreviewBuilderConfig
 from services.prune.recovery import RecoveryCoordinator, RecoveryCoordinatorConfig
 from services.prune.registry import PruneRegistry, PruneRegistryConfig
-from services.prune.requests import parse_options, parse_preview_request, valid_snapshot
+from services.prune.requests import parse_options, parse_preview_request, parse_selection_page, valid_snapshot
 
 if TYPE_CHECKING:
     import logging
@@ -112,8 +112,11 @@ class PruneService:
         self._registry = registry
         self._preview: PrunePreview | None = None
         self._task: asyncio.Task[None] | None = None
+        self._admission_task: asyncio.Task[Any] | None = None
         self._run_id: str | None = None
         self._starting = False
+        self._closed = False
+        self._selection: InstalledSelection | None = None
         self._pending_action: PendingAction | None = None
         self._completed_action_tokens: set[str] = set()
         self._admission_lock = asyncio.Lock()
@@ -139,6 +142,7 @@ class PruneService:
                     None, self._preview_builder.build, token, scope, explicit_rom_id
                 )
                 self._preview = preview
+                self._selection = None
             elif (
                 preview is None
                 or preview.preview_id != preview_id
@@ -153,21 +157,71 @@ class PruneService:
             self._logger.exception("Removed-game cleanup preview failed")
             return self._failure(ErrorCode.UNKNOWN.value, str(exc))
 
+    async def stage_prune_installed_selection(self, request: object) -> dict[str, Any]:
+        """Append one bounded page to an ephemeral preview-bound selection."""
+        parsed = parse_selection_page(request)
+        if isinstance(parsed, dict):
+            return parsed
+        preview_id, selection_id, rom_ids, final = parsed
+        async with self._admission_lock:
+            preview = self._preview
+            if self.is_active() or preview is None or preview.preview_id != preview_id:
+                return self._failure("stale_preview", "This cleanup preview is stale. Scan again before confirming.")
+            installed_ids = {
+                int(entry["rom_id"])
+                for entry in preview.entries
+                if entry.get("installed") is True and type(entry.get("rom_id")) is int
+            }
+            if not set(rom_ids) <= installed_ids:
+                return self._failure(
+                    "invalid_selection", "Selection contains a ROM without disclosed installed content."
+                )
+            selection = self._selection
+            if selection_id is None:
+                selection = InstalledSelection(preview_id, self._uuid_gen.uuid4(), set())
+                self._selection = selection
+            elif selection is None or selection.selection_id != selection_id or selection.preview_id != preview_id:
+                return self._failure("stale_selection", "This installed-content selection is stale.")
+            if selection.finalized:
+                return self._failure("selection_finalized", "This installed-content selection is already complete.")
+            selection.rom_ids.update(rom_ids)
+            selection.finalized = final
+            return {
+                "success": True,
+                "selection_id": selection.selection_id,
+                "selected_count": len(selection.rom_ids),
+                "finalized": selection.finalized,
+            }
+
     async def start_prune(self, request: object) -> dict[str, Any]:
         """Atomically consume a preview and start one explicit cleanup run."""
         if not isinstance(request, dict) or request.get("confirmed") is not True:
             return self._failure("confirmation_required", "Explicit confirmation is required before cleanup.")
-        options = parse_options(request)
+        raw_selection_id = request.get("installed_selection_id")
+        if raw_selection_id is not None and not isinstance(raw_selection_id, str):
+            return self._failure("invalid_selection_id", "Installed selection id must be a string or null.")
+        selected_ids = frozenset[int]()
+        if isinstance(raw_selection_id, str):
+            selection = self._selection
+            if selection is None or selection.selection_id != raw_selection_id or not selection.finalized:
+                return self._failure("stale_selection", "Finish staging installed-content selections before cleanup.")
+            selected_ids = frozenset(selection.rom_ids)
+        options = parse_options(request, selected_ids)
         if isinstance(options, dict):
             return options
         preview_id = request.get("preview_id")
         async with self._admission_lock:
+            if self._closed:
+                return self._failure("service_stopping", "Removed-game cleanup is shutting down.")
             if self.is_active():
                 return self._failure("prune_active", "A removed-game cleanup is already running.")
             preview = self._preview
             if not isinstance(preview_id, str) or preview is None or preview.preview_id != preview_id:
                 return self._failure("stale_preview", "This cleanup preview is stale. Scan again before confirming.")
             self._starting = True
+            self._admission_task = asyncio.current_task()
+        started_run = False
+        run_id = ""
         try:
             refreshed = await self._loop.run_in_executor(
                 None,
@@ -176,29 +230,44 @@ class PruneService:
                 preview.scope,
                 preview.explicit_rom_id,
             )
+            async with self._admission_lock:
+                if self._closed:
+                    return self._failure("service_stopping", "Removed-game cleanup is shutting down.")
+                if refreshed.candidate_ids != preview.candidate_ids or refreshed.fingerprint != preview.fingerprint:
+                    self._preview = refreshed
+                    self._selection = None
+                    return self._failure("stale_preview", "Local game state changed. Review a fresh cleanup preview.")
+                self._preview = None
+                self._selection = None
+                run_id = self._uuid_gen.uuid4()
+                self._run_id = run_id
+                self._completed_action_tokens.clear()
+                self._task = self._loop.create_task(self._run(run_id, refreshed, options))
+                started_run = True
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             self._logger.exception("Removed-game cleanup start validation failed")
+            return self._failure(ErrorCode.UNKNOWN.value, str(exc))
+        finally:
             async with self._admission_lock:
                 self._starting = False
-            return self._failure(ErrorCode.UNKNOWN.value, str(exc))
-
-        async with self._admission_lock:
-            if refreshed.candidate_ids != preview.candidate_ids or refreshed.fingerprint != preview.fingerprint:
-                self._preview = refreshed
-                self._starting = False
-                return self._failure("stale_preview", "Local game state changed. Review a fresh cleanup preview.")
-            self._preview = None
-            run_id = self._uuid_gen.uuid4()
-            self._run_id = run_id
-            self._completed_action_tokens.clear()
-            self._task = self._loop.create_task(self._run(run_id, refreshed, options))
-            self._starting = False
+                self._admission_task = None
+        if not started_run:
+            return self._failure("service_stopping", "Removed-game cleanup did not start.")
         response: dict[str, Any] = {"success": True, "run_id": run_id}
         response["status"] = "running"
         return response
 
     async def report_prune_action(self, request: object) -> dict[str, Any]:
         """Claim or complete the exact frontend action currently awaited by the run."""
+        try:
+            return await self._report_prune_action(request)
+        except Exception as exc:
+            self._logger.exception("Removed-game cleanup action report failed")
+            return self._failure(ErrorCode.UNKNOWN.value, str(exc))
+
+    async def _report_prune_action(self, request: object) -> dict[str, Any]:
         if not isinstance(request, dict):
             return self._failure("invalid_request", "Action result must be an object.")
         token = request.get("action_token")
@@ -215,8 +284,13 @@ class PruneService:
             if self._clock.monotonic() >= pending.expires_at:
                 return self._failure("stale_action", "This cleanup action token has expired.")
             if phase == "claim":
+                action = request.get("action")
+                app_id = request.get("app_id")
+                target_rom_id = request.get("target_rom_id")
+                if action != pending.kind or app_id != pending.app_id or target_rom_id != pending.target_rom_id:
+                    return self._failure("action_mismatch", "Action claim does not match the pending Steam operation.")
                 if pending.claimed:
-                    return self._failure("action_already_claimed", "This cleanup action token is already claimed.")
+                    return {"success": True, "ignored": True, "message": "Action token was already claimed."}
                 if pending.app_id is not None and pending.expected_bound_rom_id is not None:
                     valid = await self._loop.run_in_executor(
                         None,
@@ -225,6 +299,7 @@ class PruneService:
                         pending.expected_bound_rom_id,
                         pending.app_id,
                         pending.target_rom_id,
+                        pending.group_rom_ids,
                     )
                     if not valid:
                         return self._failure(
@@ -243,9 +318,14 @@ class PruneService:
             if type(request.get("success")) is not bool or not isinstance(request.get("message"), str):
                 return self._failure("invalid_action_result", "Action success and message fields are required.")
             snapshot = request.get("snapshot")
-            snapshot_required = pending.kind == "capture_shortcut_snapshot" and request["success"] is True
+            shortcut_absent = request.get("shortcut_absent") is True
+            snapshot_required = (
+                pending.kind == "capture_shortcut_snapshot" and request["success"] is True and not shortcut_absent
+            )
             if snapshot_required and snapshot is None:
                 return self._failure("invalid_snapshot", "The Steam recovery snapshot was missing.")
+            if shortcut_absent and pending.kind not in {"capture_shortcut_snapshot", "remove_shortcut"}:
+                return self._failure("invalid_action_result", "This action may not report an absent shortcut.")
             if snapshot is not None and (
                 pending.kind != "capture_shortcut_snapshot" or not valid_snapshot(snapshot, pending.app_id)
             ):
@@ -259,11 +339,18 @@ class PruneService:
 
     async def shutdown(self) -> None:
         """Cancel unstarted work and await any already-claimed destructive phase."""
-        task = self._task
-        if task is None or task.done():
-            return
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        async with self._admission_lock:
+            self._closed = True
+            admission_task = self._admission_task
+            task = self._task
+        current = asyncio.current_task()
+        pending = [
+            item for item in (admission_task, task) if item is not None and item is not current and not item.done()
+        ]
+        for item in pending:
+            item.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     async def _run(self, run_id: str, preview: PrunePreview, options: PruneOptions) -> None:
         try:
@@ -284,6 +371,7 @@ class PruneService:
         data: dict[str, object],
         expected_bound_rom_id: int | None,
         target_rom_id: int | None,
+        group_rom_ids: set[int],
     ) -> dict[str, Any]:
         token = self._uuid_gen.uuid4()
         future: asyncio.Future[dict[str, Any]] = self._loop.create_future()
@@ -297,6 +385,7 @@ class PruneService:
             app_id=app_id,
             expected_bound_rom_id=expected_bound_rom_id,
             target_rom_id=target_rom_id,
+            group_rom_ids=frozenset(group_rom_ids),
             future=future,
             claim_event=claim_event,
             expires_at=self._clock.monotonic() + _ACTION_TIMEOUT_SECONDS,
@@ -322,11 +411,17 @@ class PruneService:
                 return result
             raise
         except TimeoutError:
-            return {
+            result: dict[str, Any] = {
                 "success": False,
-                "reason": "action_timeout",
-                "message": "Steam did not confirm the action in time.",
+                "reason": "action_ambiguous" if pending.claimed else "action_timeout",
+                "message": (
+                    "Steam action was claimed but its outcome is unknown."
+                    if pending.claimed
+                    else "Steam did not claim the action in time."
+                ),
+                "claimed": pending.claimed,
             }
+            return self._with_cancellation_state(result)
         finally:
             if self._pending_action is pending:
                 self._pending_action = None

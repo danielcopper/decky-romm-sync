@@ -191,3 +191,50 @@ def test_symlinked_recovery_root_is_rejected(tmp_path):
 
     with pytest.raises(ValueError, match="trusted directory"):
         adapter.free_bytes()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("sealed", False), ("bundle_id", "other"), ("file_count", 99)],
+)
+def test_seal_contract_fields_are_revalidated(tmp_path, field, value):
+    adapter = _adapter(tmp_path)
+    sealed = Path(adapter.seal_bundle("20260724T120000Z_7_seal-fields", _snapshot(), [], "readme", "playtime"))
+    seal_path = sealed / "SEAL.json"
+    seal = json.loads(seal_path.read_text())
+    seal[field] = value
+    seal_path.write_text(json.dumps(seal))
+
+    assert adapter.validate_sources(str(sealed)) is False
+
+
+def test_new_recovery_directories_fsync_each_parent(tmp_path, monkeypatch):
+    adapter = _adapter(tmp_path)
+    synced: list[str] = []
+    monkeypatch.setattr(adapter, "_fsync_dir", synced.append)
+
+    adapter.seal_bundle("20260724T120000Z_7_new-parents", _snapshot(), [], "readme", "playtime")
+
+    root = Path(adapter.root())
+    assert str(tmp_path) in synced
+    assert synced.count(str(root)) >= 2
+    assert str(root / "bundles") in synced
+
+
+def test_post_rename_fsync_failure_marks_bundle_durability_uncertain(tmp_path, monkeypatch):
+    adapter = _adapter(tmp_path)
+    bundles = Path(adapter.root()) / "bundles"
+    original = adapter._fsync_dir
+
+    def fail_final_sync(path: str) -> None:
+        if path == str(bundles):
+            raise OSError(errno.EIO, "directory fsync failed")
+        original(path)
+
+    monkeypatch.setattr(adapter, "_fsync_dir", fail_final_sync)
+    bundle_id = "20260724T120000Z_7_uncertain"
+    with pytest.raises(OSError, match="durability is uncertain"):
+        adapter.seal_bundle(bundle_id, _snapshot(), [], "readme", "playtime")
+
+    assert not (bundles / bundle_id).exists()
+    assert (bundles / f"{bundle_id}.durability-uncertain").is_dir()

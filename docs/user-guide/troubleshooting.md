@@ -228,17 +228,21 @@ captured and then being removed by finalization.
 
 Recovery bundles are under `~/decky-romm-sync-recovery/bundles/`. A directory appears there only after every required
 copy and checksum succeeds, directory durability succeeds where supported, and the staging directory is atomically
-sealed. Before deletion, the backend verifies the sealed manifest/checksums and confirms every source set and byte
-stream still matches. A failed attempt may report `recovery_failed`; it leaves the local game unchanged and cleans
-incomplete staging best-effort. Free-space blocking in the modal covers the installed ROM content you selected. The
-backend checks actual source size and free space again at copy time, so a later disk-space change can still stop the
-group safely.
+sealed. A post-rename durability failure preserves the directory with a `.durability-uncertain` suffix instead of making
+it look successfully sealed. Before the Steam action and again before local finalization, the backend verifies the seal,
+manifest/checksums, source sets/bytes, database state, save ownership, and captured Steam/controller state. Filesystem
+mutation then claims the sealed no-follow identity through anchored descriptors; replacing a path after validation does
+not authorize deleting the replacement. A failed attempt may report `recovery_failed`; it leaves the local game
+unchanged and cleans incomplete staging best-effort. Free-space blocking in the modal covers the installed ROM content
+you selected. The backend checks actual source size and free space again at copy time, so a later disk-space change can
+still stop the group safely.
 
 The cleanup report is per group: unrelated groups continue after a skip or failure. Large runs deliver terminal details
-in bounded chunks, which the UI assembles into one report. A **partial** result means the report lists a Steam or
-filesystem action that committed before a later guard failed; read that group's concrete message before retrying. If a
-recovery bundle was sealed but a later liveness or Steam check aborted, keep the bundle; it is a valid pre-action
-snapshot even though no local row was deleted. Recovery has no automatic import flow.
+in serialized-byte-bounded chunks, which the UI assembles into one report. A **partial** result means the report lists a
+Steam or filesystem action that committed or became ambiguous before a later guard failed; read that group's concrete
+message and save warnings before retrying. If a recovery bundle was sealed but a later liveness or Steam check aborted,
+keep the bundle; it is a valid pre-action snapshot even though no local row was deleted. Recovery has no automatic
+import flow.
 
 A bulk shortcut removal is paced so it never freezes the interface, so on a large library it can take a few seconds.
 While one is running, all the removal buttons are disabled and a spinner with a live **Removing x of y** counter shows

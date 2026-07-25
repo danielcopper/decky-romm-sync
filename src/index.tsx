@@ -74,6 +74,7 @@ import { cancelPruneActions, handlePruneAction } from "./utils/pruneActions";
 import type { PruneActionRequired } from "./utils/pruneActions";
 import { setPruneComplete, setPruneProgress } from "./utils/pruneStore";
 import type { PruneComplete, PruneProgress } from "./utils/pruneStore";
+import { publishCommittedVersionSwitch } from "./utils/versionSwitchApplication";
 
 type Page = "main" | "settings" | "library" | "data" | "downloads" | "system";
 
@@ -831,15 +832,32 @@ export default definePlugin(() => {
     );
     if (!completed) return;
     cancelPruneActions();
+    for (const item of completed.results) {
+      if (
+        item.committed_action === "repoint_shortcut" &&
+        !item.action_ambiguous &&
+        item.app_id !== undefined &&
+        item.target_rom_id !== undefined
+      ) {
+        setTimeout(() => detach(publishCommittedVersionSwitch(item.app_id!, item.target_rom_id!)), 0);
+      }
+    }
     const removed = completed.removed_count ?? completed.removed_rom_ids.length;
     const skipped =
       completed.problem_count ??
       completed.results.filter((item) => ["failed", "skipped", "partial"].includes(item.status)).length;
+    const ambiguousPartial = completed.results.find((item) => item.status === "partial" && item.action_ambiguous);
+    const committedPartial = completed.results.find((item) => item.status === "partial" && item.committed_action);
     toaster.toast({
       title: "RomM Sync",
-      body: removed
-        ? `Removed ${removed} local entr${removed === 1 ? "y" : "ies"}${skipped ? `; ${skipped} group(s) skipped` : ""}.`
-        : completed.message || "No removed RomM games were cleaned up.",
+      body: ambiguousPartial
+        ? `${ambiguousPartial.committed_action === "remove_shortcut" ? "Shortcut removal" : "Shortcut repoint"} outcome is uncertain; source data was retained.`
+        : committedPartial
+          ? `${committedPartial.committed_action === "remove_shortcut" ? "Shortcut removal" : "Shortcut repoint"} committed; local cleanup incomplete.`
+          : removed
+            ? `Removed ${removed} local entr${removed === 1 ? "y" : "ies"}${skipped ? `; ${skipped} group(s) skipped` : ""}.`
+            : completed.message || "No removed RomM games were cleaned up.",
+      subtext: ambiguousPartial?.message ?? committedPartial?.message,
     });
   });
 

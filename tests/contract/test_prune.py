@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
+
 import pytest
 
 from domain.platform_sync_state import PlatformSyncState
 from domain.rom import Rom
+from domain.rom_install import RomInstall
+from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.sync_state import SyncState
+from domain.version_metadata import VersionMetadata
 from lib.errors import RommNotFoundError
 
 
@@ -136,6 +143,19 @@ async def test_action_report_rejects_stale_token_with_canonical_shape(harness):
         ("migrate_retrodeck_files", (None,)),
         ("sync_rom_saves", (41,)),
         ("switch_version", (0x80000001, 41, False)),
+        ("report_unit_results", ({}, "run", "unit", 0)),
+        ("report_removal_results", ([],)),
+        ("reconcile_shortcuts", ([],)),
+        ("refresh_save_status", (41,)),
+        ("get_save_status", (41,)),
+        ("get_save_slots", (41,)),
+        ("record_session_start", (41,)),
+        ("reconcile_playtime", (41,)),
+        ("fetch_cover_base64", (41,)),
+        ("get_sgdb_artwork_base64", (41, 0)),
+        ("apply_sgdb_game_id", (41, 7)),
+        ("save_shortcut_icon", (0x80000001, "")),
+        ("clear_sync_cache", ()),
     ],
 )
 async def test_prune_claim_reciprocally_blocks_conflicting_callable_entries(harness, method, args):
@@ -146,3 +166,201 @@ async def test_prune_claim_reciprocally_blocks_conflicting_callable_entries(harn
     assert result["success"] is False
     assert result["reason"] == "prune_active"
     assert result["message"]
+
+
+@pytest.mark.parametrize("operation", ["save_status", "download"])
+async def test_detached_writer_lifetime_blocks_prune_admission(harness, monkeypatch, operation):
+    _seed_bulk_candidate(harness)
+    preview = await harness.plugin.get_prune_preview(_preview_request())
+    release = asyncio.Event()
+    task = None
+    if operation == "save_status":
+        entered = asyncio.Event()
+        finished = asyncio.Event()
+
+        async def delayed_status(_rom_id):
+            entered.set()
+            await release.wait()
+            finished.set()
+
+        monkeypatch.setattr(harness.plugin._save_sync_service, "check_save_status_background", delayed_status)
+        assert (await harness.plugin.refresh_save_status(41))["success"] is True
+        await entered.wait()
+    else:
+        task = asyncio.create_task(release.wait())
+
+        async def start_download(_rom_id):
+            return {"success": True, "message": "started"}
+
+        monkeypatch.setattr(harness.plugin._download_service, "start_download", start_download)
+        monkeypatch.setattr(harness.plugin._download_service, "task_for_rom", lambda _rom_id: task)
+        assert (await harness.plugin.start_download(41))["success"] is True
+
+    blocked = await harness.plugin.start_prune(
+        {
+            "preview_id": preview["preview_id"],
+            "confirmed": True,
+            "repoint_shortcuts": True,
+            "remove_rows": True,
+            "remove_fully_vanished": True,
+            "create_recovery_bundle": False,
+            "installed_selection_id": None,
+        }
+    )
+    assert blocked["reason"] == "operation_active"
+
+    release.set()
+    if task is not None:
+        await task
+    else:
+        await finished.wait()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    started = await harness.plugin.start_prune(
+        {
+            "preview_id": preview["preview_id"],
+            "confirmed": True,
+            "repoint_shortcuts": True,
+            "remove_rows": True,
+            "remove_fully_vanished": True,
+            "create_recovery_bundle": False,
+            "installed_selection_id": None,
+        }
+    )
+    assert started["success"] is True
+    running = harness.plugin._prune_service._task
+    assert running is not None
+    await running
+
+
+async def _wait_for_prune_action(harness, action: str):
+    for _ in range(200):
+        for emitted in harness.emit.await_args_list:
+            if emitted.args[0] == "prune_action_required" and emitted.args[1]["action"] == action:
+                return emitted.args[1]
+        await asyncio.sleep(0.001)
+    raise AssertionError(f"Prune action {action} was not emitted")
+
+
+async def test_recovery_on_repoint_uses_real_save_inventory_filesystem_and_sqlite(harness):
+    app_id = 0x80000041
+    source = Rom.synced(
+        rom_id=41,
+        platform_slug="gba",
+        name="Removed Game",
+        fs_name="Removed Game.gba",
+        shortcut_app_id=app_id,
+        synced_at="2026-01-01T00:00:00",
+        version=VersionMetadata(sibling_group_key="group-41", regions=("USA",)),
+    )
+    source.record_fetch_generation("older-fetch")
+    target = Rom.synced(
+        rom_id=42,
+        platform_slug="gba",
+        name="Live Game",
+        fs_name="Live Game.gba",
+        shortcut_app_id=None,
+        synced_at="2026-01-01T00:00:00",
+        version=VersionMetadata(sibling_group_key="group-41", regions=("USA",)),
+    )
+    target.record_fetch_generation("completed-fetch")
+    rom_path = Path(harness.retrodeck_paths.roms_path()) / "gba" / source.fs_name
+    rom_path.parent.mkdir(parents=True)
+    rom_path.write_bytes(b"installed rom")
+    save_path = Path(harness.retrodeck_paths.saves_path()) / "gba" / "Removed Game.srm"
+    save_path.parent.mkdir(parents=True)
+    save_path.write_bytes(b"local save")
+    with harness.uow_factory() as uow:
+        uow.roms.save(source)
+        uow.roms.save(target)
+        uow.rom_installs.save(
+            RomInstall.mark_installed(
+                rom_id=41,
+                file_path=str(rom_path),
+                rom_dir=None,
+                platform_slug="gba",
+                system="gba",
+                installed_at="2026-01-01T00:00:00",
+            )
+        )
+        uow.rom_save_sync_states.save(
+            41,
+            RomSaveSyncState(system="gba", files={"Removed Game.srm": FileSyncState(last_sync_hash="known")}),
+        )
+        uow.platform_sync_state.save(
+            PlatformSyncState.stamp(
+                platform_slug="gba",
+                at="2026-01-02T00:00:00",
+                rom_count=2,
+                fetch_id="completed-fetch",
+            )
+        )
+    harness.romm.roms[42] = {"id": 42}
+    harness.romm.get_rom_once_side_effect_by_id[41] = RommNotFoundError("gone")
+    preview = await harness.plugin.get_prune_preview(_preview_request())
+    staged = await harness.plugin.stage_prune_installed_selection(
+        {
+            "preview_id": preview["preview_id"],
+            "selection_id": None,
+            "rom_ids": [41],
+            "final": True,
+        }
+    )
+
+    started = await harness.plugin.start_prune(
+        {
+            "preview_id": preview["preview_id"],
+            "confirmed": True,
+            "repoint_shortcuts": True,
+            "remove_rows": True,
+            "remove_fully_vanished": False,
+            "create_recovery_bundle": True,
+            "installed_selection_id": staged["selection_id"],
+        }
+    )
+    action = await _wait_for_prune_action(harness, "repoint_shortcut")
+    claim = await harness.plugin.report_prune_action(
+        {
+            "phase": "claim",
+            "run_id": action["run_id"],
+            "action_token": action["action_token"],
+            "action": action["action"],
+            "app_id": action["app_id"],
+            "target_rom_id": action["target_rom_id"],
+        }
+    )
+    assert claim["success"] is True
+    assert (
+        await harness.plugin.report_prune_action(
+            {
+                "phase": "complete",
+                "run_id": action["run_id"],
+                "action_token": action["action_token"],
+                "success": True,
+                "message": "Steam confirmed the launch command.",
+            }
+        )
+    )["success"] is True
+    task = harness.plugin._prune_service._task
+    assert task is not None
+    await task
+
+    with harness.uow_factory() as uow:
+        assert uow.roms.get(41) is None
+        bound = uow.roms.get(42)
+        assert bound is not None and bound.shortcut_app_id == app_id
+        assert uow.rom_installs.get(41) is None
+        assert uow.rom_save_sync_states.get(41) is None
+    assert started["success"] is True
+    assert not rom_path.exists()
+    assert not save_path.exists()
+    backups = list((save_path.parent / ".romm-backup").glob("Removed Game_*.srm"))
+    assert len(backups) == 1 and backups[0].read_bytes() == b"local save"
+    complete = [call.args[1] for call in harness.emit.await_args_list if call.args[0] == "prune_complete"][-1]
+    result = complete["results"][0]
+    assert result["status"] == "removed"
+    assert result["committed_action"] == "repoint_shortcut"
+    assert {"save_quarantine", "installed_rom_content"} <= set(result["mutations"])
+    bundle = Path(result["bundle_path"])
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    assert {item["kind"] for item in manifest["artifacts"]} >= {"current_save", "installed_rom"}
