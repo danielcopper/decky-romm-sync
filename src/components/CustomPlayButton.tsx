@@ -58,9 +58,11 @@ import { detach } from "../utils/detach";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import {
   capturePruneLeaseAdmission,
+  isPruneLeaseAdmissionCurrent,
   mountPruneLeaseOwner,
   releasePruneLeasesByOwner,
   withPruneLease,
+  type PruneLeaseAdmission,
 } from "../utils/pruneLease";
 import { reconfirmLaunchOptions } from "../utils/launchOptionsReconcile";
 import { saveSyncToastBody } from "../utils/saveSyncToast";
@@ -537,12 +539,20 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   // shared skip-set immediately before RunGame so this RunGame does NOT re-enter
   // the global watcher and re-gate a launch that already ran the funnel (the
   // double-gate fix C1).
-  const dispatchLaunch = async (gameId: string) => {
+  const dispatchLaunch = async (gameId: string, admission: PruneLeaseAdmission) => {
+    if (!isPruneLeaseAdmissionCurrent(admission)) return;
     setState("launching");
     // Heal any mid-session launch_options drift on this shortcut before launch
-    // (#1150) via the shared bounded-race re-confirm. Best-effort: a hang, a
-    // null item, or a failure still launches — no worse than today.
-    if (romId) await reconfirmLaunchOptions(romId, appId, "CustomPlayButton");
+    // (#1150) via the shared bounded-race re-confirm. Ordinary I/O failures stay
+    // best-effort; timeout or plugin teardown cancels this launch.
+    if (romId) {
+      const reconfirm = await reconfirmLaunchOptions(romId, appId, "CustomPlayButton", admission);
+      if (reconfirm.status === "cancelled") return;
+      if (reconfirm.status === "timeout") {
+        setState("play");
+        return;
+      }
+    }
     markLaunchSkipped(appId);
     SteamClient.Apps.RunGame(gameId, "", -1, 100);
   };
@@ -588,11 +598,12 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     if (state === "syncing" || state === "launching") return; // debounce
     const overview = appStore.GetAppOverviewByAppID(appId);
     const gameId = overview?.GetGameID?.() ?? String(appId);
+    const admission = capturePruneLeaseAdmission(leaseOwner);
     detach(debugLog(`CustomPlayButton: handlePlay appId=${appId} gameId=${gameId}`));
 
     // Non-RomM / unresolved ROM — nothing to gate, launch straight through.
     if (!romId) {
-      await dispatchLaunch(gameId);
+      await dispatchLaunch(gameId, admission);
       return;
     }
 
@@ -606,7 +617,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     // resulting RunGame doesn't re-enter the interceptor and re-gate either.
     if (isSessionActive(romId) || isAppRunning(appId)) {
       detach(debugLog(`CustomPlayButton: appId=${appId} already running — skipping pre-launch sync`));
-      await dispatchLaunch(gameId);
+      await dispatchLaunch(gameId, admission);
       return;
     }
 
@@ -621,7 +632,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     // fast reachability check), and `actOnVerdict` signals back "retry".
     try {
       let verdict = await runLaunchGate(appId, romId, makePlayButtonOps(romId));
-      while ((await actOnVerdict(verdict, gameId, romId)) === "retry") {
+      while ((await actOnVerdict(verdict, gameId, romId, admission)) === "retry") {
         verdict = await runLaunchGate(appId, romId, makePlayButtonOps(romId));
       }
     } catch (e) {
@@ -636,10 +647,15 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   // Returns "retry" only from the offline-drift branch when the user asks to
   // re-probe — `handlePlay` loops on that and re-runs the gate; every other
   // outcome returns "done".
-  const actOnVerdict = async (verdict: GateVerdict, gameId: string, rid: number): Promise<"done" | "retry"> => {
+  const actOnVerdict = async (
+    verdict: GateVerdict,
+    gameId: string,
+    rid: number,
+    admission: PruneLeaseAdmission,
+  ): Promise<"done" | "retry"> => {
     switch (verdict.decision) {
       case "allow":
-        await dispatchLaunch(gameId);
+        await dispatchLaunch(gameId, admission);
         return "done";
       case "abort":
       case "block":
@@ -656,13 +672,13 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
         }
         // Conflicts resolved — notify sibling components to refresh, then launch.
         globalThis.dispatchEvent(new CustomEvent("romm_data_changed", { detail: { type: "save_sync", rom_id: rid } }));
-        await dispatchLaunch(gameId);
+        await dispatchLaunch(gameId, admission);
         return "done";
       }
       case "offline_drift": {
         const choice = await showOfflineDriftModal();
         if (choice === "start_anyway") {
-          await dispatchLaunch(gameId);
+          await dispatchLaunch(gameId, admission);
           return "done";
         }
         if (choice === "retry") {
@@ -678,7 +694,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       case "sync_failed": {
         const proceed = await showFallbackLaunchModal(verdict.message);
         if (proceed) {
-          await dispatchLaunch(gameId);
+          await dispatchLaunch(gameId, admission);
           return "done";
         }
         setState("play");

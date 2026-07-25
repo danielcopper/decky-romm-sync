@@ -28,6 +28,8 @@ class UnsettledContinuation {
   constructor(readonly error: unknown) {}
 }
 
+export class PruneLeaseAdmissionCancelled extends Error {}
+
 export function isPruneLeaseCancelled(signal: AbortSignal | undefined): boolean {
   return signal?.aborted ?? false;
 }
@@ -51,7 +53,7 @@ export function capturePruneLeaseAdmission(owner?: string): PruneLeaseAdmission 
   };
 }
 
-function admissionIsCurrent(admission: PruneLeaseAdmission): boolean {
+export function isPruneLeaseAdmissionCurrent(admission: PruneLeaseAdmission): boolean {
   if (!pluginMounted || admission.pluginGeneration !== pluginGeneration) return false;
   if (admission.owner === undefined) return true;
   const current = ownerGenerations.get(admission.owner);
@@ -160,9 +162,9 @@ export async function withPruneLeases<T>(
   admission: PruneLeaseAdmission = capturePruneLeaseAdmission(),
 ): Promise<T> {
   const uniqueTokens = [...new Set(tokens.filter((token): token is string => !!token))];
-  if (!admissionIsCurrent(admission)) {
+  if (!isPruneLeaseAdmissionCurrent(admission)) {
     await Promise.all(uniqueTokens.map((token) => releasePruneLease(token, context)));
-    throw new Error(`${context}: continuation was cancelled before lease registration`);
+    throw new PruneLeaseAdmissionCancelled(`${context}: continuation was cancelled before lease registration`);
   }
   const abortController = new AbortController();
   const operationPromise = Promise.resolve().then(() => operation(abortController.signal));

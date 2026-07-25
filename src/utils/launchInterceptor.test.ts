@@ -11,6 +11,7 @@ import * as fallbackLaunchModal from "../components/FallbackLaunchModal";
 import * as coreChangeModal from "../components/CoreChangeModal";
 import * as steamShortcuts from "./steamShortcuts";
 import { registerLaunchInterceptor, unregisterLaunchInterceptor } from "./launchInterceptor";
+import { mountPruneLeasePlugin, releaseAllPruneLeases } from "./pruneLease";
 import type { GateVerdict, LaunchGateOps } from "./launchGate";
 import type { SyncConflict } from "../types";
 
@@ -35,6 +36,8 @@ vi.mock("../api/backend", () => ({
   // The shared reconcile helper (real module) pulls the single-ROM command here
   // before each watcher relaunch (#1152).
   getRomRelaunchOptions: vi.fn(),
+  releasePruneConflictLease: vi.fn(),
+  renewPruneConflictLease: vi.fn(),
   logInfo: vi.fn(),
   logError: vi.fn(),
 }));
@@ -168,6 +171,8 @@ describe("launchInterceptor — full funnel watcher", () => {
       launch_options: "flatpak run x",
       prune_lease_token: "launch-lease",
     });
+    vi.mocked(backend.releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
+    vi.mocked(backend.renewPruneConflictLease).mockResolvedValue({ success: true, message: "renewed" });
     vi.mocked(steamShortcuts.setLaunchOptionsConfirmed).mockResolvedValue(true);
   });
 
@@ -532,8 +537,8 @@ describe("launchInterceptor — full funnel watcher", () => {
   // ---------------------------------------------------------------------------
   // #1152 — the watcher's relaunch path re-confirms launch_options just before
   // RunGame, mirroring the Play-button funnel via the shared
-  // `reconfirmLaunchOptions` helper. Best-effort: a null/rejected/hung re-confirm
-  // still relaunches (the launch must never be trapped).
+  // `reconfirmLaunchOptions` helper. Null/rejected responses remain best-effort;
+  // a timeout or stale plugin admission aborts the relaunch.
   // ---------------------------------------------------------------------------
   describe("relaunch launch_options re-confirm (#1152)", () => {
     const RELAUNCH_COMMAND = 'flatpak run net.retrodeck.retrodeck "/roms/snes/g.rom"';
@@ -613,6 +618,62 @@ describe("launchInterceptor — full funnel watcher", () => {
         expect.stringContaining("Watcher: launch_options re-confirm failed"),
       );
       expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
+    });
+
+    it("a timed-out re-confirm keeps the cancelled watcher launch blocked", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(backend.getRomRelaunchOptions).mockReturnValue(new Promise<never>(() => {}));
+        registerLaunchInterceptor();
+        captureHandler()(77, "1234", "LaunchApp", 0);
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(backend.getRomRelaunchOptions).toHaveBeenCalledWith(42);
+        await vi.advanceTimersByTimeAsync(3000);
+
+        expect(backend.logError).toHaveBeenCalledWith(
+          expect.stringContaining("Watcher: launch_options re-confirm timed out"),
+        );
+        expect(steamShortcuts.setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+        expect(runGameMock()).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("plugin teardown while re-confirm is pending releases a late token and never calls RunGame", async () => {
+      let resolveFetch!: (value: Awaited<ReturnType<typeof backend.getRomRelaunchOptions>>) => void;
+      let remounted = false;
+      vi.mocked(backend.getRomRelaunchOptions).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveFetch = resolve;
+          }),
+      );
+
+      try {
+        registerLaunchInterceptor();
+        captureHandler()(77, "1234", "LaunchApp", 0);
+        await flush();
+        expect(backend.getRomRelaunchOptions).toHaveBeenCalledWith(42);
+
+        await releaseAllPruneLeases();
+        mountPruneLeasePlugin();
+        remounted = true;
+        resolveFetch({
+          success: true,
+          app_id: 1234,
+          launch_options: RELAUNCH_COMMAND,
+          prune_lease_token: "late-watcher-launch-lease",
+        });
+        await flush();
+
+        expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("late-watcher-launch-lease");
+        expect(steamShortcuts.setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+        expect(runGameMock()).not.toHaveBeenCalled();
+      } finally {
+        if (!remounted) mountPruneLeasePlugin();
+      }
     });
 
     it("conflict resolved → re-confirms then relaunches (shared path covers every relaunch branch)", async () => {

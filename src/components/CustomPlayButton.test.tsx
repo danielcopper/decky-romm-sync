@@ -97,6 +97,7 @@ import { showOfflineDriftModal } from "../components/OfflineDriftModal";
 import { showFallbackLaunchModal } from "../components/FallbackLaunchModal";
 import { handleConflicts } from "../components/SyncConflictModal";
 import { showStopGameModal } from "../components/StopGameModal";
+import { mountPruneLeasePlugin, releaseAllPruneLeases } from "../utils/pruneLease";
 import type { SyncConflict, SaveStatus } from "../types";
 
 function mockCachedDetail(overrides: Partial<CachedGameDetail> = {}): void {
@@ -1890,10 +1891,10 @@ describe("CustomPlayButton — pre-launch relaunch re-confirm (#1150)", () => {
     logSpy.mockRestore();
   });
 
-  it("a hung getRomRelaunchOptions falls through to the launch after the timeout (button never trapped)", async () => {
+  it("a hung getRomRelaunchOptions aborts launch after the timeout and restores Play", async () => {
     // The Decky callable bridge can hang forever on a wedged backend. The fetch
-    // is bounded by a 3s Promise.race; on timeout the re-confirm is skipped and
-    // the launch still fires — the button must not stay stuck on "Launching…".
+    // is bounded by a 3s Promise.race; on timeout the launch is aborted and the
+    // button must not stay stuck on "Launching…".
     // RTL's findBy* deadlocks under fake timers, so render + settle to "Play"
     // under REAL timers, then switch to fake timers right before the click so the
     // 3s re-confirm timeout fires without a real wait (kept fast).
@@ -1903,28 +1904,63 @@ describe("CustomPlayButton — pre-launch relaunch re-confirm (#1150)", () => {
 
     try {
       mockCachedDetail();
-      const { findByText } = render(<CustomPlayButton appId={100} />);
+      const { findByText, getByText } = render(<CustomPlayButton appId={100} />);
       const playBtn = await findByText("Play");
 
       vi.useFakeTimers();
       await act(async () => {
         playBtn.click();
-        // The gate chain up to dispatchLaunch is microtask-driven (no setTimeout);
-        // advancing past 3000ms flushes those microtasks and fires the re-confirm
-        // timeout that unblocks the hung fetch.
+        // Let the gate chain schedule the re-confirm timeout before advancing it.
+        for (let index = 0; index < 12; index++) await Promise.resolve();
+      });
+      expect(backend.getRomRelaunchOptions).toHaveBeenCalledWith(42);
+      await act(async () => {
         await vi.advanceTimersByTimeAsync(3000);
       });
 
-      // The hung fetch timed out → re-confirm skipped (no set), logged, and the
-      // launch STILL fired. RunGame is the proof the button escaped "Launching…".
+      // The hung fetch timed out → no set and no launch. Returning to Play proves
+      // the current component is not trapped in its optimistic launching state.
       expect(vi.mocked(setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
       expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining("CustomPlayButton: launch_options re-confirm failed"),
+        expect.stringContaining("CustomPlayButton: launch_options re-confirm timed out"),
       );
-      expect(vi.mocked(SteamClient.Apps.RunGame)).toHaveBeenCalledWith("gid-1", "", -1, 100);
+      expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+      expect(getByText("Play")).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
       logSpy.mockRestore();
+    }
+  });
+
+  it("plugin teardown while relaunch options are pending releases the late token and never calls RunGame", async () => {
+    let resolveFetch!: (value: Awaited<ReturnType<typeof backend.getRomRelaunchOptions>>) => void;
+    vi.mocked(backend.getRomRelaunchOptions).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    vi.mocked(backend.releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
+
+    try {
+      await clickPlay();
+      await waitFor(() => expect(backend.getRomRelaunchOptions).toHaveBeenCalledWith(42));
+      await releaseAllPruneLeases();
+      resolveFetch({
+        success: true,
+        app_id: 100,
+        launch_options: RELAUNCH_COMMAND,
+        prune_lease_token: "late-plugin-launch-lease",
+      });
+      await act(async () => {
+        for (let index = 0; index < 8; index++) await Promise.resolve();
+      });
+
+      expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("late-plugin-launch-lease");
+      expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+      expect(SteamClient.Apps.RunGame).not.toHaveBeenCalled();
+    } finally {
+      mountPruneLeasePlugin();
     }
   });
 });

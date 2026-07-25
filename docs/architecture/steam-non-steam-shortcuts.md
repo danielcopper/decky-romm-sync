@@ -462,6 +462,15 @@ The backend also writes each `{app_id}p.png` grid file at commit (`SyncReporter.
 file even if a per-item API call failed, so a residual gray tile resolves the next time the game's page is opened or on
 the next client restart.
 
+## Pre-launch launch-options confirmation
+
+Both launch funnels (the game-detail Play button and Steam's direct-launch watcher) re-fetch the selected ROM's resolved
+command and confirm-write it immediately before `RunGame`. Ordinary fetch or Steam-write failures remain best-effort and
+the launch proceeds. A three-second callable timeout is different: the already-cancelled launch remains blocked, while
+the unresolved callable stays observed so a lease token returned later is released without a Steam write. Each launch
+captures its plugin/component generation before gate and modal waits; teardown makes that admission stale, and even an
+immediate remount cannot let the old chain write launch options or invoke `RunGame` under the new generation.
+
 ## Key Files
 
 | File                                      | Purpose                                                                                                                                                                                                                                                                                                                                        |

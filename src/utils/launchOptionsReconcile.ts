@@ -1,49 +1,92 @@
 import { getRomRelaunchOptions, logError } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "./steamShortcuts";
-import { capturePruneLeaseAdmission, withPruneLease } from "./pruneLease";
+import {
+  capturePruneLeaseAdmission,
+  isPruneLeaseAdmissionCurrent,
+  PruneLeaseAdmissionCancelled,
+  releasePruneLease,
+  withPruneLease,
+  type PruneLeaseAdmission,
+} from "./pruneLease";
 
 // Apply in bounded-concurrency batches (mirrors getExistingRomMShortcuts) so a
 // reconcile touching many ROMs doesn't serialize worst-case per-shortcut
 // confirm-poll timeouts.
 const CONCURRENCY = 10;
 
-/** Bound on the single-ROM relaunch-options fetch before a launch. The Decky
- *  callable bridge can hang indefinitely on a wedged backend, so the read is
- *  raced against this timeout — a hang falls through to the launch instead of
- *  trapping the caller (mirrors index.tsx's withTimeout). */
+/** Bound on the single-ROM relaunch-options fetch before a launch. */
 const RECONFIRM_FETCH_TIMEOUT_MS = 3000;
+
+export type RelaunchOptionsReconfirmResult =
+  { status: "ready" } | { status: "best_effort_failure" } | { status: "timeout" } | { status: "cancelled" };
 
 /**
  * Heal any mid-session `launch_options` drift on one shortcut right before a
  * launch: pull the ROM's resolved command (`get_rom_relaunch_options`) and
- * confirm-set it onto the shortcut's appId. Best-effort — a hang (bounded by a
- * 3s race), a `null` item, or a thrown error is logged via `logError` with the
- * `context` prefix and never blocks the caller; the launch proceeds regardless.
- * Shared by the Play-button funnel and the direct-launch watcher relaunch path.
+ * confirm-set it onto the shortcut's appId. Ordinary fetch/write failures remain
+ * best-effort. Lifecycle cancellation and timeout are explicit launch-stopping
+ * results; a timed-out callable stays observed so a late lease is released.
  */
-export async function reconfirmLaunchOptions(romId: number, appId: number, context: string): Promise<void> {
-  const admission = capturePruneLeaseAdmission();
+export async function reconfirmLaunchOptions(
+  romId: number,
+  appId: number,
+  context: string,
+  admission: PruneLeaseAdmission = capturePruneLeaseAdmission(),
+): Promise<RelaunchOptionsReconfirmResult> {
+  if (!isPruneLeaseAdmissionCurrent(admission)) return { status: "cancelled" };
+  const fetchOutcome = getRomRelaunchOptions(romId).then(
+    (item) => ({ kind: "result" as const, item }),
+    (error: unknown) => ({ kind: "error" as const, error }),
+  );
+  let timer!: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout" }), RECONFIRM_FETCH_TIMEOUT_MS);
+  });
+  const outcome = await Promise.race([fetchOutcome, timeout]);
+  if (outcome.kind === "timeout") {
+    logError(`${context}: launch_options re-confirm timed out (launch cancelled)`);
+    void fetchOutcome
+      .then(async (late) => {
+        if (late.kind === "result" && late.item?.success) {
+          await releasePruneLease(late.item.prune_lease_token, `${context}: timed-out launch_options re-confirm`);
+        }
+      })
+      .catch((error: unknown) => logError(`${context}: late launch_options re-confirm cleanup failed: ${error}`));
+    return { status: isPruneLeaseAdmissionCurrent(admission) ? "timeout" : "cancelled" };
+  }
+  clearTimeout(timer);
+  if (outcome.kind === "error") {
+    if (!isPruneLeaseAdmissionCurrent(admission)) return { status: "cancelled" };
+    logError(`${context}: launch_options re-confirm failed (launching anyway): ${outcome.error}`);
+    return { status: "best_effort_failure" };
+  }
+  const item = outcome.item;
+  if (!item) {
+    return { status: isPruneLeaseAdmissionCurrent(admission) ? "ready" : "cancelled" };
+  }
+  if (!item.success) {
+    if (!isPruneLeaseAdmissionCurrent(admission)) return { status: "cancelled" };
+    logError(`${context}: launch_options re-confirm failed (launching anyway): ${item.message}`);
+    return { status: "best_effort_failure" };
+  }
   try {
-    const item = await Promise.race([
-      getRomRelaunchOptions(romId),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("get_rom_relaunch_options timed out")), RECONFIRM_FETCH_TIMEOUT_MS),
-      ),
-    ]);
-    if (item?.success) {
-      await withPruneLease(
-        item.prune_lease_token,
-        context,
-        async (signal) => {
-          if (signal.aborted) return;
-          await setLaunchOptionsConfirmed(appId, item.launch_options);
-        },
-        context,
-        admission,
-      );
-    }
+    await withPruneLease(
+      item.prune_lease_token,
+      context,
+      async (signal) => {
+        if (signal.aborted) return;
+        await setLaunchOptionsConfirmed(appId, item.launch_options);
+      },
+      context,
+      admission,
+    );
+    return { status: isPruneLeaseAdmissionCurrent(admission) ? "ready" : "cancelled" };
   } catch (e) {
+    if (e instanceof PruneLeaseAdmissionCancelled || !isPruneLeaseAdmissionCurrent(admission)) {
+      return { status: "cancelled" };
+    }
     logError(`${context}: launch_options re-confirm failed (launching anyway): ${e}`);
+    return { status: "best_effort_failure" };
   }
 }
 

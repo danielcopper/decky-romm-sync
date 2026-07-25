@@ -48,6 +48,7 @@ import { getEventTarget } from "../utils/events";
 import { detach } from "../utils/detach";
 import {
   capturePruneLeaseAdmission,
+  isPruneLeaseAdmissionCurrent,
   mountPruneLeaseOwner,
   releasePruneLeasesByOwner,
   type PruneLeaseAdmission,
@@ -281,8 +282,10 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         ),
       );
     };
+    if (!isPruneLeaseAdmissionCurrent(admission)) return;
     try {
       const sync = await syncRomSaves(unsyncedRomId);
+      if (!isPruneLeaseAdmissionCurrent(admission)) return;
       if (!sync.success) {
         abort("Couldn't sync saves — try again");
         return;
@@ -291,6 +294,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         abort("Resolve save conflicts first");
         return;
       }
+      if (!isPruneLeaseAdmissionCurrent(admission)) return;
       const retry = await switchVersion(appId, target.rom_id, false);
       if (retry.success) {
         await applySwitchSuccess(retry, admission);
@@ -302,6 +306,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         handleSwitchFailure(retry);
       }
     } catch (e) {
+      if (!isPruneLeaseAdmissionCurrent(admission)) return;
       logError(`VersionPicker: sync-then-switch failed: ${e}`);
       abort("Couldn't sync saves — try again");
     }
@@ -333,6 +338,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
           versionName: result.unsynced_version_name,
           serverReachable: result.server_reachable,
         });
+        if (!isPruneLeaseAdmissionCurrent(admission)) return;
         if (choice === "cancel") {
           setSwitching(false);
           return;

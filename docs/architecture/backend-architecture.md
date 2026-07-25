@@ -198,9 +198,12 @@ response that arrives afterward is released without running its continuation. On
 opens a new generation. Cancellation stops every not-yet-started Steam mutation and lease renewal, but explicit backend
 release waits for any already-started non-cancellable Steam promise to settle. An unresolved operation stops renewing
 after a bounded five minutes; the backend's five-minute no-heartbeat expiry is the abandonment backstop if it never
-settles. Each non-empty `sync_stale` event carries its own lease through the paced removal tail; a later `sync_complete`
-lease overlaps and joins that same promise, so success composes both leases while a post-stale backend failure still
-leaves the tail covered. A terminal prune result that needs repoint publication likewise acquires its lease before event
+settles. Launch funnels carry the admission captured at the original Play action through every gate, modal, and
+launch-options confirmation wait. The version picker likewise rechecks its captured owner admission after save-sync and
+modal waits before any successor `switch_version` mutation, so an unmounted chain cannot resume under a new picker. Each
+non-empty `sync_stale` event carries its own lease through the paced removal tail; a later `sync_complete` lease
+overlaps and joins that same promise, so success composes both leases while a post-stale backend failure still leaves
+the tail covered. A terminal prune result that needs repoint publication likewise acquires its lease before event
 delivery while the old run is active; the frontend holds it across release acknowledgement and cover publication. Event
 delivery failure releases a token that never reached the frontend. This closes the reciprocal admission race, and each
 path refuses while a prune claim is active. Migration and active-library-sync decorators additionally guard preview and

@@ -14,6 +14,7 @@ describe("batchConfirmLaunchOptions", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(steamShortcuts.setLaunchOptionsConfirmed).mockResolvedValue(true);
+    vi.mocked(backend.releasePruneConflictLease).mockResolvedValue({ success: true, message: "released" });
   });
 
   it("no-ops on an empty list (no confirm, no log)", async () => {
@@ -95,7 +96,7 @@ describe("reconfirmLaunchOptions", () => {
       prune_lease_token: "launch-lease",
     });
 
-    await reconfirmLaunchOptions(42, 100, "CustomPlayButton");
+    await expect(reconfirmLaunchOptions(42, 100, "CustomPlayButton")).resolves.toEqual({ status: "ready" });
 
     expect(vi.mocked(backend.getRomRelaunchOptions)).toHaveBeenCalledWith(42);
     expect(vi.mocked(steamShortcuts.setLaunchOptionsConfirmed)).toHaveBeenCalledWith(100, RELAUNCH_COMMAND);
@@ -105,7 +106,7 @@ describe("reconfirmLaunchOptions", () => {
   it("skips the confirm-set on a null item but does not throw or log", async () => {
     vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue(null);
 
-    await expect(reconfirmLaunchOptions(42, 100, "Watcher")).resolves.toBeUndefined();
+    await expect(reconfirmLaunchOptions(42, 100, "Watcher")).resolves.toEqual({ status: "ready" });
 
     expect(vi.mocked(backend.getRomRelaunchOptions)).toHaveBeenCalledWith(42);
     expect(vi.mocked(steamShortcuts.setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
@@ -115,7 +116,9 @@ describe("reconfirmLaunchOptions", () => {
   it("logs a non-vacuous error with the context prefix when the fetch rejects; never throws", async () => {
     vi.mocked(backend.getRomRelaunchOptions).mockRejectedValue(new Error("offline"));
 
-    await expect(reconfirmLaunchOptions(42, 100, "Watcher")).resolves.toBeUndefined();
+    await expect(reconfirmLaunchOptions(42, 100, "Watcher")).resolves.toEqual({
+      status: "best_effort_failure",
+    });
 
     expect(vi.mocked(steamShortcuts.setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
     const msg = vi.mocked(backend.logError).mock.calls[0]![0];
@@ -126,14 +129,35 @@ describe("reconfirmLaunchOptions", () => {
   it("carries the caller's context prefix (CustomPlayButton) into the failure log", async () => {
     vi.mocked(backend.getRomRelaunchOptions).mockRejectedValue(new Error("boom"));
 
-    await reconfirmLaunchOptions(42, 100, "CustomPlayButton");
+    await expect(reconfirmLaunchOptions(42, 100, "CustomPlayButton")).resolves.toEqual({
+      status: "best_effort_failure",
+    });
 
     expect(vi.mocked(backend.logError)).toHaveBeenCalledWith(
       expect.stringContaining("CustomPlayButton: launch_options re-confirm failed"),
     );
   });
 
-  it("a hung fetch falls through after the 3s timeout: no set, logged, resolves (never hangs the caller)", async () => {
+  it("keeps a Steam write failure best-effort and releases its lease", async () => {
+    vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue({
+      success: true,
+      app_id: 100,
+      launch_options: RELAUNCH_COMMAND,
+      prune_lease_token: "write-failure-lease",
+    });
+    vi.mocked(steamShortcuts.setLaunchOptionsConfirmed).mockRejectedValue(new Error("steam unavailable"));
+
+    await expect(reconfirmLaunchOptions(42, 100, "Watcher")).resolves.toEqual({
+      status: "best_effort_failure",
+    });
+
+    expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("write-failure-lease");
+    expect(backend.logError).toHaveBeenCalledWith(
+      expect.stringContaining("Watcher: launch_options re-confirm failed (launching anyway)"),
+    );
+  });
+
+  it("a hung fetch returns a distinct timeout without starting a Steam write", async () => {
     vi.useFakeTimers();
     try {
       // Never resolves — simulates a wedged backend / hung callable bridge.
@@ -142,12 +166,43 @@ describe("reconfirmLaunchOptions", () => {
       const pending = reconfirmLaunchOptions(42, 100, "CustomPlayButton");
       // Advancing past the 3s race fires the timeout reject without a real wait.
       await vi.advanceTimersByTimeAsync(3000);
-      await expect(pending).resolves.toBeUndefined();
+      await expect(pending).resolves.toEqual({ status: "timeout" });
 
       expect(vi.mocked(steamShortcuts.setLaunchOptionsConfirmed)).not.toHaveBeenCalled();
       expect(vi.mocked(backend.logError)).toHaveBeenCalledWith(
-        expect.stringContaining("CustomPlayButton: launch_options re-confirm failed"),
+        expect.stringContaining("CustomPlayButton: launch_options re-confirm timed out"),
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("observes a lease-bearing response that arrives after timeout and releases it without a Steam write", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveFetch!: (value: Awaited<ReturnType<typeof backend.getRomRelaunchOptions>>) => void;
+      vi.mocked(backend.getRomRelaunchOptions).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveFetch = resolve;
+          }),
+      );
+
+      const pending = reconfirmLaunchOptions(42, 100, "Watcher");
+      await vi.advanceTimersByTimeAsync(3000);
+      await expect(pending).resolves.toEqual({ status: "timeout" });
+      expect(backend.releasePruneConflictLease).not.toHaveBeenCalled();
+
+      resolveFetch({
+        success: true,
+        app_id: 100,
+        launch_options: RELAUNCH_COMMAND,
+        prune_lease_token: "late-timeout-lease",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(backend.releasePruneConflictLease).toHaveBeenCalledWith("late-timeout-lease");
+      expect(steamShortcuts.setLaunchOptionsConfirmed).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

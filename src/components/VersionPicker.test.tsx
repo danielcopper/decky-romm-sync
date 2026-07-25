@@ -1223,6 +1223,87 @@ describe("VersionPicker — unsynced-saves soft-block", () => {
     expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(true);
   });
 
+  it("unmount during save sync stops before the successor switch commits", async () => {
+    let resolveSync!: (value: { success: true; message: string; synced: number }) => void;
+    vi.mocked(backend.switchVersion).mockResolvedValue(block);
+    vi.mocked(backend.syncRomSaves).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSync = resolve;
+        }),
+    );
+    vi.mocked(showUnsyncedSavesModal).mockResolvedValue("sync_and_switch");
+    const { r, menu } = await renderAndOpen();
+
+    fireEvent.click(within(menu.container).getByText("Game (Japan)"));
+    await waitFor(() => expect(backend.syncRomSaves).toHaveBeenCalledWith(1));
+    r.unmount();
+    resolveSync({ success: true, message: "", synced: 1 });
+    await act(async () => {
+      for (let index = 0; index < 8; index++) await Promise.resolve();
+    });
+
+    expect(backend.switchVersion).toHaveBeenCalledTimes(1);
+    expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+    expect(invalidateCachedGameDetail).not.toHaveBeenCalled();
+  });
+
+  it("unmount during the unsynced-save modal stops before Switch anyway commits", async () => {
+    let resolveChoice!: (value: "switch_anyway") => void;
+    vi.mocked(backend.switchVersion).mockResolvedValue(block);
+    vi.mocked(showUnsyncedSavesModal).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveChoice = resolve;
+        }),
+    );
+    const { r, menu } = await renderAndOpen();
+
+    fireEvent.click(within(menu.container).getByText("Game (Japan)"));
+    await waitFor(() => expect(showUnsyncedSavesModal).toHaveBeenCalled());
+    r.unmount();
+    resolveChoice("switch_anyway");
+    await act(async () => {
+      for (let index = 0; index < 8; index++) await Promise.resolve();
+    });
+
+    expect(backend.switchVersion).toHaveBeenCalledTimes(1);
+    expect(setLaunchOptionsConfirmed).not.toHaveBeenCalled();
+  });
+
+  it("a genuine remount admits its own switch while the old modal chain stays stale", async () => {
+    let resolveOldChoice!: (value: "switch_anyway") => void;
+    vi.mocked(backend.switchVersion)
+      .mockResolvedValueOnce(block)
+      .mockResolvedValueOnce(block)
+      .mockResolvedValueOnce(successResult);
+    vi.mocked(showUnsyncedSavesModal)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOldChoice = resolve;
+          }),
+      )
+      .mockResolvedValueOnce("switch_anyway");
+
+    const oldPicker = await renderAndOpen();
+    fireEvent.click(within(oldPicker.menu.container).getByText("Game (Japan)"));
+    await waitFor(() => expect(showUnsyncedSavesModal).toHaveBeenCalledTimes(1));
+    oldPicker.r.unmount();
+
+    const currentPicker = await renderAndOpen();
+    await clickRow(currentPicker.menu.container, "Game (Japan)");
+    resolveOldChoice("switch_anyway");
+    await act(async () => {
+      for (let index = 0; index < 8; index++) await Promise.resolve();
+    });
+
+    expect(backend.switchVersion).toHaveBeenCalledTimes(3);
+    expect(backend.switchVersion).toHaveBeenNthCalledWith(2, APP_ID, 2, false);
+    expect(backend.switchVersion).toHaveBeenNthCalledWith(3, APP_ID, 2, true);
+    expect(setLaunchOptionsConfirmed).toHaveBeenCalledWith(APP_ID, "");
+  });
+
   it("routes a version_vanished 'Switch anyway' retry through the common refusal path", async () => {
     const vanished = {
       success: false as const,
