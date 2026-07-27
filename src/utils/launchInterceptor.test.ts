@@ -620,7 +620,7 @@ describe("launchInterceptor — full funnel watcher", () => {
       expect(runGameMock()).toHaveBeenCalledWith("gid-7", "", -1, 100);
     });
 
-    it("a timed-out re-confirm keeps the cancelled watcher launch blocked", async () => {
+    it("a timed-out re-confirm keeps the cancelled watcher launch blocked and says so", async () => {
       vi.useFakeTimers();
       try {
         vi.mocked(backend.getRomRelaunchOptions).mockReturnValue(new Promise<never>(() => {}));
@@ -636,8 +636,33 @@ describe("launchInterceptor — full funnel watcher", () => {
         );
         expect(steamShortcuts.setLaunchOptionsConfirmed).not.toHaveBeenCalled();
         expect(runGameMock()).not.toHaveBeenCalled();
+        // The watcher owns no UI, so without this toast the press dies silently.
+        expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Launch cancelled — try again" });
       } finally {
         vi.useRealTimers();
+      }
+    });
+
+    it("a lifecycle-cancelled re-confirm stays silent (no launch-cancelled toast)", async () => {
+      let remounted = false;
+      vi.mocked(backend.getRomRelaunchOptions).mockReturnValue(new Promise<never>(() => {}));
+      try {
+        registerLaunchInterceptor();
+        captureHandler()(77, "1234", "LaunchApp", 0);
+        await flush();
+        expect(backend.getRomRelaunchOptions).toHaveBeenCalledWith(42);
+        vi.mocked(toaster.toast).mockClear();
+
+        await releaseAllPruneLeases();
+        mountPruneLeasePlugin();
+        remounted = true;
+        await flush();
+
+        // Teardown is not a refused launch — only the timeout branch reports.
+        expect(toaster.toast).not.toHaveBeenCalled();
+        expect(runGameMock()).not.toHaveBeenCalled();
+      } finally {
+        if (!remounted) mountPruneLeasePlugin();
       }
     });
 

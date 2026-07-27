@@ -4,7 +4,6 @@ import {
   addShortcut,
   getExistingRomMShortcuts,
   getLiveRomMShortcutAppIds,
-  removeShortcutConfirmed,
   removeShortcutConfirmedOutcome,
   setLaunchOptionsConfirmed,
 } from "./steamShortcuts";
@@ -74,7 +73,7 @@ describe("setLaunchOptionsConfirmed", () => {
   });
 });
 
-describe("removeShortcutConfirmed", () => {
+describe("removeShortcutConfirmedOutcome", () => {
   beforeEach(() => {
     vi.useRealTimers();
   });
@@ -93,7 +92,7 @@ describe("removeShortcutConfirmed", () => {
       },
     });
 
-    await expect(removeShortcutConfirmed(77)).resolves.toBe(true);
+    await expect(removeShortcutConfirmedOutcome(77)).resolves.toEqual({ status: "confirmed" });
     expect(remove).toHaveBeenCalledWith(77);
   });
 
@@ -102,7 +101,7 @@ describe("removeShortcutConfirmed", () => {
     vi.stubGlobal("collectionStore", { deckDesktopApps: undefined });
     vi.stubGlobal("SteamClient", { Apps: { RemoveShortcut: remove } });
 
-    await expect(removeShortcutConfirmed(77)).resolves.toBe(false);
+    await expect(removeShortcutConfirmedOutcome(77)).resolves.toEqual({ status: "not_attempted" });
     expect(remove).not.toHaveBeenCalled();
   });
 
@@ -120,7 +119,7 @@ describe("removeShortcutConfirmed", () => {
       },
     });
 
-    await expect(removeShortcutConfirmed(77)).resolves.toBe(false);
+    await expect(removeShortcutConfirmedOutcome(77)).resolves.toEqual({ status: "not_attempted" });
     expect(remove).not.toHaveBeenCalled();
   });
 
@@ -139,10 +138,10 @@ describe("removeShortcutConfirmed", () => {
       },
     });
 
-    const result = removeShortcutConfirmed(77, 200);
+    const result = removeShortcutConfirmedOutcome(77, 200);
     await vi.advanceTimersByTimeAsync(200);
 
-    await expect(result).resolves.toBe(false);
+    await expect(result).resolves.toEqual({ status: "attempted_unconfirmed" });
     expect(apps.has(77)).toBe(true);
   });
 

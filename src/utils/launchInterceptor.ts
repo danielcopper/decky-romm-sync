@@ -196,7 +196,14 @@ function bareRelaunch(appId: number): void {
  *  so it only adds a bounded (≤3s) wait to the cancel→relaunch window. */
 async function relaunch(appId: number, romId: number, admission: PruneLeaseAdmission): Promise<void> {
   const reconfirm = await reconfirmLaunchOptions(romId, appId, "Watcher", admission);
-  if (reconfirm.status === "cancelled" || reconfirm.status === "timeout") return;
+  if (reconfirm.status === "cancelled") return;
+  if (reconfirm.status === "timeout") {
+    // The watcher has no game-page UI to fall back to, so the refusal would
+    // otherwise be a silently dead Play press — say it out loud instead
+    // (CustomPlayButton's twin path returns its trigger to "Play").
+    toaster.toast({ title: "RomM Sync", body: "Launch cancelled — try again" });
+    return;
+  }
   bareRelaunch(appId);
 }
 

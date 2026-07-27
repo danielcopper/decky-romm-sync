@@ -33,6 +33,7 @@ import { resetEta, weightedCoarseFraction } from "./utils/syncEta";
 import { recordSyncCreated, resetSyncDelta, getSyncDelta } from "./utils/syncDeltaStore";
 import { resetSyncCancel } from "./utils/syncManager";
 import { beginPrunePreview, beginPruneRun, getPruneState, resetPruneState } from "./utils/pruneStore";
+import { mountPruneLeasePlugin, releaseAllPruneLeases } from "./utils/pruneLease";
 import type {
   DownloadCompleteEvent,
   DownloadProgressEvent,
@@ -632,7 +633,60 @@ describe("index.tsx — sync_stale listener", () => {
       plugin.onDismount();
     }
   });
+
+  it("catches a rejecting stale tail so it never wedges the later sync_complete continuation", async () => {
+    const plugin = pluginFactory();
+    await flush();
+    vi.mocked(releasePruneConflictLease).mockClear();
+    removeShortcut.mockClear();
+    logError.mockClear();
+    createOrUpdateCollections.mockClear();
+
+    try {
+      // A tombstoned plugin generation refuses the tail's continuation outright,
+      // so the stored promise REJECTS — the shape L20 is about.
+      await releaseAllPruneLeases();
+      act(() => {
+        emitDeckyEvent<[SyncStaleData]>("sync_stale", {
+          remove: [{ rom_id: 1, app_id: 3000 }],
+          prune_lease_token: "rejecting-stale-lease",
+        });
+      });
+      await flush();
+
+      // Post-catch state: the failure is surfaced where the tail is STORED, so the
+      // stored promise is settled (nothing waits on an unhandled rejection), no
+      // Steam write happened, and the refused token is released anyway.
+      expect(logError).toHaveBeenCalledWith(expect.stringContaining("stale shortcut removal failed"));
+      expect(removeShortcut).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(releasePruneConflictLease).toHaveBeenCalledWith("rejecting-stale-lease"));
+
+      mountPruneLeasePlugin();
+      // The completion continuation awaits that same tail and still runs its
+      // sibling reconciles to the end instead of being aborted by it.
+      act(() => {
+        emitDeckyEvent<[SyncCompleteAfterStaleFailure]>("sync_complete", {
+          platform_app_ids: { gba: [3000] },
+          total_games: 1,
+          prune_lease_token: "completion-after-failed-tail",
+        });
+      });
+      await flush();
+
+      expect(createOrUpdateCollections).toHaveBeenCalled();
+      await vi.waitFor(() => expect(releasePruneConflictLease).toHaveBeenCalledWith("completion-after-failed-tail"));
+    } finally {
+      mountPruneLeasePlugin();
+      plugin.onDismount();
+    }
+  });
 });
+
+type SyncCompleteAfterStaleFailure = {
+  platform_app_ids: Record<string, number[]>;
+  total_games: number;
+  prune_lease_token?: string;
+};
 
 describe("index.tsx — migration_relaunch_options listener", () => {
   beforeEach(() => {

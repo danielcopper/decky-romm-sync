@@ -22,13 +22,20 @@ import {
   type PruneScope,
 } from "../api/backend";
 import { detach } from "../utils/detach";
-import { beginPrunePreview, beginPruneRun, getPruneState, onPruneStateChange } from "../utils/pruneStore";
+import {
+  beginPrunePreview,
+  beginPruneRun,
+  getPruneState,
+  isPruneResultLost,
+  onPruneStateChange,
+} from "../utils/pruneStore";
 import { getSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
 import { withTimeout } from "../utils/withTimeout";
 
 const PAGE_SIZE = 50;
 const SELECTION_PAGE_SIZE = 100;
 const PRUNE_CALLABLE_TIMEOUT_MS = 15000;
+const RESULT_LOST_MESSAGE = "The cleanup result was lost — check your library and run the scan again.";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -72,9 +79,13 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   const [includedContent, setIncludedContent] = useState<Set<number>>(new Set());
   const [freeBytes, setFreeBytes] = useState(initial.free_bytes ?? 0);
   const [pruneState, setPruneState] = useState(getPruneState());
+  const [resultLost, setResultLost] = useState(isPruneResultLost());
 
   useEffect(() => {
-    const unsubscribe = onPruneStateChange(() => setPruneState(getPruneState()));
+    const unsubscribe = onPruneStateChange(() => {
+      setPruneState(getPruneState());
+      setResultLost(isPruneResultLost());
+    });
     return () => {
       unsubscribe();
     };
@@ -203,7 +214,13 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
         setStatus(result.message ?? "Cleanup could not start.");
         return;
       }
-      beginPruneRun(result.run_id!, initial.preview_id);
+      if (!result.run_id) {
+        // A success without a run id can never be adopted by id — say so instead
+        // of wedging frame admission on a run the store will never recognise.
+        setStatus("Cleanup started but the backend response carried no run id.");
+        return;
+      }
+      beginPruneRun(result.run_id, initial.preview_id);
       setRunStarted(true);
       setStatus("Cleanup running...");
     } catch (e) {
@@ -244,7 +261,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
             onChange={setRemoveRows}
           />
           <ToggleField
-            label="Remove fully vanished games and their Steam shortcut"
+            label="Remove fully vanished games, including any Steam shortcut"
             description="Off by default. This removes the whole local game only when every local ID returns 404."
             checked={removeDeadGames}
             disabled={runInFlight}
@@ -383,6 +400,11 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
             </Focusable>
           </div>
         )}
+        {resultLost && (
+          <div role="status" aria-live="polite" style={{ marginTop: "10px", color: "#ff8c6a" }}>
+            {RESULT_LOST_MESSAGE}
+          </div>
+        )}
         {status && !complete && (
           <div role="status" aria-live="polite" style={{ marginTop: "10px", color: "#ffcc66" }}>
             {status}
@@ -409,7 +431,10 @@ export async function openRemovedGamesCleanupModal(romId?: number): Promise<bool
   );
   if (!result.success) throw new Error(result.message ?? "Cleanup scan failed.");
   if ((result.total ?? 0) === 0) return false;
-  beginPrunePreview(result.preview_id!);
+  // Without a preview id nothing can admit this run's frames — surface the
+  // malformed response rather than opening a modal that can never report.
+  if (!result.preview_id) throw new Error("Cleanup scan response carried no preview id.");
+  beginPrunePreview(result.preview_id);
   showModal(<CleanupModal initial={result} scope={scope} romId={romId ?? null} />);
   return true;
 }
@@ -418,10 +443,14 @@ export const RemovedGamesCleanupSection: FC = () => {
   const [scanning, setScanning] = useState(false);
   const [syncRunning, setSyncRunning] = useState(getSyncProgress().running);
   const [pruneState, setPruneState] = useState(getPruneState());
+  const [resultLost, setResultLost] = useState(isPruneResultLost());
 
   useEffect(() => {
     const unsubscribeSync = onSyncProgressChange(() => setSyncRunning(getSyncProgress().running));
-    const unsubscribePrune = onPruneStateChange(() => setPruneState(getPruneState()));
+    const unsubscribePrune = onPruneStateChange(() => {
+      setPruneState(getPruneState());
+      setResultLost(isPruneResultLost());
+    });
     return () => {
       unsubscribeSync();
       unsubscribePrune();
@@ -456,6 +485,11 @@ export const RemovedGamesCleanupSection: FC = () => {
           {scanning ? "Scanning..." : "Clean Up Removed RomM Games"}
         </ButtonItem>
       </PanelSectionRow>
+      {resultLost && (
+        <PanelSectionRow>
+          <Field label={RESULT_LOST_MESSAGE} />
+        </PanelSectionRow>
+      )}
       {progress && (
         <PanelSectionRow>
           <Field

@@ -86,7 +86,7 @@ async function captureShortcutSnapshot(appId: number): Promise<PruneSteamSnapsho
   const details = await getAppDetails(appId);
   if (!isRomMShortcutDetails(details)) throw new Error("The live shortcut is not owned by RomM Sync");
   const overview = appStore.GetAppOverviewByAppID(appId);
-  if (!details || !overview) throw new Error("Steam shortcut playtime state was unavailable");
+  if (!overview) throw new Error("Steam shortcut playtime state was unavailable");
   const collections = collectionStore.userCollections
     .filter((collection) => collection.apps.has(appId))
     .map((collection) => ({
@@ -222,7 +222,6 @@ async function executePruneAction(action: PruneAction, generation: number): Prom
             message: "Steam confirmed the shortcut is already absent.",
             shortcut_absent: true,
           };
-          if (!(await claim())) return;
           await reportWithRetry(report);
           return;
         }

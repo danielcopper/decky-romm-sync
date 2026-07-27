@@ -58,16 +58,59 @@ export interface PruneComplete {
 }
 
 type Listener = () => void;
+
+/**
+ * How long an adopted run may go without a frame before its result is presumed
+ * lost. A completion is only published from a contiguous chunk set, so a single
+ * dropped chunk would otherwise pin `progress` forever and permanently disable
+ * the cleanup entry point. The window has to clear the longest legitimate gap
+ * between frames — a whole-group recovery bundle copying and checksumming a
+ * large installed ROM emits nothing while it runs.
+ */
+const LOST_RESULT_TIMEOUT_MS = 15 * 60_000;
+
 let activeRunId: string | null = null;
+let activePreviewId: string | null = null;
 let progress: PruneProgress | null = null;
 let complete: PruneComplete | null = null;
 const receivedChunks = new Map<number, PruneComplete>();
 let terminalChunkIndex: number | null = null;
 let pendingPreviewId: string | null = null;
+let resultLost = false;
+let lostResultTimer: ReturnType<typeof setTimeout> | null = null;
 const listeners = new Set<Listener>();
 
 function notify(): void {
   for (const listener of listeners) listener();
+}
+
+function disarmLostResultTimer(): void {
+  if (lostResultTimer === null) return;
+  clearTimeout(lostResultTimer);
+  lostResultTimer = null;
+}
+
+/**
+ * (Re)start the lost-result countdown from the frame just accepted.
+ *
+ * Firing releases the run from the UI — `progress` clears, so the entry point
+ * re-enables — and raises the flag the UI turns into a "check your library and
+ * scan again" warning. It deliberately keeps the half-assembled chunk set and
+ * re-opens the originating preview for adoption: a run that was merely SLOW
+ * re-adopts on its next frame and still finalizes, so an over-eager countdown
+ * can never turn a late result into a silently dropped one.
+ */
+function armLostResultTimer(): void {
+  disarmLostResultTimer();
+  lostResultTimer = setTimeout(() => {
+    lostResultTimer = null;
+    if (complete !== null) return;
+    pendingPreviewId = activePreviewId;
+    activeRunId = null;
+    progress = null;
+    resultLost = true;
+    notify();
+  }, LOST_RESULT_TIMEOUT_MS);
 }
 
 function unique(values: number[]): number[] {
@@ -78,11 +121,14 @@ export function beginPruneRun(runId: string, previewId: string): void {
   if (activeRunId === runId) return;
   if (pendingPreviewId !== previewId) return;
   activeRunId = runId;
+  activePreviewId = previewId;
   pendingPreviewId = null;
   progress = null;
   complete = null;
   receivedChunks.clear();
   terminalChunkIndex = null;
+  resultLost = false;
+  armLostResultTimer();
   notify();
 }
 
@@ -91,7 +137,10 @@ export function admitPruneFrame(previewId: string, runId: string): boolean {
   if (activeRunId !== null) return activeRunId === runId;
   if (pendingPreviewId === null || pendingPreviewId !== previewId) return false;
   activeRunId = runId;
+  activePreviewId = previewId;
   pendingPreviewId = null;
+  resultLost = false;
+  armLostResultTimer();
   notify();
   return true;
 }
@@ -99,7 +148,7 @@ export function admitPruneFrame(previewId: string, runId: string): boolean {
 export function setPruneProgress(value: PruneProgress): void {
   if (!admitPruneFrame(value.preview_id, value.run_id)) return;
   progress = value;
-  complete = null;
+  armLostResultTimer();
   notify();
 }
 
@@ -109,10 +158,12 @@ export function setPruneComplete(value: PruneComplete): PruneComplete | null {
   if (receivedChunks.has(chunkIndex)) return null;
   receivedChunks.set(chunkIndex, value);
   if (value.final !== false) terminalChunkIndex = chunkIndex;
+  armLostResultTimer();
   if (terminalChunkIndex === null) return null;
   for (let index = 0; index <= terminalChunkIndex; index++) {
     if (!receivedChunks.has(index)) return null;
   }
+  disarmLostResultTimer();
   const chunks = Array.from({ length: terminalChunkIndex + 1 }, (_, index) => receivedChunks.get(index)!);
   const terminal = receivedChunks.get(terminalChunkIndex)!;
   progress = null;
@@ -135,27 +186,43 @@ export function getPruneState(): {
   return { runId: activeRunId, progress, complete };
 }
 
+/**
+ * Whether the last adopted run went silent long enough that its result is
+ * presumed lost. Separate from {@link getPruneState} because it survives the
+ * run being dropped — it is the only trace the user gets that cleanup may have
+ * done work the UI never saw.
+ */
+export function isPruneResultLost(): boolean {
+  return resultLost;
+}
+
 export function onPruneStateChange(listener: Listener): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
 
 export function resetPruneState(): void {
+  disarmLostResultTimer();
   activeRunId = null;
+  activePreviewId = null;
   progress = null;
   complete = null;
   receivedChunks.clear();
   terminalChunkIndex = null;
   pendingPreviewId = null;
+  resultLost = false;
   notify();
 }
 
 export function beginPrunePreview(previewId: string): void {
+  disarmLostResultTimer();
   activeRunId = null;
+  activePreviewId = null;
   progress = null;
   complete = null;
   receivedChunks.clear();
   terminalChunkIndex = null;
   pendingPreviewId = previewId;
+  resultLost = false;
   notify();
 }

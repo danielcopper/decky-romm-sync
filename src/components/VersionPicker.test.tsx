@@ -366,6 +366,38 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
     await waitFor(() => expect(openRemovedGamesCleanupModal).toHaveBeenCalledWith(1));
   });
 
+  it("explains WHY a singleton vanished binding only offers cleanup", async () => {
+    const bound = multiVersionList().versions![0]!;
+    vi.mocked(backend.getVersionList).mockResolvedValue({
+      multi_version: false,
+      server_query_failed: false,
+      bound_vanished: true,
+      bound_version: { ...bound, vanished: true },
+    });
+
+    const picker = render(<VersionPicker appId={APP_ID} />);
+    await picker.findByRole("button", { name: "Remove local data..." });
+
+    // Without the label the lone destructive action has no stated cause.
+    expect(picker.container.textContent).toContain("No longer available on RomM");
+  });
+
+  it("renders nothing for a singleton whose binding is still live", async () => {
+    const bound = multiVersionList().versions![0]!;
+    vi.mocked(backend.getVersionList).mockResolvedValue({
+      multi_version: false,
+      server_query_failed: false,
+      bound_vanished: false,
+      bound_version: bound,
+    });
+
+    const { container } = render(<VersionPicker appId={APP_ID} />);
+
+    await waitFor(() => expect(vi.mocked(backend.getVersionList)).toHaveBeenCalledWith(APP_ID));
+    expect(container.textContent).not.toContain("No longer available on RomM");
+    expect(container.textContent).not.toContain("Remove local data...");
+  });
+
   it("surfaces an inline cleanup-preview failure", async () => {
     vi.mocked(backend.getVersionList).mockResolvedValue(listWithBoundVanished());
     vi.mocked(openRemovedGamesCleanupModal).mockRejectedValue(new Error("offline"));
@@ -401,6 +433,23 @@ describe("VersionPicker — liveness connection signals (#1570)", () => {
     render(<VersionPicker appId={APP_ID} />);
     await waitFor(() => expect(backend.getVersionList).toHaveBeenCalledWith(APP_ID));
 
+    expect(getRommConnectionState()).toBe("checking");
+  });
+
+  it("manufactures no verdict from a singleton vanished binding", async () => {
+    const bound = multiVersionList().versions![0]!;
+    vi.mocked(backend.getVersionList).mockResolvedValue({
+      multi_version: false,
+      server_query_failed: false,
+      bound_vanished: true,
+      bound_version: { ...bound, vanished: true },
+    });
+
+    const picker = render(<VersionPicker appId={APP_ID} />);
+    await picker.findByRole("button", { name: "Remove local data..." });
+
+    // The 404 is an entity verdict; the server plainly answered, so neither
+    // "connected" nor "offline" may be inferred from it.
     expect(getRommConnectionState()).toBe("checking");
   });
 
@@ -841,6 +890,39 @@ describe("VersionPicker — switching", () => {
 
     expect(toaster.toast).toHaveBeenCalledWith({ title: "RomM Sync", body: "Could not switch version" });
     expect(invalidateCachedGameDetail).not.toHaveBeenCalled();
+  });
+
+  it("stays silent when the in-flight switch rejects only because the page unmounted", async () => {
+    const logWarnSpy = vi.spyOn(backend, "logWarn").mockImplementation(() => {});
+    try {
+      vi.mocked(backend.getVersionList).mockResolvedValue(multiVersionList());
+      let rejectSwitch!: (error: unknown) => void;
+      vi.mocked(backend.switchVersion).mockImplementation(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectSwitch = reject;
+          }),
+      );
+
+      const { r, menu } = await renderAndOpen();
+      fireEvent.click(within(menu.container).getByText("Game (Japan)"));
+      await waitFor(() => expect(backend.switchVersion).toHaveBeenCalledWith(APP_ID, 2, false));
+      r.unmount();
+      vi.mocked(toaster.toast).mockClear();
+
+      await act(async () => {
+        rejectSwitch(new Error("teardown cancelled the callable"));
+        for (let i = 0; i < 6; i++) await Promise.resolve();
+      });
+
+      // The picker is gone: a "Could not switch version" toast would blame the
+      // user's next screen for work that either committed or never ran.
+      expect(toaster.toast).not.toHaveBeenCalled();
+      expect(logWarnSpy).toHaveBeenCalledWith(expect.stringContaining("version switch continuation was cancelled"));
+      expect(invalidateCachedGameDetail).not.toHaveBeenCalled();
+    } finally {
+      logWarnSpy.mockRestore();
+    }
   });
 });
 

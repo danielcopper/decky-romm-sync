@@ -41,6 +41,7 @@ import { RemovedGamesCleanupSection } from "./RemovedGamesCleanup";
 import {
   capturePruneLeaseAdmission,
   isPruneLeaseCancelled,
+  isPruneLeaseCancellation,
   mountPruneLeaseOwner,
   releasePruneLeasesByOwner,
   withPruneLease,
@@ -210,8 +211,8 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
   const handleRemoveShortcuts = (p: RegistryPlatform) =>
     runRemoval(async (onProgress) => {
       setActionStatus(`Removing ${p.name} shortcuts...`);
+      const admission = capturePruneLeaseAdmission(DANGER_ZONE_LEASE_OWNER);
       try {
-        const admission = capturePruneLeaseAdmission(DANGER_ZONE_LEASE_OWNER);
         const result = await removePlatformShortcuts(p.slug);
         // The @migration_blocked / @sync_active_blocked gates short-circuit to
         // { success: false, message, ... } with no app_ids/rom_ids — surface
@@ -241,7 +242,13 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
         setActionStatus(`Removed ${p.count} ${p.name} game${p.count === 1 ? "" : "s"}`);
         await refreshPlatforms();
         loadNonSteamApps();
-      } catch {
+      } catch (e) {
+        // Leaving the Danger Zone cancels the removal continuation — the backend
+        // removal already committed, so this is teardown, not a failed removal.
+        if (isPruneLeaseCancellation(e, admission)) {
+          logWarn(`Platform shortcut removal continuation was cancelled: ${e}`);
+          return;
+        }
         setActionStatus("Failed to remove shortcuts");
       }
     });
@@ -298,8 +305,8 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
     await runRemoval(async (onProgress) => {
       setStatus("Removing all shortcuts...");
       let removedCount = 0;
+      const admission = capturePruneLeaseAdmission(DANGER_ZONE_LEASE_OWNER);
       try {
-        const admission = capturePruneLeaseAdmission(DANGER_ZONE_LEASE_OWNER);
         const result = await removeAllShortcuts();
         if (!result.success) {
           // A gate refusal (@sync_active_blocked / @migration_blocked) carries
@@ -355,7 +362,13 @@ const ShortcutRemovalSection: FC<ShortcutRemovalSectionProps> = ({
           );
           setStatus(result.message ?? "All shortcuts removed");
         }
-      } catch {
+      } catch (e) {
+        // Teardown cancellation, not a failed removal — the backend work already
+        // committed and there is no panel left to refresh or report into.
+        if (isPruneLeaseCancellation(e, admission)) {
+          logWarn(`All-shortcut removal continuation was cancelled: ${e}`);
+          return;
+        }
         setStatus("Failed to remove shortcuts");
       }
       await refreshPlatforms();

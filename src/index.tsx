@@ -539,7 +539,9 @@ export default definePlugin(() => {
         else leaseSignal.addEventListener("abort", abort, { once: true });
         try {
           const signal = continuationController.signal;
-          await Promise.all([
+          // Settle semantics, not Promise.all: one rejecting sibling must not
+          // release this lease while the others are still writing to Steam.
+          await Promise.allSettled([
             staleRemovals,
             reconcileLaunchOptions(signal),
             reconcileCollections(signal),
@@ -651,6 +653,9 @@ export default definePlugin(() => {
     }
     const continuationController = syncContinuationController;
     const previousTail = staleRemovalTail;
+    // The tail is stored and awaited later by the sync-completion continuation, so
+    // it carries its own catch: an unhandled rejection would otherwise sit on it
+    // for the whole window, and a rejected tail must not abort its awaiters.
     staleRemovalTail = withPruneLease(data.prune_lease_token, "Sync stale removal", async (leaseSignal) => {
       const abort = () => continuationController.abort();
       if (leaseSignal.aborted) abort();
@@ -664,7 +669,7 @@ export default definePlugin(() => {
       } finally {
         leaseSignal.removeEventListener("abort", abort);
       }
-    });
+    }).catch((e: unknown) => logError(`sync_stale: stale shortcut removal failed: ${e}`));
   });
 
   // ``sync_collections`` arrives at the end of the per-unit run with the

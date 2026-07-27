@@ -34,6 +34,21 @@ export function isPruneLeaseCancelled(signal: AbortSignal | undefined): boolean 
   return signal?.aborted ?? false;
 }
 
+/**
+ * Whether a thrown error means "this continuation was cancelled by a lifecycle
+ * teardown", not "the operation failed".
+ *
+ * Two shapes count: the explicit {@link PruneLeaseAdmissionCancelled} thrown when
+ * a continuation is refused at lease registration, and any error observed while
+ * *admission* is already stale — an owner that unmounted (or a plugin generation
+ * that rolled) mid-flight rejects its own in-flight callables, and the backend
+ * work behind them either committed or was never really attempted. Callers use
+ * this to stay silent instead of toasting a failure the user cannot act on.
+ */
+export function isPruneLeaseCancellation(error: unknown, admission: PruneLeaseAdmission): boolean {
+  return error instanceof PruneLeaseAdmissionCancelled || !isPruneLeaseAdmissionCurrent(admission);
+}
+
 export function mountPruneLeasePlugin(): void {
   pluginGeneration++;
   pluginMounted = true;

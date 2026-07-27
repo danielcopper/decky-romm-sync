@@ -10,7 +10,7 @@ import { delay } from "./pacedOps";
  */
 const ROM_LAUNCHER_SUFFIX = "/bin/rom-launcher";
 
-export function isRomMShortcutDetails(details: SteamAppDetails | null): boolean {
+export function isRomMShortcutDetails(details: SteamAppDetails | null): details is SteamAppDetails {
   return (
     typeof details?.strShortcutExe === "string" &&
     details.strShortcutExe.replace(/^"|"$/g, "").endsWith(ROM_LAUNCHER_SUFFIX)
@@ -262,18 +262,10 @@ export function removeShortcut(appId: number): void {
   }
 }
 
-/** Remove one shortcut and require Steam's live store to confirm its absence. */
+/** Steam's live non-Steam shortcut map, or `null` when it can't be read. */
 function readDesktopAppStore(): Map<number, unknown> | null {
   if (typeof collectionStore === "undefined") return null;
   return collectionStore.deckDesktopApps?.apps ?? null;
-}
-
-export async function removeShortcutConfirmed(
-  appId: number,
-  timeoutMs = 3000,
-  ownershipAlreadyChecked = false,
-): Promise<boolean> {
-  return (await removeShortcutConfirmedOutcome(appId, timeoutMs, ownershipAlreadyChecked)).status === "confirmed";
 }
 
 export interface ShortcutRemovalOutcome {

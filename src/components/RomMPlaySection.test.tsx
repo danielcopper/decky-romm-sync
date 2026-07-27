@@ -2426,6 +2426,44 @@ describe("RomMPlaySection", () => {
       });
       expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith(expect.objectContaining({ body: "Uninstall failed" }));
     });
+
+    it("throw caused by unmount → no toast, debug-logged instead (non-vacuous catch)", async () => {
+      vi.mocked(cachedStore.getCachedGameDetail).mockResolvedValue({
+        found: true,
+        rom_id: 42,
+        rom_name: "Mario",
+      });
+      const view = render(<RomMPlaySection appId={testAppId} />);
+      await flushAsync();
+      const items = await openRomMMenuAndGetItems(testAppId);
+
+      let rejectRemove!: (error: unknown) => void;
+      vi.mocked(backend.removeRom).mockImplementation(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectRemove = reject;
+          }),
+      );
+      const uninstall = items[items.length - 1]!.props.onClick?.();
+      await flushAsync();
+
+      // The user leaves the game page while the uninstall is still in flight.
+      view.unmount();
+      vi.mocked(toaster.toast).mockClear();
+      vi.mocked(backend.debugLog).mockClear();
+      await act(async () => {
+        rejectRemove(new Error("teardown cancelled the callable"));
+        await uninstall;
+        for (let i = 0; i < 6; i++) await Promise.resolve();
+      });
+
+      // Post-catch state: no user-facing failure for work that already committed,
+      // and the cancellation is recorded on the debug channel instead.
+      expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
+      expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
+        expect.stringContaining("handleUninstall: continuation was cancelled"),
+      );
+    });
   });
 
   // ------------------------------------------------------------------

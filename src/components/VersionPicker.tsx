@@ -49,6 +49,7 @@ import { detach } from "../utils/detach";
 import {
   capturePruneLeaseAdmission,
   isPruneLeaseAdmissionCurrent,
+  isPruneLeaseCancellation,
   mountPruneLeaseOwner,
   releasePruneLeasesByOwner,
   type PruneLeaseAdmission,
@@ -79,6 +80,14 @@ const BADGE_COLORS: Record<"accent" | "muted" | "good", { bg: string; fg: string
   good: { bg: "rgba(91, 163, 43, 0.22)", fg: "#7ac74f" },
   muted: { bg: "rgba(255, 255, 255, 0.10)", fg: "rgba(255, 255, 255, 0.55)" },
 };
+
+/** The label a row (or a singleton binding) carries once RomM 404s its exact id. */
+const VANISHED_HINT = "No longer available on RomM";
+
+/** The italic inline hint that explains why a version can't be selected. */
+const AvailabilityHint: FC<{ text: string }> = ({ text }) => (
+  <span style={{ marginLeft: "8px", fontSize: "11px", fontStyle: "italic", color: NEUTRAL_GREY }}>{text}</span>
+);
 
 /** A small pill badge (Default / Downloaded / not synced) shown after a row's label. */
 const Badge: FC<{ text: string; tone: "accent" | "muted" | "good" }> = ({ text, tone }) => {
@@ -364,6 +373,13 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
       // backend detail in the subtext so the reason is readable (#1359).
       handleSwitchFailure(result);
     } catch (e) {
+      // A teardown-cancelled continuation is not a switch failure: the backend
+      // rebind either committed or was never attempted, and this picker is gone.
+      // Stay silent (and touch no state) rather than toast at the next surface.
+      if (isPruneLeaseCancellation(e, admission)) {
+        logWarn(`VersionPicker: version switch continuation was cancelled: ${e}`);
+        return;
+      }
       setSwitching(false);
       logError(`VersionPicker: switchVersion failed: ${e}`);
       toaster.toast({ title: "RomM Sync", body: "Could not switch version" });
@@ -386,10 +402,16 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   if (!versionList?.multi_version) {
     const bound = versionList?.bound_version;
     if (!versionList?.bound_vanished || !bound?.synced) return null;
+    // A single-member group has nothing to pick between, so it renders no menu —
+    // but its vanished binding still has to SAY why the game is unusable, next to
+    // the inline cleanup that is the only action left for it.
     return (
-      <DialogButton className="romm-disc-btn" onClick={() => openCleanup(bound.rom_id)}>
-        Remove local data...
-      </DialogButton>
+      <span style={{ display: "inline-flex", alignItems: "center" }}>
+        <DialogButton className="romm-disc-btn" onClick={() => openCleanup(bound.rom_id)}>
+          Remove local data...
+        </DialogButton>
+        <AvailabilityHint text={VANISHED_HINT} />
+      </span>
     );
   }
   if (!versionList.versions || versionList.versions.length === 0) return null;
@@ -416,17 +438,9 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
   };
 
   const rowAvailabilityHint = (v: VersionInfo): ReactNode => {
-    let text: string;
-    if (v.vanished) {
-      text = "No longer available on RomM";
-    } else if (!v.switchable) {
-      text = "conflicting metadata match in RomM";
-    } else {
-      return null;
-    }
-    return (
-      <span style={{ marginLeft: "8px", fontSize: "11px", fontStyle: "italic", color: NEUTRAL_GREY }}>{text}</span>
-    );
+    if (v.vanished) return <AvailabilityHint text={VANISHED_HINT} />;
+    if (!v.switchable) return <AvailabilityHint text="conflicting metadata match in RomM" />;
+    return null;
   };
 
   const openMenu = (e: MouseEvent): void => {

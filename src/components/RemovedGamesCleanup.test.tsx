@@ -4,7 +4,14 @@ import { toaster } from "@decky/api";
 import { showModal } from "@decky/ui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as backend from "../api/backend";
-import { resetPruneState, setPruneComplete, setPruneProgress } from "../utils/pruneStore";
+import {
+  beginPrunePreview,
+  beginPruneRun,
+  getPruneState,
+  resetPruneState,
+  setPruneComplete,
+  setPruneProgress,
+} from "../utils/pruneStore";
 import { openRemovedGamesCleanupModal, RemovedGamesCleanupSection } from "./RemovedGamesCleanup";
 
 const preview: backend.PrunePreviewResult = {
@@ -451,5 +458,95 @@ describe("RemovedGamesCleanup", () => {
     expect(modal.container.textContent).toContain("Warning: A shared save was retained.");
     expect(modal.container.textContent).toContain("One or more displayed warnings were shortened.");
     expect(modal.container.textContent).not.toContain("0 additional warning(s)");
+  });
+
+  it("blocks confirmation when a selected installed ROM has no measurable size", async () => {
+    vi.mocked(backend.getPrunePreview).mockResolvedValue({
+      ...preview,
+      free_bytes: 1_000_000,
+      items: [{ ...preview.items![0]!, installed_bytes: null }],
+    });
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    const confirm = modal.getByRole("button", { name: "Confirm Cleanup" }) as HTMLButtonElement;
+    // Unselected, an unmeasurable ROM blocks nothing — it is simply not copied.
+    expect(confirm.disabled).toBe(false);
+    expect(modal.container.textContent).not.toContain("no safe measurable size");
+
+    const toggles = modal.getAllByTestId("toggle-input") as HTMLInputElement[];
+    fireEvent.click(toggles[4]!);
+
+    // Selected for recovery, its required space cannot be proven, so the run is
+    // refused rather than started on an unbacked estimate.
+    expect(confirm.disabled).toBe(true);
+    expect(modal.container.textContent).toContain("A selected installed ROM has no safe measurable size.");
+    expect(modal.container.textContent).not.toContain("Not enough free space.");
+  });
+
+  it("names the shortcut removal as conditional on the fully-vanished toggle", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+
+    // Rows in a fully vanished group may have no shortcut at all, so the label
+    // must not promise one is removed.
+    expect(modal.container.textContent).toContain("Remove fully vanished games, including any Steam shortcut");
+  });
+
+  it("surfaces a success response that carries no run id instead of wedging admission", async () => {
+    vi.mocked(backend.startPrune).mockResolvedValue({ success: true, status: "running" });
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("carried no run id"));
+
+    // No run was adopted by id, and the control stays usable for a retry.
+    expect(getPruneState().runId).toBeNull();
+    expect((modal.getByRole("button", { name: "Confirm Cleanup" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("rejects a scan response that carries no preview id", async () => {
+    const malformed: backend.PrunePreviewResult = { ...preview };
+    delete malformed.preview_id;
+    vi.mocked(backend.getPrunePreview).mockResolvedValue(malformed);
+
+    await expect(openRemovedGamesCleanupModal()).rejects.toThrow("carried no preview id");
+    expect(showModal).not.toHaveBeenCalled();
+  });
+
+  it("recovers the entry point and warns when a run's result never arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const section = render(createElement(RemovedGamesCleanupSection));
+      const button = section.getByRole("button", { name: "Clean Up Removed RomM Games" }) as HTMLButtonElement;
+
+      act(() => {
+        beginPrunePreview("preview-1");
+        beginPruneRun("run-lost", "preview-1");
+        setPruneProgress({
+          run_id: "run-lost",
+          preview_id: "preview-1",
+          current: 1,
+          total: 2,
+          stage: "removing_rows",
+          rom_ids: [7],
+          name: "Removed Game",
+        });
+      });
+      expect(button.disabled).toBe(true);
+
+      // The terminal chunk never lands (a dropped completion frame).
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15 * 60_000);
+      });
+
+      expect(button.disabled).toBe(false);
+      expect(section.container.textContent).toContain(
+        "The cleanup result was lost — check your library and run the scan again.",
+      );
+      expect(section.container.textContent).not.toContain("removing rows");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

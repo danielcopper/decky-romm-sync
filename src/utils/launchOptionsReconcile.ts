@@ -3,7 +3,7 @@ import { setLaunchOptionsConfirmed } from "./steamShortcuts";
 import {
   capturePruneLeaseAdmission,
   isPruneLeaseAdmissionCurrent,
-  PruneLeaseAdmissionCancelled,
+  isPruneLeaseCancellation,
   releasePruneLease,
   withPruneLease,
   type PruneLeaseAdmission,
@@ -82,7 +82,7 @@ export async function reconfirmLaunchOptions(
     );
     return { status: isPruneLeaseAdmissionCurrent(admission) ? "ready" : "cancelled" };
   } catch (e) {
-    if (e instanceof PruneLeaseAdmissionCancelled || !isPruneLeaseAdmissionCurrent(admission)) {
+    if (isPruneLeaseCancellation(e, admission)) {
       return { status: "cancelled" };
     }
     logError(`${context}: launch_options re-confirm failed (launching anyway): ${e}`);

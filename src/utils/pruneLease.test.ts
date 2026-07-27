@@ -2,9 +2,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { logError, releasePruneConflictLease, renewPruneConflictLease } from "../api/backend";
 import {
   capturePruneLeaseAdmission,
+  isPruneLeaseCancellation,
   maintainPruneLease,
   mountPruneLeaseOwner,
   mountPruneLeasePlugin,
+  PruneLeaseAdmissionCancelled,
   releaseAllPruneLeases,
   releasePruneLease,
   releasePruneLeasesByOwner,
@@ -25,6 +27,37 @@ afterEach(async () => {
   await releaseAllPruneLeases();
   vi.useRealTimers();
   vi.clearAllMocks();
+});
+
+it("reads an ordinary failure on a live owner as a real failure, not a cancellation", () => {
+  mountPruneLeaseOwner("game-detail:1");
+  const admission = capturePruneLeaseAdmission("game-detail:1");
+
+  // The single predicate every surfacing catch shares: while the owner is alive,
+  // an error means the operation failed and MUST reach the user.
+  expect(isPruneLeaseCancellation(new Error("io"), admission)).toBe(false);
+  // The explicit refusal is a cancellation even before any teardown is observed.
+  expect(isPruneLeaseCancellation(new PruneLeaseAdmissionCancelled("refused"), admission)).toBe(true);
+});
+
+it("reads any failure on a torn-down owner as a cancellation", async () => {
+  mountPruneLeaseOwner("game-detail:2");
+  const admission = capturePruneLeaseAdmission("game-detail:2");
+
+  await releasePruneLeasesByOwner("game-detail:2");
+
+  // The backend rejects its own in-flight callables on teardown; that rejection
+  // describes the teardown, not the work.
+  expect(isPruneLeaseCancellation(new Error("io"), admission)).toBe(true);
+});
+
+it("reads any failure as a cancellation once the plugin generation rolls", async () => {
+  const admission = capturePruneLeaseAdmission();
+
+  await releaseAllPruneLeases();
+  mountPruneLeasePlugin();
+
+  expect(isPruneLeaseCancellation(new Error("io"), admission)).toBe(true);
 });
 
 it("rejects and releases a lease-bearing response that arrives after owner teardown", async () => {

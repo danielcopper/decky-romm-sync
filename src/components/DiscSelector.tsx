@@ -19,7 +19,7 @@ import { useState, useEffect, useRef, FC, ReactNode } from "react";
 import { addEventListener, removeEventListener, toaster } from "@decky/api";
 import { Menu, MenuItem, showContextMenu, DialogButton } from "@decky/ui";
 import { FaCompactDisc, FaChevronDown } from "react-icons/fa";
-import { getCachedGameDetail, getDiscSelection, selectDisc, logError } from "../api/backend";
+import { getCachedGameDetail, getDiscSelection, selectDisc, logError, logWarn } from "../api/backend";
 import type { DiscSelection } from "../api/backend";
 import { setLaunchOptionsConfirmed } from "../utils/steamShortcuts";
 import { getEventTarget } from "../utils/events";
@@ -27,6 +27,7 @@ import { detach } from "../utils/detach";
 import type { DownloadCompleteEvent } from "../types";
 import {
   capturePruneLeaseAdmission,
+  isPruneLeaseCancellation,
   mountPruneLeaseOwner,
   releasePruneLeasesByOwner,
   withPruneLease,
@@ -136,8 +137,8 @@ export const DiscSelector: FC<DiscSelectorProps> = ({ appId }) => {
   const handleChange = async (data: DiscOptionData): Promise<void> => {
     const rid = romIdRef.current;
     if (rid == null) return;
+    const admission = capturePruneLeaseAdmission(leaseOwner);
     try {
-      const admission = capturePruneLeaseAdmission(leaseOwner);
       const result = await selectDisc(rid, data);
       await withPruneLease(
         result.prune_lease_token,
@@ -158,6 +159,12 @@ export const DiscSelector: FC<DiscSelectorProps> = ({ appId }) => {
         admission,
       );
     } catch (e) {
+      // Leaving the game page cancels the pick's continuation — the disc is
+      // already persisted backend-side, so that is teardown and not a failure.
+      if (isPruneLeaseCancellation(e, admission)) {
+        logWarn(`DiscSelector: disc selection continuation was cancelled: ${e}`);
+        return;
+      }
       // Observable catch effect: surface the failure so the user knows the pick
       // didn't take, and leave `selected` unchanged (revert to the prior pin).
       logError(`DiscSelector: selectDisc failed: ${e}`);
