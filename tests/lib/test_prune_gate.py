@@ -88,6 +88,58 @@ async def test_prune_start_refuses_operation_that_entered_before_it() -> None:
 
 
 @pytest.mark.asyncio
+async def test_conflicting_operation_is_refused_without_awaiting_a_slow_prune_admission() -> None:
+    admitting = asyncio.Event()
+    finish_admission = asyncio.Event()
+    order: list[str] = []
+
+    class Owner(_Owner):
+        @prune_exclusive_start
+        async def start_prune(self):
+            admitting.set()
+            await finish_admission.wait()
+            order.append("admission")
+            return {"success": True}
+
+    owner = Owner(False)
+    admission = asyncio.create_task(owner.start_prune())
+    await admitting.wait()
+
+    result = await owner.mutate()
+    order.append("mutation")
+
+    assert result["success"] is False
+    assert result["reason"] == "prune_active"
+    assert owner.called is False
+    assert order == ["mutation"]
+
+    finish_admission.set()
+    assert await admission == {"success": True}
+    assert order == ["mutation", "admission"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["refused", "raised"])
+async def test_prune_claim_is_released_when_admission_does_not_start_a_run(outcome) -> None:
+    class Owner(_Owner):
+        @prune_exclusive_start
+        async def start_prune(self):
+            if outcome == "raised":
+                raise RuntimeError("admission blew up")
+            return {"success": False, "reason": "stale_preview", "message": "stale"}
+
+    owner = Owner(False)
+    if outcome == "raised":
+        with pytest.raises(RuntimeError, match="admission blew up"):
+            await owner.start_prune()
+    else:
+        assert (await owner.start_prune())["reason"] == "stale_preview"
+
+    assert await owner.mutate() == {"success": True}
+    assert owner.called is True
+
+
+@pytest.mark.asyncio
 async def test_detached_task_retains_conflict_claim_for_its_full_lifetime() -> None:
     release = asyncio.Event()
 

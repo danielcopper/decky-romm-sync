@@ -39,8 +39,31 @@ def _seed_bulk_candidate(harness, rom_id: int = 41) -> None:
         )
 
 
+def _seed_installed_bulk_candidate(harness, rom_id: int = 41) -> Path:
+    _seed_bulk_candidate(harness, rom_id)
+    rom_path = Path(harness.retrodeck_paths.roms_path()) / "gba" / "Removed Game.gba"
+    rom_path.parent.mkdir(parents=True, exist_ok=True)
+    rom_path.write_bytes(b"installed rom")
+    with harness.uow_factory() as uow:
+        uow.rom_installs.save(
+            RomInstall.mark_installed(
+                rom_id=rom_id,
+                file_path=str(rom_path),
+                rom_dir=None,
+                platform_slug="gba",
+                system="gba",
+                installed_at="2026-01-01T00:00:00",
+            )
+        )
+    return rom_path
+
+
 def _preview_request(preview_id=None):
     return {"scope": "bulk", "rom_id": None, "preview_id": preview_id, "offset": 0, "limit": 50}
+
+
+def _selection_request(preview_id, selection_id, rom_ids, final):
+    return {"preview_id": preview_id, "selection_id": selection_id, "rom_ids": rom_ids, "final": final}
 
 
 async def test_preview_is_local_paged_and_frontend_shaped(harness):
@@ -420,3 +443,173 @@ async def test_recovery_on_repoint_uses_real_save_inventory_filesystem_and_sqlit
     bundle = Path(result["bundle_path"])
     manifest = json.loads((bundle / "manifest.json").read_text())
     assert {item["kind"] for item in manifest["artifacts"]} >= {"current_save", "installed_rom"}
+
+
+async def test_stage_selection_rejects_a_foreign_preview_id(harness):
+    _seed_installed_bulk_candidate(harness)
+    await harness.plugin.get_prune_preview(_preview_request())
+
+    result = await harness.plugin.stage_prune_installed_selection(
+        _selection_request("not-the-live-preview", None, [41], True)
+    )
+
+    assert result == {
+        "success": False,
+        "reason": "stale_preview",
+        "message": "This cleanup preview is stale. Scan again before confirming.",
+    }
+
+
+async def test_stage_selection_rejects_a_rom_without_disclosed_installed_content(harness):
+    _seed_bulk_candidate(harness)
+    preview = await harness.plugin.get_prune_preview(_preview_request())
+
+    result = await harness.plugin.stage_prune_installed_selection(
+        _selection_request(preview["preview_id"], None, [41], False)
+    )
+
+    assert result == {
+        "success": False,
+        "reason": "invalid_selection",
+        "message": "Selection contains a ROM without disclosed installed content.",
+    }
+
+
+async def test_stage_selection_rejects_a_foreign_selection_id(harness):
+    _seed_installed_bulk_candidate(harness)
+    preview = await harness.plugin.get_prune_preview(_preview_request())
+    staged = await harness.plugin.stage_prune_installed_selection(
+        _selection_request(preview["preview_id"], None, [41], False)
+    )
+    assert set(staged) == {"success", "selection_id", "selected_count", "finalized"}
+    assert (staged["success"], staged["selected_count"], staged["finalized"]) == (True, 1, False)
+
+    result = await harness.plugin.stage_prune_installed_selection(
+        _selection_request(preview["preview_id"], "not-the-live-selection", [], True)
+    )
+
+    assert result == {
+        "success": False,
+        "reason": "stale_selection",
+        "message": "This installed-content selection is stale.",
+    }
+
+
+async def test_stage_selection_rejects_a_page_after_the_selection_was_finalized(harness):
+    _seed_installed_bulk_candidate(harness)
+    preview = await harness.plugin.get_prune_preview(_preview_request())
+    staged = await harness.plugin.stage_prune_installed_selection(
+        _selection_request(preview["preview_id"], None, [41], True)
+    )
+    assert staged["finalized"] is True
+
+    result = await harness.plugin.stage_prune_installed_selection(
+        _selection_request(preview["preview_id"], staged["selection_id"], [41], True)
+    )
+
+    assert result == {
+        "success": False,
+        "reason": "selection_finalized",
+        "message": "This installed-content selection is already complete.",
+    }
+
+
+async def test_conflict_lease_renewal_extends_a_live_lease_and_denies_a_released_one(harness, monkeypatch):
+    _seed_bulk_candidate(harness)
+
+    async def set_game_core(_rom_id, _label):
+        return {"success": True, "app_id": 0x80000041, "launch_options": "launch"}
+
+    monkeypatch.setattr(harness.plugin._core_service, "set_game_core", set_game_core)
+    token = (await harness.plugin.set_game_core(41, "core"))["prune_lease_token"]
+
+    assert await harness.plugin.renew_prune_conflict_lease(token) == {
+        "success": True,
+        "message": "Operation lease renewed.",
+    }
+
+    assert (await harness.plugin.release_prune_conflict_lease(token))["success"] is True
+    assert await harness.plugin.renew_prune_conflict_lease(token) == {
+        "success": False,
+        "reason": "stale_lease",
+        "message": "Operation lease is no longer active.",
+    }
+
+
+async def test_release_wait_rejects_an_empty_run_id(harness):
+    assert await harness.plugin.wait_for_prune_release("") == {
+        "success": False,
+        "reason": "invalid_run_id",
+        "message": "Cleanup run id must be a non-empty string.",
+    }
+
+
+async def test_release_wait_returns_immediately_for_an_unknown_run(harness):
+    assert await harness.plugin.wait_for_prune_release("no-such-run") == {
+        "success": True,
+        "message": "Cleanup claim is released.",
+    }
+
+
+async def test_full_purge_leaves_save_states_completely_untouched(harness):
+    _seed_bulk_candidate(harness)
+    rom_path = Path(harness.retrodeck_paths.roms_path()) / "gba" / "Removed Game.gba"
+    rom_path.parent.mkdir(parents=True)
+    rom_path.write_bytes(b"installed rom")
+    saves_dir = Path(harness.retrodeck_paths.saves_path()) / "gba"
+    saves_dir.mkdir(parents=True)
+    save_path = saves_dir / "Removed Game.srm"
+    save_path.write_bytes(b"local save")
+    state_path = saves_dir / "Removed Game.state"
+    state_path.write_bytes(b"emulator save state")
+    with harness.uow_factory() as uow:
+        uow.rom_installs.save(
+            RomInstall.mark_installed(
+                rom_id=41,
+                file_path=str(rom_path),
+                rom_dir=None,
+                platform_slug="gba",
+                system="gba",
+                installed_at="2026-01-01T00:00:00",
+            )
+        )
+        uow.rom_save_sync_states.save(
+            41,
+            RomSaveSyncState(system="gba", files={"Removed Game.srm": FileSyncState(last_sync_hash="known")}),
+        )
+    harness.romm.get_rom_once_side_effect_by_id[41] = RommNotFoundError("gone")
+    preview = await harness.plugin.get_prune_preview(_preview_request())
+    staged = await harness.plugin.stage_prune_installed_selection(
+        _selection_request(preview["preview_id"], None, [41], True)
+    )
+
+    started = await harness.plugin.start_prune(
+        {
+            "preview_id": preview["preview_id"],
+            "confirmed": True,
+            "repoint_shortcuts": True,
+            "remove_rows": True,
+            "remove_fully_vanished": True,
+            "create_recovery_bundle": True,
+            "installed_selection_id": staged["selection_id"],
+        }
+    )
+    assert started["success"] is True
+    task = harness.plugin._prune_service._task
+    assert task is not None
+    await task
+
+    with harness.uow_factory() as uow:
+        assert uow.roms.get(41) is None
+    assert not rom_path.exists()
+    assert not save_path.exists()
+    assert state_path.exists()
+    assert state_path.read_bytes() == b"emulator save state"
+    assert list((saves_dir / ".romm-backup").glob("*.state")) == []
+    complete = [call.args[1] for call in harness.emit.await_args_list if call.args[0] == "prune_complete"][-1]
+    result = complete["results"][0]
+    assert result["status"] == "removed"
+    bundle = Path(result["bundle_path"])
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    assert not any(str(item["source_path"]).endswith(".state") for item in manifest["artifacts"])
+    assert list(bundle.rglob("*.state")) == []

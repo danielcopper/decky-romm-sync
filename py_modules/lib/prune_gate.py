@@ -18,6 +18,7 @@ _LEASE_SECONDS = 300.0
 class _PruneAdmissionGate:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     conflicting_operations: int = 0
+    prune_reservations: int = 0
     leases: dict[str, float] = field(default_factory=dict)
     next_lease_id: int = 1
 
@@ -43,7 +44,7 @@ def prune_active_blocked(method):
         gate = _gate(self)
         async with gate.lock:
             _expire_leases(gate)
-            if service.is_active():
+            if gate.prune_reservations or service.is_active():
                 return {"success": False, "reason": "prune_active", "message": _BLOCKED_MESSAGE}
             gate.conflicting_operations += 1
         try:
@@ -57,7 +58,14 @@ def prune_active_blocked(method):
 
 
 def prune_exclusive_start(method):
-    """Atomically refuse prune admission while a conflicting callable is active."""
+    """Atomically refuse prune admission while a conflicting callable is active.
+
+    The refusal check and the claim reservation share one lock hold, so no
+    conflicting registration can slip between them. Admission itself then runs
+    unlocked: the reservation already refuses every conflicting callable, and
+    holding the lock across the run's preview rebuild would make each of them
+    wait for that rebuild instead of learning its verdict immediately.
+    """
 
     @functools.wraps(method)
     async def wrapper(self, *args: Any, **kwargs: Any):
@@ -70,7 +78,14 @@ def prune_exclusive_start(method):
                     "reason": "operation_active",
                     "message": _OPERATION_BLOCKED_MESSAGE,
                 }
+            gate.prune_reservations += 1
+        try:
             return await method(self, *args, **kwargs)
+        finally:
+            # Released without the lock on purpose: the single-threaded loop
+            # cannot interleave a bare decrement, while awaiting a contended
+            # lock here could lose the release to a cancellation.
+            gate.prune_reservations -= 1
 
     wrapper._prune_exclusive_start = True  # type: ignore[attr-defined]
     return wrapper

@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -16,6 +15,7 @@ from lib.errors import RommNotFoundError, classify_error
 from lib.list_result import ErrorCode
 from lib.url_host import romm_namespace
 from services.prune._models import PruneOptions, PrunePreview, RecoveryHandle, cancellation_state
+from services.prune.results import MutationLedger, PruneResultReporter, PruneResultReporterConfig
 
 if TYPE_CHECKING:
     import logging
@@ -37,13 +37,6 @@ if TYPE_CHECKING:
     from services.prune.registry import PruneRegistry
 
 _LIVENESS_CONCURRENCY = 4
-_COMPLETION_IDS_PER_GROUP = 50
-_COMPLETION_TEXT_CHARS = 512
-_COMPLETION_PATH_CHARS = 2048
-_COMPLETION_REASON_CHARS = 128
-_COMPLETION_WARNING_CHARS = 256
-_COMPLETION_WARNINGS_PER_GROUP = 5
-_COMPLETION_BUDGET_BYTES = 48 * 1024
 
 ActionRequester = Callable[[str, str, dict[str, object], int | None, int | None, set[int]], Awaitable[dict[str, Any]]]
 
@@ -70,33 +63,13 @@ class PruneExecutorConfig:
     request_action: ActionRequester
 
 
-@dataclass
-class _MutationLedger:
-    rows: list[Rom]
-    app_id: int | None = None
-    target_rom_id: int | None = None
-    bundle_path: str | None = None
-    committed_action: str | None = None
-    action_ambiguous: bool = False
-    mutations: list[str] = field(default_factory=list)
-    ambiguous_mutations: list[str] = field(default_factory=list)
-
-    def has_commit(self) -> bool:
-        return (
-            self.committed_action is not None
-            or self.action_ambiguous
-            or bool(self.mutations)
-            or bool(self.ambiguous_mutations)
-        )
-
-
 class PruneExecutor:
     """Own liveness, recovery, frontend actions, and final cleanup sequencing."""
 
     def __init__(self, *, config: PruneExecutorConfig) -> None:
         self._loop = config.loop
         self._logger = config.logger
-        self._emit = config.emit
+        self._results = PruneResultReporter(config=PruneResultReporterConfig(emit=config.emit))
         self._romm_api = config.romm_api
         self._recovery_store = config.recovery_store
         self._prune_artifacts = config.prune_artifacts
@@ -111,13 +84,12 @@ class PruneExecutor:
         self._registry = config.registry
         self._request_action = config.request_action
         self._run_namespace: str | None = None
-        self._run_preview_id: str | None = None
 
     async def run(self, run_id: str, preview: PrunePreview, options: PruneOptions) -> None:
         """Execute every candidate group and emit bounded terminal chunks."""
         results: list[dict[str, Any]] = []
         self._run_namespace = preview.server_namespace
-        self._run_preview_id = preview.preview_id
+        self._results.bind_run(preview.preview_id)
         try:
             if romm_namespace(self._settings) != preview.server_namespace:
                 raise RuntimeError("The RomM server or user changed after cleanup preview.")
@@ -126,7 +98,7 @@ class PruneExecutor:
             )
             total = len(groups)
             for index, rows in enumerate(groups, start=1):
-                await self._emit_progress(run_id, index, total, "checking", rows)
+                await self._results.emit_progress(run_id, index, total, "checking", rows)
                 try:
                     result = await self._run_group(
                         run_id,
@@ -140,7 +112,7 @@ class PruneExecutor:
                     raise
                 except Exception as exc:
                     self._logger.exception(f"Vanished-ROM cleanup group {rows[0].rom_id} failed")
-                    result = self._group_result(rows, "failed", ErrorCode.UNKNOWN.value, str(exc))
+                    result = self._results.group_result(rows, "failed", ErrorCode.UNKNOWN.value, str(exc))
                 results.append(result)
         except asyncio.CancelledError as exc:
             result = cancellation_state(exc).group_result
@@ -176,10 +148,10 @@ class PruneExecutor:
         message: str | None,
     ) -> None:
         try:
-            await self._emit_completion(run_id, results, cancelled=cancelled, reason=reason, message=message)
+            await self._results.emit_completion(run_id, results, cancelled=cancelled, reason=reason, message=message)
         finally:
             self._run_namespace = None
-            self._run_preview_id = None
+            self._results.end_run()
 
     async def _run_group(
         self,
@@ -190,7 +162,7 @@ class PruneExecutor:
         index: int,
         total: int,
     ) -> dict[str, Any]:
-        ledger = _MutationLedger(initial_rows)
+        ledger = MutationLedger(initial_rows)
         try:
             return await self._run_group_inner(
                 run_id, initial_rows, preview_candidate_ids, options, index, total, ledger
@@ -198,9 +170,9 @@ class PruneExecutor:
         except asyncio.CancelledError as exc:
             state = cancellation_state(exc)
             if state.child_fault is not None:
-                state.group_result = self._fault_result(ledger, initial_rows, state.child_fault)
+                state.group_result = self._results.fault_result(ledger, initial_rows, state.child_fault)
             elif state.group_result is None and ledger.has_commit():
-                state.group_result = self._ledger_result(
+                state.group_result = self._results.ledger_result(
                     ledger,
                     "cancelled",
                     "Cleanup was cancelled after a committed or ambiguous action; later groups were not started.",
@@ -209,7 +181,7 @@ class PruneExecutor:
         except Exception as exc:
             if ledger.has_commit():
                 self._logger.exception(f"Vanished-ROM cleanup group {initial_rows[0].rom_id} failed after mutation")
-                return self._ledger_result(ledger, ErrorCode.UNKNOWN.value, str(exc))
+                return self._results.ledger_result(ledger, ErrorCode.UNKNOWN.value, str(exc))
             raise
 
     async def _run_group_inner(
@@ -220,19 +192,21 @@ class PruneExecutor:
         options: PruneOptions,
         index: int,
         total: int,
-        ledger: _MutationLedger,
+        ledger: MutationLedger,
     ) -> dict[str, Any]:
         rows = await self._loop.run_in_executor(None, self._registry.reread_group, initial_rows[0].rom_id)
         ledger.rows = rows or initial_rows
         if not rows:
-            return self._group_result(initial_rows, "skipped", "local_state_changed", "The local group changed.")
+            return self._results.group_result(
+                initial_rows, "skipped", "local_state_changed", "The local group changed."
+            )
         group_ids = {row.rom_id for row in rows}
         candidate_ids = group_ids & preview_candidate_ids
         bound = [row for row in rows if row.shortcut_app_id is not None]
         if len(bound) > 1:
-            return self._group_result(rows, "skipped", "multiple_bindings", "The group has multiple shortcuts.")
+            return self._results.group_result(rows, "skipped", "multiple_bindings", "The group has multiple shortcuts.")
         if self._active_downloads() & group_ids:
-            return self._group_result(rows, "skipped", "download_in_progress", "Cancel active downloads first.")
+            return self._results.group_result(rows, "skipped", "download_in_progress", "Cancel active downloads first.")
 
         verdicts = await self._probe_many(group_ids)
         vanished_ids = {rom_id for rom_id, verdict in verdicts.items() if verdict["status"] == "vanished"}
@@ -243,7 +217,7 @@ class PruneExecutor:
             namespace_changed = any(
                 verdicts[rom_id]["reason"] == "server_namespace_changed" for rom_id in uncertain_ids
             )
-            return self._group_result(
+            return self._results.group_result(
                 rows,
                 "skipped",
                 "server_namespace_changed" if namespace_changed else "liveness_uncertain",
@@ -267,13 +241,15 @@ class PruneExecutor:
         if bound_row is not None and bound_row.rom_id in vanished_ids and live_ids and options.repoint_shortcuts:
             target_id = self._natural_default(rows, live_ids)
             if target_id is None:
-                return self._group_result(rows, "skipped", "no_live_default", "No live default could be selected.")
+                return self._results.group_result(
+                    rows, "skipped", "no_live_default", "No live default could be selected."
+                )
         if bound_row is not None and bound_row.rom_id in delete_ids and live_ids and target_id is None:
             delete_ids.remove(bound_row.rom_id)
 
         whole_game_action = fully_dead and bool(delete_ids)
         if not delete_ids and target_id is None:
-            return self._group_result(
+            return self._results.group_result(
                 rows, "skipped", "options_excluded", "No confirmed rows matched the selected options."
             )
 
@@ -282,7 +258,7 @@ class PruneExecutor:
             drift = await self._drift_probe(bound_row.rom_id)
             drifted = bool(drift.get("drifted"))
             if drifted and not options.create_recovery_bundle:
-                return self._group_result(
+                return self._results.group_result(
                     rows,
                     "skipped",
                     "unsynced_saves",
@@ -320,14 +296,14 @@ class PruneExecutor:
             recovery_ids.add(target_id)
         handle: RecoveryHandle | None = None
         if options.create_recovery_bundle:
-            await self._emit_progress(run_id, index, total, "creating_recovery", rows)
+            await self._results.emit_progress(run_id, index, total, "creating_recovery", rows)
             try:
                 async with self._stable_save_locks(recovery_ids) as save_inventory:
                     locked_rows = await self._loop.run_in_executor(
                         None, self._registry.reread_group, initial_rows[0].rom_id
                     )
                     if not locked_rows or not recovery_ids <= {row.rom_id for row in locked_rows}:
-                        return self._group_result(
+                        return self._results.group_result(
                             rows, "skipped", "local_state_changed", "The local group changed before recovery."
                         )
                     snapshot = await self._loop.run_in_executor(
@@ -361,8 +337,8 @@ class PruneExecutor:
                     ledger.bundle_path = bundle_path
             except Exception as exc:
                 self._logger.error(f"Recovery bundle failed for group {min(group_ids)}: {exc}")
-                return self._group_result(rows, "failed", "recovery_failed", str(exc))
-            await self._emit_progress(
+                return self._results.group_result(rows, "failed", "recovery_failed", str(exc))
+            await self._results.emit_progress(
                 run_id,
                 index,
                 total,
@@ -372,7 +348,7 @@ class PruneExecutor:
             )
 
         if self._active_downloads() & delete_ids:
-            return self._group_result(rows, "skipped", "download_in_progress", "Cancel active downloads first.")
+            return self._results.group_result(rows, "skipped", "download_in_progress", "Cancel active downloads first.")
         proof_ids = set(delete_ids)
         if target_id is not None:
             proof_ids.add(target_id)
@@ -386,7 +362,7 @@ class PruneExecutor:
             bound_row.rom_id if target_id is not None and bound_row is not None else None,
         )
         if guard is not None:
-            return self._group_result(
+            return self._results.group_result(
                 rows,
                 "skipped",
                 guard[0],
@@ -394,7 +370,15 @@ class PruneExecutor:
                 bundle_path=handle.bundle_path if handle else None,
             )
 
-        if handle is not None:
+        # This early revalidation exists to protect the Steam action below, which
+        # _finish_group's identical pre-mutation check runs too late to precede.
+        # Without a planned Steam action nothing irreversible happens in between,
+        # so that later check is the pre-mutation gate and this one only repeats
+        # the same full source rehash.
+        steam_action_planned = (
+            app_id is not None and bound_row is not None and (target_id is not None or whole_game_action)
+        )
+        if handle is not None and steam_action_planned:
             recovery_guard = await self._recovery_guard(
                 handle,
                 recovery_ids,
@@ -404,7 +388,7 @@ class PruneExecutor:
                 launch_options=None,
             )
             if recovery_guard is not None:
-                return self._group_result(
+                return self._results.group_result(
                     rows,
                     "skipped",
                     "recovery_state_changed",
@@ -427,7 +411,7 @@ class PruneExecutor:
                         state.child_result, rows, ledger, target_id, app_id, handle
                     )
                     if state.group_result is None:
-                        state.group_result = self._ledger_result(
+                        state.group_result = self._results.ledger_result(
                             ledger,
                             "cancelled",
                             "Cleanup was cancelled after the version binding changed; later groups were not started.",
@@ -440,7 +424,7 @@ class PruneExecutor:
                 raise RuntimeError("Successful version switch did not produce launch options")
             committed_action = "repoint_shortcut"
             await self._shielded(
-                self._emit_progress(
+                self._results.emit_progress(
                     run_id, index, total, "repointing", rows, bundle_path=handle.bundle_path if handle else None
                 )
             )
@@ -463,7 +447,7 @@ class PruneExecutor:
                 if state.action_result is not None:
                     state.group_result = self._repoint_action_outcome(state.action_result, ledger)
                     if state.group_result is None:
-                        state.group_result = self._ledger_result(
+                        state.group_result = self._results.ledger_result(
                             ledger,
                             "cancelled",
                             "Cleanup was cancelled after Steam confirmed the repoint; later groups were not started.",
@@ -473,7 +457,7 @@ class PruneExecutor:
             if result is not None:
                 return result
         elif whole_game_action and app_id is not None and bound_row is not None:
-            await self._emit_progress(
+            await self._results.emit_progress(
                 run_id,
                 index,
                 total,
@@ -500,7 +484,7 @@ class PruneExecutor:
                         state.action_result, rows, ledger, bound_row.rom_id, app_id, handle
                     )
                     if state.group_result is None:
-                        state.group_result = self._ledger_result(
+                        state.group_result = self._results.ledger_result(
                             ledger,
                             "cancelled",
                             "Cleanup was cancelled after Steam confirmed removal; later groups were not started.",
@@ -524,8 +508,8 @@ class PruneExecutor:
                 bound_row.rom_id if bound_row is not None else None,
             )
             if final_guard is not None:
-                return self._ledger_result(ledger, final_guard[0], final_guard[1])
-            return self._group_result(
+                return self._results.ledger_result(ledger, final_guard[0], final_guard[1])
+            return self._results.group_result(
                 rows,
                 "repointed",
                 None,
@@ -557,7 +541,7 @@ class PruneExecutor:
         self,
         capture: dict[str, Any],
         rows: list[Rom],
-        ledger: _MutationLedger,
+        ledger: MutationLedger,
         bound_rom_id: int,
         app_id: int,
     ) -> tuple[dict[str, object] | None, dict[str, Any] | None]:
@@ -576,7 +560,7 @@ class PruneExecutor:
             return None, self._shortcut_absence_result(ledger, bool(reconciled), app_id)
         snapshot = capture.get("snapshot")
         if not capture.get("success") or not isinstance(snapshot, dict):
-            return None, self._group_result(
+            return None, self._results.group_result(
                 rows,
                 "failed",
                 "steam_snapshot_failed",
@@ -584,10 +568,10 @@ class PruneExecutor:
             )
         return cast("dict[str, object]", snapshot), None
 
-    def _shortcut_absence_result(self, ledger: _MutationLedger, reconciled: bool, app_id: int) -> dict[str, Any]:
+    def _shortcut_absence_result(self, ledger: MutationLedger, reconciled: bool, app_id: int) -> dict[str, Any]:
         if reconciled and "shortcut_binding" not in ledger.mutations:
             ledger.mutations.append("shortcut_binding")
-        return self._ledger_result(
+        return self._results.ledger_result(
             ledger,
             "shortcut_absence_reconciled" if reconciled else "local_state_changed",
             (
@@ -602,7 +586,7 @@ class PruneExecutor:
         self,
         switch: dict[str, Any],
         rows: list[Rom],
-        ledger: _MutationLedger,
+        ledger: MutationLedger,
         target_id: int,
         app_id: int,
         handle: RecoveryHandle | None,
@@ -610,7 +594,7 @@ class PruneExecutor:
         if not switch.get("success"):
             ledger.committed_action = None
             ledger.action_ambiguous = False
-            return None, self._group_result(
+            return None, self._results.group_result(
                 rows,
                 "failed",
                 switch.get("reason", "repoint_failed"),
@@ -619,7 +603,7 @@ class PruneExecutor:
             )
         launch_options = switch.get("launch_options")
         if switch.get("rom_id") != target_id or switch.get("app_id") != app_id or not isinstance(launch_options, str):
-            return None, self._ledger_result(
+            return None, self._results.ledger_result(
                 ledger,
                 "repoint_result_invalid",
                 "The binding changed but the switch result was incomplete.",
@@ -630,17 +614,17 @@ class PruneExecutor:
             ledger.mutations.append("shortcut_binding")
         return launch_options, None
 
-    def _repoint_action_outcome(self, action: dict[str, Any], ledger: _MutationLedger) -> dict[str, Any] | None:
+    def _repoint_action_outcome(self, action: dict[str, Any], ledger: MutationLedger) -> dict[str, Any] | None:
         if action.get("success"):
             return None
         if action.get("mutation_attempted") is True or action.get("reason") == "action_ambiguous":
             ledger.action_ambiguous = True
-            return self._ledger_result(
+            return self._results.ledger_result(
                 ledger,
                 "action_ambiguous",
                 action.get("message", "The binding changed but Steam confirmation is unknown."),
             )
-        return self._ledger_result(
+        return self._results.ledger_result(
             ledger,
             "steam_action_failed",
             action.get("message", "The binding changed but Steam confirmation failed."),
@@ -650,7 +634,7 @@ class PruneExecutor:
         self,
         action: dict[str, Any],
         rows: list[Rom],
-        ledger: _MutationLedger,
+        ledger: MutationLedger,
         bound_rom_id: int,
         app_id: int,
         handle: RecoveryHandle | None,
@@ -660,12 +644,12 @@ class PruneExecutor:
                 ledger.app_id = app_id
                 ledger.committed_action = "remove_shortcut"
                 ledger.action_ambiguous = True
-                return None, self._ledger_result(
+                return None, self._results.ledger_result(
                     ledger,
                     "action_ambiguous",
                     "Steam removal was claimed but its outcome is unknown; source data was retained.",
                 )
-            return None, self._group_result(
+            return None, self._results.group_result(
                 rows,
                 "failed",
                 "steam_action_failed",
@@ -686,7 +670,7 @@ class PruneExecutor:
                     ledger, state.child_result, rows, app_id, handle
                 )
                 if state.group_result is None:
-                    state.group_result = self._ledger_result(
+                    state.group_result = self._results.ledger_result(
                         ledger,
                         "cancelled",
                         "Cleanup was cancelled after Steam confirmed removal; later groups were not started.",
@@ -697,7 +681,7 @@ class PruneExecutor:
 
     def _removed_shortcut_reconcile_result(
         self,
-        ledger: _MutationLedger,
+        ledger: MutationLedger,
         reconciled: bool,
         rows: list[Rom],
         app_id: int,
@@ -707,7 +691,7 @@ class PruneExecutor:
             if "shortcut_binding" not in ledger.mutations:
                 ledger.mutations.append("shortcut_binding")
             return "remove_shortcut", None
-        return "remove_shortcut", self._group_result(
+        return "remove_shortcut", self._results.group_result(
             rows,
             "partial",
             "local_state_changed",
@@ -733,7 +717,7 @@ class PruneExecutor:
         index: int,
         total: int,
         launch_options: str | None,
-        ledger: _MutationLedger,
+        ledger: MutationLedger,
         vanished_source_id: int | None,
     ) -> dict[str, Any]:
         refreshed = await self._probe_many(
@@ -743,9 +727,9 @@ class PruneExecutor:
         )
         guard = self._fresh_guard(refreshed, delete_ids, target_id, vanished_source_id)
         if guard is not None:
-            return self._ledger_or_guard_result(ledger, initial_rows, guard, handle, app_id)
+            return self._results.ledger_or_guard_result(ledger, initial_rows, guard, handle, app_id)
         if self._active_downloads() & delete_ids:
-            return self._ledger_or_guard_result(
+            return self._results.ledger_or_guard_result(
                 ledger,
                 initial_rows,
                 ("download_in_progress", "A download became active; source data was retained."),
@@ -755,7 +739,7 @@ class PruneExecutor:
 
         rows = await self._loop.run_in_executor(None, self._registry.reread_group, initial_rows[0].rom_id)
         if not rows or not delete_ids <= {row.rom_id for row in rows}:
-            return self._ledger_or_guard_result(
+            return self._results.ledger_or_guard_result(
                 ledger,
                 initial_rows,
                 ("local_state_changed", "Local state changed; source data was retained."),
@@ -763,7 +747,7 @@ class PruneExecutor:
                 app_id,
             )
         ledger.rows = rows
-        await self._emit_progress(
+        await self._results.emit_progress(
             run_id, index, total, "removing", rows, bundle_path=handle.bundle_path if handle else None
         )
 
@@ -780,7 +764,7 @@ class PruneExecutor:
                 expected_app_id,
                 fully_dead,
             ):
-                return self._ledger_or_guard_result(
+                return self._results.ledger_or_guard_result(
                     ledger,
                     initial_rows,
                     ("local_state_changed", "Final local revalidation failed before source removal."),
@@ -813,7 +797,7 @@ class PruneExecutor:
                     or not sources_match
                     or not backend_matches
                 ):
-                    return self._ledger_or_guard_result(
+                    return self._results.ledger_or_guard_result(
                         ledger,
                         rows,
                         (
@@ -830,7 +814,7 @@ class PruneExecutor:
             delete_locks = {int(value) for value in delete_inventory.get("lock_rom_ids", delete_ids)}
             held_locks = {int(value) for value in recovery_inventory.get("lock_rom_ids", recovery_ids)}
             if not delete_locks <= held_locks:
-                return self._ledger_or_guard_result(
+                return self._results.ledger_or_guard_result(
                     ledger,
                     rows,
                     ("save_ownership_changed", "Save ownership expanded; source data was retained."),
@@ -859,7 +843,7 @@ class PruneExecutor:
                 raise
 
         try:
-            await self._emit_progress(
+            await self._results.emit_progress(
                 run_id, index, total, "removed", rows, bundle_path=handle.bundle_path if handle else None
             )
         except asyncio.CancelledError as exc:
@@ -881,7 +865,7 @@ class PruneExecutor:
         handle: RecoveryHandle | None,
         expected_app_id: int | None,
         delete_inventory: dict[str, Any],
-        ledger: _MutationLedger,
+        ledger: MutationLedger,
     ) -> dict[str, Any]:
         acted_app_id = app_id if committed_action is not None else None
         warnings = self._inventory_warnings(delete_inventory)
@@ -898,7 +882,7 @@ class PruneExecutor:
         if quarantine.get("ambiguous") and "save_quarantine" not in ledger.ambiguous_mutations:
             ledger.ambiguous_mutations.append("save_quarantine")
         if not quarantine.get("success"):
-            return self._group_result(
+            return self._results.group_result(
                 rows,
                 "partial" if ledger.has_commit() else "failed",
                 "save_quarantine_failed",
@@ -924,7 +908,7 @@ class PruneExecutor:
                 continue
             if removal.get("reason") == "not_installed":
                 continue
-            return self._group_result(
+            return self._results.group_result(
                 rows,
                 "partial" if ledger.has_commit() else "failed",
                 "rom_removal_failed",
@@ -962,7 +946,7 @@ class PruneExecutor:
                 if not steam_outcome.get("success"):
                     raise RuntimeError(steam_outcome.get("message", "Steam state cleanup failed"))
         except Exception as exc:
-            return self._group_result(
+            return self._results.group_result(
                 rows,
                 "partial" if ledger.has_commit() else "failed",
                 "artifact_cleanup_failed",
@@ -981,7 +965,7 @@ class PruneExecutor:
         if not isinstance(absence_claims, dict) or not await self._loop.run_in_executor(
             None, self._save_coordinator.validate_prune_absences, absence_claims
         ):
-            return self._group_result(
+            return self._results.group_result(
                 rows,
                 "partial" if ledger.has_commit() else "failed",
                 "save_state_changed",
@@ -1004,7 +988,7 @@ class PruneExecutor:
             ledger.mutations.append("database_rows_ambiguous")
             raise
         if not deleted:
-            return self._group_result(
+            return self._results.group_result(
                 rows,
                 "partial" if ledger.has_commit() else "skipped",
                 "local_state_changed",
@@ -1020,7 +1004,7 @@ class PruneExecutor:
             )
         ledger.mutations.append("database_rows")
 
-        return self._group_result(
+        return self._results.group_result(
             rows,
             "removed",
             None,
@@ -1180,60 +1164,6 @@ class PruneExecutor:
         raw = inventory.get("warnings")
         return [str(item) for item in raw] if isinstance(raw, list) else []
 
-    def _ledger_result(
-        self,
-        ledger: _MutationLedger,
-        reason: str,
-        message: object,
-        *,
-        removed_app_id: int | None = None,
-        warnings: list[str] | None = None,
-    ) -> dict[str, Any]:
-        return self._group_result(
-            ledger.rows,
-            "partial",
-            reason,
-            message,
-            app_id=ledger.app_id,
-            removed_app_id=removed_app_id,
-            bundle_path=ledger.bundle_path,
-            committed_action=ledger.committed_action,
-            mutations=ledger.mutations,
-            ambiguous_mutations=ledger.ambiguous_mutations,
-            warnings=warnings,
-            action_ambiguous=ledger.action_ambiguous,
-            target_rom_id=ledger.target_rom_id,
-        )
-
-    def _ledger_or_guard_result(
-        self,
-        ledger: _MutationLedger,
-        rows: list[Rom],
-        guard: tuple[str, str],
-        handle: RecoveryHandle | None,
-        app_id: int | None,
-        *,
-        warnings: list[str] | None = None,
-    ) -> dict[str, Any]:
-        if ledger.has_commit():
-            return self._ledger_result(
-                ledger,
-                guard[0],
-                guard[1],
-                removed_app_id=app_id
-                if ledger.committed_action == "remove_shortcut" and not ledger.action_ambiguous
-                else None,
-                warnings=warnings,
-            )
-        return self._group_result(
-            rows,
-            "skipped",
-            guard[0],
-            guard[1],
-            bundle_path=handle.bundle_path if handle else None,
-            warnings=warnings,
-        )
-
     async def _shielded(self, awaitable: Awaitable[Any]) -> Any:
         task = asyncio.ensure_future(awaitable)
         try:
@@ -1248,215 +1178,3 @@ class PruneExecutor:
             except BaseException as child_fault:
                 state.child_fault = child_fault
             raise
-
-    def _fault_result(self, ledger: _MutationLedger, rows: list[Rom], error: BaseException) -> dict[str, Any]:
-        if ledger.has_commit():
-            return self._ledger_result(ledger, ErrorCode.UNKNOWN.value, str(error))
-        return self._group_result(rows, "failed", ErrorCode.UNKNOWN.value, str(error))
-
-    async def _emit_progress(
-        self,
-        run_id: str,
-        current: int,
-        total: int,
-        stage: str,
-        rows: list[Rom],
-        *,
-        bundle_path: str | None = None,
-    ) -> None:
-        payload: dict[str, object] = {
-            "run_id": run_id,
-            "preview_id": self._run_preview_id,
-            "current": current,
-            "total": total,
-            "stage": stage,
-            "rom_ids": [row.rom_id for row in rows[:_COMPLETION_IDS_PER_GROUP]],
-            "rom_count": len(rows),
-            "rom_ids_truncated": len(rows) > _COMPLETION_IDS_PER_GROUP,
-            "name": (rows[0].name if rows else "")[:_COMPLETION_TEXT_CHARS],
-        }
-        if bundle_path is not None:
-            payload["bundle_path"] = bundle_path[:_COMPLETION_PATH_CHARS]
-        await self._emit("prune_progress", payload)
-
-    async def _emit_completion(
-        self,
-        run_id: str,
-        results: list[dict[str, Any]],
-        *,
-        cancelled: bool,
-        reason: str | None,
-        message: str | None,
-    ) -> None:
-        failures = [result for result in results if result["status"] in {"failed", "skipped", "partial"}]
-        removed_count = sum(
-            int(result.get("removed_count", len(result.get("removed_rom_ids", [])))) for result in results
-        )
-        committed = bool(removed_count) or any(
-            result.get("committed_action")
-            or result.get("action_ambiguous")
-            or result.get("mutations")
-            or result.get("ambiguous_mutations")
-            for result in results
-        )
-        run_failed = cancelled or reason is not None
-        partial = any(result["status"] == "partial" for result in results) or bool(
-            committed and (failures or run_failed)
-        )
-        publication_required = any(
-            result.get("committed_action") == "repoint_shortcut"
-            and not result.get("action_ambiguous")
-            and type(result.get("app_id")) is int
-            and type(result.get("target_rom_id")) is int
-            for result in results
-        )
-        bounded_reason = reason[:_COMPLETION_REASON_CHARS] if reason is not None else None
-        bounded_message = message[:_COMPLETION_TEXT_CHARS] if message is not None else None
-        chunks: list[list[dict[str, Any]]] = []
-        current: list[dict[str, Any]] = []
-        for result in results:
-            candidate = [*current, result]
-            probe = self._completion_payload(
-                run_id,
-                candidate,
-                chunk_index=len(chunks),
-                final=False,
-                success=not failures and not cancelled and reason is None,
-                partial=partial,
-                removed_count=removed_count,
-                problem_count=len(failures),
-                reason=bounded_reason,
-                message=bounded_message,
-                publication_required=publication_required,
-            )
-            if current and len(json.dumps(probe, ensure_ascii=True).encode("utf-8")) > _COMPLETION_BUDGET_BYTES:
-                chunks.append(current)
-                current = [result]
-            else:
-                current = candidate
-        chunks.append(current)
-        for chunk_index, chunk in enumerate(chunks):
-            payload = self._completion_payload(
-                run_id,
-                chunk,
-                chunk_index=chunk_index,
-                final=chunk_index == len(chunks) - 1,
-                success=not failures and not cancelled and reason is None,
-                partial=partial,
-                removed_count=removed_count,
-                problem_count=len(failures),
-                reason=bounded_reason,
-                message=bounded_message,
-                publication_required=publication_required,
-            )
-            await self._emit("prune_complete", payload)
-
-    def _completion_payload(
-        self,
-        run_id: str,
-        chunk: list[dict[str, Any]],
-        *,
-        chunk_index: int,
-        final: bool,
-        success: bool,
-        partial: bool,
-        removed_count: int,
-        problem_count: int,
-        reason: str | None,
-        message: str | None,
-        publication_required: bool,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "success": success,
-            "partial": partial,
-            "run_id": run_id,
-            "preview_id": self._run_preview_id,
-            "chunk_index": chunk_index,
-            "final": final,
-            "removed_count": removed_count,
-            "problem_count": problem_count,
-            "removed_rom_ids": sorted({int(value) for result in chunk for value in result.get("removed_rom_ids", [])}),
-            "affected_app_ids": sorted(
-                {int(result["app_id"]) for result in chunk if type(result.get("app_id")) is int}
-            ),
-            "removed_app_ids": sorted(
-                {int(result["removed_app_id"]) for result in chunk if type(result.get("removed_app_id")) is int}
-            ),
-            "results": chunk,
-        }
-        if publication_required:
-            payload["publication_required"] = True
-        if reason is not None:
-            payload["reason"] = reason
-        if message is not None:
-            payload["message"] = message
-        return payload
-
-    @staticmethod
-    def _group_result(
-        rows: list[Rom],
-        status: str,
-        reason: str | None,
-        message: object,
-        *,
-        removed_rom_ids: list[int] | None = None,
-        app_id: int | None = None,
-        removed_app_id: int | None = None,
-        bundle_path: str | None = None,
-        committed_action: str | None = None,
-        mutations: list[str] | None = None,
-        ambiguous_mutations: list[str] | None = None,
-        warnings: list[str] | None = None,
-        action_ambiguous: bool = False,
-        target_rom_id: int | None = None,
-    ) -> dict[str, Any]:
-        raw_group_id = rows[0].sibling_group_key or f"rom:{rows[0].rom_id}"
-        all_rom_ids = [row.rom_id for row in rows]
-        bounded_removed = (removed_rom_ids or [])[:_COMPLETION_IDS_PER_GROUP]
-        raw_message = str(message)
-        result: dict[str, Any] = {
-            "group_id": raw_group_id[:_COMPLETION_TEXT_CHARS],
-            "group_id_truncated": len(raw_group_id) > _COMPLETION_TEXT_CHARS,
-            "rom_ids": all_rom_ids[:_COMPLETION_IDS_PER_GROUP],
-            "rom_count": len(all_rom_ids),
-            "rom_ids_truncated": len(all_rom_ids) > _COMPLETION_IDS_PER_GROUP,
-            "status": status,
-            "message": raw_message[:_COMPLETION_TEXT_CHARS],
-            "message_truncated": len(raw_message) > _COMPLETION_TEXT_CHARS,
-        }
-        if reason is not None:
-            raw_reason = str(reason)
-            result["reason"] = raw_reason[:_COMPLETION_REASON_CHARS]
-            result["reason_truncated"] = len(raw_reason) > _COMPLETION_REASON_CHARS
-        if removed_rom_ids is not None:
-            result["removed_rom_ids"] = bounded_removed
-            result["removed_count"] = len(removed_rom_ids)
-            result["removed_rom_ids_truncated"] = len(removed_rom_ids) > _COMPLETION_IDS_PER_GROUP
-        if app_id is not None:
-            result["app_id"] = app_id
-        if removed_app_id is not None:
-            result["removed_app_id"] = removed_app_id
-        if bundle_path is not None:
-            result["bundle_path"] = bundle_path[:_COMPLETION_PATH_CHARS]
-            result["bundle_path_truncated"] = len(bundle_path) > _COMPLETION_PATH_CHARS
-        if committed_action is not None:
-            result["committed_action"] = committed_action
-        if mutations:
-            result["mutations"] = [str(item)[:_COMPLETION_REASON_CHARS] for item in mutations]
-        if ambiguous_mutations:
-            result["ambiguous_mutations"] = [str(item)[:_COMPLETION_REASON_CHARS] for item in ambiguous_mutations]
-        if warnings:
-            bounded_warnings = [
-                str(item)[:_COMPLETION_WARNING_CHARS] for item in warnings[:_COMPLETION_WARNINGS_PER_GROUP]
-            ]
-            result["warnings"] = bounded_warnings
-            result["warning_count"] = len(warnings)
-            result["warnings_omitted"] = len(warnings) > len(bounded_warnings)
-            result["warnings_truncated"] = any(
-                len(str(item)) > _COMPLETION_WARNING_CHARS for item in warnings[:_COMPLETION_WARNINGS_PER_GROUP]
-            )
-        if action_ambiguous:
-            result["action_ambiguous"] = True
-        if target_rom_id is not None:
-            result["target_rom_id"] = target_rom_id
-        return result

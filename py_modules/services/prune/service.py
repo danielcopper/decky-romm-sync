@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     )
 
 _ACTION_TIMEOUT_SECONDS = 60.0
+_RELEASE_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -288,7 +289,7 @@ class PruneService:
         if self._release_run_id != run_id or self._release_event.is_set():
             return {"success": True, "message": "Cleanup claim is released."}
         try:
-            await asyncio.wait_for(self._release_event.wait(), timeout=5.0)
+            await asyncio.wait_for(self._release_event.wait(), timeout=_RELEASE_TIMEOUT_SECONDS)
         except TimeoutError:
             return self._failure("release_timeout", "Cleanup claim release was not observed in time.")
         return {"success": True, "message": "Cleanup claim is released."}

@@ -74,6 +74,25 @@ def test_repointed_group_delete_revalidates_and_invalidates_collection_only() ->
     assert uow.platform_sync_state.get("gba") is not None
 
 
+def test_fully_dead_group_delete_keeps_the_platform_completion_stamp() -> None:
+    uow = FakeUnitOfWork()
+    with uow:
+        uow.roms.save(_rom(1))
+        uow.roms.save(_rom(2))
+        uow.platform_sync_state.save(
+            PlatformSyncState.stamp(platform_slug="gba", at="now", rom_count=2, fetch_id="fetch")
+        )
+
+    current = _registry(uow).reread_group(1)
+    deleted = _registry(uow).delete_rows(current, {1}, None, None, True)
+
+    assert deleted is True
+    assert uow.roms.get(1) is None
+    stamp = uow.platform_sync_state.get("gba")
+    assert stamp is not None
+    assert (stamp.fetch_id, stamp.rom_count) == ("fetch", 2)
+
+
 def test_new_sibling_or_changed_binding_blocks_pre_mutation_validation() -> None:
     uow = FakeUnitOfWork()
     app_id = 0x80000001

@@ -101,9 +101,6 @@ class PruneRegistry:
             for stamp in list(uow.collection_sync_state.iter_all()):
                 if delete_ids.intersection(stamp.member_rom_ids):
                     uow.collection_sync_state.delete(stamp.collection_id, stamp.collection_kind)
-            if fully_dead:
-                for slug in {row.platform_slug for row in expected_rows if row.rom_id in delete_ids}:
-                    uow.platform_sync_state.delete(slug)
             for rom_id in delete_ids:
                 uow.roms.delete(rom_id)
         return True
