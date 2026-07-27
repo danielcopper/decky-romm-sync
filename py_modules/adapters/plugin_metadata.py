@@ -29,7 +29,7 @@ class PluginMetadataAdapter:
         raw_version = payload.get("version")
         value = (
             raw_name if isinstance(raw_name, str) and raw_name else "decky-plugin",
-            raw_version if isinstance(raw_version, str) else "0.0.0",
+            raw_version if isinstance(raw_version, str) and raw_version else "0.0.0",
         )
         self._cache[plugin_dir] = value
         return value

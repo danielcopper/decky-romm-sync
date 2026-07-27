@@ -76,32 +76,20 @@ class TestPluginMetadataAdapter:
         assert adapter.read_version(str(plugin_dir)) == "1.2.3"
         assert calls == 1
 
-    def test_read_version_empty_version_returned_as_is(self, tmp_path):
-        """An empty version string passes through rather than becoming the fallback.
-
-        The fallback is reserved for a version this adapter cannot represent;
-        an empty string reflects what the file actually contained and surfaces
-        upstream so a malformed publish can be diagnosed.
-        """
-        plugin_dir = tmp_path / "plugin"
-        plugin_dir.mkdir()
-        (plugin_dir / "package.json").write_text(json.dumps({"version": ""}))
-
-        adapter = PluginMetadataAdapter()
-        assert adapter.read_version(str(plugin_dir)) == ""
-
-    @pytest.mark.parametrize("non_string", [None, 3, 1.2, ["1.0.0"], {"major": 1}])
-    def test_read_version_non_string_returns_fallback(self, tmp_path, non_string):
-        """A version that is not a string cannot be surfaced as one.
+    @pytest.mark.parametrize("unusable", ["", None, 3, 1.2, ["1.0.0"], {"major": 1}])
+    def test_read_version_unusable_version_returns_fallback(self, tmp_path, unusable):
+        """A version that is not a non-empty string takes the documented fallback.
 
         ``read_version`` is declared to return ``str`` and its value is
-        interpolated into the outgoing User-Agent, so a JSON number, object,
-        list, or ``null`` takes the documented fallback instead of travelling
-        onward mistyped.
+        interpolated into the outgoing User-Agent and recorded as the recovery
+        bundle's ``plugin_version``. An empty string, ``null``, a number, a
+        list, or an object cannot serve either purpose, so they resolve to the
+        same fallback a missing field does — matching how ``name`` is
+        validated.
         """
         plugin_dir = tmp_path / "plugin"
         plugin_dir.mkdir()
-        (plugin_dir / "package.json").write_text(json.dumps({"version": non_string}))
+        (plugin_dir / "package.json").write_text(json.dumps({"version": unusable}))
 
         adapter = PluginMetadataAdapter()
         assert adapter.read_version(str(plugin_dir)) == "0.0.0"

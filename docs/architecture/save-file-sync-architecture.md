@@ -261,18 +261,18 @@ backup.
 Explicit cleanup of a retained RomM 404 starts with the same exact per-ROM save paths used by sync and unions path-safe
 filenames already retained in `RomSaveSyncState.files`; it never broad-scans a save directory. This preserves exact
 historical filenames after a ROM rename or layout change without guessing. Before a row can be purged, the service
-canonicalizes those paths for the purge set and every remaining local ROM row. Ownership deliberately spans uninstalled
-rows too: a vanished row's live replacement is routinely uninstalled, and an uninstalled row that shares a platform and
-content stem lands on the same save files. A current save with any owner outside the purge set is copied into an enabled
-recovery bundle but left in the emulator directory. An exclusively owned current save is copied and checksum-verified
-when recovery is enabled, then moved through `quarantine_prune_saves` → `quarantine_claimed_file` → `rename_claimed`.
-This operation deliberately keeps all existing `.romm-backup` history instead of enforcing the normal newest-ten cap.
-Cleanup always takes a final no-follow source claim and creates the backup directory through anchored parents before a
-directory-durable rename, including recovery-off runs. A post-rename fsync failure is returned as an actual but
-durability-ambiguous move rather than disappearing from the group ledger. After quarantine, every exclusively owned
-current-save path is expected absent, including one that existed during inventory and was moved successfully. Cleanup
-collectively rechecks the whole set after later filesystem cleanup and immediately before deleting the owning aggregate.
-Any newly created or emulator-recreated save retains the aggregate, with or without a recovery bundle.
+canonicalizes those paths for the purge set and every remaining local ROM row, installed or not — an uninstalled row
+that projects onto the same save path is a co-owner. That matters because a vanished row's live replacement is routinely
+uninstalled. A current save with any owner outside the purge set is copied into an enabled recovery bundle but left in
+the emulator directory. An exclusively owned current save is copied and checksum-verified when recovery is enabled, then
+moved through `quarantine_prune_saves` → `quarantine_claimed_file` → `rename_claimed`. This operation deliberately keeps
+all existing `.romm-backup` history instead of enforcing the normal newest-ten cap. Cleanup always takes a final
+no-follow source claim and creates the backup directory through anchored parents before a directory-durable rename,
+including recovery-off runs. A post-rename fsync failure is returned as an actual but durability-ambiguous move rather
+than disappearing from the group ledger. After quarantine, every exclusively owned current-save path is expected absent,
+including one that existed during inventory and was moved successfully. Cleanup collectively rechecks the whole set
+after later filesystem cleanup and immediately before deleting the owning aggregate. Any newly created or
+emulator-recreated save retains the aggregate, with or without a recovery bundle.
 
 Recovery also copies matching `.romm-backup` files while leaving the originals untouched. If an uninstalled ROM or an
 unsupported layout has no resolvable exact path, the manifest preserves known save-sync filenames/state and records a
