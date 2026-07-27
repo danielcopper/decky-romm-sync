@@ -81,15 +81,19 @@ def _uow(svc) -> FakeUnitOfWork:
     return svc._uow_factory.uow
 
 
-def _seed_rom(svc, rom_id: int, *, platform_slug: str = "gba") -> None:
-    """Seed a ``Rom`` registry row so per-rom child writes pass the commit-time FK."""
+def _seed_rom(svc, rom_id: int, *, platform_slug: str = "gba", fs_name: str | None = None) -> None:
+    """Seed a ``Rom`` registry row so per-rom child writes pass the commit-time FK.
+
+    ``fs_name`` is the RomM content filename; pass it when the test needs two
+    rows to agree (or disagree) on the save identity they project onto.
+    """
     with _uow(svc) as uow:
         uow.roms.save(
             Rom.synced(
                 rom_id=rom_id,
                 platform_slug=platform_slug,
                 name=f"rom-{rom_id}",
-                fs_name=f"rom-{rom_id}",
+                fs_name=fs_name if fs_name is not None else f"rom-{rom_id}",
                 shortcut_app_id=rom_id,
                 synced_at="2026-01-01T00:00:00",
             )

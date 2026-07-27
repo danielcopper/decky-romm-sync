@@ -44,6 +44,24 @@ if TYPE_CHECKING:
     from services.protocols import UnitOfWorkFactory
 
 
+def _save_identity(platform_slug: str, content_path: str) -> tuple[str, str]:
+    """The identity two local ROM rows share when they project onto the same save files.
+
+    A ROM's save files are ``<saves_root>/<platform's content dir>/<content
+    stem><ext>``: the directory follows from the platform (a single-file ROM
+    installs into that platform's system directory) and the stem is the content
+    filename without its extension, exactly as ``RomInfoService`` derives
+    ``rom_name`` from an install's ``file_path``. Two rows agreeing on both
+    therefore land on the same paths, whether or not either is installed —
+    which is what lets an *uninstalled* row be recognised as a co-owner of an
+    installed row's saves.
+
+    ``content_path`` is an install's full ``file_path`` or a row's bare
+    ``fs_name``; only its basename stem is read, so the two are interchangeable.
+    """
+    return (platform_slug, os.path.splitext(os.path.basename(content_path))[0])
+
+
 class SaveService:
     """Aggregate root for bidirectional save file sync between RetroDECK and RomM.
 
@@ -272,19 +290,35 @@ class SaveService:
             yield
 
     def inventory_prune_saves(self, purge_rom_ids: list[int]) -> dict[str, Any]:
-        """Build exact-path save ownership and recovery artifacts for a purge set."""
+        """Build exact-path save ownership and recovery artifacts for a purge set.
+
+        Ownership spans every local ``roms`` row that lands on a path, not only
+        the installed ones: a vanished row's live replacement is routinely
+        uninstalled, and treating its shared save as exclusive would quarantine
+        a file the replacement still reads.
+        """
         purge_ids = {int(value) for value in purge_rom_ids}
         with self._uow_factory() as uow:
-            installed_ids = [install.rom_id for install in uow.rom_installs.iter_all()]
+            installs = list(uow.rom_installs.iter_all())
+            installed_ids = {install.rom_id for install in installs}
             persisted_names = {
                 rom_id: list(state.files)
                 for rom_id, state in uow.rom_save_sync_states.iter_all()
                 if rom_id in installed_ids
             }
+            # An uninstalled row has no install record to resolve a path from, so
+            # it is matched onto an installed row's paths by save identity.
+            uninstalled_by_identity: dict[tuple[str, str], set[int]] = {}
+            for rom in uow.roms.iter_all():
+                if rom.rom_id in installed_ids:
+                    continue
+                identity = _save_identity(rom.platform_slug, rom.fs_name)
+                uninstalled_by_identity.setdefault(identity, set()).add(rom.rom_id)
 
         ownership: dict[str, set[int]] = {}
         expected_by_id: dict[int, list[dict[str, str]]] = {}
-        for rom_id in installed_ids:
+        for install in installs:
+            rom_id = install.rom_id
             expected = self._rom_info.expected_save_files(rom_id)
             if expected:
                 saves_dir = expected[0]["saves_dir"]
@@ -300,8 +334,11 @@ class SaveService:
                             {"path": os.path.join(saves_dir, filename), "filename": filename, "saves_dir": saves_dir}
                         )
             expected_by_id[rom_id] = expected
+            owners = {rom_id} | uninstalled_by_identity.get(
+                _save_identity(install.platform_slug, install.file_path), set()
+            )
             for item in expected:
-                ownership.setdefault(self._save_file_store.canonical_path(item["path"]), set()).add(rom_id)
+                ownership.setdefault(self._save_file_store.canonical_path(item["path"]), set()).update(owners)
 
         saves_root = self._config.retrodeck_paths.saves_path()
         artifacts: list[dict[str, object]] = []

@@ -25,6 +25,7 @@ from tests.services.saves._helpers import (
     _get_device_id,
     _get_save_state,
     _install_rom,
+    _seed_rom,
     _seed_save_state,
     _set_device_id,
     make_service,
@@ -1505,6 +1506,58 @@ class TestPruneSaveInventory:
         assert inventory["exclusive"] == []
         assert inventory["shared"] == [str(shared)]
         assert inventory["lock_rom_ids"] == [1, 2]
+
+    def test_uninstalled_live_replacement_keeps_its_shared_save_in_place(self, tmp_path):
+        """The canonical vanished/replacement pair: purge row installed, live row not.
+
+        Both rows project onto the same save path, so the locked recovery
+        contract copies the file into the bundle and leaves it where the
+        replacement will read it — quarantining it would strand the live
+        version's progress.
+        """
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=4375, system="gba", file_name="game.gba")
+        _seed_rom(svc, 25135, platform_slug="gba", fs_name="game.gba")
+        shared = _create_save(tmp_path, system="gba", rom_name="game", content=b"live progress")
+
+        inventory = svc.inventory_prune_saves([4375])
+
+        assert inventory["exclusive"] == []
+        assert inventory["shared"] == [str(shared)]
+        assert {item["source_path"] for item in inventory["artifacts"]} == {str(shared)}
+        assert inventory["source_claims"] == {}
+        assert inventory["lock_rom_ids"] == [4375, 25135]
+
+        result = svc.quarantine_prune_saves(inventory["exclusive"], inventory["source_claims"])
+
+        assert result == {"success": True, "moved": [], "ambiguous": False}
+        assert shared.read_bytes() == b"live progress"
+
+    def test_uninstalled_row_with_a_different_content_name_stays_exclusive(self, tmp_path):
+        """No over-correction: an unrelated uninstalled row must not shield the save.
+
+        It projects onto a different stem, so the purge row still owns its saves
+        alone and they leave through the ``.romm-backup`` quarantine funnel.
+        """
+        svc, _ = make_service(tmp_path)
+        _install_rom(svc, tmp_path, rom_id=4375, system="gba", file_name="game.gba")
+        _seed_rom(svc, 25135, platform_slug="gba", fs_name="other-game.gba")
+        owned = _create_save(tmp_path, system="gba", rom_name="game", content=b"only mine")
+
+        inventory = svc.inventory_prune_saves([4375])
+
+        expected_paths = {str(tmp_path / "saves" / "gba" / f"game.{extension}") for extension in ("srm", "rtc", "sav")}
+        assert {item["path"] for item in inventory["exclusive"]} == expected_paths
+        assert inventory["shared"] == []
+        assert inventory["lock_rom_ids"] == [4375]
+
+        result = svc.quarantine_prune_saves(inventory["exclusive"], inventory["source_claims"])
+
+        assert result["success"] is True
+        assert result["moved"] == [str(owned)]
+        assert owned.exists() is False
+        backups = list((tmp_path / "saves" / "gba" / ".romm-backup").glob("game_*.srm"))
+        assert [path.read_bytes() for path in backups] == [b"only mine"]
 
     def test_missing_exclusive_save_is_claimed_absent_and_late_creation_is_retained(self, tmp_path):
         svc, _ = make_service(tmp_path)
