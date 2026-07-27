@@ -1585,6 +1585,33 @@ describe("VersionPicker — unsynced-saves soft-block", () => {
     expect(dispatched.some((e) => e.detail?.type === "version_switched")).toBe(false);
   });
 
+  it("refreshes the stranded save status when the post-sync retry is refused", async () => {
+    // The sync SUCCEEDED — the saves moved — so the SavesTab has to hear about it
+    // even though the retried switch was then refused. `refresh_save_status` is
+    // the only trigger for the `save_status_updated` chain, so without it the tab
+    // shows pre-sync status until it is re-entered. Exercised on the generic
+    // refusal branch that version_vanished / bound_elsewhere both take.
+    const refused = {
+      success: false as const,
+      reason: "bound_elsewhere" as const,
+      message: "That version is bound to another shortcut.",
+    };
+    vi.mocked(backend.switchVersion).mockResolvedValueOnce(block).mockResolvedValueOnce(refused);
+    vi.mocked(backend.syncRomSaves).mockResolvedValue({ success: true, message: "", synced: 1 });
+    vi.mocked(showUnsyncedSavesModal).mockResolvedValue("sync_and_switch");
+
+    const { menu } = await renderAndOpen();
+    await clickRow(menu.container, "Game (Japan)");
+
+    expect(backend.refreshSaveStatus).toHaveBeenCalledWith(block.unsynced_rom_id);
+    // The refusal toast still fires — the refresh is additive, not a replacement.
+    expect(toaster.toast).toHaveBeenCalledWith({
+      title: "RomM Sync",
+      body: "Could not switch version",
+      subtext: refused.message,
+    });
+  });
+
   it("reports an explicit server_unreachable post-save retry as offline", async () => {
     vi.mocked(backend.switchVersion).mockResolvedValueOnce(block).mockResolvedValueOnce({
       success: false,

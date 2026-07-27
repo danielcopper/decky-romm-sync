@@ -304,25 +304,32 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     if (result.reason === "version_vanished") detach(refreshAfterVanishedRefusal());
   };
 
-  // Sync the stranded version's saves, then retry the switch. Any failure —
-  // sync failed, sync surfaced conflicts, or the retry blocked again — aborts
-  // with a short toast and re-runs the save-status refresh so the conflict UI
+  // Sync the stranded version's saves, then retry the switch. Every failure —
+  // sync failed, sync surfaced conflicts, the retry blocked again, or the retry
+  // was refused outright — ends the attempt with a toast and re-runs the
+  // save-status refresh, so the conflict UI (or the just-completed upload)
   // surfaces through the normal save_status_updated loop.
   const syncThenSwitch = async (
     unsyncedRomId: number,
     target: VersionInfo,
     admission: PruneLeaseAdmission,
   ): Promise<void> => {
-    const abort = (body: string): void => {
-      // Every sync-then-switch failure is terminal for this attempt — release the
-      // in-flight guard so the trigger re-enables (it never reaches a reload).
-      setSwitching(false);
-      toaster.toast({ title: "RomM Sync", body });
+    // The SavesTab has no other refresh trigger — `refresh_save_status` is what
+    // drives the `save_status_updated` chain — so EVERY terminal failure here
+    // must run it, or the tab keeps showing pre-sync status until it is re-entered.
+    const refreshStrandedSaveStatus = (): void => {
       detach(
         refreshSaveStatus(unsyncedRomId).catch((e) =>
           logWarn(`VersionPicker: post-abort save-status refresh failed for rom ${unsyncedRomId}: ${e}`),
         ),
       );
+    };
+    const abort = (body: string): void => {
+      // Every sync-then-switch failure is terminal for this attempt — release the
+      // in-flight guard so the trigger re-enables (it never reaches a reload).
+      setSwitching(false);
+      toaster.toast({ title: "RomM Sync", body });
+      refreshStrandedSaveStatus();
     };
     if (!isPruneLeaseAdmissionCurrent(admission)) return;
     try {
@@ -345,7 +352,11 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
         // race) — say so instead of the generic "couldn't switch".
         abort("Saves still unsynced — try again");
       } else {
+        // The sync landed but the retried switch was refused (e.g. the target
+        // version vanished). handleSwitchFailure owns the toast + guard; the
+        // refresh is still ours, since the saves DID move.
         handleSwitchFailure(retry);
+        refreshStrandedSaveStatus();
       }
     } catch (e) {
       if (!isPruneLeaseAdmissionCurrent(admission)) return;

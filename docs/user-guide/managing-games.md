@@ -79,7 +79,9 @@ and the picker refreshes directly so the row becomes unavailable without startin
 applies after **Sync now & switch** and **Switch anyway**; the latter bypasses only the unsynced-save warning. If RomM
 cannot provide a definitive answer because of a timeout, connection/sign-in/server error, or malformed response, the
 local switch is allowed to continue. In particular, the offline **Switch anyway** path does not wait through the normal
-retry sequence. A target-specific refusal does not by itself change the plugin's global online/offline status.
+retry sequence. A target-specific refusal does not by itself change the plugin's global online/offline status. When the
+refusal follows a **Sync now & switch** whose upload already succeeded, the **Saves** tab is refreshed as well, so it
+shows the saves that were just uploaded rather than the state from before the sync.
 
 Switching **never deletes anything.** ROM files already on disk stay put, and save files are never moved or deleted by a
 switch. What happens depends on whether the version you're leaving is downloaded and whether its saves are synced:
