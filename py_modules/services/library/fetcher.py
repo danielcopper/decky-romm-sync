@@ -29,9 +29,10 @@ from lib.romm_paging import LIST_PAGE_SIZE
 if TYPE_CHECKING:
     import asyncio
     import logging
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Sequence
 
     from domain.collection_sync_state import CollectionSyncState
+    from domain.rom import Rom
     from services.library._state import LibrarySyncStateBox
     from services.protocols import (
         DebugLogger,
@@ -74,7 +75,13 @@ class _PlanEstimate(NamedTuple):
 
 
 class _SkipBaseline(NamedTuple):
-    """One platform's locally persisted inputs to the incremental-skip gate."""
+    """One platform's locally persisted inputs to the incremental-skip gate.
+
+    Every field that judges the local mirror against the server
+    (``fetched_count``, ``needs_backfill``) is scoped to the completion stamp's
+    fetch generation: a row the server has dropped can neither be re-counted nor
+    re-fetched, so it may never hold the platform's skip off forever (#1504).
+    """
 
     stamp_completed_at: str | None
     stamp_rom_count: int | None
@@ -90,6 +97,27 @@ class _SkipBaseline(NamedTuple):
 # (interval 1) — a "page 3/7" update every few seconds — rather than throttled.
 # The interval knob stays so a future larger page count can throttle again.
 _FETCH_PROGRESS_PAGE_INTERVAL = 1
+
+
+def _backfill_needed(rows: Sequence[Rom], fetch_id: str | None) -> bool:
+    """Whether a NULL ``sibling_group_key`` among *rows* may force a full fetch.
+
+    Sibling twin of :func:`count_rows_for_skip` and gated on the same generation:
+    a full fetch can only backfill a row the server still returns, so only a row
+    carrying the stamp's generation may demand one. A row for a rom_id RomM has
+    dropped keeps its older generation (ADR-0007 retains it, nothing is deleted),
+    and no fetch will ever fill its key in — letting it force a backfill would
+    wedge the platform into a full fetch on every sync, forever.
+
+    A stamp with **no** generation (``fetch_id`` falsy) predates the contract and
+    cannot say what its fetch saw, so every NULL-key row still forces the fetch,
+    exactly as before — the same deliberately permissive legacy path
+    :func:`count_rows_for_skip` takes, here erring towards fetching rather than
+    skipping.
+    """
+    if not fetch_id:
+        return any(rom.sibling_group_key is None for rom in rows)
+    return any(rom.sibling_group_key is None and rom.last_fetch_id == fetch_id for rom in rows)
 
 
 def _collection_units(
@@ -776,15 +804,17 @@ class LibraryFetcher:
                 stamp = uow.platform_sync_state.get(unit.slug)
                 all_rows = list(uow.roms.iter_by_platform(unit.slug))
                 bound_count = sum(1 for rom in all_rows if rom.shortcut_app_id is not None)
+                fetch_id = stamp.fetch_id if stamp is not None else None
                 predicted = predict_unit_skip(
                     stamp_completed_at=stamp.completed_at if stamp is not None else None,
                     stamp_rom_count=stamp.rom_count if stamp is not None else None,
                     unit_rom_count=unit.rom_count,
-                    # The same fetch-generation count the real gate uses (#1504),
-                    # so the estimate keeps replaying the gate's local conditions.
-                    fetched_count=count_rows_for_skip(all_rows, stamp.fetch_id if stamp is not None else None),
+                    # The same fetch-generation count and backfill gate the real
+                    # gate uses (#1504), so the estimate keeps replaying the
+                    # gate's local conditions.
+                    fetched_count=count_rows_for_skip(all_rows, fetch_id),
                     registry_count=bound_count,
-                    needs_backfill=any(rom.sibling_group_key is None for rom in all_rows),
+                    needs_backfill=_backfill_needed(all_rows, fetch_id),
                 )
                 collapsed = (
                     collapsed_shortcut_count(
@@ -852,9 +882,12 @@ class LibraryFetcher:
         * ``persisted_count`` — every persisted row for the platform,
           superseded ones included. Reporting only: it makes the "N persisted,
           M from the last fetch" divergence visible in the log.
-        * ``needs_backfill`` — any persisted row still carries a NULL
-          ``sibling_group_key`` (predates the version-metadata capture), so the
-          platform must full-fetch to fill it in.
+        * ``needs_backfill`` — a persisted row carrying the stamp's generation
+          still has a NULL ``sibling_group_key`` (predates the version-metadata
+          capture), so the platform must full-fetch to fill it in. Generation-
+          gated for the same reason ``fetched_count`` is: a dropped row is never
+          returned again, so no fetch can ever backfill it. Falls back to every
+          row for a stamp written before the generation contract.
 
         Only one short read UoW is opened.
         """
@@ -875,13 +908,14 @@ class LibraryFetcher:
             for rom in all_rows
             if rom.shortcut_app_id is not None
         ]
+        fetch_id = stamp.fetch_id if stamp is not None else None
         return _SkipBaseline(
             stamp_completed_at=stamp.completed_at if stamp is not None else None,
             stamp_rom_count=stamp.rom_count if stamp is not None else None,
             reconstructed_roms=reconstructed,
-            fetched_count=count_rows_for_skip(all_rows, stamp.fetch_id if stamp is not None else None),
+            fetched_count=count_rows_for_skip(all_rows, fetch_id),
             persisted_count=len(all_rows),
-            needs_backfill=any(rom.sibling_group_key is None for rom in all_rows),
+            needs_backfill=_backfill_needed(all_rows, fetch_id),
         )
 
     @staticmethod
@@ -920,10 +954,11 @@ class LibraryFetcher:
         rows count alike — only the generation decides, which keeps skip parity on
         platforms holding sibling groups while excluding a row for a rom_id the
         server has since dropped (#1504; such a row is retained per ADR-0007 and
-        would otherwise inflate the count forever). Returns ``None`` to fall
-        through to a full paginated fetch — no stamp (including every platform's
-        first sync after this contract shipped — a one-time re-walk), no rows
-        carrying the stamp's generation, an un-backfilled row, a stamped ROM count
+        would otherwise inflate the count — or demand a backfill no fetch can
+        deliver — forever). Returns ``None`` to fall through to a full paginated
+        fetch — no stamp (including every platform's first sync after this
+        contract shipped — a one-time re-walk), no rows carrying the stamp's
+        generation, an un-backfilled row from that generation, a stamped ROM count
         that no longer matches the server, the delta check raised, or the server
         reports changes.
 
@@ -968,9 +1003,9 @@ class LibraryFetcher:
         # whose sibling_group_key is still NULL predates the version-metadata
         # capture and must be re-fetched to fill it in (and to persist its
         # siblings). Skipping would leave it NULL forever, so any un-backfilled
-        # ROM forces a full fetch — the commit then persists every sibling's
-        # group key + version dimensions. Once every row carries a key this is a
-        # no-op and the skip resumes.
+        # ROM *the server still returns* forces a full fetch — the commit then
+        # persists every sibling's group key + version dimensions. Once every
+        # such row carries a key this is a no-op and the skip resumes.
         if needs_backfill:
             self._logger.info(f"Per-unit fetch {platform_name}: version-metadata backfill needed — full fetch")
             return None

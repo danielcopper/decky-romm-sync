@@ -822,6 +822,53 @@ class TestIncrementalSkipSupersededRows:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_dropped_null_key_row_no_longer_forces_a_backfill_fetch(self, plugin, fake_romm_api):
+        """A dropped row's NULL group key can never be filled in, so it must not
+        wedge the platform into a full fetch on every sync forever."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=1, fetch_id="run-new")
+        _seed_persisted_rom(uow, 25135, app_id=1001, group_key="igdb:100:1", fetch_id="run-new")
+        # Superseded by 25135 and dropped by the server before the key was ever
+        # captured — no fetch will return it again to backfill it.
+        _seed_persisted_rom(uow, 4375, app_id=None, group_key=None, fetch_id="run-old")
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+
+        result = await plugin._sync_service._fetcher._try_unit_incremental_skip(unit)
+
+        assert result is not None
+        assert {r["id"] for r in result} == {25135}
+
+    @pytest.mark.asyncio
+    async def test_current_generation_null_key_row_still_forces_a_backfill_fetch(self, plugin, fake_romm_api):
+        """The gate is narrowed, not disabled: a row the last fetch returned with
+        no group key is backfillable and still costs a full fetch."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=1, fetch_id="run-new")
+        _seed_persisted_rom(uow, 25135, app_id=1001, group_key=None, fetch_id="run-new")
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=1)
+
+        result = await plugin._sync_service._fetcher._try_unit_incremental_skip(unit)
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_pre_migration_stamp_backfills_on_any_null_key_row(self, plugin, fake_romm_api):
+        """A stamp with no generation cannot say which rows its fetch saw, so it
+        keeps the pre-#1504 behaviour and lets any NULL-key row force the fetch."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=2, fetch_id=None)
+        _seed_persisted_rom(uow, 10, app_id=1001, group_key="igdb:100:1", fetch_id=None)
+        _seed_persisted_rom(uow, 11, app_id=None, group_key=None, fetch_id="run-old")
+        unit = WorkUnit(type="platform", id=1, name="N64", slug="n64", rom_count=2)
+
+        result = await plugin._sync_service._fetcher._try_unit_incremental_skip(unit)
+
+        assert result is None
+
+    @pytest.mark.asyncio
     async def test_pre_migration_stamp_counts_every_row(self, plugin, fake_romm_api):
         """A stamp written before the generation contract cannot say what its fetch
         saw, so the pre-#1504 count stands and a clean platform keeps skipping
@@ -1872,6 +1919,22 @@ class TestPlanEstimates:
 
         assert units[0].predicted_skip is False
         assert units[0].collapsed_count == 1
+
+    @pytest.mark.asyncio
+    async def test_dropped_null_key_row_predicts_a_skip(self, plugin, fake_romm_api):
+        """The estimate replays the gate's generation-gated backfill too, so a
+        dropped keyless row no longer prices a phantom full fetch every run."""
+        _wire_fake(plugin, fake_romm_api)
+        uow = plugin._uow
+        fake_romm_api.platforms = [{"id": 1, "name": "N64", "slug": "n64", "rom_count": 1}]
+        plugin.settings["enabled_platforms"] = {"1": True}
+        _seed_platform_stamp(uow, "n64", at="2025-01-01T00:00:00", rom_count=1, fetch_id="run-new")
+        _seed_persisted_rom(uow, 25135, app_id=1001, group_key="igdb:100:1", fetch_id="run-new")
+        _seed_persisted_rom(uow, 4375, app_id=None, group_key=None, fetch_id="run-old")
+
+        units = await plugin._sync_service._fetcher.build_work_queue()
+
+        assert units[0].predicted_skip is True
 
     @pytest.mark.asyncio
     async def test_zero_bound_rows_predicts_no_skip(self, plugin, fake_romm_api):
