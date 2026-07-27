@@ -450,3 +450,38 @@ def test_controller_rollback_failure_preserves_claimed_newer_vdf(tmp_path, monke
     with claimed[0].open() as source:
         preserved = vdf.load(source)
     assert preserved["UserLocalConfigStore"]["Unrelated"] == {"Fresh": "value"}
+
+
+def test_controller_cleanup_preserves_unrelated_duplicate_vdf_keys(tmp_path):
+    app_id = 0x80000007
+    _first, _second, grid = _layout(tmp_path, app_id)
+    localconfig = grid.parent / "localconfig.vdf"
+    localconfig.write_text(
+        '"UserLocalConfigStore"\n'
+        "{\n"
+        '\t"Apps"\n'
+        "\t{\n"
+        f'\t\t"{app_id}"\n'
+        "\t\t{\n"
+        '\t\t\t"UseSteamControllerConfig"\t\t"2"\n'
+        '\t\t\t"LastPlayed"\t\t"1700000000"\n'
+        "\t\t}\n"
+        "\t}\n"
+        '\t"Software"\n'
+        "\t{\n"
+        '\t\t"Launcher"\t\t"first"\n'
+        '\t\t"Launcher"\t\t"second"\n'
+        "\t}\n"
+        "}\n"
+    )
+    adapter = SteamRecoveryAdapter(user_home=str(tmp_path), logger=logging.getLogger("test"))
+    snapshot = adapter.snapshot(app_id)
+    assert snapshot["controller_setting"] == "2"
+
+    outcome = adapter.remove_state(app_id, snapshot, _source_claims(snapshot))
+
+    assert outcome["success"] is True
+    with localconfig.open() as source:
+        rewritten = vdf.load(source, mapper=vdf.VDFDict, merge_duplicate_keys=False)
+    assert rewritten["UserLocalConfigStore"]["Software"].get_all_for("Launcher") == ["first", "second"]
+    assert list(rewritten["UserLocalConfigStore"]["Apps"][str(app_id)].items()) == [("LastPlayed", "1700000000")]

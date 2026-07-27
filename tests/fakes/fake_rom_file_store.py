@@ -6,7 +6,7 @@ import hashlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from models.prune import MutationOutcome, SourceClaim, SourceIdentity
+    from models.prune import MutationOutcome, SourceClaim
 
 
 class FakeRomFileStore:
@@ -72,16 +72,6 @@ class FakeRomFileStore:
             if d.startswith(prefix):
                 self.dirs.discard(d)
 
-    def remove_exact(self, path: str, safe_root: str, identity: SourceIdentity) -> bool:
-        del safe_root, identity
-        if self.is_dir(path):
-            self.remove_tree(path)
-            return True
-        if path in self.files:
-            self.remove_file(path)
-            return True
-        return False
-
     def claim_source(self, path: str, safe_root: str) -> SourceClaim:
         exists = self.exists(path)
         return {
@@ -102,5 +92,13 @@ class FakeRomFileStore:
         }
 
     def remove_claimed(self, path: str, safe_root: str, claim: SourceClaim) -> MutationOutcome:
-        changed = self.remove_exact(path, safe_root, claim["source_identity"])
+        del safe_root, claim
+        if self.is_dir(path):
+            self.remove_tree(path)
+            changed = True
+        elif path in self.files:
+            self.remove_file(path)
+            changed = True
+        else:
+            changed = False
         return {"success": True, "changed": changed, "ambiguous": False, "message": "Source removed"}

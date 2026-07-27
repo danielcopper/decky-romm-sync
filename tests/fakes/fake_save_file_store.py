@@ -13,7 +13,7 @@ from domain.save_hash import combine_zip_entry_hashes
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from models.prune import MutationOutcome, SourceClaim, SourceIdentity
+    from models.prune import MutationOutcome, SourceClaim
 
 
 class FakeSaveFileStore:
@@ -114,11 +114,6 @@ class FakeSaveFileStore:
         else:
             self._ensure_mtime(dst)
 
-    def rename_exact(self, src: str, dst: str, safe_root: str, identity: SourceIdentity) -> bool:
-        del safe_root, identity
-        self.rename(src, dst)
-        return True
-
     def claim_source(self, path: str, safe_root: str) -> SourceClaim:
         exists = path in self.files
         return {
@@ -147,8 +142,9 @@ class FakeSaveFileStore:
             if src in self.files:
                 raise RuntimeError(f"Recovery source appeared after sealing: {src}")
             return {"success": True, "changed": False, "ambiguous": False, "message": "Source was already absent"}
-        changed = self.rename_exact(src, dst, safe_root, claim["source_identity"])
-        return {"success": True, "changed": changed, "ambiguous": False, "message": "Source renamed"}
+        del safe_root
+        self.rename(src, dst)
+        return {"success": True, "changed": True, "ambiguous": False, "message": "Source renamed"}
 
     def get_mtime(self, path: str) -> float:
         if path not in self.files:

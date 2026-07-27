@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import errno
 import hashlib
 import json
 import os
@@ -11,7 +10,13 @@ import re
 import stat
 from typing import TYPE_CHECKING, Any
 
-from adapters.descriptor_paths import claim_source, identity_for_stat, mount_id_for_fd, remove_current
+from adapters.descriptor_paths import (
+    claim_source,
+    identity_for_stat,
+    measure_tree,
+    mount_id_for_fd,
+    remove_current,
+)
 from domain.prune import sanitize_package_name
 
 if TYPE_CHECKING:
@@ -32,22 +37,33 @@ class RecoveryBundleAdapter:
         return self._root
 
     def free_bytes(self) -> int:
-        descriptors = self._open_layout(create=True)
-        try:
-            stats = os.fstatvfs(descriptors[1])
-            return stats.f_bavail * stats.f_frsize
-        finally:
-            self._close_layout(descriptors)
+        """Report free bytes on the filesystem that holds — or would hold — the recovery root.
 
-    def measure_path(self, path: str, safe_root: str) -> int:
-        total = 0
-        for file_path in self._files_for_claim(claim_source(path, safe_root)):
-            fd = self._open_regular_beneath(file_path, safe_root)
+        Read-only: the ``staging`` / ``bundles`` layout is created by
+        :meth:`seal_bundle`, never by a preview, so this walks up to the nearest
+        existing ancestor instead of materializing the root.
+        """
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        candidate = self._root
+        while True:
             try:
-                total += os.fstat(fd).st_size
+                fd = os.open(candidate, flags)
+            except FileNotFoundError:
+                parent = os.path.dirname(candidate)
+                if parent == candidate:
+                    raise
+                candidate = parent
+                continue
+            except OSError as exc:
+                raise ValueError(f"Recovery directory is not a trusted directory: {candidate}") from exc
+            try:
+                return self._free_bytes_fd(fd)
             finally:
                 os.close(fd)
-        return total
+
+    def measure_path(self, path: str, safe_root: str) -> int:
+        """Sum the recursive byte size of one source without reading its content."""
+        return measure_tree(path, safe_root)
 
     def validate_sources(self, bundle_path: str, bundle_digest: str | None = None) -> bool:
         """Verify that every sealed source set and source byte stream is unchanged."""
@@ -113,6 +129,7 @@ class RecoveryBundleAdapter:
             if not isinstance(source_sets, list) or not isinstance(records, list) or seal["file_count"] != len(records):
                 raise ValueError("Recovery manifest is invalid")
             claims: dict[str, SourceClaim] = {}
+            sealed_files: dict[str, tuple[str, SourceIdentity, str]] = {}
             for item in source_sets:
                 if not isinstance(item, dict):
                     raise ValueError("Recovery manifest source claim is invalid")
@@ -135,6 +152,7 @@ class RecoveryBundleAdapter:
                 if self._files_for_claim(claim) != files or claim_source(source_path, safe_root) != claim:
                     raise ValueError("Recovery source no longer matches the sealed claim")
                 claims[source_path] = claim
+                sealed_files.update(self._sealed_files_for_claim(claim))
 
             for record in records:
                 if not isinstance(record, dict):
@@ -150,9 +168,14 @@ class RecoveryBundleAdapter:
                     or not isinstance(raw_identity, dict)
                 ):
                     raise ValueError("Recovery artifact record is invalid")
-                current = claim_source(source_path, safe_root)
-                if current["source_identity"] != self._decode_identity(raw_identity) or current["sha256"] != digest:
-                    raise ValueError("Recovery artifact source changed after sealing")
+                sealed = sealed_files.get(source_path)
+                if (
+                    sealed is None
+                    or sealed[0] != safe_root
+                    or sealed[1] != self._decode_identity(raw_identity)
+                    or sealed[2] != digest
+                ):
+                    raise ValueError("Recovery artifact does not match its verified source claim")
             return {"claims": claims, "bundle_digest": bundle_digest}
         finally:
             os.close(bundle_fd)
@@ -187,6 +210,7 @@ class RecoveryBundleAdapter:
         home_fd, root_fd, staging_parent_fd, bundles_parent_fd = descriptors
         staging_fd: int | None = None
         renamed = False
+        preserved: str | None = None
         try:
             if (
                 self._stat_at(staging_parent_fd, staging_name) is not None
@@ -239,19 +263,14 @@ class RecoveryBundleAdapter:
                 os.fsync(bundles_parent_fd)
                 self._require_layout_attached(home_fd, root_fd, staging_parent_fd, bundles_parent_fd)
             except (OSError, ValueError) as exc:
-                uncertain_name = bundle_id + ".durability-uncertain"
-                with contextlib.suppress(OSError):
-                    os.rename(
-                        bundle_id,
-                        uncertain_name,
-                        src_dir_fd=bundles_parent_fd,
-                        dst_dir_fd=bundles_parent_fd,
-                    )
-                    os.fsync(bundles_parent_fd)
-                uncertain = os.path.join(bundles_parent, uncertain_name)
-                raise OSError(f"Recovery bundle durability is uncertain: {uncertain}") from exc
+                preserved = self._preserve_uncertain_bundle(bundles_parent_fd, bundles_parent, bundle_id)
+                if preserved is None:
+                    raise OSError("Recovery bundle durability is uncertain and no bundle remains on disk") from exc
+                raise OSError(f"Recovery bundle durability is uncertain: {preserved}") from exc
             return sealed
         except BaseException as primary:
+            if preserved is not None:
+                raise
             cleanup_path = os.path.join(
                 bundles_parent if renamed else os.path.join(self._root, "staging"),
                 bundle_id if renamed else staging_name,
@@ -270,6 +289,35 @@ class RecoveryBundleAdapter:
             if staging_fd is not None:
                 os.close(staging_fd)
             self._close_layout(descriptors)
+
+    @classmethod
+    def _preserve_uncertain_bundle(cls, bundles_parent_fd: int, bundles_parent: str, bundle_id: str) -> str | None:
+        """Mark a sealed-but-undurable bundle and report the path that actually holds it.
+
+        The marker rename is best-effort — the bundle is never deleted to reach a
+        tidier name, so an unrenamable bundle is reported at its sealed name and a
+        bundle that no longer exists is reported as ``None``. The directory is
+        named from the held descriptor, so a bundle parent that was detached or
+        replaced meanwhile is reported where it actually is.
+        """
+        uncertain_name = bundle_id + ".durability-uncertain"
+        try:
+            os.rename(bundle_id, uncertain_name, src_dir_fd=bundles_parent_fd, dst_dir_fd=bundles_parent_fd)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return os.path.join(cls._held_directory_path(bundles_parent_fd, bundles_parent), bundle_id)
+        with contextlib.suppress(OSError):
+            os.fsync(bundles_parent_fd)
+        return os.path.join(cls._held_directory_path(bundles_parent_fd, bundles_parent), uncertain_name)
+
+    @classmethod
+    def _held_directory_path(cls, fd: int, lexical: str) -> str:
+        """Resolve where a held directory descriptor currently lives."""
+        try:
+            return os.readlink(cls._fd_path(fd))
+        except OSError:
+            return lexical
 
     def _copy_artifacts(
         self, staging_fd: int, artifacts: list[RecoveryArtifact], free_bytes: int
@@ -394,6 +442,22 @@ class RecoveryBundleAdapter:
             for relative, entry in claim["entries"].items()
             if "sha256" in entry
         )
+
+    @staticmethod
+    def _sealed_files_for_claim(claim: SourceClaim) -> dict[str, tuple[str, SourceIdentity, str]]:
+        """Index a verified claim's regular-file members by absolute path."""
+        if not claim["source_identity"]["exists"]:
+            return {}
+        if claim["sha256"] is not None:
+            return {claim["source_path"]: (claim["safe_root"], claim["source_identity"], claim["sha256"])}
+        indexed: dict[str, tuple[str, SourceIdentity, str]] = {}
+        for relative, entry in claim["entries"].items():
+            digest = entry.get("sha256")
+            if digest is None:
+                continue
+            absolute = os.path.join(claim["source_path"], *relative.split("/"))
+            indexed[absolute] = (claim["safe_root"], entry["identity"], digest)
+        return indexed
 
     @staticmethod
     def _open_regular_beneath(path: str, safe_root: str) -> int:
@@ -534,14 +598,6 @@ class RecoveryBundleAdapter:
                     os.close(fd)
             finally:
                 os.close(parent_fd)
-
-    @staticmethod
-    def _sha256(path: str) -> str:
-        digest = hashlib.sha256()
-        with open(path, "rb") as source:
-            for block in iter(lambda: source.read(1024 * 1024), b""):
-                digest.update(block)
-        return digest.hexdigest()
 
     @staticmethod
     def _sha256_fd(fd: int) -> str:
@@ -701,30 +757,3 @@ class RecoveryBundleAdapter:
             "sha256": raw_sha256,
             "entries": entries,
         }
-
-    def _ensure_dir(self, path: str) -> None:
-        if os.path.lexists(path):
-            if os.path.islink(path) or not os.path.isdir(path):
-                raise ValueError(f"Recovery directory is not a trusted directory: {path}")
-            return
-        os.mkdir(path, 0o700)
-        parent = os.path.dirname(path)
-        if parent:
-            self._fsync_dir(parent)
-
-    @staticmethod
-    def _fsync_dir(path: str) -> None:
-        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-        try:
-            fd = os.open(path, flags)
-        except OSError as exc:
-            if exc.errno in {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP}:
-                return
-            raise
-        try:
-            os.fsync(fd)
-        except OSError as exc:
-            if exc.errno not in {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP}:
-                raise
-        finally:
-            os.close(fd)

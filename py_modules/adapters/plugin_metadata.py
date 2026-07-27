@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, cast
+from typing import Any
 
 
 class PluginMetadataAdapter:
@@ -26,9 +26,10 @@ class PluginMetadataAdapter:
             return cached
         payload = self._read(plugin_dir)
         raw_name = payload.get("name")
+        raw_version = payload.get("version")
         value = (
             raw_name if isinstance(raw_name, str) and raw_name else "decky-plugin",
-            cast("str", payload.get("version", "0.0.0")),
+            raw_version if isinstance(raw_version, str) else "0.0.0",
         )
         self._cache[plugin_dir] = value
         return value

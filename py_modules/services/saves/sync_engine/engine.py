@@ -71,7 +71,7 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Iterator
 
-    from models.prune import MutationOutcome, SourceClaim, SourceIdentity
+    from models.prune import MutationOutcome, SourceClaim
 
     from domain.save_layout import SaveLayout
     from services.protocols import (
@@ -318,23 +318,9 @@ class SyncEngine:
         """Download a save file from server (delegate to :class:`MatrixExecutor`)."""
         self._matrix.do_download_save(server_save, saves_dir, filename, save_state, device_id, system, default_slot)
 
-    def quarantine_local_file(
-        self,
-        saves_dir: str,
-        filename: str,
-        *,
-        preserve_history: bool = False,
-        expected_identity: SourceIdentity | None = None,
-        safe_root: str | None = None,
-    ) -> bool:
+    def quarantine_local_file(self, saves_dir: str, filename: str) -> bool:
         """Back up a local save into ``.romm-backup`` (delegate to :class:`MatrixExecutor`)."""
-        return self._matrix.quarantine_local_file(
-            saves_dir,
-            filename,
-            preserve_history=preserve_history,
-            expected_identity=expected_identity,
-            safe_root=safe_root,
-        )
+        return self._matrix.quarantine_local_file(saves_dir, filename)
 
     def quarantine_claimed_file(
         self,

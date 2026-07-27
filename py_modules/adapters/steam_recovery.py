@@ -188,22 +188,22 @@ class SteamRecoveryAdapter:
                     os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
                     dir_fd=config_fd,
                 )
-                source_identity = identity_for_stat(os.fstat(source_fd))
-                source_hash = SteamRecoveryAdapter._sha256_fd(source_fd)
-                os.lseek(source_fd, 0, os.SEEK_SET)
                 try:
+                    source_identity = identity_for_stat(os.fstat(source_fd))
+                    source_hash = SteamRecoveryAdapter._sha256_fd(source_fd)
+                    os.lseek(source_fd, 0, os.SEEK_SET)
                     with os.fdopen(os.dup(source_fd), encoding="utf-8") as source:
-                        payload: dict[str, Any] = vdf.load(source)
+                        payload: dict[str, Any] = vdf.load(source, mapper=vdf.VDFDict, merge_duplicate_keys=False)
+                    apps = payload.get("UserLocalConfigStore", {}).get("Apps", {})
+                    app = apps.get(str(app_id)) if isinstance(apps, dict) else None
+                    if not isinstance(app, dict) or str(app.get("UseSteamControllerConfig")) != expected:
+                        raise RuntimeError("Steam controller setting changed after recovery capture")
+                    del app["UseSteamControllerConfig"]
+                    if not app:
+                        del apps[str(app_id)]
                 except BaseException:
                     os.close(source_fd)
                     raise
-                apps = payload.get("UserLocalConfigStore", {}).get("Apps", {})
-                app = apps.get(str(app_id)) if isinstance(apps, dict) else None
-                if not isinstance(app, dict) or str(app.get("UseSteamControllerConfig")) != expected:
-                    raise RuntimeError("Steam controller setting changed after recovery capture")
-                del app["UseSteamControllerConfig"]
-                if not app:
-                    del apps[str(app_id)]
 
                 temporary = f".localconfig.vdf.prune-new-{source_identity['inode']}-{attempt}"
                 claimed = f".localconfig.vdf.prune-old-{source_identity['inode']}-{attempt}"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import json
 import os
 import shutil
@@ -9,11 +10,32 @@ from pathlib import Path
 
 import pytest
 
+from adapters import descriptor_paths, recovery_bundle
 from adapters.recovery_bundle import RecoveryBundleAdapter
 
 
 def _adapter(tmp_path) -> RecoveryBundleAdapter:
     return RecoveryBundleAdapter(user_home=str(tmp_path), package_name="decky romm/sync", plugin_version="1.2.3")
+
+
+def _create_layout(adapter: RecoveryBundleAdapter) -> None:
+    """Materialize ``staging`` / ``bundles``; ``free_bytes`` deliberately does not."""
+    adapter._close_layout(adapter._open_layout(create=True))
+
+
+def _reseal(sealed: Path) -> None:
+    """Re-derive ``checksums.sha256`` and ``SEAL.json`` over the bundle's current bytes."""
+    checksums = sealed / "checksums.sha256"
+    lines = []
+    for raw in checksums.read_text().splitlines():
+        relative = raw.split("  ", 1)[1]
+        digest = hashlib.sha256((sealed / relative).read_bytes()).hexdigest()
+        lines.append(f"{digest}  {relative}\n")
+    checksums.write_text("".join(sorted(lines)))
+    seal_path = sealed / "SEAL.json"
+    seal = json.loads(seal_path.read_text())
+    seal["checksums_sha256"] = hashlib.sha256(checksums.read_bytes()).hexdigest()
+    seal_path.write_text(json.dumps(seal, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
 
 
 def _snapshot() -> dict[str, object]:
@@ -251,7 +273,7 @@ def test_new_recovery_directories_fsync_each_parent(tmp_path, monkeypatch):
 
 def test_post_rename_fsync_failure_marks_bundle_durability_uncertain(tmp_path, monkeypatch):
     adapter = _adapter(tmp_path)
-    adapter.free_bytes()
+    _create_layout(adapter)
     bundles = Path(adapter.root()) / "bundles"
     bundles_inode = bundles.stat().st_ino
     original = os.fsync
@@ -272,7 +294,7 @@ def test_post_rename_fsync_failure_marks_bundle_durability_uncertain(tmp_path, m
 
 def test_recovery_bundle_parent_replacement_is_not_reauthorized(tmp_path, monkeypatch):
     adapter = _adapter(tmp_path)
-    adapter.free_bytes()
+    _create_layout(adapter)
     bundles = Path(adapter.root()) / "bundles"
     detached = Path(adapter.root()) / "detached-bundles"
     outside = tmp_path / "outside-bundles"
@@ -287,15 +309,18 @@ def test_recovery_bundle_parent_replacement_is_not_reauthorized(tmp_path, monkey
 
     monkeypatch.setattr(adapter, "_copy_artifacts", swap_parent)
 
-    with pytest.raises(RuntimeError, match="unsafe staging was preserved"):
+    with pytest.raises(OSError, match="durability is uncertain") as caught:
         adapter.seal_bundle("20260724T120000Z_7_swapped", _snapshot(), [], "readme", "playtime")
 
     assert list(outside.iterdir()) == []
+    preserved = Path(str(caught.value).split(": ", 1)[1])
+    assert preserved.parent == detached
+    assert (preserved / "SEAL.json").is_file()
 
 
 def test_failed_seal_preserves_staging_instead_of_crossing_nested_mount(tmp_path, monkeypatch):
     adapter = _adapter(tmp_path)
-    adapter.free_bytes()
+    _create_layout(adapter)
     module = __import__("adapters.descriptor_paths", fromlist=["_mount_id"])
     original_mount_id = module._mount_id
     staging_path: Path | None = None
@@ -346,6 +371,132 @@ def test_claim_digest_rejects_same_name_bundle_replacement(tmp_path):
 
     assert adapter.validate_sources(str(sealed), decoded["bundle_digest"]) is False
     assert decoded["claims"][str(source)]["sha256"] is not None
+
+
+def test_resealed_artifact_record_must_still_match_its_verified_source_claim(tmp_path):
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    source = safe / "save.srm"
+    source.write_bytes(b"save")
+    adapter = _adapter(tmp_path)
+    sealed = Path(
+        adapter.seal_bundle(
+            "20260724T120000Z_7_resealed",
+            _snapshot(),
+            [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
+            "readme",
+            "playtime",
+        )
+    )
+    manifest_path = sealed / "manifest.json"
+
+    _reseal(sealed)
+    assert adapter.validate_sources(str(sealed)) is True
+
+    manifest = json.loads(manifest_path.read_text())
+    manifest["artifacts"][0]["sha256"] = "0" * 64
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
+    _reseal(sealed)
+
+    assert adapter.validate_sources(str(sealed)) is False
+
+
+def test_measure_path_sums_the_whole_tree_without_hashing_any_byte(tmp_path, monkeypatch):
+    safe = tmp_path / "safe"
+    rom = safe / "big rom"
+    (rom / "nested").mkdir(parents=True)
+    (rom / "disc 1.bin").write_bytes(b"a" * 5000)
+    (rom / "nested" / "disc 2.bin").write_bytes(b"b" * 320)
+    adapter = _adapter(tmp_path)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("measure_path must not read source content")
+
+    monkeypatch.setattr(descriptor_paths, "_sha256_fd", forbidden)
+    monkeypatch.setattr(recovery_bundle, "claim_source", forbidden)
+    monkeypatch.setattr(RecoveryBundleAdapter, "_sha256_fd", staticmethod(forbidden))
+    monkeypatch.setattr(hashlib, "sha256", forbidden)
+    monkeypatch.setattr(os, "read", forbidden)
+    try:
+        total = adapter.measure_path(str(rom), str(safe))
+    finally:
+        monkeypatch.undo()
+
+    assert total == 5320
+    assert adapter.measure_path(str(safe / "absent"), str(safe)) == 0
+    assert adapter.measure_path(str(safe / "no" / "such" / "parent"), str(safe)) == 0
+
+
+def test_measure_path_refuses_an_unsupported_entry_it_cannot_measure(tmp_path):
+    safe = tmp_path / "safe"
+    rom = safe / "rom"
+    rom.mkdir(parents=True)
+    (rom / "disc.bin").write_bytes(b"rom")
+    os.mkfifo(rom / "pipe")
+    os.mkfifo(safe / "lone-pipe")
+    adapter = _adapter(tmp_path)
+
+    with pytest.raises(ValueError, match="unsupported entry"):
+        adapter.measure_path(str(rom), str(safe))
+    with pytest.raises(ValueError, match="unsupported type"):
+        adapter.measure_path(str(safe / "lone-pipe"), str(safe))
+
+
+def test_directory_source_artifacts_are_verified_against_their_sealed_claim(tmp_path):
+    safe = tmp_path / "safe"
+    rom = safe / "multi disc game"
+    (rom / "extra").mkdir(parents=True)
+    (rom / "disc 1.bin").write_bytes(b"one")
+    (rom / "extra" / "disc 2.bin").write_bytes(b"two")
+    adapter = _adapter(tmp_path)
+    sealed = adapter.seal_bundle(
+        "20260724T120000Z_7_multidisc",
+        _snapshot(),
+        [{"source_path": str(rom), "safe_root": str(safe), "kind": "installed_rom", "rom_id": 7}],
+        "readme",
+        "playtime",
+    )
+
+    decoded = adapter.source_claims(sealed)
+    assert sorted(decoded["claims"][str(rom)]["entries"]) == ["disc 1.bin", "extra", "extra/disc 2.bin"]
+    assert adapter.validate_sources(sealed) is True
+
+    (rom / "extra" / "disc 2.bin").write_bytes(b"TWO")
+    assert adapter.validate_sources(sealed) is False
+
+
+def test_free_bytes_never_creates_the_recovery_layout(tmp_path):
+    adapter = _adapter(tmp_path)
+
+    assert adapter.free_bytes() > 0
+    assert not Path(adapter.root()).exists()
+
+
+def test_unrenamable_uncertain_bundle_is_reported_and_kept_where_it_is(tmp_path, monkeypatch):
+    adapter = _adapter(tmp_path)
+    _create_layout(adapter)
+    bundles = Path(adapter.root()) / "bundles"
+    bundle_id = "20260724T120000Z_7_stuck"
+    original_rename = os.rename
+
+    def refuse_marker_rename(src, dst, **kwargs):
+        if isinstance(dst, str) and dst.endswith(".durability-uncertain"):
+            raise OSError(errno.EIO, "marker rename failed")
+        return original_rename(src, dst, **kwargs)
+
+    def fail_attachment(*_args, **_kwargs):
+        raise OSError(errno.EIO, "layout attachment failed")
+
+    monkeypatch.setattr("adapters.recovery_bundle.os.rename", refuse_marker_rename)
+    monkeypatch.setattr(RecoveryBundleAdapter, "_require_layout_attached", fail_attachment)
+
+    with pytest.raises(OSError, match="durability is uncertain") as caught:
+        adapter.seal_bundle(bundle_id, _snapshot(), [], "readme", "playtime")
+
+    assert str(bundles / bundle_id) in str(caught.value)
+    assert ".durability-uncertain" not in str(caught.value)
+    assert (bundles / bundle_id / "SEAL.json").is_file()
+    assert not (bundles / f"{bundle_id}.durability-uncertain").exists()
 
 
 def test_destination_replacement_cannot_modify_outside_file(tmp_path, monkeypatch):

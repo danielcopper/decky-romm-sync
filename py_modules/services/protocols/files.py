@@ -23,7 +23,6 @@ if TYPE_CHECKING:
         RecoveryArtifact,
         SealedSourceClaims,
         SourceClaim,
-        SourceIdentity,
         SteamRecoverySnapshot,
     )
 
@@ -370,10 +369,6 @@ class RomFileStore(Protocol):
         """Recursively delete *path* and all contents."""
         ...
 
-    def remove_exact(self, path: str, safe_root: str, identity: SourceIdentity) -> bool:
-        """Remove only the exact sealed no-follow source identity."""
-        ...
-
     def claim_source(self, path: str, safe_root: str) -> SourceClaim:
         """Capture the current no-follow source and complete subtree identity."""
         ...
@@ -438,10 +433,6 @@ class SaveFileStore(Protocol):
 
         Uses ``os.replace`` semantics — same-filesystem only.
         """
-        ...
-
-    def rename_exact(self, src: str, dst: str, safe_root: str, identity: SourceIdentity) -> bool:
-        """Rename only the exact sealed no-follow source identity."""
         ...
 
     def claim_source(self, path: str, safe_root: str) -> SourceClaim:

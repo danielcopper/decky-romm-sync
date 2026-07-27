@@ -6,11 +6,10 @@ import pytest
 
 from adapters.descriptor_paths import (
     claim_source,
-    identity_for_stat,
+    ensure_directory,
+    measure_tree,
     remove_claimed,
-    remove_exact,
     rename_claimed,
-    stat_beneath,
 )
 
 
@@ -19,16 +18,14 @@ def test_inside_root_symlink_replacement_is_not_removed(tmp_path):
     safe.mkdir()
     source = safe / "source.srm"
     source.write_bytes(b"sealed")
-    captured = stat_beneath(str(source), str(safe))
-    assert captured is not None
-    identity = identity_for_stat(captured)
+    claim = claim_source(str(source), str(safe))
     replacement = safe / "replacement.srm"
     replacement.write_bytes(b"not sealed")
     source.unlink()
     source.symlink_to(replacement)
 
     with pytest.raises(RuntimeError, match="identity changed"):
-        remove_exact(str(source), str(safe), identity)
+        remove_claimed(str(source), str(safe), claim)
 
     assert source.is_symlink()
     assert replacement.read_bytes() == b"not sealed"
@@ -44,7 +41,7 @@ def test_intermediate_symlink_never_authorizes_deletion_outside_root(tmp_path):
     (safe / "linked").symlink_to(outside, target_is_directory=True)
 
     with pytest.raises(OSError):
-        stat_beneath(str(safe / "linked" / "target.srm"), str(safe))
+        claim_source(str(safe / "linked" / "target.srm"), str(safe))
 
     assert target.read_bytes() == b"keep"
 
@@ -54,9 +51,7 @@ def test_replacement_in_pre_rename_window_is_verified_and_rolled_back(tmp_path, 
     safe.mkdir()
     source = safe / "source.srm"
     source.write_bytes(b"sealed")
-    captured = stat_beneath(str(source), str(safe))
-    assert captured is not None
-    identity = identity_for_stat(captured)
+    claim = claim_source(str(source), str(safe))
     module = __import__("adapters.descriptor_paths", fromlist=["rename_noreplace_at"])
     original = module.rename_noreplace_at
     replaced = False
@@ -71,7 +66,7 @@ def test_replacement_in_pre_rename_window_is_verified_and_rolled_back(tmp_path, 
 
     monkeypatch.setattr(module, "rename_noreplace_at", replace_then_rename)
     with pytest.raises(RuntimeError, match="while it was claimed"):
-        remove_exact(str(source), str(safe), identity)
+        remove_claimed(str(source), str(safe), claim)
 
     assert source.read_bytes() == b"replacement"
 
@@ -226,6 +221,74 @@ def test_rename_never_replaces_a_destination_created_after_the_absence_check(tmp
 
     assert source.read_bytes() == b"current-save"
     assert destination.read_bytes() == b"concurrent-backup"
+
+
+def test_rename_reports_the_move_when_the_source_path_was_reoccupied(tmp_path, monkeypatch):
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    source = safe / "save.srm"
+    destination = safe / "backup.srm"
+    source.write_bytes(b"current-save")
+    claim = claim_source(str(source), str(safe))
+
+    def fail_and_reoccupy(path, current, expected):
+        del path, current, expected
+        source.write_bytes(b"emulator-recreated")
+        raise RuntimeError("injected post-rename validation failure")
+
+    monkeypatch.setattr("adapters.descriptor_paths._require_claimed_identity", fail_and_reoccupy)
+
+    outcome = rename_claimed(str(source), str(destination), str(safe), claim)
+
+    assert outcome["success"] is False
+    assert outcome["changed"] is True
+    assert outcome["ambiguous"] is True
+    assert str(destination) in outcome["message"]
+    assert "re-occupied" in outcome["message"]
+    assert destination.read_bytes() == b"current-save"
+    assert source.read_bytes() == b"emulator-recreated"
+
+
+def test_ensure_directory_refuses_a_same_device_nested_mount_component(tmp_path, monkeypatch):
+    safe = tmp_path / "safe"
+    mounted = safe / "backups" / "mounted"
+    mounted.mkdir(parents=True)
+    (mounted / "outside.bin").write_bytes(b"keep")
+    module = __import__("adapters.descriptor_paths", fromlist=["_mount_id"])
+    original = module._mount_id
+
+    def fake_mount_id(fd):
+        target = os.readlink(f"/proc/self/fd/{fd}")
+        return original(fd) + (1 if "/mounted" in target else 0)
+
+    monkeypatch.setattr("adapters.descriptor_paths._mount_id", fake_mount_id)
+
+    with pytest.raises(ValueError, match="mount boundary"):
+        ensure_directory(str(mounted / "created"), str(safe))
+
+    assert not (mounted / "created").exists()
+    assert (mounted / "outside.bin").read_bytes() == b"keep"
+
+
+def test_measure_tree_refuses_to_cross_a_same_device_nested_mount(tmp_path, monkeypatch):
+    safe = tmp_path / "safe"
+    mounted = safe / "game" / "mounted"
+    mounted.mkdir(parents=True)
+    (safe / "game" / "disc.bin").write_bytes(b"1234")
+    (mounted / "outside.bin").write_bytes(b"keep")
+    module = __import__("adapters.descriptor_paths", fromlist=["_mount_id"])
+    original = module._mount_id
+
+    def fake_mount_id(fd):
+        target = os.readlink(f"/proc/self/fd/{fd}")
+        return original(fd) + (1 if "/mounted" in target else 0)
+
+    assert measure_tree(str(safe / "game"), str(safe)) == 4 + len(b"keep")
+
+    monkeypatch.setattr("adapters.descriptor_paths._mount_id", fake_mount_id)
+
+    with pytest.raises(ValueError, match="mount boundary"):
+        measure_tree(str(safe / "game"), str(safe))
 
 
 def test_remove_reports_lease_release_failure_after_unlink_as_ambiguous(tmp_path, monkeypatch):

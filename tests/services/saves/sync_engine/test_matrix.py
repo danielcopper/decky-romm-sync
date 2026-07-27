@@ -2727,7 +2727,7 @@ class TestQuarantineBackupRetention:
         (saves_dir / ".romm-backup").symlink_to(outside, target_is_directory=True)
 
         with pytest.raises(ValueError, match="Unsafe save backup directory"):
-            matrix.quarantine_local_file(str(saves_dir), "game.srm", preserve_history=True)
+            matrix.quarantine_local_file(str(saves_dir), "game.srm")
 
         assert save.read_bytes() == b"keep"
         assert list(outside.iterdir()) == []

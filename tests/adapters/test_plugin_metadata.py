@@ -76,17 +76,32 @@ class TestPluginMetadataAdapter:
         assert adapter.read_version(str(plugin_dir)) == "1.2.3"
         assert calls == 1
 
-    @pytest.mark.parametrize("empty_value", ["", None])
-    def test_read_version_empty_version_returned_as_is(self, tmp_path, empty_value):
-        """The adapter does not validate the version string — empty/None pass through.
+    def test_read_version_empty_version_returned_as_is(self, tmp_path):
+        """An empty version string passes through rather than becoming the fallback.
 
-        The fallback is only applied when the field is missing entirely; an
-        empty string or ``None`` reflects what the file actually contained
-        and surfaces upstream so a malformed publish can be diagnosed.
+        The fallback is reserved for a version this adapter cannot represent;
+        an empty string reflects what the file actually contained and surfaces
+        upstream so a malformed publish can be diagnosed.
         """
         plugin_dir = tmp_path / "plugin"
         plugin_dir.mkdir()
-        (plugin_dir / "package.json").write_text(json.dumps({"version": empty_value}))
+        (plugin_dir / "package.json").write_text(json.dumps({"version": ""}))
 
         adapter = PluginMetadataAdapter()
-        assert adapter.read_version(str(plugin_dir)) == empty_value
+        assert adapter.read_version(str(plugin_dir)) == ""
+
+    @pytest.mark.parametrize("non_string", [None, 3, 1.2, ["1.0.0"], {"major": 1}])
+    def test_read_version_non_string_returns_fallback(self, tmp_path, non_string):
+        """A version that is not a string cannot be surfaced as one.
+
+        ``read_version`` is declared to return ``str`` and its value is
+        interpolated into the outgoing User-Agent, so a JSON number, object,
+        list, or ``null`` takes the documented fallback instead of travelling
+        onward mistyped.
+        """
+        plugin_dir = tmp_path / "plugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "package.json").write_text(json.dumps({"version": non_string}))
+
+        adapter = PluginMetadataAdapter()
+        assert adapter.read_version(str(plugin_dir)) == "0.0.0"
