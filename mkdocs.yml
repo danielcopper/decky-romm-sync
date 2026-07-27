@@ -76,6 +76,7 @@ nav:
       - Database Design: architecture/database-design.md
       - Save File Sync Architecture: architecture/save-file-sync-architecture.md
       - Save Sync Coverage: architecture/save-sync-coverage.md
+      - Removed-Game Cleanup: architecture/removed-game-cleanup.md
       - Config Source Parsers: architecture/config-source-parsers.md
       - Core &amp; Emulator Selection: architecture/core-emulator-selection.md
       - Steam Non-Steam Shortcuts: architecture/steam-non-steam-shortcuts.md

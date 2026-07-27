@@ -30,6 +30,8 @@ is invisible at the citation site), so reach it through the page that owns the t
 - Save-file sync — slots, conflict resolution, negotiate transport, version history —
   [save-file-sync-architecture.md](docs/architecture/save-file-sync-architecture.md)
 - Save-sync coverage matrix — [save-sync-coverage.md](docs/architecture/save-sync-coverage.md)
+- Removed-game cleanup — deletion authority, admission/leases, claims, recovery bundles —
+  [removed-game-cleanup.md](docs/architecture/removed-game-cleanup.md)
 - Services, adapters, wiring; connection/token and settings-persistence internals —
   [backend-architecture.md](docs/architecture/backend-architecture.md)
 - SQLite schema, aggregate roots, migrations — [database-design.md](docs/architecture/database-design.md)
@@ -215,37 +217,20 @@ Format: **invariant** — tier — enforced by.
   is never mutated while the stash is pending (box IDLE) — every run-entry path passes `try_begin_run`, which clears the
   stash before any staging write (#1367)** — prompt-only — verified closed in #1367 review; mechanize via a
   staging-writer call-site audit
-- **A prune claim excludes library sync, downloads/resumes, migrations, version switches, core/disc/controller writes,
-  launch evaluation, save mutations, session writes, uninstalls, connection identity changes, and affected cache
-  cleanup; each conflicting callable registers before its first await, detached work retains that claim for the task
-  lifetime, and frontend-owned multi-call work holds and heartbeats a globally registered, bounded tokenized lease
-  through every sibling Steam continuation's final write (including each paced `sync_stale` removal and terminal repoint
-  publication); every continuation checks its abort signal before each later Steam mutation; failed event delivery
-  releases an unreachable token; owner/plugin generation is captured before each backend wait, teardown tombstones it so
-  late lease-bearing responses are released without work, and only a genuine remount opens a new generation; teardown
-  stops renewal and future writes but defers explicit release until already-started Steam promises settle; run admission
-  atomically refuses those registrations before reserving the prune claim and refreshing the preview** — test
-  - prompt-only — prune service/gate race tests + contract callable-entry matrix; new conflicting entry points are
-    prompt-only
+- **A prune run's claim reservation and its refusal of every conflicting callable happen in one atomic gate hold (the
+  preview rebuild does not), and frontend-owned Steam work holds a heartbeated, generation-tombstoned lease through
+  every continuation's final write** — test + prompt-only — prune service/gate race tests + contract callable-entry
+  matrix; new conflicting entry points are prompt-only
 - **A prune frontend action mutates Steam only after atomically claiming its exact run/token/discriminant/binding;
-  identical repeat claims are idempotent, action delivery is serialized/deduplicated, completion retries never repeat
-  the Steam operation, and a claimed outcome lost in transit is reported as ambiguous until live Steam absence is
-  reconciled** — test + prompt-only — prune service claim tests + `src/utils/pruneActions.test.ts`; new action kinds are
-  prompt-only
-- **Every prune source carries a no-follow claim (root `(device, inode, mount-id, mode, size, mtime, ctime)` plus every
-  descendant identity and regular-file hash) through descriptor-relative mutation; mount transitions are refused,
-  regular-file and controller-claim deletion holds kernel writer exclusion from final validation through unlink,
-  selected sources consume claims decoded from the same held and digest-bound sealed bundle, unselected/recovery-off
-  sources take a final presence-or-absence claim, every exclusive save is expected absent after quarantine and the whole
-  set is collectively rechecked immediately before aggregate cascade, quarantine publication is atomic no-replace,
-  writer-exclusion teardown faults are ambiguity, controller claim branches revalidate and preserve newer held-inode
-  edits at a surfaced path, and path re-lookup alone never authorizes delete/quarantine; unsafe recovery-failure cleanup
-  preserves and reports the anchored staging path** — test + prompt-only — descriptor-path, recovery-adapter, real
-  RomRemovalService, and prune contract tests; new mutation adapters are prompt-only
-- **Every prune action/progress/completion frame carries its originating preview ID; a pending frontend preview may
-  adopt only a matching run, including when the successful start response is lost, and foreign frames never trigger
-  state or side effects; an accepted contiguous terminal result seals the run against every later frame** — test +
-  prompt-only — prune service frame tests + `src/utils/pruneStore.test.ts`; new prune frame types are prompt-only
+  repeats are idempotent and an outcome lost in transit is ambiguous, never success** — test + prompt-only — prune
+  service claim tests + `src/utils/pruneActions.test.ts`; new action kinds are prompt-only
+- **Every prune mutation is authorized by a descriptor-relative no-follow claim (root identity, descendant identities,
+  regular-file hashes) revalidated immediately before it, never by a path re-lookup; refusal and ambiguity are reported,
+  never rewritten into success** — test + prompt-only — descriptor-path, recovery-adapter, real RomRemovalService, and
+  prune contract tests; new mutation adapters are prompt-only
+- **Every prune frame carries its originating preview ID; only a matching pending preview may adopt a run, and an
+  accepted contiguous terminal result seals it against every later frame** — test + prompt-only — prune service frame
+  tests + `src/utils/pruneStore.test.ts`; new prune frame types are prompt-only
 - **Every destructive RomM proof is bound to one canonical server-origin/token-origin/user namespace from preview
   through every exact-ID request; a namespace change is uncertainty, never a 404 deletion authority** — test +
   prompt-only — prune service namespace-race tests; new destructive RomM proof paths are prompt-only
