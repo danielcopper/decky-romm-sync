@@ -224,6 +224,14 @@ class PlaytimeRepository(Protocol):
         """Return up to *limit* outbox rows directly (cheapest-first). (playtime.py flush)"""
         ...
 
+    def rom_ids_with_pending_device(self, device_id: str) -> list[int]:
+        """Return the rom_ids holding outbox rows addressed to *device_id*.
+
+        Narrows the re-address after a device re-registration to the affected
+        aggregates. (saves/sync_engine/devices.py device heal)
+        """
+        ...
+
 
 class RomSaveSyncStateRepository(Protocol):
     """Persistence seam for the ``RomSaveSyncState`` aggregate (per-ROM save-sync state).

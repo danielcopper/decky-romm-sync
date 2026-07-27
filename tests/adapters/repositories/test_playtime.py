@@ -159,6 +159,32 @@ class TestIterPendingSessions:
         assert uow.playtime.iter_pending_sessions(10) == []
 
 
+class TestRomIdsWithPendingDevice:
+    def test_returns_distinct_rom_ids_in_order(self, uow: SqliteUnitOfWork):
+        for rom_id in (7, 3):
+            _seed_rom(uow, rom_id)
+            uow.playtime.save(
+                rom_id,
+                Playtime(pending_sessions={"s1": _pending("dead"), "s2": _pending("dead")}),
+            )
+
+        assert uow.playtime.rom_ids_with_pending_device("dead") == [3, 7]
+
+    def test_excludes_roms_queued_on_another_device(self, uow: SqliteUnitOfWork):
+        _seed_rom(uow, 3)
+        uow.playtime.save(3, Playtime(pending_sessions={"s1": _pending("dead")}))
+        _seed_rom(uow, 4)
+        uow.playtime.save(4, Playtime(pending_sessions={"s1": _pending("live")}))
+
+        assert uow.playtime.rom_ids_with_pending_device("dead") == [3]
+
+    def test_empty_when_no_row_names_the_device(self, uow: SqliteUnitOfWork):
+        _seed_rom(uow, 3)
+        uow.playtime.save(3, Playtime(total_seconds=60))
+
+        assert uow.playtime.rom_ids_with_pending_device("dead") == []
+
+
 class TestMiss:
     def test_get_absent_returns_none(self, uow: SqliteUnitOfWork):
         assert uow.playtime.get(999) is None

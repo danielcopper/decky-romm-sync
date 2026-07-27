@@ -291,6 +291,65 @@ class TestEnqueueSession:
         assert playtime.pending_sessions["2026-05-28T10:00:00"].duration_ms == 1_800_000
 
 
+class TestReassignPendingDevice:
+    """A device heal re-addresses queued sessions to the id the server now knows."""
+
+    def test_matching_rows_move_to_the_new_device(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="dead", start_time="s1", end_time="e1", duration_ms=100)
+        playtime.enqueue_session(device_id="dead", start_time="s2", end_time="e2", duration_ms=200)
+
+        moved = playtime.reassign_pending_device("dead", "fresh")
+
+        assert moved == 2
+        assert {s.device_id for s in playtime.pending_sessions.values()} == {"fresh"}
+
+    def test_session_payload_survives_the_move(self):
+        """Only the addressee changes — the window and its duration are untouched."""
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="dead", start_time="s1", end_time="e1", duration_ms=1234)
+
+        playtime.reassign_pending_device("dead", "fresh")
+
+        assert playtime.pending_sessions == {
+            "s1": PendingPlaySession(device_id="fresh", end_time="e1", duration_ms=1234)
+        }
+
+    def test_attempts_are_preserved(self):
+        """The quarantine ceiling must survive a re-address, or the outbox loses its bound."""
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="dead", start_time="s1", end_time="e1", duration_ms=100)
+        playtime.record_ingest_failure(["s1"])
+        playtime.record_ingest_failure(["s1"])
+
+        playtime.reassign_pending_device("dead", "fresh")
+
+        assert playtime.pending_sessions["s1"].attempts == 2
+
+    def test_rows_on_other_devices_are_left_alone(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="dead", start_time="s1", end_time="e1", duration_ms=100)
+        playtime.enqueue_session(device_id="other", start_time="s2", end_time="e2", duration_ms=200)
+
+        moved = playtime.reassign_pending_device("dead", "fresh")
+
+        assert moved == 1
+        assert playtime.pending_sessions["s1"].device_id == "fresh"
+        assert playtime.pending_sessions["s2"].device_id == "other"
+
+    def test_no_match_is_a_no_op(self):
+        playtime = Playtime()
+        playtime.enqueue_session(device_id="other", start_time="s1", end_time="e1", duration_ms=100)
+
+        assert playtime.reassign_pending_device("dead", "fresh") == 0
+        assert playtime.pending_sessions["s1"].device_id == "other"
+
+    def test_empty_outbox_is_a_no_op(self):
+        playtime = Playtime()
+        assert playtime.reassign_pending_device("dead", "fresh") == 0
+        assert playtime.pending_sessions == {}
+
+
 class TestMarkSessionsSent:
     def test_dequeues_named_starts(self):
         playtime = Playtime()

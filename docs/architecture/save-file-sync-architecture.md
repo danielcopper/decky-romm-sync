@@ -1523,6 +1523,22 @@ through its `*ServiceConfig` (the [same-bounded-context peer-ref carve-out](back
 through it, instead of each opening its own `kv_config` read. The registry is built once in the `SaveService` facade and
 threaded into every sub-service config.
 
+**A dead id heals itself, and its queued playtime moves with it.** A cached id is trusted only as far as the best-effort
+`update_device` touch every `ensure_device_registered` makes: a definitive **404** means the server no longer has this
+device (its database was wiped or restored), so the dead id is forgotten and a fresh one registered in its place — every
+other touch failure is a transient miss that keeps the cached id, since a server blip must never churn a
+re-registration. The outbox row in `rom_playtime_sessions` stores the `device_id` its session was recorded under, so a
+heal also re-addresses the pending play sessions from the dead id to the fresh one (`Playtime.reassign_pending_device`,
+driven by the narrow `rom_ids_with_pending_device` lookup so only the affected aggregates are rebuilt). The id names the
+**server registration**, not the machine — both ids denote this same Deck. Without the carry-over those sessions are
+neither lost nor stuck; they are silently **mis-filed**. RomM accepts a POST naming an id it does not know and stores
+the row with a `NULL` device (verified — see the ingest bullet under
+[Native play-session ingest](#native-play-session-ingest-adr-0018)), so the queued rows would drain as `created`, land
+attributed to no device, and take RomM's `(user_id, device_id, rom_id, start_time)` dedup key down with them. Only the
+addressee moves: `attempts` is preserved, so a row already walking toward its quarantine ceiling keeps its position. The
+re-address is bound to a _minted_ id and is best-effort — a failed re-registration, or a failure of the re-address
+itself, leaves the rows queued exactly as they were.
+
 ## Playtime Tracking
 
 ### Local delta-based accumulation
@@ -1975,7 +1991,14 @@ the hot path:
   is enqueued into the `rom_playtime_sessions` outbox and POSTed under this device's `device_id` (batch, max 100). The
   server accumulates the additive union across devices and dedupes on `(user_id, device_id, rom_id, start_time)`, so a
   re-POST is idempotent. A `created` or `duplicate` result dequeues the outbox row; only an `error` keeps it queued.
-  Offline, the session stays queued and flushes on the next launch/session-end/reconcile.
+  Offline, the session stays queued and flushes on the next launch/session-end/reconcile. A **404** on the POST is
+  handled as a routing fault, not a verdict on the sessions. Verified against a live server: a POST naming an unknown
+  `device_id` **and** an unknown `rom_id` still returns `201` with `status: "created"` — RomM accepts the row and
+  resolves both unknown ids to `NULL` rather than rejecting. So this endpoint does not 404 over the _contents_ of a
+  batch; a 404 means the request never reached it (a misrouted tunnel, a server not exposing the route), which is
+  recoverable server-side. The batch is therefore retained untouched and logged with the 404 named as the cause;
+  advancing the retry counter would quarantine the whole outbox over an infrastructure fault, discarding playtime that
+  exists nowhere else.
 - **Reconcile (`GET /api/play-sessions?rom_id={id}`).** Opening a game's detail page runs `reconcile_playtime(rom_id)`:
   flush the outbox, sum the returned sessions' `duration_ms`, and fold `Σ / 1000` into the local total via
   `reconcile_total` (monotonic `max()`, never regresses). The GET needs the `roms.user.read` scope (minted in #1280);

@@ -225,6 +225,25 @@ class Playtime:
             duration_ms=duration_ms,
         )
 
+    def reassign_pending_device(self, old_device_id: str, new_device_id: str) -> int:
+        """Re-address queued sessions from a superseded device id to the current one.
+
+        The outbox row's ``device_id`` names the *server registration*, not the
+        physical machine: when a registration is replaced (the server no longer
+        knows the old id, so a fresh one is minted for this same device) the
+        sessions queued under it are still this device's play and must ingest
+        under the id the server actually knows. Only the addressee changes —
+        ``attempts`` is deliberately preserved, so a row already walking toward
+        its quarantine ceiling keeps its position and the outbox stays loop-free.
+        Returns the number of rows re-addressed.
+        """
+        moved = 0
+        for start_time, session in list(self.pending_sessions.items()):
+            if session.device_id == old_device_id:
+                self.pending_sessions[start_time] = replace(session, device_id=new_device_id)
+                moved += 1
+        return moved
+
     def mark_sessions_sent(self, start_times: Iterable[str]) -> None:
         """Dequeue the outbox rows whose sessions the server accepted (created or duplicate)."""
         for start_time in start_times:

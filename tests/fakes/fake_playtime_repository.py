@@ -54,6 +54,14 @@ class FakePlaytimeRepository:
         rows.sort(key=lambda r: (r.rom_id, r.start_time))
         return rows[:limit]
 
+    def rom_ids_with_pending_device(self, device_id: str) -> list[int]:
+        """Mirror the adapter's DISTINCT projection of outbox rows by device id."""
+        return sorted(
+            rom_id
+            for rom_id, playtime in self._playtime.items()
+            if any(session.device_id == device_id for session in playtime.pending_sessions.values())
+        )
+
     def _snapshot(self) -> dict[int, Playtime]:
         return copy.deepcopy(self._playtime)
 

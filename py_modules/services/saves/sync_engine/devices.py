@@ -143,6 +143,38 @@ class DeviceRegistry:
         self._cached_device_id = device_id
         self._device_id_loaded = True
 
+    def _reassign_pending_play_sessions(self, old_device_id: str, new_device_id: str) -> None:
+        """Re-address queued play sessions from a dead device id to the fresh one.
+
+        The outbox row's device id names the server registration the session was
+        recorded under, and a heal replaces that registration for the *same*
+        physical device — so rows queued before the heal still describe this
+        device's play and must ingest under the id the server now knows. Left
+        behind they would keep naming an id the server has never heard of.
+
+        Best-effort, mirroring the device-name write below: the registration is
+        already complete and authoritative, so a failure here is logged and
+        swallowed rather than reported as a failed registration. The rows simply
+        stay addressed to the old id, where their bounded-retry ceiling still
+        applies.
+        """
+        try:
+            with self._uow_factory() as uow:
+                moved = 0
+                for rom_id in uow.playtime.rom_ids_with_pending_device(old_device_id):
+                    entry = uow.playtime.get(rom_id)
+                    if entry is None:
+                        continue
+                    moved += entry.reassign_pending_device(old_device_id, new_device_id)
+                    uow.playtime.save(rom_id, entry)
+            if moved:
+                self._log_debug(
+                    f"ensure_device_registered: re-addressed {moved} queued play session(s) "
+                    f"from dead device {old_device_id} to {new_device_id}"
+                )
+        except Exception as e:
+            self._log_debug(f"ensure_device_registered: play-session re-address failed (non-fatal): {e}")
+
     def _get_device_name(self) -> str | None:
         return self._settings.get("device_name")
 
@@ -223,6 +255,10 @@ class DeviceRegistry:
                 self._logger.debug(f"ensure_device_registered: version probe failed (non-fatal): {e}")
 
         device_id = await loop.run_in_executor(None, self.get_device_id)
+        # Set only once the touch below proves the cached id dead — the
+        # registration path then re-addresses the play sessions still queued
+        # under it to the fresh id.
+        dead_device_id: str | None = None
         if device_id:
             server_id_str = str(device_id)
             # Best-effort touch of the server-side client_version, with one
@@ -234,7 +270,6 @@ class DeviceRegistry:
             # the cached id and return it, logging at debug so the swallow
             # leaves a breadcrumb. A transient server blip must NEVER throw away
             # a valid id and churn a spurious re-registration.
-            dead_device = False
             try:
                 await loop.run_in_executor(
                     None,
@@ -245,17 +280,17 @@ class DeviceRegistry:
                     f"ensure_device_registered: server no longer has device {server_id_str} (404), re-registering: {e}"
                 )
                 await loop.run_in_executor(None, self.forget_device)
-                dead_device = True
+                dead_device_id = server_id_str
             except Exception as e:
                 self._log_debug(f"ensure_device_registered: update_device failed (non-fatal): {e}")
-            if not dead_device:
+            if dead_device_id is None:
                 return {
                     "success": True,
                     "device_id": device_id,
                     "device_name": self._get_device_name() or "",
                     "server_device_id": device_id,
                 }
-            # dead_device: the cached id was forgotten above; fall through to
+            # The cached id was dead and has been forgotten above; fall through to
             # registration so a fresh id is minted and persisted.
 
         hostname = hostname_provider.get()
@@ -283,6 +318,11 @@ class DeviceRegistry:
                 # device is still fully registered and usable — the prior/default
                 # label persists — instead of being left in a broken half-state.
                 await loop.run_in_executor(None, self._set_device_id, new_id)
+                if dead_device_id is not None and dead_device_id != new_id:
+                    # A heal, not a first registration: carry the outbox over to
+                    # the id the server actually knows (RomM's machine-id dedup
+                    # can hand back the SAME id, which needs no re-address).
+                    await loop.run_in_executor(None, self._reassign_pending_play_sessions, dead_device_id, new_id)
                 device_name = hostname
                 try:
                     await loop.run_in_executor(None, self._set_device_name, hostname)

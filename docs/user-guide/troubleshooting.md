@@ -90,7 +90,8 @@ device was issued no longer exists — you don't have to do anything. Both when 
 counts, since that reloads it) and before every save-sync (before a game launches, after it exits, or a manual sync),
 the plugin first checks that this device's id still exists on the server; the moment it finds the id is gone it
 registers this device afresh and carries on under the new id. A new entry shows up in RomM's device list; the old, dead
-one can be ignored.
+one can be ignored. Play time that was recorded but not yet uploaded — sessions played while RomM was away — is carried
+over to the new registration, so it still lands on the server under this device rather than being stranded.
 
 The first-time save-slot setup screen is the clearest example. If RomM can't find the save data that setup needs, it
 pauses with "RomM couldn't find the save data for this setup" rather than the "server is not reachable" message, and the

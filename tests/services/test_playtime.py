@@ -13,8 +13,19 @@ from fakes.system_time import FakeClock
 
 from domain.playtime import PendingPlaySession, Playtime
 from domain.rom import Rom
-from lib.errors import RommApiError, RommConnectionError, RommForbiddenError, RommUnprocessableEntityError
-from services.playtime import PlaytimeService, PlaytimeServiceConfig, _coerce_duration_ms
+from lib.errors import (
+    RommApiError,
+    RommConnectionError,
+    RommForbiddenError,
+    RommNotFoundError,
+    RommUnprocessableEntityError,
+)
+from services.playtime import (
+    _MAX_INGEST_ATTEMPTS,
+    PlaytimeService,
+    PlaytimeServiceConfig,
+    _coerce_duration_ms,
+)
 
 
 class FakeDeviceIdProvider:
@@ -1038,6 +1049,139 @@ class TestFlushBoundedRetry:
         assert entry is not None
         assert set(entry.pending_sessions) == {"s1"}  # healthy s0 drained, s1 retries
         assert entry.pending_sessions["s1"].attempts == 1
+
+
+# ---------------------------------------------------------------------------
+# TestFlushEndpoint404 — a 404 indicts the route, not the sessions
+# ---------------------------------------------------------------------------
+
+
+def _ingest_404(*_args, **_kwargs):
+    """Stub whose ingest POST always draws a 404 from the endpoint."""
+    raise RommNotFoundError("Device with ID device-1 not found")
+
+
+class TestFlushEndpoint404:
+    """RomM NULL-resolves an unknown device or rom rather than rejecting
+    (ADR-0018), so a 404 on this POST points at the route — a misrouted tunnel,
+    an endpoint the server does not expose — which is recoverable server-side.
+    The batch is retained untouched: advancing the counter would quarantine the
+    whole outbox over a misconfiguration, losing playtime that exists nowhere
+    else."""
+
+    @pytest.mark.asyncio
+    async def test_404_retains_the_row_without_bumping(self):
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending(attempts=0)}))
+        fake.ingest_play_sessions = _ingest_404  # type: ignore[method-assign]
+
+        await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert set(entry.pending_sessions) == {"s1"}
+        assert entry.pending_sessions["s1"].attempts == 0
+
+    @pytest.mark.asyncio
+    async def test_404_retains_every_row_in_the_group(self):
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending(), "s2": _pending()}))
+        fake.ingest_play_sessions = _ingest_404  # type: ignore[method-assign]
+
+        await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert set(entry.pending_sessions) == {"s1", "s2"}
+        assert [s.attempts for s in entry.pending_sessions.values()] == [0, 0]
+
+    @pytest.mark.asyncio
+    async def test_404_does_not_quarantine_a_row_at_the_threshold(self, caplog):
+        """A row one bump from its ceiling survives a 404 — the endpoint being
+        unreachable by route is never the evidence that drops a session."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending(attempts=4)}))
+        fake.ingest_play_sessions = _ingest_404  # type: ignore[method-assign]
+
+        with caplog.at_level("WARNING"):
+            await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert set(entry.pending_sessions) == {"s1"}
+        assert entry.pending_sessions["s1"].attempts == 4
+        assert not any("Dropping play session" in r.message for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_repeated_404_leaves_the_outbox_intact(self):
+        """The behavior the retain buys: a misrouted endpoint can persist across
+        many flushes without ever draining the queue, so the sessions are still
+        there to ingest once the route is fixed."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending(attempts=0)}))
+        fake.ingest_play_sessions = _ingest_404  # type: ignore[method-assign]
+
+        for _ in range(_MAX_INGEST_ATTEMPTS + 2):
+            await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert set(entry.pending_sessions) == {"s1"}
+        assert entry.pending_sessions["s1"].attempts == 0
+
+    @pytest.mark.asyncio
+    async def test_404_logs_the_endpoint_as_the_cause(self):
+        """The peel exists for the diagnostic: the log must name the 404 instead
+        of burying it in the generic transport line."""
+        logs: list[str] = []
+        svc, fake, uow = make_service(log_debug=logs.append)
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending()}))
+        fake.ingest_play_sessions = _ingest_404  # type: ignore[method-assign]
+
+        await svc.flush_pending_sessions()
+
+        assert any("endpoint answered 404" in m and "retaining" in m for m in logs)
+
+    @pytest.mark.asyncio
+    async def test_transport_failure_still_does_not_bump(self):
+        """Unchanged best-effort semantics: an offline flush retains the row
+        untouched, exactly as before."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending(attempts=0)}))
+
+        def _offline(*_args, **_kwargs):
+            raise RommConnectionError("Connection refused")
+
+        fake.ingest_play_sessions = _offline  # type: ignore[method-assign]
+
+        await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert entry.pending_sessions["s1"].attempts == 0
+
+    @pytest.mark.asyncio
+    async def test_single_session_fallback_404_retains_only_that_row(self):
+        """The per-session fan-out (unindexed batch 422) applies the same rule:
+        the 404ing row is retained unbumped, its healthy sibling still ingests."""
+        svc, fake, uow = make_service()
+        _seed_playtime(uow, 42, Playtime(pending_sessions={"s1": _pending(), "s2": _pending()}))
+
+        def _ingest(_device_id, sessions):
+            if len(sessions) > 1:
+                raise RommUnprocessableEntityError("HTTP 422", detail=None)  # mangled batch body
+            if sessions[0]["start_time"] == "s1":
+                raise RommNotFoundError("HTTP 404")
+            return {"results": [{"index": 0, "status": "created"}], "created_count": 1, "skipped_count": 0}
+
+        fake.ingest_play_sessions = _ingest  # type: ignore[method-assign]
+
+        await svc.flush_pending_sessions()
+
+        entry = uow.playtime.get(42)
+        assert entry is not None
+        assert set(entry.pending_sessions) == {"s1"}  # s2 ingested
+        assert entry.pending_sessions["s1"].attempts == 0
 
 
 # ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.iso_time import parse_iso
 from domain.playtime import Playtime, is_ingestable_session, rejected_session_indices
-from lib.errors import RommForbiddenError, RommUnprocessableEntityError
+from lib.errors import RommForbiddenError, RommNotFoundError, RommUnprocessableEntityError
 from lib.list_result import ErrorCode
 
 if TYPE_CHECKING:
@@ -393,7 +393,12 @@ class PlaytimeService:
 
         A transport failure on the POST is non-fatal (mirrors
         ``_close_negotiate_session``): the group's rows stay queued and retry on
-        the next flush. A whole-request 422 — RomM validates the ``sessions``
+        the next flush. A whole-request **404** is peeled off that catch-all for
+        its own log line but keeps the same retain-untouched handling: RomM
+        NULL-resolves an unknown device or rom instead of rejecting, so a 404
+        indicts the route rather than the sessions, and quarantining the outbox
+        over it would lose playtime to a recoverable server-side
+        misconfiguration. A whole-request 422 — RomM validates the ``sessions``
         array atomically and rejects the ENTIRE POST if any entry is invalid — is
         healed by :meth:`_handle_batch_rejection`: the server-flagged entries drop
         and the survivors resubmit, so one poison row never blocks the batch
@@ -414,6 +419,22 @@ class PlaytimeService:
                 rejected_by_rom=rejected_by_rom,
                 undrained=undrained,
             )
+            return
+        except RommNotFoundError as e:
+            # The ENDPOINT answered 404, which is not a verdict on these sessions:
+            # RomM resolves an unknown device or rom to NULL rather than rejecting
+            # (ADR-0018), so a 404 here points at the route — a misrouted tunnel, a
+            # server that does not expose the endpoint — which is recoverable
+            # server-side. Retain the whole group untouched rather than advancing
+            # the counter, since bumping would quarantine the ENTIRE outbox within
+            # _MAX_INGEST_ATTEMPTS flushes over a misconfiguration. Peeled off the
+            # catch-all anyway so the log names the cause instead of burying it in
+            # the generic transport line.
+            self._log_debug(
+                f"Play-session ingest endpoint answered 404 for device {device_id} — "
+                f"retaining {len(group)} queued session(s) untouched: {e}"
+            )
+            undrained.extend(group)
             return
         except Exception as e:
             # No service-level retry wrap — a flush failure is non-fatal and
@@ -617,7 +638,8 @@ class PlaytimeService:
         a 201 (``created`` / ``duplicate``) dequeues; a lone 422 that now DOES name
         the entry (index 0) drops it terminally (the genuine poison); a lone 422
         that STILL names no index bumps only THIS row's attempt counter; a
-        transport error retains only this row. Deliberately does NOT re-enter
+        an endpoint 404, like a transport error, retains only this row.
+        Deliberately does NOT re-enter
         :meth:`_handle_batch_rejection`, so the fan-out is one POST per session and
         cannot loop.
         """
@@ -640,6 +662,14 @@ class PlaytimeService:
                     quarantine_by_rom=quarantine_by_rom,
                     undrained=undrained,
                 )
+            return
+        except RommNotFoundError as e:
+            # Same route-level reading as the batch path, scoped to this row.
+            self._log_debug(
+                f"Play-session ingest endpoint answered 404 for device {device_id} — "
+                f"retaining session {row.start_time} untouched: {e}"
+            )
+            undrained.append(row)
             return
         except Exception as e:
             self._log_debug(f"Play-session ingest failed (non-fatal): {e}")

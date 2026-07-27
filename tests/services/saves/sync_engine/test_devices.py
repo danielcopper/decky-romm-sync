@@ -14,6 +14,7 @@ from fakes.fake_machine_id_reader import FakeMachineIdReader
 from fakes.fake_save_api import FakeSaveApi
 from fakes.fake_unit_of_work import FakeUnitOfWorkFactory
 
+from domain.playtime import PendingPlaySession, Playtime
 from lib.errors import (
     RommApiError,
     RommAuthError,
@@ -30,6 +31,8 @@ from tests.services.saves._helpers import (
     _enable_sync_with_device,
     _get_device_id,
     _install_rom,
+    _seed_rom,
+    _uow,
     make_service,
 )
 
@@ -454,6 +457,131 @@ class TestEnsureDeviceRegisteredReRegistersDeadDevice:
         # the first-time path.
         assert not any(c[0] == "update_device" for c in fake.call_log)
         assert _register_call(fake) is not None
+
+
+class TestDeviceHealReAddressesPlaytimeOutbox:
+    """A heal replaces the server registration of the SAME physical device, so the
+    play sessions still queued under the dead id are re-addressed to the fresh one
+    — otherwise they keep naming an id the server has never heard of."""
+
+    @staticmethod
+    def _seed_pending(svc, rom_id: int, device_id: str, *, starts: tuple[str, ...], attempts: int = 0) -> None:
+        """Queue outbox rows for *rom_id* addressed to *device_id* (FK parent first)."""
+        _seed_rom(svc, rom_id)
+        with _uow(svc) as uow:
+            uow.playtime.save(
+                rom_id,
+                Playtime(
+                    pending_sessions={
+                        start: PendingPlaySession(
+                            device_id=device_id,
+                            end_time=f"{start}-end",
+                            duration_ms=60_000,
+                            attempts=attempts,
+                        )
+                        for start in starts
+                    }
+                ),
+            )
+
+    @staticmethod
+    def _pending(svc, rom_id: int) -> dict[str, PendingPlaySession]:
+        with _uow(svc) as uow:
+            entry = uow.playtime.get(rom_id)
+        return {} if entry is None else entry.pending_sessions
+
+    @pytest.mark.asyncio
+    async def test_heal_moves_queued_sessions_to_the_fresh_id(self, tmp_path):
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, "server-uuid")
+        fake.set_version("4.9.0")
+        self._seed_pending(svc, 42, "server-uuid", starts=("2026-01-01T10:00:00",), attempts=3)
+        fake.fail_on_next(RommNotFoundError("Device with ID server-uuid not found"))
+
+        result = await svc.ensure_device_registered()
+
+        new_id = result["device_id"]
+        assert new_id and new_id != "server-uuid"
+        session = self._pending(svc, 42)["2026-01-01T10:00:00"]
+        # Re-addressed to the id the server now knows...
+        assert session.device_id == new_id
+        # ...with the session itself intact — a re-address moves the addressee only.
+        assert session.end_time == "2026-01-01T10:00:00-end"
+        assert session.duration_ms == 60_000
+        # The quarantine ceiling survives, so the outbox keeps its loop-free bound.
+        assert session.attempts == 3
+
+    @pytest.mark.asyncio
+    async def test_heal_moves_every_queued_row_past_the_flush_batch_limit(self, tmp_path):
+        """A backlog larger than one flush batch (100) moves whole — a partial
+        re-address would leave the surplus rows stuck on the dead id and crowd
+        live sessions out of every future flush window."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, "server-uuid")
+        fake.set_version("4.9.0")
+        for rom_id in (1, 2, 3):
+            self._seed_pending(
+                svc,
+                rom_id,
+                "server-uuid",
+                starts=tuple(f"2026-01-01T{hour:02d}:00:00" for hour in range(50)),
+            )
+        fake.fail_on_next(RommNotFoundError("Device with ID server-uuid not found"))
+
+        result = await svc.ensure_device_registered()
+
+        new_id = result["device_id"]
+        moved = [s.device_id for rom_id in (1, 2, 3) for s in self._pending(svc, rom_id).values()]
+        assert len(moved) == 150
+        assert set(moved) == {new_id}
+
+    @pytest.mark.asyncio
+    async def test_rows_queued_on_another_device_are_left_alone(self, tmp_path):
+        """Only the dead id is re-addressed — a row naming some other device is
+        not this heal's business."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, "server-uuid")
+        fake.set_version("4.9.0")
+        self._seed_pending(svc, 42, "server-uuid", starts=("s-dead",))
+        self._seed_pending(svc, 43, "other-device", starts=("s-other",))
+        fake.fail_on_next(RommNotFoundError("Device with ID server-uuid not found"))
+
+        result = await svc.ensure_device_registered()
+
+        assert self._pending(svc, 42)["s-dead"].device_id == result["device_id"]
+        assert self._pending(svc, 43)["s-other"].device_id == "other-device"
+
+    @pytest.mark.asyncio
+    async def test_live_touch_leaves_the_outbox_untouched(self, tmp_path):
+        """No heal, no re-address: the cached id is still the server's id."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, "server-uuid")
+        fake.set_version("4.9.0")
+        self._seed_pending(svc, 42, "server-uuid", starts=("s1",))
+
+        await svc.ensure_device_registered()
+
+        assert self._pending(svc, 42)["s1"].device_id == "server-uuid"
+
+    @pytest.mark.asyncio
+    async def test_failed_reregistration_leaves_sessions_on_the_old_id(self, tmp_path):
+        """The re-address is bound to a MINTED id: when registration fails there is
+        no new addressee, so the rows stay queued as they were (nothing is lost)."""
+        svc, fake = make_service(tmp_path)
+        _enable_sync_with_device(svc, "server-uuid")
+        fake.set_version("4.9.0")
+        self._seed_pending(svc, 42, "server-uuid", starts=("s1",))
+
+        def _touch_404(*_args, **_kwargs):
+            raise RommNotFoundError("Device with ID server-uuid not found")
+
+        fake.update_device = _touch_404
+        fake.fail_on_next(RommConnectionError("Connection refused"))
+
+        result = await svc.ensure_device_registered()
+
+        assert result["success"] is False
+        assert self._pending(svc, 42)["s1"].device_id == "server-uuid"
 
 
 class TestPermissionDegradedNeverDropsDeviceId:
