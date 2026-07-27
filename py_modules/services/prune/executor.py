@@ -1174,7 +1174,11 @@ class PruneExecutor:
                 state.child_result = await task
                 state.child_completed = True
             except asyncio.CancelledError:
-                raise
+                # The child was cancelled too. Its CancelledError carries no
+                # captured state, and callers read that state off whatever
+                # propagates to decide what the group actually did — so the
+                # original cancellation is re-raised instead of this one.
+                pass
             except BaseException as child_fault:
                 state.child_fault = child_fault
             raise

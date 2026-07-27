@@ -921,6 +921,39 @@ async def test_shielded_child_finishes_then_reraises_cancellation_with_fault_sta
 
 
 @pytest.mark.asyncio
+async def test_shielded_cancelled_child_keeps_the_original_cancellation_state(harness):
+    """A child that is itself cancelled must not replace the captured cancellation.
+
+    The child's own ``CancelledError`` carries whatever state happens to be
+    attached to it — never what this run captured — so letting it propagate
+    would hand the group handler a foreign record of what the child did.
+    """
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def child():
+        entered.set()
+        await release.wait()
+        foreign = asyncio.CancelledError()
+        cancellation_state(foreign).child_result = "state from the child's own cancellation"
+        raise foreign
+
+    task = asyncio.create_task(harness.service._executor._shielded(child()))
+    await entered.wait()
+    task.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await task
+
+    state = cancellation_state(caught.value)
+    assert task.cancelled()
+    assert state.child_result is None
+    assert state.child_completed is False
+    assert state.child_fault is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("resume_after_claim", [False, True])
 async def test_claimed_action_result_is_attached_before_request_task_reraises_cancellation(harness, resume_after_claim):
     request_task = asyncio.create_task(
@@ -2086,6 +2119,34 @@ async def test_drifted_repoint_is_skipped_when_the_recovery_bundle_fails(harness
     assert harness.switch_calls == []
     assert harness.recovery.sealed == []
     assert harness.uow.roms.get(1).shortcut_app_id == app_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fully_dead", [False, True])
+async def test_unbound_group_plans_no_steam_action_and_takes_no_steam_path(harness, fully_dead):
+    """No planned Steam action must mean no Steam mutation is reachable.
+
+    The early recovery revalidation is skipped precisely when the run plans no
+    Steam action, on the grounds that nothing irreversible then happens before
+    ``_finish_group``'s own pre-mutation check. That reasoning holds only while
+    the skip condition and the two Steam branches stay in step, so this pins
+    the correspondence from both sides: with no bound shortcut, neither the
+    repoint branch (a live sibling to move to) nor the whole-game branch (every
+    member vanished) may reach the version switcher or raise a shortcut action.
+    """
+    _seed(harness.uow, _rom(1, fetch="old", group="g"), _rom(2, fetch="new", group="g"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    harness.romm.outcomes[2] = [RommNotFoundError("gone")] * 3 if fully_dead else [{"id": 2}] * 3
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=fully_dead)
+
+    complete = await _finish(harness)
+
+    assert complete["results"][0]["status"] != "failed"
+    assert harness.switch_calls == []
+    assert [name for name, _ in harness.events.events if name == "prune_action_required"] == []
+    assert harness.uow.roms.get(1) is None
+    assert (harness.uow.roms.get(2) is None) is fully_dead
 
 
 @pytest.mark.asyncio
