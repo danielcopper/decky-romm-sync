@@ -212,12 +212,8 @@ class PlaytimeRepository(Protocol):
         """Upsert *playtime* under *rom_id*. (playtime.py session start/end)"""
         ...
 
-    def delete(self, rom_id: int) -> None:
-        """Remove playtime for *rom_id*. Idempotent. (saves/state.py orphan prune)"""
-        ...
-
     def iter_all(self) -> Iterator[tuple[int, Playtime]]:
-        """Iterate ``(rom_id, playtime)`` for every ROM. (playtime.py get_all_playtime, saves/state.py)"""
+        """Iterate ``(rom_id, playtime)`` for every ROM. (playtime.py get_all_playtime)"""
         ...
 
     def iter_pending_sessions(self, limit: int) -> list[PendingSessionRow]:
@@ -247,10 +243,6 @@ class RomSaveSyncStateRepository(Protocol):
 
     def save(self, rom_id: int, state: RomSaveSyncState) -> None:
         """Upsert *state* under *rom_id*, replacing its child file rows. (saves/state.py, saves/sync_engine)"""
-        ...
-
-    def delete(self, rom_id: int) -> None:
-        """Remove the save-sync state for *rom_id*. Idempotent. (saves/state.py orphan prune)"""
         ...
 
     def iter_all(self) -> Iterator[tuple[int, RomSaveSyncState]]:

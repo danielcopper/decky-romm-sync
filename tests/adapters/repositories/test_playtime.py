@@ -190,23 +190,6 @@ class TestMiss:
         assert uow.playtime.get(999) is None
 
 
-class TestDelete:
-    def test_delete_removes_scalar_and_child_rows(self, uow: SqliteUnitOfWork):
-        _seed_rom(uow, 5)
-        uow.playtime.save(5, Playtime(total_seconds=10, pending_sessions={"s1": _pending()}))
-        uow.playtime.delete(5)
-        assert uow.playtime.get(5) is None
-        # Child rows are gone too — a fresh save with no outbox reads back empty.
-        uow.playtime.save(5, Playtime())
-        loaded = uow.playtime.get(5)
-        assert loaded is not None
-        assert loaded.pending_sessions == {}
-
-    def test_delete_absent_is_idempotent(self, uow: SqliteUnitOfWork):
-        uow.playtime.delete(404)
-        assert uow.playtime.get(404) is None
-
-
 class TestIteration:
     def test_iter_all_yields_rom_id_pairs_with_outbox(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 1)

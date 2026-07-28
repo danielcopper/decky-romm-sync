@@ -117,10 +117,6 @@ class SqliteRomSaveSyncStateRepository(BaseRepository):
             ],
         )
 
-    def delete(self, rom_id: int) -> None:
-        self._conn.execute("DELETE FROM rom_save_files WHERE rom_id = ?", (rom_id,))
-        self._conn.execute("DELETE FROM rom_save_sync_states WHERE rom_id = ?", (rom_id,))
-
     def iter_all(self) -> Iterator[tuple[int, RomSaveSyncState]]:
         rom_ids = [row["rom_id"] for row in self._conn.execute("SELECT rom_id FROM rom_save_sync_states")]
         for rom_id in rom_ids:

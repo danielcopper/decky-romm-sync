@@ -87,10 +87,6 @@ class SqlitePlaytimeRepository(BaseRepository):
             ],
         )
 
-    def delete(self, rom_id: int) -> None:
-        self._conn.execute("DELETE FROM rom_playtime_sessions WHERE rom_id = ?", (rom_id,))
-        self._conn.execute("DELETE FROM rom_playtime WHERE rom_id = ?", (rom_id,))
-
     def iter_all(self) -> Iterator[tuple[int, Playtime]]:
         rom_ids = [row["rom_id"] for row in self._conn.execute("SELECT rom_id FROM rom_playtime")]
         for rom_id in rom_ids:

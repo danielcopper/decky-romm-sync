@@ -35,9 +35,6 @@ class FakeRomSaveSyncStateRepository:
         self.save_count += 1
         self._states[rom_id] = copy.deepcopy(state)
 
-    def delete(self, rom_id: int) -> None:
-        self._states.pop(rom_id, None)
-
     def iter_all(self) -> Iterator[tuple[int, RomSaveSyncState]]:
         return iter([(rom_id, copy.deepcopy(state)) for rom_id, state in self._states.items()])
 

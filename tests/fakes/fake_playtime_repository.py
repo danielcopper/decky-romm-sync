@@ -27,9 +27,6 @@ class FakePlaytimeRepository:
         self.save_count += 1
         self._playtime[rom_id] = copy.deepcopy(playtime)
 
-    def delete(self, rom_id: int) -> None:
-        self._playtime.pop(rom_id, None)
-
     def iter_all(self) -> Iterator[tuple[int, Playtime]]:
         return iter([(rom_id, copy.deepcopy(playtime)) for rom_id, playtime in self._playtime.items()])
 

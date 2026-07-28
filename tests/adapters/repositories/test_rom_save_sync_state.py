@@ -180,27 +180,6 @@ class TestMiss:
         assert uow.rom_save_sync_states.get(999) is None
 
 
-class TestDelete:
-    def test_delete_removes_state_and_files(self, uow: SqliteUnitOfWork):
-        _seed_rom(uow, 5)
-        uow.rom_save_sync_states.save(
-            5,
-            RomSaveSyncState(files={"a.srm": FileSyncState(tracked_save_id=1, last_sync_hash="h")}),
-        )
-        uow.rom_save_sync_states.delete(5)
-
-        assert uow.rom_save_sync_states.get(5) is None
-        # The child rows are gone too, so a fresh save under the same id starts clean.
-        uow.rom_save_sync_states.save(5, RomSaveSyncState())
-        reloaded = uow.rom_save_sync_states.get(5)
-        assert reloaded is not None
-        assert reloaded.files == {}
-
-    def test_delete_absent_is_idempotent(self, uow: SqliteUnitOfWork):
-        uow.rom_save_sync_states.delete(404)
-        assert uow.rom_save_sync_states.get(404) is None
-
-
 class TestIteration:
     def test_iter_all_yields_rom_id_state_pairs(self, uow: SqliteUnitOfWork):
         _seed_rom(uow, 1)
