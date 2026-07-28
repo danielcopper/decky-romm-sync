@@ -637,7 +637,7 @@ class PlaytimeService:
         quarantine a valid session for a sibling's fault (#1312 L2). Verdicts:
         a 201 (``created`` / ``duplicate``) dequeues; a lone 422 that now DOES name
         the entry (index 0) drops it terminally (the genuine poison); a lone 422
-        that STILL names no index bumps only THIS row's attempt counter; a
+        that STILL names no index bumps only THIS row's attempt counter;
         an endpoint 404, like a transport error, retains only this row.
         Deliberately does NOT re-enter
         :meth:`_handle_batch_rejection`, so the fan-out is one POST per session and
