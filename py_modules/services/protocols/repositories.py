@@ -238,15 +238,15 @@ class RomSaveSyncStateRepository(Protocol):
     """
 
     def get(self, rom_id: int) -> RomSaveSyncState | None:
-        """Return the save-sync state for *rom_id*, or ``None``. (saves/state.py, saves/sync_engine)"""
+        """Return the save-sync state for *rom_id*, or ``None``."""
         ...
 
     def save(self, rom_id: int, state: RomSaveSyncState) -> None:
-        """Upsert *state* under *rom_id*, replacing its child file rows. (saves/state.py, saves/sync_engine)"""
+        """Upsert *state* under *rom_id*, replacing its child file rows."""
         ...
 
     def iter_all(self) -> Iterator[tuple[int, RomSaveSyncState]]:
-        """Iterate ``(rom_id, state)`` for every ROM. (saves/state.py orphan scan)"""
+        """Iterate ``(rom_id, state)`` for every ROM. (saves/service.py save-inventory scan)"""
         ...
 
 
