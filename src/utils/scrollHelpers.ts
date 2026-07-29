@@ -59,6 +59,27 @@ export function scrollFocusedToCenter(e: FocusLike): void {
 }
 
 /**
+ * onFocus handler that scrolls the NEAREST scroll container to its very top.
+ *
+ * For modal content, where the text the user has to read sits ABOVE the first
+ * focusable element: Steam's focus engine only scrolls far enough to reveal the
+ * focused element itself, so an intro above the first control stays permanently
+ * off-screen on a controller. Put this on a wrapper around the topmost
+ * selectable — React's onFocus is delivered via focusin, so it fires for a
+ * focus landing on any descendant.
+ *
+ * Nearest, not outermost (`scrollToTop`): a modal's own scroll container is the
+ * one that has to move, never the page scrolled behind it.
+ */
+export function scrollNearestToTop(e: FocusLike): void {
+  const el = e.currentTarget as HTMLElement | null;
+  setTimeout(() => {
+    if (!el) return;
+    findScrollParent(el)?.scrollTo({ top: 0, behavior: "smooth" });
+  }, 50);
+}
+
+/**
  * onFocus handler that scrolls to the top of the scroll container.
  * Use on the Play button so navigating back up reveals the banner/hero.
  */

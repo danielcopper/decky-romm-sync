@@ -303,7 +303,7 @@ describe("RemovedGamesCleanup", () => {
     fireEvent.click(confirm);
     await waitFor(() => expect(backend.startPrune).toHaveBeenCalled());
     expect(vi.mocked(backend.startPrune).mock.calls[0]?.[0].remove_rows).toBe(false);
-    expect(modal.container.textContent).toContain("selected unavailable ROM");
+    expect(modal.container.textContent).toContain("1 locally kept version of this game is no longer on your RomM");
   });
 
   it("refreshes the free-space snapshot without replacing the preview", async () => {
@@ -481,6 +481,115 @@ describe("RemovedGamesCleanup", () => {
     expect(confirm.disabled).toBe(true);
     expect(modal.container.textContent).toContain("A selected installed ROM has no safe measurable size.");
     expect(modal.container.textContent).not.toContain("Not enough free space.");
+  });
+
+  it("counts only removable rows in the headline and labels a disclosed sibling as kept", async () => {
+    vi.mocked(backend.getPrunePreview).mockResolvedValue({
+      ...preview,
+      total: 2,
+      candidate_total: 1,
+      items: [
+        preview.items![0]!,
+        { ...preview.items![0]!, rom_id: 8, candidate: false, installed: false, name: "Live sibling", group_size: 2 },
+      ],
+    });
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    const text = modal.container.textContent;
+
+    // The headline must not inflate itself with the sibling RomM still serves.
+    expect(text).toContain("1 locally kept version is no longer on your RomM server");
+    expect(text).not.toContain("2 locally kept");
+    // The sibling is still disclosed — a fresh probe, not the local fetch
+    // generation, decides whole-game removal — but never called a candidate.
+    expect(text).toContain("Live sibling");
+    expect(text).toContain("Other versions of these games — kept");
+    expect(text).toContain("Still on RomM as of your last sync");
+    expect(text).toContain("Other versions of the same games are listed below");
+    expect(text).not.toContain("disclosed for whole-game removal");
+  });
+
+  it("drops the disclosure sentence and heading when every listed row is removable", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    const text = modal.container.textContent;
+
+    expect(text).toContain("1 locally kept version is no longer on your RomM server");
+    expect(text).not.toContain("Other versions of the same games are listed below");
+    expect(text).not.toContain("Other versions of these games — kept");
+  });
+
+  it("says so when no listed version has ROM files on this device", async () => {
+    vi.mocked(backend.getPrunePreview).mockResolvedValue({
+      ...preview,
+      items: [{ ...preview.items![0]!, installed: false, installed_bytes: null }],
+    });
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+
+    // Otherwise the per-row content option is simply absent and reads as missing.
+    expect(modal.container.textContent).toContain("None of these versions has ROM files downloaded on this device");
+  });
+
+  it("claims nothing about ROM files while a page is still undisclosed", async () => {
+    vi.mocked(backend.getPrunePreview).mockResolvedValue({
+      ...preview,
+      total: 2,
+      items: [{ ...preview.items![0]!, installed: false, installed_bytes: null }],
+    });
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+
+    // An unloaded page could still hold an installed row.
+    expect(modal.container.textContent).not.toContain("None of these versions has ROM files");
+  });
+
+  it("shows the installed-content option instead of the empty state when a row has files", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+
+    expect(modal.container.textContent).toContain("Include installed ROM content (200 B)");
+    expect(modal.container.textContent).not.toContain("None of these versions has ROM files");
+  });
+
+  it("keeps the confirm dialog to one scroll region so the estimate cannot cover the last row", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+
+    const scrollers = [...modal.container.querySelectorAll<HTMLElement>("div")].filter(
+      (el) => el.style.overflowY === "auto",
+    );
+    expect(scrollers).toHaveLength(1);
+    // The space estimate scrolls WITH the list rather than sitting pinned over it.
+    expect(scrollers[0]!.textContent).toContain("Removed Game");
+    expect(scrollers[0]!.textContent).toContain("Selected ROM-content recovery estimate");
+  });
+
+  it("brings the intro back into view when the first option takes focus", async () => {
+    vi.useFakeTimers();
+    try {
+      await openRemovedGamesCleanupModal();
+      const modal = render(shownModal());
+      const body = [...modal.container.querySelectorAll<HTMLElement>("div")].find(
+        (el) => el.style.overflowY === "auto",
+      )!;
+      Object.defineProperty(body, "scrollHeight", { value: 2000, configurable: true });
+      Object.defineProperty(body, "clientHeight", { value: 600, configurable: true });
+      const scrollTo = vi.fn();
+      body.scrollTo = scrollTo as unknown as typeof body.scrollTo;
+
+      fireEvent.focusIn((modal.getAllByTestId("toggle-input") as HTMLInputElement[])[0]!);
+      expect(scrollTo).not.toHaveBeenCalled();
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      // Steam's focus engine stops at the control itself, stranding the intro
+      // above it off-screen on a controller.
+      expect(scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 0, behavior: "smooth" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("names the shortcut removal as conditional on the fully-vanished toggle", async () => {

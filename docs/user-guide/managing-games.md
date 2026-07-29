@@ -102,11 +102,15 @@ switching straight back before the list has caught up).
 
 Normal library sync never deletes retained local rows, installed files, saves, or playtime just because a game
 disappears from RomM. To remove that state explicitly, open **Danger Zone → Clean Up Removed RomM Games**. The first
-scan is local and finds groups containing rows absent from a completed platform fetch. The modal byte-budgets every page
-for the Decky bridge and pages every member of those affected groups, marking which rows are candidates; load every page
-before confirmation. The confirmation run checks every exact RomM id again. Only a confirmed 404 can be removed.
-Offline, timeout, authentication, server, malformed-response, active-download, and ambiguous multi-shortcut cases are
-skipped and reported without deleting data.
+scan is local and finds groups containing rows absent from a completed platform fetch.
+
+The dialog opens on the count that matters — how many locally kept versions are no longer on your RomM server — and
+lists those versions first, under **Versions no longer on RomM**. Other versions of the same games follow under **Other
+versions of these games — kept**: they were still on RomM at your last sync and stay, unless the run's fresh check finds
+every version of that game gone. They are listed so nothing can be removed without having been shown. The modal
+byte-budgets every page for the Decky bridge; load every page before confirmation. The confirmation run checks every
+exact RomM id again. Only a confirmed 404 can be removed. Offline, timeout, authentication, server, malformed-response,
+active-download, and ambiguous multi-shortcut cases are skipped and reported without deleting data.
 
 The confirmation options apply to this run only:
 
@@ -120,7 +124,8 @@ The confirmation options apply to this run only:
 - **Include installed ROM content** is off for every disclosed installed row. Its exact recursive size is shown;
   selecting more than the currently free recovery space blocks confirmation. Turning recovery off clears and disables
   these selections. Large selections are staged in bounded pages before the run without a total selection cap.
-  Unselected installed content is still deleted if the row is removed.
+  Unselected installed content is still deleted if the row is removed. When no listed version has ROM files on this
+  device the option has nothing to attach to, so the list says so instead of leaving the option apparently missing.
 
 The displayed selected-content total is a lower-bound preflight, not the complete bundle size. Use **Refresh free
 space** after freeing disk space. The backend remeasures selected ROMs plus mandatory saves, backup history, caches, and
@@ -133,9 +138,11 @@ files, and the controller setting. It contains no settings, credentials, tokens,
 Recovery is manual only: there is no restore UI, and a new Steam shortcut cannot inherit the recorded Steam-assigned
 appId or playtime.
 
-A synced vanished row also has **Remove local data...** directly below it in the version picker. A synced singleton
-vanished binding shows the same focused action without opening an otherwise empty picker. Both open the same
-confirmation scoped to that one row; the vanished version itself remains non-switchable.
+A synced vanished row carries a red trash icon at its right edge in the version picker, and activating that row opens
+the same confirmation scoped to that one version. A synced singleton vanished binding shows the same trash action as a
+single button, without opening an otherwise empty picker. The vanished version itself remains non-switchable either way
+— selecting it can only ever start the cleanup, never rebind the shortcut to it. A vanished version with no local data
+to remove stays listed and disabled, with no trash icon.
 
 If Steam changes before local cleanup can finish, the report can show a **partial** group with the concrete committed
 action and failure message. A confirmed shortcut removal is reconciled to an unbound retained row; a committed repoint

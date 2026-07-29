@@ -3,6 +3,7 @@ import {
   findScrollParent,
   findOutermostScrollParent,
   scrollToTop,
+  scrollNearestToTop,
   scrollFocusedToCenter,
   scrollElementToTop,
 } from "./scrollHelpers";
@@ -163,6 +164,44 @@ describe("scrollToTop", () => {
     wrapper.scrollTo = scrollTo as unknown as typeof wrapper.scrollTo;
 
     scrollToTop({ currentTarget: leaf });
+    vi.runAllTimers();
+
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+});
+
+describe("scrollNearestToTop", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("scrolls the NEAREST scroll parent to the very top, leaving the outer one alone", () => {
+    // A modal's own scroll container nested inside the scrolled page behind it:
+    // only the inner one may move, or the modal jumps around on the page.
+    const outer = makeElement({ overflowY: "auto", scrollHeight: 4000, clientHeight: 800 });
+    const inner = makeElement({ overflowY: "auto", scrollHeight: 2000, clientHeight: 600 });
+    const leaf = makeElement({});
+    chain(outer, inner, leaf);
+    const outerScrollTo = vi.fn();
+    const innerScrollTo = vi.fn();
+    outer.scrollTo = outerScrollTo as unknown as typeof outer.scrollTo;
+    inner.scrollTo = innerScrollTo as unknown as typeof inner.scrollTo;
+
+    scrollNearestToTop({ currentTarget: leaf });
+    expect(innerScrollTo).not.toHaveBeenCalled();
+    vi.runAllTimers();
+
+    expect(innerScrollTo).toHaveBeenCalledExactlyOnceWith({ top: 0, behavior: "smooth" });
+    expect(outerScrollTo).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op when no scroll parent is found", () => {
+    const wrapper = makeElement({ overflowY: "visible", scrollHeight: 600, clientHeight: 600 });
+    const leaf = makeElement({});
+    chain(wrapper, leaf);
+    const scrollTo = vi.fn();
+    wrapper.scrollTo = scrollTo as unknown as typeof wrapper.scrollTo;
+
+    scrollNearestToTop({ currentTarget: leaf });
     vi.runAllTimers();
 
     expect(scrollTo).not.toHaveBeenCalled();

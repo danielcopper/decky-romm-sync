@@ -1,4 +1,4 @@
-import { useEffect, useState, FC } from "react";
+import { useEffect, useState, FC, Fragment } from "react";
 import { toaster } from "@decky/api";
 import {
   ButtonItem,
@@ -29,6 +29,7 @@ import {
   isPruneResultLost,
   onPruneStateChange,
 } from "../utils/pruneStore";
+import { scrollNearestToTop } from "../utils/scrollHelpers";
 import { getSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
 import { withTimeout } from "../utils/withTimeout";
 
@@ -36,6 +37,8 @@ const PAGE_SIZE = 50;
 const SELECTION_PAGE_SIZE = 100;
 const PRUNE_CALLABLE_TIMEOUT_MS = 15000;
 const RESULT_LOST_MESSAGE = "The cleanup result was lost — check your library and run the scan again.";
+
+const plural = (count: number, singular: string, pluralForm: string): string => (count === 1 ? singular : pluralForm);
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -92,6 +95,11 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   }, []);
 
   const total = initial.total ?? items.length;
+  // The headline count is the rows this run can remove on its own. `total` also
+  // counts the siblings that are merely disclosed because a whole-game removal
+  // could still take them, and leading with that number reads as a threat to
+  // versions RomM still serves.
+  const candidateTotal = initial.candidate_total ?? total;
   const selectedBytes = items.reduce(
     (sum, item) => sum + (includedContent.has(item.rom_id) ? (item.installed_bytes ?? 0) : 0),
     0,
@@ -238,22 +246,43 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
 
   return (
     <ModalRoot closeModal={closeModal}>
-      <div style={{ minWidth: "440px", maxWidth: "720px", padding: "18px" }}>
+      {/* The whole dialog scrolls as one. A separate inner scroller for the list
+          leaves the space estimate pinned over the last row, and gives the
+          controller two scroll axes to choose between on every focus move. */}
+      <div
+        style={{
+          minWidth: "440px",
+          maxWidth: "720px",
+          padding: "18px",
+          paddingBottom: "28px",
+          maxHeight: "76vh",
+          overflowY: "auto",
+        }}
+      >
         <div style={{ fontSize: "20px", fontWeight: 700, marginBottom: "6px" }}>Clean Up Removed RomM Games</div>
         <div style={{ color: "#c7d5e0", marginBottom: "14px" }}>
-          {scope === "bulk"
-            ? `${total} local group entr${total === 1 ? "y" : "ies"} may be affected by candidates absent from a completed RomM fetch.`
-            : `${total} local group entr${total === 1 ? "y" : "ies"} may be affected by cleanup of the selected unavailable ROM.`}{" "}
-          Every entry is checked again by exact ID; only a confirmed 404 can be removed.
+          {`${candidateTotal} locally kept ${plural(candidateTotal, "version", "versions")}${
+            scope === "bulk" ? "" : " of this game"
+          } ${plural(candidateTotal, "is", "are")} no longer on your RomM server.`}{" "}
+          Nothing is removed until each one is checked against the server again — only entries RomM confirms as gone can
+          be deleted.
+          {total > candidateTotal
+            ? " Other versions of the same games are listed below; they stay, unless the check finds every version of a game gone."
+            : ""}
         </div>
 
-        <div style={{ maxHeight: "62vh", overflowY: "auto", paddingRight: "10px" }}>
-          <ToggleField
-            label="Repoint vanished shortcuts to the live Default"
-            checked={repoint}
-            disabled={runInFlight}
-            onChange={setRepoint}
-          />
+        <div>
+          {/* Focusing the first control has to bring the intro above it back into
+              view — Steam's focus engine only scrolls far enough to reveal the
+              control itself, which strands the text off the top on a controller. */}
+          <div onFocus={scrollNearestToTop}>
+            <ToggleField
+              label="Repoint vanished shortcuts to the live Default"
+              checked={repoint}
+              disabled={runInFlight}
+              onChange={setRepoint}
+            />
+          </div>
           <ToggleField
             label="Remove confirmed rows and installed content from groups with a live version"
             checked={removeRows}
@@ -287,35 +316,67 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
             />
           )}
 
-          <div style={{ margin: "14px 0 8px", fontWeight: 700 }}>Candidates</div>
-          {items.map((item) => (
-            <div key={item.rom_id} style={{ padding: "10px 0", borderTop: "1px solid rgba(255,255,255,0.10)" }}>
-              <div style={{ fontWeight: 600 }}>{item.name || item.fs_name || `ROM ${item.rom_id}`}</div>
-              {(item.name_truncated || item.fs_name_truncated || item.group_id_truncated || item.warning_truncated) && (
-                <div style={{ color: "#e5a43b", fontSize: "12px" }}>
-                  One or more display fields were shortened to keep this preview page within the Decky wire limit.
-                </div>
+          <div style={{ margin: "14px 0 8px", fontWeight: 700 }}>Versions no longer on RomM</div>
+          {items.map((item, index) => (
+            <Fragment key={item.rom_id}>
+              {/* The backend sorts candidates first, so the first non-candidate
+                  row is where the disclosure block starts. */}
+              {!item.candidate && (index === 0 || items[index - 1]!.candidate) && (
+                <div style={{ margin: "18px 0 8px", fontWeight: 700 }}>Other versions of these games — kept</div>
               )}
-              <div style={{ fontSize: "12px", color: "#8f98a0" }}>
-                {item.platform_slug} · ROM {item.rom_id} · group of {item.group_size} ·{" "}
-                {item.candidate ? "cleanup candidate" : "group member disclosed for whole-game removal"}
+              <div
+                style={{
+                  padding: "10px 0",
+                  borderTop: "1px solid rgba(255,255,255,0.10)",
+                  ...(item.candidate ? {} : { paddingLeft: "14px", opacity: 0.75 }),
+                }}
+              >
+                <div style={{ fontWeight: item.candidate ? 600 : 400 }}>
+                  {item.name || item.fs_name || `ROM ${item.rom_id}`}
+                </div>
+                {(item.name_truncated ||
+                  item.fs_name_truncated ||
+                  item.group_id_truncated ||
+                  item.warning_truncated) && (
+                  <div style={{ color: "#e5a43b", fontSize: "12px" }}>
+                    One or more display fields were shortened to keep this preview page within the Decky wire limit.
+                  </div>
+                )}
+                <div style={{ fontSize: "12px", color: "#8f98a0" }}>
+                  {item.platform_slug} · ROM {item.rom_id}
+                  {item.group_size > 1 ? ` · one of ${item.group_size} versions of this game` : ""}
+                </div>
+                <div style={{ fontSize: "12px", color: item.candidate ? "#c7d5e0" : "#8f98a0" }}>
+                  {item.candidate
+                    ? "Gone from RomM — removed once the server confirms it."
+                    : "Still on RomM as of your last sync. Listed because removing a whole game would take this version too."}
+                </div>
+                {item.warning && <div style={{ color: "#e5a43b", fontSize: "12px" }}>{item.warning}</div>}
+                {item.installed && (
+                  <ToggleField
+                    label={`Include installed ROM content (${item.installed_bytes === null ? "size unavailable" : formatBytes(item.installed_bytes)})`}
+                    checked={includedContent.has(item.rom_id)}
+                    disabled={runInFlight || !recovery}
+                    onChange={(checked: boolean) => toggleContent(item.rom_id, checked)}
+                  />
+                )}
+                {item.installed && (!recovery || !includedContent.has(item.rom_id)) && (
+                  <div style={{ color: "#e5a43b", fontSize: "12px" }}>
+                    Installed content is not backed up but will still be deleted if this row is removed.
+                  </div>
+                )}
               </div>
-              {item.warning && <div style={{ color: "#e5a43b", fontSize: "12px" }}>{item.warning}</div>}
-              {item.installed && (
-                <ToggleField
-                  label={`Include installed ROM content (${item.installed_bytes === null ? "size unavailable" : formatBytes(item.installed_bytes)})`}
-                  checked={includedContent.has(item.rom_id)}
-                  disabled={runInFlight || !recovery}
-                  onChange={(checked: boolean) => toggleContent(item.rom_id, checked)}
-                />
-              )}
-              {item.installed && (!recovery || !includedContent.has(item.rom_id)) && (
-                <div style={{ color: "#e5a43b", fontSize: "12px" }}>
-                  Installed content is not backed up but will still be deleted if this row is removed.
-                </div>
-              )}
-            </div>
+            </Fragment>
           ))}
+          {/* Without this the per-row "Include installed ROM content" checkbox is
+              invisible on a library where nothing is downloaded, and the option
+              reads as missing rather than as not applicable. Only claimed once
+              every page is loaded — an unseen page could still hold one. */}
+          {allEntriesLoaded && !items.some((item) => item.installed) && (
+            <div style={{ padding: "10px 0", fontSize: "12px", color: "#8f98a0" }}>
+              None of these versions has ROM files downloaded on this device, so there is nothing to back up.
+            </div>
+          )}
           {items.length < total && (
             <DialogButton disabled={loadingMore} onClick={() => detach(loadMore())}>
               {loadingMore ? "Loading..." : `Load more (${items.length} of ${total})`}
