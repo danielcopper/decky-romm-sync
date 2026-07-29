@@ -37,16 +37,25 @@ describe("styleInjector — vanished-version trash", () => {
   it("flips only the menu-row trash to black on gamepad focus", () => {
     const css = injectedCss();
 
-    // Steam repaints a focused destructive MenuItem red; without these the red
-    // icon disappears into it. gpfocus is Steam's own focus class; the :focus /
-    // :focus-within siblings cover the row taking real DOM focus instead.
-    expect(css).toContain(".gpfocus .romm-vanished-trash-row");
-    expect(css).toContain(":focus .romm-vanished-trash-row");
-    expect(css).toContain(":focus-within .romm-vanished-trash-row");
-    expect(css).toMatch(/\.romm-vanished-trash-row[^{]*\{[^}]*color:\s*#000/);
+    // Steam repaints a focused destructive MenuItem red; without this the red
+    // icon disappears into it. gpfocus is Steam's own class for the focused
+    // element itself, so the descendant combinator resolves to that one row.
+    expect(css).toMatch(/\.gpfocus \.romm-vanished-trash-row\s*\{[^}]*color:\s*#000/);
     // The flip must not be reachable through the base class alone — the
     // singleton binding's button keeps a dark focus background.
     expect(css).not.toMatch(/\.gpfocus \.romm-vanished-trash\s*[,{]/);
+  });
+
+  it("never reaches the trash through an ancestor-matching pseudo-class", () => {
+    const css = injectedCss();
+
+    // :focus-within matches every ancestor of the focused element up to <body>,
+    // so `:focus-within .romm-vanished-trash-row` repaints EVERY vanished row's
+    // trash while the menu is navigated — and at (0,2,0) it outranks the
+    // (0,1,0) red base, so red would never paint on a menu row at all. `:focus`
+    // on a container that wraps the rows has the same flaw in narrower form.
+    expect(css).not.toMatch(/:focus-within[^,{]*\.romm-vanished-trash/);
+    expect(css).not.toMatch(/:focus\s+\.romm-vanished-trash/);
   });
 
   it("removes the block again when the native play section is restored", () => {

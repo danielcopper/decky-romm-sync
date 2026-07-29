@@ -539,13 +539,19 @@ export function hideNativePlaySection(playSectionClass: string) {
 
    The -row modifier gates the focused colour to the menu row ONLY. The
    singleton binding's trash sits in a .romm-disc-btn whose focus background
-   stays dark, so black there would swap one invisible icon for another. */
+   stays dark, so black there would swap one invisible icon for another.
+
+   gpfocus ONLY. Steam marks the focused element itself with gpfocus and its
+   ancestors with gpfocuswithin, so this descendant combinator resolves to the
+   one focused row. An ancestor-matching pseudo-class must never be used here:
+   :focus-within (and :focus on a container) matches every ancestor up to
+   <body>, so while the menu is navigated it would repaint EVERY vanished
+   row's trash black — at (0,2,0) it also outranks the (0,1,0) red base, so
+   the red would never paint on a menu row at all. */
 .romm-vanished-trash {
   color: #d94126;
 }
-.gpfocus .romm-vanished-trash-row,
-:focus .romm-vanished-trash-row,
-:focus-within .romm-vanished-trash-row {
+.gpfocus .romm-vanished-trash-row {
   color: #000;
 }`;
     sp.window.document.head.appendChild(gearStyle);
