@@ -170,9 +170,10 @@ with RomM.
 ## Explicit cleanup of vanished versions
 
 Automatic sync remains unbind/retain-only. Deleting retained local state is a separate confirmed workflow under **Danger
-Zone → Clean Up Removed RomM Games**, also reachable as **Remove local data...** beside a synced vanished version or as
-a focused button for a synced singleton vanished binding. Candidate discovery is not deletion authority: the backend
-freshly probes each exact RomM id, and only typed 404s can proceed.
+Zone → Clean Up Removed RomM Games**, also reachable by activating a synced vanished version's own picker row (which
+carries a trash affordance, the menu row being the focusable unit) or as a focused button for a synced singleton
+vanished binding. Candidate discovery is not deletion authority: the backend freshly probes each exact RomM id, and only
+typed 404s can proceed.
 
 For a vanished bound version with a live sibling, the default-on repoint action reuses `switch_version` independently of
 the row-removal option, then the frontend confirm-writes the returned exact launch options. Cover/cache publication and

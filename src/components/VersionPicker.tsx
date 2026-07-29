@@ -12,6 +12,12 @@
  * #1346), so each version shows its own art rather than the group's shared grid
  * cover; a not-yet-synced sibling downloads its cover once.
  *
+ * A version RomM no longer serves stays listed as retained context, dimmed and
+ * unswitchable. When local data for it exists, that row carries a trash
+ * affordance and activating it opens the removed-game cleanup confirmation
+ * scoped to that ROM — the row is the menu's focusable unit, so the action has
+ * to live on it rather than in a nested button or a row of its own.
+ *
  * Selecting a version while the game is not downloaded rebinds the group's Steam
  * shortcut to it (appId-safe: the name/appId stay sticky) so the Download button
  * fetches exactly that version. Switching a *downloaded* game rebinds it too and
@@ -21,10 +27,10 @@
  * nothing (the null-gate pattern).
  */
 
-import { useState, useEffect, useRef, FC, Fragment, ReactNode } from "react";
+import { useState, useEffect, useRef, FC, ReactNode } from "react";
 import { toaster, addEventListener, removeEventListener } from "@decky/api";
 import { Menu, MenuItem, showContextMenu, DialogButton } from "@decky/ui";
-import { FaChevronDown, FaCompactDisc, FaLayerGroup } from "react-icons/fa";
+import { FaChevronDown, FaCompactDisc, FaLayerGroup, FaTrash } from "react-icons/fa";
 import {
   getVersionList,
   switchVersion,
@@ -66,6 +72,8 @@ interface VersionPickerProps {
 // palette DiscSelector uses so the two game-detail pickers read as one system.
 const ACTIVE_ACCENT = "#59b6ff";
 const NEUTRAL_GREY = "#dcdedf";
+// Steam's destructive red, for the one action in this picker that deletes.
+const DESTRUCTIVE_RED = "#d94126";
 
 const reportVersionListReachability = (result: VersionList): void => {
   if (result.server_query_failed) {
@@ -83,6 +91,18 @@ const BADGE_COLORS: Record<"accent" | "muted" | "good", { bg: string; fg: string
 
 /** The label a row (or a singleton binding) carries once RomM 404s its exact id. */
 const VANISHED_HINT = "No longer available on RomM";
+
+/** Accessible name of the trash affordance that opens the cleanup confirmation. */
+const REMOVE_LOCAL_DATA_LABEL = "Remove local data";
+
+/**
+ * The cleanup affordance, shown on a vanished row and on a vanished singleton
+ * binding. Icon-only: it sits at the right edge of a row that already says why
+ * the version is unusable, so a text label would only repeat that hint.
+ */
+const RemoveLocalDataIcon: FC<{ style?: React.CSSProperties }> = ({ style }) => (
+  <FaTrash size={14} color={DESTRUCTIVE_RED} role="img" aria-label={REMOVE_LOCAL_DATA_LABEL} style={style} />
+);
 
 /** The italic inline hint that explains why a version can't be selected. */
 const AvailabilityHint: FC<{ text: string }> = ({ text }) => (
@@ -407,8 +427,13 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     // the inline cleanup that is the only action left for it.
     return (
       <span style={{ display: "inline-flex", alignItems: "center" }}>
-        <DialogButton className="romm-disc-btn" onClick={() => openCleanup(bound.rom_id)}>
-          Remove local data...
+        <DialogButton
+          className="romm-disc-btn"
+          onClick={() => openCleanup(bound.rom_id)}
+          aria-label={REMOVE_LOCAL_DATA_LABEL}
+          title={REMOVE_LOCAL_DATA_LABEL}
+        >
+          <RemoveLocalDataIcon />
         </DialogButton>
         <AvailabilityHint text={VANISHED_HINT} />
       </span>
@@ -449,17 +474,31 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
     if (switching) return;
     showContextMenu(
       <Menu label="Version">
-        {versions.map((v) => (
-          <Fragment key={v.rom_id}>
-            <MenuItem disabled={v.vanished || !v.switchable} onClick={() => detach(handleSwitch(v))}>
+        {versions.map((v) => {
+          // A synced vanished row has exactly one thing left to offer, so the row
+          // IS that offer: it carries the trash affordance and activates the
+          // cleanup confirmation. The action has to sit on the row itself — a
+          // MenuItem is the menu's focusable unit, so a nested button would be
+          // unreachable by gamepad and a row of its own belongs to no version
+          // visually. Switching stays impossible either way: handleSwitch
+          // refuses a vanished target.
+          const removable = v.vanished && v.synced;
+          return (
+            <MenuItem
+              key={v.rom_id}
+              disabled={!removable && (v.vanished || !v.switchable)}
+              {...(removable ? { tone: "destructive" as const } : {})}
+              onClick={() => (removable ? openCleanup(v.rom_id) : detach(handleSwitch(v)))}
+            >
               <span
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
                   gap: "10px",
+                  width: "100%",
                   color: v.active ? ACTIVE_ACCENT : undefined,
                   // Unavailable/conflicting rows stay visible as retained context,
-                  // but are dimmed and disabled until RomM offers a usable target.
+                  // but are dimmed until RomM offers a usable target.
                   opacity: v.vanished || !v.switchable ? 0.55 : undefined,
                 }}
               >
@@ -470,15 +509,11 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
                 {v.switchable && !v.synced ? <Badge text="not synced" tone="muted" /> : null}
                 {rowAvailabilityHint(v)}
                 {v.active ? <span style={{ marginLeft: "6px", fontWeight: 700 }}>✓</span> : null}
+                {removable ? <RemoveLocalDataIcon style={{ marginLeft: "auto", flexShrink: 0 }} /> : null}
               </span>
             </MenuItem>
-            {v.vanished && v.synced ? (
-              <MenuItem onClick={() => openCleanup(v.rom_id)}>
-                <span style={{ color: "#ffb15c", paddingLeft: "38px" }}>Remove local data...</span>
-              </MenuItem>
-            ) : null}
-          </Fragment>
-        ))}
+          );
+        })}
       </Menu>,
       getEventTarget(e),
     );

@@ -28,13 +28,32 @@ import {
 const captured: { menu: ReactNode } = { menu: null };
 
 vi.mock("@decky/ui", () => ({
-  DialogButton: (p: { onClick?: (e: unknown) => void; children?: ReactNode; className?: string }) =>
-    createElement("button", { "data-testid": "version-btn", onClick: p.onClick, className: p.className }, p.children),
+  DialogButton: (p: {
+    onClick?: (e: unknown) => void;
+    children?: ReactNode;
+    className?: string;
+    "aria-label"?: string;
+  }) =>
+    createElement(
+      "button",
+      {
+        "data-testid": "version-btn",
+        onClick: p.onClick,
+        className: p.className,
+        "aria-label": p["aria-label"],
+      },
+      p.children,
+    ),
   Menu: (p: { children?: ReactNode }) => createElement("div", { "data-testid": "version-menu" }, p.children),
-  MenuItem: (p: { onClick?: () => void; children?: ReactNode; disabled?: boolean }) =>
+  MenuItem: (p: { onClick?: () => void; children?: ReactNode; disabled?: boolean; tone?: string }) =>
     createElement(
       "div",
-      { role: "menuitem", onClick: p.onClick, "aria-disabled": p.disabled ? "true" : undefined },
+      {
+        role: "menuitem",
+        onClick: p.onClick,
+        "aria-disabled": p.disabled ? "true" : undefined,
+        "data-tone": p.tone,
+      },
       p.children,
     ),
   showContextMenu: (menu: ReactNode) => {
@@ -289,7 +308,7 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
     return multiVersionList({ bound_vanished: true, versions });
   }
 
-  it("keeps a vanished active row visible, dimmed, disabled, labelled, and marked", async () => {
+  it("keeps a vanished active row visible, dimmed, labelled, and marked", async () => {
     vi.mocked(backend.getVersionList).mockResolvedValue(listWithBoundVanished());
 
     const { menu } = await renderAndOpen();
@@ -297,7 +316,6 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
     const items = within(menu.container).getAllByRole("menuitem");
     const vanishedRow = items.find((i) => i.textContent.includes("Game (USA)"));
     expect(vanishedRow).toBeTruthy();
-    expect(vanishedRow?.getAttribute("aria-disabled")).toBe("true");
     expect(vanishedRow?.textContent).toContain("No longer available on RomM");
     expect(vanishedRow?.textContent).toContain("Downloaded");
     expect(vanishedRow?.textContent).toContain("✓");
@@ -307,7 +325,45 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
     expect(liveRow?.getAttribute("aria-disabled")).toBeNull();
   });
 
-  it("clicking an inactive vanished row is inert in code", async () => {
+  it("carries the cleanup affordance on the vanished row itself, marked destructive", async () => {
+    vi.mocked(backend.getVersionList).mockResolvedValue(listWithBoundVanished());
+
+    const { menu } = await renderAndOpen();
+
+    const items = within(menu.container).getAllByRole("menuitem");
+    const vanishedRow = items.find((i) => i.textContent.includes("Game (USA)"))!;
+    // A free-standing entry below the row belonged to no version visually; the
+    // trash sits ON the row, and the row is the single gamepad-focusable unit.
+    expect(within(vanishedRow).getByLabelText("Remove local data")).toBeTruthy();
+    expect(vanishedRow.getAttribute("data-tone")).toBe("destructive");
+    expect(vanishedRow.getAttribute("aria-disabled")).toBeNull();
+    // The live row offers no removal and stays a plain switch target.
+    const liveRow = items.find((i) => i.textContent.includes("Game (Japan)"))!;
+    expect(within(liveRow).queryByLabelText("Remove local data")).toBeNull();
+    expect(liveRow.getAttribute("data-tone")).toBeNull();
+  });
+
+  it("offers no cleanup on a vanished row whose local data was never synced", async () => {
+    const list = listWithBoundVanished();
+    list.versions = (list.versions ?? []).map((v) => (v.rom_id === 1 ? { ...v, synced: false } : v));
+    vi.mocked(backend.getVersionList).mockResolvedValue(list);
+
+    const { menu } = await renderAndOpen();
+    const vanishedRow = within(menu.container)
+      .getAllByRole("menuitem")
+      .find((i) => i.textContent.includes("Game (USA)"))!;
+
+    // Nothing local to remove, so the row stays a dead end rather than offering
+    // a destructive action that would find nothing.
+    expect(within(vanishedRow).queryByLabelText("Remove local data")).toBeNull();
+    expect(vanishedRow.getAttribute("aria-disabled")).toBe("true");
+
+    await clickRow(menu.container, "Game (USA)");
+    expect(openRemovedGamesCleanupModal).not.toHaveBeenCalled();
+    expect(backend.switchVersion).not.toHaveBeenCalled();
+  });
+
+  it("never switches to a vanished row, inactive or not", async () => {
     const list = listWithBoundVanished();
     list.bound_vanished = false;
     list.versions = (list.versions ?? []).map((v) =>
@@ -318,8 +374,11 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
     const { menu } = await renderAndOpen();
     await clickRow(menu.container, "Game (USA)");
 
+    // Activating the row opens the cleanup confirmation — it can never rebind
+    // the shortcut to a version RomM no longer serves.
     expect(backend.switchVersion).not.toHaveBeenCalled();
     expect(toaster.toast).not.toHaveBeenCalled();
+    expect(openRemovedGamesCleanupModal).toHaveBeenCalledWith(1);
   });
 
   it("allows recovery by selecting a live alternative to the vanished binding", async () => {
@@ -340,14 +399,16 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
     vi.mocked(backend.getVersionList).mockResolvedValue(listWithBoundVanished());
 
     const { menu } = await renderAndOpen();
-    const cleanup = within(menu.container).getByText("Remove local data...");
+    const cleanup = within(menu.container).getByLabelText("Remove local data");
     await act(async () => {
       fireEvent.click(cleanup.closest('[role="menuitem"]')!);
       await Promise.resolve();
     });
 
     expect(openRemovedGamesCleanupModal).toHaveBeenCalledWith(1);
-    expect(within(menu.container).getAllByText("Remove local data...")).toHaveLength(1);
+    // One affordance for one vanished version — never a second, free-standing row.
+    expect(within(menu.container).getAllByLabelText("Remove local data")).toHaveLength(1);
+    expect(menu.container.textContent).not.toContain("Remove local data...");
   });
 
   it("offers local cleanup for a synced singleton vanished binding", async () => {
@@ -360,7 +421,7 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
     });
     vi.mocked(openRemovedGamesCleanupModal).mockResolvedValue(true);
     const picker = render(<VersionPicker appId={APP_ID} />);
-    const cleanup = await picker.findByRole("button", { name: "Remove local data..." });
+    const cleanup = await picker.findByRole("button", { name: "Remove local data" });
 
     fireEvent.click(cleanup);
     await waitFor(() => expect(openRemovedGamesCleanupModal).toHaveBeenCalledWith(1));
@@ -376,7 +437,7 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
     });
 
     const picker = render(<VersionPicker appId={APP_ID} />);
-    await picker.findByRole("button", { name: "Remove local data..." });
+    await picker.findByRole("button", { name: "Remove local data" });
 
     // Without the label the lone destructive action has no stated cause.
     expect(picker.container.textContent).toContain("No longer available on RomM");
@@ -395,7 +456,7 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
 
     await waitFor(() => expect(vi.mocked(backend.getVersionList)).toHaveBeenCalledWith(APP_ID));
     expect(container.textContent).not.toContain("No longer available on RomM");
-    expect(container.textContent).not.toContain("Remove local data...");
+    expect(container.querySelector('[aria-label="Remove local data"]')).toBeNull();
   });
 
   it("surfaces an inline cleanup-preview failure", async () => {
@@ -405,7 +466,7 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
 
     const { menu } = await renderAndOpen();
     await act(async () => {
-      fireEvent.click(within(menu.container).getByText("Remove local data...").closest('[role="menuitem"]')!);
+      fireEvent.click(within(menu.container).getByLabelText("Remove local data").closest('[role="menuitem"]')!);
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -446,7 +507,7 @@ describe("VersionPicker — liveness connection signals (#1570)", () => {
     });
 
     const picker = render(<VersionPicker appId={APP_ID} />);
-    await picker.findByRole("button", { name: "Remove local data..." });
+    await picker.findByRole("button", { name: "Remove local data" });
 
     // The 404 is an entity verdict; the server plainly answered, so neither
     // "connected" nor "offline" may be inferred from it.
@@ -982,8 +1043,15 @@ describe("VersionPicker — switch target liveness (#1570)", () => {
     const target = within(refreshedMenu.container)
       .getAllByRole("menuitem")
       .find((item) => item.textContent.includes("Game (Japan)"));
-    expect(target?.getAttribute("aria-disabled")).toBe("true");
+    // The refused target converged out of the switchable set: it now states why
+    // and offers only the cleanup, so a repeat click can never re-attempt it.
     expect(target?.textContent).toContain("No longer available on RomM");
+    expect(within(target!).getByLabelText("Remove local data")).toBeTruthy();
+    expect(target?.getAttribute("data-tone")).toBe("destructive");
+
+    vi.mocked(backend.switchVersion).mockClear();
+    await clickRow(refreshedMenu.container, "Game (Japan)");
+    expect(backend.switchVersion).not.toHaveBeenCalled();
   });
 
   it("leaves connection state alone for version_vanished itself", async () => {
