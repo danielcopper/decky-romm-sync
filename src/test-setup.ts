@@ -160,7 +160,9 @@ vi.mock("@decky/ui", () => {
         onChange: (e: unknown) => p.onChange?.(e),
         onKeyDown: (e: unknown) => p.onKeyDown?.(e),
       }),
-    ToggleField: (p: AnyProps & { checked?: boolean; onChange?: (v: boolean) => void; label?: unknown }) =>
+    ToggleField: (
+      p: AnyProps & { checked?: boolean; onChange?: (v: boolean) => void; label?: unknown; description?: unknown },
+    ) =>
       createElement(
         "div",
         { "data-testid": "toggle" },
@@ -171,6 +173,9 @@ vi.mock("@decky/ui", () => {
           onChange: (e: { target: { checked: boolean } }) => p.onChange?.(e.target.checked),
         }),
         typeof p.label === "string" ? p.label : null,
+        // Mirrors the ButtonItem stub: a toggle's description carries real
+        // user-facing copy, so it has to be assertable rather than dropped.
+        p.description == null ? null : createElement("span", { "data-testid": "toggle-desc" }, p.description as never),
       ),
     Dropdown: passthrough("select"),
     DropdownItem: (p: AnyProps) => createElement("select", {}, p.children as never),

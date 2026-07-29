@@ -55,6 +55,11 @@ may never be deleted unseen. What the generation does establish is that the row 
 so the projection separates the two classes rather than flattening them — candidates sort first, the page carries a
 `candidate_total` beside `total`, and the dialog leads with the candidate count and labels the rest as retained.
 
+The wire always carries both classes; which ones are **rendered** is a frontend decision keyed on the whole-game removal
+option, because `selected_prune_ids` returns a non-candidate only under that option. With it off, the retained rows
+describe an outcome that cannot occur, so the dialog hides them and drops any installed-content selection they carried;
+every page is still fetched, and the completeness gate before confirmation is unchanged.
+
 Cleanup deliberately does **not** clear the platform's `platform_sync_state` completion stamp. It does not need to: a
 server that dropped ids also reports a different `rom_count`, and the fetcher's existing stamp-count guard already
 forces the re-fetch. Clearing the stamp would cost the platform its incremental skip and disable further bulk discovery
@@ -128,8 +133,11 @@ warning, and cannot be selected for recovery.
 ## Recovery
 
 Recovery is a temporary per-run choice, not a persisted setting. The confirmation dialog offers **Create recovery
-bundle** (default on), and **Include installed ROM content** per candidate (default off). The dialog shows recursive
-size per ROM alongside required and free space, and blocks confirmation when space is insufficient.
+bundle** (default on), and **Include installed ROM content** per candidate (default off). Whole-game removal also
+defaults **on**: removing a game the server no longer has is the operation this dialog exists for, and the default-on
+bundle is what keeps it reversible by hand. The two defaults are a pair — turning recovery off requires a separate
+acknowledgement toggle before the run can start. The dialog shows recursive size per ROM alongside required and free
+space, and blocks confirmation when space is insufficient.
 
 The root is `~/<package-name>-recovery`, with the package name taken from `package.json` through the canonical metadata
 adapter and path-sanitized (today: `~/decky-romm-sync-recovery`). Reading free space must not create that layout — a

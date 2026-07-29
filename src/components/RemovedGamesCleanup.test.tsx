@@ -97,12 +97,16 @@ describe("RemovedGamesCleanup", () => {
     expect(showModal).not.toHaveBeenCalled();
   });
 
-  it("uses safe option defaults and blocks confirmation when selected content exceeds free space", async () => {
+  it("uses the shipped option defaults and blocks confirmation when selected content exceeds free space", async () => {
     await openRemovedGamesCleanupModal();
     const modal = render(shownModal());
     const toggles = modal.getAllByTestId("toggle-input") as HTMLInputElement[];
 
-    expect(toggles.map((toggle) => toggle.checked)).toEqual([true, true, false, true, false]);
+    // repoint, remove rows, remove fully vanished, recovery bundle, per-ROM
+    // content. Whole-game removal is on: it is what the dialog exists for, and
+    // the default-on recovery bundle is what makes it recoverable. Per-ROM
+    // content stays off — it is the only one that can exhaust the disk.
+    expect(toggles.map((toggle) => toggle.checked)).toEqual([true, true, true, true, false]);
     const confirm = modal.getByRole("button", { name: "Confirm Cleanup" }) as HTMLButtonElement;
     expect(confirm.disabled).toBe(false);
     expect(modal.container.textContent).toContain("Installed content is not backed up");
@@ -128,7 +132,7 @@ describe("RemovedGamesCleanup", () => {
       confirmed: true,
       repoint_shortcuts: true,
       remove_rows: true,
-      remove_fully_vanished: false,
+      remove_fully_vanished: true,
       create_recovery_bundle: true,
       installed_selection_id: null,
     });
@@ -504,9 +508,75 @@ describe("RemovedGamesCleanup", () => {
     // generation, decides whole-game removal — but never called a candidate.
     expect(text).toContain("Live sibling");
     expect(text).toContain("Other versions of these games — kept");
-    expect(text).toContain("Still on RomM as of your last sync");
+    expect(text).toContain("Still on RomM at your last sync");
     expect(text).toContain("Other versions of the same games are listed below");
     expect(text).not.toContain("disclosed for whole-game removal");
+  });
+
+  it("hides the disclosure rows when whole-game removal is switched off", async () => {
+    vi.mocked(backend.getPrunePreview).mockResolvedValue({
+      ...preview,
+      total: 2,
+      candidate_total: 1,
+      items: [
+        preview.items![0]!,
+        { ...preview.items![0]!, rom_id: 8, candidate: false, installed: false, name: "Live sibling", group_size: 2 },
+      ],
+    });
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    expect(modal.container.textContent).toContain("Live sibling");
+
+    fireEvent.click((modal.getAllByTestId("toggle-input") as HTMLInputElement[])[2]!);
+
+    // With whole-game removal off, `selected_prune_ids` can never return a
+    // non-candidate, so disclosing one describes a thing that cannot happen.
+    expect(modal.container.textContent).not.toContain("Live sibling");
+    expect(modal.container.textContent).not.toContain("Other versions of these games — kept");
+    expect(modal.container.textContent).not.toContain("Other versions of the same games are listed below");
+    // The headline counted candidates only, so it does not move.
+    expect(modal.container.textContent).toContain("1 locally kept version is no longer on your RomM server");
+  });
+
+  it("unstages a hidden row's content when whole-game removal is switched off", async () => {
+    vi.mocked(backend.getPrunePreview).mockResolvedValue({
+      ...preview,
+      total: 2,
+      candidate_total: 1,
+      free_bytes: 10_000,
+      items: [
+        { ...preview.items![0]!, installed: false, installed_bytes: null },
+        { ...preview.items![0]!, rom_id: 8, candidate: false, name: "Live sibling", installed_bytes: 512 },
+      ],
+    });
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+
+    const contentToggle = (modal.getAllByTestId("toggle-input") as HTMLInputElement[])[4]!;
+    fireEvent.click(contentToggle);
+    expect(modal.container.textContent).toContain("recovery estimate: 512 B");
+
+    fireEvent.click((modal.getAllByTestId("toggle-input") as HTMLInputElement[])[2]!);
+    await waitFor(() => expect(modal.container.textContent).toContain("recovery estimate: 0 B"));
+
+    // A selection the user can no longer see must not be staged behind their back.
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(backend.startPrune).toHaveBeenCalled());
+    expect(backend.stagePruneInstalledSelection).not.toHaveBeenCalled();
+    expect(vi.mocked(backend.startPrune).mock.calls[0]?.[0].installed_selection_id).toBeNull();
+  });
+
+  it("states what whole-game removal takes and what the recovery bundle keeps", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    const descriptions = [...modal.container.querySelectorAll('[data-testid="toggle"]')]
+      .map((el) => el.textContent)
+      .join(" ");
+
+    // The option ships on, so its description has to carry the full weight.
+    expect(modal.container.textContent).toContain("Only for games where the server confirms every single version is");
+    expect(modal.container.textContent).toContain("rebuild it by hand");
+    expect(descriptions).not.toContain("Off by default");
   });
 
   it("drops the disclosure sentence and heading when every listed row is removable", async () => {

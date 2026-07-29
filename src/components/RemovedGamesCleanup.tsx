@@ -76,7 +76,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   const [status, setStatus] = useState("");
   const [repoint, setRepoint] = useState(true);
   const [removeRows, setRemoveRows] = useState(true);
-  const [removeDeadGames, setRemoveDeadGames] = useState(false);
+  const [removeDeadGames, setRemoveDeadGames] = useState(true);
   const [recovery, setRecovery] = useState(true);
   const [confirmWithoutRecovery, setConfirmWithoutRecovery] = useState(false);
   const [includedContent, setIncludedContent] = useState<Set<number>>(new Set());
@@ -100,11 +100,16 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   // could still take them, and leading with that number reads as a threat to
   // versions RomM still serves.
   const candidateTotal = initial.candidate_total ?? total;
-  const selectedBytes = items.reduce(
+  // A row that is not a candidate can only ever be deleted by a whole-game
+  // removal (`selected_prune_ids` returns nothing else for it), so with that
+  // option off it is disclosing a thing that cannot happen. Every page is still
+  // fetched and the wire payload is untouched — this is what gets rendered.
+  const visibleItems = removeDeadGames ? items : items.filter((item) => item.candidate);
+  const selectedBytes = visibleItems.reduce(
     (sum, item) => sum + (includedContent.has(item.rom_id) ? (item.installed_bytes ?? 0) : 0),
     0,
   );
-  const unknownSelectedSize = items.some(
+  const unknownSelectedSize = visibleItems.some(
     (item) => includedContent.has(item.rom_id) && item.installed && item.installed_bytes === null,
   );
   const insufficientSpace = recovery && (unknownSelectedSize || selectedBytes > freeBytes);
@@ -266,7 +271,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
           } ${plural(candidateTotal, "is", "are")} no longer on your RomM server.`}{" "}
           Nothing is removed until each one is checked against the server again — only entries RomM confirms as gone can
           be deleted.
-          {total > candidateTotal
+          {removeDeadGames && total > candidateTotal
             ? " Other versions of the same games are listed below; they stay, unless the check finds every version of a game gone."
             : ""}
         </div>
@@ -291,10 +296,20 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
           />
           <ToggleField
             label="Remove fully vanished games, including any Steam shortcut"
-            description="Off by default. This removes the whole local game only when every local ID returns 404."
+            description="Only for games where the server confirms every single version is gone — those are removed whole, Steam shortcut included. The recovery bundle keeps the shortcut's Steam details so you can rebuild it by hand."
             checked={removeDeadGames}
             disabled={runInFlight}
-            onChange={setRemoveDeadGames}
+            onChange={(checked: boolean) => {
+              setRemoveDeadGames(checked);
+              // Turning it off hides the rows only a whole-game removal could
+              // take, so their content selections must not stay staged.
+              if (!checked) {
+                setIncludedContent((current) => {
+                  const stillShown = new Set(items.filter((item) => item.candidate).map((item) => item.rom_id));
+                  return new Set([...current].filter((romId) => stillShown.has(romId)));
+                });
+              }
+            }}
           />
           <ToggleField
             label="Create recovery bundle"
@@ -317,11 +332,11 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
           )}
 
           <div style={{ margin: "14px 0 8px", fontWeight: 700 }}>Versions no longer on RomM</div>
-          {items.map((item, index) => (
+          {visibleItems.map((item, index) => (
             <Fragment key={item.rom_id}>
               {/* The backend sorts candidates first, so the first non-candidate
                   row is where the disclosure block starts. */}
-              {!item.candidate && (index === 0 || items[index - 1]!.candidate) && (
+              {!item.candidate && (index === 0 || visibleItems[index - 1]!.candidate) && (
                 <div style={{ margin: "18px 0 8px", fontWeight: 700 }}>Other versions of these games — kept</div>
               )}
               <div
@@ -349,7 +364,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
                 <div style={{ fontSize: "12px", color: item.candidate ? "#c7d5e0" : "#8f98a0" }}>
                   {item.candidate
                     ? "Gone from RomM — removed once the server confirms it."
-                    : "Still on RomM as of your last sync. Listed because removing a whole game would take this version too."}
+                    : "Still on RomM at your last sync. Removed only if the final check finds every version of this game gone — then the whole game goes, Steam shortcut included."}
                 </div>
                 {item.warning && <div style={{ color: "#e5a43b", fontSize: "12px" }}>{item.warning}</div>}
                 {item.installed && (
@@ -372,7 +387,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
               invisible on a library where nothing is downloaded, and the option
               reads as missing rather than as not applicable. Only claimed once
               every page is loaded — an unseen page could still hold one. */}
-          {allEntriesLoaded && !items.some((item) => item.installed) && (
+          {allEntriesLoaded && !visibleItems.some((item) => item.installed) && (
             <div style={{ padding: "10px 0", fontSize: "12px", color: "#8f98a0" }}>
               None of these versions has ROM files downloaded on this device, so there is nothing to back up.
             </div>

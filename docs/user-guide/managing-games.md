@@ -106,11 +106,14 @@ scan is local and finds groups containing rows absent from a completed platform 
 
 The dialog opens on the count that matters — how many locally kept versions are no longer on your RomM server — and
 lists those versions first, under **Versions no longer on RomM**. Other versions of the same games follow under **Other
-versions of these games — kept**: they were still on RomM at your last sync and stay, unless the run's fresh check finds
-every version of that game gone. They are listed so nothing can be removed without having been shown. The modal
-byte-budgets every page for the Decky bridge; load every page before confirmation. The confirmation run checks every
-exact RomM id again. Only a confirmed 404 can be removed. Offline, timeout, authentication, server, malformed-response,
-active-download, and ambiguous multi-shortcut cases are skipped and reported without deleting data.
+versions of these games — kept**: they were still on RomM at your last sync, and they go only if the run's fresh check
+finds every version of that game gone, in which case the whole game is removed with its Steam shortcut. They are listed
+so nothing can be removed without having been shown, and they appear only while **Remove fully vanished games** is on —
+with that option off they cannot be removed at all, so the list drops them. The headline count always counts the
+versions that are gone, never these. The modal byte-budgets every page for the Decky bridge; load every page before
+confirmation. The confirmation run checks every exact RomM id again. Only a confirmed 404 can be removed. Offline,
+timeout, authentication, server, malformed-response, active-download, and ambiguous multi-shortcut cases are skipped and
+reported without deleting data.
 
 The confirmation options apply to this run only:
 
@@ -118,14 +121,19 @@ The confirmation options apply to this run only:
   artwork, and playtime while switching to the group's natural live Default. This option works independently of row
   removal.
 - **Remove confirmed rows and installed content from groups with a live version** is on.
-- **Remove fully vanished games and their Steam shortcut** is off. Enable it only when you intend to remove a whole
-  game.
+- **Remove fully vanished games, including any Steam shortcut** is on. It applies only to games where the server
+  confirms every single version is gone; those are removed whole, Steam shortcut included. It ships on because removing
+  a game RomM no longer has is what this dialog is for, and because the default-on recovery bundle keeps the shortcut's
+  Steam details so it can be rebuilt by hand. Switch it off to limit the run to individual versions of games that still
+  exist — the list then hides the retained siblings, since nothing else can reach them.
 - **Create recovery bundle** is on. Bundles are sealed under `~/decky-romm-sync-recovery/bundles/` before mutation.
+  Leaving it on is what makes whole-game removal reversible by hand; turning it off asks you to confirm separately.
 - **Include installed ROM content** is off for every disclosed installed row. Its exact recursive size is shown;
   selecting more than the currently free recovery space blocks confirmation. Turning recovery off clears and disables
-  these selections. Large selections are staged in bounded pages before the run without a total selection cap.
-  Unselected installed content is still deleted if the row is removed. When no listed version has ROM files on this
-  device the option has nothing to attach to, so the list says so instead of leaving the option apparently missing.
+  these selections, and so does switching off whole-game removal for a row that is only listed because of it. Large
+  selections are staged in bounded pages before the run without a total selection cap. Unselected installed content is
+  still deleted if the row is removed. When no listed version has ROM files on this device the option has nothing to
+  attach to, so the list says so instead of leaving the option apparently missing.
 
 The displayed selected-content total is a lower-bound preflight, not the complete bundle size. Use **Refresh free
 space** after freeing disk space. The backend remeasures selected ROMs plus mandatory saves, backup history, caches, and
