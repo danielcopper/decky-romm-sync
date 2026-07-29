@@ -23,6 +23,10 @@
 
 </div>
 
+> [!NOTE]
+> **Reduced availability until ~end of August 2026** — a new addition to the family means slower responses on issues and
+> PRs for the next few weeks. See #1584 for details. Thanks for your patience!
+
 A [Decky Loader](https://decky.xyz/) plugin that syncs your self-hosted [RomM](https://github.com/rommapp/romm) library
 into Steam as non-steam shortcuts. Games appear directly in your Steam library, launch through
 [RetroDECK](https://retrodeck.net/), and can keep their saves in sync across devices through your RomM server.
