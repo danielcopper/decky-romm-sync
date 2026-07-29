@@ -79,12 +79,14 @@ async def test_preview_is_local_paged_and_frontend_shaped(harness):
         "offset",
         "limit",
         "total",
+        "candidate_total",
         "free_bytes",
         "recovery_root",
     }
     assert result["success"] is True
     assert result["scope"] == "bulk"
     assert result["total"] == 1
+    assert result["candidate_total"] == 1
     assert result["items"][0]["rom_id"] == 41
     assert result["items"][0]["installed"] is False
     assert result["recovery_root"].endswith("-recovery")

@@ -48,6 +48,13 @@ at all, because absence from an incomplete fetch is not evidence of removal. Inl
 version-picker row needs no generation — the row is already known vanished — but still takes the same fresh exact-id
 proof.
 
+The preview discloses **every** member of an affected group, not only the candidates. A member carrying the platform
+stamp's current fetch generation is not evidence that RomM still serves it: whole-game removal is decided by the run's
+fresh probe of every id in the group, never by the stored generation, so a generation-current row can still be taken and
+may never be deleted unseen. What the generation does establish is that the row was there at the last completed fetch,
+so the projection separates the two classes rather than flattening them — candidates sort first, the page carries a
+`candidate_total` beside `total`, and the dialog leads with the candidate count and labels the rest as retained.
+
 Cleanup deliberately does **not** clear the platform's `platform_sync_state` completion stamp. It does not need to: a
 server that dropped ids also reports a different `rom_count`, and the fetcher's existing stamp-count guard already
 forces the re-fetch. Clearing the stamp would cost the platform its incremental skip and disable further bulk discovery

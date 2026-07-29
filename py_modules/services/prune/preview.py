@@ -96,7 +96,17 @@ class PreviewBuilder:
                         "warning_truncated": warning is not None and len(warning) > _PREVIEW_WARNING_CHARS,
                     }
                 )
-        entries.sort(key=lambda entry: (str(entry["platform_slug"]), str(entry["name"]), int(entry["rom_id"])))
+        # Candidates first, so the paged list opens on the rows a run can actually
+        # remove and the retained siblings read as the subordinate disclosure they
+        # are. Within each block the old platform/name/id order still applies.
+        entries.sort(
+            key=lambda entry: (
+                not entry["candidate"],
+                str(entry["platform_slug"]),
+                str(entry["name"]),
+                int(entry["rom_id"]),
+            )
+        )
         return PrunePreview(
             preview_id=preview_id,
             scope=scope,
@@ -109,6 +119,15 @@ class PreviewBuilder:
         )
 
     def page(self, preview: PrunePreview, offset: int, limit: int) -> dict[str, Any]:
+        """Project one byte-bounded window of a snapshot onto the wire.
+
+        ``total`` counts every disclosed row — candidates plus the retained
+        siblings a whole-game removal could still take — while
+        ``candidate_total`` counts only the rows this run could remove on its
+        own. The frontend needs both before it has paged the whole list: the
+        headline count must not inflate itself with rows that are merely
+        disclosed.
+        """
         result: dict[str, Any] = {
             "success": True,
             "preview_id": preview.preview_id,
@@ -117,6 +136,7 @@ class PreviewBuilder:
             "offset": offset,
             "limit": limit,
             "total": len(preview.entries),
+            "candidate_total": sum(1 for entry in preview.entries if entry["candidate"]),
             "free_bytes": self._recovery_store.free_bytes(),
             "recovery_root": self._recovery_store.root(),
         }

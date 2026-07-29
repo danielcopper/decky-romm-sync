@@ -623,7 +623,10 @@ export interface PrunePreviewResult {
   items?: PrunePreviewItem[];
   offset?: number;
   limit?: number;
+  /** Every disclosed row: the candidates plus the siblings a whole-game removal could still take. */
   total?: number;
+  /** Only the rows this run can remove on its own — the count the dialog leads with. */
+  candidate_total?: number;
   free_bytes?: number;
   recovery_root?: string | null;
   blocked_by_migration?: boolean;
