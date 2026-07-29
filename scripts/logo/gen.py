@@ -16,10 +16,12 @@ Outputs, selected on the command line:
     gen.py --list          the palette names, one per line
 
 The disc, the arrows and the whole inner geometry live in a 200-unit square.
-The facet is a single anti-diagonal (x + y = 200): lighter above-left, darker
-below-right. One polygon, clipped per shape, carries that split across the disc
-and the arrows; the capsules and dots are flat, and simply take the tone of the
-side they sit on so the seam reads through them too.
+The facet is a single line through the disc centre, lighter above-left and
+darker below-right. It is **not** the 45° anti-diagonal: it runs parallel to
+the capsules, so the seam crossing a capsule lines up with that capsule's own
+slant instead of cutting across it. One polygon, clipped per shape, carries the
+split across the disc and the arrows; the capsules and dots are flat, and simply
+take the tone of the side they sit on so the seam reads through them too.
 """
 
 from __future__ import annotations
@@ -29,11 +31,6 @@ from dataclasses import dataclass
 
 VIEW = 200.0
 CX = CY = VIEW / 2.0
-
-# The half-plane below-right of the anti-diagonal x + y = VIEW, as a triangle
-# large enough to cover the whole square. Clipped to a shape, it paints that
-# shape's darker (below-right) side.
-LOWER_RIGHT = "300,-100 300,300 -100,300"
 
 
 # --------------------------------------------------------------------------- #
@@ -56,26 +53,39 @@ class Palette:
 class Geometry:
     """Positions and sizes, all in the 200-unit drawing square."""
 
-    disc_r: float = 98.0
+    disc_r: float = 100.0
 
     # Sync arrows: two point-symmetric arcs about the disc centre, one over the
     # top and one under the bottom, each capped with a filled arrowhead that
-    # points the way the ring turns (clockwise).
-    arc_r: float = 72.0
-    arc_span: float = 138.0  # degrees swept by each arc
-    arc_w: float = 13.0  # stroke width
-    arc_rot: float = 0.0  # orientation offset; the animation's spin knob
-    arrow_len: float = 15.0  # arrowhead reach along the tangent
-    arrow_half: float = 12.0  # arrowhead half-width across the stroke
+    # points the way the ring turns (clockwise). The arrowhead is wider than the
+    # stroke it caps, so `arrow_half` wants to track `arc_w` when that changes.
+    arc_r: float = 74.05
+    arc_span: float = 140.0  # degrees swept by each arc
+    arc_w: float = 15.5  # stroke width
+    arc_rot: float = 6.34  # orientation offset; the animation's spin knob
+    arrow_len: float = 22.5  # arrowhead reach along the tangent
+    arrow_half: float = 13.8  # arrowhead half-width across the stroke
+    arrow_back: float = 3.2  # degrees the head's base sits behind the stroke's end
 
-    # Capsules: two parallel stadiums tilted off vertical, offset to either
-    # side of the seam. Each holds two dots spaced along its long axis.
-    cap_angle: float = 141.8  # tilt of the long axis, degrees
-    cap_len: float = 74.0  # stadium length (rounded ends included)
-    cap_w: float = 31.0  # stadium width
-    cap_sep: float = 40.0  # centre-to-centre across the axis
-    dot_along: float = 21.7  # dot offset from its capsule centre, along the axis
-    dot_r: float = 13.3
+    # Capsules: two parallel stadiums tilted off vertical, offset to either side
+    # of the seam and slid along their own axis so the pair reads as staggered
+    # rather than as two bars side by side.
+    cap_angle: float = 141.64  # tilt of the long axis, degrees
+    cap_len: float = 76.35  # stadium length (rounded ends included)
+    cap_w: float = 31.38  # stadium width
+    cap_sep: float = 40.96  # centre-to-centre across the axis
+    cap_stagger: float = 9.86  # centre-to-centre along the axis
+    dot_along: float = 22.27  # dot offset from its capsule centre, along the axis
+    dot_r: float = 13.63
+
+    # The facet's direction. None keeps it parallel to the capsules, which is
+    # what makes the seam line up with their slant; set a number to break that
+    # deliberately (135.0 is the plain 45° anti-diagonal).
+    facet_angle: float | None = None
+
+    @property
+    def facet_deg(self) -> float:
+        return self.cap_angle if self.facet_angle is None else self.facet_angle
 
 
 # The stock geometry — the default everything renders at unless a caller passes
@@ -91,6 +101,25 @@ def _pt(cx: float, cy: float, r: float, deg: float) -> tuple[float, float]:
     return cx + r * math.cos(a), cy + r * math.sin(a)
 
 
+def _half_plane(g: Geometry) -> str:
+    """Polygon points covering the darker side of the facet.
+
+    The facet line runs through the disc centre along `facet_deg`; the darker
+    side is the one the normal rotated -90° off that direction points into
+    (right and down). Extended well past the viewBox so it clips cleanly to
+    whatever shape it is applied to.
+    """
+    th = math.radians(g.facet_deg)
+    dx, dy = math.cos(th), math.sin(th)
+    nx, ny = math.sin(th), -math.cos(th)
+    reach = 4.0 * VIEW
+    a = (CX + dx * reach, CY + dy * reach)
+    b = (CX - dx * reach, CY - dy * reach)
+    c = (b[0] + nx * reach, b[1] + ny * reach)
+    d = (a[0] + nx * reach, a[1] + ny * reach)
+    return " ".join(f"{x:.1f},{y:.1f}" for x, y in (a, b, c, d))
+
+
 def _arc_d(cx: float, cy: float, r: float, a0: float, a1: float) -> str:
     """SVG path for the arc from a0 to a1 (degrees, clockwise in screen space)."""
     x0, y0 = _pt(cx, cy, r, a0)
@@ -102,9 +131,10 @@ def _arc_d(cx: float, cy: float, r: float, a0: float, a1: float) -> str:
 
 def _arrowhead(cx: float, cy: float, r: float, a_end: float, g: Geometry) -> str:
     """Filled triangle at an arc's leading end, pointing along the sweep."""
-    base = _pt(cx, cy, r, a_end)
-    tan = math.radians(a_end + 90.0)  # sweep direction (increasing angle)
-    rad = math.radians(a_end)  # outward-radial
+    a_base = a_end - g.arrow_back
+    base = _pt(cx, cy, r, a_base)
+    tan = math.radians(a_base + 90.0)  # sweep direction (increasing angle)
+    rad = math.radians(a_base)  # outward-radial
     tx, ty = math.cos(tan), math.sin(tan)
     rx, ry = math.cos(rad), math.sin(rad)
     tip = (base[0] + tx * g.arrow_len, base[1] + ty * g.arrow_len)
@@ -125,7 +155,7 @@ def _faceted_arc(uid: str, a0: float, a1: float, ink: tuple[str, str], g: Geomet
     dark = f'<path d="{d}" stroke="{ink[1]}" {stroke}/><polygon points="{head}" fill="{ink[1]}"/>'
     return (
         f"{light}"
-        f'<clipPath id="lr{uid}"><polygon points="{LOWER_RIGHT}"/></clipPath>'
+        f'<clipPath id="lr{uid}"><polygon points="{_half_plane(g)}"/></clipPath>'
         f'<g clip-path="url(#lr{uid})">{dark}</g>'
     )
 
@@ -158,21 +188,24 @@ def mark(uid: str, pal: Palette, g: Geometry = DEFAULT_GEOMETRY) -> str:
     """The mark's inner content — everything inside a 200-unit square, clipped
     to the disc. Wrap it in an <svg> via `standalone`, or place several on a
     sheet via `sheet`."""
+    axis = math.radians(g.cap_angle)
+    ux, uy = math.cos(axis), math.sin(axis)
     perp = math.radians(g.cap_angle + 90.0)
     vx, vy = math.cos(perp), math.sin(perp)
-    off = g.cap_sep / 2.0
-    # +v lands above-left of the seam, -v below-right.
-    ul = (CX + vx * off, CY + vy * off)
-    lr = (CX - vx * off, CY - vy * off)
+    off, stag = g.cap_sep / 2.0, g.cap_stagger / 2.0
+    # +v lands above-left of the seam, -v below-right; the stagger slides each
+    # capsule along its own axis so the pair sits offset, not merely parallel.
+    ul = (CX + vx * off + ux * stag, CY + vy * off + uy * stag)
+    lr = (CX - vx * off - ux * stag, CY - vy * off - uy * stag)
 
     half = g.arc_span / 2.0
     top0, top1 = 270.0 - half + g.arc_rot, 270.0 + half + g.arc_rot
     bot0, bot1 = 90.0 - half + g.arc_rot, 90.0 + half + g.arc_rot
 
     body = (
-        # disc: light fill, then the below-right facet tone
+        # disc: light fill, then the darker facet tone
         f'<circle cx="{CX}" cy="{CY}" r="{g.disc_r}" fill="{pal.disc[0]}"/>'
-        f'<polygon points="{LOWER_RIGHT}" fill="{pal.disc[1]}"/>'
+        f'<polygon points="{_half_plane(g)}" fill="{pal.disc[1]}"/>'
         # sync arrows
         f"{_faceted_arc(f'{uid}t', top0, top1, pal.ink, g)}"
         f"{_faceted_arc(f'{uid}b', bot0, bot1, pal.ink, g)}"
