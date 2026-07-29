@@ -117,9 +117,9 @@ reported without deleting data.
 
 The confirmation options apply to this run only:
 
-- **Repoint vanished shortcuts to the live Default** is on. It preserves the Steam shortcut and its appId, collections,
-  artwork, and playtime while switching to the group's natural live Default. This option works independently of row
-  removal.
+- **Repoint vanished shortcuts to the live default version** is on. It preserves the Steam shortcut and its appId,
+  collections, artwork, and playtime while switching to the group's natural live Default. This option works
+  independently of row removal.
 - **Remove confirmed rows and installed content from groups with a live version** is on.
 - **Remove fully vanished games, including any Steam shortcut** is on. It applies only to games where the server
   confirms every single version is gone; those are removed whole, Steam shortcut included. It ships on because removing

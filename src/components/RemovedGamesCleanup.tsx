@@ -282,7 +282,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
               control itself, which strands the text off the top on a controller. */}
           <div onFocus={scrollNearestToTop}>
             <ToggleField
-              label="Repoint vanished shortcuts to the live Default"
+              label="Repoint vanished shortcuts to the live default version"
               checked={repoint}
               disabled={runInFlight}
               onChange={setRepoint}
