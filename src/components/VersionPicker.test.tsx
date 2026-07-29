@@ -299,6 +299,9 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
     vi.mocked(backend.switchVersion).mockReset();
     vi.mocked(backend.fetchCoverBase64).mockResolvedValue({ base64: null });
     vi.mocked(toaster.toast).mockReset();
+    // Reset per test: the rows here assert both that cleanup opens and that it
+    // does NOT, so a call leaking in from a sibling test would pass either way.
+    vi.mocked(openRemovedGamesCleanupModal).mockReset().mockResolvedValue(true);
   });
 
   function listWithBoundVanished(): VersionList {
@@ -308,7 +311,7 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
     return multiVersionList({ bound_vanished: true, versions });
   }
 
-  it("keeps a vanished active row visible, dimmed, labelled, and marked", async () => {
+  it("keeps a vanished active row visible, dimmed, labelled, marked, and non-switchable", async () => {
     vi.mocked(backend.getVersionList).mockResolvedValue(listWithBoundVanished());
 
     const { menu } = await renderAndOpen();
@@ -320,6 +323,13 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
     expect(vanishedRow?.textContent).toContain("Downloaded");
     expect(vanishedRow?.textContent).toContain("✓");
     expect((vanishedRow?.firstElementChild as HTMLElement | null)?.style.opacity).toBe("0.55");
+    // The row now carries the cleanup action, so "non-switchable" has to be
+    // asserted as behaviour: activating it can never rebind the shortcut to a
+    // version RomM no longer serves.
+    expect(within(vanishedRow!).getByLabelText("Remove local data")).toBeTruthy();
+    await clickRow(menu.container, "Game (USA)");
+    expect(backend.switchVersion).not.toHaveBeenCalled();
+    expect(openRemovedGamesCleanupModal).toHaveBeenCalledWith(1);
     // The live recovery target remains selectable.
     const liveRow = items.find((i) => i.textContent.includes("Game (Japan)"));
     expect(liveRow?.getAttribute("aria-disabled")).toBeNull();
