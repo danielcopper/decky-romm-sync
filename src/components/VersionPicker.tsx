@@ -72,8 +72,6 @@ interface VersionPickerProps {
 // palette DiscSelector uses so the two game-detail pickers read as one system.
 const ACTIVE_ACCENT = "#59b6ff";
 const NEUTRAL_GREY = "#dcdedf";
-// Steam's destructive red, for the one action in this picker that deletes.
-const DESTRUCTIVE_RED = "#d94126";
 
 const reportVersionListReachability = (result: VersionList): void => {
   if (result.server_query_failed) {
@@ -99,9 +97,21 @@ const REMOVE_LOCAL_DATA_LABEL = "Remove local data";
  * The cleanup affordance, shown on a vanished row and on a vanished singleton
  * binding. Icon-only: it sits at the right edge of a row that already says why
  * the version is unusable, so a text label would only repeat that hint.
+ *
+ * Colour comes from the injected stylesheet, never a `color` prop: Steam
+ * repaints a focused destructive MenuItem red, and an inline colour would
+ * survive that and leave a red icon on a red row. `onMenuRow` opts into the
+ * focused-state flip, which must not reach the singleton button (its focus
+ * background stays dark).
  */
-const RemoveLocalDataIcon: FC<{ style?: React.CSSProperties }> = ({ style }) => (
-  <FaTrash size={14} color={DESTRUCTIVE_RED} role="img" aria-label={REMOVE_LOCAL_DATA_LABEL} style={style} />
+const RemoveLocalDataIcon: FC<{ onMenuRow?: boolean; style?: React.CSSProperties }> = ({ onMenuRow, style }) => (
+  <FaTrash
+    size={14}
+    role="img"
+    aria-label={REMOVE_LOCAL_DATA_LABEL}
+    className={onMenuRow ? "romm-vanished-trash romm-vanished-trash-row" : "romm-vanished-trash"}
+    style={style}
+  />
 );
 
 /** The italic inline hint that explains why a version can't be selected. */
@@ -509,7 +519,7 @@ export const VersionPicker: FC<VersionPickerProps> = ({ appId }) => {
                 {v.switchable && !v.synced ? <Badge text="not synced" tone="muted" /> : null}
                 {rowAvailabilityHint(v)}
                 {v.active ? <span style={{ marginLeft: "6px", fontWeight: 700 }}>✓</span> : null}
-                {removable ? <RemoveLocalDataIcon style={{ marginLeft: "auto", flexShrink: 0 }} /> : null}
+                {removable ? <RemoveLocalDataIcon onMenuRow style={{ marginLeft: "auto", flexShrink: 0 }} /> : null}
               </span>
             </MenuItem>
           );

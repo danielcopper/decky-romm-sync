@@ -353,6 +353,40 @@ describe("VersionPicker — vanished retained rows (#1570)", () => {
     expect(liveRow.getAttribute("data-tone")).toBeNull();
   });
 
+  it("leaves the trash colour to CSS and opts only the menu row into the focused flip", async () => {
+    vi.mocked(backend.getVersionList).mockResolvedValue(listWithBoundVanished());
+
+    const { menu } = await renderAndOpen();
+    const rowTrash = within(menu.container).getByLabelText("Remove local data");
+
+    // An inline colour would survive Steam's repaint of the focused destructive
+    // row and leave a red icon on a red row, so the element must carry none.
+    expect(rowTrash.style.color).toBe("");
+    expect(rowTrash.getAttribute("fill")).toBe("currentColor");
+    expect(rowTrash.classList.contains("romm-vanished-trash")).toBe(true);
+    expect(rowTrash.classList.contains("romm-vanished-trash-row")).toBe(true);
+  });
+
+  it("keeps the singleton binding's trash out of the focused flip", async () => {
+    const bound = multiVersionList().versions![0]!;
+    vi.mocked(backend.getVersionList).mockResolvedValue({
+      multi_version: false,
+      server_query_failed: false,
+      bound_vanished: true,
+      bound_version: { ...bound, vanished: true },
+    });
+
+    const picker = render(<VersionPicker appId={APP_ID} />);
+    await picker.findByRole("button", { name: "Remove local data" });
+    const trash = picker.container.querySelector<SVGElement>("svg.romm-vanished-trash")!;
+
+    // This one sits in a .romm-disc-btn whose focus background stays dark —
+    // the black-on-focus rule would swap one invisible icon for another.
+    expect(trash).toBeTruthy();
+    expect(trash.classList.contains("romm-vanished-trash-row")).toBe(false);
+    expect(trash.style.color).toBe("");
+  });
+
   it("offers no cleanup on a vanished row whose local data was never synced", async () => {
     const list = listWithBoundVanished();
     list.versions = (list.versions ?? []).map((v) => (v.rom_id === 1 ? { ...v, synced: false } : v));

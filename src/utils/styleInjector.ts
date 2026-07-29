@@ -529,6 +529,24 @@ export function hideNativePlaySection(playSectionClass: string) {
 }
 .romm-disc-btn:active {
   filter: brightness(0.9);
+}
+/* Cleanup trash on a vanished version row. The colour lives here rather than on
+   the element because Steam repaints a destructive-tone MenuItem red when it
+   takes gamepad focus: it flips the row's TEXT to stay legible, but an inline
+   icon colour survives that repaint and the red trash disappears into the red
+   row. The icon sets no colour prop, so it is fill:currentColor and these rules
+   own both states.
+
+   The -row modifier gates the focused colour to the menu row ONLY. The
+   singleton binding's trash sits in a .romm-disc-btn whose focus background
+   stays dark, so black there would swap one invisible icon for another. */
+.romm-vanished-trash {
+  color: #d94126;
+}
+.gpfocus .romm-vanished-trash-row,
+:focus .romm-vanished-trash-row,
+:focus-within .romm-vanished-trash-row {
+  color: #000;
 }`;
     sp.window.document.head.appendChild(gearStyle);
   }
