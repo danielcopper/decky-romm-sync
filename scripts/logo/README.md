@@ -38,7 +38,8 @@ python3 anim.py --frame 18         # one frame's SVG
 Three config objects, and nothing else worth editing:
 
 - **`gen.Palette`** — one row per candidate in `PALETTES`; `CHOSEN` names the one that ships. Each carries two facet
-  pairs, disc and ink, given as (above-left, below-right). The two warm dot colours are shared across every candidate.
+  pairs, disc and ink, given as (above-left, below-right), plus the two warm dot colours. How dark a candidate can go is
+  bounded at both ends — see the comment above `PALETTES`.
 - **`gen.Geometry`** — every position and size, in a 200-unit square. Grouped by what they describe: the disc, the sync
   arrows, the button diamond, the dot shapes, the cross.
 - **`anim.Animation`** — frame count, rate, how far the ring turns, and where the morph's holds and ramps meet.

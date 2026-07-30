@@ -6,8 +6,9 @@ Everything is driven by two small config objects — a `Palette` (colours) and a
 `Geometry` (positions and sizes) — so the mark can be re-derived and nudged
 without touching the drawing code. A `Palette` carries two facet pairs: the disc
 tones and the "ink" tones (arrows + button bars), each given as (above-left,
-below-right) for the split. The two dot colours are the warm accents and are
-meant to stay put; the blue work happens in the pairs.
+below-right) for the split, plus the two warm dot colours. Most of the work is in
+the blue pairs; the dots only move when the ink moves far enough that they have
+to follow it.
 
 The four dots sit on a diamond that is **wider than it is tall** — a stretched
 one, not a square. That stretch is what tilts the bars joining adjacent dots past
@@ -449,10 +450,16 @@ def standalone(
 # --------------------------------------------------------------------------- #
 # Palettes                                                                    #
 # --------------------------------------------------------------------------- #
-# The warm dots are shared; only the blues change between candidates.
 _TAN = "#e6c7a7"
 _PEACH = "#e1a38d"
 
+# How dark the mark can go is bounded from both sides, and the two bounds close on
+# each other. The pale warm dots sit *on* the bars, so the ink has to stay dark
+# enough to carry them — on light ink they fall to 1.1:1 and vanish, which is why
+# inverting the mark is not an option. The arrows meanwhile need the disc to stay
+# lighter than the ink, and dropping the disc alone runs out at about #5b7896,
+# where they fall to 1.65:1 against it. So a darker mark moves the disc and the
+# ink together and keeps the separation between them.
 PALETTES: list[Palette] = [
     # The source artwork's colours — the reference point.
     Palette("original", ("#aec6da", "#93b0c8"), ("#2d5876", "#1a3549"), _TAN, _PEACH),
@@ -464,12 +471,17 @@ PALETTES: list[Palette] = [
     Palette("midnight", ("#8ba7c0", "#6f90ac"), ("#22415a", "#0e1f2e"), _TAN, _PEACH),
     # A cooler, brighter blue on a lighter disc.
     Palette("slate", ("#a6c0d6", "#88a6c0"), ("#34617f", "#1f3d52"), _TAN, _PEACH),
+    # Disc and ink both two steps down, which halves the glare against the docs'
+    # dark ground. The dots come up to meet the deeper ink rather than staying on
+    # the shared pair — they are the only warm thing in the mark and the extra
+    # depth behind them is worth spending on making them read.
+    Palette("harbor-warm", ("#7896b1", "#5c7d9a"), ("#22455d", "#122836"), "#e8c49c", "#dd9880"),
 ]
 
 BY_NAME = {p.name: p for p in PALETTES}
 
 # The chosen mark — what the shipped assets render from.
-CHOSEN = "steel"
+CHOSEN = "harbor-warm"
 
 
 # --------------------------------------------------------------------------- #
