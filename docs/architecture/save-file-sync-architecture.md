@@ -1742,6 +1742,41 @@ stop (`running: false`), and both reload-adoption branches (`running: true`). Th
 \#1308 (the interceptor and the `handlePlay` guard) stay in place as **backstops** for the render→click race, where the
 session begins between the button rendering Play and the user pressing it.
 
+#### Stop Game
+
+Beside Resume sits a chevron whose menu holds one destructive action: **Stop Game**. It confirms first (one line: any
+progress since the last in-game save may be lost — the plugin promises nothing about the save, because it cannot), then
+calls the `stop_running_game` backend callable.
+
+**Steam cannot terminate these games.** The shortcut execs `flatpak run net.retrodeck.retrodeck`; flatpak's D-Bus portal
+starts the sandbox from the session helper, so the emulator is not a descendant of Steam's `reaper`.
+`SteamClient.Apps.TerminateApp(appId, force)` therefore has nothing to signal — a measured on-device no-op even with
+`force: true`. The kill has to happen backend-side, against the host process table.
+
+The backend finds those processes through the **flatpak instance registry**: `/run/user/<uid>/.flatpak/<instance>/info`
+names the app (`name=<app id>`), the sibling `bwrapinfo.json` carries the instance's inner-`bwrap` host pid in
+`child-pid`, and `/proc/<pid>/task/<pid>/children` walks down to the emulator. The walk returns pids **deepest-first**
+so the emulator is reached before the shell wrappers whose exit would tear it down mid-write; `bwrap` processes are
+descended through but never signalled (killing the sandbox scaffolding collapses it under the emulator instead of
+letting it flush). Every read is fail-soft — a pid that vanishes mid-scan is a normal race and is skipped, never fatal.
+Nothing shells out: direct `/proc` reads and `os.kill` only, all as the plugin's own uid, so no `flatpak kill`
+subprocess and no elevation.
+
+**The ladder never re-sends the polite signal.** It is strictly _one SIGTERM per process → a bounded grace window
+(polled, 6 s) → SIGKILL for whatever is left_. A "retry SIGTERM a few times" loop looks like robustness and is in fact
+save destruction: RetroArch's handler runs `if (unix_sighandler_quit == 2) exit(1);` and registers no `atexit`, so the
+second signal skips the save flush the first one started; DuckStation and PCSX2 route the repeat through `quick_exit`,
+and Dolphin installs its handler with `SA_RESETHAND` so the second signal takes the default terminate action. In every
+case the repeat destroys the file being written. SIGKILL is the only permitted escalation, and only once the window is
+fully spent. The rule is documented at the ladder in `services/game_process.py` so it survives future edits.
+
+Layering follows the usual split: `GameProcessControl` (`services/protocols/infra.py`) is the semantic seam — POSIX
+signal numbers never reach `services/` — `adapters/game_process.py` implements it, and `GameProcessService` owns the
+policy with an injected `Sleeper` for the grace window. The callable answers `{success: true, stopped, force_killed}`,
+or the canonical `{success: false, reason: "not_running", message}` when nothing of RetroDECK's is alive. The frontend
+treats `not_running` exactly like its own stale-overlay self-heal: clear the overlay (and reset a `launching` state
+stuck underneath it) rather than surface an error.
+
 ### App ID to ROM ID mapping
 
 The session manager maintains a cached `appId -> romId` map loaded from the backend's synced-ROM registry (the `roms`

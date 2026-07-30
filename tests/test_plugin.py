@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fakes.fake_active_core_resolver import FakeActiveCoreResolver
 from fakes.fake_disc_resolver import FakeDiscResolver
+from fakes.fake_game_process_control import FakeGameProcessControlAdapter
 from fakes.fake_path_exists_reader import FakePathExistsReader
 from fakes.fake_relaunch_options_resolver import FakeRelaunchOptionsResolver
 from fakes.fake_renderer_gc import FakeRendererGc
@@ -751,6 +752,10 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     "sync_cancel_preview",
     "cancel_download",
     "pause_download",
+    # Terminating the running game — signals host processes only, never a
+    # RetroDECK path, and the user must be able to stop a live game whatever the
+    # migration marker says (same reasoning as the cancel/pause group above).
+    "stop_running_game",
     # In-memory download-queue cleanup (#149) — evicts terminal entries from the
     # queue dict only, never touching SQLite or RetroDECK, so a pending migration
     # doesn't gate it.
@@ -994,6 +999,7 @@ class TestMainStartupOrdering:
             "startup_healing_service": startup_healing_service,
             "launch_gate_service": MagicMock(),
             "session_lifecycle_service": MagicMock(),
+            "game_process_service": MagicMock(),
             "relaunch_options_resolver": MagicMock(),
         }
 
@@ -1014,6 +1020,7 @@ class TestMainStartupOrdering:
                 core_info_provider=MagicMock(),
                 renderer_rss=FakeRendererRss(),
                 renderer_gc=FakeRendererGc(),
+                game_process=FakeGameProcessControlAdapter(),
                 resolve_upload_conflict=MagicMock(),
             ),
             stores=StateBundle(

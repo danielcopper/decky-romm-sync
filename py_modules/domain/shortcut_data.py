@@ -12,12 +12,14 @@ from typing import Any
 
 from domain.sibling_group import compute_sibling_group_key
 
-# RetroDECK's flatpak application id. Its plain ``flatpak run <app>`` form is the
-# emulator invocation prefix the launch command wraps the resolved ROM path with;
-# the folder-boot ``direct`` form threads a ``--command=<launcher>`` between the
-# ``flatpak run`` verb and the app id (see :func:`resolve_emulator_invocation`).
-_RETRODECK_APP_ID = "net.retrodeck.retrodeck"
-RETRODECK_INVOCATION = f"flatpak run {_RETRODECK_APP_ID}"
+# RetroDECK's flatpak application id — the single source of the string across the
+# plugin. Its plain ``flatpak run <app>`` form is the emulator invocation prefix
+# the launch command wraps the resolved ROM path with; the folder-boot ``direct``
+# form threads a ``--command=<launcher>`` between the ``flatpak run`` verb and the
+# app id (see :func:`resolve_emulator_invocation`). It is also the identity the
+# stop-game path resolves live processes by, so it is public.
+RETRODECK_APP_ID = "net.retrodeck.retrodeck"
+RETRODECK_INVOCATION = f"flatpak run {RETRODECK_APP_ID}"
 
 # The leading ``%EMULATOR_<NAME>%`` binary token and the trailing ``%ROM%`` target
 # of an ES-DE ``<command>`` — stripped from a standalone command to recover the
@@ -115,7 +117,7 @@ def resolve_emulator_invocation(rom: dict[str, Any], emulator: EmulatorInvocatio
         # directory-as-a-file reinterpretation (ADR-0019). The game folder is
         # appended by build_launch_options; only the middle args ride here.
         args = _direct_launch_args(emulator.command)
-        base = f"flatpak run --command={emulator.launcher} {_RETRODECK_APP_ID}"
+        base = f"flatpak run --command={emulator.launcher} {RETRODECK_APP_ID}"
         return f"{base} {args}" if args else base
     if emulator.kind == "standalone" and emulator.command:
         return f'{RETRODECK_INVOCATION} -e "{emulator.command}"'

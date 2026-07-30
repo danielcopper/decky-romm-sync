@@ -80,6 +80,11 @@ vi.mock("../components/FallbackLaunchModal", () => ({
 vi.mock("../components/SyncConflictModal", () => ({
   handleConflicts: vi.fn(),
 }));
+// Stop-Game confirm — spy so the confirm-then-call ordering is observable
+// without rendering the modal (same shape as the launch-gate modals above).
+vi.mock("../components/StopGameModal", () => ({
+  showStopGameModal: vi.fn(),
+}));
 
 import { getCachedGameDetail } from "../utils/cachedGameDetailStore";
 import { setRommConnectionState, reportServerReachable, getRommConnectionState } from "../utils/connectionState";
@@ -91,6 +96,7 @@ import { isAppRunning } from "../utils/runningApps";
 import { showOfflineDriftModal } from "../components/OfflineDriftModal";
 import { showFallbackLaunchModal } from "../components/FallbackLaunchModal";
 import { handleConflicts } from "../components/SyncConflictModal";
+import { showStopGameModal } from "../components/StopGameModal";
 import type { SyncConflict, SaveStatus } from "../types";
 
 function mockCachedDetail(overrides: Partial<CachedGameDetail> = {}): void {
@@ -2202,6 +2208,247 @@ describe("CustomPlayButton — state-aware Resume (#1313)", () => {
     // SetRunningApp is unreachable (no store), and it's still not a launch.
     expect(setRunningApp).not.toHaveBeenCalled();
     expect(vi.mocked(SteamClient.Apps.RunGame)).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stop Game — the running overlay's chevron action. Steam cannot terminate these
+// games (the shortcut execs `flatpak run`, whose portal-started sandbox is not
+// under Steam's reaper, so TerminateApp is a proven on-device no-op), so the
+// kill is a backend callable. It is destructive and unconfirmable after the
+// fact, hence the confirm modal in front of it.
+// ---------------------------------------------------------------------------
+describe("CustomPlayButton — Stop Game", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getCachedGameDetail).mockReset();
+    vi.mocked(showContextMenu).mockReset();
+    vi.mocked(toaster.toast).mockReset();
+    // Live session for appId 100 / rom 42 → the running overlay renders.
+    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+    vi.mocked(isAppRunning).mockReturnValue(true);
+    vi.mocked(getCachedGameDetail).mockResolvedValue({
+      found: true,
+      rom_id: 42,
+      rom_name: "Test ROM",
+      installed: true,
+    });
+    // Default: the user confirms, the backend reports a clean stop.
+    vi.mocked(showStopGameModal).mockResolvedValue(true);
+    vi.mocked(backend.stopRunningGame).mockResolvedValue({ success: true, stopped: 2, force_killed: 0 });
+    vi.stubGlobal("SteamUIStore", { SetRunningApp: vi.fn(), NavigateToRunningApp: vi.fn() });
+    vi.stubGlobal("appStore", { GetAppOverviewByAppID: vi.fn(() => ({ GetGameID: () => "gid-1" })), allApps: [] });
+  });
+
+  // Open the running-actions chevron and render the <Menu> the showContextMenu
+  // spy captured, so its MenuItem buttons are clickable.
+  function openRunningMenu(button: HTMLElement): ReturnType<typeof render> {
+    act(() => {
+      button.click();
+    });
+    expect(showContextMenu).toHaveBeenCalled();
+    const calls = vi.mocked(showContextMenu).mock.calls;
+    return render(calls[calls.length - 1]![0] as ReactElement);
+  }
+
+  async function renderRunningWithMenu(): Promise<{
+    utils: ReturnType<typeof render>;
+    menu: ReturnType<typeof render>;
+  }> {
+    const utils = render(<CustomPlayButton appId={100} />);
+    await utils.findByText("Resume");
+    const chevron = await utils.findByLabelText("Game actions");
+    return { utils, menu: openRunningMenu(chevron) };
+  }
+
+  it("offers Stop Game in the running overlay's chevron menu", async () => {
+    const { menu } = await renderRunningWithMenu();
+
+    expect(await menu.findByText("Stop Game")).toBeInTheDocument();
+  });
+
+  it("confirms first, then calls the backend and clears the running overlay", async () => {
+    const { utils, menu } = await renderRunningWithMenu();
+    const stopItem = await menu.findByText("Stop Game");
+
+    await act(async () => {
+      stopItem.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(showStopGameModal).toHaveBeenCalledTimes(1);
+    expect(backend.stopRunningGame).toHaveBeenCalledTimes(1);
+    // Post-state: the overlay came down and the underlying Play button shows.
+    expect(await utils.findByText("Play")).toBeInTheDocument();
+    expect(utils.queryByText("Resume")).toBeNull();
+  });
+
+  it("does NOT call the backend when the confirm is cancelled, and leaves the overlay up", async () => {
+    vi.mocked(showStopGameModal).mockResolvedValue(false);
+    const { utils, menu } = await renderRunningWithMenu();
+    const stopItem = await menu.findByText("Stop Game");
+
+    await act(async () => {
+      stopItem.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(showStopGameModal).toHaveBeenCalledTimes(1);
+    expect(backend.stopRunningGame).not.toHaveBeenCalled();
+    // The game is untouched, so Resume must stay reachable.
+    expect(await utils.findByText("Resume")).toBeInTheDocument();
+    expect(utils.queryByText("Play")).toBeNull();
+  });
+
+  it("self-heals a stale overlay without confirming or calling the backend", async () => {
+    // Overlay seeded by the session-start EVENT while the live sources say
+    // nothing is running — the same stale-overlay case handleResumeGame heals.
+    vi.mocked(getActiveSessionRomId).mockReturnValue(null);
+    vi.mocked(isAppRunning).mockReturnValue(false);
+
+    const utils = render(<CustomPlayButton appId={100} />);
+    await utils.findByText("Play");
+    act(() => {
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_session_changed", { detail: { running: true, appId: 100, romId: 42 } }),
+      );
+    });
+    await utils.findByText("Resume");
+
+    const chevron = await utils.findByLabelText("Game actions");
+    const menu = openRunningMenu(chevron);
+    const stopItem = await menu.findByText("Stop Game");
+    await act(async () => {
+      stopItem.click();
+      await Promise.resolve();
+    });
+
+    // Nothing to kill → no prompt, no callable, and the overlay is cleared.
+    expect(showStopGameModal).not.toHaveBeenCalled();
+    expect(backend.stopRunningGame).not.toHaveBeenCalled();
+    expect(await utils.findByText("Play")).toBeInTheDocument();
+    expect(utils.queryByText("Resume")).toBeNull();
+  });
+
+  it("clears the overlay when the backend reports nothing was running", async () => {
+    // The backend found no live RetroDECK process — the stale-overlay case one
+    // layer down. The game is not running, so the overlay must still come down.
+    vi.mocked(backend.stopRunningGame).mockResolvedValue({
+      success: false,
+      reason: "not_running",
+      message: "No running game was found to stop.",
+    });
+    const { utils, menu } = await renderRunningWithMenu();
+    const stopItem = await menu.findByText("Stop Game");
+
+    await act(async () => {
+      stopItem.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(await utils.findByText("Play")).toBeInTheDocument();
+    // Not an error the user has to act on — no toast.
+    expect(vi.mocked(toaster.toast)).not.toHaveBeenCalled();
+  });
+
+  it("toasts and keeps the overlay up when the backend reports a real failure", async () => {
+    vi.mocked(backend.stopRunningGame).mockResolvedValue({
+      success: false,
+      reason: "permission_denied",
+      message: "Couldn't signal the emulator",
+    });
+    const { utils, menu } = await renderRunningWithMenu();
+    const stopItem = await menu.findByText("Stop Game");
+
+    await act(async () => {
+      stopItem.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
+      title: "RomM Sync",
+      body: "Couldn't signal the emulator",
+    });
+    // The game may well still be running — Resume must stay reachable.
+    expect(await utils.findByText("Resume")).toBeInTheDocument();
+    expect(utils.queryByText("Play")).toBeNull();
+  });
+
+  it("catches a rejected stop call: toasts, logs, and leaves the overlay up", async () => {
+    vi.mocked(backend.stopRunningGame).mockRejectedValue(new Error("bridge died"));
+    const { utils, menu } = await renderRunningWithMenu();
+    const stopItem = await menu.findByText("Stop Game");
+
+    await act(async () => {
+      stopItem.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Non-vacuous post-catch state: the fallback toast fired, the failure was
+    // logged, and the overlay is deliberately NOT cleared (no verdict was
+    // reached, so the game may still be running).
+    expect(vi.mocked(toaster.toast)).toHaveBeenCalledWith({
+      title: "RomM Sync",
+      body: "Couldn't stop the game",
+    });
+    expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(
+      expect.stringContaining("stop_running_game threw for appId=100"),
+    );
+    expect(await utils.findByText("Resume")).toBeInTheDocument();
+  });
+
+  it("resets a stuck Launching state on a successful stop", async () => {
+    // The session-start path sets isRunning but leaves state === "launching";
+    // clearing only the overlay would expose a stale "Launching..." label.
+    vi.mocked(getActiveSessionRomId).mockReturnValue(null);
+    vi.mocked(isAppRunning).mockReturnValue(false);
+    vi.mocked(backend.isSaveTrackingConfigured).mockResolvedValue({ configured: true, active_slot: "default" });
+    vi.mocked(backend.checkCoreChange).mockResolvedValue({ changed: false });
+    vi.mocked(backend.probeReachability).mockResolvedValue({ online: true });
+    vi.mocked(backend.preLaunchSync).mockResolvedValue({
+      success: true,
+      message: "",
+      synced: 0,
+      errors: [],
+      conflicts: [],
+    });
+    vi.mocked(backend.getRomRelaunchOptions).mockResolvedValue(null);
+    vi.stubGlobal("SteamClient", { Apps: { RunGame: vi.fn() } });
+
+    const utils = render(<CustomPlayButton appId={100} />);
+    const playBtn = await utils.findByText("Play");
+    await act(async () => {
+      playBtn.click();
+    });
+    // The launch left the state at "launching"; the session-start event raises
+    // the overlay on top of it, and the live sources now report the session.
+    vi.mocked(getActiveSessionRomId).mockReturnValue(42);
+    vi.mocked(isAppRunning).mockReturnValue(true);
+    act(() => {
+      globalThis.dispatchEvent(
+        new CustomEvent("romm_session_changed", { detail: { running: true, appId: 100, romId: 42 } }),
+      );
+    });
+    await utils.findByText("Resume");
+
+    const chevron = await utils.findByLabelText("Game actions");
+    const menu = openRunningMenu(chevron);
+    const stopItem = await menu.findByText("Stop Game");
+    await act(async () => {
+      stopItem.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Non-vacuous: without the launching reset the overlay drops to the stuck
+    // "Launching..." label instead of Play.
+    expect(await utils.findByText("Play")).toBeInTheDocument();
+    expect(utils.queryByText("Launching...")).toBeNull();
   });
 });
 

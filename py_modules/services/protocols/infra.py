@@ -122,6 +122,58 @@ class RendererGcFn(Protocol):
     def __call__(self) -> bool: ...
 
 
+class GameProcessControl(Protocol):
+    """Discovery and signalled termination of a flatpak app's host processes.
+
+    The seam the stop-game ladder acts through: locate the host PIDs a flatpak
+    app is running, ask one to exit, ask whether it has, and force it when it
+    has not. POSIX signal numbers stay behind this Protocol — a service reasons
+    in ``request_stop`` / ``force_kill`` / ``is_alive``, never in ``SIGTERM`` /
+    ``SIGKILL`` — so the escalation policy stays expressible without raw
+    syscalls in ``services/``.
+    """
+
+    def find_game_pids(self, flatpak_app_id: str) -> list[int]:
+        """Return the host PIDs running inside *flatpak_app_id*'s live instances.
+
+        Ordered **deepest-first**, so the emulator is reached before the shell
+        wrappers that would otherwise tear it down mid-write. Sandbox
+        scaffolding is excluded — every returned pid is a legitimate signal
+        target. An empty list means the app is not running (or its process
+        table is unreadable, which is indistinguishable from here; both mean
+        "nothing to stop").
+        """
+        ...
+
+    def request_stop(self, pid: int) -> bool:
+        """Ask *pid* to exit cleanly. Returns True when the request was delivered.
+
+        Exactly one such request is ever sent per process — see the ladder in
+        ``services.game_process`` for why a retry is forbidden. False means the
+        request never landed (the process had already exited, or it is not ours
+        to signal), so the caller carries that pid no further.
+        """
+        ...
+
+    def force_kill(self, pid: int) -> bool:
+        """Terminate *pid* unconditionally. Returns True when the kill was delivered.
+
+        The ladder's last rung, reached only once the grace window expires with
+        the process still alive. False means the pid was already gone or is not
+        ours to signal.
+        """
+        ...
+
+    def is_alive(self, pid: int) -> bool:
+        """Return True while *pid* is still a live process.
+
+        A process that has exited but not yet been reaped (a zombie) is **not**
+        alive: it has already run its exit path, so reporting it alive would
+        spend the whole grace window and provoke a pointless force kill.
+        """
+        ...
+
+
 class PendingSyncReader(Protocol):
     """Read seam for the LibraryService pending-sync map.
 

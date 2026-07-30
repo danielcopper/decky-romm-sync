@@ -148,6 +148,21 @@ export const checkLocalDrift = callable<[number], { drifted: boolean; rom_id: nu
 export const getRomRelaunchOptions = callable<[number], { app_id: number; launch_options: string } | null>(
   "get_rom_relaunch_options",
 );
+/**
+ * `stop_running_game` result. On success the counts describe what the backend's
+ * stop ladder did: `stopped` processes received the polite stop request and
+ * `force_killed` of them had to be killed after the grace window. The only
+ * failure is `reason: "not_running"` — nothing of RetroDECK's was alive, which
+ * the caller treats as "the overlay was stale", not as an error.
+ */
+export interface StopGameResult {
+  success: boolean;
+  reason?: string;
+  message?: string;
+  stopped?: number;
+  force_killed?: number;
+}
+export const stopRunningGame = callable<[], StopGameResult>("stop_running_game");
 export const probeReachability = callable<[], { online: boolean }>("probe_reachability");
 export const refreshSaveStatus = callable<[number], { success: boolean }>("refresh_save_status");
 export const removeRom = callable<[number], BackendResult>("remove_rom");

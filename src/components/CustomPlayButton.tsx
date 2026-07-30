@@ -34,6 +34,7 @@ import {
   probeReachability,
   checkLocalDrift,
   refreshSaveStatus,
+  stopRunningGame,
 } from "../api/backend";
 import { getRommConnectionState, onRommConnectionChange, reportServerReachable } from "../utils/connectionState";
 import { scrollToTop } from "../utils/scrollHelpers";
@@ -44,6 +45,7 @@ import { showCoreChangeModal } from "./CoreChangeModal";
 import { handleConflicts } from "./SyncConflictModal";
 import { showOfflineDriftModal } from "./OfflineDriftModal";
 import { showFallbackLaunchModal } from "./FallbackLaunchModal";
+import { showStopGameModal } from "./StopGameModal";
 import { getMigrationState } from "../utils/migrationStore";
 import { runLaunchGate, markLaunchSkipped } from "../utils/launchGate";
 import type { GateVerdict, LaunchGateOps, PreLaunchSyncOutcome } from "../utils/launchGate";
@@ -714,6 +716,76 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     detach(debugLog(`CustomPlayButton: resumed appId=${appId} via Navigation.Navigate`));
   };
 
+  // Drop the running overlay back to the underlying button state. Clearing
+  // `isRunning` alone is not enough: the session-start path leaves the state at
+  // "launching", so the overlay coming down would expose a stale "Launching..."
+  // label instead of Play. Same reset the session-stop listener applies.
+  const clearRunningOverlay = () => {
+    setIsRunning(false);
+    setState((prev) => (prev === "launching" ? "play" : prev));
+  };
+
+  // Stop the running game. Steam cannot do this itself: the shortcut execs
+  // `flatpak run net.retrodeck.retrodeck` and flatpak's portal starts the
+  // sandbox outside Steam's `reaper` ancestry, so `SteamClient.Apps.TerminateApp`
+  // has nothing to signal (measured on-device: a no-op even with force=true).
+  // The backend owns the kill instead — it resolves the flatpak instance's host
+  // processes and runs a single-stop-request → grace → force ladder
+  // (`services/game_process.py`).
+  const handleStopGame = async () => {
+    // Stale-overlay self-heal, mirroring handleResumeGame: if nothing is
+    // actually running, the overlay is stale — clear it back to Play without
+    // prompting or touching the backend.
+    if (!(isAppRunning(appId) || getActiveSessionRomId() === romId)) {
+      detach(debugLog(`CustomPlayButton: Stop on appId=${appId} but nothing is running — clearing stale overlay`));
+      clearRunningOverlay();
+      return;
+    }
+
+    // Destructive and unrecoverable: the emulator gets one chance to flush and
+    // is forced after that, so anything unsaved is gone. Confirm first.
+    if (!(await showStopGameModal())) {
+      detach(debugLog(`CustomPlayButton: Stop cancelled for appId=${appId}`));
+      return;
+    }
+
+    try {
+      const result = await stopRunningGame();
+      if (result.success || result.reason === "not_running") {
+        // "not_running" is the same stale-overlay case caught one layer down:
+        // the backend found nothing of RetroDECK's alive. Either way the game is
+        // not running now, so the overlay must come down.
+        detach(
+          debugLog(
+            `CustomPlayButton: stop_running_game for appId=${appId} — success=${result.success} ` +
+              `reason=${result.reason ?? "none"} stopped=${result.stopped ?? 0} forced=${result.force_killed ?? 0}`,
+          ),
+        );
+        clearRunningOverlay();
+        return;
+      }
+      toaster.toast({ title: "RomM Sync", body: result.message || "Couldn't stop the game" });
+    } catch (e) {
+      // The overlay deliberately stays up: the call never reached a verdict, so
+      // the game may well still be running and Resume must stay reachable.
+      detach(debugLog(`CustomPlayButton: stop_running_game threw for appId=${appId}: ${e}`));
+      toaster.toast({ title: "RomM Sync", body: "Couldn't stop the game" });
+    }
+  };
+
+  // Chevron menu for the running overlay — the single destructive Stop Game
+  // action, mirroring the download-state showDownloadActionsMenu shape.
+  const showRunningActionsMenu = (e: MouseEvent) => {
+    showContextMenu(
+      <Menu label="Game Actions">
+        <MenuItem key="stop" tone="destructive" onClick={() => detach(handleStopGame())}>
+          Stop Game
+        </MenuItem>
+      </Menu>,
+      getEventTarget(e),
+    );
+  };
+
   // Resolve the conflict the button is already showing. This is a READ, not a
   // re-sync: it pulls the already-known conflict via `getSaveStatus` and hands
   // it to the shared resolution modal. Re-running the act-capable
@@ -918,9 +990,11 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     fontWeight: "bold",
   };
 
-  // Running overlay (#1313) — top precedence over install/conflict/download. A
-  // single green Resume button (no Uninstall chevron: uninstalling a running game
-  // is a footgun) that brings the live session to front via `handleResumeGame`.
+  // Running overlay (#1313) — top precedence over install/conflict/download. The
+  // green Resume button brings the live session to front via `handleResumeGame`;
+  // a chevron beside it opens the Stop Game action, which confirms and then has
+  // the backend terminate the emulator. No Uninstall entry here — uninstalling a
+  // running game is a footgun.
   if (isRunning) {
     return (
       <Focusable
@@ -934,7 +1008,7 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           className={[appActionButtonClasses?.PlayButton, "romm-btn-play"].filter(Boolean).join(" ")}
           style={{
             ...mainBtnStyle,
-            borderRadius: "2px",
+            borderRadius: "2px 0 0 2px",
             background: "linear-gradient(to right, #70d61d 0%, #01a75b 60%)",
             backgroundPosition: "25%",
             backgroundSize: "330% 100%",
@@ -945,6 +1019,27 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
           onFocus={scrollToTop}
         >
           Resume
+        </DialogButton>
+        <DialogButton
+          className="romm-btn-cancel"
+          aria-label="Game actions"
+          title="Game actions"
+          style={{
+            ...dropdownArrowStyle,
+            background: "rgba(255, 255, 255, 0.15)",
+            color: "#fff",
+          }}
+          onClick={(e: MouseEvent) => showRunningActionsMenu(e)}
+        >
+          <svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path
+              d="M1 1.5L6 6.5L11 1.5"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
         </DialogButton>
       </Focusable>
     );

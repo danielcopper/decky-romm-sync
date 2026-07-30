@@ -300,6 +300,22 @@ shortcut when the game is synced or downloaded, so launching just runs that comm
 If the ROM is not downloaded, pressing Play won't launch a game — download it first from the game's detail panel; the
 shortcut's command is filled in automatically when the download completes.
 
+### Stopping a running game
+
+While a game is running, its detail panel shows **Resume** instead of Play, with a small chevron beside it. The
+chevron's menu holds one action: **Stop Game**. It asks you to confirm first, because any progress since your last
+in-game save may be lost.
+
+Steam's own "Stop Game" cannot end these games. Your shortcut starts RetroDECK through Flatpak, and Flatpak launches the
+emulator outside the process tree Steam watches — so Steam has nothing to stop, and pressing its button does nothing at
+all. The plugin's Stop Game finds the emulator itself and ends it.
+
+It asks the emulator to quit politely **once**, waits a few seconds for it to shut down (which is when emulators write
+their save file), and only forces it if it is still running after that. The polite request is deliberately never
+repeated: most emulators treat a second one as "quit right now" and skip writing the save entirely, which would destroy
+the file the first request was in the middle of saving. If you want to be certain your progress is kept, save in-game
+first, then stop.
+
 ---
 
 **Previous:** [Syncing Your Library](syncing-your-library.md) | **Next:** [BIOS Management](bios-management.md)

@@ -19,6 +19,7 @@ from fakes.fake_core_info_provider import FakeCoreInfoProvider
 from fakes.fake_cover_art_file_store import FakeCoverArtFileStore
 from fakes.fake_download_file_store import FakeDownloadFileStore
 from fakes.fake_firmware_file_store import FakeFirmwareFileStore
+from fakes.fake_game_process_control import FakeGameProcessControlAdapter
 from fakes.fake_hostname_reader import FakeHostnameReader
 from fakes.fake_machine_id_reader import FakeMachineIdReader
 from fakes.fake_migration_file_store import FakeMigrationFileStore
@@ -45,6 +46,7 @@ from services.cores import CoreService
 from services.disc import DiscService
 from services.downloads import DownloadService
 from services.firmware import FirmwareService
+from services.game_process import GameProcessService
 from services.library import LibraryService
 from services.metadata import MetadataService
 from services.playtime import PlaytimeService
@@ -246,6 +248,7 @@ class TestWireServices:
             "path_probe": FakePathExistsReader(),
             "renderer_rss": FakeRendererRss(),
             "renderer_gc": FakeRendererGc(),
+            "game_process": FakeGameProcessControlAdapter(),
             "resolve_upload_conflict": resolve_upload_conflict,
             "settings": settings,
             "loop": asyncio.new_event_loop(),
@@ -298,6 +301,7 @@ class TestWireServices:
                 core_info_provider=deps["core_info_provider"],
                 renderer_rss=deps["renderer_rss"],
                 renderer_gc=deps["renderer_gc"],
+                game_process=deps["game_process"],
                 resolve_upload_conflict=deps["resolve_upload_conflict"],
             ),
             stores=StateBundle(
@@ -382,7 +386,7 @@ class TestWireServices:
     def test_returns_expected_services(self, tmp_path):
         deps = self._make_deps(tmp_path)
         result = wire_services(self._make_config(deps))
-        assert len(result) == 22
+        assert len(result) == 23
         assert "migration_service" in result
         assert "game_detail_service" in result
         assert "rom_removal_service" in result
@@ -397,6 +401,8 @@ class TestWireServices:
         assert "startup_healing_service" in result
         assert "launch_gate_service" in result
         assert "session_lifecycle_service" in result
+        assert "game_process_service" in result
+        assert isinstance(result["game_process_service"], GameProcessService)
         assert "relaunch_options_resolver" in result
         deps["loop"].close()
 

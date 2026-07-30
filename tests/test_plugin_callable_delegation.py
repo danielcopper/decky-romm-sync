@@ -53,6 +53,7 @@ def plugin():
     p._playtime_service = MagicMock()
     p._launch_gate_service = MagicMock()
     p._session_lifecycle_service = MagicMock()
+    p._game_process_service = MagicMock()
     return p
 
 
@@ -500,6 +501,15 @@ class TestLifecycleCallableDelegation:
         result = await plugin.finalize_game_session(7)
         plugin._session_lifecycle_service.finalize.assert_awaited_once_with(7)
         assert result == {"synced": False}
+
+    @pytest.mark.asyncio
+    async def test_stop_running_game_delegates(self, plugin):
+        plugin._game_process_service.stop_running_game = AsyncMock(
+            return_value={"success": True, "stopped": 2, "force_killed": 0}
+        )
+        result = await plugin.stop_running_game()
+        plugin._game_process_service.stop_running_game.assert_awaited_once_with()
+        assert result == {"success": True, "stopped": 2, "force_killed": 0}
 
 
 # ── Download callables ─────────────────────────────────────────────────

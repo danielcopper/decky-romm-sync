@@ -46,6 +46,7 @@ from bootstrap import (
     bootstrap,
     wire_services,
 )
+from fakes.fake_game_process_control import FakeGameProcessControlAdapter
 from fakes.fake_renderer_gc import FakeRendererGc
 from fakes.fake_renderer_rss import FakeRendererRss
 from fakes.fake_romm_api import FakeRommApi
@@ -85,6 +86,7 @@ _BOUND_SERVICE_ATTRS = {
     "_startup_healing_service": "startup_healing_service",
     "_launch_gate_service": "launch_gate_service",
     "_session_lifecycle_service": "session_lifecycle_service",
+    "_game_process_service": "game_process_service",
     "_relaunch_options_resolver": "relaunch_options_resolver",
 }
 
@@ -116,6 +118,9 @@ class ContractHarness:
     # swaps a controllable fake onto ``plugin._migration_service._retrodeck_paths``
     # to drive RetroDECK-home changes through detection.
     retrodeck_paths: Any
+    # The in-memory process table behind the stop-game ladder. Tests seed ``pids``
+    # (and ``survive_stop`` / ``alive``) to stage what the kill should find.
+    game_process: FakeGameProcessControlAdapter
 
 
 def _single_attempt_pass_through(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -162,12 +167,17 @@ def build_contract_harness(tmp_path: Any) -> ContractHarness:
     # Steam Deck (the dev box) that would sample the live renderer and force a GC
     # on the actual Steam client mid-test. Swap in fakes: RSS unavailable + no-op
     # GC leave the budget gate inert, so contract sync tests stay deterministic.
+    # The game-process seam is faked for the same reason and then some: the real
+    # adapter reads the dev box's flatpak instance registry and would SIGTERM the
+    # developer's actually-running game.
+    fake_game_process = FakeGameProcessControlAdapter()
     patched_adapters = dataclasses.replace(
         result.adapters,
         romm_api=fake_romm,
         sgdb_adapter=fake_sgdb,
         renderer_rss=FakeRendererRss(),
         renderer_gc=FakeRendererGc(),
+        game_process=fake_game_process,
     )
 
     # Deterministic time/uuid/sleep seams so timestamped responses assert cleanly.
@@ -227,4 +237,5 @@ def build_contract_harness(tmp_path: Any) -> ContractHarness:
         tmp_path=tmp_path,
         uow_factory=result.callbacks.uow_factory,
         retrodeck_paths=result.callbacks.retrodeck_paths,
+        game_process=fake_game_process,
     )

@@ -21,6 +21,7 @@ from adapters.debug_logger import SettingsAwareDebugLogger
 from adapters.download_file import DownloadFileAdapter
 from adapters.es_de_config import CoreResolver
 from adapters.firmware_file import FirmwareFileAdapter
+from adapters.game_process import GameProcessAdapter
 from adapters.gavel_native import GavelNativeAdapter
 from adapters.hostname import HostnameAdapter
 from adapters.machine_id import MachineIdAdapter
@@ -48,6 +49,7 @@ from adapters.steam_config import SteamConfigAdapter
 from adapters.steamgriddb import SteamGridDbAdapter
 from adapters.system_clock import SystemClock
 from adapters.system_uuid_gen import SystemUuidGen
+from domain.shortcut_data import RETRODECK_APP_ID
 from domain.state_migrations import fold_legacy_save_sync_settings, migrate_settings
 from lib.late_binding import LateBinding
 from services.achievements import AchievementsService, AchievementsServiceConfig
@@ -60,6 +62,7 @@ from services.disc_launch_resolver import DiscLaunchResolver, DiscLaunchResolver
 from services.downloads import DownloadService, DownloadServiceConfig
 from services.firmware import FirmwareService, FirmwareServiceConfig
 from services.game_detail import GameDetailService, GameDetailServiceConfig
+from services.game_process import GameProcessService, GameProcessServiceConfig
 from services.launch_gate import LaunchGateService, LaunchGateServiceConfig
 from services.library import LibraryService, LibraryServiceConfig
 from services.metadata import MetadataService, MetadataServiceConfig
@@ -90,6 +93,7 @@ if TYPE_CHECKING:
         DownloadFileStore,
         EventEmitter,
         FirmwareFileStore,
+        GameProcessControl,
         HostnameReader,
         InstalledRomRemoverFn,
         MachineIdReader,
@@ -139,6 +143,7 @@ class AdapterBundle:
     core_info_provider: CoreInfoProvider
     renderer_rss: RendererRssFn
     renderer_gc: RendererGcFn
+    game_process: GameProcessControl
     resolve_upload_conflict: ResolveUploadConflictFn
 
 
@@ -359,6 +364,7 @@ def bootstrap(
     path_probe = PathProbeAdapter()
     renderer_rss = RendererRssAdapter()
     renderer_gc = RendererGcAdapter(logger=logger)
+    game_process = GameProcessAdapter()
     # The compiled gavel core owns the save-sync upload-409 resolution. Loaded
     # eagerly so a missing / wrong-architecture artifact is fatal here (like the
     # SQLite migration gate above) rather than surfacing mid-sync — there is no
@@ -386,6 +392,7 @@ def bootstrap(
         core_info_provider=core_resolver,
         renderer_rss=renderer_rss,
         renderer_gc=renderer_gc,
+        game_process=game_process,
         resolve_upload_conflict=resolve_upload_conflict,
     )
     stores = StateBundle(
@@ -808,6 +815,20 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         ),
     )
 
+    # Stop Game (the running-overlay chevron action). Steam's own TerminateApp
+    # cannot reach a flatpak-detached emulator, so the kill is backend-side; the
+    # service owns the escalation policy and takes the RetroDECK app id from the
+    # single domain constant the launch command is built from.
+    game_process_service = GameProcessService(
+        config=GameProcessServiceConfig(
+            game_process=cfg.adapters.game_process,
+            sleeper=cfg.runtime.sleeper,
+            logger=cfg.runtime.logger,
+            log_debug=cfg.callbacks.log_debug,
+            flatpak_app_id=RETRODECK_APP_ID,
+        ),
+    )
+
     session_lifecycle_service = SessionLifecycleService(
         config=SessionLifecycleServiceConfig(
             playtime_recorder=playtime_service,
@@ -840,5 +861,6 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
         "startup_healing_service": startup_healing_service,
         "launch_gate_service": launch_gate_service,
         "session_lifecycle_service": session_lifecycle_service,
+        "game_process_service": game_process_service,
         "relaunch_options_resolver": relaunch_options_resolver,
     }

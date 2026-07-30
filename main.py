@@ -134,6 +134,7 @@ class Plugin:
         self._startup_healing_service = services["startup_healing_service"]
         self._launch_gate_service = services["launch_gate_service"]
         self._session_lifecycle_service = services["session_lifecycle_service"]
+        self._game_process_service = services["game_process_service"]
         self._relaunch_options_resolver = services["relaunch_options_resolver"]
 
         # ── 4b. Legacy credential migration ─────────────────────────────────
@@ -447,6 +448,16 @@ class Plugin:
         # same target); check_save_status_background owns its own error handling.
         self.loop.create_task(self._save_sync_service.check_save_status_background(int(rom_id)))
         return {"success": True}
+
+    async def stop_running_game(self):
+        """Terminate the game RetroDECK is currently running.
+
+        Backs the game-detail running overlay's Stop Game action. Steam's own
+        ``TerminateApp`` cannot end these games — the shortcut execs ``flatpak
+        run``, whose portal-started sandbox is not under Steam's reaper — so the
+        kill runs backend-side over the flatpak instance's host processes.
+        """
+        return await self._game_process_service.stop_running_game()
 
     async def finalize_game_session(self, rom_id):
         result = await self._session_lifecycle_service.finalize(rom_id)
