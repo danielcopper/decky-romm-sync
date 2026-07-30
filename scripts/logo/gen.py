@@ -1,27 +1,32 @@
 #!/usr/bin/env python3
-"""Generates the plugin mark: two tilted button capsules ringed by a pair of
-sync arrows, set in a disc and split along a 45° facet.
+"""Generates the plugin mark: a SNES button diamond ringed by a pair of sync
+arrows, set in a disc and split along a 45° facet.
 
 Everything is driven by two small config objects — a `Palette` (colours) and a
 `Geometry` (positions and sizes) — so the mark can be re-derived and nudged
-without touching the drawing code. A `Palette` carries two facet pairs: the
-disc tones and the "ink" tones (arrows + capsules), each given as
-(above-left, below-right) for the diagonal split. The two dot colours are the
-warm accents and are meant to stay put; the blue work happens in the pairs.
+without touching the drawing code. A `Palette` carries two facet pairs: the disc
+tones and the "ink" tones (arrows + button bars), each given as (above-left,
+below-right) for the split. The two dot colours are the warm accents and are
+meant to stay put; the blue work happens in the pairs.
+
+The four dots sit on a **square** diamond — up, left, right, down, all the same
+distance from the centre, like the SNES face buttons. That squareness is what
+puts the bars joining adjacent dots at 45°, and the facet follows the bars, so
+the seam and the bars share one angle. A stretched diamond (`cap_stagger` away
+from 0) tilts both off 45° together.
+
+The body is drawn as four round-capped bars, each running from a hub to one dot.
+At rest the two hubs sit either side of the seam, so each pair of collinear bars
+merges into one capsule. Pull the hubs to the centre (`morph` -> 1) and the same
+four bars become a D-pad cross — that is the whole shape animation, and it is
+why there is only one body routine rather than two.
 
 Outputs, selected on the command line:
 
-    gen.py                 an SVG contact sheet of every PALETTE (default)
-    gen.py --asset [name]  one mark on its own, transparent outside the disc
-    gen.py --list          the palette names, one per line
-
-The disc, the arrows and the whole inner geometry live in a 200-unit square.
-The facet is a single line through the disc centre, lighter above-left and
-darker below-right. It is **not** the 45° anti-diagonal: it runs parallel to
-the capsules, so the seam crossing a capsule lines up with that capsule's own
-slant instead of cutting across it. One polygon, clipped per shape, carries the
-split across the disc and the arrows; the capsules and dots are flat, and simply
-take the tone of the side they sit on so the seam reads through them too.
+    gen.py                    an SVG contact sheet of every PALETTE (default)
+    gen.py --asset [name]     one mark on its own, transparent outside the disc
+    gen.py --morph <0..1>     with --asset, the mark part-way to the cross
+    gen.py --list             the palette names, one per line
 """
 
 from __future__ import annotations
@@ -42,9 +47,9 @@ class Palette:
 
     name: str
     disc: tuple[str, str]  # the disc's two facet tones
-    ink: tuple[str, str]  # arrows + capsules: light capsule / dark capsule
-    dot_tan: str  # the two dots on the above-left (light-ink) capsule
-    dot_peach: str  # the two dots on the below-right (dark-ink) capsule
+    ink: tuple[str, str]  # arrows + button bars: light side / dark side
+    dot_tan: str  # the two dots above-left of the seam (up, left)
+    dot_peach: str  # the two dots below-right of the seam (down, right)
     dot_stroke: str = "none"  # optional ring around every dot
     dot_stroke_w: float = 0.0
 
@@ -57,8 +62,8 @@ class Geometry:
 
     # Sync arrows: two point-symmetric arcs about the disc centre, one over the
     # top and one under the bottom, each capped with a filled arrowhead that
-    # points the way the ring turns (clockwise). The arrowhead is wider than the
-    # stroke it caps, so `arrow_half` wants to track `arc_w` when that changes.
+    # points the way the ring turns. The arrowhead is wider than the stroke it
+    # caps, so `arrow_half` and `arrow_round` want to track `arc_w` when it moves.
     arc_r: float = 74.05
     arc_span: float = 140.0  # degrees swept by each arc
     arc_w: float = 15.5  # stroke width
@@ -71,29 +76,41 @@ class Geometry:
     # way is what keeps the arrow from reading as a sharp dart. 0 disables it.
     arrow_round: float = 4.3
 
-    # Capsules: two parallel stadiums tilted off vertical, offset to either side
-    # of the seam and slid along their own axis so the pair reads as staggered
-    # rather than as two bars side by side.
-    cap_angle: float = 141.64  # tilt of the long axis, degrees
-    cap_len: float = 76.35  # stadium length (rounded ends included)
-    cap_w: float = 31.38  # stadium width
-    cap_sep: float = 40.96  # centre-to-centre across the axis
-    cap_stagger: float = 9.86  # centre-to-centre along the axis
-    dot_along: float = 22.27  # dot offset from its capsule centre, along the axis
+    # The button diamond. `cap_sep` is the distance between the two hubs across
+    # the bar axis; with `cap_stagger` at 0 and `dot_along` at half of it, the
+    # four dots land on a square diamond and the bars sit at 45°. The capsule
+    # length is not a field: it follows as 2 * (dot_along + cap_w / 2), because a
+    # bar's round cap is centred on its dot.
+    cap_angle: float = 135.0  # tilt of the bar axis, degrees
+    cap_w: float = 31.38  # bar width
+    cap_sep: float = 44.54  # hub-to-hub across the axis
+    cap_stagger: float = 0.0  # hub-to-hub along the axis; non-zero skews the diamond
+    dot_along: float = 22.27  # dot offset from its hub, along the axis
     dot_r: float = 13.63
 
-    # The facet's direction. None keeps it parallel to the capsules, which is
-    # what makes the seam line up with their slant; set a number to break that
-    # deliberately (135.0 is the plain 45° anti-diagonal).
+    # Dot shape while morphing. At morph 1 each dot is a triangle pointing away
+    # from the centre, blended back toward its circle by this much: 1 keeps the
+    # circle, 0 is a sharp triangle, and the default reads as a plump rounded one.
+    dot_tri_blend: float = 0.42
+    dot_samples: int = 48  # points sampled around a morphing dot
+
+    # The facet's direction. None keeps it parallel to the bars, which is what
+    # makes the seam line up with their slant; set a number to break that
+    # deliberately.
     facet_angle: float | None = None
 
     @property
     def facet_deg(self) -> float:
         return self.cap_angle if self.facet_angle is None else self.facet_angle
 
+    @property
+    def cap_len(self) -> float:
+        """Length of one merged capsule, end cap to end cap."""
+        return 2.0 * (self.dot_along + self.cap_w / 2.0)
+
 
 # The stock geometry — the default everything renders at unless a caller passes
-# its own (the animation frames do, to spin the arrows).
+# its own (the animation frames do, to spin the arrows and pull the hubs in).
 DEFAULT_GEOMETRY = Geometry()
 
 
@@ -147,6 +164,34 @@ def _arrowhead(cx: float, cy: float, r: float, a_end: float, g: Geometry) -> str
     return f"{tip[0]:.2f},{tip[1]:.2f} {out[0]:.2f},{out[1]:.2f} {inn[0]:.2f},{inn[1]:.2f}"
 
 
+Corner = tuple[int, float, float, float]  # hub index, x, y, outward angle (deg)
+
+
+def _diamond(g: Geometry) -> tuple[tuple[float, float], tuple[float, float], tuple[Corner, ...]]:
+    """The two hubs and the four dots, in draw order.
+
+    Hub 0 sits above-left of the seam and owns the up and left dots; hub 1 sits
+    below-right and owns the down and right ones. Each dot also carries the
+    direction pointing away from the disc centre, which is where its triangle
+    aims while morphing.
+    """
+    a = math.radians(g.cap_angle)
+    ux, uy = math.cos(a), math.sin(a)
+    vx, vy = math.cos(a + math.pi / 2.0), math.sin(a + math.pi / 2.0)
+    off, stag = g.cap_sep / 2.0, g.cap_stagger / 2.0
+    ul = (CX + vx * off + ux * stag, CY + vy * off + uy * stag)
+    lr = (CX - vx * off - ux * stag, CY - vy * off - uy * stag)
+    d = g.dot_along
+    raw = (
+        (0, ul[0] - ux * d, ul[1] - uy * d),
+        (0, ul[0] + ux * d, ul[1] + uy * d),
+        (1, lr[0] + ux * d, lr[1] + uy * d),
+        (1, lr[0] - ux * d, lr[1] - uy * d),
+    )
+    corners = tuple((hub, x, y, math.degrees(math.atan2(y - CY, x - CX))) for hub, x, y in raw)
+    return ul, lr, corners
+
+
 # --------------------------------------------------------------------------- #
 # Drawing                                                                     #
 # --------------------------------------------------------------------------- #
@@ -171,48 +216,60 @@ def _faceted_arc(uid: str, a0: float, a1: float, ink: tuple[str, str], g: Geomet
     )
 
 
-def _capsule(cx: float, cy: float, g: Geometry, fill: str) -> str:
-    x, y = cx - g.cap_len / 2.0, cy - g.cap_w / 2.0
+def _body(uid: str, g: Geometry, ink: tuple[str, str], morph: float) -> str:
+    """The four button bars, painted light then re-clipped dark below-right.
+
+    At morph 0 the hubs sit apart and each collinear pair merges into a capsule;
+    at morph 1 both hubs are at the centre and the bars read as a D-pad cross.
+    """
+    ul, lr, corners = _diamond(g)
+    hubs = (
+        (ul[0] + (CX - ul[0]) * morph, ul[1] + (CY - ul[1]) * morph),
+        (lr[0] + (CX - lr[0]) * morph, lr[1] + (CY - lr[1]) * morph),
+    )
+    arms = "".join(f'<path d="M {hubs[h][0]:.2f} {hubs[h][1]:.2f} L {x:.2f} {y:.2f}"/>' for h, x, y, _ in corners)
+    common = f'stroke-width="{g.cap_w}" stroke-linecap="round" fill="none"'
     return (
-        f'<rect x="{x:.3f}" y="{y:.3f}" width="{g.cap_len:.3f}" height="{g.cap_w:.3f}" '
-        f'rx="{g.cap_w / 2.0:.3f}" fill="{fill}" '
-        f'transform="rotate({g.cap_angle:.3f} {cx:.3f} {cy:.3f})"/>'
+        f'<g {common} stroke="{ink[0]}">{arms}</g>'
+        f'<clipPath id="bd{uid}"><polygon points="{_half_plane(g)}"/></clipPath>'
+        f'<g clip-path="url(#bd{uid})" {common} stroke="{ink[1]}">{arms}</g>'
     )
 
 
-def _dot(cx: float, cy: float, g: Geometry, fill: str, pal: Palette) -> str:
+def _dot(cx: float, cy: float, g: Geometry, pal: Palette, fill: str, morph: float, out_deg: float) -> str:
+    """One dot: a circle at rest, a rounded triangle pointing outward as it morphs."""
     ring = ""
     if pal.dot_stroke_w > 0.0 and pal.dot_stroke != "none":
         ring = f' stroke="{pal.dot_stroke}" stroke-width="{pal.dot_stroke_w}"'
-    return f'<circle cx="{cx:.3f}" cy="{cy:.3f}" r="{g.dot_r:.3f}" fill="{fill}"{ring}/>'
+    if morph <= 0.0:
+        return f'<circle cx="{cx:.3f}" cy="{cy:.3f}" r="{g.dot_r:.3f}" fill="{fill}"{ring}/>'
+    # Radius sampled between the circle and an equilateral triangle whose vertex
+    # points along out_deg — the polygon's polar form, blended back toward R.
+    blend = 1.0 - morph * (1.0 - g.dot_tri_blend)
+    third = 2.0 * math.pi / 3.0
+    base = math.radians(out_deg)
+    pts = []
+    for i in range(g.dot_samples):
+        th = 2.0 * math.pi * i / g.dot_samples
+        k = ((th - base) % third) - third / 2.0
+        r_tri = g.dot_r * math.cos(third / 2.0) / math.cos(k)
+        r = r_tri + (g.dot_r - r_tri) * blend
+        pts.append(f"{cx + r * math.cos(th):.2f},{cy + r * math.sin(th):.2f}")
+    return f'<path d="M {" L ".join(pts)} Z" fill="{fill}"{ring}/>'
 
 
-def _capsule_group(cx: float, cy: float, g: Geometry, ink: str, dot: str, pal: Palette) -> str:
-    """A capsule with its two dots spaced along the axis."""
-    ux, uy = math.cos(math.radians(g.cap_angle)), math.sin(math.radians(g.cap_angle))
-    d1 = _dot(cx + ux * g.dot_along, cy + uy * g.dot_along, g, dot, pal)
-    d2 = _dot(cx - ux * g.dot_along, cy - uy * g.dot_along, g, dot, pal)
-    return f"{_capsule(cx, cy, g, ink)}{d1}{d2}"
-
-
-def mark(uid: str, pal: Palette, g: Geometry = DEFAULT_GEOMETRY) -> str:
-    """The mark's inner content — everything inside a 200-unit square, clipped
-    to the disc. Wrap it in an <svg> via `standalone`, or place several on a
-    sheet via `sheet`."""
-    axis = math.radians(g.cap_angle)
-    ux, uy = math.cos(axis), math.sin(axis)
-    perp = math.radians(g.cap_angle + 90.0)
-    vx, vy = math.cos(perp), math.sin(perp)
-    off, stag = g.cap_sep / 2.0, g.cap_stagger / 2.0
-    # +v lands above-left of the seam, -v below-right; the stagger slides each
-    # capsule along its own axis so the pair sits offset, not merely parallel.
-    ul = (CX + vx * off + ux * stag, CY + vy * off + uy * stag)
-    lr = (CX - vx * off - ux * stag, CY - vy * off - uy * stag)
-
+def mark(uid: str, pal: Palette, g: Geometry = DEFAULT_GEOMETRY, morph: float = 0.0) -> str:
+    """The mark's inner content — everything inside a 200-unit square, clipped to
+    the disc. Wrap it in an <svg> via `standalone`, or place several on a sheet
+    via `sheet`. `morph` runs 0 (button diamond) to 1 (D-pad cross)."""
+    _, _, corners = _diamond(g)
     half = g.arc_span / 2.0
     top0, top1 = 270.0 - half + g.arc_rot, 270.0 + half + g.arc_rot
     bot0, bot1 = 90.0 - half + g.arc_rot, 90.0 + half + g.arc_rot
 
+    dots = "".join(
+        _dot(x, y, g, pal, pal.dot_tan if hub == 0 else pal.dot_peach, morph, od) for hub, x, y, od in corners
+    )
     body = (
         # disc: light fill, then the darker facet tone
         f'<circle cx="{CX}" cy="{CY}" r="{g.disc_r}" fill="{pal.disc[0]}"/>'
@@ -220,9 +277,9 @@ def mark(uid: str, pal: Palette, g: Geometry = DEFAULT_GEOMETRY) -> str:
         # sync arrows
         f"{_faceted_arc(f'{uid}t', top0, top1, pal.ink, g)}"
         f"{_faceted_arc(f'{uid}b', bot0, bot1, pal.ink, g)}"
-        # capsules + dots (flat; the tone reinforces the seam)
-        f"{_capsule_group(ul[0], ul[1], g, pal.ink[0], pal.dot_tan, pal)}"
-        f"{_capsule_group(lr[0], lr[1], g, pal.ink[1], pal.dot_peach, pal)}"
+        # button bars, then the dots on top (flat; the tone reinforces the seam)
+        f"{_body(uid, g, pal.ink, morph)}"
+        f"{dots}"
     )
     return (
         f'<defs><clipPath id="disc{uid}"><circle cx="{CX}" cy="{CY}" r="{g.disc_r}"/></clipPath></defs>'
@@ -230,10 +287,10 @@ def mark(uid: str, pal: Palette, g: Geometry = DEFAULT_GEOMETRY) -> str:
     )
 
 
-def standalone(pal: Palette, g: Geometry = DEFAULT_GEOMETRY, size: int = 512) -> str:
+def standalone(pal: Palette, g: Geometry = DEFAULT_GEOMETRY, size: int = 512, morph: float = 0.0) -> str:
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
-        f'viewBox="0 0 {VIEW:.0f} {VIEW:.0f}">{mark("m", pal, g)}</svg>'
+        f'viewBox="0 0 {VIEW:.0f} {VIEW:.0f}">{mark("m", pal, g, morph)}</svg>'
     )
 
 
@@ -245,9 +302,9 @@ _TAN = "#e6c7a7"
 _PEACH = "#e1a38d"
 
 PALETTES: list[Palette] = [
-    # The delivered mark, unchanged — the reference point.
+    # The delivered mark's colours — the reference point.
     Palette("original", ("#aec6da", "#93b0c8"), ("#2d5876", "#1a3549"), _TAN, _PEACH),
-    # Same disc, deeper ink so the capsules and arrows sit heavier.
+    # Same disc, deeper ink so the bars and arrows sit heavier.
     Palette("deep-ink", ("#aec6da", "#93b0c8"), ("#264a63", "#12283a"), _TAN, _PEACH),
     # Disc pulled down and slightly desaturated; original ink.
     Palette("steel", ("#9db8cf", "#7f9fba"), ("#2d5876", "#1a3549"), _TAN, _PEACH),
@@ -258,6 +315,9 @@ PALETTES: list[Palette] = [
 ]
 
 BY_NAME = {p.name: p for p in PALETTES}
+
+# The chosen mark — what the shipped assets render from.
+CHOSEN = "steel"
 
 
 # --------------------------------------------------------------------------- #
@@ -299,11 +359,12 @@ if __name__ == "__main__":
     import sys
 
     argv = sys.argv[1:]
+    morph = float(argv[argv.index("--morph") + 1]) if "--morph" in argv else 0.0
     if "--list" in argv:
         print("\n".join(p.name for p in PALETTES))
     elif "--asset" in argv:
         i = argv.index("--asset")
-        name = argv[i + 1] if i + 1 < len(argv) else "original"
-        print(standalone(BY_NAME[name]))
+        name = argv[i + 1] if i + 1 < len(argv) and not argv[i + 1].startswith("-") else CHOSEN
+        print(standalone(BY_NAME[name], morph=morph))
     else:
         print(sheet())
