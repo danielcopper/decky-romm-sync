@@ -102,12 +102,12 @@ class Geometry:
     # delivered loop; 1 would keep them the same size throughout.
     dot_shrink: float = 0.862
 
-    # How round the cross's arm ends are, as a fraction of half the bar width. 1
-    # is a semicircle, 0 a square end. The delivered loop measures as an exact
-    # semicircle, so 1 is both the default and the faithful value — an end that
-    # looks too round is a sign the arm is too short, not too round. Only applies
-    # at full morph, so it cannot disturb the static asset either way.
-    dpad_end_round: float = 1.0
+    # How round the cross's arm ends are, as a fraction of half the bar width. 1 is
+    # a semicircle, 0 a square end. The delivered loop measures as an exact
+    # semicircle; this sits deliberately short of that, because a full one reads
+    # rounder than the pad it is quoting. Only applies at full morph, so the static
+    # asset keeps its capsule either way.
+    dpad_end_round: float = 0.65
     # How far the cross's arms run past their dots. At rest this is half the bar
     # width, because a capsule's end cap is centred on its dot; the cross reaches
     # further, so the dots sit inside the arms rather than capping them. Measured
@@ -272,12 +272,17 @@ def _arm(
     end_r: float,
     overhang: float,
 ) -> str:
-    """One bar, hub to dot and `overhang` beyond it, with only its outer corners rounded.
+    """One bar, hub to `overhang` past its dot: half-round at the hub, `end_r` outside.
 
-    The inner end runs half a width *past* the hub so the bars meeting there
-    overlap rather than showing their own corners — which is what lets the outer
-    end be square without opening a notch at the centre. At end_r = w / 2 the two
-    outer arcs meet and the end is the semicircle a capsule needs.
+    The hub end is always a half-round centred exactly *on* the hub, never past it.
+    Every bar sharing a hub therefore shares one cap circle, so the union of two
+    bars at any angle is filleted by w / 2 with no crease — which is what keeps the
+    silhouette smooth all the way through the fold. Square inner ends extended past
+    the hub would poke their corners through that outline instead, and the crease
+    shows up the moment the pair stops being collinear.
+
+    Only the outer end takes `end_r`, so its roundness is free to differ: at
+    end_r = w / 2 the two outer arcs meet and it is a semicircle.
     """
     dx, dy = dot[0] - hub[0], dot[1] - hub[1]
     span = math.hypot(dx, dy)
@@ -288,7 +293,7 @@ def _arm(
     h = w / 2.0
     r = min(max(end_r, 0.0), h)
     bx, by = dot[0] + ux * overhang, dot[1] + uy * overhang  # outer end face
-    ax, ay = hub[0] - ux * h, hub[1] - uy * h  # inner end face, past the hub
+    ax, ay = hub  # the hub itself, centre of the inner half-round
 
     def pt(x: float, y: float) -> str:
         return f"{x:.2f} {y:.2f}"
@@ -299,10 +304,12 @@ def _arm(
     p3 = pt(bx - px * (h - r), by - py * (h - r))
     p4 = pt(bx - px * h - ux * r, by - py * h - uy * r)
     p5 = pt(ax - px * h, ay - py * h)
+    hub_cap = f"A {h:.2f} {h:.2f} 0 0 0 {p0}"
     if r < 0.01:
-        return f'<path d="M {p0} L {p1} L {p4} L {p5} Z"/>'
+        square = f"{pt(bx + px * h, by + py * h)} L {pt(bx - px * h, by - py * h)}"
+        return f'<path d="M {p0} L {square} L {p5} {hub_cap} Z"/>'
     arc = f"A {r:.2f} {r:.2f} 0 0 0"
-    return f'<path d="M {p0} L {p1} {arc} {p2} L {p3} {arc} {p4} L {p5} Z"/>'
+    return f'<path d="M {p0} L {p1} {arc} {p2} L {p3} {arc} {p4} L {p5} {hub_cap} Z"/>'
 
 
 def _body(uid: str, g: Geometry, ink: tuple[str, str], morph: float) -> str:
