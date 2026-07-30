@@ -17,12 +17,37 @@ from adapters.descriptor_paths import (
     mount_id_for_fd,
     remove_current,
 )
-from domain.prune import sanitize_package_name
+from domain.prune import render_bundle_readme, sanitize_package_name
 
 if TYPE_CHECKING:
-    from models.prune import RecoveryArtifact, SealedSourceClaims, SourceClaim, SourceEntry, SourceIdentity
+    from models.prune import (
+        RecoveryArtifact,
+        SealedSourceClaims,
+        SourceClaim,
+        SourceEntry,
+        SourceIdentity,
+    )
 
-_SAFE_BUNDLE_ID = re.compile(r"^[0-9TZ]+_[1-9][0-9]*_[A-Za-z0-9-]+$", re.ASCII)
+    from domain.prune import BundleReadmeContext
+
+_SAFE_BUNDLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*_\d{4}-\d{2}-\d{2}_[A-Za-z0-9]{4,32}$", re.ASCII)
+_ROOT_README_NAME = "README.txt"
+_ROOT_README_TEXT = """decky-romm-sync recovery bundles
+================================
+
+This folder holds snapshots the RomM Sync plugin took immediately BEFORE it
+deleted a game's local data, during "Clean Up Removed RomM Games".
+
+  bundles/   one folder per cleaned-up game, named <game>_<date>_<id>.
+             Each has its own README.txt explaining what it holds and how to
+             put it back by hand.
+  staging/   scratch space used while a bundle is being written. It is normally
+             empty; anything left here is from a run that failed mid-write.
+
+Nothing here is ever read back automatically — there is no restore button. The
+plugin only writes to this folder, so it is safe to move, archive, or delete a
+bundle once you are sure you no longer need it.
+"""
 
 
 class RecoveryBundleAdapter:
@@ -198,7 +223,7 @@ class RecoveryBundleAdapter:
         bundle_id: str,
         snapshot: dict[str, object],
         artifacts: list[RecoveryArtifact],
-        readme: str,
+        readme_context: BundleReadmeContext,
         playtime_text: str,
     ) -> str:
         if _SAFE_BUNDLE_ID.fullmatch(bundle_id) is None:
@@ -227,6 +252,9 @@ class RecoveryBundleAdapter:
             enriched["artifacts"] = records
             enriched["source_sets"] = source_sets
             self._write_rom_states(staging_fd, enriched, checksums)
+            # Rendered here, not passed in: the files/NNNNNN mapping the index
+            # is built from only exists once the artifacts have been copied.
+            readme = render_bundle_readme(readme_context, records)
             self._write_verified_text(staging_fd, "README.txt", readme, checksums)
             self._write_verified_text(staging_fd, "playtime.txt", playtime_text, checksums)
             self._write_verified_text(
@@ -620,6 +648,8 @@ class RecoveryBundleAdapter:
             root_fd = self._open_or_create_dir(home_fd, root_name, create=create)
             staging_fd = self._open_or_create_dir(root_fd, "staging", create=create)
             bundles_fd = self._open_or_create_dir(root_fd, "bundles", create=create)
+            if create:
+                self._write_root_readme(root_fd)
             return home_fd, root_fd, staging_fd, bundles_fd
         except BaseException:
             for fd in (bundles_fd, staging_fd, root_fd, home_fd):
@@ -627,6 +657,26 @@ class RecoveryBundleAdapter:
                     with contextlib.suppress(OSError):
                         os.close(fd)
             raise
+
+    @staticmethod
+    def _write_root_readme(root_fd: int) -> None:
+        """Explain the recovery root itself, once, when it is first created.
+
+        Written here rather than on preview: reading free space must never
+        bring this directory into existence, so the only moment the root is
+        known to be wanted is the one that creates it. Best-effort — a bundle
+        must never fail to seal because its folder's signpost could not be
+        written.
+        """
+        with contextlib.suppress(OSError):
+            if RecoveryBundleAdapter._stat_at(root_fd, _ROOT_README_NAME) is not None:
+                return
+            fd = os.open(_ROOT_README_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=root_fd)
+            try:
+                os.write(fd, _ROOT_README_TEXT.encode("utf-8"))
+                os.fsync(fd)
+            finally:
+                os.close(fd)
 
     @staticmethod
     def _close_layout(descriptors: tuple[int, int, int, int]) -> None:

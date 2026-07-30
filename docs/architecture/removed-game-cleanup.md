@@ -142,13 +142,34 @@ space, and blocks confirmation when space is insufficient.
 The root is `~/<package-name>-recovery`, with the package name taken from `package.json` through the canonical metadata
 adapter and path-sanitized (today: `~/decky-romm-sync-recovery`). Reading free space must not create that layout — a
 read-only preview stats the nearest existing parent, and the directories appear only when a bundle is actually written.
+The root's own `README.txt`, which explains what the folder is, is written by the same layout-creating step for the same
+reason: the only moment the root is known to be wanted is the one that creates it. It is best-effort, because a bundle
+must never fail to seal over its folder's signpost.
 
 A bundle records the complete pre-cascade state in lossless JSON: the ROM aggregate, install and metadata state,
 save-sync baselines and files, playtime including pending sessions, completion stamps, plugin artifacts, and applicable
-Steam-only state. It also writes a human-readable README and a `playtime.txt` with exact seconds. Every exact
-attributable current save is copied and checksum-verified, and existing `.romm-backup` history is copied in while
-remaining at its original location. Bundles are sealed, checksum-verified, descriptor-bound, and published atomically
-under `bundles/`.
+Steam-only state. Every exact attributable current save is copied and checksum-verified, and existing `.romm-backup`
+history is copied in while remaining at its original location. Bundles are sealed, checksum-verified, descriptor-bound,
+and published atomically under `bundles/`.
+
+### The human layer
+
+There is no restore UI, so the folder itself is the restore interface and is built to be read by a person months later.
+That layer is **presentation over** the sealed machine layer, never a change to it: `files/NNNNNN`, `manifest.json`,
+`checksums.sha256` and `SEAL.json` are what the run's own claim consumption is digest-bound to, and they keep their
+shapes.
+
+- **Folder name** — `<sanitized game name>_<YYYY-MM-DD>_<short id>`, named after the row the run is **removing** rather
+  than the group's lowest id, so a bundle is never titled after a version that survived. Uniqueness rides on the short
+  id; the name is bounded and path-sanitized, and the seal refuses to overwrite an existing directory regardless. The
+  folder name is not a rename — it is the `bundle_id` the seal is written with, so `SEAL.json`'s basename binding holds
+  by construction.
+- **`README.txt`** — a generated index: every ROM id with its name, file name, platform and role in the run (removed, or
+  kept and recorded for context); every `files/NNNNNN` blob with its artifact kind in plain words, its size, and the
+  absolute path it must be copied back to; playtime in whole units beside the game's name; and step-by-step manual
+  restore instructions starting with the checksum verification. It is rendered **inside** the seal, because the blob
+  mapping it indexes only exists once the artifacts have been copied.
+- **`playtime.txt`** — keeps its exact machine-readable fields, with the game's name beside each ROM id.
 
 For a fully vanished game whose shortcut will be removed, an enabled bundle also captures Steam artwork and per-app
 Steam Input files, the appId, name, executable, start directory, launch options, collection membership, available Steam

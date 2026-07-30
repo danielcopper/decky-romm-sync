@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
@@ -17,6 +18,7 @@ from models.prune import SealedSourceClaims
 
 from domain.fetch_generation import count_rows_for_skip, prune_candidate_ids
 from domain.platform_sync_state import PlatformSyncState
+from domain.playtime import Playtime
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from domain.version_metadata import VersionMetadata
@@ -66,7 +68,7 @@ class FakeRecoveryStore:
         del bundle_path
         return SealedSourceClaims(claims={}, bundle_digest="sealed-digest")
 
-    def seal_bundle(self, bundle_id, snapshot, artifacts, readme, playtime_text):
+    def seal_bundle(self, bundle_id, snapshot, artifacts, readme_context, playtime_text):
         if self.failure is not None:
             raise self.failure
         self.sealed.append(
@@ -74,7 +76,7 @@ class FakeRecoveryStore:
                 "bundle_id": bundle_id,
                 "snapshot": snapshot,
                 "artifacts": artifacts,
-                "readme": readme,
+                "readme_context": readme_context,
                 "playtime": playtime_text,
             }
         )
@@ -629,6 +631,53 @@ async def test_cancel_after_the_run_finished_is_refused_not_crashed(harness):
 
     assert late["success"] is False
     assert late["reason"] == "stale_run"
+
+
+@pytest.mark.asyncio
+async def test_bundle_is_named_after_the_game_it_removes(harness):
+    app_id = 0x80000001
+    _seed(harness.uow, _rom(1, fetch="old", group="g", app_id=app_id), _rom(2, fetch="new", group="g"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    harness.romm.outcomes[2] = [{"id": 2}] * 3
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], create_recovery_bundle=True)
+    action = await _wait_action(harness, "repoint_shortcut")
+    await _claim_action(harness, action)
+    await _complete_action(harness, action)
+    await _finish(harness)
+
+    sealed = harness.recovery.sealed[0]
+    # The recovery root is the manual-restore surface: the folder has to say
+    # which game it holds, dated, with a short id carrying the uniqueness.
+    assert sealed["bundle_id"].startswith("Game-1_")
+    assert re.fullmatch(r"Game-1_\d{4}-\d{2}-\d{2}_[A-Za-z0-9]{8}", sealed["bundle_id"])
+
+    context = sealed["readme_context"]
+    roles = {game["rom_id"]: game["role"] for game in context["games"]}
+    # Both rows are named, and each says what this run does to it.
+    assert roles[1] == "removed by this cleanup"
+    assert roles[2] == "kept — recorded for context"
+    assert {game["name"] for game in context["games"]} == {"Game 1", "Game 2"}
+    # A repoint keeps the shortcut, so no Steam state is captured and the README
+    # must not offer rebuild instructions for a shortcut that still exists.
+    assert "steam_app_id" not in context
+
+
+@pytest.mark.asyncio
+async def test_bundle_playtime_lines_name_the_game_beside_the_id(harness):
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    with harness.uow:
+        harness.uow.playtime.save(1, Playtime(total_seconds=894))
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True, create_recovery_bundle=True)
+    await _finish(harness)
+
+    context = harness.recovery.sealed[0]["readme_context"]
+    line = context["playtime_lines"][0]
+    # "894" alone tells a person nothing about which game, or how long that is.
+    assert line.startswith("Game 1 (ROM 1): 894 seconds")
+    assert "0h 14m 54s" in line
 
 
 @pytest.mark.asyncio

@@ -26,6 +26,8 @@ if TYPE_CHECKING:
         SteamRecoverySnapshot,
     )
 
+    from domain.prune import BundleReadmeContext
+
 
 class DirectoryFileListerFn(Protocol):
     """Recursively list the absolute paths of every file under a directory.
@@ -561,7 +563,7 @@ class RecoveryBundleStore(Protocol):
         bundle_id: str,
         snapshot: dict[str, object],
         artifacts: list[RecoveryArtifact],
-        readme: str,
+        readme_context: BundleReadmeContext,
         playtime_text: str,
     ) -> str: ...
 

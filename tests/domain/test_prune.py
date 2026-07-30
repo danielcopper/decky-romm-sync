@@ -27,12 +27,31 @@ def test_package_name_sanitization_and_fallback():
     assert sanitize_package_name(None) == "decky-plugin"
 
 
-def test_bundle_id_accepts_only_trusted_components():
-    assert recovery_bundle_id("20260724T120000Z", 7, "abc-123") == "20260724T120000Z_7_abc-123"
+def test_bundle_id_leads_with_the_game_and_stays_a_safe_path_component():
+    assert (
+        recovery_bundle_id("Shenmue II (Europe)", "2026-07-24", "a436b01a") == "Shenmue-II-Europe_2026-07-24_a436b01a"
+    )
+    # A name that sanitizes away still yields a usable component.
+    assert recovery_bundle_id("///", "2026-07-24", "abcd") == "game_2026-07-24_abcd"
+    assert recovery_bundle_id(None, "2026-07-24", "abcd") == "game_2026-07-24_abcd"
+
+
+def test_bundle_id_refuses_untrusted_date_and_id_components():
     with pytest.raises(ValueError):
-        recovery_bundle_id("now", 0, "abc")
+        recovery_bundle_id("Game", "now", "abcd")
     with pytest.raises(ValueError):
-        recovery_bundle_id("now", 1, "../escape")
+        recovery_bundle_id("Game", "2026-07-24", "../escape")
+    with pytest.raises(ValueError):
+        recovery_bundle_id("Game", "2026-07-24", "no")
+
+
+def test_bundle_name_cannot_escape_or_hide_its_directory():
+    # Traversal, separators and leading dots are the shapes that would turn a
+    # game's own name into a path escape or a hidden directory.
+    assert "/" not in recovery_bundle_id("../../etc/passwd", "2026-07-24", "abcd")
+    assert recovery_bundle_id("../../etc/passwd", "2026-07-24", "abcd").startswith("etc-passwd")
+    assert recovery_bundle_id("...hidden", "2026-07-24", "abcd").startswith("hidden")
+    assert len(recovery_bundle_id("N" * 500, "2026-07-24", "abcd")) < 100
 
 
 def test_null_group_keys_are_independent_singletons():

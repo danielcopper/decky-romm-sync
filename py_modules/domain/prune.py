@@ -3,15 +3,56 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NotRequired, TypedDict
+
+
+class BundleGameRow(TypedDict):
+    """One ROM the bundle covers, named for a human reading the folder."""
+
+    rom_id: int
+    name: str
+    fs_name: str
+    platform_slug: str
+    role: str
+
+
+class BundleReadmeContext(TypedDict):
+    """Everything the generated README needs that the file records don't carry.
+
+    Handed to the store instead of finished text: the ``files/NNNNNN`` mapping
+    the index is built from only exists once the artifacts have been copied, so
+    the README is rendered inside the seal rather than before it. It is the
+    renderer's own input contract, which is why it lives beside the renderer.
+    """
+
+    bundle_id: str
+    created_at: str
+    games: list[BundleGameRow]
+    playtime_lines: list[str]
+    steam_app_id: NotRequired[int]
+
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     from domain.rom import Rom
 
 _UNSAFE_PACKAGE_RUN = re.compile(r"[^A-Za-z0-9._-]+", re.ASCII)
-_SAFE_UUID = re.compile(r"^[A-Za-z0-9-]+$", re.ASCII)
+_SAFE_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$", re.ASCII)
+_SAFE_SHORT_ID = re.compile(r"^[A-Za-z0-9]{4,32}$", re.ASCII)
+_MAX_BUNDLE_NAME_CHARS = 64
+
+# Artifact kinds as the machine layer names them, in the words a person reading
+# the folder would use.
+_READABLE_KINDS = {
+    "current_save": "current save file",
+    "save_history": "previous save (.romm-backup history)",
+    "installed_rom": "downloaded ROM content",
+    "artwork_cache": "cached artwork",
+    "steam_grid": "Steam grid artwork",
+    "steam_input": "Steam Input configuration",
+    "plugin_artifact": "plugin cache file",
+}
 
 
 def sanitize_package_name(name: object) -> str:
@@ -21,16 +62,106 @@ def sanitize_package_name(name: object) -> str:
     return cleaned or "decky-plugin"
 
 
-def recovery_bundle_id(timestamp: str, lowest_rom_id: int, operation_id: str) -> str:
-    """Build a collision-resistant bundle directory name from trusted values."""
-    if lowest_rom_id <= 0:
-        raise ValueError("lowest_rom_id must be positive")
-    if not _SAFE_UUID.fullmatch(operation_id):
-        raise ValueError("operation_id must contain only ASCII letters, digits, and hyphens")
-    safe_timestamp = re.sub(r"[^0-9TZ]", "", timestamp, flags=re.ASCII)
-    if not safe_timestamp:
-        raise ValueError("timestamp must contain a UTC date/time")
-    return f"{safe_timestamp}_{lowest_rom_id}_{operation_id}"
+def sanitize_bundle_name(name: object) -> str:
+    """Return a bounded ASCII path component for a game's name."""
+    raw = name if isinstance(name, str) else ""
+    cleaned = _UNSAFE_PACKAGE_RUN.sub("-", raw).strip("-._")[:_MAX_BUNDLE_NAME_CHARS].strip("-._")
+    return cleaned or "game"
+
+
+def recovery_bundle_id(game_name: object, date: str, short_id: str) -> str:
+    """Build a bundle directory name a human can recognise months later.
+
+    The recovery root is the manual-restore surface, so the folder leads with
+    the game it holds. Uniqueness rides on ``short_id``, not on the name: two
+    bundles for the same game on the same day differ only there, and the seal
+    refuses to overwrite an existing directory either way.
+    """
+    if not _SAFE_DATE.fullmatch(date):
+        raise ValueError("date must be an ISO YYYY-MM-DD day")
+    if not _SAFE_SHORT_ID.fullmatch(short_id):
+        raise ValueError("short_id must be 4-32 ASCII letters or digits")
+    return f"{sanitize_bundle_name(game_name)}_{date}_{short_id}"
+
+
+def render_bundle_readme(context: BundleReadmeContext, records: Sequence[Mapping[str, object]]) -> str:
+    """Render the bundle's human index: what it holds and how to put it back.
+
+    ``manifest.json`` stays the lossless machine authority; this is the same
+    facts arranged for someone restoring by hand, which is the only kind of
+    restore that exists.
+    """
+    games = context["games"]
+    lines = [
+        "decky-romm-sync recovery bundle",
+        "===============================",
+        "",
+        f"Bundle:  {context['bundle_id']}",
+        f"Created: {context['created_at']}",
+        "",
+        "A verified snapshot taken immediately BEFORE this game's local data was",
+        "deleted. There is no automatic restore — everything here is put back by",
+        "hand. manifest.json is the lossless machine-readable authority, and",
+        "checksums.sha256 verifies every copied file.",
+        "",
+        "Games in this bundle",
+        "--------------------",
+    ]
+    for game in games:
+        lines.append(f"ROM {game['rom_id']} — {game['name']} [{game['platform_slug']}] — {game['role']}")
+        if game["fs_name"]:
+            lines.append(f"    file name on the server: {game['fs_name']}")
+    app_id = context.get("steam_app_id")
+    if app_id is not None:
+        lines += [
+            "",
+            f"Steam shortcut appId {app_id} is recorded in manifest.json. Steam assigns",
+            "appIds, so a rebuilt shortcut gets a new one and cannot inherit the old",
+            "playtime — recreate it manually and re-point it at the game.",
+        ]
+    lines += ["", "Playtime", "--------", *context["playtime_lines"], "", "Files", "-----"]
+    if not records:
+        lines.append("This bundle copied no files; it records database state only.")
+    for record in records:
+        destination = record.get("destination")
+        source = record.get("source_path")
+        size = record.get("size")
+        kind = _READABLE_KINDS.get(str(record.get("kind")), str(record.get("kind")))
+        rom_id = record.get("rom_id")
+        suffix = f" (ROM {rom_id})" if isinstance(rom_id, int) else ""
+        lines.append(f"{destination}  {_human_size(size)}  {kind}{suffix}")
+        lines.append(f"    restore to: {source}")
+    lines += [
+        "",
+        "Restoring by hand",
+        "-----------------",
+        "1. Check the copies are intact — in this folder, run:",
+        "       sha256sum -c checksums.sha256",
+        "2. Put each file back at the path its entry names above, for example:",
+        "       cp -a 'files/000001' '/path/from/the/entry'",
+        "   Create any missing parent directories first, and do not overwrite a",
+        "   newer file you want to keep.",
+        "3. ROM files and saves are usable immediately once copied back.",
+        "4. Database state (playtime, save-sync baselines, install records) lives in",
+        "   manifest.json and is not restored by copying files. Re-syncing the game",
+        "   in the plugin rebuilds its row; the recorded playtime is reference only.",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _human_size(size: object) -> str:
+    """Format a byte count for a person skimming the file table."""
+    if not isinstance(size, int) or size < 0:
+        return "unknown size"
+    if size < 1024:
+        return f"{size} B"
+    value = float(size)
+    for unit in ("KiB", "MiB", "GiB", "TiB"):
+        value /= 1024
+        if value < 1024:
+            return f"{value:.1f} {unit}"
+    return f"{value:.1f} PiB"
 
 
 def group_rows(rows: Iterable[Rom]) -> list[list[Rom]]:

@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 # conftest.py patches decky before this import
 from adapters.recovery_bundle import RecoveryBundleAdapter
 from adapters.rom_files import RomFileAdapter
+from domain.prune import BundleReadmeContext
 from domain.rom import Rom
 from domain.rom_install import RomInstall
 from services.rom_removal import RomRemovalService, RomRemovalServiceConfig
@@ -206,10 +207,15 @@ class TestDeleteRomFiles:
             plugin_version="test",
         )
         bundle = recovery.seal_bundle(
-            "20260724T120000Z_1_rom",
+            "Game_2026-07-24_romfile",
             {"roms": [{"rom_id": 1}]},
             [{"source_path": str(rom_path), "safe_root": str(roms), "kind": "installed_rom", "rom_id": 1}],
-            "readme",
+            BundleReadmeContext(
+                bundle_id="Game_2026-07-24_romfile",
+                created_at="2026-07-24T12:00:00+00:00",
+                games=[],
+                playtime_lines=[],
+            ),
             "playtime",
         )
         claims = recovery.source_claims(bundle)["claims"]
@@ -269,10 +275,15 @@ class TestDeleteRomFiles:
         child.write_bytes(b"sealed")
         recovery = RecoveryBundleAdapter(user_home=str(tmp_path), package_name="decky-romm-sync", plugin_version="test")
         bundle = recovery.seal_bundle(
-            "20260724T120000Z_1_directory",
+            "Game_2026-07-24_romdir",
             {"roms": [{"rom_id": 1}]},
             [{"source_path": str(rom_dir), "safe_root": str(roms), "kind": "installed_rom", "rom_id": 1}],
-            "readme",
+            BundleReadmeContext(
+                bundle_id="Game_2026-07-24_romdir",
+                created_at="2026-07-24T12:00:00+00:00",
+                games=[],
+                playtime_lines=[],
+            ),
             "playtime",
         )
         claims = recovery.source_claims(bundle)["claims"]

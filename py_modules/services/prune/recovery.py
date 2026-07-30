@@ -10,6 +10,7 @@ from domain.prune import recovery_bundle_id
 if TYPE_CHECKING:
     from models.prune import RecoveryArtifact, SteamRecoverySnapshot
 
+    from domain.prune import BundleReadmeContext
     from domain.rom import Rom
     from services.protocols import (
         Clock,
@@ -171,20 +172,72 @@ class RecoveryCoordinator:
                 warnings.append("Shared current saves were copied but deliberately left in place")
 
         now = self._clock.now()
-        bundle_id = recovery_bundle_id(now.strftime("%Y%m%dT%H%M%SZ"), min(rom_ids), self._uuid_gen.uuid4())
-        readme = (
-            "decky-romm-sync vanished-ROM recovery bundle\n\n"
-            "This bundle is a verified pre-deletion snapshot for manual recovery.\n"
-            "There is no automatic restore. Steam-assigned appIds and Steam playtime are recorded,\n"
-            "but cannot currently be restored to a newly created shortcut. Save states are not included.\n"
-            "manifest.json is the lossless authority; checksums.sha256 verifies copied files.\n"
+        names = {row.rom_id: row.name for row in rows}
+        # Named after the row the run is actually removing, not the lowest id in
+        # the group — a folder called after a version that survives would point
+        # at the wrong thing.
+        headline = min(delete_ids) if delete_ids else min(rom_ids)
+        bundle_id = recovery_bundle_id(
+            names.get(headline, ""),
+            now.strftime("%Y-%m-%d"),
+            self._uuid_gen.uuid4().replace("-", "")[:8],
         )
-        playtime_text = self._playtime_text(snapshot)
-        sealed = self._recovery_store.seal_bundle(bundle_id, snapshot, artifacts, readme, playtime_text)
+        readme_context: BundleReadmeContext = {
+            "bundle_id": bundle_id,
+            "created_at": now.isoformat(),
+            "games": [
+                {
+                    "rom_id": row.rom_id,
+                    "name": row.name,
+                    "fs_name": row.fs_name,
+                    "platform_slug": row.platform_slug,
+                    "role": self._bundle_role(row.rom_id, delete_ids),
+                }
+                for row in rows
+            ],
+            "playtime_lines": self._playtime_lines(snapshot, names),
+        }
+        if app_id is not None:
+            readme_context["steam_app_id"] = app_id
+        playtime_text = self._playtime_text(snapshot, names)
+        sealed = self._recovery_store.seal_bundle(bundle_id, snapshot, artifacts, readme_context, playtime_text)
         return sealed, steam_backend
 
     @staticmethod
-    def _playtime_text(snapshot: dict[str, object]) -> str:
+    def _bundle_role(rom_id: int, delete_ids: set[int]) -> str:
+        """Say what this run does to one row, in the reader's terms."""
+        return "removed by this cleanup" if rom_id in delete_ids else "kept — recorded for context"
+
+    @staticmethod
+    def _playtime_lines(snapshot: dict[str, object], names: dict[int, str]) -> list[str]:
+        """Summarise recorded playtime in whole units, named, for the README.
+
+        playtime.txt keeps the exact machine-readable fields; this is the same
+        numbers said out loud, because "894" alone tells a person nothing.
+        """
+        entries = snapshot.get("playtime")
+        if not isinstance(entries, list) or not entries:
+            return ["No local playtime was recorded for these games."]
+        lines: list[str] = []
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            rom_id = entry.get("rom_id")
+            raw_state = entry.get("state")
+            state: dict[str, object] = raw_state if isinstance(raw_state, dict) else {}
+            seconds = state.get("total_seconds", 0)
+            total = int(seconds) if isinstance(seconds, int) else 0
+            name = names.get(rom_id, "unknown game") if isinstance(rom_id, int) else "unknown game"
+            lines.append(
+                f"{name} (ROM {rom_id}): {total} seconds — {total // 3600}h {total % 3600 // 60}m {total % 60}s"
+            )
+            pending = state.get("pending_sessions")
+            if isinstance(pending, dict) and pending:
+                lines.append(f"    plus {len(pending)} session(s) recorded locally but never sent to RomM")
+        return lines or ["No local playtime was recorded for these games."]
+
+    @staticmethod
+    def _playtime_text(snapshot: dict[str, object], names: dict[int, str] | None = None) -> str:
         lines = ["Local playtime snapshot", ""]
         entries = snapshot.get("playtime")
         if not isinstance(entries, list) or not entries:
@@ -197,9 +250,11 @@ class RecoveryCoordinator:
             state: dict[str, object] = raw_state if isinstance(raw_state, dict) else {}
             pending_sessions = state.get("pending_sessions")
             pending_count = len(pending_sessions) if isinstance(pending_sessions, dict) else 0
+            rom_id = entry.get("rom_id")
+            named = (names or {}).get(rom_id) if isinstance(rom_id, int) else None
             lines.extend(
                 [
-                    f"ROM {entry.get('rom_id')}",
+                    f"ROM {rom_id}" + (f" — {named}" if named else ""),
                     f"  total_seconds: {state.get('total_seconds', 0)}",
                     f"  session_count: {state.get('session_count', 0)}",
                     f"  last_played: {state.get('last_played')}",

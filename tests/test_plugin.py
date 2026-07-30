@@ -862,6 +862,10 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     # run waits on its exact Steam action token; gating it would deadlock the
     # recovery-backed operation if migration state changed mid-run.
     "report_prune_action",
+    # Stopping a run destroys nothing and touches no RetroDECK path — it only
+    # cancels the run's own task. Gating it on a migration that appeared
+    # mid-run would strand the user with a cleanup they cannot stop.
+    "cancel_prune",
     # Sync-start reconcile of Steam-UI-deleted shortcut bindings (#1046) — clears
     # only the SQLite ``shortcut_app_id`` link (never a RetroDECK path), so it is
     # not gated by a pending migration, matching report_removal_results above.

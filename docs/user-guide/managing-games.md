@@ -144,7 +144,10 @@ saves (including path-safe filenames retained in prior save-sync state) and back
 Fully vanished shortcut recovery also records bounded Steam details, collections/playtime fields, grid art, Steam Input
 files, and the controller setting. It contains no settings, credentials, tokens, whole database, BIOS, or save states.
 Recovery is manual only: there is no restore UI, and a new Steam shortcut cannot inherit the recorded Steam-assigned
-appId or playtime.
+appId or playtime. Because the folder is the recovery interface, it is written to be read months later. Each bundle is
+named `<game>_<date>_<id>`, and its `README.txt` lists every game the bundle covers and what the run did to it, every
+copied file with the exact path to put it back, the playtime in hours and minutes, and the steps to restore by hand
+starting with `sha256sum -c checksums.sha256`. The recovery folder itself carries a `README.txt` explaining what it is.
 
 A synced vanished row carries a red trash icon at its right edge in the version picker, and activating that row opens
 the same confirmation scoped to that one version. A synced singleton vanished binding shows the same trash action as a

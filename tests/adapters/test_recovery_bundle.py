@@ -7,11 +7,15 @@ import os
 import shutil
 import stat
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from adapters import descriptor_paths, recovery_bundle
 from adapters.recovery_bundle import RecoveryBundleAdapter
+
+if TYPE_CHECKING:
+    from domain.prune import BundleReadmeContext
 
 
 def _adapter(tmp_path) -> RecoveryBundleAdapter:
@@ -38,6 +42,23 @@ def _reseal(sealed: Path) -> None:
     seal_path.write_text(json.dumps(seal, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
 
 
+def _readme_context(bundle_id: str = "TestGame_2026-07-24_abc123") -> BundleReadmeContext:
+    return {
+        "bundle_id": bundle_id,
+        "created_at": "2026-07-24T12:00:00+00:00",
+        "games": [
+            {
+                "rom_id": 7,
+                "name": "Test Game",
+                "fs_name": "Test Game.chd",
+                "platform_slug": "dc",
+                "role": "removed by this cleanup",
+            }
+        ],
+        "playtime_lines": ["Test Game (ROM 7): 894 seconds — 0h 14m 54s"],
+    }
+
+
 def _snapshot() -> dict[str, object]:
     return {
         "roms": [{"rom_id": 7, "name": "Game"}],
@@ -59,15 +80,15 @@ def test_seals_verified_bundle_with_generated_destinations(tmp_path):
 
     sealed = Path(
         adapter.seal_bundle(
-            "20260724T120000Z_7_abc-123",
+            "TestGame_2026-07-24_abc123",
             _snapshot(),
             [{"source_path": str(nested), "safe_root": str(source_root), "kind": "installed_rom", "rom_id": 7}],
-            "manual recovery\n",
+            _readme_context(),
             "7 seconds\n",
         )
     )
 
-    assert sealed.name == "20260724T120000Z_7_abc-123"
+    assert sealed.name == "TestGame_2026-07-24_abc123"
     assert (sealed / "SEAL.json").exists()
     manifest = json.loads((sealed / "manifest.json").read_text())
     assert manifest["plugin_version"] == "1.2.3"
@@ -76,6 +97,41 @@ def test_seals_verified_bundle_with_generated_destinations(tmp_path):
     assert (sealed / "files" / "000001").read_bytes() == b"rom"
     assert (sealed / "roms" / "7" / "state.json").exists()
     assert "files/000001" in (sealed / "checksums.sha256").read_text()
+
+    # The README is the manual-restore surface, so it has to name the real game,
+    # the real blob, and the real absolute path the blob came from.
+    readme = (sealed / "README.txt").read_text()
+    assert "Test Game" in readme
+    assert "Test Game.chd" in readme
+    assert "removed by this cleanup" in readme
+    assert "files/000001" in readme
+    assert str(nested / "disc 1.bin") in readme
+    assert "downloaded ROM content" in readme
+    assert "894 seconds" in readme
+    assert "sha256sum -c checksums.sha256" in readme
+    # The README is covered by the seal like every other file in the bundle.
+    assert "README.txt" in (sealed / "checksums.sha256").read_text()
+
+
+def test_recovery_root_explains_itself_once_it_exists(tmp_path):
+    adapter = _adapter(tmp_path)
+
+    adapter.seal_bundle("TestGame_2026-07-24_root01", _snapshot(), [], _readme_context(), "none\n")
+
+    root_readme = Path(adapter.root()) / "README.txt"
+    assert root_readme.is_file()
+    assert "bundles/" in root_readme.read_text()
+    assert "there is no restore button" in root_readme.read_text()
+
+
+def test_reading_free_space_still_creates_no_recovery_root(tmp_path):
+    adapter = _adapter(tmp_path)
+
+    assert adapter.free_bytes() > 0
+
+    # L17: a preview must never bring the recovery layout — or its README —
+    # into existence just by showing how much space is free.
+    assert not Path(adapter.root()).exists()
 
 
 def test_rejects_path_escape_symlink_and_duplicate_identity(tmp_path):
@@ -91,12 +147,12 @@ def test_rejects_path_escape_symlink_and_duplicate_identity(tmp_path):
     with pytest.raises(ValueError, match="outside"):
         adapter.measure_path(str(outside), str(safe))
     with pytest.raises(ValueError, match="unsafe recovery bundle id"):
-        adapter.seal_bundle("../escape", _snapshot(), [], "readme", "playtime")
+        adapter.seal_bundle("../escape", _snapshot(), [], _readme_context(), "playtime")
 
-    bundle_id = "20260724T120000Z_7_same"
-    adapter.seal_bundle(bundle_id, _snapshot(), [], "readme", "playtime")
+    bundle_id = "TestGame_2026-07-24_same"
+    adapter.seal_bundle(bundle_id, _snapshot(), [], _readme_context(), "playtime")
     with pytest.raises(FileExistsError):
-        adapter.seal_bundle(bundle_id, _snapshot(), [], "readme", "playtime")
+        adapter.seal_bundle(bundle_id, _snapshot(), [], _readme_context(), "playtime")
 
 
 def test_failed_copy_cleans_staging_without_touching_existing_bundle(tmp_path, monkeypatch):
@@ -112,10 +168,10 @@ def test_failed_copy_cleans_staging_without_touching_existing_bundle(tmp_path, m
     monkeypatch.setattr(adapter, "_copy_opened_source", fail_copy)
     with pytest.raises(OSError, match="disk full"):
         adapter.seal_bundle(
-            "20260724T120000Z_7_failure",
+            "TestGame_2026-07-24_failure",
             _snapshot(),
             [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
-            "readme",
+            _readme_context(),
             "playtime",
         )
     staging = Path(adapter.root()) / "staging"
@@ -129,10 +185,10 @@ def test_sealed_bundle_revalidates_manifest_and_source_bytes(tmp_path):
     source.write_bytes(b"before")
     adapter = _adapter(tmp_path)
     sealed = adapter.seal_bundle(
-        "20260724T120000Z_7_validate",
+        "TestGame_2026-07-24_validate",
         _snapshot(),
         [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
-        "readme",
+        _readme_context(),
         "playtime",
     )
 
@@ -148,10 +204,10 @@ def test_same_byte_source_replacement_fails_sealed_identity_validation(tmp_path)
     source.write_bytes(b"same bytes")
     adapter = _adapter(tmp_path)
     sealed = adapter.seal_bundle(
-        "20260724T120000Z_7_identity",
+        "TestGame_2026-07-24_identity",
         _snapshot(),
         [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
-        "readme",
+        _readme_context(),
         "playtime",
     )
     source.unlink()
@@ -169,10 +225,10 @@ def test_sealed_bundle_rejects_file_that_appears_in_an_initially_empty_source_se
     source = safe / "late-grid.png"
     adapter = _adapter(tmp_path)
     sealed = adapter.seal_bundle(
-        "20260724T120000Z_7_late",
+        "TestGame_2026-07-24_late",
         _snapshot(),
         [{"source_path": str(source), "safe_root": str(safe), "kind": "steam_grid"}],
-        "readme",
+        _readme_context(),
         "playtime",
     )
 
@@ -203,10 +259,10 @@ def test_source_replacement_with_symlink_fails_at_open_time(tmp_path, monkeypatc
     monkeypatch.setattr(adapter, "_open_regular_beneath", replace_before_open)
     with pytest.raises((OSError, ValueError)):
         adapter.seal_bundle(
-            "20260724T120000Z_7_replaced",
+            "TestGame_2026-07-24_replaced",
             _snapshot(),
             [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
-            "readme",
+            _readme_context(),
             "playtime",
         )
 
@@ -222,7 +278,7 @@ def test_real_directory_fsync_failure_aborts_sealing(tmp_path, monkeypatch):
 
     monkeypatch.setattr("adapters.recovery_bundle.os.fsync", fail_directory)
     with pytest.raises(OSError, match="directory fsync failed"):
-        adapter.seal_bundle("20260724T120000Z_7_fsync", _snapshot(), [], "readme", "playtime")
+        adapter.seal_bundle("TestGame_2026-07-24_fsync", _snapshot(), [], _readme_context(), "playtime")
 
 
 def test_symlinked_recovery_root_is_rejected(tmp_path):
@@ -241,7 +297,7 @@ def test_symlinked_recovery_root_is_rejected(tmp_path):
 )
 def test_seal_contract_fields_are_revalidated(tmp_path, field, value):
     adapter = _adapter(tmp_path)
-    sealed = Path(adapter.seal_bundle("20260724T120000Z_7_seal-fields", _snapshot(), [], "readme", "playtime"))
+    sealed = Path(adapter.seal_bundle("TestGame_2026-07-24_sealfields", _snapshot(), [], _readme_context(), "playtime"))
     seal_path = sealed / "SEAL.json"
     seal = json.loads(seal_path.read_text())
     seal[field] = value
@@ -262,7 +318,7 @@ def test_new_recovery_directories_fsync_each_parent(tmp_path, monkeypatch):
 
     monkeypatch.setattr("adapters.recovery_bundle.os.fsync", track)
 
-    adapter.seal_bundle("20260724T120000Z_7_new-parents", _snapshot(), [], "readme", "playtime")
+    adapter.seal_bundle("TestGame_2026-07-24_newparents", _snapshot(), [], _readme_context(), "playtime")
 
     root = Path(adapter.root())
     assert tmp_path.stat().st_ino in synced
@@ -284,9 +340,9 @@ def test_post_rename_fsync_failure_marks_bundle_durability_uncertain(tmp_path, m
         original(fd)
 
     monkeypatch.setattr("adapters.recovery_bundle.os.fsync", fail_final_sync)
-    bundle_id = "20260724T120000Z_7_uncertain"
+    bundle_id = "TestGame_2026-07-24_uncertain"
     with pytest.raises(OSError, match="durability is uncertain"):
-        adapter.seal_bundle(bundle_id, _snapshot(), [], "readme", "playtime")
+        adapter.seal_bundle(bundle_id, _snapshot(), [], _readme_context(), "playtime")
 
     assert not (bundles / bundle_id).exists()
     assert (bundles / f"{bundle_id}.durability-uncertain").is_dir()
@@ -310,7 +366,7 @@ def test_recovery_bundle_parent_replacement_is_not_reauthorized(tmp_path, monkey
     monkeypatch.setattr(adapter, "_copy_artifacts", swap_parent)
 
     with pytest.raises(OSError, match="durability is uncertain") as caught:
-        adapter.seal_bundle("20260724T120000Z_7_swapped", _snapshot(), [], "readme", "playtime")
+        adapter.seal_bundle("TestGame_2026-07-24_swapped", _snapshot(), [], _readme_context(), "playtime")
 
     assert list(outside.iterdir()) == []
     preserved = Path(str(caught.value).split(": ", 1)[1])
@@ -342,7 +398,7 @@ def test_failed_seal_preserves_staging_instead_of_crossing_nested_mount(tmp_path
     monkeypatch.setattr(adapter, "_verify_staging_checksums", add_mount_transition_then_fail)
 
     with pytest.raises(RuntimeError, match="unsafe staging was preserved") as caught:
-        adapter.seal_bundle("20260724T120000Z_7_mounted", _snapshot(), [], "readme", "playtime")
+        adapter.seal_bundle("TestGame_2026-07-24_mounted", _snapshot(), [], _readme_context(), "playtime")
 
     assert staging_path is not None
     assert str(staging_path) in str(caught.value)
@@ -357,10 +413,10 @@ def test_claim_digest_rejects_same_name_bundle_replacement(tmp_path):
     adapter = _adapter(tmp_path)
     sealed = Path(
         adapter.seal_bundle(
-            "20260724T120000Z_7_bound",
+            "TestGame_2026-07-24_bound",
             _snapshot(),
             [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
-            "readme",
+            _readme_context(),
             "playtime",
         )
     )
@@ -381,10 +437,10 @@ def test_resealed_artifact_record_must_still_match_its_verified_source_claim(tmp
     adapter = _adapter(tmp_path)
     sealed = Path(
         adapter.seal_bundle(
-            "20260724T120000Z_7_resealed",
+            "TestGame_2026-07-24_resealed",
             _snapshot(),
             [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
-            "readme",
+            _readme_context(),
             "playtime",
         )
     )
@@ -450,10 +506,10 @@ def test_directory_source_artifacts_are_verified_against_their_sealed_claim(tmp_
     (rom / "extra" / "disc 2.bin").write_bytes(b"two")
     adapter = _adapter(tmp_path)
     sealed = adapter.seal_bundle(
-        "20260724T120000Z_7_multidisc",
+        "TestGame_2026-07-24_multidisc",
         _snapshot(),
         [{"source_path": str(rom), "safe_root": str(safe), "kind": "installed_rom", "rom_id": 7}],
-        "readme",
+        _readme_context(),
         "playtime",
     )
 
@@ -476,7 +532,7 @@ def test_unrenamable_uncertain_bundle_is_reported_and_kept_where_it_is(tmp_path,
     adapter = _adapter(tmp_path)
     _create_layout(adapter)
     bundles = Path(adapter.root()) / "bundles"
-    bundle_id = "20260724T120000Z_7_stuck"
+    bundle_id = "TestGame_2026-07-24_stuck"
     original_rename = os.rename
 
     def refuse_marker_rename(src, dst, **kwargs):
@@ -491,7 +547,7 @@ def test_unrenamable_uncertain_bundle_is_reported_and_kept_where_it_is(tmp_path,
     monkeypatch.setattr(RecoveryBundleAdapter, "_require_layout_attached", fail_attachment)
 
     with pytest.raises(OSError, match="durability is uncertain") as caught:
-        adapter.seal_bundle(bundle_id, _snapshot(), [], "readme", "playtime")
+        adapter.seal_bundle(bundle_id, _snapshot(), [], _readme_context(), "playtime")
 
     assert str(bundles / bundle_id) in str(caught.value)
     assert ".durability-uncertain" not in str(caught.value)
@@ -520,10 +576,10 @@ def test_destination_replacement_cannot_modify_outside_file(tmp_path, monkeypatc
 
     with pytest.raises(RuntimeError, match="unsafe staging was preserved"):
         adapter.seal_bundle(
-            "20260724T120000Z_7_destination",
+            "TestGame_2026-07-24_destination",
             _snapshot(),
             [{"source_path": str(source), "safe_root": str(safe), "kind": "current_save", "rom_id": 7}],
-            "readme",
+            _readme_context(),
             "playtime",
         )
 
