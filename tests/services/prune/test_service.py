@@ -514,6 +514,174 @@ async def test_unbound_confirmed_404_row_is_deleted_after_final_reprobes(harness
 
 
 @pytest.mark.asyncio
+async def test_cancel_stops_the_named_run_and_reports_it_as_cancelled(harness):
+    app_id = 0x80000001
+    _seed(harness.uow, _rom(1, fetch="old", group="g", app_id=app_id), _rom(2, fetch="new", group="g"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    harness.romm.outcomes[2] = [{"id": 2}] * 3
+    preview = await _preview(harness)
+    started = await _start(harness, preview["preview_id"])
+    task = _active_run_task(harness)
+    # Park the run on its pending Steam action so the cancellation lands mid-run
+    # rather than before the executor body has had a chance to start.
+    await _wait_action(harness, "repoint_shortcut")
+
+    cancelled = await harness.service.cancel_prune(started["run_id"])
+
+    assert cancelled == {
+        "success": True,
+        "run_id": started["run_id"],
+        "already_cancelling": False,
+        "message": "Cleanup will stop before the next group.",
+    }
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    complete = [payload for name, payload in harness.events.events if name == "prune_complete"][-1]
+    assert complete["reason"] == "cancelled"
+    # Nothing was rolled back and nothing was invented: the shortcut is untouched
+    # because its action never completed, and the row survives.
+    assert harness.uow.roms.get(1) is not None
+    # The claim is released, so the next scan is not locked out by a stopped run.
+    assert harness.service.is_active() is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_the_run_task_starts_still_releases_the_claim(harness):
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    preview = await _preview(harness)
+    started = await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    task = _active_run_task(harness)
+
+    # Cancelled in the same tick the task was created, so its coroutine body —
+    # and the `finally` that normally releases the claim — never runs at all.
+    await harness.service.cancel_prune(started["run_id"])
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(0)
+
+    # A claim left set here would refuse Play, downloads and saves for the rest
+    # of the plugin's life, with no run to release it.
+    assert harness.service.is_active() is False
+    assert harness.uow.roms.get(1) is not None
+
+
+@pytest.mark.asyncio
+async def test_cancel_refuses_an_id_that_is_not_the_running_one(harness):
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    preview = await _preview(harness)
+    started = await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+
+    stale = await harness.service.cancel_prune("00000000-0000-4000-8000-00000000dead")
+
+    assert stale == {
+        "success": False,
+        "reason": "stale_run",
+        "message": "That cleanup run is not running.",
+    }
+    # The real run is untouched by a wrong-id request.
+    await _finish(harness)
+    assert harness.uow.roms.get(1) is None
+    assert started["run_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("run_id", ["", None, 7])
+async def test_cancel_rejects_a_malformed_run_id(harness, run_id):
+    result = await harness.service.cancel_prune(run_id)
+    assert result == {
+        "success": False,
+        "reason": "invalid_run_id",
+        "message": "Cleanup run id must be a non-empty string.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_cancel_is_idempotent_for_the_same_run(harness):
+    _seed(harness.uow, _rom(1, fetch="old"), _rom(2, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    harness.romm.outcomes[2] = [RommNotFoundError("gone")] * 3
+    preview = await _preview(harness)
+    started = await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    task = _active_run_task(harness)
+
+    first = await harness.service.cancel_prune(started["run_id"])
+    second = await harness.service.cancel_prune(started["run_id"])
+
+    # A repeat while the first is still propagating is a success, not an error —
+    # a user mashing the button must not see a failure for work already asked for.
+    assert (first["success"], first["already_cancelling"]) == (True, False)
+    assert (second["success"], second["already_cancelling"]) == (True, True)
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_cancel_after_the_run_finished_is_refused_not_crashed(harness):
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    preview = await _preview(harness)
+    started = await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    await _finish(harness)
+
+    late = await harness.service.cancel_prune(started["run_id"])
+
+    assert late["success"] is False
+    assert late["reason"] == "stale_run"
+
+
+@pytest.mark.asyncio
+async def test_successful_run_leaves_an_audit_trail_at_info(harness, caplog):
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+
+    with caplog.at_level(logging.INFO, logger="test-prune"):
+        preview = await _preview(harness)
+        await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+        await _finish(harness)
+
+    run_id = harness.service._release_run_id
+    assert run_id
+    audit = [record.message for record in caplog.records if record.levelno == logging.INFO]
+    # Every line ties back to the run id, so one grep reconstructs the run.
+    assert all(run_id in line for line in audit)
+
+    start = next(line for line in audit if "starting" in line)
+    assert "1 group(s), 1 candidate(s)" in start
+    assert "remove_fully_vanished=True" in start
+    assert "recovery=False" in start
+
+    group = next(line for line in audit if "group 1/1" in line)
+    assert "rom_ids=[1]" in group
+    assert "status=removed" in group
+    assert "removed=[1]" in group
+
+    end = next(line for line in audit if "finished" in line)
+    assert "removed=[1]" in end
+
+
+@pytest.mark.asyncio
+async def test_audit_trail_records_why_an_untouched_group_was_skipped(harness, caplog):
+    _seed(harness.uow, _rom(1, fetch="old"))
+    # RomM cannot confirm the id is gone, so nothing may be removed. Which of
+    # the several "nothing happened" verdicts it was is exactly what the log has
+    # to preserve — a bare "skipped" would leave the user guessing.
+    harness.romm.outcomes[1] = [RommConnectionError("offline")]
+
+    with caplog.at_level(logging.INFO, logger="test-prune"):
+        preview = await _preview(harness)
+        await _start(harness, preview["preview_id"])
+        await _finish(harness)
+
+    audit = [record.message for record in caplog.records if record.levelno == logging.INFO]
+    group = next(line for line in audit if "group 1/1" in line)
+    assert "status=skipped" in group
+    assert "reason=liveness_uncertain" in group
+    assert next(line for line in audit if "finished" in line).endswith("removed=[], affected_app_ids=[]")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("create_recovery_bundle", [False, True])
 async def test_save_appearing_after_artifact_cleanup_blocks_final_cascade(harness, monkeypatch, create_recovery_bundle):
     _seed(harness.uow, _rom(1, fetch="old"))

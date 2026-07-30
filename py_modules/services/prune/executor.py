@@ -97,6 +97,7 @@ class PruneExecutor:
                 None, self._registry.groups_for_candidates, set(preview.candidate_ids)
             )
             total = len(groups)
+            self._log_run_start(run_id, preview, options, total)
             for index, rows in enumerate(groups, start=1):
                 await self._results.emit_progress(run_id, index, total, "checking", rows)
                 try:
@@ -113,6 +114,7 @@ class PruneExecutor:
                 except Exception as exc:
                     self._logger.exception(f"Vanished-ROM cleanup group {rows[0].rom_id} failed")
                     result = self._results.group_result(rows, "failed", ErrorCode.UNKNOWN.value, str(exc))
+                self._log_group_outcome(run_id, index, total, result)
                 results.append(result)
         except asyncio.CancelledError as exc:
             result = cancellation_state(exc).group_result
@@ -138,6 +140,42 @@ class PruneExecutor:
         else:
             await self._finish_run(run_id, results, cancelled=False, reason=None, message=None)
 
+    def _log_run_start(self, run_id: str, preview: PrunePreview, options: PruneOptions, groups: int) -> None:
+        """Open this run's audit trail.
+
+        Cleanup is the one operation that deletes local state a server can no
+        longer supply, so what it was asked to do has to survive in the log
+        independently of the UI that asked — every later line ties back to this
+        run id.
+        """
+        self._logger.info(
+            f"Cleanup run {run_id} starting: {groups} group(s), {len(preview.candidate_ids)} candidate(s), "
+            f"scope={preview.scope}, repoint={options.repoint_shortcuts}, remove_rows={options.remove_rows}, "
+            f"remove_fully_vanished={options.remove_fully_vanished}, recovery={options.create_recovery_bundle}, "
+            f"installed_content_selected={len(options.include_installed_rom_ids)}"
+        )
+
+    def _log_group_outcome(self, run_id: str, index: int, total: int, result: dict[str, Any]) -> None:
+        """Record one group's verdict, including the reason it was not touched."""
+        reason = result.get("reason")
+        bundle = result.get("bundle_path")
+        detail = [f"status={result.get('status')}"]
+        if reason:
+            detail.append(f"reason={reason}")
+        if result.get("committed_action"):
+            detail.append(f"action={result['committed_action']}")
+        if result.get("action_ambiguous"):
+            detail.append("action=ambiguous")
+        removed = result.get("removed_rom_ids") or []
+        if removed:
+            detail.append(f"removed={sorted(removed)}")
+        if bundle:
+            detail.append(f"bundle={bundle}")
+        self._logger.info(
+            f"Cleanup run {run_id} group {index}/{total} {result.get('group_id')} "
+            f"rom_ids={result.get('rom_ids')}: {', '.join(detail)}"
+        )
+
     async def _finish_run(
         self,
         run_id: str,
@@ -147,11 +185,42 @@ class PruneExecutor:
         reason: str | None,
         message: str | None,
     ) -> None:
+        self._log_run_end(run_id, results, cancelled=cancelled, reason=reason, message=message)
         try:
             await self._results.emit_completion(run_id, results, cancelled=cancelled, reason=reason, message=message)
         finally:
             self._run_namespace = None
             self._results.end_run()
+
+    def _log_run_end(
+        self,
+        run_id: str,
+        results: list[dict[str, Any]],
+        *,
+        cancelled: bool,
+        reason: str | None,
+        message: str | None,
+    ) -> None:
+        """Close the audit trail with what the run actually changed.
+
+        Logged before the completion frame is emitted, so a run whose terminal
+        event never reaches the frontend still leaves the removed ids on disk.
+        """
+        removed = sorted({rom_id for result in results for rom_id in (result.get("removed_rom_ids") or [])})
+        app_ids = sorted(
+            {
+                app_id
+                for result in results
+                for app_id in (result.get("app_id"), result.get("removed_app_id"))
+                if app_id is not None
+            }
+        )
+        outcome = "cancelled" if cancelled else "finished"
+        tail = f", reason={reason}: {message}" if reason else ""
+        self._logger.info(
+            f"Cleanup run {run_id} {outcome}: {len(results)} group(s), removed={removed}, affected_app_ids={app_ids}"
+            f"{tail}"
+        )
 
     async def _run_group(
         self,
