@@ -12,10 +12,10 @@ Both must be on PATH.
     build.py --gif                only the animated GIF
     build.py --size <px>          master raster size (default 512)
 
-The GIF is quantised against a palette generated from the whole sequence, not
-per frame, so the flat colours stay flat and the loop does not shimmer. The mark
-has few enough colours that a small palette is lossless in practice, which is
-most of why the file stays small.
+The GIF is quantised against a palette generated from the whole sequence rather
+than one per frame, so the flat colours stay flat and the loop does not shimmer.
+That single shared palette, and no dithering, is most of why the file stays well
+under a per-frame-palette encode of the same footage.
 """
 
 from __future__ import annotations
@@ -31,18 +31,25 @@ import gen
 HERE = pathlib.Path(__file__).parent
 PNG_SIZES = (512, 256, 128, 64, 32)
 
+
 # One palette for the whole sequence, then mapped against it. `stats_mode=full`
 # looks at every frame, so a colour that only appears mid-morph still gets a slot.
 #
 # Dithering is off on purpose. The mark is flat colour over flat colour, so the
-# only thing a dither adds is per-pixel noise — which reads as grain *and* costs
-# a fifth of the file, because LZW cannot compress it. 24 slots cover the ten
-# real colours plus the antialiased edges between them with no visible banding.
-_GIF_FILTER = (
-    "split[a][b];"
-    "[a]palettegen=max_colors=24:stats_mode=full:reserve_transparent=1[p];"
-    "[b][p]paletteuse=dither=none:diff_mode=rectangle"
-)
+# only thing a dither adds is per-pixel noise — which reads as grain *and* costs a
+# fifth of the file, because LZW cannot compress it.
+#
+# The mark itself only has about ten colours; the rest of the palette goes on the
+# antialiased edges between them, and at 512px there are enough edge pixels that a
+# small palette starts to show. Measured against the source frames, 24 slots leave
+# a worst-case channel error of 49 on 1.2% of pixels, 64 slots halve that to 26 on
+# 0.3%, and going further buys very little for its size. Hence 64.
+def _gif_filter(colors: int) -> str:
+    return (
+        "split[a][b];"
+        f"[a]palettegen=max_colors={colors}:stats_mode=full:reserve_transparent=1[p];"
+        "[b][p]paletteuse=dither=none:diff_mode=rectangle"
+    )
 
 
 def _require(*tools: str) -> None:
@@ -74,8 +81,15 @@ def build_static(out: pathlib.Path, pal: gen.Palette, size: int) -> None:
     print("  contact-sheet.png")
 
 
-def _gif(frames_glob: pathlib.Path, dest: pathlib.Path, fps: int, scale: int | None = None) -> None:
-    vf = _GIF_FILTER if scale is None else f"scale={scale}:{scale}:flags=lanczos,{_GIF_FILTER}"
+def _gif(
+    frames_glob: pathlib.Path,
+    dest: pathlib.Path,
+    fps: int,
+    scale: int | None = None,
+    colors: int = 64,
+) -> None:
+    filt = _gif_filter(colors)
+    vf = filt if scale is None else f"scale={scale}:{scale}:flags=lanczos,{filt}"
     _run(
         [
             *("ffmpeg", "-v", "error", "-y"),
@@ -100,12 +114,14 @@ def build_gif(out: pathlib.Path, pal: gen.Palette, size: int, a: anim.Animation)
     pattern = work / "f%03d.png"
     gif = out / "logo-animated.gif"
     _gif(pattern, gif, a.fps)
-    print(f"  {gif.name}  ({gif.stat().st_size:,}b, {a.frames} frames @ {a.fps}fps)")
+    print(f"  {gif.name}  ({gif.stat().st_size:,}b, {size}px, {a.frames} frames @ {a.fps}fps)  <- shipped")
 
-    # A smaller one for inline use, where 512 is far more than the slot needs.
+    # A half-size one for slots that never render bigger than this. Quarter the
+    # pixels means quarter the antialiased edge, so it needs far less palette to
+    # stay clean — 24 measures as well here as 64 does at full size.
     small = out / "logo-animated-256.gif"
-    _gif(pattern, small, a.fps, scale=256)
-    print(f"  {small.name}  ({small.stat().st_size:,}b)")
+    _gif(pattern, small, a.fps, scale=256, colors=24)
+    print(f"  {small.name}  ({small.stat().st_size:,}b, 256px)")
 
 
 if __name__ == "__main__":

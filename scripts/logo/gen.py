@@ -119,6 +119,12 @@ class Geometry:
     # from the measured constants so it stays clear which numbers are observed and
     # which are taste.
     dpad_scale: float = 0.93
+    # Bar width at full morph, as a fraction of the resting width. Separate from
+    # `cap_w` because that width is the resting capsule's and is measured; only the
+    # cross gets to be leaner. Do not take it below the point where a dot's reach
+    # (dot_r * dot_shrink) exceeds half the narrowed bar, or the dots break out of
+    # the arms.
+    dpad_bar_narrow: float = 0.9
 
     # The facet's direction. None keeps it parallel to the bars, which is what
     # makes the seam line up with their slant; set a number to break that
@@ -326,12 +332,14 @@ def _body(uid: str, g: Geometry, ink: tuple[str, str], morph: float) -> str:
     """
     ul, lr, corners = _diamond(g, morph)
     hubs = (ul, lr)
-    # The ends unround and reach further as the cross forms; at rest both fall back
-    # to half the bar width, which is exactly the capsule the static asset needs.
-    h = g.cap_w / 2.0
-    end_r = h * (1.0 + (g.dpad_end_round - 1.0) * morph)
-    overhang = h + (g.dpad_overhang * g.dpad_scale - h) * morph
-    arms = "".join(_arm(hubs[hub], (x, y), g.cap_w, end_r, overhang) for hub, x, y, _ in corners)
+    # The bars narrow, their ends unround and they reach further as the cross forms.
+    # At morph 0 all three fall back to the resting capsule the static asset needs:
+    # full width, a semicircular end, and an overhang of exactly half that width.
+    rest_h = g.cap_w / 2.0
+    w = g.cap_w * (1.0 + (g.dpad_bar_narrow - 1.0) * morph)
+    end_r = (w / 2.0) * (1.0 + (g.dpad_end_round - 1.0) * morph)
+    overhang = rest_h + (g.dpad_overhang * g.dpad_scale - rest_h) * morph
+    arms = "".join(_arm(hubs[hub], (x, y), w, end_r, overhang) for hub, x, y, _ in corners)
     return (
         f'<g fill="{ink[0]}">{arms}</g>'
         f'<clipPath id="bd{uid}"><polygon points="{_half_plane(g)}"/></clipPath>'
