@@ -97,12 +97,22 @@ class Geometry:
     # 1 keeps the circle, 0 is a sharp triangle, and the default leaves the edges
     # visibly straight while the corners stay soft.
     dot_tri_blend: float = 0.42
+    # The dots also draw in as the cross forms — the D-pad's triangles reach less
+    # far than the resting circles' radius, by this fraction. Measured off the
+    # delivered loop; 1 would keep them the same size throughout.
+    dot_shrink: float = 0.862
 
     # How round the cross's arm ends are, as a fraction of half the bar width. 1
-    # is the semicircle the resting capsule needs, 0 a square end. Only applies at
-    # full morph — the resting shape always gets its stadium back, so this cannot
-    # disturb the static asset.
-    dpad_end_round: float = 0.65
+    # is a semicircle, 0 a square end. The delivered loop measures as an exact
+    # semicircle, so 1 is both the default and the faithful value — an end that
+    # looks too round is a sign the arm is too short, not too round. Only applies
+    # at full morph, so it cannot disturb the static asset either way.
+    dpad_end_round: float = 1.0
+    # How far the cross's arms run past their dots. At rest this is half the bar
+    # width, because a capsule's end cap is centred on its dot; the cross reaches
+    # further, so the dots sit inside the arms rather than capping them. Measured
+    # off the delivered loop.
+    dpad_overhang: float = 22.2
 
     # The facet's direction. None keeps it parallel to the bars, which is what
     # makes the seam line up with their slant; set a number to break that
@@ -255,8 +265,14 @@ def _faceted_arc(uid: str, a0: float, a1: float, ink: tuple[str, str], g: Geomet
     )
 
 
-def _arm(hub: tuple[float, float], dot: tuple[float, float], w: float, end_r: float) -> str:
-    """One bar, hub to dot, with only its outer corners rounded.
+def _arm(
+    hub: tuple[float, float],
+    dot: tuple[float, float],
+    w: float,
+    end_r: float,
+    overhang: float,
+) -> str:
+    """One bar, hub to dot and `overhang` beyond it, with only its outer corners rounded.
 
     The inner end runs half a width *past* the hub so the bars meeting there
     overlap rather than showing their own corners — which is what lets the outer
@@ -271,7 +287,7 @@ def _arm(hub: tuple[float, float], dot: tuple[float, float], w: float, end_r: fl
     px, py = -uy, ux  # +90° in screen terms
     h = w / 2.0
     r = min(max(end_r, 0.0), h)
-    bx, by = dot[0] + ux * h, dot[1] + uy * h  # outer end face
+    bx, by = dot[0] + ux * overhang, dot[1] + uy * overhang  # outer end face
     ax, ay = hub[0] - ux * h, hub[1] - uy * h  # inner end face, past the hub
 
     def pt(x: float, y: float) -> str:
@@ -297,10 +313,12 @@ def _body(uid: str, g: Geometry, ink: tuple[str, str], morph: float) -> str:
     """
     ul, lr, corners = _diamond(g, morph)
     hubs = (ul, lr)
-    # The ends unround as the cross forms; the resting capsule keeps its semicircle.
+    # The ends unround and reach further as the cross forms; at rest both fall back
+    # to half the bar width, which is exactly the capsule the static asset needs.
     h = g.cap_w / 2.0
     end_r = h * (1.0 + (g.dpad_end_round - 1.0) * morph)
-    arms = "".join(_arm(hubs[hub], (x, y), g.cap_w, end_r) for hub, x, y, _ in corners)
+    overhang = h + (g.dpad_overhang - h) * morph
+    arms = "".join(_arm(hubs[hub], (x, y), g.cap_w, end_r, overhang) for hub, x, y, _ in corners)
     return (
         f'<g fill="{ink[0]}">{arms}</g>'
         f'<clipPath id="bd{uid}"><polygon points="{_half_plane(g)}"/></clipPath>'
@@ -324,11 +342,12 @@ def _dot(cx: float, cy: float, g: Geometry, pal: Palette, fill: str, morph: floa
     if morph <= 0.0:
         return f'<circle cx="{cx:.3f}" cy="{cy:.3f}" r="{g.dot_r:.3f}" fill="{fill}"{ring}/>'
 
-    # rho 1 keeps the circle, 0 sharpens to a triangle; the vertex reaches dot_r
+    # rho 1 keeps the circle, 0 sharpens to a triangle; the vertex reaches `span`
     # either way because the triangle shrinks by exactly what the offset adds.
     rho = 1.0 - morph * (1.0 - g.dot_tri_blend)
-    reach = g.dot_r * (1.0 - rho)  # vertex distance from the dot's centre
-    fillet = g.dot_r * rho  # corner radius
+    span = g.dot_r * (1.0 + (g.dot_shrink - 1.0) * morph)
+    reach = span * (1.0 - rho)  # vertex distance from the dot's centre
+    fillet = span * rho  # corner radius
     sixty = math.pi / 3.0
 
     corners = []
