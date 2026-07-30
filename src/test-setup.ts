@@ -172,7 +172,11 @@ vi.mock("@decky/ui", () => {
     showModal: vi.fn(),
     showContextMenu: vi.fn(),
     Menu: passthrough("div"),
-    MenuItem: ({ children, onClick }: AnyProps) => createElement("button", { onClick }, children as never),
+    // `disabled` is forwarded: dropping it would let a test click an item the
+    // component deliberately disabled and assert the resulting call, i.e. pass
+    // against behavior the real UI does not have.
+    MenuItem: ({ children, onClick, disabled }: AnyProps) =>
+      createElement("button", { onClick, disabled }, children as never),
     Router: { CloseSideMenus: vi.fn(), Navigate: vi.fn() },
     Navigation: { NavigateToExternalWeb: vi.fn(), Navigate: vi.fn() },
     // findSP locates Steam's <SteamRoot> iframe document for stylesheet

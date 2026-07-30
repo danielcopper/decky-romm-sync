@@ -2,13 +2,14 @@
 
 The ladder's safety rule is that a still-alive process is NEVER asked to stop a
 second time (emulators skip their save flush on the repeat and destroy the save
-file); the only escalation is the force kill after the grace window. The
-exactly-once test in :class:`TestNeverRepeatsTheStopRequest` is the guard for
-that rule and must not be weakened.
+file); the only escalation is the force kill after the grace window. The rule
+has two halves — no retry inside one call, and no second concurrent call — and
+:class:`TestNeverRepeatsTheStopRequest` guards both. Neither may be weakened.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from unittest.mock import MagicMock
 
@@ -26,9 +27,27 @@ from services.game_process import (
 APP_ID = "net.retrodeck.retrodeck"
 
 
+class _YieldingSleeper:
+    """``Sleeper`` that hands control back to the event loop without real delay.
+
+    ``FakeSleeper`` returns without ever suspending, so two coroutines driven
+    through it never interleave — a concurrency test built on it would run the
+    two calls strictly one after the other and pass vacuously. This one awaits a
+    zero-delay ``asyncio.sleep``, so a second call genuinely arrives while the
+    first is parked inside its grace window.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[float] = []
+
+    async def sleep(self, seconds: float) -> None:
+        self.calls.append(seconds)
+        await asyncio.sleep(0)
+
+
 def _make_service(
     control: FakeGameProcessControlAdapter,
-    sleeper: FakeSleeper | None = None,
+    sleeper: FakeSleeper | _YieldingSleeper | None = None,
 ) -> GameProcessService:
     return GameProcessService(
         config=GameProcessServiceConfig(
@@ -163,15 +182,19 @@ class TestEscalationToForceKill:
 
     @pytest.mark.asyncio
     async def test_a_force_kill_that_cannot_be_delivered_is_not_counted(self) -> None:
-        # The process survived the stop request but vanished before the force
-        # kill (or belongs to another user) — the run still succeeds.
+        # The process took the stop request, survived the grace window, and then
+        # vanished before the force kill landed (or belongs to another user).
+        # ``unkillable`` — not ``unsignalable`` — so the stop request still
+        # succeeds and the pid actually reaches the force rung.
         control = FakeGameProcessControlAdapter(pids=[101])
         control.survive_stop = {101}
-        control.unsignalable = {101}
+        control.unkillable = {101}
 
         result = await _make_service(control).stop_running_game()
 
-        assert result == {"success": True, "stopped": 0, "force_killed": 0}
+        # The force kill was genuinely attempted and genuinely reported False.
+        assert control.kill_calls == [101]
+        assert result == {"success": True, "stopped": 1, "force_killed": 0}
 
 
 class TestNeverRepeatsTheStopRequest:
@@ -181,6 +204,11 @@ class TestNeverRepeatsTheStopRequest:
     with no ``atexit``), DuckStation/PCSX2 (``quick_exit``) and Dolphin
     (``SA_RESETHAND``) skip the save flush the first one started, destroying the
     save file. Only the force kill may escalate.
+
+    "Ever" is literal and covers both halves: no retry loop inside a single
+    ladder, AND no second ladder running concurrently with the first. The
+    in-call half alone is not the guarantee — the grace window yields the event
+    loop for seconds, which is ample time for a second callable to arrive.
     """
 
     @pytest.mark.asyncio
@@ -206,6 +234,82 @@ class TestNeverRepeatsTheStopRequest:
 
         assert control.stop_calls == [101, 102, 103]
         assert sorted(control.kill_calls) == [101, 102, 103]
+
+    @pytest.mark.asyncio
+    async def test_a_concurrent_second_call_never_re_asks_the_same_process(self) -> None:
+        """The cross-CALL half of the guarantee — the save-destroying scenario.
+
+        The user presses Stop, the emulator starts flushing a large memory card,
+        the UI shows nothing changing for seconds, and the user presses Stop
+        again. Without the single-flight claim the second call rediscovers the
+        same still-alive pids and sends a second stop request, which is exactly
+        what makes the emulator abandon the flush.
+        """
+        control = FakeGameProcessControlAdapter(pids=[101])
+        control.survive_stop = {101}
+        # A yielding sleeper, so the second call really does land while the first
+        # is parked in its grace window (see _YieldingSleeper).
+        service = _make_service(control, _YieldingSleeper())
+
+        first, second = await asyncio.gather(
+            service.stop_running_game(),
+            service.stop_running_game(),
+        )
+
+        # THE assertion: one stop request for that pid across BOTH calls.
+        assert control.stop_calls == [101]
+        # The loser is refused with the canonical shape rather than silently
+        # no-oping, so the frontend can say something true about it.
+        outcomes = {first["success"], second["success"]}
+        assert outcomes == {True, False}
+        refused = first if first["success"] is False else second
+        assert refused["reason"] == "already_stopping"
+        assert isinstance(refused["message"], str) and refused["message"]
+        assert "error" not in refused
+        assert "error_code" not in refused
+        # The refusal never touched the process table at all.
+        assert control.find_calls == [APP_ID]
+
+    @pytest.mark.asyncio
+    async def test_the_claim_is_released_so_a_later_stop_still_works(self) -> None:
+        # The guard is single-FLIGHT, not once-per-session: once the ladder ends,
+        # a fresh Stop for a new session must be admitted normally.
+        control = FakeGameProcessControlAdapter(pids=[101])
+        service = _make_service(control)
+
+        assert (await service.stop_running_game())["success"] is True
+
+        control.pids = [202]
+        control.alive = {202}
+        second = await service.stop_running_game()
+
+        assert second == {"success": True, "stopped": 1, "force_killed": 0}
+        assert control.stop_calls == [101, 202]
+
+    @pytest.mark.asyncio
+    async def test_the_claim_is_released_when_the_ladder_raises(self) -> None:
+        # A leaked flag would make Stop Game permanently unavailable for the rest
+        # of the session, so the release must survive an exception.
+        control = FakeGameProcessControlAdapter(pids=[101])
+        service = _make_service(control)
+        real_find = control.find_game_pids
+        find_count = 0
+
+        def _boom_on_first_call(app_id: str) -> list[int]:
+            nonlocal find_count
+            find_count += 1
+            if find_count == 1:
+                raise RuntimeError("proc exploded")
+            return real_find(app_id)
+
+        control.find_game_pids = _boom_on_first_call  # type: ignore[method-assign]
+
+        with pytest.raises(RuntimeError, match="proc exploded"):
+            await service.stop_running_game()
+
+        # The next call is admitted normally, not refused with already_stopping.
+        assert (await service.stop_running_game())["success"] is True
+        assert control.stop_calls == [101]
 
 
 class TestRacesDuringTheLadder:

@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, waitFor, act } from "@testing-library/react";
+import { render, waitFor, act, within } from "@testing-library/react";
 import { toaster } from "@decky/api";
 import { showContextMenu, Navigation } from "@decky/ui";
 import type { ReactElement } from "react";
@@ -2241,19 +2241,23 @@ describe("CustomPlayButton — Stop Game", () => {
   });
 
   // Open the running-actions chevron and render the <Menu> the showContextMenu
-  // spy captured, so its MenuItem buttons are clickable.
-  function openRunningMenu(button: HTMLElement): ReturnType<typeof render> {
+  // spy captured, so its MenuItem buttons are clickable. Queries are scoped to
+  // this menu's own container via `within`: several tests open the menu more
+  // than once, and RTL's render-bound queries search all of document.body, so
+  // an unscoped lookup would match every menu rendered so far.
+  function openRunningMenu(button: HTMLElement): ReturnType<typeof within> {
     act(() => {
       button.click();
     });
     expect(showContextMenu).toHaveBeenCalled();
     const calls = vi.mocked(showContextMenu).mock.calls;
-    return render(calls[calls.length - 1]![0] as ReactElement);
+    const { container } = render(calls[calls.length - 1]![0] as ReactElement);
+    return within(container);
   }
 
   async function renderRunningWithMenu(): Promise<{
     utils: ReturnType<typeof render>;
-    menu: ReturnType<typeof render>;
+    menu: ReturnType<typeof within>;
   }> {
     const utils = render(<CustomPlayButton appId={100} />);
     await utils.findByText("Resume");
@@ -2400,6 +2404,118 @@ describe("CustomPlayButton — Stop Game", () => {
       expect.stringContaining("stop_running_game threw for appId=100"),
     );
     expect(await utils.findByText("Resume")).toBeInTheDocument();
+  });
+
+  it("disables Stop Game and reads Stopping... while the call is outstanding", async () => {
+    // The backend ladder can take seconds with nothing visible changing (the
+    // emulator is flushing its save). Park the call so the in-flight render is
+    // observable, then release it.
+    let release: (v: { success: boolean; stopped: number; force_killed: number }) => void = () => {};
+    vi.mocked(backend.stopRunningGame).mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    const { utils, menu } = await renderRunningWithMenu();
+    const stopItem = await menu.findByText("Stop Game");
+
+    await act(async () => {
+      stopItem.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Reopening the chevron mid-flight shows the disabled, relabelled item.
+    const chevron = await utils.findByLabelText("Game actions");
+    const pendingMenu = openRunningMenu(chevron);
+    const pendingItem = await pendingMenu.findByText("Stopping...");
+    expect(pendingItem).toBeInTheDocument();
+    expect(pendingMenu.queryByText("Stop Game")).toBeNull();
+    expect(pendingItem.closest("button")).toBeDisabled();
+
+    await act(async () => {
+      release({ success: true, stopped: 1, force_killed: 0 });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Post-state: the stop landed and the overlay came down.
+    expect(await utils.findByText("Play")).toBeInTheDocument();
+  });
+
+  it("does not fire a second backend stop while one is in flight", async () => {
+    // A second stop request to a flushing emulator destroys the save it is
+    // writing, so the in-flight press must not reach the backend at all.
+    let release: (v: { success: boolean; stopped: number; force_killed: number }) => void = () => {};
+    vi.mocked(backend.stopRunningGame).mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    const { utils, menu } = await renderRunningWithMenu();
+    const stopItem = await menu.findByText("Stop Game");
+
+    await act(async () => {
+      stopItem.click();
+      await Promise.resolve();
+    });
+    // Press the ORIGINAL (pre-flag) menu item again — the render-level disable
+    // never saw this node, so only the in-flight guard can stop it.
+    await act(async () => {
+      stopItem.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Exactly one backend call, and the second press never re-confirmed either.
+    expect(backend.stopRunningGame).toHaveBeenCalledTimes(1);
+    expect(showStopGameModal).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(backend.debugLog)).toHaveBeenCalledWith(expect.stringContaining("a stop is already in flight"));
+
+    await act(async () => {
+      release({ success: true, stopped: 1, force_killed: 0 });
+      await Promise.resolve();
+    });
+    expect(await utils.findByText("Play")).toBeInTheDocument();
+  });
+
+  it("re-enables Stop Game after a failed stop so it can be retried", async () => {
+    vi.mocked(backend.stopRunningGame).mockRejectedValue(new Error("bridge died"));
+    const { utils, menu } = await renderRunningWithMenu();
+    const stopItem = await menu.findByText("Stop Game");
+
+    await act(async () => {
+      stopItem.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Non-vacuous: the flag was released in the finally, so the item is back to
+    // "Stop Game" and enabled — a leaked flag would strand it on "Stopping...".
+    const chevron = await utils.findByLabelText("Game actions");
+    const retryMenu = openRunningMenu(chevron);
+    const retryItem = await retryMenu.findByText("Stop Game");
+    expect(retryItem.closest("button")).not.toBeDisabled();
+    expect(retryMenu.queryByText("Stopping...")).toBeNull();
+  });
+
+  it("does not strand Stopping... when the confirm is cancelled", async () => {
+    vi.mocked(showStopGameModal).mockResolvedValue(false);
+    const { utils, menu } = await renderRunningWithMenu();
+    const stopItem = await menu.findByText("Stop Game");
+
+    await act(async () => {
+      stopItem.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // The claim is taken only after the confirm resolves true, so an abandoned
+    // modal leaves the item untouched.
+    const chevron = await utils.findByLabelText("Game actions");
+    const reopened = openRunningMenu(chevron);
+    expect(await reopened.findByText("Stop Game")).toBeInTheDocument();
+    expect(reopened.queryByText("Stopping...")).toBeNull();
   });
 
   it("resets a stuck Launching state on a successful stop", async () => {

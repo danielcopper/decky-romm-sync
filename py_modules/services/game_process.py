@@ -53,6 +53,8 @@ class GameProcessService:
         self._logger = config.logger
         self._log_debug = config.log_debug
         self._flatpak_app_id = config.flatpak_app_id
+        # Single-flight admission flag for the ladder — see ``stop_running_game``.
+        self._stopping = False
 
     async def stop_running_game(self) -> dict[str, Any]:
         """Stop the running game, escalating only if it refuses to exit.
@@ -60,14 +62,50 @@ class GameProcessService:
         Returns ``{"success": True, "stopped": int, "force_killed": int}`` once
         every located process has been dealt with, where ``stopped`` counts the
         processes that received the stop request and ``force_killed`` the subset
-        that had to be forced. Returns the canonical
-        ``{"success": False, "reason": "not_running", "message": str}`` when the
-        app has no live process — the honest answer when the frontend's running
-        overlay has gone stale.
+        that had to be forced. Two canonical failures: ``not_running`` when the
+        app has no live process (the honest answer when the frontend's running
+        overlay has gone stale), and ``already_stopping`` when a ladder is
+        already in flight.
 
         A process that exits between discovery and the request is not an error:
         the requested end state is already true, so the run still succeeds (with
         a smaller ``stopped`` count).
+        """
+        # ── Single-flight admission, claimed before ANY await ──────────────────
+        #
+        # The exactly-once stop request is a guarantee across CALLS, not merely
+        # within one. The grace window below yields the event loop for seconds
+        # while the emulator flushes, during which the user sees no change and
+        # may well press Stop again. A second concurrent call would rediscover
+        # the same still-alive pids and send them a second stop request — the
+        # exact save-destroying repeat the ladder exists to prevent. So refuse.
+        #
+        # A plain flag, deliberately NOT an ``asyncio.Lock``: a Lock queues the
+        # second caller and runs it the moment the first releases, which fires
+        # the repeat a few seconds late instead of never. The needed semantic is
+        # REFUSE, not wait. Unsynchronised access is safe because the event loop
+        # is single-threaded and no await sits between the check and the set —
+        # the same compare-and-swap shape as ``LibrarySyncStateBox.try_begin_run``.
+        if self._stopping:
+            self._log_debug("GameProcessService: stop refused — a stop is already in flight")
+            return {
+                "success": False,
+                "reason": "already_stopping",
+                "message": "The game is already being stopped.",
+            }
+        self._stopping = True
+        try:
+            return await self._run_stop_ladder()
+        finally:
+            # Released on every exit path, exceptions included — a leaked flag
+            # would make Stop Game permanently unavailable for the session.
+            self._stopping = False
+
+    async def _run_stop_ladder(self) -> dict[str, Any]:
+        """Run the discovery → stop-request → grace → force ladder once.
+
+        Split from :meth:`stop_running_game` so the single-flight claim and its
+        release read as one unit; every caller must hold that claim.
         """
         pids = self._game_process.find_game_pids(self._flatpak_app_id)
         if not pids:
@@ -92,6 +130,11 @@ class GameProcessService:
         # like a robustness improvement and would silently corrupt saves — the
         # only escalation permitted here is the force kill below, and only once
         # the grace window is fully spent.
+        #
+        # "Never a second request" spans CALLS as well as this loop: a repeat
+        # from a concurrent invocation is just as fatal, which is what the
+        # single-flight claim in ``stop_running_game`` refuses. Both halves are
+        # load-bearing; neither alone gives the guarantee.
         requested = [pid for pid in pids if self._game_process.request_stop(pid)]
         self._log_debug(
             f"GameProcessService: stop requested for {len(requested)}/{len(pids)} "

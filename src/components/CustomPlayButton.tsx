@@ -119,6 +119,12 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   // front instead of running the launch funnel. Seeded synchronously at init and
   // flipped live by the `romm_session_changed` listener.
   const [isRunning, setIsRunning] = useState(false);
+  // Stop Game is outstanding. The backend refuses a concurrent stop outright
+  // (a second stop request would destroy the save the emulator is flushing), so
+  // this exists to keep the user from wanting to press it twice: the menu item
+  // reads "Stopping..." and is disabled while the ladder runs, which can be
+  // several seconds of no visible change.
+  const [stopPending, setStopPending] = useState(false);
   const romIdRef = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -725,6 +731,15 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
     setState((prev) => (prev === "launching" ? "play" : prev));
   };
 
+  // Stop Game is the only action that can reach the backend twice, and the
+  // second reach is save-destroying. The backend's single-flight guard is the
+  // load-bearing half (a remount, a second detail page, or the retry the error
+  // toast invites all bypass anything held in this component's state); this
+  // ref only stops the same button from firing twice. A ref, not the
+  // `stopPending` state, because two clicks in one frame both read the old
+  // state value — the ref is updated synchronously.
+  const stopInFlightRef = useRef(false);
+
   // Stop the running game. Steam cannot do this itself: the shortcut execs
   // `flatpak run net.retrodeck.retrodeck` and flatpak's portal starts the
   // sandbox outside Steam's `reaper` ancestry, so `SteamClient.Apps.TerminateApp`
@@ -733,6 +748,15 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
   // processes and runs a single-stop-request → grace → force ladder
   // (`services/game_process.py`).
   const handleStopGame = async () => {
+    // A stop is already running — do not start a second one. The disabled menu
+    // item makes this hard to reach; this is the guard for the paths that
+    // bypass the render (a menu opened before the flag flipped, a double-fire
+    // within one frame).
+    if (stopInFlightRef.current) {
+      detach(debugLog(`CustomPlayButton: Stop ignored for appId=${appId} — a stop is already in flight`));
+      return;
+    }
+
     // Stale-overlay self-heal, mirroring handleResumeGame: if nothing is
     // actually running, the overlay is stale — clear it back to Play without
     // prompting or touching the backend.
@@ -749,6 +773,10 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       return;
     }
 
+    // Claimed only once the user has actually confirmed — an abandoned modal
+    // must not leave Stop Game stuck reading "Stopping...".
+    stopInFlightRef.current = true;
+    setStopPending(true);
     try {
       const result = await stopRunningGame();
       if (result.success || result.reason === "not_running") {
@@ -770,16 +798,23 @@ export const CustomPlayButton: FC<CustomPlayButtonProps> = ({ appId }) => { // N
       // the game may well still be running and Resume must stay reachable.
       detach(debugLog(`CustomPlayButton: stop_running_game threw for appId=${appId}: ${e}`));
       toaster.toast({ title: "RomM Sync", body: "Couldn't stop the game" });
+    } finally {
+      // Released on every path, so a failed stop can be retried deliberately
+      // (the backend, not this flag, is what makes a retry safe).
+      stopInFlightRef.current = false;
+      setStopPending(false);
     }
   };
 
   // Chevron menu for the running overlay — the single destructive Stop Game
-  // action, mirroring the download-state showDownloadActionsMenu shape.
+  // action, mirroring the download-state showDownloadActionsMenu shape. While a
+  // stop is in flight the item is disabled and reads "Stopping..." so the
+  // seconds of no visible change don't read as a missed press.
   const showRunningActionsMenu = (e: MouseEvent) => {
     showContextMenu(
       <Menu label="Game Actions">
-        <MenuItem key="stop" tone="destructive" onClick={() => detach(handleStopGame())}>
-          Stop Game
+        <MenuItem key="stop" tone="destructive" disabled={stopPending} onClick={() => detach(handleStopGame())}>
+          {stopPending ? "Stopping..." : "Stop Game"}
         </MenuItem>
       </Menu>,
       getEventTarget(e),

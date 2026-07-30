@@ -8,14 +8,24 @@ class FakeGameProcessControlAdapter:
 
     Models a process table without touching ``/proc``. ``pids`` is what
     :meth:`find_game_pids` reports for a matching app id (empty models "nothing
-    running"); ``alive`` is the set of pids that still answer :meth:`is_alive`.
-    ``unsignalable`` marks pids whose signals fail (a vanished or foreign
-    process), and ``survive_stop`` marks pids that stay alive through the stop
-    request so the escalation to :meth:`force_kill` is exercised.
+    running"); ``alive`` is the set of pids that still answer :meth:`is_alive`;
+    ``survive_stop`` marks pids that stay alive through the stop request so the
+    escalation to :meth:`force_kill` is exercised.
+
+    The two signal-failure switches are deliberately separate, because a test
+    that wants a failing force kill must still get a *successful* stop request
+    (a pid whose stop request fails never reaches the force rung at all):
+
+    - ``unsignalable`` — :meth:`request_stop` AND :meth:`force_kill` both fail
+      (the process vanished before the ladder reached it, or is foreign).
+    - ``unkillable`` — only :meth:`force_kill` fails (the process survived the
+      stop request, then exited or became unreachable during the grace window).
 
     Every call is recorded so a test can assert the exact ladder: ``stop_calls``
-    is append-only, so a duplicate stop request for one pid is directly
-    observable — the guard for the never-re-request save-safety invariant.
+    is append-only across the fake's whole lifetime, so a duplicate stop request
+    for one pid — whether from a retry loop or from a second concurrent call —
+    is directly observable. That is the guard for the never-re-request
+    save-safety invariant.
     """
 
     def __init__(self, pids: list[int] | None = None, app_id: str | None = None) -> None:
@@ -24,6 +34,7 @@ class FakeGameProcessControlAdapter:
         self.app_id = app_id
         self.alive: set[int] = set(self.pids)
         self.unsignalable: set[int] = set()
+        self.unkillable: set[int] = set()
         self.survive_stop: set[int] = set()
         self.find_calls: list[str] = []
         self.stop_calls: list[int] = []
@@ -46,7 +57,7 @@ class FakeGameProcessControlAdapter:
 
     def force_kill(self, pid: int) -> bool:
         self.kill_calls.append(pid)
-        if pid in self.unsignalable:
+        if pid in self.unsignalable or pid in self.unkillable:
             return False
         self.alive.discard(pid)
         return True

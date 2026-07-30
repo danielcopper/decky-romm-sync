@@ -1770,12 +1770,23 @@ and Dolphin installs its handler with `SA_RESETHAND` so the second signal takes 
 case the repeat destroys the file being written. SIGKILL is the only permitted escalation, and only once the window is
 fully spent. The rule is documented at the ladder in `services/game_process.py` so it survives future edits.
 
+**"Exactly once" spans calls, not just the loop.** The grace window yields the event loop for seconds while the emulator
+flushes, and the UI shows nothing changing in the meantime — the precise conditions under which a user presses Stop
+again. A second concurrent call would rediscover the same still-alive pids and send them the same fatal repeat, so
+`GameProcessService` holds a **single-flight claim** taken before its first `await` and released in a `finally`; the
+loser is refused with `{success: false, reason: "already_stopping", message}`. It is a plain flag rather than an
+`asyncio.Lock` deliberately: a lock _queues_ the second caller and fires the repeat a few seconds late instead of never,
+whereas the needed semantic is refuse. (This mirrors the compare-and-swap shape of `LibrarySyncStateBox.try_begin_run`.)
+The frontend adds its own in-flight flag on top — the Stop Game menu item is disabled and reads "Stopping…" while the
+call is outstanding — but that is a convenience, not the guarantee: a remount, a second game-detail page, or the retry
+the error toast invites all bypass component state, so the backend claim is the load-bearing half.
+
 Layering follows the usual split: `GameProcessControl` (`services/protocols/infra.py`) is the semantic seam — POSIX
 signal numbers never reach `services/` — `adapters/game_process.py` implements it, and `GameProcessService` owns the
 policy with an injected `Sleeper` for the grace window. The callable answers `{success: true, stopped, force_killed}`,
-or the canonical `{success: false, reason: "not_running", message}` when nothing of RetroDECK's is alive. The frontend
-treats `not_running` exactly like its own stale-overlay self-heal: clear the overlay (and reset a `launching` state
-stuck underneath it) rather than surface an error.
+or a canonical failure: `not_running` when nothing of RetroDECK's is alive, `already_stopping` when a ladder is in
+flight. The frontend treats `not_running` exactly like its own stale-overlay self-heal: clear the overlay (and reset a
+`launching` state stuck underneath it) rather than surface an error.
 
 ### App ID to ROM ID mapping
 
