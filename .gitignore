@@ -7,6 +7,9 @@ dist/
 # MkDocs build output
 site/
 
+# Logo render staging — the shipped copies live in assets/ and docs/assets/
+scripts/logo/out/
+
 # Environment
 .env
 .env.*
