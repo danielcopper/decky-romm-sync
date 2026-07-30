@@ -6,11 +6,15 @@ Wraps the two external tools the drawing code deliberately knows nothing about
 Both must be on PATH.
 
     build.py                      everything, into scripts/logo/out/
+    build.py --install            everything, into the paths the repo ships from
     build.py --out <dir>          somewhere else
     build.py --palette <name>     a palette other than the chosen one
     build.py --static             only the static SVG + PNGs
     build.py --gif                only the animated GIF
     build.py --size <px>          master raster size (default 512)
+
+`--install` is the one to run after changing the mark: it writes every shipped
+copy from the same render, so `assets/` and `docs/assets/` cannot drift apart.
 
 The GIF is quantised against a palette generated from the whole sequence rather
 than one per frame, so the flat colours stay flat and the loop does not shimmer.
@@ -29,7 +33,7 @@ import anim
 import gen
 
 HERE = pathlib.Path(__file__).parent
-PNG_SIZES = (512, 256, 128, 64, 32)
+PNG_SIZES = (1024, 512, 256, 128, 64, 32)
 
 
 # One palette for the whole sequence, then mapped against it. `stats_mode=full`
@@ -124,6 +128,31 @@ def build_gif(out: pathlib.Path, pal: gen.Palette, size: int, a: anim.Animation)
     print(f"  {small.name}  ({small.stat().st_size:,}b, 256px)")
 
 
+REPO = HERE.parent.parent
+
+# Where each shipped file goes. The mark lands twice because MkDocs only serves
+# what lives under docs/, and the README needs a path that resolves on GitHub.
+INSTALL = {
+    "logo.svg": ("assets/logo.svg", "docs/assets/logo.svg"),
+    "logo.png": ("assets/logo.png", "docs/assets/logo.png"),
+    "logo-animated.gif": ("assets/logo-animated.gif", "docs/assets/logo-animated.gif"),
+}
+# The Decky store pulls this one straight off the default branch by URL.
+STORE_IMAGE = ("logo-1024.png", "assets/store_image.png")
+
+
+def install(out: pathlib.Path) -> None:
+    """Copy the freshly built files over the ones the repo ships."""
+    pairs = [(out / src, REPO / dest) for src, dests in INSTALL.items() for dest in dests]
+    pairs.append((out / STORE_IMAGE[0], REPO / STORE_IMAGE[1]))
+    for src, dest in pairs:
+        if not src.exists():
+            sys.exit(f"not built: {src}")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dest)
+        print(f"  {dest.relative_to(REPO)}  ({dest.stat().st_size:,}b)")
+
+
 if __name__ == "__main__":
     argv = sys.argv[1:]
     out = pathlib.Path(argv[argv.index("--out") + 1]) if "--out" in argv else HERE / "out"
@@ -137,3 +166,6 @@ if __name__ == "__main__":
         build_static(out, pal, size)
     if not only_static:
         build_gif(out, pal, size, anim.DEFAULT_ANIMATION)
+    if "--install" in argv:
+        print("installing:")
+        install(out)
