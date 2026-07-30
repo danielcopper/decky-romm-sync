@@ -671,7 +671,7 @@ With every consumer moved over, the teardown completed: the dead persisters, the
 (`shortcut_registry`, `metadata_cache`, `installed_roms`, and the catch-all `state` dict) are all deleted.
 
 Chapter 8+ of the Cosmic Python book (domain events + message bus) is explicitly out of scope for this epic; the
-triggers for revisiting that scope are recorded in `CLAUDE.md`.
+triggers for revisiting that scope are recorded in `.claude/rules/adapters-domain.md`.
 
 ## See also
 

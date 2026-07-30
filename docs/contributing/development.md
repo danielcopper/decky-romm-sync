@@ -67,8 +67,8 @@ Tests mirror the source layout (`tests/services/`, `tests/adapters/`, `tests/dom
 with each test file mapping 1:1 to a source module. Shared mocks live in `tests/conftest.py`, which also provides a mock
 `decky` module so tests run without Decky Loader.
 
-Frontend component tests run with `mise run test:frontend` (`pnpm test`); see the CLAUDE.md "Frontend component tests"
-section for the `@decky/api` event harness.
+Frontend component tests run with `mise run test:frontend` (`pnpm test`); see `.claude/rules/testing-frontend.md` for
+the `@decky/api` event harness.
 
 ### Property-based tests
 
@@ -84,7 +84,7 @@ python -m pytest tests/domain/test_sync_action_property.py tests/domain/test_sav
 Hypothesis is a dev-only dependency (pinned in `requirements-dev.txt`, compiled into `requirements-dev.lock` via
 `mise run lock-update` — it never ships in the plugin). A CI-safe profile in `tests/conftest.py` sets `deadline=None`
 (no timing flakes on shared runners) and a fixed example count. The example database is written to `.hypothesis/`, which
-is gitignored. See the CLAUDE.md "Testing" section for the convention on pinning a property that encodes an open bug.
+is gitignored. See `.claude/rules/testing-backend.md` for the convention on pinning a property that encodes an open bug.
 
 ### Contract tests
 
@@ -102,7 +102,7 @@ python -m pytest tests/contract/ -q
 ```
 
 A `backend.ts` manifest gate (Phase 2) that pins the frontend and backend to one parsed artifact is a forthcoming
-separate change. See the CLAUDE.md "Testing" section for the full contract-tier rules.
+separate change. See `.claude/rules/testing-backend.md` for the full contract-tier rules.
 
 ### Gavel conformance vectors
 
@@ -249,6 +249,14 @@ event channel. The same parity assertion is surfaced inside the pytest run by `t
 literal appears anywhere except its owning adapter (`adapters/persistence.py`); confining the literal to one module
 keeps all settings writes in the single crash-safe owner.
 
+`mise run lint` (and CI) also runs `scripts/check_module_size.py`, the decomposition-threshold ratchet: no module in
+`services/` or `bootstrap.py` may cross the ~700-line threshold, and the modules that were already over it when the gate
+landed are pinned at their exact size, so they cannot grow. The pin list lives in the script and only ever gets shorter
+— a module that drops back under the threshold has to leave it, and a module that banks 50+ lines of slack gets a
+non-fatal note asking for its ceiling to be lowered. `main.py` is deliberately out of scope: it grows with the callable
+surface by design. There is deliberately no `--update` flag — re-baselining should be a reviewable diff, never a command
+someone runs to get back to green.
+
 See [Backend Architecture](../architecture/backend-architecture.md) for details.
 
 ## Full CI gate
@@ -275,6 +283,24 @@ SonarCloud scan and its `sonar-gate` (they need `SONAR_TOKEN` and the CI coverag
 - **basedpyright** — Type checking in CI. Checks all source files including the test suite (tests/ is not excluded).
 - **import-linter** — Layer boundary enforcement in CI (see Linting section above).
 - **pytest-cov** — Branch coverage reported to SonarCloud.
+
+## Where the coding conventions live
+
+Two files, split by how often they apply:
+
+- **`CLAUDE.md`** (repo root) — the traps, the cross-cutting invariant register, and the workflow. Everything here
+  applies no matter which file you touch, so it is read up front.
+- **`.claude/rules/*.md`** — the per-area conventions (services, adapters/domain, Python naming and docstrings, callable
+  shapes, bootstrap wiring, vendored assets, backend and frontend testing). Each file carries a `paths:` frontmatter
+  glob and is loaded when a matching file is opened, which keeps the always-on set small.
+
+Most of what lives in `.claude/rules/` has no mechanical check — Protocol suffixes, constructor shape, docstring intent,
+verb-named mutations — so those rules hold only if they are carried while writing. `CLAUDE.md` indexes them with the
+failure mode each one prevents.
+
+Note that `.gitignore` ignores `.claude/*` (worktrees, local agents, `settings.local.json`) and re-includes
+`.claude/rules/` explicitly. Adding a rule file works; adding anything else under `.claude/` will silently not be
+tracked.
 
 ## Project Structure
 

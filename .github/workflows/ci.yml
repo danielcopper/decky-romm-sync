@@ -137,6 +137,9 @@ jobs:
       - name: Check Cosmic Python call bans
         run: bash scripts/check_cosmic_call_bans.sh
 
+      - name: Check module-size ratchet (no new god classes, no growth)
+        run: python scripts/check_module_size.py
+
       - name: Check aggregate field-assignment ban
         run: python scripts/check_aggregate_field_assignment.py
 

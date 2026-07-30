@@ -13,8 +13,9 @@ Three things, and nothing else:
 2. **Cross-cutting invariants** — rules that span files, so no single diff shows the whole rule.
 3. **Workflow** — how we work here; not derivable from the code.
 
-Everything else is topic depth and lives in `docs/`. A rule with a mechanical check needs only its one-line statement
-here (CI carries the enforcement); a rule without one needs its full statement here, because nothing else will catch it.
+Everything else is topic depth: `docs/` for humans, `.claude/rules/` for path-scoped coding conventions. A rule with a
+mechanical check needs only its one-line statement here (CI carries the enforcement); a rule without one needs its full
+statement here or in the rule file that owns its area, because nothing else will catch it.
 
 ## Where the details live
 
@@ -22,6 +23,8 @@ Each page below is the current-truth owner of its area, and most carry their own
 in the area. **Do not cite ADRs from this file** — an ADR is frozen history (and may be `Proposed` or superseded, which
 is invisible at the citation site), so reach it through the page that owns the topic.
 
+- Domain vocabulary — the canonical meaning of project terms — [CONTEXT.md](CONTEXT.md). A glossary, not a spec: use its
+  wording in code, issues, and PRs, and add a term there the moment it resolves in discussion.
 - Steam shortcuts — appIds, artwork, launch-option writes, removal churn —
   [steam-non-steam-shortcuts.md](docs/architecture/steam-non-steam-shortcuts.md)
 - Save-file sync — slots, conflict resolution, negotiate transport, version history —
@@ -36,6 +39,27 @@ is invisible at the citation site), so reach it through the page that owns the t
 - **End-user-facing behavior and UI** — setup, configuration, syncing, save-sync, BIOS, troubleshooting —
   `docs/user-guide/`
 - Dev setup, dependency management, frontend loop — `docs/contributing/`
+
+## Path-scoped rules — `.claude/rules/`
+
+Coding conventions live in `.claude/rules/*.md`, each carrying a `paths:` frontmatter glob. They are plain Markdown, not
+a harness-specific format: an agent that supports path-scoped rules gets one loaded when a matching file is read, and
+**every other agent must open the file itself**. Either way it arrives a beat late for code you are **creating** rather
+than editing, so the entries below lead with what goes wrong unnoticed. Read the rule that owns an area before writing
+new code in it.
+
+- `services.md` — a new service takes **one `config: XxxServiceConfig` kwarg** (frozen, all deps inside); debug logging
+  is the injected `DebugLogger`. Neither is checked.
+- `python-conventions.md` — Protocol suffixes by shape, `do_<verb>` vs. `_<verb>_io`, docstrings stating the contract
+  rather than the behavior, and when a subfolder is justified. **No mechanical check exists for any of it.**
+- `adapters-domain.md` — adapters own I/O, domain is pure, aggregate mutations are verb-named after the event
+  (`adopt_baseline`, not `update_baseline`). The field-assignment ban is checked; the naming is not.
+- `bootstrap-wiring.md` — the `main.py` / `bootstrap.py` split, and why `bootstrap.py` may no longer grow.
+- `callables.md` — the `{success, reason, message}` failure shape and its two carve-outs. Checked.
+- `vendored-assets.md` — `_vendor/`, `native/`, `defaults/` are checksum-pinned verbatim copies. The checksums are
+  checked; the reflex to fix the upstream artifact instead of the copy is not.
+- `testing-backend.md` — test tiers, gate tests, vendored conformance vectors.
+- `testing-frontend.md` — the `@decky/api` event harness, non-vacuous catch assertions.
 
 ## Documentation
 
@@ -91,8 +115,12 @@ Latest release and shipped features: see `git tag --sort=-v:refname` and GitHub 
 ## Development
 
 - **Build**: `pnpm build` (Rollup -> dist/index.js)
-- **Tests**: `python -m pytest tests/ -q` or `mise run test`
-- **Coverage**: `python -m pytest tests/ -q --cov=py_modules --cov=main --cov-report=term --cov-branch`
+- **Tests**: backend — `python -m pytest tests/ -q` or `mise run test`; frontend — `mise run test:frontend` (Vitest +
+  happy-dom)
+- **Coverage**: backend — `python -m pytest tests/ -q --cov=py_modules --cov=main --cov-report=term --cov-branch`;
+  frontend — `mise run test:frontend:coverage`
+- **Lint**: `mise run lint` (import-linter, the `scripts/check_*` gates, markdownlint). Ruff and basedpyright run only
+  inside `mise run gate`.
 - **Gate**: `mise run gate` (the full CI battery in one command — mirrors every PR check; slow. Run before pushing.)
 - **Setup**: `mise run setup` (installs JS + Python dependencies)
 - **Dev reload**: `mise run dev [display]` (build + restart plugin_loader; a display like `dp4` / `internal` also opens
@@ -144,6 +172,9 @@ Format: **invariant** — tier — enforced by.
   same path** — check — `scripts/check_uow_seam_nesting.py`
 - **Services never call clocks / sleep / uuid / random directly (inject the Protocol)** — check —
   `scripts/check_cosmic_call_bans.sh`
+- **No module in `services/` or `bootstrap.py` crosses the ~700-LOC decomposition threshold, and the ones already over
+  it may not grow** — check — `scripts/check_module_size.py` (the modules that predate the gate are grandfathered at
+  their exact size; that list only ever gets shorter)
 - **Service-independence contract list stays complete** — check — `scripts/check_service_independence_contract.py`
 - **Layer import direction (services ↛ adapters, adapters ↛ services, …)** — check — `.importlinter` (`lint-imports`)
 - **No bare `# type: ignore` / blanket suppressions** — check — `scripts/check_no_bare_ignores.sh`
@@ -155,22 +186,22 @@ Format: **invariant** — tier — enforced by.
   `scripts/check_romm_min_version.py` (ADRs excluded: frozen history)
 - **Server-supplied path components pass `safe_join` (`lib/path_safety.py`)** — test + prompt-only — traversal tests per
   path builder; new call sites are prompt-only
-- **No sentinel objects on the wire — explicit JSON-representable tagged values only** — prompt-only — mechanize with
-  #1032 (after tagged values replace the sentinels)
+- **No sentinel objects on the wire — explicit JSON-representable tagged values only** — prompt-only — mechanizable once
+  tagged values have replaced the sentinels
 - **Every destructive op has backup-or-confirm; never delete data that exists nowhere else** — prompt-only — save-file
-  removals route through `MatrixExecutor.quarantine_local_file` (the `.romm-backup` funnel — #965/#1058 done); mechanize
-  the rest via the #794 delete-path fixes (#974 / #1005 / #1062)
+  removals route through `MatrixExecutor.quarantine_local_file` (the `.romm-backup` funnel); every other delete path
+  carries the rule unmechanized
 - **Every read-mutate-write of a `RomSaveSyncState` runs under `SyncEngine.rom_lock(rom_id)`** — prompt-only — sync
-  paths + `get_save_status` + the four slot mutations hold the lock (#1057); mechanize via a `rom_save_sync_states.save`
+  paths, `get_save_status`, and the four slot mutations hold the lock; mechanize via a `rom_save_sync_states.save`
   call-site audit
 - **Per-slot server reads/deletes go through `domain/save_slot.py` (legacy omits `&slot=`, client-filters)** —
   prompt-only — `get_slot_saves` / `get_slot_delete_info` / `delete_slot` / `list_file_versions` / `rollback_to_version`
-  use `slot_query_param` + `save_in_slot` (#1061); RomM can't address `slot:null` via the param, so legacy MUST omit
-  it + filter client-side (legacy delete refused up-front, #1478)
+  use `slot_query_param` + `save_in_slot`; RomM can't address `slot:null` via the param, so legacy MUST omit it + filter
+  client-side, and a legacy delete is refused up-front
 - **Every save-sync decision comes from `compute_sync_action` (via `list_saves`), never the `negotiate` op list; every
   automatic upload POSTs `overwrite=false` (409-backstopped); `overwrite=true` only from an explicit `keep_local`** —
   test + prompt-only — domain property tests (`resolve_upload_conflict`, row-11 split, Inv7/Inv8) + contract 409 tests
-  (`tests/contract/`); new upload/dispatch call sites are prompt-only (#1276)
+  (`tests/contract/`); new upload/dispatch call sites are prompt-only
 - **`applied_launch_options` is written only by the five recorded-state writer sites (sync ack-commit,
   download-complete, uninstall, home-migration, version-switch), each recording the exact command the frontend wrote;
   excluded from the sync UPSERT; the only sanctioned reset is Force Full Sync's clear-to-NULL (a wrong recorded value is
@@ -179,241 +210,11 @@ Format: **invariant** — tier — enforced by.
   `record_applied_launch_options` call-site audit
 - **An abandoned-chunk stash's whole-unit apply staging (`pending_sync` / `pending_all_roms` / `pending_cover_sources`)
   is never mutated while the stash is pending (box IDLE) — every run-entry path passes `try_begin_run`, which clears the
-  stash before any staging write (#1367)** — prompt-only — verified closed in #1367 review; mechanize via a
-  staging-writer call-site audit
+  stash before any staging write** — prompt-only — the invariant holds today rather than being aspirational; mechanize
+  via a staging-writer call-site audit
 
 When a change applies a guard / sanitize / backup / grouping pattern, sweep for sibling sites of the same pattern — the
 register is what that sweep checks against.
-
-## Architecture — Cosmic Python rules
-
-Cosmic Python ("Architecture Patterns with Python", Percival & Gregory) is our north star, adapted for a single-user
-Decky plugin domain. Each rule carries a tag:
-
-- `[CP]` — Canonical Cosmic Python. Hard rule. Breaking it is an architectural regression.
-- `[ours]` — Project convention layered on top. Flag deviations in review, but the rule itself can be debated.
-
-Backend layout: `services/` (orchestration) / `adapters/` (I/O) / `domain/` (pure compute) / `lib/` (cross-cutting
-utilities) / `models/` (data shapes). `import-linter` enforces direction. `[CP]`
-
-**Services**:
-
-- `[CP]` Depend on Protocols (defined in `services/protocols/`, imported as `from services.protocols import X`), never
-  on concrete adapter classes. Carve-out: sub-services within one bounded context (e.g. all of `services/saves/`) may
-  hold concrete peer-service refs in their `*ServiceConfig` when they share an aggregate. `[ours]` A method a peer calls
-  is part of that peer's **public** surface — no leading underscore.
-- `[CP]` No raw I/O. `[ours]` Forbidden in `services/`: `os.*` (except pure path algebra: `relpath`, `join`, `splitext`,
-  `basename`, `dirname`), `open(...)`, `pathlib.Path(...).read_*` / `write_*`, `fcntl.*`, `urllib.*`, `shutil.*`,
-  `subprocess.*`, `hashlib.<x>(open(...))`.
-- `[CP]` No clocks or randomness — inject `Clock` / `UuidGen` / `Sleeper`. `time.time()` / `time.monotonic()` /
-  `datetime.now()` / `uuid.uuid4()` / `asyncio.sleep()` / `random.*` are banned at the call site.
-- `[CP]` No service-to-service concrete imports — services are independent; cross-service deps are Protocol-typed.
-- `[ours]` Module functions from `domain/` are still a coupling — if tests need `patch("services.X.module_name.fn")`,
-  wrap the module behind a Protocol and inject it.
-- `[ours]` **Constructor shape: every service takes a single `config: XxxServiceConfig` keyword argument.** Frozen
-  dataclass. Outer services keep the `Service` token in both names (`SteamGridService` + `SteamGridServiceConfig`);
-  sub-services may use role-based names (`SyncEngine` + `SyncEngineConfig`). All deps live in the config: Protocol-typed
-  adapters, infrastructure (loop, logger, clock, uuid_gen, sleeper), persistence callbacks, settings-derived values. No
-  bare-param ctors, no mixed ctors.
-- `[ours]` **Debug logging: inject the `DebugLogger` Protocol.** No per-service `_log_debug` that re-reads settings at
-  call time; no `decky.logger.info` to bypass log-level filtering.
-- `[ours]` God-class signal: services > ~700 LOC — decompose into sub-services with constructor injection
-  (`services/saves/` is the reference).
-
-**Adapters**: `[CP]` Own all I/O. Never import from `services/`. Implement Protocols defined in `services/protocols/`.
-
-**Domain**: `[CP]` Pure compute only. No I/O, no state mutation, no service or adapter imports. Anything stateless and
-I/O-free currently in a service belongs here.
-
-**Aggregates**: the aggregate roots, their tables, and the enforcement layers are canonical in
-[database-design.md](docs/architecture/database-design.md). Config-shaped toggles live in `settings.json`, not SQLite.
-Rules for the relational state that _does_ live in SQLite:
-
-- `[CP]` One Repository Protocol per aggregate root, not per table.
-- `[CP]` Aggregate methods are the **only** mutation API for the aggregate's state. No external field assignment from
-  services. Field access for reads is fine.
-- `[ours]` **Mutation methods are verb-named after the domain event they represent.** `adopt_baseline(filename, hash)`
-  not `update_baseline(...)`; `mark_installed(path)` not `set_installed(...)`; `promote_slot(slot, source)` not
-  `update_slot_source(...)`. The method name becomes the implicit event name if events are added later.
-- `[ours]` Domain events + message bus are out of scope. Revisit when handler diversity ≥3 kinds for the same state
-  change, or a non-Steam consumer becomes concrete, or telemetry needs to subscribe.
-
-**Bootstrap (`bootstrap.py`)**: `[CP]` The composition root — the only place concrete adapters meet services. `[ours]`
-`WiringConfig` holds the wiring; protocols in, services out. Adapter instantiation never happens in `main.py` — a
-Protocol-wrapped persister is built in `bootstrap()` and passed through `CallbackBundle`.
-
-**Vendored deps (`_vendor/`)**: `[ours]` Third-party runtime deps are vendored under `py_modules/_vendor/<package>/`
-(Decky has no plugin-level package manager) and imported as `from _vendor import <package>`. Only adapters import
-`_vendor.*`; services/domain/lib stay third-party-free (`domain-stdlib-only` contract in `.importlinter`). `_vendor/` is
-excluded from ruff, basedpyright, and Sonar. Every vendored package ships its upstream `LICENSE` and a provenance entry
-in [`_vendor/README.md`](py_modules/_vendor/README.md). Compiled binaries (no source in this repo) are vendored under
-`py_modules/native/` instead (inside one of the fixed directories the Decky CLI packs into the plugin zip) — downloaded
-verbatim from an upstream release with a pinned SHA-256 (CI re-verifies it; the release smoke test asserts the artifact
-ships in the zip), loaded by an adapter via `ctypes` with no Python fallback; provenance and the update procedure live
-in [`native/README.md`](py_modules/native/README.md). Vendored **data** (no source in this repo) follows the same
-discipline: `defaults/bios_registry.json` is copied verbatim from an
-[emu-atlas](https://github.com/danielcopper/emu-atlas) release with a pinned SHA-256
-(`defaults/bios_registry.json.sha256`, CI-verified via `mise run gate`; the release smoke test asserts it ships in the
-zip) — never hand-edit it, regeneration happens upstream; provenance and the update procedure live in
-[`defaults/README.md`](defaults/README.md).
-
-**Process boundaries — `main.py` vs `bootstrap.py`**: `[ours]` `main.py` owns the Decky lifecycle (`_main`, `_unload`)
-and the callable surface (one `async def` per `@callable`). `bootstrap.py` owns adapter instantiation and service
-wiring. The split is binding — no callables in `bootstrap.py`, no service wiring in `main.py`. Both files grow with the
-surface they describe; that is unavoidable density, not god-class. Split `bootstrap.py` into
-`bootstrap/{adapters,services}.py` only past ~700 LOC.
-
-**Reference shape for new service-level work**: a Protocol (in `services/protocols/`) + an adapter implementing it + a
-`FakeXxxAdapter` in `conftest` + `*ServiceConfig` ctor decomposition. `services/saves/` and `services/library/` are the
-reference decompositions for shared-state sub-services. Sequencing for a new vertical: cross-cutting Protocols first,
-domain extraction next, the biggest service last.
-
-If a refactor breaks a `[CP]` rule, that's an architectural regression — call it out and fix it in the same PR or open a
-follow-up. `[ours]` deviations should be flagged in review but can be debated.
-
-## Protocol naming — suffix by shape `[ours]`
-
-- `…Reader` — object-shaped Protocols with multiple methods (`RetroArchConfigReader`).
-- `…Provider` / `…Fn` — call-shaped (`__call__`-only) Protocols (`RetroArchSaveSortingProvider`, `CoreNameProviderFn`).
-- `…Store` — file-store Protocols (`CoverArtFileStore`).
-- `…Cache` — cache Protocols (`SgdbArtworkCache`).
-- `…Persister` — persistence Protocols (`SettingsPersister`).
-- Bare names — pervasive cross-cutting primitives (`Clock`, `Sleeper`, `UuidGen`, `DebugLogger`).
-
-A sibling set that mixes suffixes reflects a shape difference, not an inconsistency.
-
-## Async/sync method naming `[ours]`
-
-- Async methods carry the bare domain-verb name — no `_async` / `Async` suffix.
-- A **synchronous twin** (typically a lock-free worker run via `run_in_executor` that a peer calls directly to avoid
-  re-entering a lock) is named `do_<verb>` if public/peer-called, `_<verb>_io` if private/internal-only. The async
-  public method keeps the bare verb.
-
-The two idioms coexist by access level; unification is tracked in #813.
-
-## Callable response shapes `[ours]`
-
-Callables returning a plain `dict` that can fail use `{success: False, reason: ErrorCode | str, message: str}`. Both
-`reason` and `message` are **required**. Reuse `lib.list_result.ErrorCode` for coarse categories; bespoke guards
-(`config_error`, `sync_disabled`, `not_installed`, …) stay plain-string reasons. Transport failures collapse onto
-`SERVER_UNREACHABLE`; 401 and 403 collapse onto `AUTH_FAILED` (same slug, distinct `message`). The legacy `error_code`
-key and a second `error` key are **forbidden**. Enforced by `scripts/check_failure_shape.py --check`.
-
-Two carve-outs (pattern-exempt in the gate):
-
-- **Discriminated-status unions** (`status: "ok" | "server_unreachable" | …`, used by the saves version-history
-  callables) keep the `status` discriminant instead of `success` — more than two outcomes. Failure branches still carry
-  `message: str`.
-- **Partial-success responses** returning a full payload alongside a failure flag (`get_save_status`'s
-  `server_query_failed: bool`, `get_save_setup_info`'s `recommended_action`) keep the additive flag.
-
-Full convention paragraph: the `lib/list_result.py` module docstring.
-
-## Subfolder layout `[ours]`
-
-Layer top-level folders are flat by default — one file per concept. A subfolder is justified **only when the modules
-within share an internal type, helper, or state**, not when they share a brand-name prefix. `adapters/romm/` qualifies
-(`http.py` is the internal transport for the public `romm_api.py`); `adapters/retroarch/` would not (a config reader and
-a core lookup share only a brand name). Service decompositions with shared state qualify — `services/saves/`,
-`services/library/`.
-
-## Sub-package `__init__.py` `[ours]`
-
-- **Top-level layer namespace** (`adapters/`, `services/`, `domain/`, `lib/`, `models/`): empty (docstring optional).
-  Consumers deep-import.
-- **Consumed via package import** (`from package import X`): contract-style module docstring, re-exports of the public
-  class(es), optional `__all__`. Examples: `services/saves/`, `services/saves/sync_engine/`.
-- **Consumed only via deep-import**: empty or docstring, no re-exports. Example: `adapters/romm/`.
-
-Implementation never lives in `__init__.py` — it is a namespace marker plus re-exports.
-
-## Docstrings — intent over behavior
-
-**Module and class docstrings** describe **what belongs here** (the contract), not what is currently in the file
-(behavior). Behavior listings rot when methods change; contracts don't.
-
-- Bad (class): `"""Owns save_sync_state.json — persistence, migrations, default construction."""` (rots when a 4th
-  responsibility lands)
-- Good (class): `"""Owns save_sync_state.json — single source of truth for on-disk save-sync state."""`
-
-**Method docstrings are different** — one method's contract is naturally scoped, so describing behavior, parameters, and
-return value is fine and stays in sync with the signature.
-
-Avoid: "mechanical extraction from X", "during the transition", "moved from Y", "added for the Z flow", "see PR #123" —
-commit-message content that rots in source.
-
-## Testing
-
-Every backend feature or callable where testing makes sense MUST have unit tests: **happy path**, **bad path** (invalid
-input, missing data, API errors, network failures), and **edge cases** (empty strings, None, masked values `"••••"`,
-boundaries). Tests mirror the source structure (`tests/services/`, `tests/adapters/`, …), one test file per source
-module. Shared mocks live in `tests/conftest.py`.
-
-### Property-based tests — pure decision kernels (hypothesis)
-
-The pure save-sync decision kernels (`domain/sync_action.py`, `domain/save_path.py`, `domain/iso_time.py`) carry a
-property tier on top of hand-enumerated cases, in `tests/domain/test_*_property.py`. Properties state the safety
-invariant directly (no destructive action without a recovery source; decisions stable under timestamp-format variation;
-replay determinism). `hypothesis` is dev-only and never ships.
-
-**A property states the TRUE invariant, never a watered-down one.** If the invariant's fix is still open, the property
-FAILS today — pin it `@pytest.mark.xfail(strict=True, reason="#<issue>: <one-line>")`. When the fix lands the property
-passes → XPASS → CI fails → the marker must be removed. A property is never weakened to go green.
-
-### Contract tests — real `Plugin` over real `bootstrap`
-
-`tests/contract/` crosses the frontend↔backend wire: it builds the **real** `Plugin` through the **real** `bootstrap()`
-and `wire_services()` (real settings dict, real SQLite + migrations, real file-store adapters, all under `tmp_path`) and
-drives the actual `main.py` callables. Only the outermost edges are faked (`romm_api`, `sgdb_adapter`,
-Clock/UuidGen/Sleeper, `emit`, and `http_adapter.with_retry` as a single-attempt pass-through). Harness lives in
-`tests/contract/_harness.py`; seeding helpers in `tests/contract/_seed.py`.
-
-- **Call callables exactly as the frontend does** — positional, JSON-shaped arguments with the arg types declared in
-  `src/api/backend.ts` (literal `None` where the TS type says `null`).
-- **Assert the response SHAPE + behavior, not delegation.** Pin the literal dict keys, the canonical failure shape, the
-  discriminated-status union, and the partial-success carve-outs. Where a callable has a server-reachable failure mode,
-  exercise BOTH the happy path AND the failure path.
-- The `harness` fixture is **async** so it binds the test's running event loop. Each test gets a fresh `tmp_path`.
-
-`scripts/check_callable_manifest.py` derives the frontend surface from every `callable<[Args], Return>("name")` in
-`src/**/*.ts` and the backend surface from the public `async def` methods on `Plugin`, failing on any name or arity
-divergence. It runs standalone in CI and inside pytest via `tests/contract/test_callable_manifest.py`.
-
-### Gavel conformance vectors — vendored contract tier
-
-Two [romm-gavel](https://github.com/danielcopper/romm-gavel) vector families run against the production save-sync
-kernels: **ladder** against `domain/sync_action.resolve_upload_conflict`, **decision-table** against
-`compute_sync_action`. The vectors are vendored verbatim under `tests/domain/gavel_vectors/` at a pinned upstream commit
-(no submodule, no network in CI), so a contract change lands as a reviewable diff. **Never edit a vector to make the
-kernel pass** — updating means deliberately re-copying the JSON and bumping the commit reference in that folder's
-`README.md`.
-
-### emu-atlas conformance vectors — vendored contract tier
-
-The same self-conformance pattern proves the plugin's save-path kernel agrees with
-[emu-atlas](https://github.com/danielcopper/emu-atlas), the config-aware emulator-knowledge library extracted from this
-plugin, where the two overlap. Its `machines` vector family (16 fixture machines in, detected installations + save
-placements out) runs against the real adapters (`RetroDeckPathsAdapter` + `RetroArchConfigAdapter`) and domain functions
-(`resolve_save_dir` / `compute_local_save_target`) in `tests/test_atlas_machine_vectors.py`. The overlap is partial by
-design — the plugin has no standalone-RetroArch saves-root concept (its saves base always comes from RetroDECK paths) —
-so every vector carries an explicit `_CHECK_LEVELS` entry: `full` (end-to-end dir + filename), `layout-only` (only the
-`retroarch.cfg` interpretation — sort flags or the `ContentDir` classification), or `n/a` (no overlap). No vector is
-silently skipped: a new upstream vector without an allowlist entry fails at collection. Vectors are vendored verbatim
-under `tests/atlas_vectors/machines/` at a pinned upstream release tag; **never edit a vector to make the kernel pass**
-— updating means re-copying the JSON and bumping the tag in that folder's `README.md`.
-
-### Frontend component tests — `@decky/api` event harness
-
-`src/test-utils/decky-api-mock.ts` exposes an in-memory event bus that `addEventListener` / `removeEventListener` route
-through. Tests dispatch backend events via `emitDeckyEvent` instead of mocking `@decky/api` per file;
-`src/components/CustomPlayButton.test.tsx` is the reference shape. The bus resets between tests; use
-`deckyEventListenerCount(name)` to assert `useEffect` cleanup ran. DOM-level `globalThis.dispatchEvent` flows bypass the
-harness — happy-dom handles them natively. Prefer the harness over extracting listener bodies into `src/utils/*.ts`
-purely for testability.
-
-**Catch coverage assertions must be non-vacuous.** A test claiming `.catch` coverage MUST assert the post-catch state —
-the fallback return value, the toast body, the `debugLog` message, the surfaced status. Asserting only that the
-rejecting call was invoked is vacuous: it passes with or without the `.catch`.
 
 ## Security
 

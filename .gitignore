@@ -37,8 +37,12 @@ __pycache__/
 *.log
 log.txt
 
-# Claude Code
-.claude/
+# Claude Code — everything is local (worktrees, agents, settings.local.json)
+# except the checked-in path-scoped coding rules. Ignoring the contents rather
+# than the directory itself is what makes the negation below reachable: git does
+# not descend into an ignored directory.
+.claude/*
+!.claude/rules/
 .venv/
 
 # Git worktrees

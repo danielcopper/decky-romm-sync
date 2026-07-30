@@ -52,6 +52,7 @@ run = [
     "python scripts/check_service_independence_contract.py",
     "python scripts/check_callable_manifest.py",
     "bash scripts/check_cosmic_call_bans.sh",
+    "python scripts/check_module_size.py",
     "python scripts/check_aggregate_field_assignment.py",
     "python scripts/check_uow_seam_nesting.py",
     "python scripts/check_failure_shape.py --check",
