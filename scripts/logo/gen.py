@@ -66,6 +66,10 @@ class Geometry:
     arrow_len: float = 22.5  # arrowhead reach along the tangent
     arrow_half: float = 13.8  # arrowhead half-width across the stroke
     arrow_back: float = 3.2  # degrees the head's base sits behind the stroke's end
+    # The head is stroked in its own colour with a round join, which softens all
+    # three corners and inflates it by half this width. Blunting the point that
+    # way is what keeps the arrow from reading as a sharp dart. 0 disables it.
+    arrow_round: float = 4.3
 
     # Capsules: two parallel stadiums tilted off vertical, offset to either side
     # of the seam and slid along their own axis so the pair reads as staggered
@@ -151,8 +155,15 @@ def _faceted_arc(uid: str, a0: float, a1: float, ink: tuple[str, str], g: Geomet
     stroke = f'stroke-width="{g.arc_w}" fill="none" stroke-linecap="round"'
     d = _arc_d(CX, CY, g.arc_r, a0, a1)
     head = _arrowhead(CX, CY, g.arc_r, a1, g)
-    light = f'<path d="{d}" stroke="{ink[0]}" {stroke}/><polygon points="{head}" fill="{ink[0]}"/>'
-    dark = f'<path d="{d}" stroke="{ink[1]}" {stroke}/><polygon points="{head}" fill="{ink[1]}"/>'
+    # Stroking the head in its own tone is what rounds its corners; see
+    # Geometry.arrow_round.
+    soft = f' stroke-width="{g.arrow_round}" stroke-linejoin="round"' if g.arrow_round > 0.0 else ""
+    light = (
+        f'<path d="{d}" stroke="{ink[0]}" {stroke}/><polygon points="{head}" fill="{ink[0]}" stroke="{ink[0]}"{soft}/>'
+    )
+    dark = (
+        f'<path d="{d}" stroke="{ink[1]}" {stroke}/><polygon points="{head}" fill="{ink[1]}" stroke="{ink[1]}"{soft}/>'
+    )
     return (
         f"{light}"
         f'<clipPath id="lr{uid}"><polygon points="{_half_plane(g)}"/></clipPath>'
