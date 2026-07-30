@@ -9,11 +9,11 @@ tones and the "ink" tones (arrows + button bars), each given as (above-left,
 below-right) for the split. The two dot colours are the warm accents and are
 meant to stay put; the blue work happens in the pairs.
 
-The four dots sit on a **square** diamond — up, left, right, down, all the same
-distance from the centre, like the SNES face buttons. That squareness is what
-puts the bars joining adjacent dots at 45°, and the facet follows the bars, so
-the seam and the bars share one angle. A stretched diamond (`cap_stagger` away
-from 0) tilts both off 45° together.
+The four dots sit on a diamond that is **wider than it is tall** — a stretched
+one, not a square. That stretch is what tilts the bars joining adjacent dots past
+45°, to 141.6°, and the facet follows the bars, so the seam and the bars share one
+angle. Squaring the diamond (`cap_stagger` to 0, `dot_along` to half of `cap_sep`)
+would pull both back to 45° together.
 
 The body is drawn as four round-capped bars, each running from a hub to one dot.
 At rest the two hubs sit either side of the seam, so each pair of collinear bars
@@ -76,15 +76,16 @@ class Geometry:
     # way is what keeps the arrow from reading as a sharp dart. 0 disables it.
     arrow_round: float = 4.3
 
-    # The button diamond. `cap_sep` is the distance between the two hubs across
-    # the bar axis; with `cap_stagger` at 0 and `dot_along` at half of it, the
-    # four dots land on a square diamond and the bars sit at 45°. The capsule
-    # length is not a field: it follows as 2 * (dot_along + cap_w / 2), because a
-    # bar's round cap is centred on its dot.
-    cap_angle: float = 135.0  # tilt of the bar axis, degrees
+    # The button diamond. It is a *stretched* diamond, not a square one: wider
+    # than it is tall, which is what tilts the bars past 45° and slides the two
+    # hubs along their own axis relative to each other (`cap_stagger`). Zeroing
+    # the stagger and setting `dot_along` to half of `cap_sep` would square it.
+    # The capsule length is not a field: it follows as 2 * (dot_along + cap_w / 2),
+    # because a bar's round cap is centred on its dot.
+    cap_angle: float = 141.64  # tilt of the bar axis, degrees
     cap_w: float = 31.38  # bar width
-    cap_sep: float = 44.54  # hub-to-hub across the axis
-    cap_stagger: float = 0.0  # hub-to-hub along the axis; non-zero skews the diamond
+    cap_sep: float = 40.96  # hub-to-hub across the axis
+    cap_stagger: float = 9.86  # hub-to-hub along the axis; what skews the diamond
     dot_along: float = 22.27  # dot offset from its hub, along the axis
     dot_r: float = 13.63
 
@@ -167,13 +168,19 @@ def _arrowhead(cx: float, cy: float, r: float, a_end: float, g: Geometry) -> str
 Corner = tuple[int, float, float, float]  # hub index, x, y, outward angle (deg)
 
 
-def _diamond(g: Geometry) -> tuple[tuple[float, float], tuple[float, float], tuple[Corner, ...]]:
-    """The two hubs and the four dots, in draw order.
+def _diamond(g: Geometry, morph: float = 0.0) -> tuple[tuple[float, float], tuple[float, float], tuple[Corner, ...]]:
+    """The two hubs and the four dots, in draw order, at a given morph.
 
     Hub 0 sits above-left of the seam and owns the up and left dots; hub 1 sits
     below-right and owns the down and right ones. Each dot also carries the
     direction pointing away from the disc centre, which is where its triangle
     aims while morphing.
+
+    Morphing does two things at once. The diamond un-stretches — every dot slides
+    out along its own bearing until all four share the widest one's radius, so the
+    D-pad ends up square even though the diamond at rest is not. And each hub
+    slides to the centre, which is what turns a pair of collinear bars into one
+    arm of a cross. Both are why the resting shape and the cross share a routine.
     """
     a = math.radians(g.cap_angle)
     ux, uy = math.cos(a), math.sin(a)
@@ -182,14 +189,32 @@ def _diamond(g: Geometry) -> tuple[tuple[float, float], tuple[float, float], tup
     ul = (CX + vx * off + ux * stag, CY + vy * off + uy * stag)
     lr = (CX - vx * off - ux * stag, CY - vy * off - uy * stag)
     d = g.dot_along
-    raw = (
-        (0, ul[0] - ux * d, ul[1] - uy * d),
-        (0, ul[0] + ux * d, ul[1] + uy * d),
-        (1, lr[0] + ux * d, lr[1] + uy * d),
-        (1, lr[0] - ux * d, lr[1] - uy * d),
-    )
+    raw = [
+        [0, ul[0] - ux * d, ul[1] - uy * d],
+        [0, ul[0] + ux * d, ul[1] + uy * d],
+        [1, lr[0] + ux * d, lr[1] + uy * d],
+        [1, lr[0] - ux * d, lr[1] - uy * d],
+    ]
+
+    if morph > 0.0:
+        reach = max(math.hypot(x - CX, y - CY) for _, x, y in raw)
+        for dot in raw:
+            dx, dy = dot[1] - CX, dot[2] - CY
+            r = math.hypot(dx, dy)
+            grow = (reach - r) * morph / r
+            dot[1] += dx * grow
+            dot[2] += dy * grow
+
+    # Each hub is the midpoint of the pair it feeds, then pulled to the centre.
+    hubs = []
+    for which in (0, 1):
+        pair = [dot for dot in raw if dot[0] == which]
+        mx = (pair[0][1] + pair[1][1]) / 2.0
+        my = (pair[0][2] + pair[1][2]) / 2.0
+        hubs.append((mx + (CX - mx) * morph, my + (CY - my) * morph))
+
     corners = tuple((hub, x, y, math.degrees(math.atan2(y - CY, x - CX))) for hub, x, y in raw)
-    return ul, lr, corners
+    return hubs[0], hubs[1], corners
 
 
 # --------------------------------------------------------------------------- #
@@ -222,11 +247,8 @@ def _body(uid: str, g: Geometry, ink: tuple[str, str], morph: float) -> str:
     At morph 0 the hubs sit apart and each collinear pair merges into a capsule;
     at morph 1 both hubs are at the centre and the bars read as a D-pad cross.
     """
-    ul, lr, corners = _diamond(g)
-    hubs = (
-        (ul[0] + (CX - ul[0]) * morph, ul[1] + (CY - ul[1]) * morph),
-        (lr[0] + (CX - lr[0]) * morph, lr[1] + (CY - lr[1]) * morph),
-    )
+    ul, lr, corners = _diamond(g, morph)
+    hubs = (ul, lr)
     arms = "".join(f'<path d="M {hubs[h][0]:.2f} {hubs[h][1]:.2f} L {x:.2f} {y:.2f}"/>' for h, x, y, _ in corners)
     common = f'stroke-width="{g.cap_w}" stroke-linecap="round" fill="none"'
     return (
@@ -262,7 +284,7 @@ def mark(uid: str, pal: Palette, g: Geometry = DEFAULT_GEOMETRY, morph: float = 
     """The mark's inner content — everything inside a 200-unit square, clipped to
     the disc. Wrap it in an <svg> via `standalone`, or place several on a sheet
     via `sheet`. `morph` runs 0 (button diamond) to 1 (D-pad cross)."""
-    _, _, corners = _diamond(g)
+    _, _, corners = _diamond(g, morph)
     half = g.arc_span / 2.0
     top0, top1 = 270.0 - half + g.arc_rot, 270.0 + half + g.arc_rot
     bot0, bot1 = 90.0 - half + g.arc_rot, 90.0 + half + g.arc_rot
