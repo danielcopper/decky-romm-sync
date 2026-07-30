@@ -93,16 +93,16 @@ class Geometry:
     dot_r: float = 13.63
 
     # Dot shape while morphing. At morph 1 each dot is a triangle pointing away
-    # from the centre, blended back toward its circle by this much: 1 keeps the
-    # circle, 0 is a sharp triangle, and the default reads as a plump rounded one.
+    # from the centre, with this much of its radius spent on the corner fillets:
+    # 1 keeps the circle, 0 is a sharp triangle, and the default leaves the edges
+    # visibly straight while the corners stay soft.
     dot_tri_blend: float = 0.42
-    dot_samples: int = 48  # points sampled around a morphing dot
 
     # How round the cross's arm ends are, as a fraction of half the bar width. 1
-    # keeps the semicircle the resting capsule needs; 0 is a square end. The real
-    # SNES pad is nearly square, so the value only applies at full morph and the
-    # resting shape always gets its stadium back.
-    dpad_end_round: float = 0.3
+    # is the semicircle the resting capsule needs, 0 a square end. Only applies at
+    # full morph — the resting shape always gets its stadium back, so this cannot
+    # disturb the static asset.
+    dpad_end_round: float = 0.65
 
     # The facet's direction. None keeps it parallel to the bars, which is what
     # makes the seam line up with their slant; set a number to break that
@@ -309,25 +309,50 @@ def _body(uid: str, g: Geometry, ink: tuple[str, str], morph: float) -> str:
 
 
 def _dot(cx: float, cy: float, g: Geometry, pal: Palette, fill: str, morph: float, out_deg: float) -> str:
-    """One dot: a circle at rest, a rounded triangle pointing outward as it morphs."""
+    """One dot: a circle at rest, a rounded triangle pointing outward as it morphs.
+
+    The triangle is a small triangle grown by a circular offset — three corner arcs
+    joined by straight edges — not a circle whose radius is pulled in towards a
+    triangle's. Blending radially bows the edges outward and reads as a swollen
+    blob; a real rounded triangle keeps its edges straight and puts every bit of
+    curvature in the corners. Both degenerate cases fall out: all-corner is the
+    circle, no-corner the sharp triangle.
+    """
     ring = ""
     if pal.dot_stroke_w > 0.0 and pal.dot_stroke != "none":
         ring = f' stroke="{pal.dot_stroke}" stroke-width="{pal.dot_stroke_w}"'
     if morph <= 0.0:
         return f'<circle cx="{cx:.3f}" cy="{cy:.3f}" r="{g.dot_r:.3f}" fill="{fill}"{ring}/>'
-    # Radius sampled between the circle and an equilateral triangle whose vertex
-    # points along out_deg — the polygon's polar form, blended back toward R.
-    blend = 1.0 - morph * (1.0 - g.dot_tri_blend)
-    third = 2.0 * math.pi / 3.0
-    base = math.radians(out_deg)
-    pts = []
-    for i in range(g.dot_samples):
-        th = 2.0 * math.pi * i / g.dot_samples
-        k = ((th - base) % third) - third / 2.0
-        r_tri = g.dot_r * math.cos(third / 2.0) / math.cos(k)
-        r = r_tri + (g.dot_r - r_tri) * blend
-        pts.append(f"{cx + r * math.cos(th):.2f},{cy + r * math.sin(th):.2f}")
-    return f'<path d="M {" L ".join(pts)} Z" fill="{fill}"{ring}/>'
+
+    # rho 1 keeps the circle, 0 sharpens to a triangle; the vertex reaches dot_r
+    # either way because the triangle shrinks by exactly what the offset adds.
+    rho = 1.0 - morph * (1.0 - g.dot_tri_blend)
+    reach = g.dot_r * (1.0 - rho)  # vertex distance from the dot's centre
+    fillet = g.dot_r * rho  # corner radius
+    sixty = math.pi / 3.0
+
+    corners = []
+    for k in range(3):
+        th = math.radians(out_deg) + 2.0 * sixty * k
+        vx, vy = cx + reach * math.cos(th), cy + reach * math.sin(th)
+        corners.append(
+            (
+                (vx + fillet * math.cos(th - sixty), vy + fillet * math.sin(th - sixty)),
+                (vx + fillet * math.cos(th + sixty), vy + fillet * math.sin(th + sixty)),
+            )
+        )
+
+    if fillet < 0.01:
+        pts = " L ".join(f"{s[0]:.2f} {s[1]:.2f}" for s, _ in corners)
+        return f'<path d="M {pts} Z" fill="{fill}"{ring}/>'
+
+    d = [f"M {corners[0][0][0]:.2f} {corners[0][0][1]:.2f}"]
+    for i, (start, end) in enumerate(corners):
+        if i:
+            d.append(f"L {start[0]:.2f} {start[1]:.2f}")
+        d.append(f"A {fillet:.2f} {fillet:.2f} 0 0 1 {end[0]:.2f} {end[1]:.2f}")
+    d.append("Z")
+    return f'<path d="{" ".join(d)}" fill="{fill}"{ring}/>'
 
 
 def mark(
