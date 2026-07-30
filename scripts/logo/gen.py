@@ -107,12 +107,18 @@ class Geometry:
     # semicircle; this sits deliberately short of that, because a full one reads
     # rounder than the pad it is quoting. Only applies at full morph, so the static
     # asset keeps its capsule either way.
-    dpad_end_round: float = 0.65
+    dpad_end_round: float = 0.8
     # How far the cross's arms run past their dots. At rest this is half the bar
     # width, because a capsule's end cap is centred on its dot; the cross reaches
     # further, so the dots sit inside the arms rather than capping them. Measured
     # off the delivered loop.
     dpad_overhang: float = 22.2
+    # Size of the whole cross relative to those measurements. 1 reproduces the
+    # delivered loop; below that the pad sits smaller in the disc without changing
+    # its proportions, since dot reach and overhang scale together. Kept separate
+    # from the measured constants so it stays clear which numbers are observed and
+    # which are taste.
+    dpad_scale: float = 0.93
 
     # The facet's direction. None keeps it parallel to the bars, which is what
     # makes the seam line up with their slant; set a number to break that
@@ -218,7 +224,7 @@ def _diamond(g: Geometry, morph: float = 0.0) -> tuple[tuple[float, float], tupl
     ]
 
     if morph > 0.0:
-        reach = max(math.hypot(x - CX, y - CY) for _, x, y in raw)
+        reach = max(math.hypot(x - CX, y - CY) for _, x, y in raw) * g.dpad_scale
         for dot in raw:
             dx, dy = dot[1] - CX, dot[2] - CY
             r = math.hypot(dx, dy)
@@ -324,7 +330,7 @@ def _body(uid: str, g: Geometry, ink: tuple[str, str], morph: float) -> str:
     # to half the bar width, which is exactly the capsule the static asset needs.
     h = g.cap_w / 2.0
     end_r = h * (1.0 + (g.dpad_end_round - 1.0) * morph)
-    overhang = h + (g.dpad_overhang - h) * morph
+    overhang = h + (g.dpad_overhang * g.dpad_scale - h) * morph
     arms = "".join(_arm(hubs[hub], (x, y), g.cap_w, end_r, overhang) for hub, x, y, _ in corners)
     return (
         f'<g fill="{ink[0]}">{arms}</g>'

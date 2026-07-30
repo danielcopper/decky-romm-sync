@@ -45,11 +45,17 @@ class Animation:
 
     # Loop fractions where the morph's holds and ramps meet: the diamond holds
     # until [0], reaches the cross at [1], holds there until [2], and is back at
-    # the diamond by [3]. Sixths give the diamond one, the ramps one each and the
-    # cross two — the delivered loop's own division.
-    schedule: tuple[float, float, float, float] = (1 / 6, 2 / 6, 4 / 6, 5 / 6)
+    # the diamond by [3].
+    #
+    # The delivered loop divides into sixths — one for the diamond, one per ramp,
+    # two for the cross. These ramps are wider than that on purpose: spending more
+    # of the loop in motion and less parked at either end is what makes the fold
+    # read as flowing rather than as two poses with a transition between them.
+    schedule: tuple[float, float, float, float] = (0.13, 0.37, 0.63, 0.87)
 
-    easing: str = "smoothstep"  # linear | smoothstep | smootherstep
+    # smootherstep leaves and enters the holds with zero acceleration as well as
+    # zero speed, so there is no perceptible moment where the motion starts.
+    easing: str = "smootherstep"  # linear | smoothstep | smootherstep
 
 
 DEFAULT_ANIMATION = Animation()
