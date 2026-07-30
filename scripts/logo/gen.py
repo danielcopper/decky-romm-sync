@@ -15,17 +15,20 @@ one, not a square. That stretch is what tilts the bars joining adjacent dots pas
 angle. Squaring the diamond (`cap_stagger` to 0, `dot_along` to half of `cap_sep`)
 would pull both back to 45° together.
 
-The body is drawn as four round-capped bars, each running from a hub to one dot.
-At rest the two hubs sit either side of the seam, so each pair of collinear bars
-merges into one capsule. Pull the hubs to the centre (`morph` -> 1) and the same
-four bars become a D-pad cross — that is the whole shape animation, and it is
-why there is only one body routine rather than two.
+The body is drawn as four bars, each running from a hub out past one dot. At rest
+the two hubs sit either side of the seam, so each pair of collinear bars merges
+into one capsule. Pull the hubs to the centre (`morph` -> 1) and the same four
+bars become a D-pad cross — that is the whole shape animation, and it is why
+there is only one body routine rather than two. Only a bar's outer corners are
+rounded, and by how much depends on the morph: a capsule wants the full
+semicircle, a D-pad's arms want ends much closer to square.
 
 Outputs, selected on the command line:
 
     gen.py                    an SVG contact sheet of every PALETTE (default)
     gen.py --asset [name]     one mark on its own, transparent outside the disc
     gen.py --morph <0..1>     with --asset, the mark part-way to the cross
+    gen.py --no-dots          with --asset, the bare body — for judging silhouette
     gen.py --list             the palette names, one per line
 """
 
@@ -94,6 +97,12 @@ class Geometry:
     # circle, 0 is a sharp triangle, and the default reads as a plump rounded one.
     dot_tri_blend: float = 0.42
     dot_samples: int = 48  # points sampled around a morphing dot
+
+    # How round the cross's arm ends are, as a fraction of half the bar width. 1
+    # keeps the semicircle the resting capsule needs; 0 is a square end. The real
+    # SNES pad is nearly square, so the value only applies at full morph and the
+    # resting shape always gets its stadium back.
+    dpad_end_round: float = 0.3
 
     # The facet's direction. None keeps it parallel to the bars, which is what
     # makes the seam line up with their slant; set a number to break that
@@ -176,11 +185,13 @@ def _diamond(g: Geometry, morph: float = 0.0) -> tuple[tuple[float, float], tupl
     direction pointing away from the disc centre, which is where its triangle
     aims while morphing.
 
-    Morphing does two things at once. The diamond un-stretches — every dot slides
-    out along its own bearing until all four share the widest one's radius, so the
-    D-pad ends up square even though the diamond at rest is not. And each hub
-    slides to the centre, which is what turns a pair of collinear bars into one
-    arm of a cross. Both are why the resting shape and the cross share a routine.
+    Morphing does three things at once. The diamond un-stretches — every dot
+    slides out until all four share the widest one's radius, so the D-pad ends up
+    square even though the diamond at rest is not. Each dot's bearing also swings
+    onto its own axis: at rest they sit 1.4-1.9° off true, which the resting shape
+    absorbs but a cross does not — left uncorrected the D-pad reads as tilted. And
+    each hub slides to the centre, which is what turns a pair of collinear bars
+    into one arm of a cross.
     """
     a = math.radians(g.cap_angle)
     ux, uy = math.cos(a), math.sin(a)
@@ -201,9 +212,12 @@ def _diamond(g: Geometry, morph: float = 0.0) -> tuple[tuple[float, float], tupl
         for dot in raw:
             dx, dy = dot[1] - CX, dot[2] - CY
             r = math.hypot(dx, dy)
-            grow = (reach - r) * morph / r
-            dot[1] += dx * grow
-            dot[2] += dy * grow
+            bearing = math.degrees(math.atan2(dy, dx))
+            axis = round(bearing / 90.0) * 90.0
+            r += (reach - r) * morph
+            th = math.radians(bearing + (axis - bearing) * morph)
+            dot[1] = CX + r * math.cos(th)
+            dot[2] = CY + r * math.sin(th)
 
     # Each hub is the midpoint of the pair it feeds, then pulled to the centre.
     hubs = []
@@ -241,6 +255,40 @@ def _faceted_arc(uid: str, a0: float, a1: float, ink: tuple[str, str], g: Geomet
     )
 
 
+def _arm(hub: tuple[float, float], dot: tuple[float, float], w: float, end_r: float) -> str:
+    """One bar, hub to dot, with only its outer corners rounded.
+
+    The inner end runs half a width *past* the hub so the bars meeting there
+    overlap rather than showing their own corners — which is what lets the outer
+    end be square without opening a notch at the centre. At end_r = w / 2 the two
+    outer arcs meet and the end is the semicircle a capsule needs.
+    """
+    dx, dy = dot[0] - hub[0], dot[1] - hub[1]
+    span = math.hypot(dx, dy)
+    if span < 1e-9:
+        return ""
+    ux, uy = dx / span, dy / span
+    px, py = -uy, ux  # +90° in screen terms
+    h = w / 2.0
+    r = min(max(end_r, 0.0), h)
+    bx, by = dot[0] + ux * h, dot[1] + uy * h  # outer end face
+    ax, ay = hub[0] - ux * h, hub[1] - uy * h  # inner end face, past the hub
+
+    def pt(x: float, y: float) -> str:
+        return f"{x:.2f} {y:.2f}"
+
+    p0 = pt(ax + px * h, ay + py * h)
+    p1 = pt(bx + px * h - ux * r, by + py * h - uy * r)
+    p2 = pt(bx + px * (h - r), by + py * (h - r))
+    p3 = pt(bx - px * (h - r), by - py * (h - r))
+    p4 = pt(bx - px * h - ux * r, by - py * h - uy * r)
+    p5 = pt(ax - px * h, ay - py * h)
+    if r < 0.01:
+        return f'<path d="M {p0} L {p1} L {p4} L {p5} Z"/>'
+    arc = f"A {r:.2f} {r:.2f} 0 0 0"
+    return f'<path d="M {p0} L {p1} {arc} {p2} L {p3} {arc} {p4} L {p5} Z"/>'
+
+
 def _body(uid: str, g: Geometry, ink: tuple[str, str], morph: float) -> str:
     """The four button bars, painted light then re-clipped dark below-right.
 
@@ -249,12 +297,14 @@ def _body(uid: str, g: Geometry, ink: tuple[str, str], morph: float) -> str:
     """
     ul, lr, corners = _diamond(g, morph)
     hubs = (ul, lr)
-    arms = "".join(f'<path d="M {hubs[h][0]:.2f} {hubs[h][1]:.2f} L {x:.2f} {y:.2f}"/>' for h, x, y, _ in corners)
-    common = f'stroke-width="{g.cap_w}" stroke-linecap="round" fill="none"'
+    # The ends unround as the cross forms; the resting capsule keeps its semicircle.
+    h = g.cap_w / 2.0
+    end_r = h * (1.0 + (g.dpad_end_round - 1.0) * morph)
+    arms = "".join(_arm(hubs[hub], (x, y), g.cap_w, end_r) for hub, x, y, _ in corners)
     return (
-        f'<g {common} stroke="{ink[0]}">{arms}</g>'
+        f'<g fill="{ink[0]}">{arms}</g>'
         f'<clipPath id="bd{uid}"><polygon points="{_half_plane(g)}"/></clipPath>'
-        f'<g clip-path="url(#bd{uid})" {common} stroke="{ink[1]}">{arms}</g>'
+        f'<g clip-path="url(#bd{uid})" fill="{ink[1]}">{arms}</g>'
     )
 
 
@@ -280,17 +330,26 @@ def _dot(cx: float, cy: float, g: Geometry, pal: Palette, fill: str, morph: floa
     return f'<path d="M {" L ".join(pts)} Z" fill="{fill}"{ring}/>'
 
 
-def mark(uid: str, pal: Palette, g: Geometry = DEFAULT_GEOMETRY, morph: float = 0.0) -> str:
+def mark(
+    uid: str,
+    pal: Palette,
+    g: Geometry = DEFAULT_GEOMETRY,
+    morph: float = 0.0,
+    show_dots: bool = True,
+) -> str:
     """The mark's inner content — everything inside a 200-unit square, clipped to
     the disc. Wrap it in an <svg> via `standalone`, or place several on a sheet
-    via `sheet`. `morph` runs 0 (button diamond) to 1 (D-pad cross)."""
+    via `sheet`. `morph` runs 0 (button diamond) to 1 (D-pad cross); dropping the
+    dots leaves the bare body, which is how its silhouette gets reviewed."""
     _, _, corners = _diamond(g, morph)
     half = g.arc_span / 2.0
     top0, top1 = 270.0 - half + g.arc_rot, 270.0 + half + g.arc_rot
     bot0, bot1 = 90.0 - half + g.arc_rot, 90.0 + half + g.arc_rot
 
-    dots = "".join(
-        _dot(x, y, g, pal, pal.dot_tan if hub == 0 else pal.dot_peach, morph, od) for hub, x, y, od in corners
+    dots = (
+        "".join(_dot(x, y, g, pal, pal.dot_tan if hub == 0 else pal.dot_peach, morph, od) for hub, x, y, od in corners)
+        if show_dots
+        else ""
     )
     body = (
         # disc: light fill, then the darker facet tone
@@ -309,10 +368,16 @@ def mark(uid: str, pal: Palette, g: Geometry = DEFAULT_GEOMETRY, morph: float = 
     )
 
 
-def standalone(pal: Palette, g: Geometry = DEFAULT_GEOMETRY, size: int = 512, morph: float = 0.0) -> str:
+def standalone(
+    pal: Palette,
+    g: Geometry = DEFAULT_GEOMETRY,
+    size: int = 512,
+    morph: float = 0.0,
+    show_dots: bool = True,
+) -> str:
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
-        f'viewBox="0 0 {VIEW:.0f} {VIEW:.0f}">{mark("m", pal, g, morph)}</svg>'
+        f'viewBox="0 0 {VIEW:.0f} {VIEW:.0f}">{mark("m", pal, g, morph, show_dots)}</svg>'
     )
 
 
@@ -387,6 +452,6 @@ if __name__ == "__main__":
     elif "--asset" in argv:
         i = argv.index("--asset")
         name = argv[i + 1] if i + 1 < len(argv) and not argv[i + 1].startswith("-") else CHOSEN
-        print(standalone(BY_NAME[name], morph=morph))
+        print(standalone(BY_NAME[name], morph=morph, show_dots="--no-dots" not in argv))
     else:
         print(sheet())
