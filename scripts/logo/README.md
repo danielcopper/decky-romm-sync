@@ -1,7 +1,7 @@
 # Logo
 
-The plugin mark: a SNES button diamond ringed by a pair of sync arrows, set in a disc and split along a facet that runs
-parallel to the buttons' own slant. It animates — the ring turns while the diamond folds into a D-pad cross and back.
+The plugin mark: a button diamond ringed by a pair of sync arrows, set in a disc and split along a facet that runs
+parallel to the buttons' own slant. It animates — the ring turns while the diamond folds into a d-pad cross and back.
 
 ![The palette candidates on a dark and a light ground](preview.png)
 
@@ -45,10 +45,10 @@ Three config objects, and nothing else worth editing:
 
 ## Notes
 
-Most of the geometry was measured off the delivered artwork and its animated loop rather than chosen, which is why the
-numbers look oddly specific. Where a value departs from what was measured it says so at the field, and the departure has
-its own knob rather than overwriting the measurement — `dpad_scale` and `dpad_bar_narrow` exist for exactly that reason.
-Changing a measured constant is fine; just know you are moving away from a reference, not correcting an error.
+Many constants carry more precision than a hand-picked number would, because they reproduce the artwork this mark comes
+from. Treat those as a reference rather than as preferences: changing one is fine, it just moves away from that
+reference rather than correcting an error. Where a value is deliberately off it, the field says so and the departure has
+its own knob instead of overwriting the reference — `dpad_scale` and `dpad_bar_narrow` exist for that.
 
 Two things are worth knowing before touching the drawing code:
 

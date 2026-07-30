@@ -45,9 +45,9 @@ PNG_SIZES = (1024, 512, 256, 128, 64, 32)
 #
 # The mark itself only has about ten colours; the rest of the palette goes on the
 # antialiased edges between them, and at 512px there are enough edge pixels that a
-# small palette starts to show. Measured against the source frames, 24 slots leave
-# a worst-case channel error of 49 on 1.2% of pixels, 64 slots halve that to 26 on
-# 0.3%, and going further buys very little for its size. Hence 64.
+# small palette starts to show. Against the rendered frames, 24 slots leave a
+# worst-case channel error of 49 on 1.2% of pixels and 64 halve that to 26 on 0.3%;
+# past 64 the size grows faster than the fidelity. Hence 64.
 def _gif_filter(colors: int) -> str:
     return (
         "split[a][b];"

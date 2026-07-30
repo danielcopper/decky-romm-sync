@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Generates the plugin mark: a SNES button diamond ringed by a pair of sync
-arrows, set in a disc and split along a 45° facet.
+"""Generates the plugin mark: a button diamond ringed by a pair of sync arrows,
+set in a disc and split along a facet.
 
 Everything is driven by two small config objects — a `Palette` (colours) and a
 `Geometry` (positions and sizes) — so the mark can be re-derived and nudged
@@ -14,6 +14,11 @@ one, not a square. That stretch is what tilts the bars joining adjacent dots pas
 45°, to 141.6°, and the facet follows the bars, so the seam and the bars share one
 angle. Squaring the diamond (`cap_stagger` to 0, `dot_along` to half of `cap_sep`)
 would pull both back to 45° together.
+
+Many of the constants below carry more precision than a hand-picked number would.
+They are that specific because they reproduce the artwork this mark comes from;
+treat them as a reference rather than as preferences, and where one is
+deliberately off that reference the field says so.
 
 The body is drawn as four bars, each running from a hub out past one dot. At rest
 the two hubs sit either side of the seam, so each pair of collinear bars merges
@@ -97,33 +102,28 @@ class Geometry:
     # 1 keeps the circle, 0 is a sharp triangle, and the default leaves the edges
     # visibly straight while the corners stay soft.
     dot_tri_blend: float = 0.42
-    # The dots also draw in as the cross forms — the D-pad's triangles reach less
-    # far than the resting circles' radius, by this fraction. Measured off the
-    # delivered loop; 1 would keep them the same size throughout.
+    # The dots also draw in as the cross forms, reaching less far than the resting
+    # circles' radius by this fraction. 1 would keep them one size throughout.
     dot_shrink: float = 0.862
 
     # How round the cross's arm ends are, as a fraction of half the bar width. 1 is
-    # a semicircle, 0 a square end. The delivered loop measures as an exact
-    # semicircle; this sits deliberately short of that, because a full one reads
-    # rounder than the pad it is quoting. Only applies at full morph, so the static
-    # asset keeps its capsule either way.
+    # a semicircle, 0 a square end. This sits deliberately short of the semicircle,
+    # which reads rounder than the pad wants. Only applies at full morph, so the
+    # static asset keeps its capsule either way.
     dpad_end_round: float = 0.8
     # How far the cross's arms run past their dots. At rest this is half the bar
     # width, because a capsule's end cap is centred on its dot; the cross reaches
-    # further, so the dots sit inside the arms rather than capping them. Measured
-    # off the delivered loop.
+    # further, so the dots sit inside the arms rather than capping them.
     dpad_overhang: float = 22.2
-    # Size of the whole cross relative to those measurements. 1 reproduces the
-    # delivered loop; below that the pad sits smaller in the disc without changing
-    # its proportions, since dot reach and overhang scale together. Kept separate
-    # from the measured constants so it stays clear which numbers are observed and
-    # which are taste.
+    # Size of the whole cross, relative to the reference the constants above come
+    # from. Below 1 the pad sits smaller in the disc without changing its
+    # proportions, since dot reach and overhang scale together. It is its own field
+    # so the reference stays readable next to the choice made against it.
     dpad_scale: float = 0.93
-    # Bar width at full morph, as a fraction of the resting width. Separate from
-    # `cap_w` because that width is the resting capsule's and is measured; only the
-    # cross gets to be leaner. Do not take it below the point where a dot's reach
-    # (dot_r * dot_shrink) exceeds half the narrowed bar, or the dots break out of
-    # the arms.
+    # Bar width at full morph, as a fraction of the resting width — that width
+    # belongs to the resting capsule, so only the cross gets to be leaner. Do not
+    # take it below the point where a dot's reach (dot_r * dot_shrink) exceeds half
+    # the narrowed bar, or the dots break out of the arms.
     dpad_bar_narrow: float = 0.9
 
     # The facet's direction. None keeps it parallel to the bars, which is what
@@ -454,7 +454,7 @@ _TAN = "#e6c7a7"
 _PEACH = "#e1a38d"
 
 PALETTES: list[Palette] = [
-    # The delivered mark's colours — the reference point.
+    # The source artwork's colours — the reference point.
     Palette("original", ("#aec6da", "#93b0c8"), ("#2d5876", "#1a3549"), _TAN, _PEACH),
     # Same disc, deeper ink so the bars and arrows sit heavier.
     Palette("deep-ink", ("#aec6da", "#93b0c8"), ("#264a63", "#12283a"), _TAN, _PEACH),

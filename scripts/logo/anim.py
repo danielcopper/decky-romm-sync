@@ -38,7 +38,7 @@ class Animation:
     """Timing for one loop."""
 
     frames: int = 72
-    fps: int = 25  # 72 @ 25 = 2.88s, the delivered loop's length
+    fps: int = 25  # 72 @ 25 = 2.88s per loop
 
     # A whole turn per loop, clockwise. Negative reverses it.
     spin_turns: float = 1.0
@@ -47,10 +47,9 @@ class Animation:
     # until [0], reaches the cross at [1], holds there until [2], and is back at
     # the diamond by [3].
     #
-    # The delivered loop divides into sixths — one for the diamond, one per ramp,
-    # two for the cross. These ramps are wider than that on purpose: spending more
-    # of the loop in motion and less parked at either end is what makes the fold
-    # read as flowing rather than as two poses with a transition between them.
+    # Wide ramps on purpose: spending more of the loop in motion and less parked at
+    # either end is what makes the fold read as flowing rather than as two poses
+    # with a transition between them.
     schedule: tuple[float, float, float, float] = (0.13, 0.37, 0.63, 0.87)
 
     # smootherstep leaves and enters the holds with zero acceleration as well as
