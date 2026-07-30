@@ -117,9 +117,16 @@ function unique(values: number[]): number[] {
   return [...new Set(values)].sort((a, b) => a - b);
 }
 
-export function beginPruneRun(runId: string, previewId: string): void {
-  if (activeRunId === runId) return;
-  if (pendingPreviewId !== previewId) return;
+/**
+ * Adopt a started run, and report whether the adoption took.
+ *
+ * A refusal means this run's frames can never be admitted (`admitPruneFrame`
+ * gates on the same pending preview), so the caller has a backend run executing
+ * against a UI that will never show it. That has to be surfaced, not swallowed.
+ */
+export function beginPruneRun(runId: string, previewId: string): boolean {
+  if (activeRunId === runId) return true;
+  if (pendingPreviewId !== previewId) return false;
   activeRunId = runId;
   activePreviewId = previewId;
   pendingPreviewId = null;
@@ -130,6 +137,7 @@ export function beginPruneRun(runId: string, previewId: string): void {
   resultLost = false;
   armLostResultTimer();
   notify();
+  return true;
 }
 
 export function admitPruneFrame(previewId: string, runId: string): boolean {

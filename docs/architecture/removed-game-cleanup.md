@@ -190,3 +190,23 @@ checksum, liveness, or Steam-acknowledgement failure skips the affected group **
 Cancellation stops every group that has not started. Terminal results distinguish exact success, skipped work, known
 partial mutation, and ambiguous mutation, and the removed ids and affected appIds stay truthful even after cancellation
 or a failed event delivery.
+
+`cancel_prune(run_id)` is the wire entry point, reachable from the confirmation dialog and from the Danger Zone while a
+run is live. It is deliberately **not** gated by the prune claim — stopping the run is the one operation that must stay
+available while that claim is held. It cancels only the run whose id matches, is idempotent for repeat requests, and
+answers the canonical failure shape for an unknown, finished, or malformed id. Nothing is rolled back: the group already
+executing runs to its own verdict and reports what it committed.
+
+The claim's release is bound to the run **task**, not to the run body. A task cancelled before the event loop first
+schedules it never enters the body whose `finally` normally releases the claim, so a done-callback releases a claim
+stranded that way — otherwise the run id would stay set for the process's lifetime and every conflicting callable would
+keep being refused with no run left to release it.
+
+## Audit trail
+
+A destructive run logs at INFO on the injected logger, independently of the UI that asked for it: run start (run id,
+option set, group and candidate counts), one line per group (ids, status, reason slug, committed action, removed ids,
+bundle path), and run end (removed ids, affected appIds, cancellation or failure reason). The end line is written
+**before** the completion frame is emitted, so a run whose terminal event never reaches the frontend still leaves its
+outcome on disk. Frontend confirmations and cancellations log through `frontend_log`, so one log holds both sides of the
+handshake.

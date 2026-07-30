@@ -2,7 +2,7 @@ import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { createElement, type ReactElement } from "react";
 import { toaster } from "@decky/api";
 import { showModal } from "@decky/ui";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import * as backend from "../api/backend";
 import {
   beginPrunePreview,
@@ -52,12 +52,23 @@ function shownModal(): ReactElement {
 }
 
 describe("RemovedGamesCleanup", () => {
+  // logInfo/logWarn/logError are plain wrappers over the frontend_log callable,
+  // so they are spied rather than module-mocked. Fresh per test: the confirm
+  // path asserts on them in both directions, and a call leaking in from a
+  // sibling test would satisfy either.
+  let logs: { info: MockInstance; warn: MockInstance; error: MockInstance };
+
   beforeEach(() => {
     vi.mocked(backend.getPrunePreview).mockReset();
     vi.mocked(backend.stagePruneInstalledSelection).mockReset();
     vi.mocked(backend.startPrune).mockReset();
     vi.mocked(showModal).mockReset();
     vi.mocked(toaster.toast).mockReset();
+    logs = {
+      info: vi.spyOn(backend, "logInfo").mockImplementation(() => {}),
+      warn: vi.spyOn(backend, "logWarn").mockImplementation(() => {}),
+      error: vi.spyOn(backend, "logError").mockImplementation(() => {}),
+    };
     resetPruneState();
     vi.mocked(backend.getPrunePreview).mockResolvedValue(preview);
     vi.mocked(backend.stagePruneInstalledSelection).mockResolvedValue({
@@ -68,6 +79,8 @@ describe("RemovedGamesCleanup", () => {
     });
     vi.mocked(backend.startPrune).mockResolvedValue({ success: true, run_id: "run-1", status: "running" });
   });
+
+  afterEach(() => vi.restoreAllMocks());
 
   it("performs the first local scan before showing the confirmation modal", async () => {
     await expect(openRemovedGamesCleanupModal()).resolves.toBe(true);
@@ -113,8 +126,11 @@ describe("RemovedGamesCleanup", () => {
 
     fireEvent.click(toggles[4]!);
 
-    expect(confirm.disabled).toBe(true);
     expect(modal.container.textContent).toContain("Not enough free space.");
+    fireEvent.click(confirm);
+    await act(async () => Promise.resolve());
+    expect(backend.startPrune).not.toHaveBeenCalled();
+    expect(modal.container.textContent).toContain("doesn't fit in the free space");
   });
 
   it("submits all temporary options and re-enables confirmation after a failed start", async () => {
@@ -262,12 +278,19 @@ describe("RemovedGamesCleanup", () => {
     await openRemovedGamesCleanupModal();
     const modal = render(shownModal());
     const confirm = modal.getByRole("button", { name: "Confirm Cleanup" }) as HTMLButtonElement;
-    expect(confirm.disabled).toBe(true);
     expect(modal.container.textContent).toContain("Load every page before confirming");
+
+    // Pressing early must refuse and SAY so — the run may not start against a
+    // half-disclosed list, and a press that does nothing is the reported defect.
+    fireEvent.click(confirm);
+    await act(async () => Promise.resolve());
+    expect(backend.startPrune).not.toHaveBeenCalled();
+    expect(modal.container.textContent).toContain("Cleanup did not start: Load all 2 entries before confirming.");
 
     fireEvent.click(modal.getByRole("button", { name: "Load more (1 of 2)" }));
     await waitFor(() => expect(modal.container.textContent).toContain("Current sibling"));
-    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(backend.startPrune).toHaveBeenCalled());
   });
 
   it("clears and disables installed-content selections when recovery is off", async () => {
@@ -482,7 +505,9 @@ describe("RemovedGamesCleanup", () => {
 
     // Selected for recovery, its required space cannot be proven, so the run is
     // refused rather than started on an unbacked estimate.
-    expect(confirm.disabled).toBe(true);
+    fireEvent.click(confirm);
+    await act(async () => Promise.resolve());
+    expect(backend.startPrune).not.toHaveBeenCalled();
     expect(modal.container.textContent).toContain("A selected installed ROM has no safe measurable size.");
     expect(modal.container.textContent).not.toContain("Not enough free space.");
   });
@@ -662,6 +687,72 @@ describe("RemovedGamesCleanup", () => {
     }
   });
 
+  it("says why Confirm is unavailable instead of leaving a dead control", async () => {
+    vi.mocked(backend.getPrunePreview).mockResolvedValueOnce({ ...preview, total: 2 });
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+
+    // The "load every page" warning sits far above the button in a scrolling
+    // dialog, so the reason has to be readable from where the button is.
+    expect((modal.getByRole("button", { name: "Confirm Cleanup" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(modal.container.textContent).toContain("Load all 2 entries before confirming.");
+  });
+
+  it("reports a locally refused Confirm in the dialog and the log", async () => {
+    vi.mocked(backend.getPrunePreview).mockResolvedValueOnce({ ...preview, total: 2 });
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await act(async () => Promise.resolve());
+
+    expect(logs.info).toHaveBeenCalledWith(expect.stringContaining("[prune] Confirm pressed"));
+    expect(logs.warn).toHaveBeenCalledWith(expect.stringContaining("[prune] Confirm refused locally"));
+    expect(backend.startPrune).not.toHaveBeenCalled();
+  });
+
+  it("logs the confirm press and the accepted run id", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("Cleanup running..."));
+
+    expect(logs.info).toHaveBeenCalledWith(expect.stringContaining("[prune] Confirm pressed"));
+    expect(logs.info).toHaveBeenCalledWith("[prune] startPrune accepted: run=run-1");
+  });
+
+  it("logs a backend refusal alongside the message it shows", async () => {
+    vi.mocked(backend.startPrune).mockResolvedValue({
+      success: false,
+      reason: "prune_active",
+      message: "A removed-game cleanup is already running.",
+    });
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("already running"));
+
+    expect(logs.warn).toHaveBeenCalledWith(expect.stringContaining("reason=prune_active"));
+  });
+
+  it("does not claim a run is progressing when the store refused to adopt it", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    // Another preview claimed the pending slot between opening and confirming.
+    act(() => beginPrunePreview("preview-2"));
+
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("lost track of it"));
+
+    // The run is executing; its frames can never be admitted, so "running..."
+    // would promise a progress line that cannot arrive.
+    expect(modal.container.textContent).not.toContain("Cleanup running...");
+    expect(getPruneState().runId).toBeNull();
+    expect(logs.error).toHaveBeenCalledWith(expect.stringContaining("no longer pending"));
+  });
+
   it("names the shortcut removal as conditional on the fully-vanished toggle", async () => {
     await openRemovedGamesCleanupModal();
     const modal = render(shownModal());
@@ -691,6 +782,95 @@ describe("RemovedGamesCleanup", () => {
 
     await expect(openRemovedGamesCleanupModal()).rejects.toThrow("carried no preview id");
     expect(showModal).not.toHaveBeenCalled();
+  });
+
+  it("keeps the Danger Zone showing a run that has not emitted progress yet", async () => {
+    const section = render(createElement(RemovedGamesCleanupSection));
+    const button = section.getByRole("button", { name: "Clean Up Removed RomM Games" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+
+    act(() => {
+      beginPrunePreview("preview-1");
+      beginPruneRun("run-1", "preview-1");
+    });
+
+    // The window between start and the first frame is exactly where a second
+    // scan would collide, so the entry point has to close on the run id.
+    expect(button.disabled).toBe(true);
+    expect(section.container.textContent).toContain("Cleanup starting...");
+    expect(section.container.textContent).toContain("A cleanup is running.");
+  });
+
+  it("offers a Stop control in the Danger Zone and sets expectations for it", async () => {
+    vi.mocked(backend.cancelPrune).mockResolvedValue({ success: true, message: "ok", already_cancelling: false });
+    const section = render(createElement(RemovedGamesCleanupSection));
+    act(() => {
+      beginPrunePreview("preview-1");
+      beginPruneRun("run-7", "preview-1");
+    });
+
+    // The copy must not promise a rollback the backend never performs.
+    expect(section.container.textContent).toContain("The one being processed now finishes");
+
+    fireEvent.click(section.getByRole("button", { name: "Stop Cleanup" }));
+    await waitFor(() => expect(backend.cancelPrune).toHaveBeenCalledWith("run-7"));
+    expect(logs.info).toHaveBeenCalledWith("[prune] Cancel pressed for run run-7");
+  });
+
+  it("surfaces a refused cancellation instead of pretending the run stopped", async () => {
+    vi.mocked(backend.cancelPrune).mockResolvedValue({
+      success: false,
+      reason: "stale_run",
+      message: "That cleanup run is not running.",
+    });
+    const section = render(createElement(RemovedGamesCleanupSection));
+    act(() => {
+      beginPrunePreview("preview-1");
+      beginPruneRun("run-7", "preview-1");
+    });
+
+    fireEvent.click(section.getByRole("button", { name: "Stop Cleanup" }));
+
+    await waitFor(() => expect(section.container.textContent).toContain("That cleanup run is not running."));
+    expect(logs.warn).toHaveBeenCalledWith(expect.stringContaining("reason=stale_run"));
+  });
+
+  it("reports a thrown cancellation rather than leaving the button spinning", async () => {
+    vi.mocked(backend.cancelPrune).mockRejectedValue(new Error("bridge offline"));
+    const section = render(createElement(RemovedGamesCleanupSection));
+    act(() => {
+      beginPrunePreview("preview-1");
+      beginPruneRun("run-7", "preview-1");
+    });
+
+    fireEvent.click(section.getByRole("button", { name: "Stop Cleanup" }));
+
+    await waitFor(() => expect(section.container.textContent).toContain("Could not request cancellation"));
+    expect((section.getByRole("button", { name: "Stop Cleanup" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(logs.error).toHaveBeenCalledWith(expect.stringContaining("bridge offline"));
+  });
+
+  it("offers Stop inside the modal while a run is progressing", async () => {
+    vi.mocked(backend.cancelPrune).mockResolvedValue({ success: true, message: "ok", already_cancelling: false });
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("Cleanup running..."));
+
+    act(() => {
+      setPruneProgress({
+        run_id: "run-1",
+        preview_id: "preview-1",
+        current: 1,
+        total: 2,
+        stage: "checking",
+        rom_ids: [7],
+        name: "Removed Game",
+      });
+    });
+
+    fireEvent.click(modal.getByRole("button", { name: "Stop Cleanup" }));
+    await waitFor(() => expect(backend.cancelPrune).toHaveBeenCalledWith("run-1"));
   });
 
   it("recovers the entry point and warns when a run's result never arrives", async () => {

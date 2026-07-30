@@ -142,6 +142,46 @@ async def test_unbound_exact_404_cleanup_deletes_real_aggregate_and_emits_comple
     assert payload["results"][0]["status"] == "removed"
 
 
+async def test_cancel_prune_stops_the_running_run_over_the_real_wire(harness):
+    _seed_bulk_candidate(harness)
+    harness.romm.get_rom_once_side_effect_by_id[41] = RommNotFoundError("gone")
+    preview = await harness.plugin.get_prune_preview(_preview_request())
+    started = await harness.plugin.start_prune(
+        {
+            "preview_id": preview["preview_id"],
+            "confirmed": True,
+            "repoint_shortcuts": True,
+            "remove_rows": True,
+            "remove_fully_vanished": True,
+            "create_recovery_bundle": False,
+            "include_installed_rom_ids": [],
+        }
+    )
+
+    result = await harness.plugin.cancel_prune(started["run_id"])
+
+    assert set(result) == {"success", "run_id", "already_cancelling", "message"}
+    assert result["success"] is True
+    assert result["run_id"] == started["run_id"]
+    assert result["already_cancelling"] is False
+    task = harness.plugin._prune_service._task
+    assert task is not None
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    # The claim is released, so cleanup is reachable again immediately.
+    assert harness.plugin._prune_service.is_active() is False
+
+
+@pytest.mark.parametrize("run_id", ["no-such-run", "", None])
+async def test_cancel_prune_refuses_an_unknown_run_with_the_canonical_shape(harness, run_id):
+    result = await harness.plugin.cancel_prune(run_id)
+
+    assert set(result) == {"success", "reason", "message"}
+    assert result["success"] is False
+    assert result["reason"] in {"stale_run", "invalid_run_id"}
+    assert result["message"]
+
+
 async def test_action_report_rejects_stale_token_with_canonical_shape(harness):
     result = await harness.plugin.report_prune_action(
         {

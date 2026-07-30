@@ -258,6 +258,7 @@ class PruneService:
                 self._release_event = asyncio.Event()
                 self._completed_action_tokens.clear()
                 self._task = self._loop.create_task(self._run(run_id, refreshed, options))
+                self._task.add_done_callback(self._release_stranded_claim)
                 started_run = True
         except asyncio.CancelledError:
             raise
@@ -273,6 +274,33 @@ class PruneService:
         response: dict[str, Any] = {"success": True, "run_id": run_id}
         response["status"] = "running"
         return response
+
+    async def cancel_prune(self, run_id: object) -> dict[str, Any]:
+        """Request that one identified run stop before starting another group.
+
+        Cancellation is cooperative and never rolls anything back: the group
+        already executing runs to its own terminal verdict, and the run reports
+        what it committed. Idempotent for the same id — a second request while
+        the first is still propagating is a success, not an error.
+        """
+        if not isinstance(run_id, str) or not run_id:
+            return self._failure("invalid_run_id", "Cleanup run id must be a non-empty string.")
+        async with self._admission_lock:
+            task = self._task
+            if self._run_id != run_id or task is None:
+                return self._failure("stale_run", "That cleanup run is not running.")
+            already_cancelling = task.cancelling() > 0 or task.done()
+            if not already_cancelling:
+                task.cancel()
+        self._logger.info(
+            f"Cleanup run {run_id} cancellation requested{' (already cancelling)' if already_cancelling else ''}"
+        )
+        return {
+            "success": True,
+            "run_id": run_id,
+            "already_cancelling": already_cancelling,
+            "message": "Cleanup will stop before the next group.",
+        }
 
     async def report_prune_action(self, request: object) -> dict[str, Any]:
         """Claim or complete the exact frontend action currently awaited by the run."""
@@ -383,6 +411,23 @@ class PruneService:
             item.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+
+    def _release_stranded_claim(self, task: asyncio.Task[None]) -> None:
+        """Release the claim for a run task that never entered its own body.
+
+        ``_run``'s ``finally`` owns the normal release, but a task cancelled
+        before the loop first schedules it never gets there. Without this the
+        run id would stay set for the process's lifetime and every conflicting
+        callable — Play, downloads, saves — would keep being refused. Bound to
+        the exact task, so a later run that already replaced it is untouched.
+        """
+        if self._task is not task or self._run_id is None:
+            return
+        self._logger.info(f"Cleanup run {self._run_id} released a claim its task never started")
+        self._pending_action = None
+        self._run_id = None
+        self._run_preview_id = None
+        self._release_event.set()
 
     async def _run(self, run_id: str, preview: PrunePreview, options: PruneOptions) -> None:
         try:

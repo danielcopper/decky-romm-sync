@@ -366,6 +366,11 @@ class Plugin:
     async def start_prune(self, request):
         return await self._prune_service.start_prune(request)
 
+    # Deliberately undecorated: stopping the run is the one operation that must
+    # stay reachable while the prune claim is held.
+    async def cancel_prune(self, run_id):
+        return await self._prune_service.cancel_prune(run_id)
+
     async def report_prune_action(self, request):
         return await self._prune_service.report_prune_action(request)
 

@@ -152,6 +152,11 @@ single button, without opening an otherwise empty picker. The vanished version i
 — selecting it can only ever start the cleanup, never rebind the shortcut to it. A vanished version with no local data
 to remove stays listed and disabled, with no trash icon.
 
+While a cleanup runs, the Danger Zone shows its progress under the entry point and the scan button stays unavailable, so
+you can close the dialog and still see what is happening. Both the dialog and the Danger Zone offer **Stop Cleanup**. It
+stops the run before the next game; the game being processed at that moment finishes and reports what it changed.
+Nothing already done is undone — stopping is not an undo, and the report afterwards lists exactly what was committed.
+
 If Steam changes before local cleanup can finish, the report can show a **partial** group with the concrete committed
 action and failure message. A confirmed shortcut removal is reconciled to an unbound retained row; a committed repoint
 remains bound to the new Default. If Steam removal succeeded but every completion report was lost, the result is marked

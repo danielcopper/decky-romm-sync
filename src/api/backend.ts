@@ -706,6 +706,11 @@ export const stagePruneInstalledSelection = callable<
   }
 >("stage_prune_installed_selection");
 export const startPrune = callable<[StartPruneRequest], StartPruneResult>("start_prune");
+/** Stop a run before its next group; the group already executing still finishes. */
+export const cancelPrune = callable<
+  [string],
+  { success: boolean; reason?: string; message: string; already_cancelling?: boolean }
+>("cancel_prune");
 export const reportPruneAction = callable<
   [ReportPruneActionRequest],
   { success: boolean; ignored?: boolean; reason?: string; message: string }

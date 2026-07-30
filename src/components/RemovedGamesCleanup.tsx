@@ -12,10 +12,13 @@ import {
   showModal,
 } from "@decky/ui";
 import {
+  cancelPrune,
   getPrunePreview,
   startPrune,
   stagePruneInstalledSelection,
   logError,
+  logInfo,
+  logWarn,
   type PrunePreviewItem,
   type PrunePreviewRequest,
   type PrunePreviewResult,
@@ -37,6 +40,29 @@ const PAGE_SIZE = 50;
 const SELECTION_PAGE_SIZE = 100;
 const PRUNE_CALLABLE_TIMEOUT_MS = 15000;
 const RESULT_LOST_MESSAGE = "The cleanup result was lost — check your library and run the scan again.";
+/** What Cancel can and cannot promise — the running group is never rolled back. */
+const CANCEL_HINT = "Stops before the next game. The one being processed now finishes and reports what it changed.";
+
+/**
+ * Ask the backend to stop `runId`. Returns the message to surface, or null when
+ * the request was accepted — the run's own terminal frame reports the outcome,
+ * so a success here must not overwrite it with chatter.
+ */
+async function requestPruneCancel(runId: string): Promise<string | null> {
+  logInfo(`[prune] Cancel pressed for run ${runId}`);
+  try {
+    const result = await withTimeout(cancelPrune(runId), PRUNE_CALLABLE_TIMEOUT_MS);
+    if (!result.success) {
+      logWarn(`[prune] cancelPrune refused: reason=${result.reason ?? "none"}`);
+      return result.message;
+    }
+    logInfo(`[prune] cancelPrune accepted for run ${runId}`);
+    return null;
+  } catch (e) {
+    logError(`[prune] cancelPrune threw for run ${runId}: ${e}`);
+    return `Could not request cancellation: ${e}`;
+  }
+}
 
 const plural = (count: number, singular: string, pluralForm: string): string => (count === 1 ? singular : pluralForm);
 
@@ -72,6 +98,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   const [items, setItems] = useState<PrunePreviewItem[]>(initial.items ?? []);
   const [loadingMore, setLoadingMore] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [runStarted, setRunStarted] = useState(false);
   const [status, setStatus] = useState("");
   const [repoint, setRepoint] = useState(true);
@@ -118,13 +145,28 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   const progress = pruneState.progress;
   const complete = pruneState.complete;
   const runInFlight = complete === null && (starting || pruneState.runId !== null);
-  const canStart =
-    !runInFlight &&
-    complete === null &&
-    allEntriesLoaded &&
-    !insufficientSpace &&
-    destructiveConfirmed &&
-    (repoint || removeRows || removeDeadGames);
+  // Why Confirm is unavailable, in the user's words. Several of these conditions
+  // already render a warning somewhere in the dialog, but the dialog scrolls —
+  // a greyed button with its explanation off-screen reads as a dead control, and
+  // a press that does nothing at all is indistinguishable from a broken plugin.
+  const blockedReason = ((): string | null => {
+    if (complete !== null) return null;
+    if (runInFlight) return "A cleanup is already running.";
+    if (!allEntriesLoaded) return `Load all ${total} entries before confirming.`;
+    if (!destructiveConfirmed) return "Confirm you understand there will be no recovery bundle.";
+    if (insufficientSpace) {
+      return unknownSelectedSize
+        ? "A selected ROM's size can't be measured, so the recovery bundle can't be guaranteed to fit."
+        : "The selected ROM content doesn't fit in the free space at the recovery target.";
+    }
+    if (!(repoint || removeRows || removeDeadGames)) return "Choose at least one cleanup option above.";
+    return null;
+  })();
+  // Disabled ONLY where a press is unsafe or meaningless: a run is already
+  // going, or this dialog is showing a finished one. Every other reason to
+  // refuse is explained when pressed — a greyed button whose explanation the
+  // user has to hunt for is the shape the silent no-op took.
+  const pressBlocked = complete !== null || runInFlight;
 
   const toggleContent = (romIdToToggle: number, checked: boolean): void => {
     setIncludedContent((current) => {
@@ -180,7 +222,20 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   };
 
   const start = async (): Promise<void> => {
-    if (!canStart || !initial.preview_id) return;
+    // Confirm is the destructive commit point, so every press is logged and
+    // every outcome is visible in the dialog. A press that returns silently is
+    // indistinguishable on device from a plugin that has stopped responding.
+    logInfo(`[prune] Confirm pressed (preview=${initial.preview_id ?? "none"}, scope=${scope}, total=${total})`);
+    if (!initial.preview_id) {
+      setStatus("This cleanup preview has no id — close and scan again.");
+      logError("[prune] Confirm aborted: the modal holds no preview id");
+      return;
+    }
+    if (blockedReason !== null) {
+      setStatus(`Cleanup did not start: ${blockedReason}`);
+      logWarn(`[prune] Confirm refused locally: ${blockedReason}`);
+      return;
+    }
     setStarting(true);
     setStatus(
       includedContent.size
@@ -207,6 +262,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
         );
         if (!staged.success || !staged.selection_id) {
           setStatus(staged.message ?? "Installed-content selections could not be staged.");
+          logWarn(`[prune] Confirm aborted while staging installed content: ${staged.message ?? "no message"}`);
           return;
         }
         selectionId = staged.selection_id;
@@ -225,24 +281,36 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
       );
       if (!result.success) {
         setStatus(result.message ?? "Cleanup could not start.");
+        logWarn(`[prune] startPrune refused: reason=${result.reason ?? "none"} message=${result.message ?? "none"}`);
         return;
       }
       if (!result.run_id) {
         // A success without a run id can never be adopted by id — say so instead
         // of wedging frame admission on a run the store will never recognise.
         setStatus("Cleanup started but the backend response carried no run id.");
+        logError("[prune] startPrune reported success with no run id");
         return;
       }
-      beginPruneRun(result.run_id, initial.preview_id);
       setRunStarted(true);
+      if (!beginPruneRun(result.run_id, initial.preview_id)) {
+        // The run IS executing; this dialog just can't receive its frames, and
+        // neither can the Danger Zone. Saying "running..." here would leave the
+        // user watching a progress line that can never arrive.
+        setStatus("Cleanup started, but this dialog lost track of it. Check the log, then re-scan to see the result.");
+        logError(`[prune] run ${result.run_id} started but preview ${initial.preview_id} was no longer pending`);
+        return;
+      }
       setStatus("Cleanup running...");
+      logInfo(`[prune] startPrune accepted: run=${result.run_id}`);
     } catch (e) {
       const adopted = getPruneState();
       if (adopted.runId !== null) {
         setRunStarted(true);
         setStatus(adopted.complete ? "Cleanup completed." : "Cleanup running...");
+        logWarn(`[prune] startPrune response was lost; adopted run ${adopted.runId} from its frames instead: ${e}`);
       } else {
         setStatus(`Cleanup could not start: ${e}`);
+        logError(`[prune] startPrune threw with no run adopted: ${e}`);
       }
     } finally {
       setStarting(false);
@@ -426,8 +494,26 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
           )}
         </div>
         {progress && (
-          <div role="status" aria-live="polite" style={{ marginTop: "10px", color: "#c7d5e0" }}>
-            {progress.stage.replace(/_/g, " ")} · {progress.current} of {progress.total} · {progress.name}
+          <div style={{ marginTop: "10px", color: "#c7d5e0" }}>
+            <div role="status" aria-live="polite">
+              {progress.stage.replace(/_/g, " ")} · {progress.current} of {progress.total} · {progress.name}
+            </div>
+            <div style={{ color: "#8f98a0", fontSize: "12px", marginTop: "4px" }}>{CANCEL_HINT}</div>
+            <DialogButton
+              disabled={cancelling}
+              onClick={() =>
+                detach(
+                  (async () => {
+                    setCancelling(true);
+                    const failure = await requestPruneCancel(progress.run_id);
+                    if (failure !== null) setStatus(failure);
+                    setCancelling(false);
+                  })(),
+                )
+              }
+            >
+              {cancelling ? "Stopping..." : "Stop Cleanup"}
+            </DialogButton>
           </div>
         )}
         {complete && (
@@ -486,11 +572,14 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
             {status}
           </div>
         )}
+        {blockedReason !== null && !runInFlight && (
+          <div style={{ marginTop: "10px", color: "#ff8c6a", fontSize: "12px" }}>{blockedReason}</div>
+        )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "16px" }}>
           <DialogButton disabled={starting && complete === null} onClick={() => closeModal?.()}>
             {runStarted || complete !== null ? "Close" : "Cancel"}
           </DialogButton>
-          <DialogButton disabled={!canStart} onClick={() => detach(start())}>
+          <DialogButton disabled={pressBlocked} onClick={() => detach(start())}>
             {starting ? "Starting..." : progress ? `${progress.stage.replace(/_/g, " ")}...` : "Confirm Cleanup"}
           </DialogButton>
         </div>
@@ -517,6 +606,8 @@ export async function openRemovedGamesCleanupModal(romId?: number): Promise<bool
 
 export const RemovedGamesCleanupSection: FC = () => {
   const [scanning, setScanning] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelStatus, setCancelStatus] = useState<string | null>(null);
   const [syncRunning, setSyncRunning] = useState(getSyncProgress().running);
   const [pruneState, setPruneState] = useState(getPruneState());
   const [resultLost, setResultLost] = useState(isPruneResultLost());
@@ -549,13 +640,26 @@ export const RemovedGamesCleanupSection: FC = () => {
 
   const progress = pruneState.progress;
   const complete = pruneState.complete;
+  // A run that has started but not yet emitted its first progress frame is
+  // still a run: gate on the run id, not just on progress, or the entry point
+  // stays live during exactly the window where a second scan would collide.
+  const runActive = complete === null && pruneState.runId !== null;
+  const runLabel = progress
+    ? `${progress.stage.replace(/_/g, " ")} · ${progress.current} of ${progress.total} · ${progress.name}`
+    : "Cleanup starting...";
   return (
     <PanelSection title="Removed RomM Games">
       <PanelSectionRow>
         <ButtonItem
           layout="below"
-          disabled={scanning || syncRunning || progress !== null}
-          description={syncRunning ? "Unavailable while a library sync is running." : undefined}
+          disabled={scanning || syncRunning || runActive || progress !== null}
+          description={
+            syncRunning
+              ? "Unavailable while a library sync is running."
+              : runActive
+                ? "A cleanup is running. Its progress is shown below."
+                : undefined
+          }
           onClick={() => detach(scan())}
         >
           {scanning ? "Scanning..." : "Clean Up Removed RomM Games"}
@@ -566,13 +670,33 @@ export const RemovedGamesCleanupSection: FC = () => {
           <Field label={RESULT_LOST_MESSAGE} />
         </PanelSectionRow>
       )}
-      {progress && (
-        <PanelSectionRow>
-          <Field
-            label={`${progress.stage.replace(/_/g, " ")} · ${progress.current} of ${progress.total} · ${progress.name}`}
-            description={progress.bundle_path ? `Recovery sealed: ${progress.bundle_path}` : undefined}
-          />
-        </PanelSectionRow>
+      {runActive && (
+        <>
+          <PanelSectionRow>
+            <Field
+              label={runLabel}
+              description={progress?.bundle_path ? `Recovery sealed: ${progress.bundle_path}` : CANCEL_HINT}
+            />
+          </PanelSectionRow>
+          <PanelSectionRow>
+            <ButtonItem
+              layout="below"
+              disabled={cancelling}
+              description={cancelStatus ?? undefined}
+              onClick={() =>
+                detach(
+                  (async () => {
+                    setCancelling(true);
+                    setCancelStatus(await requestPruneCancel(pruneState.runId!));
+                    setCancelling(false);
+                  })(),
+                )
+              }
+            >
+              {cancelling ? "Stopping..." : "Stop Cleanup"}
+            </ButtonItem>
+          </PanelSectionRow>
+        </>
       )}
       {complete && (
         <PanelSectionRow>
