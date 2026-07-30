@@ -2,9 +2,9 @@
 #    uv pip compile requirements-docs.txt --output-file=requirements-docs.lock
 babel==2.18.0
     # via mkdocs-material
-backrefs==7.0
+backrefs==8.0
     # via mkdocs-material
-certifi==2026.6.17
+certifi==2026.7.22
     # via requests
 charset-normalizer==3.4.9
     # via requests
@@ -47,7 +47,7 @@ paginate==0.5.7
     # via mkdocs-material
 pathspec==1.1.1
     # via mkdocs
-platformdirs==4.10.0
+platformdirs==4.11.0
     # via mkdocs-get-deps
 pygments==2.20.0
     # via mkdocs-material
