@@ -1,7 +1,10 @@
 {
   "fmt": {
     "include": ["**/*.md"],
-    "exclude": ["CHANGELOG.md", "site/", "node_modules/", ".worktrees/"],
+    // docs/assets is excluded as well as being outside the md include: passing an
+    // explicit path (deno fmt docs/) overrides include but still honours exclude,
+    // and deno fmt treats SVG as markup — it has re-expanded the minified logo.
+    "exclude": ["CHANGELOG.md", "site/", "node_modules/", ".worktrees/", "docs/assets"],
     "proseWrap": "always",
     "lineWidth": 120
   }
