@@ -3,8 +3,8 @@
  * save sync + playtime tracking via backend callables.
  *
  * Uses SteamClient.GameSessions.RegisterForAppLifetimeNotifications to detect
- * game lifecycle events and the defensive `runningApps` reader (multiple Steam
- * surfaces, not just `Router.MainRunningApp`) for reliable app-ID resolution.
+ * game lifecycle events and the guarded `runningApps` reader
+ * (`SteamUIStore.RunningApps`) for reliable app-ID resolution.
  */
 
 import { toaster } from "@decky/api";
@@ -231,20 +231,20 @@ async function handleGameStop(): Promise<void> {
 }
 
 // Adoption polls Steam's running-app before deciding a session's fate: after a
-// full `plugin_loader` restart the running-app surfaces are not populated for
+// full `plugin_loader` restart `SteamUIStore.RunningApps` reads empty for
 // several seconds even though the game is still running (#1054 / #1148 round 2
 // device evidence), so a single early read wrongly orphaned a live session. Poll
-// the defensive multi-source reader until a running app appears or the window
-// elapses.
+// the reader until a running app appears or the window elapses.
 const ADOPTION_POLL_INTERVAL_MS = 500;
 export const ADOPTION_POLL_MAX_MS = 15_000;
 
 /**
- * Poll every running-app source until one reports a running app or the window
- * elapses. Returns the primary app (any app, RomM or not — the caller applies
+ * Poll the running-app reader until it reports a running app or the window
+ * elapses. Returns the foreground app (any app, RomM or not — the caller applies
  * the adoption matrix) or `null` on timeout, alongside the last round's
- * per-source `diagnostics` so a timed-out adoption logs what EVERY candidate
- * reported. Each round's diagnostics are also emitted at debug level.
+ * `diagnostics` so a timed-out adoption logs what the store actually reported
+ * (absent / empty / threw). Each round's diagnostics are also emitted at debug
+ * level.
  */
 async function pollForRunningApp(): Promise<{ app: RunningApp | null; diagnostics: string }> {
   const started = Date.now();
@@ -263,15 +263,14 @@ async function pollForRunningApp(): Promise<{ app: RunningApp | null; diagnostic
  * `destroySessionManager` wipes the in-memory session on unload, so the
  * game-stop after a reload would otherwise never finalize — the pre-reload
  * playtime is lost and the post-exit sync never runs. Steam's running-state
- * (`Router.MainRunningApp`) is the liveness authority; the localStorage
+ * (`SteamUIStore.RunningApps`) is the liveness authority; the localStorage
  * breadcrumb is the attestation of a start we actually observed. Every finalize
  * fold thus stays anchored to a marker stamped by an observed start.
  *
- * The liveness read is POLLED (not a single read) and consults MULTIPLE Steam
- * surfaces: after a loader restart `Router.MainRunningApp` stays null for seconds
- * and never repopulates without a fresh lifecycle event our reloaded context
- * missed (#1054 / #1148 round 2), so a one-shot single-source read raced the
- * restart and wrongly orphaned a still-running session.
+ * The liveness read is POLLED, not a single read: after a loader restart the
+ * store reports an EMPTY running-app list for seconds while the game is still
+ * up (#1054 / #1148 round 2), so a one-shot read raced the restart and wrongly
+ * orphaned a still-running session.
  */
 async function adoptOrphanedSession(): Promise<void> {
   const epoch = sessionEpoch;

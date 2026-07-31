@@ -74,6 +74,18 @@ async function initDrainingAdoptionPoll(): Promise<void> {
   await init;
 }
 
+// Liveness comes from `SteamUIStore.RunningApps` — the one running-app surface
+// (#1588). Its head is the foreground app, so a single-entry list seeds a
+// running game and an empty list seeds "the store reports nothing", which is
+// exactly what the post-loader-restart adoption window looks like on-device.
+function stubRunningApp(appid: number, displayName = "Game"): void {
+  vi.stubGlobal("SteamUIStore", { RunningApps: [{ appid, display_name: displayName }] });
+}
+
+function stubNothingRunning(): void {
+  vi.stubGlobal("SteamUIStore", { RunningApps: [] });
+}
+
 // The session manager registers only the lifecycle hook — suspend/resume
 // tracking was removed (#1148: the Steam hooks never fired on-device; playtime
 // now excludes suspend via the backend monotonic clock). Re-stub after the
@@ -290,7 +302,7 @@ describe("sessionManager reload adoption", () => {
 
   it("adopts a matching breadcrumb without re-stamping the marker, then finalizes on stop", async () => {
     seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000 });
-    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    stubRunningApp(APP_ID);
 
     await initSessionManager();
 
@@ -306,7 +318,7 @@ describe("sessionManager reload adoption", () => {
   });
 
   it("adopts a running game with no breadcrumb and re-stamps the marker", async () => {
-    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    stubRunningApp(APP_ID);
 
     await initSessionManager();
 
@@ -320,7 +332,7 @@ describe("sessionManager reload adoption", () => {
   it("adopts and re-stamps when the breadcrumb names a different app than the running game", async () => {
     // Stale breadcrumb for a different app; the running game is authoritative.
     seedBreadcrumb({ v: 1, appId: 555, romId: 99, startMs: 5_000 });
-    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    stubRunningApp(APP_ID);
 
     await initSessionManager();
 
@@ -332,7 +344,7 @@ describe("sessionManager reload adoption", () => {
 
   it("clears the breadcrumb and does not adopt when nothing is running", async () => {
     seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000 });
-    vi.stubGlobal("Router", { MainRunningApp: null });
+    stubNothingRunning();
 
     // Nothing ever runs → the poll times out and the breadcrumb is orphan-cleared.
     await initDrainingAdoptionPoll();
@@ -354,7 +366,7 @@ describe("sessionManager reload adoption", () => {
   });
 
   it("does not adopt when a non-RomM app is running", async () => {
-    vi.stubGlobal("Router", { MainRunningApp: { appid: 999, display_name: "Other" } });
+    stubRunningApp(999, "Other");
 
     await initSessionManager();
 
@@ -366,7 +378,7 @@ describe("sessionManager reload adoption", () => {
   });
 
   it("leaves no breadcrumb after a normal start then stop", async () => {
-    vi.stubGlobal("Router", { MainRunningApp: null });
+    stubNothingRunning();
     await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
 
@@ -381,7 +393,7 @@ describe("sessionManager reload adoption", () => {
   });
 
   it("degrades to re-stamping when localStorage throws", async () => {
-    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    stubRunningApp(APP_ID);
     // happy-dom's localStorage is a Proxy — swap the whole global (restored by
     // the global afterEach's vi.unstubAllGlobals) rather than spying a method.
     vi.stubGlobal("localStorage", {
@@ -404,7 +416,7 @@ describe("sessionManager reload adoption", () => {
   });
 
   it("survives a full reload: start, destroy, re-init, stop finalizes the original rom", async () => {
-    vi.stubGlobal("Router", { MainRunningApp: null });
+    stubNothingRunning();
     // No game at first load → the adoption poll times out before init settles.
     await initDrainingAdoptionPoll();
     const lifetime1 = captureLifetimeCb();
@@ -419,9 +431,9 @@ describe("sessionManager reload adoption", () => {
     destroySessionManager();
     expect(readCrumb()).not.toBeNull();
 
-    // Re-init while the game is still running — the poll sees MainRunningApp
-    // immediately and adopts via the surviving breadcrumb.
-    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    // Re-init while the game is still running — the poll sees the running app
+    // on its first round and adopts via the surviving breadcrumb.
+    stubRunningApp(APP_ID);
     await initSessionManager();
     // Case (a): durable marker preserved — no second record_session_start.
     expect(backend.recordSessionStart).toHaveBeenCalledTimes(1);
@@ -436,7 +448,7 @@ describe("sessionManager reload adoption", () => {
   it("treats a wrong-version breadcrumb as unusable and re-stamps (a′)", async () => {
     // A breadcrumb from a future schema (v2) fails isSessionBreadcrumb.
     seedBreadcrumb({ v: 2, appId: APP_ID, romId: ROM_ID, startMs: 5_000 });
-    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    stubRunningApp(APP_ID);
 
     await initSessionManager();
 
@@ -449,7 +461,7 @@ describe("sessionManager reload adoption", () => {
   it("treats a non-object breadcrumb JSON as unusable and re-stamps (a′)", async () => {
     // Valid JSON but not an object — isSessionBreadcrumb rejects it.
     localStorage.setItem(BREADCRUMB_KEY, JSON.stringify(42));
-    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    stubRunningApp(APP_ID);
 
     await initSessionManager();
 
@@ -459,7 +471,7 @@ describe("sessionManager reload adoption", () => {
 
   it("survives a rejected recordSessionStart during adoption", async () => {
     vi.mocked(backend.recordSessionStart).mockRejectedValueOnce(new Error("network down"));
-    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    stubRunningApp(APP_ID);
 
     // (a′) awaits recordSessionStart; its rejection is caught, not surfaced.
     await expect(initSessionManager()).resolves.toBeUndefined();
@@ -475,7 +487,7 @@ describe("sessionManager reload adoption", () => {
 
   it("clears a live breadcrumb when a non-RomM app is in the foreground", async () => {
     seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000 });
-    vi.stubGlobal("Router", { MainRunningApp: { appid: 999, display_name: "Other" } });
+    stubRunningApp(999, "Other");
 
     await initSessionManager();
 
@@ -499,7 +511,7 @@ describe("sessionManager reload adoption", () => {
       },
       clear: vi.fn(),
     });
-    vi.stubGlobal("Router", { MainRunningApp: null });
+    stubNothingRunning();
 
     // Nothing running → the poll times out, then the orphaned-breadcrumb clear
     // hits the throwing removeItem, which must be swallowed.
@@ -512,41 +524,58 @@ describe("sessionManager reload adoption", () => {
   });
 
   it("tolerates a throwing running-app getter without erroring adoption", async () => {
-    // Steam's running-app accessor faulting must not crash init. The defensive
-    // reader catches the throw PER-SOURCE (noting it in diagnostics) so adoption
-    // proceeds against the other sources instead of erroring out (#1148 round 2) —
-    // the pre-fix single-source read let the throw escape to the adoption .catch.
-    vi.stubGlobal("Router", {
-      get MainRunningApp(): unknown {
+    // Steam's running-app accessor faulting must not crash init. The reader
+    // catches the throw and notes it in the diagnostics, so adoption reaches its
+    // normal timeout verdict instead of erroring out (#1148 round 2) — the
+    // pre-fix unguarded read let the throw escape to the adoption .catch.
+    vi.stubGlobal("SteamUIStore", {
+      get RunningApps(): unknown {
         throw new Error("running-app read failed");
       },
     });
 
-    // Nothing else running → the poll times out and init resolves cleanly.
+    // Nothing readable → the poll times out and init resolves cleanly.
     const init = initSessionManager();
     await vi.advanceTimersByTimeAsync(ADOPTION_POLL_MAX_MS);
     await expect(init).resolves.toBeUndefined();
 
-    // No adoption error surfaced; the timed-out round logged what every candidate
-    // reported, including the throwing source.
+    // No adoption error surfaced; the timed-out round logged what the store
+    // reported, i.e. that it threw.
     expect(backend.logError).not.toHaveBeenCalledWith(expect.stringContaining("Session adoption error"));
     expect(backend.logInfo).toHaveBeenCalledWith(expect.stringContaining("threw:"));
     expect(backend.logInfo).toHaveBeenCalledWith(expect.stringContaining("no running app"));
   });
 
-  // #1054 follow-up: after a full plugin_loader restart Router.MainRunningApp is
-  // null for several seconds while the game is still running, so a one-shot read
-  // wrongly orphaned a live session. Adoption now polls MainRunningApp.
-  it("adopts a matching breadcrumb once MainRunningApp appears mid-poll, no orphan log", async () => {
+  it("tolerates an entirely absent running-app store without erroring adoption", async () => {
+    // SteamUIStore intentionally not stubbed — on a build/timing where the
+    // global is genuinely absent, a bare read would throw ReferenceError out of
+    // the poll. Adoption must still reach its ordinary timeout verdict.
     seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000 });
-    vi.stubGlobal("Router", { MainRunningApp: null });
 
     const init = initSessionManager();
-    // Four polls into the loader-restart window, MainRunningApp is still null.
+    await vi.advanceTimersByTimeAsync(ADOPTION_POLL_MAX_MS);
+    await expect(init).resolves.toBeUndefined();
+
+    expect(backend.logError).not.toHaveBeenCalledWith(expect.stringContaining("Session adoption error"));
+    expect(backend.logInfo).toHaveBeenCalledWith(expect.stringContaining("no-store"));
+    // Case (b): nothing attested as running → the breadcrumb is orphan-cleared.
+    expect(readCrumb()).toBeNull();
+    expect(backend.recordSessionStart).not.toHaveBeenCalled();
+  });
+
+  // #1054 follow-up: after a full plugin_loader restart the store reports an
+  // EMPTY running-app list for several seconds while the game is still running,
+  // so a one-shot read wrongly orphaned a live session. Adoption now polls.
+  it("adopts a matching breadcrumb once the store reports the app mid-poll, no orphan log", async () => {
+    seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000 });
+    stubNothingRunning();
+
+    const init = initSessionManager();
+    // Four polls into the loader-restart window, the store is still empty.
     await vi.advanceTimersByTimeAsync(2_000);
     expect(backend.recordSessionStart).not.toHaveBeenCalled();
     // Steam finally populates the running app; the next poll sees it.
-    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    stubRunningApp(APP_ID);
     await vi.advanceTimersByTimeAsync(500);
     await init;
 
@@ -564,7 +593,7 @@ describe("sessionManager reload adoption", () => {
 
   it("orphan-clears the breadcrumb after the poll times out with nothing running", async () => {
     seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000 });
-    vi.stubGlobal("Router", { MainRunningApp: null });
+    stubNothingRunning();
 
     await initDrainingAdoptionPoll();
 
@@ -575,7 +604,7 @@ describe("sessionManager reload adoption", () => {
   });
 
   it("stays silent when the poll times out with no breadcrumb", async () => {
-    vi.stubGlobal("Router", { MainRunningApp: null });
+    stubNothingRunning();
 
     await initDrainingAdoptionPoll();
 
@@ -588,7 +617,7 @@ describe("sessionManager reload adoption", () => {
 
   it("queues a racing stop behind the poll so it finalizes after adoption", async () => {
     seedBreadcrumb({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 1_000 });
-    vi.stubGlobal("Router", { MainRunningApp: null });
+    stubNothingRunning();
 
     const init = initSessionManager();
     // Let init register the lifetime hook and enter the poll.
@@ -600,7 +629,7 @@ describe("sessionManager reload adoption", () => {
     lifetime({ bRunning: false, unAppID: APP_ID });
 
     // The game becomes visible; the poll resolves and adoption (a) runs first.
-    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    stubRunningApp(APP_ID);
     await vi.advanceTimersByTimeAsync(500);
     await init;
     await vi.advanceTimersByTimeAsync(0); // flush the queued stop task
@@ -616,14 +645,14 @@ describe("sessionManager reload adoption", () => {
     // Nothing running yet → the poll is mid-flight when destroy fires. A game that
     // appears AFTER teardown must not be adopted: the aborted poll writes no
     // breadcrumb, records no session, and takes no adoption action (#1148 LOW-1).
-    vi.stubGlobal("Router", { MainRunningApp: null });
+    stubNothingRunning();
 
     const init = initSessionManager();
     await vi.advanceTimersByTimeAsync(2_000); // poll running, nothing found yet
     destroySessionManager(); // tears down mid-poll → bumps the epoch
     // A running game appears after teardown; the still-pending poll would adopt it
     // (case a′ → recordSessionStart + breadcrumb) if it did not check the epoch.
-    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    stubRunningApp(APP_ID);
     await vi.advanceTimersByTimeAsync(500);
     await init;
 
@@ -685,7 +714,7 @@ describe("sessionManager session-changed dispatch (#1313)", () => {
   });
 
   it("dispatches running:true on game start and running:false on stop", async () => {
-    vi.stubGlobal("Router", { MainRunningApp: null });
+    stubNothingRunning();
     await initDrainingAdoptionPoll();
     const lifetime = captureLifetimeCb();
 
@@ -703,7 +732,7 @@ describe("sessionManager session-changed dispatch (#1313)", () => {
       BREADCRUMB_KEY,
       JSON.stringify({ v: 1, appId: APP_ID, romId: ROM_ID, startMs: 5_000, pausedMs: 0 }),
     );
-    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    stubRunningApp(APP_ID);
 
     await initSessionManager();
 
@@ -711,7 +740,7 @@ describe("sessionManager session-changed dispatch (#1313)", () => {
   });
 
   it("dispatches running:true when adopting a running session with no breadcrumb", async () => {
-    vi.stubGlobal("Router", { MainRunningApp: { appid: APP_ID, display_name: "Game" } });
+    stubRunningApp(APP_ID);
 
     await initSessionManager();
 
@@ -719,7 +748,7 @@ describe("sessionManager session-changed dispatch (#1313)", () => {
   });
 
   it("does not dispatch a session event when nothing is running at init", async () => {
-    vi.stubGlobal("Router", { MainRunningApp: null });
+    stubNothingRunning();
     await initDrainingAdoptionPoll();
     expect(sessionEvents).toEqual([]);
   });

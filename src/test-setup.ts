@@ -177,7 +177,6 @@ vi.mock("@decky/ui", () => {
     // against behavior the real UI does not have.
     MenuItem: ({ children, onClick, disabled }: AnyProps) =>
       createElement("button", { type: "button", onClick, disabled }, children as never),
-    Router: { CloseSideMenus: vi.fn(), Navigate: vi.fn() },
     Navigation: { NavigateToExternalWeb: vi.fn(), Navigate: vi.fn() },
     // findSP locates Steam's <SteamRoot> iframe document for stylesheet
     // injection. Tests run in happy-dom — no Steam, no iframe — so the
