@@ -4,10 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-overrides:
-  js-yaml@>=4.0.0 <4.2.0: 4.3.0
-  markdown-it@>=14.0.0 <14.2.0: 14.3.0
-
 importers:
 
   .:
