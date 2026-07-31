@@ -277,6 +277,11 @@ export default definePlugin(() => {
       }
       // After backend reachability is confirmed, reconcile launch_options for
       // all installed+bound ROMs to heal any drift from a missed bake (#1043).
+      // This lease-issuing call must stay behind the awaited init round-trips:
+      // the orphan-lease disown dispatched at definePlugin entry has to land
+      // before any lease is issued to this mount — a lease issued earlier
+      // would be disowned while live, and its refused renewal would abort the
+      // continuation's Steam work mid-flight.
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `initDone` is flipped to true inside the awaited `loadAppIdsAndMetadata()`; TS's control-flow analysis can't see that cross-function mutation and narrows it to the `false` literal here. The guard is real: it gates the reconcile on the loop having actually reached a reachable backend.
       if (initDone) {
         try {
