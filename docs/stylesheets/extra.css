@@ -18,3 +18,33 @@
   --md-accent-fg-color--transparent: #66c0f41a;
   --md-typeset-a-color: #8fd0f7;
 }
+
+/* The landing page's mark sits beside its heading rather than above it, so the
+   two read as one line.
+
+   It comes in through ::before rather than as an <img> in the Markdown. The mark
+   is decorative — the heading it sits next to already says the name — and a CSS
+   background is decorative by construction: nothing to give alt text to, and
+   nothing for a screen reader to announce twice. It also keeps the Markdown a
+   plain heading, so the page title, the nav label and the anchor are untouched.
+
+   Sized in em so it tracks the heading, which Material already scales down on
+   narrow viewports; a px height would drift out of proportion there. Flex does
+   the centring, because the offset that would centre it by hand depends on the
+   font's cap height and would need re-deriving if the heading font changed. */
+.md-typeset h1.hero-title {
+  display: flex;
+  align-items: center;
+}
+
+.md-typeset h1.hero-title::before {
+  content: "";
+  background-image: url("../assets/logo-animated.gif");
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  width: 1.9em;
+  height: 1.9em;
+  margin-right: 0.28em;
+  flex: none;
+}

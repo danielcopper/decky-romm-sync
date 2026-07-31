@@ -1,6 +1,4 @@
-<p align="center"><img src="assets/logo-animated.gif" alt="" width="150"></p>
-
-# decky-romm-sync
+# decky-romm-sync { .hero-title }
 
 A [Decky Loader](https://decky.xyz/) plugin that syncs your self-hosted [RomM](https://github.com/rommapp/romm) ROM
 library into Steam as Non-Steam shortcuts. Games launch through [RetroDECK](https://retrodeck.net/).
