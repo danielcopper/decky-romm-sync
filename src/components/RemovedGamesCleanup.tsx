@@ -149,7 +149,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   const [items, setItems] = useState<PrunePreviewItem[]>(initial.items ?? []);
   const [loadingMore, setLoadingMore] = useState(false);
   const [starting, setStarting] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
+  const [cancelRequestedFor, setCancelRequestedFor] = useState<string | null>(null);
   const [runStarted, setRunStarted] = useState(false);
   const [status, setStatus] = useState("");
   const [repoint, setRepoint] = useState(true);
@@ -196,6 +196,13 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
   const progress = pruneState.progress;
   const complete = pruneState.complete;
   const runInFlight = complete === null && (starting || pruneState.runId !== null);
+  // Derived from the RUN's lifecycle, never the cancel callable's: the callable
+  // resolving means the request was received, not that the run has stopped.
+  // Tying the lock to it let seven presses through in three seconds (#1570 F19).
+  // The exits are the terminal frame (complete), the run going away in the
+  // store, and an outright refusal — the backend's idempotency is the safety
+  // net behind that, not the mechanism.
+  const cancelling = complete === null && cancelRequestedFor !== null && cancelRequestedFor === pruneState.runId;
   // Why Confirm is unavailable, in the user's words. Several of these conditions
   // already render a warning somewhere in the dialog, but the dialog scrolls —
   // a greyed button with its explanation off-screen reads as a dead control, and
@@ -555,10 +562,14 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
               onClick={() =>
                 detach(
                   (async () => {
-                    setCancelling(true);
+                    setCancelRequestedFor(progress.run_id);
                     const failure = await requestPruneCancel(progress.run_id);
-                    if (failure !== null) setStatus(failure);
-                    setCancelling(false);
+                    if (failure !== null) {
+                      // Refused means this run is not running, so no terminal
+                      // frame is coming to re-open the control — do it here.
+                      setCancelRequestedFor(null);
+                      setStatus(failure);
+                    }
                   })(),
                 )
               }
@@ -668,7 +679,7 @@ export async function openRemovedGamesCleanupModal(romId?: number): Promise<bool
 
 export const RemovedGamesCleanupSection: FC = () => {
   const [scanning, setScanning] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
+  const [cancelRequestedFor, setCancelRequestedFor] = useState<string | null>(null);
   const [cancelStatus, setCancelStatus] = useState<string | null>(null);
   const [syncRunning, setSyncRunning] = useState(getSyncProgress().running);
   const [pruneState, setPruneState] = useState(getPruneState());
@@ -717,6 +728,7 @@ export const RemovedGamesCleanupSection: FC = () => {
   // still a run: gate on the run id, not just on progress, or the entry point
   // stays live during exactly the window where a second scan would collide.
   const runActive = complete === null && pruneState.runId !== null;
+  const cancelling = runActive && cancelRequestedFor !== null && cancelRequestedFor === pruneState.runId;
   const runLabel = progress
     ? `${progress.stage.replace(/_/g, " ")} · ${progress.current} of ${progress.total} · ${progress.name}`
     : "Cleanup starting...";
@@ -761,9 +773,13 @@ export const RemovedGamesCleanupSection: FC = () => {
               onClick={() =>
                 detach(
                   (async () => {
-                    setCancelling(true);
-                    setCancelStatus(await requestPruneCancel(pruneState.runId!));
-                    setCancelling(false);
+                    const runId = pruneState.runId!;
+                    setCancelRequestedFor(runId);
+                    const failure = await requestPruneCancel(runId);
+                    setCancelStatus(failure);
+                    // A refusal is the only outcome with no terminal frame
+                    // behind it, so it is the only one that re-opens the button.
+                    if (failure !== null) setCancelRequestedFor(null);
                   })(),
                 )
               }

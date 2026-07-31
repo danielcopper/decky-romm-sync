@@ -62,6 +62,7 @@ describe("RemovedGamesCleanup", () => {
     vi.mocked(backend.getPrunePreview).mockReset();
     vi.mocked(backend.stagePruneInstalledSelection).mockReset();
     vi.mocked(backend.startPrune).mockReset();
+    vi.mocked(backend.cancelPrune).mockReset();
     vi.mocked(showModal).mockReset();
     vi.mocked(toaster.toast).mockReset();
     logs = {
@@ -1052,8 +1053,8 @@ describe("RemovedGamesCleanup", () => {
     expect(modal.container.textContent).toContain("Shenmue-II_2026-07-31_07f4953b");
   });
 
-  it("stops inviting a second Stop press once cancelling", async () => {
-    vi.mocked(backend.cancelPrune).mockImplementation(() => new Promise(() => {}));
+  it("keeps Stop locked after the cancel callable resolves, until the run ends", async () => {
+    vi.mocked(backend.cancelPrune).mockResolvedValue({ success: true, message: "ok", already_cancelling: false });
     const section = render(createElement(RemovedGamesCleanupSection));
     act(() => {
       beginPrunePreview("preview-1");
@@ -1063,9 +1064,103 @@ describe("RemovedGamesCleanup", () => {
     fireEvent.click(section.getByRole("button", { name: "Stop Cleanup" }));
     await act(async () => Promise.resolve());
 
+    // The callable has resolved. That means the request was received, NOT that
+    // the run stopped — tying the lock to it let seven presses through in three
+    // seconds on device.
+    expect(backend.cancelPrune).toHaveBeenCalledTimes(1);
     const stop = section.getByRole("button", { name: "Stopping..." }) as HTMLButtonElement;
     expect(stop.disabled).toBe(true);
     expect(section.container.textContent).toContain("finishing the current safe step");
+
+    act(() => {
+      setPruneComplete({
+        success: true,
+        partial: false,
+        run_id: "run-7",
+        preview_id: "preview-1",
+        removed_rom_ids: [],
+        affected_app_ids: [],
+        results: [],
+      });
+    });
+
+    // The terminal frame is the exit — the control is gone with the run.
+    expect(section.queryByRole("button", { name: "Stopping..." })).toBeNull();
+    expect(section.queryByRole("button", { name: "Stop Cleanup" })).toBeNull();
+  });
+
+  it("does not re-arm Stop for a run that never stops reporting", async () => {
+    vi.mocked(backend.cancelPrune).mockResolvedValue({ success: true, message: "ok", already_cancelling: false });
+    const section = render(createElement(RemovedGamesCleanupSection));
+    act(() => {
+      beginPrunePreview("preview-1");
+      beginPruneRun("run-7", "preview-1");
+    });
+
+    fireEvent.click(section.getByRole("button", { name: "Stop Cleanup" }));
+    await act(async () => Promise.resolve());
+    // Progress keeps arriving while the in-flight group finishes; that is not
+    // an invitation to press again.
+    act(() => {
+      setPruneProgress({
+        run_id: "run-7",
+        preview_id: "preview-1",
+        current: 2,
+        total: 3,
+        stage: "removing",
+        rom_ids: [7],
+        name: "Removed Game",
+      });
+    });
+
+    expect((section.getByRole("button", { name: "Stopping..." }) as HTMLButtonElement).disabled).toBe(true);
+    expect(backend.cancelPrune).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-opens Stop when the backend says the run is not running", async () => {
+    vi.mocked(backend.cancelPrune).mockResolvedValue({
+      success: false,
+      reason: "stale_run",
+      message: "That cleanup run is not running.",
+    });
+    const section = render(createElement(RemovedGamesCleanupSection));
+    act(() => {
+      beginPrunePreview("preview-1");
+      beginPruneRun("run-7", "preview-1");
+    });
+
+    fireEvent.click(section.getByRole("button", { name: "Stop Cleanup" }));
+    await waitFor(() => expect(section.container.textContent).toContain("That cleanup run is not running."));
+
+    // A refusal is the one outcome with no terminal frame behind it, so it must
+    // re-open the control rather than leave it locked forever.
+    expect((section.getByRole("button", { name: "Stop Cleanup" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("keeps the modal's Stop locked after its callable resolves", async () => {
+    vi.mocked(backend.cancelPrune).mockResolvedValue({ success: true, message: "ok", already_cancelling: false });
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("Cleanup running..."));
+    act(() => {
+      setPruneProgress({
+        run_id: "run-1",
+        preview_id: "preview-1",
+        current: 1,
+        total: 2,
+        stage: "checking",
+        rom_ids: [7],
+        name: "Removed Game",
+      });
+    });
+
+    fireEvent.click(modal.getByRole("button", { name: "Stop Cleanup" }));
+    await act(async () => Promise.resolve());
+
+    expect(backend.cancelPrune).toHaveBeenCalledTimes(1);
+    expect((modal.getByRole("button", { name: "Stopping..." }) as HTMLButtonElement).disabled).toBe(true);
+    expect(modal.container.textContent).toContain("finishing the current safe step");
   });
 
   it("recovers the entry point and warns when a run's result never arrives", async () => {
