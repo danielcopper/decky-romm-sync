@@ -28,7 +28,8 @@ _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "check_404_not_
 
 def _load_check_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location("check_404_not_unreachable", _SCRIPT_PATH)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
