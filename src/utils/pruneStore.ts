@@ -14,6 +14,9 @@ export interface PruneProgress {
 export interface PruneGroupResult {
   group_id: string;
   group_id_truncated?: boolean;
+  /** The game's display name — what a result line leads with. */
+  name?: string;
+  name_truncated?: boolean;
   rom_ids: number[];
   rom_count?: number;
   rom_ids_truncated?: boolean;

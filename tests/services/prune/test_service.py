@@ -803,6 +803,41 @@ async def test_active_download_and_multiple_bindings_skip_before_mutation(harnes
 
 
 @pytest.mark.asyncio
+async def test_group_result_leads_with_the_bound_row_s_game_name(harness):
+    app_id = 0x80000001
+    # The bound row is the group's representative — its name is the one the
+    # user sees on the shortcut.
+    _seed(
+        harness.uow,
+        _rom(1, fetch="old", group="g"),
+        _rom(2, fetch="new", group="g", app_id=app_id),
+    )
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    harness.romm.outcomes[2] = [{"id": 2}] * 3
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"])
+    complete = await _finish(harness)
+
+    result = complete["results"][0]
+    assert result["name"] == "Game 2"
+    assert result["name_truncated"] is False
+    # The metadata key stays on the wire for correlation, but it is no longer
+    # what a human-facing line has to lead with.
+    assert result["group_id"] == "g"
+
+
+@pytest.mark.asyncio
+async def test_group_result_names_an_unbound_group_from_its_members(harness):
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+    complete = await _finish(harness)
+
+    assert complete["results"][0]["name"] == "Game 1"
+
+
+@pytest.mark.asyncio
 async def test_nothing_to_do_blames_liveness_not_the_options_when_romm_was_unsure(harness):
     """An unconfirmed id is not an options problem, and must not read like one.
 

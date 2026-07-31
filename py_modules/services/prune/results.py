@@ -286,9 +286,17 @@ class PruneResultReporter:
         all_rom_ids = [row.rom_id for row in rows]
         bounded_removed = (removed_rom_ids or [])[:_COMPLETION_IDS_PER_GROUP]
         raw_message = str(message)
+        # The name the user knows the game by, so a result reads as a sentence
+        # instead of being prefixed with a metadata key. The bound row is the
+        # group's representative — it is the one with the Steam shortcut — and
+        # any member's name identifies the game when nothing is bound.
+        bound_row = next((row for row in rows if row.shortcut_app_id is not None), None)
+        raw_name = (bound_row or rows[0]).name
         result: dict[str, Any] = {
             "group_id": raw_group_id[:_COMPLETION_TEXT_CHARS],
             "group_id_truncated": len(raw_group_id) > _COMPLETION_TEXT_CHARS,
+            "name": raw_name[:_COMPLETION_TEXT_CHARS],
+            "name_truncated": len(raw_name) > _COMPLETION_TEXT_CHARS,
             "rom_ids": all_rom_ids[:_COMPLETION_IDS_PER_GROUP],
             "rom_count": len(all_rom_ids),
             "rom_ids_truncated": len(all_rom_ids) > _COMPLETION_IDS_PER_GROUP,

@@ -605,7 +605,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
                 )
                 .map((item) => (
                   <div key={item.group_id} style={{ fontSize: "12px", marginTop: "4px" }}>
-                    {item.group_id}: {item.message}
+                    {item.name || item.group_id}: {item.message}
                     {item.bundle_path !== undefined && removedInGroup(item) === 0 && (
                       <div>Backup created, nothing removed. The folder stays at {item.bundle_path}.</div>
                     )}

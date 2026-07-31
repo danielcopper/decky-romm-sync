@@ -959,6 +959,67 @@ describe("RemovedGamesCleanup", () => {
     expect(section.container.querySelector('[data-testid="progress"]')).toBeTruthy();
   });
 
+  it("leads a result line with the game's name, not its metadata key", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("Cleanup running..."));
+
+    act(() => {
+      setPruneComplete({
+        success: false,
+        partial: false,
+        run_id: "run-1",
+        preview_id: "preview-1",
+        removed_rom_ids: [],
+        affected_app_ids: [],
+        results: [
+          {
+            group_id: "igdb:1217:53",
+            name: "Shenmue II",
+            rom_ids: [4375],
+            status: "skipped",
+            reason: "liveness_uncertain",
+            message: "RomM could not confirm 1 of this game's version(s); nothing was removed.",
+          },
+        ],
+      });
+    });
+
+    // A metadata key in front of plain-language copy undoes the copy.
+    expect(modal.container.textContent).toContain("Shenmue II: RomM could not confirm");
+    expect(modal.container.textContent).not.toContain("igdb:1217:53");
+  });
+
+  it("falls back to the group key when a result carries no name", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("Cleanup running..."));
+
+    act(() => {
+      setPruneComplete({
+        success: false,
+        partial: false,
+        run_id: "run-1",
+        preview_id: "preview-1",
+        removed_rom_ids: [],
+        affected_app_ids: [],
+        results: [
+          {
+            group_id: "igdb:1217:53",
+            rom_ids: [4375],
+            status: "skipped",
+            message: "Nothing was removed.",
+          },
+        ],
+      });
+    });
+
+    // Identifying the group badly beats not identifying it at all.
+    expect(modal.container.textContent).toContain("igdb:1217:53: Nothing was removed.");
+  });
+
   it("says a bundle was left behind when a group backed up but removed nothing", async () => {
     await openRemovedGamesCleanupModal();
     const modal = render(shownModal());
