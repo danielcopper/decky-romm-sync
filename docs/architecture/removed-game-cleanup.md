@@ -78,6 +78,17 @@ check and the reservation. The run then proceeds **without** the lock. The reser
 conflicting callable, and holding the lock across the run's preview rebuild would make Play, save status, and downloads
 wait for that rebuild rather than learning their verdict immediately.
 
+Every claim on the gate is **named**. A callable registration carries the callable's own name, detached work carries the
+name of the callable that spawned it, and a lease carries its acquisition key plus the time it was taken. A refusal logs
+the complete holder inventory at INFO — label, kind, age, and a lease's remaining time — and names the holder in the
+refused message itself when its key has a user-facing name, falling back to the generic text rather than putting an
+internal token in front of the user. Acquire, renew and release are logged at debug; a lease that reaches its deadline
+is logged at INFO instead, because an expiry means its owner never released it. Without this a blocked cleanup is
+indistinguishable from a plugin that has stopped responding, and the holder cannot be identified after the fact.
+
+The live-claim count is derived from the holder registry rather than tracked beside it: a counter that can drift from
+the registry is exactly what made an unexplained refusal unattributable.
+
 Frontend-owned Steam work spans many calls, so it holds a globally registered, bounded, tokenized lease that it
 heartbeats through every sibling continuation's final write — including each paced `sync_stale` removal and the terminal
 repoint publication. Every continuation re-checks its abort signal before each later Steam mutation. Failed event
@@ -85,6 +96,12 @@ delivery releases an unreachable token. The owner's plugin generation is capture
 tombstones it so a late lease-bearing response is released without doing work; only a genuine remount opens a new
 generation. Teardown stops renewal and blocks future writes but defers the explicit release until already-started Steam
 promises settle.
+
+A lease is the frontend's to release, so every path that receives one must give it back — including the paths that do no
+work. A terminal completion frame carries a publication lease whenever the run committed a repoint; when the frame turns
+out to have nothing to publish, the listener releases it immediately rather than letting it pin the gate until its TTL.
+The TTL remains the backstop for the one case the frontend cannot cover: a response lost in transit carries a token the
+frontend never learned, and the expiry log is what makes that visible.
 
 ## Actions and frames
 

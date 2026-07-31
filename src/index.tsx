@@ -74,6 +74,7 @@ import {
   isPruneLeaseCancelled,
   mountPruneLeasePlugin,
   releaseAllPruneLeases,
+  releasePruneLease,
   withPruneLease,
 } from "./utils/pruneLease";
 import { withTimeout } from "./utils/withTimeout";
@@ -919,6 +920,12 @@ export default definePlugin(() => {
     }
     if (publications.length) {
       detach(publishPruneSwitches(completed.run_id, publications, completed.prune_lease_token));
+    } else if (completed.prune_lease_token) {
+      // The terminal frame carried a continuation lease but committed no repoint
+      // to publish, so nothing downstream will ever release it. Handing it back
+      // now keeps it from pinning the admission gate until its TTL and refusing
+      // every conflicting callable in the meantime (#1570 F13).
+      detach(releasePruneLease(completed.prune_lease_token, "Cleanup completion with nothing to publish"));
     }
     const removed = completed.removed_count ?? completed.removed_rom_ids.length;
     const skipped =

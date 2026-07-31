@@ -281,6 +281,33 @@ describe("index.tsx — persistent prune listeners", () => {
     plugin.onDismount();
   });
 
+  it("hands back a continuation lease the terminal frame gave it nothing to do with", async () => {
+    const plugin = pluginFactory();
+    beginPrunePreview("preview-nothing");
+
+    await act(async () => {
+      emitDeckyEvent("prune_complete", {
+        success: true,
+        partial: false,
+        run_id: "run-nothing",
+        preview_id: "preview-nothing",
+        // The lease is attached by the backend emit path; this run committed no
+        // repoint, so publishPruneSwitches is never called for it.
+        publication_required: true,
+        prune_lease_token: "orphan-lease",
+        removed_rom_ids: [7],
+        affected_app_ids: [],
+        results: [{ group_id: "group-1", rom_ids: [7], status: "removed", message: "Removed." }],
+      });
+      await Promise.resolve();
+    });
+
+    // Without this the lease pins the admission gate for its full 300s TTL and
+    // every conflicting callable — including the next cleanup — is refused.
+    await waitFor(() => expect(releasePruneConflictLease).toHaveBeenCalledWith("orphan-lease"));
+    plugin.onDismount();
+  });
+
   it("publishes a known committed partial repoint after terminal completion", async () => {
     const plugin = pluginFactory();
     beginPrunePreview("preview-repoint");

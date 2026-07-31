@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import pytest
 
@@ -150,13 +151,150 @@ async def test_detached_task_retains_conflict_claim_for_its_full_lifetime() -> N
 
     owner = Owner(False)
     task = asyncio.create_task(release.wait())
-    await retain_prune_conflict(owner, task)
+    await retain_prune_conflict(owner, task, "start_download")
     assert (await owner.start_prune())["reason"] == "operation_active"
 
     release.set()
     await task
     await asyncio.sleep(0)
     assert await owner.start_prune() == {"success": True}
+
+
+class _RecordingLogger:
+    def __init__(self) -> None:
+        self.info_lines: list[str] = []
+
+    def info(self, message: str) -> None:
+        self.info_lines.append(message)
+
+
+class _LoggingOwner(_Owner):
+    def __init__(self) -> None:
+        super().__init__(False)
+        self._prune_gate_logger = _RecordingLogger()
+        self.debug_lines: list[str] = []
+
+    def _log_debug(self, msg: str) -> None:
+        self.debug_lines.append(msg)
+
+    @prune_exclusive_start
+    async def start_prune(self) -> dict[str, Any]:
+        return {"success": True}
+
+
+@pytest.mark.asyncio
+async def test_refusal_logs_the_holder_that_is_actually_blocking() -> None:
+    owner = _LoggingOwner()
+    await acquire_prune_conflict_lease(owner, "launch_reconfirm")
+
+    result = await owner.start_prune()
+
+    assert result["reason"] == "operation_active"
+    # The line that would have identified F9's holder instantly.
+    refusal = next(line for line in owner._prune_gate_logger.info_lines if "admission refused" in line)
+    assert "launch_reconfirm" in refusal
+    assert "lease launch_reconfirm:1" in refusal
+    assert "held 0s" in refusal
+    assert "expires in" in refusal
+
+
+@pytest.mark.asyncio
+async def test_refusal_message_names_a_labelled_holder_in_plain_language() -> None:
+    owner = _LoggingOwner()
+    await acquire_prune_conflict_lease(owner, "launch_reconfirm")
+
+    result = await owner.start_prune()
+
+    assert "checking a game's launch settings" in result["message"]
+    assert "wait for it to finish" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_refusal_message_stays_generic_for_an_unnamed_holder() -> None:
+    owner = _LoggingOwner()
+    await acquire_prune_conflict_lease(owner, "some_internal_key")
+
+    result = await owner.start_prune()
+
+    # An internal token must never reach the user as if it were a sentence.
+    assert "some_internal_key" not in result["message"]
+    assert result["message"] == (
+        "Another local-data operation is in progress; wait for it to finish before starting cleanup."
+    )
+    # …but the log still names it, because that is where diagnosis happens.
+    assert any("some_internal_key" in line for line in owner._prune_gate_logger.info_lines)
+
+
+@pytest.mark.asyncio
+async def test_refusal_names_a_blocking_callable_registration() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class Owner(_LoggingOwner):
+        @prune_active_blocked
+        async def set_game_core(self):
+            entered.set()
+            await release.wait()
+            return {"success": True}
+
+    owner = Owner()
+    running = asyncio.create_task(owner.set_game_core())
+    await entered.wait()
+
+    await owner.start_prune()
+
+    refusal = next(line for line in owner._prune_gate_logger.info_lines if "admission refused" in line)
+    assert "set_game_core (operation" in refusal
+    release.set()
+    await running
+
+
+@pytest.mark.asyncio
+async def test_lease_lifecycle_is_traceable_at_debug() -> None:
+    owner = _LoggingOwner()
+
+    token = await acquire_prune_conflict_lease(owner, "sgdb_artwork")
+    await renew_prune_conflict_lease(owner, token)
+    await release_prune_conflict_lease(owner, token)
+
+    joined = "\n".join(owner.debug_lines)
+    assert f"acquired lease {token}" in joined
+    assert f"renewed lease {token}" in joined
+    assert f"released lease {token}" in joined
+    # Lifecycle is debug-only; it must not spam the INFO log.
+    assert owner._prune_gate_logger.info_lines == []
+
+
+@pytest.mark.asyncio
+async def test_expired_lease_is_reported_at_info_as_never_released(monkeypatch) -> None:
+    owner = _LoggingOwner()
+    monkeypatch.setattr("lib.prune_gate._LEASE_SECONDS", 0.0)
+    await acquire_prune_conflict_lease(owner, "installed_reconcile")
+
+    assert await owner.start_prune() == {"success": True}
+
+    # A lease reaching its deadline means its owner leaked it — visible without
+    # having to turn debug logging on first.
+    assert any(
+        "installed_reconcile" in line and "expired" in line and "without being released" in line
+        for line in owner._prune_gate_logger.info_lines
+    )
+
+
+@pytest.mark.asyncio
+async def test_detached_retention_is_labelled_by_its_originating_callable() -> None:
+    owner = _LoggingOwner()
+    release = asyncio.Event()
+    task = asyncio.create_task(release.wait())
+    await retain_prune_conflict(owner, task, "start_download")
+
+    await owner.start_prune()
+
+    refusal = next(line for line in owner._prune_gate_logger.info_lines if "admission refused" in line)
+    assert "start_download (operation" in refusal
+    release.set()
+    await task
+    await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio

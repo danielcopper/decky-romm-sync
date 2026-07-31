@@ -71,6 +71,11 @@ class Plugin:
     # consumes the callback.
     _debug_logger = staticmethod(lambda _msg: None)
 
+    # The admission gate lives in ``lib`` and resolves its logger off the owner
+    # so it stays runtime-dependency-free. ``None`` keeps a bare ``Plugin()``
+    # silent; ``_main`` wires the real logger before any callable can run.
+    _prune_gate_logger = None
+
     def _log_debug(self, msg):
         """Forward a debug message through the wired ``DebugLogger`` adapter.
 
@@ -119,6 +124,7 @@ class Plugin:
         )
         self.settings = result.stores.settings
         self._debug_logger = result.handles.debug_logger
+        self._prune_gate_logger = decky.logger
         # Persistence adapter — held directly for the disk-touching callable
         # paths that read/write settings without routing through a service.
         self._persistence = result.handles.persistence
@@ -578,7 +584,7 @@ class Plugin:
         # create_task pattern in services/saves/slots/switching.py (same call,
         # same target); check_save_status_background owns its own error handling.
         task = self.loop.create_task(self._save_sync_service.check_save_status_background(int(rom_id)))
-        await retain_prune_conflict(self, task)
+        await retain_prune_conflict(self, task, "refresh_save_status")
         return {"success": True}
 
     async def stop_running_game(self, rom_id):
@@ -606,7 +612,7 @@ class Plugin:
         result = await self._download_service.start_download(rom_id)
         task = self._download_service.task_for_rom(int(rom_id)) if result.get("success") else None
         if task is not None:
-            await retain_prune_conflict(self, task)
+            await retain_prune_conflict(self, task, "start_download")
         return result
 
     async def cancel_download(self, rom_id):
@@ -621,7 +627,7 @@ class Plugin:
         result = await self._download_service.resume_download(rom_id)
         task = self._download_service.task_for_rom(int(rom_id)) if result.get("success") else None
         if task is not None:
-            await retain_prune_conflict(self, task)
+            await retain_prune_conflict(self, task, "resume_download")
         return result
 
     async def get_download_queue(self):
@@ -758,7 +764,7 @@ class Plugin:
         # never blocked on the round-trip. flush_pending_sessions owns its own
         # error handling (best-effort, offline-safe).
         task = self._schedule_playtime_flush()
-        await retain_prune_conflict(self, task)
+        await retain_prune_conflict(self, task, "record_session_start")
         return result
 
     def _schedule_playtime_flush(self):

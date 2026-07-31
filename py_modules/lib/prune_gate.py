@@ -13,14 +13,73 @@ _OPERATION_BLOCKED_MESSAGE = (
 )
 _LEASE_SECONDS = 300.0
 
+# Plain-language names for the claim keys a user can actually be blocked behind.
+# A key with no entry here falls back to the generic refusal text rather than
+# leaking an internal token into the UI.
+_HOLDER_NAMES = {
+    "launch_reconfirm": "checking a game's launch settings",
+    "installed_reconcile": "checking which games are installed",
+    "sgdb_artwork": "downloading artwork",
+    "version_switch": "switching versions",
+    "shortcut_removal": "updating Steam shortcuts",
+    "rom_uninstall": "uninstalling a game",
+    "bulk_uninstall": "uninstalling games",
+    "system_core": "changing an emulator core",
+    "game_core": "changing an emulator core",
+    "disc_selection": "changing the selected disc",
+    "sync_complete": "finishing a library sync",
+    "sync_stale": "finishing a library sync",
+    "download_complete": "finishing a download",
+    "prune_complete": "finishing a cleanup",
+    "migration_relaunch_options": "finishing a RetroDECK move",
+}
+
+
+@dataclass(frozen=True)
+class _Holder:
+    """One live claim, named so a refusal can say who is holding the gate."""
+
+    label: str
+    kind: str
+    acquired_at: float
+
 
 @dataclass
 class _PruneAdmissionGate:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    conflicting_operations: int = 0
+    # Transient per-callable registrations, keyed by registration id.
+    operations: dict[int, _Holder] = field(default_factory=dict)
+    # Frontend-owned bounded claims, keyed by token; value carries its deadline.
+    leases: dict[str, tuple[_Holder, float]] = field(default_factory=dict)
     prune_reservations: int = 0
-    leases: dict[str, float] = field(default_factory=dict)
+    # Separate counters: a lease token is user-visible state the frontend round-
+    # trips, so transient registrations must not shift the ids it sees.
     next_lease_id: int = 1
+    next_operation_id: int = 1
+
+    @property
+    def conflicting_operations(self) -> int:
+        """Total live claims — the count the admission decision is made on.
+
+        Derived rather than tracked: a counter that drifts from the holder
+        registry is exactly the state that made #1570 F13's holder impossible
+        to identify.
+        """
+        return len(self.operations) + len(self.leases)
+
+    def busy(self) -> bool:
+        """Whether any conflicting claim is currently held."""
+        return bool(self.operations) or bool(self.leases)
+
+    def take_lease_id(self) -> int:
+        value = self.next_lease_id
+        self.next_lease_id += 1
+        return value
+
+    def take_operation_id(self) -> int:
+        value = self.next_operation_id
+        self.next_operation_id += 1
+        return value
 
 
 def _gate(owner: object) -> _PruneAdmissionGate:
@@ -29,6 +88,58 @@ def _gate(owner: object) -> _PruneAdmissionGate:
         gate = _PruneAdmissionGate()
         owner.__dict__["_prune_admission_gate"] = gate
     return gate
+
+
+def _info(owner: object, message: str) -> None:
+    """Log at INFO through the owner's wired logger, if it has one.
+
+    Resolved off the owner rather than imported so ``lib`` keeps no runtime
+    dependency, and so a bare ``Plugin()`` in a test fixture stays silent
+    instead of raising.
+    """
+    logger = getattr(owner, "_prune_gate_logger", None)
+    if logger is not None:
+        logger.info(message)
+
+
+def _debug(owner: object, message: str) -> None:
+    """Log gate lifecycle through the owner's settings-filtered debug logger."""
+    log = getattr(owner, "_log_debug", None)
+    if callable(log):
+        log(message)
+
+
+def _short(token: str) -> str:
+    """Shorten a lease token for logs — the id tail is what disambiguates."""
+    return token
+
+
+def _describe_holders(gate: _PruneAdmissionGate, now: float) -> str:
+    """One-line inventory of every current holder, for a refusal log line."""
+    parts = [f"{holder.label} (operation, held {now - holder.acquired_at:.0f}s)" for holder in gate.operations.values()]
+    parts += [
+        f"{holder.label} (lease {token}, held {now - holder.acquired_at:.0f}s, expires in {deadline - now:.0f}s)"
+        for token, (holder, deadline) in gate.leases.items()
+    ]
+    return ", ".join(parts) if parts else "none"
+
+
+def _blocked_message(gate: _PruneAdmissionGate) -> str:
+    """Name the holder in the refusal when its claim has a user-facing name.
+
+    The oldest claim is the one actually standing in the way, and a lease
+    outranks a transient registration because it is the one that can persist
+    long enough for a person to notice being blocked.
+    """
+    leases = sorted(gate.leases.values(), key=lambda item: item[0].acquired_at)
+    operations = sorted(gate.operations.values(), key=lambda holder: holder.acquired_at)
+    for holder in [item[0] for item in leases] + operations:
+        name = _HOLDER_NAMES.get(holder.label)
+        if name is not None:
+            return (
+                f"Another local-data operation is in progress ({name}); wait for it to finish before starting cleanup."
+            )
+    return _OPERATION_BLOCKED_MESSAGE
 
 
 def prune_active_blocked(method):
@@ -43,15 +154,18 @@ def prune_active_blocked(method):
             )
         gate = _gate(self)
         async with gate.lock:
-            _expire_leases(gate)
+            _expire_leases(self, gate)
             if gate.prune_reservations or service.is_active():
                 return {"success": False, "reason": "prune_active", "message": _BLOCKED_MESSAGE}
-            gate.conflicting_operations += 1
+            registration = gate.take_operation_id()
+            gate.operations[registration] = _Holder(
+                label=method.__name__, kind="operation", acquired_at=asyncio.get_running_loop().time()
+            )
         try:
             return await method(self, *args, **kwargs)
         finally:
             async with gate.lock:
-                gate.conflicting_operations -= 1
+                gate.operations.pop(registration, None)
 
     wrapper._prune_active_blocked = True  # type: ignore[attr-defined]
     return wrapper
@@ -65,18 +179,24 @@ def prune_exclusive_start(method):
     unlocked: the reservation already refuses every conflicting callable, and
     holding the lock across the run's preview rebuild would make each of them
     wait for that rebuild instead of learning its verdict immediately.
+
+    A refusal logs the complete holder inventory at INFO. Without it a blocked
+    cleanup is indistinguishable from a plugin that has stopped responding, and
+    the holder cannot be identified after the fact (#1570 F13).
     """
 
     @functools.wraps(method)
     async def wrapper(self, *args: Any, **kwargs: Any):
         gate = _gate(self)
         async with gate.lock:
-            _expire_leases(gate)
-            if gate.conflicting_operations:
+            _expire_leases(self, gate)
+            if gate.busy():
+                now = asyncio.get_running_loop().time()
+                _info(self, f"Cleanup admission refused — gate held by: {_describe_holders(gate, now)}")
                 return {
                     "success": False,
                     "reason": "operation_active",
-                    "message": _OPERATION_BLOCKED_MESSAGE,
+                    "message": _blocked_message(gate),
                 }
             gate.prune_reservations += 1
         try:
@@ -91,15 +211,20 @@ def prune_exclusive_start(method):
     return wrapper
 
 
-async def retain_prune_conflict(owner: object, task: asyncio.Task[Any]) -> None:
+async def retain_prune_conflict(owner: object, task: asyncio.Task[Any], label: str) -> None:
     """Transfer a callable's conflict claim to detached work until its task ends."""
     gate = _gate(owner)
     async with gate.lock:
-        gate.conflicting_operations += 1
+        registration = gate.take_operation_id()
+        gate.operations[registration] = _Holder(
+            label=label, kind="operation", acquired_at=asyncio.get_running_loop().time()
+        )
+    _debug(owner, f"[prune-gate] retained {label} for detached work (#{registration})")
 
     async def release() -> None:
         async with gate.lock:
-            gate.conflicting_operations -= 1
+            gate.operations.pop(registration, None)
+        _debug(owner, f"[prune-gate] released {label} (#{registration})")
 
     def done(_task: asyncio.Task[Any]) -> None:
         asyncio.get_running_loop().create_task(release())
@@ -111,38 +236,53 @@ async def acquire_prune_conflict_lease(owner: object, key: str) -> str:
     """Hold a bounded tokenized claim across a frontend-owned operation."""
     gate = _gate(owner)
     async with gate.lock:
-        _expire_leases(gate)
-        token = f"{key}:{gate.next_lease_id}"
-        gate.next_lease_id += 1
-        gate.leases[token] = asyncio.get_running_loop().time() + _LEASE_SECONDS
-        gate.conflicting_operations += 1
-        return token
+        _expire_leases(owner, gate)
+        now = asyncio.get_running_loop().time()
+        token = f"{key}:{gate.take_lease_id()}"
+        gate.leases[token] = (_Holder(label=key, kind="lease", acquired_at=now), now + _LEASE_SECONDS)
+    _debug(owner, f"[prune-gate] acquired lease {_short(token)} ({key})")
+    return token
 
 
 async def release_prune_conflict_lease(owner: object, token: str) -> None:
     """Release a previously acquired frontend-operation conflict claim."""
     gate = _gate(owner)
     async with gate.lock:
-        _expire_leases(gate)
-        if token in gate.leases:
-            del gate.leases[token]
-            gate.conflicting_operations -= 1
+        _expire_leases(owner, gate)
+        released = gate.leases.pop(token, None)
+    if released is not None:
+        held = asyncio.get_running_loop().time() - released[0].acquired_at
+        _debug(owner, f"[prune-gate] released lease {_short(token)} after {held:.0f}s")
 
 
 async def renew_prune_conflict_lease(owner: object, token: str) -> bool:
     """Extend a live frontend continuation lease; never revive an expired owner."""
     gate = _gate(owner)
     async with gate.lock:
-        _expire_leases(gate)
-        if token not in gate.leases:
+        _expire_leases(owner, gate)
+        current = gate.leases.get(token)
+        if current is None:
             return False
-        gate.leases[token] = asyncio.get_running_loop().time() + _LEASE_SECONDS
-        return True
+        now = asyncio.get_running_loop().time()
+        gate.leases[token] = (current[0], now + _LEASE_SECONDS)
+        held = now - current[0].acquired_at
+    _debug(owner, f"[prune-gate] renewed lease {_short(token)} (held {held:.0f}s)")
+    return True
 
 
-def _expire_leases(gate: _PruneAdmissionGate) -> None:
+def _expire_leases(owner: object, gate: _PruneAdmissionGate) -> None:
+    """Drop timed-out leases.
+
+    An expiry is logged at INFO, not debug: a lease that reached its deadline
+    means the owner never released it, which is a leak worth seeing without
+    turning debug logging on.
+    """
     now = asyncio.get_running_loop().time()
-    expired = [token for token, deadline in gate.leases.items() if deadline <= now]
+    expired = [token for token, (_holder, deadline) in gate.leases.items() if deadline <= now]
     for token in expired:
-        del gate.leases[token]
-        gate.conflicting_operations -= 1
+        holder, _deadline = gate.leases.pop(token)
+        _info(
+            owner,
+            f"[prune-gate] lease {_short(token)} ({holder.label}) expired after "
+            f"{now - holder.acquired_at:.0f}s without being released",
+        )
