@@ -29,7 +29,8 @@ async def test_stop_running_game_with_nothing_running_returns_the_canonical_fail
         "reason": "not_running",
         "message": result["message"],
     }
-    assert isinstance(result["message"], str) and result["message"]
+    assert isinstance(result["message"], str)
+    assert result["message"]
     assert "error" not in result
     assert "error_code" not in result
 

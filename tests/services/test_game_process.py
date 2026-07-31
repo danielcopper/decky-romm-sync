@@ -264,7 +264,8 @@ class TestNeverRepeatsTheStopRequest:
         assert outcomes == {True, False}
         refused = first if first["success"] is False else second
         assert refused["reason"] == "already_stopping"
-        assert isinstance(refused["message"], str) and refused["message"]
+        assert isinstance(refused["message"], str)
+        assert refused["message"]
         assert "error" not in refused
         assert "error_code" not in refused
         # The refusal never touched the process table at all.

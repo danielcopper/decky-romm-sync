@@ -176,7 +176,7 @@ vi.mock("@decky/ui", () => {
     // component deliberately disabled and assert the resulting call, i.e. pass
     // against behavior the real UI does not have.
     MenuItem: ({ children, onClick, disabled }: AnyProps) =>
-      createElement("button", { onClick, disabled }, children as never),
+      createElement("button", { type: "button", onClick, disabled }, children as never),
     Router: { CloseSideMenus: vi.fn(), Navigate: vi.fn() },
     Navigation: { NavigateToExternalWeb: vi.fn(), Navigate: vi.fn() },
     // findSP locates Steam's <SteamRoot> iframe document for stylesheet

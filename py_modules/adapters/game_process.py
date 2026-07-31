@@ -156,7 +156,9 @@ class GameProcessAdapter:
         try:
             with open(os.path.join(instance_dir, _BWRAP_INFO_FILE), encoding="utf-8") as f:
                 payload = json.load(f)
-        except (OSError, UnicodeDecodeError, ValueError):
+        # ``ValueError`` covers both ``json.JSONDecodeError`` and the
+        # ``UnicodeDecodeError`` a non-UTF-8 read raises — both subclass it.
+        except (OSError, ValueError):
             return None
         if not isinstance(payload, dict):
             return None
