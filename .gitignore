@@ -43,6 +43,7 @@ log.txt
 # not descend into an ignored directory.
 .claude/*
 !.claude/rules/
+!.claude/memory/
 .venv/
 
 # Git worktrees

@@ -298,9 +298,10 @@ Most of what lives in `.claude/rules/` has no mechanical check — Protocol suff
 verb-named mutations — so those rules hold only if they are carried while writing. `CLAUDE.md` indexes them with the
 failure mode each one prevents.
 
-Note that `.gitignore` ignores `.claude/*` (worktrees, local agents, `settings.local.json`) and re-includes
-`.claude/rules/` explicitly. Adding a rule file works; adding anything else under `.claude/` will silently not be
-tracked.
+Note that `.gitignore` ignores `.claude/*` (worktrees, local agents, `settings.local.json`) and re-includes exactly two
+directories: `.claude/rules/` and `.claude/memory/` (the per-repo agent-memory tier — durable, reviewable repo
+knowledge; public-safe content only). Adding a file in those two works; adding anything else under `.claude/` will
+silently not be tracked.
 
 ## Project Structure
 
