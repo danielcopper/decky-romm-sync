@@ -59,6 +59,56 @@ def test_null_group_keys_are_independent_singletons():
     assert [[row.rom_id for row in group] for group in groups] == [[1], [2, 4], [3]]
 
 
+@pytest.mark.parametrize("remove_fully_vanished", [False, True])
+def test_partially_live_group_ignores_the_whole_game_option(remove_fully_vanished):
+    """The whole-game branch is unreachable while any member is still live.
+
+    F6 made remove_fully_vanished the default, so this is now the ordinary
+    path for a bound vanished row beside a live sibling; the option must not
+    change what a partially-live group does (#1570 F17).
+    """
+    assert selected_prune_ids(
+        group_ids=[4375, 25135],
+        candidate_ids={4375},
+        vanished_ids={4375},
+        live_ids={25135},
+        remove_rows=True,
+        remove_fully_vanished=remove_fully_vanished,
+    ) == {4375}
+
+
+@pytest.mark.parametrize("remove_fully_vanished", [False, True])
+def test_partially_live_group_removes_nothing_without_row_removal(remove_fully_vanished):
+    # Turning the whole-game option on must not resurrect row removal that the
+    # user switched off.
+    assert (
+        selected_prune_ids(
+            group_ids=[4375, 25135],
+            candidate_ids={4375},
+            vanished_ids={4375},
+            live_ids={25135},
+            remove_rows=False,
+            remove_fully_vanished=remove_fully_vanished,
+        )
+        == set()
+    )
+
+
+def test_fully_vanished_group_needs_the_whole_game_option():
+    for remove_rows in (False, True):
+        assert (
+            selected_prune_ids(
+                group_ids=[1, 2],
+                candidate_ids={1},
+                vanished_ids={1, 2},
+                live_ids=set(),
+                remove_rows=remove_rows,
+                remove_fully_vanished=False,
+            )
+            == set()
+        )
+
+
 def test_selected_ids_truth_table():
     assert selected_prune_ids(
         group_ids=[1, 2],

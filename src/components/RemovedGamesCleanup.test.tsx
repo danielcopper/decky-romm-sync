@@ -122,7 +122,7 @@ describe("RemovedGamesCleanup", () => {
     expect(toggles.map((toggle) => toggle.checked)).toEqual([true, true, true, true, false]);
     const confirm = modal.getByRole("button", { name: "Confirm Cleanup" }) as HTMLButtonElement;
     expect(confirm.disabled).toBe(false);
-    expect(modal.container.textContent).toContain("Installed content is not backed up");
+    expect(modal.container.textContent).toContain("Without a backup, the downloaded ROM file is deleted");
 
     fireEvent.click(toggles[4]!);
 
@@ -174,7 +174,7 @@ describe("RemovedGamesCleanup", () => {
         name: "Removed Game",
       });
     });
-    expect(modal.container.textContent).toContain("creating recovery · 1 of 2 · Removed Game");
+    expect(modal.container.textContent).toContain("Backing up — Removed Game");
 
     act(() => {
       setPruneComplete({
@@ -216,7 +216,7 @@ describe("RemovedGamesCleanup", () => {
       });
 
       expect(modal.container.textContent).toContain("Cleanup running...");
-      expect(modal.container.textContent).toContain("checking · 1 of 2 · Removed Game");
+      expect(modal.container.textContent).toContain("Checking with RomM — Removed Game");
       expect(modal.container.textContent).not.toContain("Cleanup could not start");
     } finally {
       vi.useRealTimers();
@@ -307,7 +307,7 @@ describe("RemovedGamesCleanup", () => {
       expect(content.checked).toBe(false);
       expect(modal.container.textContent).toContain("Selected ROM-content recovery estimate: 0 B");
     });
-    expect(modal.container.textContent).toContain("Installed content is not backed up");
+    expect(modal.container.textContent).toContain("Without a backup, the downloaded ROM file is deleted");
   });
 
   it("allows a repoint-only run and resets an old completion when opening", async () => {
@@ -871,6 +871,100 @@ describe("RemovedGamesCleanup", () => {
 
     fireEvent.click(modal.getByRole("button", { name: "Stop Cleanup" }));
     await waitFor(() => expect(backend.cancelPrune).toHaveBeenCalledWith("run-1"));
+  });
+
+  it("renders a real progress bar with the phase in words", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("Cleanup running..."));
+
+    act(() => {
+      setPruneProgress({
+        run_id: "run-1",
+        preview_id: "preview-1",
+        current: 1,
+        total: 4,
+        stage: "creating_recovery",
+        rom_ids: [7],
+        name: "Removed Game",
+      });
+    });
+
+    // A stage slug is not a sentence — the bar and the phase have to be readable.
+    expect(modal.container.textContent).toContain("Backing up — Removed Game");
+    expect(modal.container.textContent).toContain("1 / 4");
+    expect(modal.container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("25");
+    expect(modal.container.querySelector('[data-testid="progress-indeterminate"]')?.textContent).toBe("false");
+  });
+
+  it("degrades an unknown backend stage to something readable", async () => {
+    const section = render(createElement(RemovedGamesCleanupSection));
+    act(() => {
+      beginPrunePreview("preview-1");
+      beginPruneRun("run-1", "preview-1");
+      setPruneProgress({
+        run_id: "run-1",
+        preview_id: "preview-1",
+        current: 2,
+        total: 3,
+        stage: "some_new_stage",
+        rom_ids: [7],
+        name: "Removed Game",
+      });
+    });
+
+    // A stage the frontend has not learned yet must still say something.
+    expect(section.container.textContent).toContain("some new stage — Removed Game");
+    expect(section.container.querySelector('[data-testid="progress"]')).toBeTruthy();
+  });
+
+  it("says a bundle was left behind when a group backed up but removed nothing", async () => {
+    await openRemovedGamesCleanupModal();
+    const modal = render(shownModal());
+    fireEvent.click(modal.getByRole("button", { name: "Confirm Cleanup" }));
+    await waitFor(() => expect(modal.container.textContent).toContain("Cleanup running..."));
+
+    act(() => {
+      setPruneComplete({
+        success: true,
+        partial: false,
+        run_id: "run-1",
+        preview_id: "preview-1",
+        removed_rom_ids: [],
+        affected_app_ids: [],
+        results: [
+          {
+            group_id: "group-1",
+            rom_ids: [7],
+            status: "removed",
+            message: "Cancelled after the backup sealed.",
+            bundle_path: "/home/deck/decky-romm-sync-recovery/bundles/Shenmue-II_2026-07-31_07f4953b",
+            removed_rom_ids: [],
+          },
+        ],
+      });
+    });
+
+    // Otherwise the leftover folder is a mystery the user has to reverse-engineer.
+    expect(modal.container.textContent).toContain("Backup created, nothing removed.");
+    expect(modal.container.textContent).toContain("Shenmue-II_2026-07-31_07f4953b");
+  });
+
+  it("stops inviting a second Stop press once cancelling", async () => {
+    vi.mocked(backend.cancelPrune).mockImplementation(() => new Promise(() => {}));
+    const section = render(createElement(RemovedGamesCleanupSection));
+    act(() => {
+      beginPrunePreview("preview-1");
+      beginPruneRun("run-7", "preview-1");
+    });
+
+    fireEvent.click(section.getByRole("button", { name: "Stop Cleanup" }));
+    await act(async () => Promise.resolve());
+
+    const stop = section.getByRole("button", { name: "Stopping..." }) as HTMLButtonElement;
+    expect(stop.disabled).toBe(true);
+    expect(section.container.textContent).toContain("finishing the current safe step");
   });
 
   it("recovers the entry point and warns when a run's result never arrives", async () => {

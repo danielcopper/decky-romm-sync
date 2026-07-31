@@ -282,6 +282,14 @@ class PruneExecutor:
         live_ids = {rom_id for rom_id, verdict in verdicts.items() if verdict["status"] == "live"}
         uncertain_ids = group_ids - vanished_ids - live_ids
         fully_dead = bool(group_ids) and group_ids <= vanished_ids
+        # The verdicts are what every later decision turns on, so they belong in
+        # the audit trail: a group reported as skipped is otherwise impossible to
+        # explain after the fact without re-running against the same server.
+        self._logger.info(
+            f"Cleanup run {run_id} group {index}/{total} liveness: "
+            f"gone={sorted(vanished_ids)}, still_there={sorted(live_ids)}, unconfirmed={sorted(uncertain_ids)}, "
+            f"candidates={sorted(candidate_ids)}, bound={bound[0].rom_id if bound else None}"
+        )
         if not live_ids and uncertain_ids:
             namespace_changed = any(
                 verdicts[rom_id]["reason"] == "server_namespace_changed" for rom_id in uncertain_ids

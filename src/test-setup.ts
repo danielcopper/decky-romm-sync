@@ -179,6 +179,15 @@ vi.mock("@decky/ui", () => {
       ),
     Dropdown: passthrough("select"),
     DropdownItem: (p: AnyProps) => createElement("select", {}, p.children as never),
+    // Per-prop testids so bar wiring (nProgress / indeterminate) is assertable
+    // without a local re-mock; mirrors DownloadProgressRow's own stub.
+    ProgressBar: (p: AnyProps & { nProgress?: number; indeterminate?: boolean }) =>
+      createElement(
+        "div",
+        { "data-testid": "progress" },
+        createElement("span", { "data-testid": "progress-progress" }, String(p.nProgress)),
+        createElement("span", { "data-testid": "progress-indeterminate" }, String(p.indeterminate)),
+      ),
     Spinner: () => createElement("div", { "data-testid": "spinner" }),
     showModal: vi.fn(),
     showContextMenu: vi.fn(),

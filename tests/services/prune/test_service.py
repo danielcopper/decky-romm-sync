@@ -701,7 +701,12 @@ async def test_successful_run_leaves_an_audit_trail_at_info(harness, caplog):
     assert "remove_fully_vanished=True" in start
     assert "recovery=False" in start
 
-    group = next(line for line in audit if "group 1/1" in line)
+    liveness = next(line for line in audit if "group 1/1 liveness" in line)
+    # The verdicts every later decision turns on: without them a skipped group
+    # cannot be explained after the fact (#1570 F17).
+    assert "gone=[1], still_there=[], unconfirmed=[], candidates=[1]" in liveness
+
+    group = next(line for line in audit if "group 1/1" in line and "group 1/1 liveness" not in line)
     assert "rom_ids=[1]" in group
     assert "status=removed" in group
     assert "removed=[1]" in group
@@ -724,7 +729,10 @@ async def test_audit_trail_records_why_an_untouched_group_was_skipped(harness, c
         await _finish(harness)
 
     audit = [record.message for record in caplog.records if record.levelno == logging.INFO]
-    group = next(line for line in audit if "group 1/1" in line)
+    liveness = next(line for line in audit if "group 1/1 liveness" in line)
+    assert "gone=[], still_there=[], unconfirmed=[1]" in liveness
+
+    group = next(line for line in audit if "group 1/1" in line and "group 1/1 liveness" not in line)
     assert "status=skipped" in group
     assert "reason=liveness_uncertain" in group
     assert next(line for line in audit if "finished" in line).endswith("removed=[], affected_app_ids=[]")
@@ -792,6 +800,40 @@ async def test_active_download_and_multiple_bindings_skip_before_mutation(harnes
     await _start(harness, preview["preview_id"], remove_fully_vanished=True)
     complete = await _finish(harness)
     assert complete["results"][0]["reason"] == "download_in_progress"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("remove_fully_vanished", [False, True])
+async def test_partially_live_group_repoints_and_removes_under_every_toggle(harness, remove_fully_vanished):
+    """A group with a live member must not depend on the whole-game option.
+
+    F6 flipped remove_fully_vanished on by default, so this combination —
+    bound vanished row + live sibling, every toggle on — became the feature's
+    ordinary path. It was previously untested (#1570 F17).
+    """
+    app_id = 0x80000001
+    _seed(
+        harness.uow,
+        _rom(1, fetch="old", group="g", app_id=app_id),
+        _rom(2, fetch="new", group="g"),
+    )
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    harness.romm.outcomes[2] = [{"id": 2}] * 3
+    preview = await _preview(harness)
+    await _start(
+        harness,
+        preview["preview_id"],
+        remove_fully_vanished=remove_fully_vanished,
+    )
+    action = await _wait_action(harness, "repoint_shortcut")
+    await _claim_action(harness, action)
+    await _complete_action(harness, action)
+    complete = await _finish(harness)
+
+    assert complete["removed_rom_ids"] == [1]
+    assert harness.uow.roms.get(1) is None
+    retained = harness.uow.roms.get(2)
+    assert retained is not None and retained.shortcut_app_id == app_id
 
 
 @pytest.mark.asyncio

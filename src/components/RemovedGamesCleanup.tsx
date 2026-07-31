@@ -8,6 +8,7 @@ import {
   ModalRoot,
   PanelSection,
   PanelSectionRow,
+  ProgressBar,
   ToggleField,
   showModal,
 } from "@decky/ui";
@@ -31,6 +32,7 @@ import {
   getPruneState,
   isPruneResultLost,
   onPruneStateChange,
+  type PruneProgress,
 } from "../utils/pruneStore";
 import { scrollNearestToTop } from "../utils/scrollHelpers";
 import { getSyncProgress, onSyncProgressChange } from "../utils/syncProgress";
@@ -42,6 +44,8 @@ const PRUNE_CALLABLE_TIMEOUT_MS = 15000;
 const RESULT_LOST_MESSAGE = "The cleanup result was lost — check your library and run the scan again.";
 /** What Cancel can and cannot promise — the running group is never rolled back. */
 const CANCEL_HINT = "Stops before the next game. The one being processed now finishes and reports what it changed.";
+/** Shown once Stop was pressed, so a second press never looks necessary. */
+const CANCELLING_HINT = "Stopping — finishing the current safe step, then reporting what changed.";
 
 /**
  * Ask the backend to stop `runId`. Returns the message to surface, or null when
@@ -76,6 +80,47 @@ function formatBytes(bytes: number): string {
     index++;
   }
   return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[index]}`;
+}
+
+/**
+ * The backend's stage slugs in the words the user reads. An unknown stage falls
+ * back to its slug with underscores opened up, so a new backend stage degrades
+ * to something readable instead of vanishing.
+ */
+const STAGE_LABELS: Record<string, string> = {
+  checking: "Checking with RomM",
+  creating_recovery: "Backing up",
+  copying_content: "Copying ROM files",
+  removing_rows: "Removing local data",
+  repointing: "Updating the Steam shortcut",
+  removing_shortcut: "Removing the Steam shortcut",
+};
+
+function stageLabel(stage: string): string {
+  return STAGE_LABELS[stage] ?? stage.replace(/_/g, " ");
+}
+
+/** Caption + bar for a running cleanup, shared by the modal and the Danger Zone. */
+const CleanupProgress: FC<{ progress: PruneProgress }> = ({ progress }) => (
+  <div style={{ width: "100%" }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", fontSize: "12px" }}>
+      <span style={{ overflowWrap: "anywhere" }}>
+        {stageLabel(progress.stage)} — {progress.name}
+      </span>
+      <span style={{ flexShrink: 0, marginLeft: "8px" }}>
+        {progress.current} / {progress.total}
+      </span>
+    </div>
+    <ProgressBar
+      indeterminate={progress.total <= 0}
+      {...(progress.total > 0 ? { nProgress: (progress.current / progress.total) * 100 } : {})}
+    />
+  </div>
+);
+
+/** How many rows a group actually removed, however the frame reported it. */
+function removedInGroup(item: { removed_count?: number; removed_rom_ids?: number[] }): number {
+  return item.removed_count ?? item.removed_rom_ids?.length ?? 0;
 }
 
 function requestFor(
@@ -445,7 +490,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
                 )}
                 {item.installed && (!recovery || !includedContent.has(item.rom_id)) && (
                   <div style={{ color: "#e5a43b", fontSize: "12px" }}>
-                    Installed content is not backed up but will still be deleted if this row is removed.
+                    Without a backup, the downloaded ROM file is deleted along with this version.
                   </div>
                 )}
               </div>
@@ -496,7 +541,7 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
         {progress && (
           <div style={{ marginTop: "10px", color: "#c7d5e0" }}>
             <div role="status" aria-live="polite">
-              {progress.stage.replace(/_/g, " ")} · {progress.current} of {progress.total} · {progress.name}
+              <CleanupProgress progress={progress} />
             </div>
             <div style={{ color: "#8f98a0", fontSize: "12px", marginTop: "4px" }}>{CANCEL_HINT}</div>
             <DialogButton
@@ -514,6 +559,11 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
             >
               {cancelling ? "Stopping..." : "Stop Cleanup"}
             </DialogButton>
+            {cancelling && (
+              <div role="status" aria-live="polite" style={{ color: "#8f98a0", fontSize: "12px", marginTop: "4px" }}>
+                {CANCELLING_HINT}
+              </div>
+            )}
           </div>
         )}
         {complete && (
@@ -542,11 +592,17 @@ const CleanupModal: FC<CleanupModalProps> = ({ initial, scope, romId, closeModal
                     ["partial", "failed", "skipped"].includes(item.status) ||
                     (item.warnings?.length ?? 0) > 0 ||
                     item.warnings_omitted ||
-                    item.warnings_truncated,
+                    item.warnings_truncated ||
+                    // A sealed bundle that removed nothing leaves a folder on
+                    // disk; saying so is what stops it being a mystery later.
+                    (item.bundle_path !== undefined && removedInGroup(item) === 0),
                 )
                 .map((item) => (
                   <div key={item.group_id} style={{ fontSize: "12px", marginTop: "4px" }}>
                     {item.group_id}: {item.message}
+                    {item.bundle_path !== undefined && removedInGroup(item) === 0 && (
+                      <div>Backup created, nothing removed. The folder stays at {item.bundle_path}.</div>
+                    )}
                     {item.message_truncated && <div>Detail was shortened to fit the Decky wire limit.</div>}
                     {item.warnings?.map((warning) => (
                       <div key={warning}>Warning: {warning}</div>
@@ -673,16 +729,18 @@ export const RemovedGamesCleanupSection: FC = () => {
       {runActive && (
         <>
           <PanelSectionRow>
-            <Field
-              label={runLabel}
-              description={progress?.bundle_path ? `Recovery sealed: ${progress.bundle_path}` : CANCEL_HINT}
-            />
+            {progress ? <CleanupProgress progress={progress} /> : <Field label={runLabel} description={CANCEL_HINT} />}
           </PanelSectionRow>
+          {progress?.bundle_path && (
+            <PanelSectionRow>
+              <Field label={`Recovery sealed: ${progress.bundle_path}`} />
+            </PanelSectionRow>
+          )}
           <PanelSectionRow>
             <ButtonItem
               layout="below"
               disabled={cancelling}
-              description={cancelStatus ?? undefined}
+              description={cancelStatus ?? (cancelling ? CANCELLING_HINT : undefined)}
               onClick={() =>
                 detach(
                   (async () => {

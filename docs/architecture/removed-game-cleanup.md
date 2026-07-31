@@ -243,8 +243,10 @@ keep being refused with no run left to release it.
 ## Audit trail
 
 A destructive run logs at INFO on the injected logger, independently of the UI that asked for it: run start (run id,
-option set, group and candidate counts), one line per group (ids, status, reason slug, committed action, removed ids,
-bundle path), and run end (removed ids, affected appIds, cancellation or failure reason). The end line is written
-**before** the completion frame is emitted, so a run whose terminal event never reaches the frontend still leaves its
-outcome on disk. Frontend confirmations and cancellations log through `frontend_log`, so one log holds both sides of the
-handshake.
+option set, group and candidate counts), one line per group carrying the fresh liveness verdicts the group's every later
+decision turns on (which ids RomM confirmed gone, which are still there, which went unconfirmed, which were discovery
+candidates, and which row holds the shortcut), a second line per group with its outcome (status, reason slug, committed
+action, removed ids, bundle path), and run end (removed ids, affected appIds, cancellation or failure reason). The end
+line is written **before** the completion frame is emitted, so a run whose terminal event never reaches the frontend
+still leaves its outcome on disk. Frontend confirmations and cancellations log through `frontend_log`, so one log holds
+both sides of the handshake.
