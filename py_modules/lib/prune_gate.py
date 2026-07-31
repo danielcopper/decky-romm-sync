@@ -109,11 +109,6 @@ def _debug(owner: object, message: str) -> None:
         log(message)
 
 
-def _short(token: str) -> str:
-    """Shorten a lease token for logs — the id tail is what disambiguates."""
-    return token
-
-
 def _describe_holders(gate: _PruneAdmissionGate, now: float) -> str:
     """One-line inventory of every current holder, for a refusal log line."""
     parts = [f"{holder.label} (operation, held {now - holder.acquired_at:.0f}s)" for holder in gate.operations.values()]
@@ -240,7 +235,7 @@ async def acquire_prune_conflict_lease(owner: object, key: str) -> str:
         now = asyncio.get_running_loop().time()
         token = f"{key}:{gate.take_lease_id()}"
         gate.leases[token] = (_Holder(label=key, kind="lease", acquired_at=now), now + _LEASE_SECONDS)
-    _debug(owner, f"[prune-gate] acquired lease {_short(token)} ({key})")
+    _debug(owner, f"[prune-gate] acquired lease {token} ({key})")
     return token
 
 
@@ -252,7 +247,7 @@ async def release_prune_conflict_lease(owner: object, token: str) -> None:
         released = gate.leases.pop(token, None)
     if released is not None:
         held = asyncio.get_running_loop().time() - released[0].acquired_at
-        _debug(owner, f"[prune-gate] released lease {_short(token)} after {held:.0f}s")
+        _debug(owner, f"[prune-gate] released lease {token} after {held:.0f}s")
 
 
 async def renew_prune_conflict_lease(owner: object, token: str) -> bool:
@@ -266,7 +261,7 @@ async def renew_prune_conflict_lease(owner: object, token: str) -> bool:
         now = asyncio.get_running_loop().time()
         gate.leases[token] = (current[0], now + _LEASE_SECONDS)
         held = now - current[0].acquired_at
-    _debug(owner, f"[prune-gate] renewed lease {_short(token)} (held {held:.0f}s)")
+    _debug(owner, f"[prune-gate] renewed lease {token} (held {held:.0f}s)")
     return True
 
 
@@ -283,6 +278,6 @@ def _expire_leases(owner: object, gate: _PruneAdmissionGate) -> None:
         holder, _deadline = gate.leases.pop(token)
         _info(
             owner,
-            f"[prune-gate] lease {_short(token)} ({holder.label}) expired after "
+            f"[prune-gate] lease {token} ({holder.label}) expired after "
             f"{now - holder.acquired_at:.0f}s without being released",
         )

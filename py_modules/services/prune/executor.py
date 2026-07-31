@@ -326,6 +326,18 @@ class PruneExecutor:
 
         whole_game_action = fully_dead and bool(delete_ids)
         if not delete_ids and target_id is None:
+            # Distinguish "your options excluded everything" from "RomM never
+            # confirmed anything gone". Both leave nothing to do, but only the
+            # first is answered by changing a toggle — reporting the second as
+            # an options problem sends the user to fiddle with settings that
+            # cannot help (#1570 F17).
+            if uncertain_ids:
+                return self._results.group_result(
+                    rows,
+                    "skipped",
+                    "liveness_uncertain",
+                    f"RomM could not confirm {len(uncertain_ids)} of this game's version(s); nothing was removed.",
+                )
             return self._results.group_result(
                 rows, "skipped", "options_excluded", "No confirmed rows matched the selected options."
             )

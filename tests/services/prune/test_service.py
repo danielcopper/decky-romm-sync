@@ -803,6 +803,52 @@ async def test_active_download_and_multiple_bindings_skip_before_mutation(harnes
 
 
 @pytest.mark.asyncio
+async def test_nothing_to_do_blames_liveness_not_the_options_when_romm_was_unsure(harness):
+    """An unconfirmed id is not an options problem, and must not read like one.
+
+    Both states leave nothing to do, but only one is answered by changing a
+    toggle; reporting the other as "options" sends the user to fiddle with
+    settings that cannot help (#1570 F17).
+    """
+    app_id = 0x80000001
+    _seed(
+        harness.uow,
+        _rom(1, fetch="old", group="g", app_id=app_id),
+        _rom(2, fetch="new", group="g"),
+    )
+    # 2 is live, so the group is not "fully uncertain" — but 1 never gets a
+    # verdict, which is what leaves delete_ids empty and no repoint target.
+    harness.romm.outcomes[1] = [RommConnectionError("offline")]
+    harness.romm.outcomes[2] = [{"id": 2}] * 3
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"])
+    complete = await _finish(harness)
+
+    result = complete["results"][0]
+    assert result["status"] == "skipped"
+    assert result["reason"] == "liveness_uncertain"
+    assert "could not confirm" in result["message"]
+    assert harness.uow.roms.get(1) is not None
+
+
+@pytest.mark.asyncio
+async def test_nothing_to_do_still_blames_the_options_when_liveness_was_certain(harness):
+    _seed(
+        harness.uow,
+        _rom(1, fetch="old", group="g"),
+        _rom(2, fetch="new", group="g"),
+    )
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 3
+    harness.romm.outcomes[2] = [{"id": 2}] * 3
+    preview = await _preview(harness)
+    # Every verdict is certain; the user's own options are what excluded the row.
+    await _start(harness, preview["preview_id"], remove_rows=False, repoint_shortcuts=False)
+    complete = await _finish(harness)
+
+    assert complete["results"][0]["reason"] == "options_excluded"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("remove_fully_vanished", [False, True])
 async def test_partially_live_group_repoints_and_removes_under_every_toggle(harness, remove_fully_vanished):
     """A group with a live member must not depend on the whole-game option.
