@@ -12,8 +12,8 @@ plugin. Code is split into four layers with a strictly enforced dependency direc
 - **`models/`** — data shapes (TypedDicts, dataclasses) independent of every other layer.
 
 Services depend on **Protocols** (defined in `services/protocols/`), never on concrete adapter classes. Adapters
-implement those Protocols. `bootstrap.py` is the composition root — the only place where concrete adapters meet
-services. `main.py` owns the Decky lifecycle and the callable surface; it holds no business logic.
+implement those Protocols. `bootstrap/` is the composition root — the only place where concrete adapters meet services.
+`main.py` owns the Decky lifecycle and the callable surface; it holds no business logic.
 
 ```python
 class Plugin:
@@ -27,7 +27,7 @@ class Plugin:
 ```text
 main.py (Plugin — Decky lifecycle + callable routing)
     ↓ calls
-bootstrap.py (composition root: bootstrap() builds adapters, wire_services() builds services)
+bootstrap/ (composition root: adapters.bootstrap() builds adapters, services.wire_services() builds services)
     ↓ creates
 ┌─────────────────────────────────────────────────────────┐
 │ Adapters (own all I/O — implement Protocols)            │
@@ -1291,21 +1291,24 @@ nothing from the other layers.
 | File                 | Role                                                                                                          |
 | -------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `main.py`            | Plugin class — Decky lifecycle (`_main`/`_unload`) and the callable surface (one `async def` per `@callable`) |
-| `bootstrap.py`       | Composition root — `bootstrap()` builds adapters, `wire_services()` builds services                           |
+| `bootstrap/`         | Composition root — `adapters.bootstrap()` builds adapters, `services.wire_services()` builds services         |
 | `lib/errors.py`      | Exception hierarchy (`RommApiError`, `classify_error`)                                                        |
 | `lib/list_result.py` | `ErrorCode` and the canonical callable failure shape                                                          |
 
-## Composition Root (`bootstrap.py`)
+## Composition Root (`bootstrap/`)
 
-The composition root has two functions:
+The composition root is a package of two halves, one per phase, plus an `__init__.py` that is namespace and re-exports
+only — consumers write `from bootstrap import …` and never deep-import a submodule:
 
-1. **`bootstrap()`** — builds every adapter, applies the SQLite schema migrations, and loads + migrates `settings.json`
-   (folding in the one-time legacy `save_sync_state.json` settings) so the settings persister binds the live mutable
-   `settings` dict at construction. Returns a typed `BootstrapResult` carrying four bundles (`adapters`, `stores`,
-   `callbacks`, `runtime_adapters`) plus a small `handles` struct for Plugin-only outputs.
+1. **`adapters.py`** — owns `bootstrap()`, which builds every adapter, applies the SQLite schema migrations, and loads +
+   migrates `settings.json` (folding in the one-time legacy `save_sync_state.json` settings) so the settings persister
+   binds the live mutable `settings` dict at construction. Returns a typed `BootstrapResult` carrying four bundles
+   (`adapters`, `stores`, `callbacks`, `runtime_adapters`) plus a small `handles` struct for Plugin-only outputs. The
+   bundle dataclasses are defined here too — they are the vocabulary the second half consumes.
 
-2. **`wire_services()`** — takes a `WiringConfig` (the four bundles plus `min_required_version`) and constructs every
-   service, injecting each one's `*ServiceConfig`. Returns a dict of named service instances.
+2. **`services.py`** — owns `WiringConfig` and `wire_services()`, which takes the four bundles plus
+   `min_required_version` and constructs every service, injecting each one's `*ServiceConfig`. Returns a dict of named
+   service instances.
 
 The two-phase split exists because adapter instantiation and state loading happen first (`bootstrap()`), then `main.py`
 composes the runtime bundle (event loop, `decky.emit`) and calls `wire_services()`. Services receive the `settings` dict
@@ -1315,7 +1318,8 @@ no plural in-memory state dicts remain. Some services are constructed before oth
 peers are threaded via `LateBinding`.
 
 Per the process-boundary rule, adapter instantiation never happens in `main.py`, and no service wiring happens in
-`bootstrap.py`'s caller other than via `wire_services()`.
+`bootstrap/`'s caller other than via `wire_services()`. Both modules are governed by the ~700-line decomposition
+threshold (`scripts/check_module_size.py`), neither is grandfathered.
 
 ## Protocol Interfaces
 

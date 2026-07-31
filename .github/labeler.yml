@@ -71,7 +71,7 @@ area:playtime:
 area:architecture:
   - changed-files:
       - any-glob-to-any-file:
-          - 'py_modules/bootstrap.py'
+          - 'py_modules/bootstrap/**'
           - 'py_modules/services/protocols/**'
           - 'py_modules/domain/**'
           - 'py_modules/lib/**'

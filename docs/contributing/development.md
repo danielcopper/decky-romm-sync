@@ -250,7 +250,7 @@ literal appears anywhere except its owning adapter (`adapters/persistence.py`); 
 keeps all settings writes in the single crash-safe owner.
 
 `mise run lint` (and CI) also runs `scripts/check_module_size.py`, the decomposition-threshold ratchet: no module in
-`services/` or `bootstrap.py` may cross the ~700-line threshold, and the modules that were already over it when the gate
+`services/` or `bootstrap/` may cross the ~700-line threshold, and the modules that were already over it when the gate
 landed are pinned at their exact size, so they cannot grow. The pin list lives in the script and only ever gets shorter
 — a module that drops back under the threshold has to leave it, and a module that banks 50+ lines of slack gets a
 non-fatal note asking for its ceiling to be lowered. `main.py` is deliberately out of scope: it grows with the callable
@@ -307,7 +307,9 @@ tracked.
 ```text
 main.py                              # Plugin entry — Decky lifecycle + callable surface
 py_modules/
-  bootstrap.py                       # Composition root — bootstrap() builds adapters, wire_services() builds services
+  bootstrap/                         # Composition root — re-exported through __init__.py
+    adapters.py                      # bootstrap() builds every adapter and the typed bundles
+    services.py                      # wire_services() builds every service from those bundles
   services/                          # Orchestration / business logic (Protocol-typed deps via *ServiceConfig)
     protocols/                       # Protocol interfaces, grouped: transport / determinism /
                                      #   persistence / paths / infra / files / cross_service

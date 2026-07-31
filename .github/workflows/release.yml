@@ -109,7 +109,11 @@ jobs:
           # py_modules/native/libgavel-x86_64-linux.so is the compiled save-sync 409 kernel;
           # bootstrap RAISES (no Python fallback) if it's missing, so a Decky CLI
           # packaging change that drops it must fail the release here.
-          for required in main.py plugin.json package.json dist/index.js py_modules/bootstrap.py bin/rom-launcher \
+          # All three bootstrap modules are listed, not just the package marker:
+          # __init__.py is a re-export shim, so asserting it alone would pass a
+          # packaging regression that dropped the composition root's actual code.
+          for required in main.py plugin.json package.json dist/index.js bin/rom-launcher \
+              py_modules/bootstrap/__init__.py py_modules/bootstrap/adapters.py py_modules/bootstrap/services.py \
               py_modules/db/migrations/001_initial.sql py_modules/db/migrations/002_add_emulator_override.sql \
               bios_registry.json py_modules/native/libgavel-x86_64-linux.so; do
             if ! unzip -l "$BUILT_ZIP" | grep -qE "/$required\b"; then

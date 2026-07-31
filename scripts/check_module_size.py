@@ -2,7 +2,7 @@
 """Hold the line on module size: no new god classes, no growth in the old ones.
 
 CLAUDE.md sets a ~700-LOC decomposition threshold for ``services/`` and an
-explicit split trigger for ``bootstrap.py``. Both lived in prose, and prose
+explicit split trigger for ``bootstrap/``. Both lived in prose, and prose
 drifted: ``sync_orchestrator.py`` was 901 lines when #999 wrote it down and is
 past 2000 today. Nothing failed in between, because nothing was watching.
 
@@ -36,18 +36,16 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 THRESHOLD = 700
 SLACK_ADVISORY = 50
 
-# Trees and files the threshold governs. ``main.py`` is deliberately absent: it
-# owns the Decky lifecycle plus one ``async def`` per callable, so it grows with
-# the callable surface by design (CLAUDE.md, "Process boundaries").
-SCOPE_DIRS = ("py_modules/services",)
-SCOPE_FILES = ("py_modules/bootstrap.py",)
+# Trees the threshold governs. ``main.py`` is deliberately absent: it owns the
+# Decky lifecycle plus one ``async def`` per callable, so it grows with the
+# callable surface by design (CLAUDE.md, "Process boundaries").
+SCOPE_DIRS = ("py_modules/bootstrap", "py_modules/services")
 
 # Modules that were already over the threshold when this gate landed, each
 # pinned at the size it had that day. Entries come out when the module drops
 # back under the threshold; numbers go down when a refactor banks real slack.
 # A number is never raised — that is the whole point of the gate.
 ALLOWLIST = {
-    "py_modules/bootstrap.py": 844,
     "py_modules/services/artwork.py": 1063,
     "py_modules/services/connection.py": 844,
     "py_modules/services/downloads.py": 1501,
@@ -68,10 +66,6 @@ def in_scope() -> list[pathlib.Path]:
     paths: set[pathlib.Path] = set()
     for directory in SCOPE_DIRS:
         paths.update((ROOT / directory).rglob("*.py"))
-    for filename in SCOPE_FILES:
-        path = ROOT / filename
-        if path.is_file():
-            paths.add(path)
     return sorted(paths)
 
 

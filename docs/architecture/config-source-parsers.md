@@ -194,7 +194,7 @@ import-linter).
 ### 3. Protocol(s) in `py_modules/services/protocols/`
 
 Services never import concrete adapters. They depend on callable protocols defined in the `services/protocols/` package
-(config-source parsers live in `paths.py`), and the concrete adapter method is wired up by `bootstrap.py`.
+(config-source parsers live in `paths.py`), and the concrete adapter method is wired up by `bootstrap/`.
 
 ```python
 class CoreNameProviderFn(Protocol):
@@ -207,9 +207,10 @@ same adapter exposes multiple capabilities (`get_corename`, `get_supported_exten
 each gets its own protocol so services can depend on only what they actually use — and a test double only needs to stub
 the callables a given test exercises.
 
-### 4. Wiring in `py_modules/bootstrap.py`
+### 4. Wiring in `py_modules/bootstrap/`
 
-Adapter instance is created in the composition root, and its method is threaded into services that need it:
+Adapter instance is created in `bootstrap/adapters.py`, and `bootstrap/services.py` threads its method into services
+that need it:
 
 ```python
 retroarch_core_info = RetroArchCoreInfoAdapter(user_home=user_home, logger=logger)
@@ -382,7 +383,7 @@ None of these are in scope for #208. They are listed here so that, when the time
   accessor method on the adapter (e.g. `get_supported_extensions(core_so)`).
 - The underlying `get_core_info` already returns the full dict, so each new accessor is a few lines wrapping
   `info.get(field)`.
-- The new accessor gets wired into bootstrap.py the same way `get_corename` is.
+- The new accessor gets wired into `bootstrap/` the same way `get_corename` is.
 
 ## How to add a new source
 
@@ -396,8 +397,8 @@ When the plugin needs to read a new external config/metadata source, the checkli
    Tests with `tmp_path`.
 4. **Add callback protocol(s)** in `py_modules/services/protocols/`. One protocol per capability, in the existing `*Fn`
    Call-protocol style.
-5. **Wire in `bootstrap.py`.** Instantiate the adapter in the composition root; thread its method(s) into services that
-   need them.
+5. **Wire in `bootstrap/`.** Instantiate the adapter in `adapters.py`; thread its method(s) from `services.py` into the
+   services that need them.
 6. **Consume in services.** Services depend on the protocol, not on the adapter. Handle the `None` / failure case at the
    service layer — no cross-parser fallbacks.
 7. **Add a row to Current parsers** above and update the decisions log below if there's a non-obvious design choice

@@ -86,9 +86,9 @@ class TestHappyPath:
         modules = {"py_modules/services/big.py": 900}
         assert run_check(modules, {"py_modules/services/big.py": 900}) == 0
 
-    def test_bootstrap_is_in_scope_via_scope_files(self, run_check, capsys: pytest.CaptureFixture[str]) -> None:
-        assert run_check({"py_modules/bootstrap.py": 900}, {}) == 1
-        assert "py_modules/bootstrap.py: 900 lines exceeds" in capsys.readouterr().err
+    def test_bootstrap_package_is_in_scope_via_scope_dirs(self, run_check, capsys: pytest.CaptureFixture[str]) -> None:
+        assert run_check({"py_modules/bootstrap/services.py": 900}, {}) == 1
+        assert "py_modules/bootstrap/services.py: 900 lines exceeds" in capsys.readouterr().err
 
     def test_main_py_is_out_of_scope(self, run_check) -> None:
         """``main.py`` grows with the callable surface by design — never flagged."""
