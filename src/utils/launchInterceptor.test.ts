@@ -36,6 +36,7 @@ vi.mock("../api/backend", () => ({
   // The shared reconcile helper (real module) pulls the single-ROM command here
   // before each watcher relaunch (#1152).
   getRomRelaunchOptions: vi.fn(),
+  releaseOrphanedPruneLeases: vi.fn(() => Promise.resolve({ success: true, released: 0 })),
   releasePruneConflictLease: vi.fn(),
   renewPruneConflictLease: vi.fn(),
   logInfo: vi.fn(),

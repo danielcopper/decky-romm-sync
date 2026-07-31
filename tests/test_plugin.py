@@ -866,6 +866,11 @@ _MIGRATION_BLOCKED_WHITELIST: set[str] = {
     # cancels the run's own task. Gating it on a migration that appeared
     # mid-run would strand the user with a cleanup they cannot stop.
     "cancel_prune",
+    # Disowning leases a dead frontend context stranded touches no RetroDECK
+    # path either, and must run at mount regardless of migration state — a
+    # stranded lease is precisely what would otherwise refuse the callables
+    # that resolve the migration.
+    "release_orphaned_prune_leases",
     # Sync-start reconcile of Steam-UI-deleted shortcut bindings (#1046) — clears
     # only the SQLite ``shortcut_app_id`` link (never a RetroDECK path), so it is
     # not gated by a pending migration, matching report_removal_results above.

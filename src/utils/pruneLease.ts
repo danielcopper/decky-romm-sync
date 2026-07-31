@@ -1,4 +1,9 @@
-import { logError, releasePruneConflictLease, renewPruneConflictLease } from "../api/backend";
+import {
+  logError,
+  releaseOrphanedPruneLeases,
+  releasePruneConflictLease,
+  renewPruneConflictLease,
+} from "../api/backend";
 import { withTimeout } from "./withTimeout";
 
 const RELEASE_TIMEOUT_MS = 5000;
@@ -52,6 +57,17 @@ export function isPruneLeaseCancellation(error: unknown, admission: PruneLeaseAd
 export function mountPruneLeasePlugin(): void {
   pluginGeneration++;
   pluginMounted = true;
+  // Disown anything the previous context stranded. A continuation whose JS
+  // context died mid-call never released its lease and never renews it, so it
+  // would pin the admission gate for its full TTL with nobody behind it
+  // (#1570 F18). This mount is the proof that no such continuation survives.
+  void releaseOrphanedPruneLeases()
+    .then((result) => {
+      if (result.released > 0) {
+        logError(`prune lease: disowned ${result.released} lease(s) stranded by a previous frontend context`);
+      }
+    })
+    .catch((e: unknown) => logError(`prune lease: could not disown stranded leases: ${e}`));
 }
 
 export function mountPruneLeaseOwner(owner: string): void {

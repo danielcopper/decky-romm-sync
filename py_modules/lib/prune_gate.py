@@ -239,6 +239,35 @@ async def acquire_prune_conflict_lease(owner: object, key: str) -> str:
     return token
 
 
+async def release_orphaned_frontend_leases(owner: object) -> int:
+    """Drop every frontend-owned lease and report how many were orphaned.
+
+    A lease is released by the continuation that received it. A frontend whose
+    JS context is torn down mid-call — the double mount at plugin load — never
+    reaches that release, and never renews either, so the lease pins the gate
+    for its full TTL with nobody behind it (#1570 F18).
+
+    A newly mounted frontend is the proof that no earlier continuation can still
+    be running: the context that owned them is gone. That makes mount the one
+    moment an orphan is provably safe to drop, which is why this is called there
+    and nowhere else. Run claims and callable registrations are untouched — only
+    the frontend's own leases are the frontend's to disown.
+    """
+    gate = _gate(owner)
+    async with gate.lock:
+        _expire_leases(owner, gate)
+        orphaned = list(gate.leases.items())
+        gate.leases.clear()
+    now = asyncio.get_running_loop().time()
+    for token, (holder, _deadline) in orphaned:
+        _info(
+            owner,
+            f"[prune-gate] released orphaned lease {token} ({holder.label}) held "
+            f"{now - holder.acquired_at:.0f}s by a frontend that is no longer mounted",
+        )
+    return len(orphaned)
+
+
 async def release_prune_conflict_lease(owner: object, token: str) -> None:
     """Release a previously acquired frontend-operation conflict claim."""
     gate = _gate(owner)

@@ -21,6 +21,7 @@ from lib.prune_gate import (
     acquire_prune_conflict_lease,
     prune_active_blocked,
     prune_exclusive_start,
+    release_orphaned_frontend_leases,
     retain_prune_conflict,
 )
 from lib.prune_gate import (
@@ -371,6 +372,13 @@ class Plugin:
     @sync_active_blocked
     async def start_prune(self, request):
         return await self._prune_service.start_prune(request)
+
+    # Deliberately undecorated, like cancel_prune: a frontend that just mounted
+    # has to be able to disown leases stranded by the context before it, and a
+    # stranded lease is exactly what would otherwise refuse this call.
+    async def release_orphaned_prune_leases(self):
+        released = await release_orphaned_frontend_leases(self)
+        return {"success": True, "released": released}
 
     # Deliberately undecorated: stopping the run is the one operation that must
     # stay reachable while the prune claim is held.

@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { logError, releasePruneConflictLease, renewPruneConflictLease } from "../api/backend";
+import {
+  logError,
+  releaseOrphanedPruneLeases,
+  releasePruneConflictLease,
+  renewPruneConflictLease,
+} from "../api/backend";
 import {
   capturePruneLeaseAdmission,
   isPruneLeaseCancellation,
@@ -15,6 +20,7 @@ import {
 
 vi.mock("../api/backend", () => ({
   logError: vi.fn(),
+  releaseOrphanedPruneLeases: vi.fn(() => Promise.resolve({ success: true, released: 0 })),
   releasePruneConflictLease: vi.fn(),
   renewPruneConflictLease: vi.fn(),
 }));
@@ -278,4 +284,39 @@ it("a refused renewal aborts future writes and abandons the refused token", asyn
 
   expect(wroteAfterAwait).toBe(false);
   expect(releasePruneConflictLease).not.toHaveBeenCalledWith("lease-refused");
+});
+
+it("disowns leases stranded by a previous frontend context on mount", async () => {
+  vi.mocked(releaseOrphanedPruneLeases).mockResolvedValueOnce({ success: true, released: 1 });
+
+  mountPruneLeasePlugin();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  // A context torn down mid-call never released its lease and never renews it,
+  // so nothing but a fresh mount can free the gate before the TTL.
+  expect(releaseOrphanedPruneLeases).toHaveBeenCalled();
+  expect(logError).toHaveBeenCalledWith(expect.stringContaining("disowned 1 lease(s) stranded"));
+});
+
+it("says nothing on a mount that had nothing to disown", async () => {
+  vi.mocked(releaseOrphanedPruneLeases).mockResolvedValueOnce({ success: true, released: 0 });
+
+  mountPruneLeasePlugin();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(logError).not.toHaveBeenCalled();
+});
+
+it("keeps mounting when the disown call fails", async () => {
+  vi.mocked(releaseOrphanedPruneLeases).mockRejectedValueOnce(new Error("bridge offline"));
+
+  mountPruneLeasePlugin();
+  await Promise.resolve();
+  await Promise.resolve();
+
+  // Mount must not be blocked by a best-effort cleanup; the TTL still backs it.
+  expect(logError).toHaveBeenCalledWith(expect.stringContaining("could not disown stranded leases"));
+  expect(capturePruneLeaseAdmission().pluginGeneration).toBeGreaterThan(0);
 });

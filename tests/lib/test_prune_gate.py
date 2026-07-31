@@ -9,6 +9,7 @@ from lib.prune_gate import (
     acquire_prune_conflict_lease,
     prune_active_blocked,
     prune_exclusive_start,
+    release_orphaned_frontend_leases,
     release_prune_conflict_lease,
     renew_prune_conflict_lease,
     retain_prune_conflict,
@@ -295,6 +296,59 @@ async def test_detached_retention_is_labelled_by_its_originating_callable() -> N
     release.set()
     await task
     await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_a_new_frontend_disowns_a_lease_its_predecessor_stranded() -> None:
+    owner = _LoggingOwner()
+    # The double mount at plugin load: mount 1 acquires, its context dies before
+    # the continuation that would release, so nothing ever releases or renews.
+    await acquire_prune_conflict_lease(owner, "installed_reconcile")
+    assert (await owner.start_prune())["reason"] == "operation_active"
+
+    released = await release_orphaned_frontend_leases(owner)
+
+    assert released == 1
+    assert await owner.start_prune() == {"success": True}
+    assert any(
+        "orphaned lease installed_reconcile:1" in line and "no longer mounted" in line
+        for line in owner._prune_gate_logger.info_lines
+    )
+
+
+@pytest.mark.asyncio
+async def test_disowning_leaves_callable_registrations_and_run_claims_alone() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class Owner(_LoggingOwner):
+        @prune_active_blocked
+        async def set_game_core(self):
+            entered.set()
+            await release.wait()
+            return {"success": True}
+
+    owner = Owner()
+    running = asyncio.create_task(owner.set_game_core())
+    await entered.wait()
+
+    # Only the frontend's own leases are the frontend's to disown; a live
+    # callable still holds the gate on its own account.
+    assert await release_orphaned_frontend_leases(owner) == 0
+    assert (await owner.start_prune())["reason"] == "operation_active"
+
+    release.set()
+    await running
+
+
+@pytest.mark.asyncio
+async def test_disowning_an_empty_gate_is_a_silent_no_op() -> None:
+    owner = _LoggingOwner()
+
+    assert await release_orphaned_frontend_leases(owner) == 0
+
+    # An ordinary mount must not log as though it cleaned something up.
+    assert owner._prune_gate_logger.info_lines == []
 
 
 @pytest.mark.asyncio

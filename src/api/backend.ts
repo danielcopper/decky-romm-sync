@@ -323,6 +323,10 @@ export const reportRemovalResults = callable<
   [(string | number)[], string | null],
   { success: boolean; message: string }
 >("report_removal_results");
+/** Disown leases stranded by a previous frontend context; called once at mount. */
+export const releaseOrphanedPruneLeases = callable<[], { success: boolean; released: number }>(
+  "release_orphaned_prune_leases",
+);
 export const releasePruneConflictLease = callable<[string], { success: boolean; message: string }>(
   "release_prune_conflict_lease",
 );
