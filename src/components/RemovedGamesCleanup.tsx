@@ -1,4 +1,4 @@
-import { useEffect, useState, FC, Fragment } from "react";
+import { useEffect, useRef, useState, FC, Fragment } from "react";
 import { toaster } from "@decky/api";
 import {
   ButtonItem,
@@ -83,17 +83,23 @@ function formatBytes(bytes: number): string {
 }
 
 /**
- * The backend's stage slugs in the words the user reads. An unknown stage falls
- * back to its slug with underscores opened up, so a new backend stage degrades
- * to something readable instead of vanishing.
+ * The backend's stage slugs in the words the user reads — one entry per
+ * `emit_progress` call site in `services/prune/executor.py`, and no others.
+ * An unknown stage falls back to its slug with underscores opened up, so a new
+ * backend stage degrades to something readable instead of vanishing; that
+ * fallback is a safety net, not a licence to leave a real stage unmapped.
+ *
+ * Exported so a test can pin the key set against the backend's: an entry for a
+ * stage that is never emitted hides a missing one behind it.
  */
-const STAGE_LABELS: Record<string, string> = {
+export const STAGE_LABELS: Record<string, string> = {
   checking: "Checking with RomM",
   creating_recovery: "Backing up",
-  copying_content: "Copying ROM files",
-  removing_rows: "Removing local data",
+  recovery_sealed: "Backup complete",
   repointing: "Updating the Steam shortcut",
   removing_shortcut: "Removing the Steam shortcut",
+  removing: "Removing local data",
+  removed: "Done",
 };
 
 function stageLabel(stage: string): string {
@@ -667,11 +673,22 @@ export const RemovedGamesCleanupSection: FC = () => {
   const [syncRunning, setSyncRunning] = useState(getSyncProgress().running);
   const [pruneState, setPruneState] = useState(getPruneState());
   const [resultLost, setResultLost] = useState(isPruneResultLost());
+  const lastRunIdRef = useRef(getPruneState().runId);
 
   useEffect(() => {
     const unsubscribeSync = onSyncProgressChange(() => setSyncRunning(getSyncProgress().running));
     const unsubscribePrune = onPruneStateChange(() => {
-      setPruneState(getPruneState());
+      const next = getPruneState();
+      // A refusal message belongs to the run it was refused for; carrying it
+      // into the next run would describe that run's Stop button with an
+      // outcome that never happened to it. Tracked in a ref because this
+      // subscription is registered once and would otherwise compare against
+      // the state it closed over on mount.
+      if (next.runId !== lastRunIdRef.current) {
+        lastRunIdRef.current = next.runId;
+        setCancelStatus(null);
+      }
+      setPruneState(next);
       setResultLost(isPruneResultLost());
     });
     return () => {

@@ -12,7 +12,7 @@ import {
   setPruneComplete,
   setPruneProgress,
 } from "../utils/pruneStore";
-import { openRemovedGamesCleanupModal, RemovedGamesCleanupSection } from "./RemovedGamesCleanup";
+import { openRemovedGamesCleanupModal, RemovedGamesCleanupSection, STAGE_LABELS } from "./RemovedGamesCleanup";
 
 const preview: backend.PrunePreviewResult = {
   success: true,
@@ -896,6 +896,46 @@ describe("RemovedGamesCleanup", () => {
     expect(modal.container.textContent).toContain("1 / 4");
     expect(modal.container.querySelector('[data-testid="progress-progress"]')?.textContent).toBe("25");
     expect(modal.container.querySelector('[data-testid="progress-indeterminate"]')?.textContent).toBe("false");
+  });
+
+  // Every stage services/prune/executor.py emits, from its emit_progress call
+  // sites. A caption is only correct if it survives a real run, so each one is
+  // driven through the component rather than asserted against the map alone.
+  const BACKEND_STAGES = [
+    "checking",
+    "creating_recovery",
+    "recovery_sealed",
+    "repointing",
+    "removing_shortcut",
+    "removing",
+    "removed",
+  ];
+
+  it("maps exactly the stages the backend emits — no more, no fewer", () => {
+    // An entry for a stage that is never emitted is how three real captions
+    // ended up rendering as raw slugs while the map looked complete.
+    expect(Object.keys(STAGE_LABELS).sort()).toEqual([...BACKEND_STAGES].sort());
+  });
+
+  it.each(BACKEND_STAGES)("renders a plain-language caption for the %s stage", (stage) => {
+    const section = render(createElement(RemovedGamesCleanupSection));
+    act(() => {
+      beginPrunePreview("preview-1");
+      beginPruneRun("run-1", "preview-1");
+      setPruneProgress({
+        run_id: "run-1",
+        preview_id: "preview-1",
+        current: 1,
+        total: 2,
+        stage,
+        rom_ids: [7],
+        name: "Removed Game",
+      });
+    });
+
+    expect(section.container.textContent).toContain(`${STAGE_LABELS[stage]} — Removed Game`);
+    // The raw slug must never reach the caption for a stage we do know.
+    expect(section.container.textContent).not.toContain(stage.replace(/_/g, " ") + " — Removed Game");
   });
 
   it("degrades an unknown backend stage to something readable", async () => {

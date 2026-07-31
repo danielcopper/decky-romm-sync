@@ -156,13 +156,13 @@ single button, without opening an otherwise empty picker. The vanished version i
 to remove stays listed and disabled, with no trash icon.
 
 While a cleanup runs, the Danger Zone shows a progress bar under the entry point — the game being worked on, the phase
-in words (checking with RomM, backing up, copying ROM files, removing local data, updating the Steam shortcut) and how
-many games are done — and the scan button stays unavailable, so you can close the dialog and still see what is
-happening. Both the dialog and the Danger Zone offer **Stop Cleanup**. It stops the run before the next game; the game
-being processed at that moment finishes and reports what it changed, and while that is happening the button says
-**Stopping** so a second press is never needed. Nothing already done is undone — stopping is not an undo, and the report
-afterwards lists exactly what was committed. If a game's backup finished before the run stopped, the report says so and
-names the folder, so a recovery bundle that removed nothing is never a mystery.
+in words (checking with RomM, backing up, backup complete, updating or removing the Steam shortcut, removing local data,
+done) and how many games are done — and the scan button stays unavailable, so you can close the dialog and still see
+what is happening. Both the dialog and the Danger Zone offer **Stop Cleanup**. It stops the run before the next game;
+the game being processed at that moment finishes and reports what it changed, and while that is happening the button
+says **Stopping** so a second press is never needed. Nothing already done is undone — stopping is not an undo, and the
+report afterwards lists exactly what was committed. If a game's backup finished before the run stopped, the report says
+so and names the folder, so a recovery bundle that removed nothing is never a mystery.
 
 If Steam changes before local cleanup can finish, the report can show a **partial** group with the concrete committed
 action and failure message. A confirmed shortcut removal is reconciled to an unbound retained row; a committed repoint
