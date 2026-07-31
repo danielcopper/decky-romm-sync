@@ -1,15 +1,13 @@
-# Prettier only formats frontend sources under src/.
-# Generated, vendored, and non-frontend paths are out of scope.
-dist
-node_modules
-defaults
-bin
-coverage
-.worktrees
-py_modules
+# Prettier's scope in this repo is frontend sources under src/ — that is what
+# `pnpm format:check` checks and what the pre-commit hook formats.
+#
+# Expressed as an allowlist rather than a denylist: a denylist silently grows
+# stale, and an unscoped `prettier --write .` then reformats whatever was not
+# listed yet. That is not hypothetical — it has re-expanded the minified
+# docs/assets/logo.svg into a 300-line diff, and reached CI configs and the
+# vendored conformance vectors under tests/, which must never be edited.
+/*
+!/src
 
-# Generated / lockfiles
-pnpm-lock.yaml
-
-# Markdown is owned by mkdocs + markdownlint — don't fight them.
-*.md
+# Within src/, generated and non-source paths stay out.
+/src/**/*.snap
