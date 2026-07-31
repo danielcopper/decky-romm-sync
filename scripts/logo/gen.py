@@ -476,12 +476,18 @@ PALETTES: list[Palette] = [
     # the shared pair — they are the only warm thing in the mark and the extra
     # depth behind them is worth spending on making them read.
     Palette("harbor-warm", ("#7896b1", "#5c7d9a"), ("#22455d", "#122836"), "#e8c49c", "#dd9880"),
+    # A lighter, cooler disc over a much deeper ink. harbor-warm bought its calm on
+    # the dark ground by desaturating the disc, which is what left it looking washed
+    # out; this keeps the chroma and spends the contrast on the ink instead. The
+    # arrows gain most from that — 4.26:1 against the disc's dark half rather than
+    # 2.34:1 — at the cost of some separation from a white page.
+    Palette("glacier", ("#92b7e3", "#779cc5"), ("#1f384b", "#1a1f25"), "#e8c49c", "#dd9880"),
 ]
 
 BY_NAME = {p.name: p for p in PALETTES}
 
 # The chosen mark — what the shipped assets render from.
-CHOSEN = "harbor-warm"
+CHOSEN = "glacier"
 
 
 # --------------------------------------------------------------------------- #
