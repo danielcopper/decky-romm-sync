@@ -86,8 +86,8 @@ single-attempt exact-id 404 under the pinned namespace.
 **What it does not cover.** The control and the candidate are different ids by construction, so a _per-id_ misroute —
 one that answers correctly for the control and a bogus 404 for the candidate — passes every check here. Nothing
 client-side can close that: a client cannot distinguish "this id is gone" from "this id, specifically, was misrouted"
-without a second source of truth about that id. What the tiers rule out is the whole-route failure, which is the shape a
-proxy misconfiguration actually takes.
+without a second source of truth about that id. What the ROM tiers rule out is the whole-route failure, which is the
+shape a proxy misconfiguration actually takes.
 
 **How this composes with the adapter-side 404 discrimination** (#1622): the two run in series and are not redundant. The
 adapter filters non-entity 404 **shapes** at the transport boundary, so a 404 that does not look like RomM answering
