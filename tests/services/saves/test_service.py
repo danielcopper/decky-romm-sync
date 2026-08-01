@@ -5,7 +5,6 @@ import hashlib
 import logging
 import os
 import time
-from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -25,7 +24,6 @@ from tests.services.saves._helpers import (
     _get_device_id,
     _get_save_state,
     _install_rom,
-    _seed_rom,
     _seed_save_state,
     _set_device_id,
     make_service,
@@ -1469,143 +1467,3 @@ class TestBuildSaveInventory:
         _seed_save_state(svc, 42, state)
 
         assert svc.build_save_inventory(rom_id=42) == []
-
-
-class TestPruneSaveInventory:
-    def test_persisted_known_filename_and_matching_history_are_recovery_artifacts(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="renamed.gba")
-        saves_dir = tmp_path / "saves" / "gba"
-        saves_dir.mkdir(parents=True)
-        historical = saves_dir / "old-name.srm"
-        historical.write_bytes(b"save")
-        backup_dir = saves_dir / ".romm-backup"
-        backup_dir.mkdir()
-        matching_backup = backup_dir / "old-name_20260101_120000.srm"
-        matching_backup.write_bytes(b"history")
-        (backup_dir / "other_20260101_120000.srm").write_bytes(b"other")
-        state = RomSaveSyncState(system="gba", files={"old-name.srm": FileSyncState(last_sync_hash="known")})
-        with svc._uow_factory() as uow:
-            uow.rom_save_sync_states.save(42, state)
-
-        inventory = svc.inventory_prune_saves([42])
-
-        artifact_paths = {item["source_path"] for item in inventory["artifacts"]}
-        expected_current = {str(saves_dir / f"renamed.{extension}") for extension in ("srm", "rtc", "sav")}
-        assert artifact_paths == {str(historical), str(matching_backup), *expected_current}
-        assert {item["path"] for item in inventory["exclusive"]} == {str(historical), *expected_current}
-
-    def test_shared_save_expands_lock_owners_and_is_never_quarantined(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        _install_rom(svc, tmp_path, rom_id=1, system="gba", file_name="shared.gba")
-        _install_rom(svc, tmp_path, rom_id=2, system="gba", file_name="shared.gba")
-        shared = _create_save(tmp_path, system="gba", rom_name="shared", content=b"shared")
-
-        inventory = svc.inventory_prune_saves([1])
-
-        assert inventory["exclusive"] == []
-        assert inventory["shared"] == [str(shared)]
-        assert inventory["lock_rom_ids"] == [1, 2]
-
-    def test_uninstalled_live_replacement_keeps_its_shared_save_in_place(self, tmp_path):
-        """The canonical vanished/replacement pair: purge row installed, live row not.
-
-        Both rows project onto the same save path, so the locked recovery
-        contract copies the file into the bundle and leaves it where the
-        replacement will read it — quarantining it would strand the live
-        version's progress.
-        """
-        svc, _ = make_service(tmp_path)
-        _install_rom(svc, tmp_path, rom_id=4375, system="gba", file_name="game.gba")
-        _seed_rom(svc, 25135, platform_slug="gba", fs_name="game.gba")
-        shared = _create_save(tmp_path, system="gba", rom_name="game", content=b"live progress")
-
-        inventory = svc.inventory_prune_saves([4375])
-
-        assert inventory["exclusive"] == []
-        assert inventory["shared"] == [str(shared)]
-        assert {item["source_path"] for item in inventory["artifacts"]} == {str(shared)}
-        assert inventory["source_claims"] == {}
-        assert inventory["lock_rom_ids"] == [4375, 25135]
-
-        result = svc.quarantine_prune_saves(inventory["exclusive"], inventory["source_claims"])
-
-        assert result == {"success": True, "moved": [], "ambiguous": False}
-        assert shared.read_bytes() == b"live progress"
-
-    def test_uninstalled_row_with_a_different_content_name_stays_exclusive(self, tmp_path):
-        """No over-correction: an unrelated uninstalled row must not shield the save.
-
-        It projects onto a different stem, so the purge row still owns its saves
-        alone and they leave through the ``.romm-backup`` quarantine funnel.
-        """
-        svc, _ = make_service(tmp_path)
-        _install_rom(svc, tmp_path, rom_id=4375, system="gba", file_name="game.gba")
-        _seed_rom(svc, 25135, platform_slug="gba", fs_name="other-game.gba")
-        owned = _create_save(tmp_path, system="gba", rom_name="game", content=b"only mine")
-
-        inventory = svc.inventory_prune_saves([4375])
-
-        expected_paths = {str(tmp_path / "saves" / "gba" / f"game.{extension}") for extension in ("srm", "rtc", "sav")}
-        assert {item["path"] for item in inventory["exclusive"]} == expected_paths
-        assert inventory["shared"] == []
-        assert inventory["lock_rom_ids"] == [4375]
-
-        result = svc.quarantine_prune_saves(inventory["exclusive"], inventory["source_claims"])
-
-        assert result["success"] is True
-        assert result["moved"] == [str(owned)]
-        assert owned.exists() is False
-        backups = list((tmp_path / "saves" / "gba" / ".romm-backup").glob("game_*.srm"))
-        assert [path.read_bytes() for path in backups] == [b"only mine"]
-
-    def test_missing_exclusive_save_is_claimed_absent_and_late_creation_is_retained(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="late.gba")
-        expected = str(tmp_path / "saves" / "gba" / "late.srm")
-
-        inventory = svc.inventory_prune_saves([42])
-
-        expected_paths = {str(tmp_path / "saves" / "gba" / f"late.{extension}") for extension in ("srm", "rtc", "sav")}
-        assert {item["path"] for item in inventory["exclusive"]} == expected_paths
-        assert {item["source_path"] for item in inventory["artifacts"]} == expected_paths
-        assert set(inventory["source_claims"]) == expected_paths
-        assert inventory["source_claims"][expected]["source_identity"]["exists"] is False
-
-        Path(expected).parent.mkdir(parents=True, exist_ok=True)
-        Path(expected).write_bytes(b"created by emulator")
-        result = svc.quarantine_prune_saves(inventory["exclusive"], inventory["source_claims"])
-
-        assert result["success"] is False
-        assert "appeared after sealing" in result["message"]
-        assert Path(expected).read_bytes() == b"created by emulator"
-
-    def test_expected_absence_is_rechecked_after_quarantine_before_cascade(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="late.gba")
-        expected = Path(tmp_path / "saves" / "gba" / "late.srm")
-        expected.parent.mkdir(parents=True)
-        inventory = svc.inventory_prune_saves([42])
-
-        result = svc.quarantine_prune_saves(inventory["exclusive"], inventory["source_claims"])
-        assert result["success"] is True
-
-        expected.parent.mkdir(parents=True, exist_ok=True)
-        expected.write_bytes(b"created after absence was consumed")
-
-        assert svc.validate_prune_absences(inventory["source_claims"]) is False
-        assert expected.read_bytes() == b"created after absence was consumed"
-
-    def test_quarantined_present_save_is_rechecked_for_recreation_before_cascade(self, tmp_path):
-        svc, _ = make_service(tmp_path)
-        _install_rom(svc, tmp_path, rom_id=42, system="gba", file_name="present.gba")
-        expected = _create_save(tmp_path, system="gba", rom_name="present", content=b"sealed-current")
-        inventory = svc.inventory_prune_saves([42])
-        assert inventory["source_claims"][str(expected)]["source_identity"]["exists"] is True
-
-        result = svc.quarantine_prune_saves(inventory["exclusive"], inventory["source_claims"])
-        assert result["success"] is True
-        expected.write_bytes(b"emulator-recreated")
-
-        assert svc.validate_prune_absences(inventory["source_claims"]) is False
-        assert expected.read_bytes() == b"emulator-recreated"

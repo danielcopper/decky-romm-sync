@@ -1,7 +1,7 @@
 """Save-sync aggregate root and facade for the Decky callable surface.
 
 Composes the save-sync sub-services (sync_engine, status, versions,
-slots, rom_info) over the SQLite ``rom_save_sync_states`` aggregate (reached
+slots, rom_info, prune_support) over the SQLite ``rom_save_sync_states`` aggregate (reached
 through the injected Unit-of-Work factory) and exposes the public
 methods the frontend reaches through callables. The five save-sync
 feature toggles and the device label live in ``settings.json`` and are
@@ -12,13 +12,10 @@ single-sub-service logic does not.
 
 from __future__ import annotations
 
-import contextlib
-import os
 from typing import TYPE_CHECKING, Any
 
 from domain.iso_time import epoch_to_iso
 from domain.rom_save_sync_state import RomSaveSyncState
-from domain.save_backup import is_backup_for
 from lib.list_result import ErrorCode
 from services.saves._config import SaveServiceConfig
 from services.saves._settings import (
@@ -28,6 +25,7 @@ from services.saves._settings import (
     save_sync_settings_view,
 )
 from services.saves.copies import SaveCopyService, SaveCopyServiceConfig
+from services.saves.prune_support import PruneSaveSupport, PruneSaveSupportConfig
 from services.saves.rom_info import RomInfoService, RomInfoServiceConfig
 from services.saves.slots import SlotsService, SlotsServiceConfig
 from services.saves.status import StatusService, StatusServiceConfig
@@ -36,37 +34,16 @@ from services.saves.sync_engine.devices import DeviceRegistry
 from services.saves.versions import VersionsService, VersionsServiceConfig
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
-
-    from models.prune import SourceClaim
     from models.sync import ClientSaveState
 
     from services.protocols import UnitOfWorkFactory
-
-
-def _save_identity(platform_slug: str, content_path: str) -> tuple[str, str]:
-    """The identity two local ROM rows share when they project onto the same save files.
-
-    A ROM's save files are ``<saves_root>/<platform's content dir>/<content
-    stem><ext>``: the directory follows from the platform (a single-file ROM
-    installs into that platform's system directory) and the stem is the content
-    filename without its extension, exactly as ``RomInfoService`` derives
-    ``rom_name`` from an install's ``file_path``. Two rows agreeing on both
-    therefore land on the same paths, whether or not either is installed —
-    which is what lets an *uninstalled* row be recognised as a co-owner of an
-    installed row's saves.
-
-    ``content_path`` is an install's full ``file_path`` or a row's bare
-    ``fs_name``; only its basename stem is read, so the two are interchangeable.
-    """
-    return (platform_slug, os.path.splitext(os.path.basename(content_path))[0])
 
 
 class SaveService:
     """Aggregate root for bidirectional save file sync between RetroDECK and RomM.
 
     Composes the save-sync sub-services (sync_engine, status, versions, slots,
-    rom_info) over the SQLite ``rom_save_sync_states`` aggregate. Exposes the callable
+    rom_info, prune_support) over the SQLite ``rom_save_sync_states`` aggregate. Exposes the callable
     surface consumed by the Decky entrypoints — every public method delegates to
     a sub-service or reads ``settings.json``. Bulk local-save deletion is the
     only flow whose orchestration lives directly on the aggregate root because it
@@ -211,6 +188,22 @@ class SaveService:
             ),
         )
 
+        self._prune_support = PruneSaveSupport(
+            config=PruneSaveSupportConfig(
+                uow_factory=config.uow_factory,
+                save_file_store=config.save_file_store,
+                retrodeck_paths=config.retrodeck_paths,
+                clock=config.clock,
+                rom_info=self._rom_info,
+                sync_engine=self._sync_engine,
+            ),
+        )
+
+    @property
+    def prune_support(self) -> PruneSaveSupport:
+        """The save-side collaborator the composition root wires as ``PruneSaveCoordinator``."""
+        return self._prune_support
+
     # ------------------------------------------------------------------
     # Device registration (delegated to SyncEngine)
     # ------------------------------------------------------------------
@@ -280,174 +273,6 @@ class SaveService:
         if save_entry is None:
             return {}
         return {filename: state.last_sync_hash for filename, state in save_entry.files.items()}
-
-    @contextlib.asynccontextmanager
-    async def lock_prune_roms(self, rom_ids: list[int]) -> AsyncIterator[None]:
-        """Hold affected save locks in ascending id order for recovery/removal."""
-        async with contextlib.AsyncExitStack() as stack:
-            for rom_id in sorted({int(value) for value in rom_ids}):
-                await stack.enter_async_context(self._sync_engine.rom_lock(rom_id))
-            yield
-
-    def inventory_prune_saves(self, purge_rom_ids: list[int]) -> dict[str, Any]:
-        """Build exact-path save ownership and recovery artifacts for a purge set.
-
-        Ownership spans every local ``roms`` row that lands on a path, not only
-        the installed ones: a vanished row's live replacement is routinely
-        uninstalled, and treating its shared save as exclusive would quarantine
-        a file the replacement still reads.
-        """
-        purge_ids = {int(value) for value in purge_rom_ids}
-        with self._uow_factory() as uow:
-            installs = list(uow.rom_installs.iter_all())
-            installed_ids = {install.rom_id for install in installs}
-            persisted_names = {
-                rom_id: list(state.files)
-                for rom_id, state in uow.rom_save_sync_states.iter_all()
-                if rom_id in installed_ids
-            }
-            # An uninstalled row has no install record to resolve a path from, so
-            # it is matched onto an installed row's paths by save identity.
-            uninstalled_by_identity: dict[tuple[str, str], set[int]] = {}
-            for rom in uow.roms.iter_all():
-                if rom.rom_id in installed_ids:
-                    continue
-                identity = _save_identity(rom.platform_slug, rom.fs_name)
-                uninstalled_by_identity.setdefault(identity, set()).add(rom.rom_id)
-
-        ownership: dict[str, set[int]] = {}
-        expected_by_id: dict[int, list[dict[str, str]]] = {}
-        for install in installs:
-            rom_id = install.rom_id
-            expected = self._rom_info.expected_save_files(rom_id)
-            if expected:
-                saves_dir = expected[0]["saves_dir"]
-                known = {item["filename"] for item in expected}
-                for filename in persisted_names.get(rom_id, []):
-                    if (
-                        filename not in known
-                        and filename not in {"", ".", ".."}
-                        and os.path.basename(filename) == filename
-                        and "\x00" not in filename
-                    ):
-                        expected.append(
-                            {"path": os.path.join(saves_dir, filename), "filename": filename, "saves_dir": saves_dir}
-                        )
-            expected_by_id[rom_id] = expected
-            owners = {rom_id} | uninstalled_by_identity.get(
-                _save_identity(install.platform_slug, install.file_path), set()
-            )
-            for item in expected:
-                ownership.setdefault(self._save_file_store.canonical_path(item["path"]), set()).update(owners)
-
-        saves_root = self._config.retrodeck_paths.saves_path()
-        artifacts: list[dict[str, object]] = []
-        exclusive: list[dict[str, str]] = []
-        shared: list[str] = []
-        warnings: list[str] = []
-        source_claims: dict[str, SourceClaim] = {}
-        lock_ids = set(purge_ids)
-        for rom_id in sorted(purge_ids):
-            expected = expected_by_id.get(rom_id, [])
-            if not expected:
-                warnings.append(f"ROM {rom_id}: save path could not be resolved; physical saves were left untouched")
-                continue
-            for item in expected:
-                path = item["path"]
-                if not self._save_file_store.is_within(path, saves_root):
-                    warnings.append(f"ROM {rom_id}: save path is outside the supported saves root; left untouched")
-                    continue
-                owners = ownership.get(self._save_file_store.canonical_path(path), {rom_id})
-                lock_ids.update(owners)
-                exists = self._save_file_store.is_file(path)
-                if owners <= purge_ids:
-                    artifacts.append(
-                        {"source_path": path, "safe_root": saves_root, "kind": "current_save", "rom_id": rom_id}
-                    )
-                    exclusive.append(item)
-                    source_claims[path] = self._save_file_store.claim_source(path, saves_root)
-                elif exists:
-                    artifacts.append(
-                        {"source_path": path, "safe_root": saves_root, "kind": "current_save", "rom_id": rom_id}
-                    )
-                    shared.append(path)
-                backup_dir = os.path.join(item["saves_dir"], ".romm-backup")
-                if self._save_file_store.is_symlink(backup_dir) or not self._save_file_store.is_within(
-                    backup_dir, saves_root
-                ):
-                    raise ValueError(f"ROM {rom_id}: save backup directory is unsafe: {backup_dir}")
-                for entry in self._save_file_store.listdir(backup_dir):
-                    backup_path = os.path.join(backup_dir, entry)
-                    if is_backup_for(item["filename"], entry) and self._save_file_store.is_file(backup_path):
-                        artifacts.append(
-                            {
-                                "source_path": backup_path,
-                                "safe_root": saves_root,
-                                "kind": "save_backup",
-                                "rom_id": rom_id,
-                            }
-                        )
-        return {
-            "artifacts": artifacts,
-            "exclusive": exclusive,
-            "shared": sorted(set(shared)),
-            "warnings": warnings,
-            "lock_rom_ids": sorted(lock_ids),
-            "source_claims": source_claims,
-        }
-
-    def quarantine_prune_saves(
-        self, files: list[dict[str, str]], claims: dict[str, SourceClaim] | None = None
-    ) -> dict[str, Any]:
-        """Move exclusive current saves through the sanctioned backup funnel."""
-        moved: list[str] = []
-        saves_root = self._config.retrodeck_paths.saves_path()
-        try:
-            for item in files:
-                backup_dir = os.path.join(item["saves_dir"], ".romm-backup")
-                if (
-                    not self._save_file_store.is_within(item["path"], saves_root)
-                    or not self._save_file_store.is_within(backup_dir, saves_root)
-                    or self._save_file_store.is_symlink(backup_dir)
-                ):
-                    raise ValueError(f"Unsafe save quarantine destination: {backup_dir}")
-                claim = claims.get(item["path"]) if claims is not None else None
-                if claim is None:
-                    claim = self._save_file_store.claim_source(item["path"], saves_root)
-                outcome = self._sync_engine.quarantine_claimed_file(
-                    item["saves_dir"], item["filename"], claim=claim, safe_root=saves_root
-                )
-                if outcome["changed"]:
-                    moved += [item["path"]]
-                if not outcome["success"]:
-                    return {
-                        "success": False,
-                        "reason": "save_quarantine_failed",
-                        "message": outcome["message"],
-                        "moved": moved,
-                        "ambiguous": outcome["ambiguous"],
-                    }
-        except Exception as exc:
-            return {
-                "success": False,
-                "reason": "save_quarantine_failed",
-                "message": str(exc),
-                "moved": moved,
-                "ambiguous": False,
-            }
-        return {"success": True, "moved": moved, "ambiguous": False}
-
-    def validate_prune_absences(self, claims: dict[str, SourceClaim]) -> bool:
-        """Require every quarantined purge-owned path to remain absent before cascade."""
-        saves_root = self._config.retrodeck_paths.saves_path()
-        try:
-            for path in claims:
-                current = self._save_file_store.claim_source(path, saves_root)
-                if current["source_identity"]["exists"]:
-                    return False
-        except Exception:
-            return False
-        return True
 
     # ------------------------------------------------------------------
     # Sync orchestration (delegated to SyncEngine)

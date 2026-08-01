@@ -23,7 +23,7 @@ from domain.emulator_tag import build_emulator_tag
 from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_sync_state import FileSyncState, RomSaveSyncState
 from domain.save_backup import backup_name, select_backups_to_prune
-from domain.save_slot import save_in_slot
+from domain.save_slot import filter_saves_to_slot
 from domain.sync_action import (
     Conflict,
     Download,
@@ -39,8 +39,6 @@ from services.saves._messages import DEVICE_NOT_REGISTERED
 if TYPE_CHECKING:
     import logging
     from collections.abc import Iterator
-
-    from models.prune import MutationOutcome, SourceClaim
 
     from services.protocols import (
         Clock,
@@ -341,8 +339,7 @@ class MatrixExecutor:
         ts = self._clock.now().strftime("%Y%m%d_%H%M%S")
         existing = set(self._save_file_store.listdir(backup_dir))
         backup = backup_name(filename, ts, existing)
-        backup_path = os.path.join(backup_dir, backup)
-        self._save_file_store.rename(local_path, backup_path)
+        self._save_file_store.rename(local_path, os.path.join(backup_dir, backup))
         # Bound the recovery net: keep only the newest N backups per save file (#974).
         existing.add(backup)
         for stale in select_backups_to_prune(filename, list(existing), _BACKUP_RETENTION):
@@ -350,27 +347,6 @@ class MatrixExecutor:
                 continue  # never prune the backup just created this call (#974 — would destroy the save)
             self._save_file_store.remove_file(os.path.join(backup_dir, stale))
         return True
-
-    def quarantine_claimed_file(
-        self,
-        saves_dir: str,
-        filename: str,
-        *,
-        claim: SourceClaim,
-        safe_root: str,
-    ) -> MutationOutcome:
-        """Durably quarantine one exact claimed save through anchored directories."""
-        local_path = os.path.join(saves_dir, filename)
-        backup_dir = os.path.join(saves_dir, ".romm-backup")
-        self._save_file_store.ensure_directory(backup_dir, safe_root)
-        ts = self._clock.now().strftime("%Y%m%d_%H%M%S")
-        backup = backup_name(filename, ts, set(self._save_file_store.listdir(backup_dir)))
-        return self._save_file_store.rename_claimed(
-            local_path,
-            os.path.join(backup_dir, backup),
-            safe_root,
-            claim,
-        )
 
     @staticmethod
     def _resolve_upload_slot(save_state: RomSaveSyncState, default_slot: str | None = None) -> str | None:
@@ -542,21 +518,6 @@ class MatrixExecutor:
         with contextlib.suppress(OSError):
             self._save_file_store.remove_file(tmp)
 
-    @staticmethod
-    def filter_server_saves_to_slot(
-        server_saves: list[dict[str, Any]], active_slot: str | None
-    ) -> list[dict[str, Any]]:
-        """Filter server saves to the active slot by exact slot membership.
-
-        A legacy (``slot:null`` / ``""``) save belongs ONLY to the legacy slot —
-        it is never surfaced under a named slot. Sharing
-        :func:`domain.save_slot.save_in_slot` keeps the sync matrix, the status
-        display, and rollback consistent with the per-slot read/delete paths
-        (#1061): the legacy save is visible and syncable only in legacy mode, so
-        it can't bleed into a named slot's status or get downloaded into it.
-        """
-        return [ss for ss in server_saves if save_in_slot(ss, active_slot)]
-
     def _build_local_input(self, local_path: str, filename: str) -> dict[str, Any]:
         """Build the dict shape consumed by ``compute_sync_action``."""
         exists = self._save_file_store.is_file(local_path)
@@ -711,7 +672,7 @@ class MatrixExecutor:
         (empty regroup or surfaced conflict — nothing transferred).
         """
         server_saves = self._retry.with_retry(lambda: self._romm_api.list_saves(ctx.rom_id, device_id=ctx.device_id))
-        server_in_slot = self.filter_server_saves_to_slot(server_saves, ctx.save_state.active_slot)
+        server_in_slot = filter_saves_to_slot(server_saves, ctx.save_state.active_slot)
         group = [ss for ss in server_in_slot if local_save_target(ss, ctx.rom_name) == filename]
         if not group:
             self._logger.warning(
@@ -961,7 +922,7 @@ class MatrixExecutor:
         self._log_debug(f"[TIMING] do_sync_rom_saves({rom_id}): list_saves {self._clock.time() - t0:.3f}s")
 
         active_slot = save_state.active_slot
-        server_in_slot = self.filter_server_saves_to_slot(server_saves, active_slot)
+        server_in_slot = filter_saves_to_slot(server_saves, active_slot)
 
         self._log_debug(
             f"do_sync_rom_saves({rom_id}): system={system}, rom_name={info['rom_name']}, "

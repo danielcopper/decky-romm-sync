@@ -495,7 +495,7 @@ def wire_services(cfg: WiringConfig) -> dict[str, Any]:
             prune_artifacts=cfg.adapters.prune_artifacts,
             steam_recovery=cfg.adapters.steam_recovery,
             retrodeck_paths=cfg.callbacks.retrodeck_paths,
-            save_coordinator=save_sync_service,
+            save_coordinator=save_sync_service.prune_support,
             active_downloads=download_service.active_download_rom_ids,
             drift_probe=launch_gate_service.check_local_drift,
             remove_installed_files=rom_removal_service.delete_rom_files,

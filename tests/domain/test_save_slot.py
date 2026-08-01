@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from domain.save_slot import normalize_slot, save_in_slot, slot_query_param
+from domain.save_slot import filter_saves_to_slot, normalize_slot, save_in_slot, slot_query_param
 
 
 class TestNormalizeSlot:
@@ -73,3 +73,30 @@ class TestSaveInSlot:
     def test_named_save_does_not_match_other_name(self):
         """A named-slot save does not match a different slot name."""
         assert save_in_slot({"slot": "default"}, "desktop") is False
+
+
+class TestFilterSavesToSlot:
+    def test_isolates_legacy_from_every_named_slot(self):
+        """#1061: a legacy (slot:null) save belongs ONLY to the legacy slot.
+
+        Regression for the on-device carry-over: the old filter matched a null
+        save under ANY named active slot (``slot == active or slot is None``), so
+        the legacy save bled into a named slot's status and got synced into it.
+        Exact slot membership keeps each slot isolated.
+        """
+        saves = [{"id": 75, "slot": "default"}, {"id": 77, "slot": None}, {"id": 74, "slot": "default"}]
+        # Named slot the legacy save does NOT belong to → empty (no leak).
+        assert [s["id"] for s in filter_saves_to_slot(saves, "test")] == []
+        # Named slot → only its own saves, never the legacy null one.
+        assert [s["id"] for s in filter_saves_to_slot(saves, "default")] == [75, 74]
+        # Legacy mode (None or "") → only the null save.
+        assert [s["id"] for s in filter_saves_to_slot(saves, None)] == [77]
+        assert [s["id"] for s in filter_saves_to_slot(saves, "")] == [77]
+
+    def test_empty_list_and_no_match_both_yield_empty(self):
+        assert filter_saves_to_slot([], "default") == []
+        assert filter_saves_to_slot([{"id": 1, "slot": "a"}], "b") == []
+
+    def test_save_without_a_slot_key_counts_as_legacy(self):
+        assert [s["id"] for s in filter_saves_to_slot([{"id": 3}], None)] == [3]
+        assert filter_saves_to_slot([{"id": 3}], "default") == []

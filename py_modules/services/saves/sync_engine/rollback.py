@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_path import sanitize_save_filename
+from domain.save_slot import filter_saves_to_slot
 from lib.errors import DeviceNotRegisteredError, classify_error
 from lib.list_result import ErrorCode
 from services.saves._helpers import local_save_target
@@ -150,7 +151,7 @@ class RollbackOrchestrator:
             }
 
         active_slot = save_state.active_slot
-        server_in_slot = self._matrix.filter_server_saves_to_slot(server_saves, active_slot)
+        server_in_slot = filter_saves_to_slot(server_saves, active_slot)
         if not server_in_slot:
             return {"success": False, "reason": "no_server_save", "message": "No server save in active slot"}
         server = max(server_in_slot, key=lambda s: parse_iso_to_epoch(s.get("updated_at")) or 0.0)

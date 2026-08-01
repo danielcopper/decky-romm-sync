@@ -33,3 +33,16 @@ def slot_query_param(slot: str | None) -> str | None:
 def save_in_slot(server_save: dict[str, Any], slot: str | None) -> bool:
     """Whether ``server_save`` belongs to ``slot``. The legacy slot matches a save whose slot is ``null`` or ``""``."""
     return normalize_slot(server_save.get("slot")) == normalize_slot(slot)
+
+
+def filter_saves_to_slot(server_saves: list[dict[str, Any]], active_slot: str | None) -> list[dict[str, Any]]:
+    """Filter server saves to *active_slot* by exact slot membership.
+
+    A legacy (``slot:null`` / ``""``) save belongs ONLY to the legacy slot — it
+    is never surfaced under a named slot. Sharing :func:`save_in_slot` keeps the
+    sync matrix, the status display, and rollback consistent with the per-slot
+    read/delete paths (#1061): the legacy save is visible and syncable only in
+    legacy mode, so it can't bleed into a named slot's status or get downloaded
+    into it.
+    """
+    return [ss for ss in server_saves if save_in_slot(ss, active_slot)]

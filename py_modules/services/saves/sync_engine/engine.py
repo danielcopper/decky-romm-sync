@@ -71,8 +71,6 @@ if TYPE_CHECKING:
     import logging
     from collections.abc import Iterator
 
-    from models.prune import MutationOutcome, SourceClaim
-
     from domain.save_layout import SaveLayout
     from services.protocols import (
         ActiveCoreReader,
@@ -322,22 +320,6 @@ class SyncEngine:
         """Back up a local save into ``.romm-backup`` (delegate to :class:`MatrixExecutor`)."""
         return self._matrix.quarantine_local_file(saves_dir, filename)
 
-    def quarantine_claimed_file(
-        self,
-        saves_dir: str,
-        filename: str,
-        *,
-        claim: SourceClaim,
-        safe_root: str,
-    ) -> MutationOutcome:
-        """Durably quarantine an exact save claim (delegate to :class:`MatrixExecutor`)."""
-        return self._matrix.quarantine_claimed_file(
-            saves_dir,
-            filename,
-            claim=claim,
-            safe_root=safe_root,
-        )
-
     def do_upload_save(
         self,
         rom_id: int,
@@ -384,13 +366,6 @@ class SyncEngine:
     def adopt_baseline_hash(self, save_state: RomSaveSyncState, filename: str, local_hash: str) -> None:
         """Record ``local_hash`` as the file's ``last_sync_hash`` baseline."""
         self._matrix.adopt_baseline_hash(save_state, filename, local_hash)
-
-    @staticmethod
-    def filter_server_saves_to_slot(
-        server_saves: list[dict[str, Any]], active_slot: str | None
-    ) -> list[dict[str, Any]]:
-        """Filter server saves to the active slot."""
-        return MatrixExecutor.filter_server_saves_to_slot(server_saves, active_slot)
 
     def build_sync_conflict_entry(
         self,

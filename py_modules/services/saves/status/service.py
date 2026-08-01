@@ -8,6 +8,7 @@ from domain.iso_time import parse_iso_to_epoch
 from domain.rom_save_sync_state import RomSaveSyncState
 from domain.save_attribution import compute_uploaded_by_us
 from domain.save_layout import ContentDir
+from domain.save_slot import filter_saves_to_slot
 from domain.save_status import compute_multi_file_slot, compute_save_sync_display
 from domain.save_status_builders import (
     build_file_status,
@@ -223,7 +224,7 @@ class StatusService:
         device_id = self._device_registry.get_device_id()
 
         active_slot = save_state.active_slot if save_state else None
-        server_in_slot = self._sync_engine.filter_server_saves_to_slot(server_saves, active_slot)
+        server_in_slot = filter_saves_to_slot(server_saves, active_slot)
 
         own_upload_ids: list[int] | None = save_state.own_upload_ids if save_state else None
 
