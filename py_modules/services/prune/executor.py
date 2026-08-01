@@ -91,7 +91,13 @@ class PruneExecutor:
         self._registry = config.registry
 
         self._liveness = LivenessProber(
-            config=LivenessProberConfig(loop=config.loop, romm_api=config.romm_api, settings=config.settings),
+            config=LivenessProberConfig(
+                loop=config.loop,
+                logger=config.logger,
+                romm_api=config.romm_api,
+                settings=config.settings,
+                canary_rom_ids=config.registry.canary_rom_ids,
+            ),
         )
         self._save_locks = SaveLockCoordinator(
             config=SaveLockCoordinatorConfig(loop=config.loop, save_coordinator=config.save_coordinator),
@@ -138,7 +144,7 @@ class PruneExecutor:
     async def run(self, run_id: str, preview: PrunePreview, options: PruneOptions) -> None:
         """Execute every candidate group and emit bounded terminal chunks."""
         results: list[dict[str, Any]] = []
-        self._liveness.bind_run(preview.server_namespace)
+        self._liveness.bind_run(run_id, preview.server_namespace)
         self._results.bind_run(preview.preview_id)
         try:
             if romm_namespace(self._settings) != preview.server_namespace:

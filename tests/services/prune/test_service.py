@@ -249,10 +249,11 @@ def _rom(
     group: str | None = None,
     app_id: int | None = None,
     fs_name: str | None = None,
+    platform: str = "dc",
 ) -> Rom:
     rom = Rom.synced(
         rom_id=rom_id,
-        platform_slug="dc",
+        platform_slug=platform,
         name=f"Game {rom_id}",
         fs_name=fs_name or f"Game {rom_id}.gdi",
         shortcut_app_id=app_id,
@@ -264,10 +265,30 @@ def _rom(
     return rom
 
 
-def _seed(uow: FakeUnitOfWork, *rows: Rom, stamp_count: int = 1) -> None:
+_CONTROL_ROM_ID = 900001
+
+
+def _seed(uow: FakeUnitOfWork, *rows: Rom, stamp_count: int = 1, control: bool = True) -> None:
+    """Seed the given rows plus, by default, one the stamped fetch is recorded as returning.
+
+    A completed fetch stamp asserts the server served that fetch, so a real
+    library always holds at least one row carrying its generation — seeding a
+    stamp with none of its rows is a state the fetch path cannot produce.
+    Cleanup now leans on exactly that row: with nothing the server is known to
+    have served, a 404 cannot be told apart from a misrouted request.
+    ``control=False`` seeds that impossible-but-testable state deliberately.
+    """
     with uow:
         for row in rows:
             uow.roms.save(row)
+        if control:
+            # On its own platform on purpose: outside every seeded group, since a
+            # row inside the probed group is not available as a control (it is the
+            # thing being questioned), and outside every ``dc``-scoped count.
+            uow.roms.save(_rom(_CONTROL_ROM_ID, fetch="ctl", platform="ctl", fs_name="Control.gdi"))
+            uow.platform_sync_state.save(
+                PlatformSyncState.stamp(platform_slug="ctl", at="now", rom_count=1, fetch_id="ctl")
+            )
         uow.platform_sync_state.save(
             PlatformSyncState.stamp(platform_slug="dc", at="now", rom_count=stamp_count, fetch_id="new")
         )
@@ -529,11 +550,113 @@ async def test_unbound_confirmed_404_row_is_deleted_after_final_reprobes(harness
     assert harness.uow.roms.get(1) is None
     assert complete["removed_rom_ids"] == [1]
     assert complete["results"][0]["mutations"] == ["plugin_artifacts", "database_rows"]
-    assert harness.romm.calls == [1, 1, 1]
+    # Three re-proof rounds, and because no candidate answered live in any of
+    # them, each round also asks one control whether the endpoint answers at all.
+    # One extra request per round — never per candidate.
+    assert harness.romm.calls == [1, _CONTROL_ROM_ID, 1, _CONTROL_ROM_ID, 1, _CONTROL_ROM_ID]
     assert harness.saves.locked == [[1]]
     frames = [payload for name, payload in harness.events.events if name in {"prune_progress", "prune_complete"}]
     assert frames
     assert all(frame["preview_id"] == preview["preview_id"] for frame in frames)
+
+
+@pytest.mark.asyncio
+async def test_a_total_misroute_removes_nothing_and_says_so(harness):
+    """404s from something that is not answering about ROMs are not deletion authority.
+
+    The realistic trigger is a reverse-proxy path misroute: every ROM request
+    answers 404 while the row is perfectly alive on the server. Indistinguishable
+    from a real 404 one request at a time — which is why the run asks a control
+    the server is known to have served, and refuses when that 404s too.
+    """
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("misrouted")] * 5
+    harness.romm.outcomes[_CONTROL_ROM_ID] = [RommNotFoundError("misrouted")] * 5
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+
+    complete = await _finish(harness)
+
+    assert harness.uow.roms.get(1) is not None, "a misrouted 404 may never delete a row"
+    assert complete["removed_rom_ids"] == []
+    assert complete["results"][0]["reason"] == "unconfirmed_server"
+    assert "could not be confirmed" in complete["results"][0]["message"]
+    assert harness.installed_remover.removed == []
+    assert harness.artifacts.removed == []
+
+
+@pytest.mark.asyncio
+async def test_a_confirmed_endpoint_still_removes_a_genuine_404(harness):
+    """The converse: with the control answering, a 404 is authority exactly as before."""
+    _seed(harness.uow, _rom(1, fetch="old"))
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 5
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+
+    complete = await _finish(harness)
+
+    assert harness.uow.roms.get(1) is None
+    assert complete["removed_rom_ids"] == [1]
+
+
+@pytest.mark.asyncio
+async def test_a_misroute_may_not_reclassify_a_repoint_group_as_fully_dead(harness):
+    """The amplifier: a misroute 404s the LIVE sibling too.
+
+    Believed, that turns "one version vanished, repoint to the other" into
+    "the whole game is gone" — taking the Steam shortcut and any unselected
+    installed content with it, and fully-vanished removal is on by default.
+    """
+    app_id = 0x80000001
+    _seed(harness.uow, _rom(1, fetch="old", group="g", app_id=app_id), _rom(2, fetch="new", group="g"))
+    harness.romm.outcomes[1] = [RommNotFoundError("misrouted")] * 5
+    harness.romm.outcomes[2] = [RommNotFoundError("misrouted")] * 5
+    harness.romm.outcomes[_CONTROL_ROM_ID] = [RommNotFoundError("misrouted")] * 5
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+
+    complete = await _finish(harness)
+
+    assert harness.uow.roms.get(1) is not None
+    assert harness.uow.roms.get(2) is not None, "the live sibling survives a lying 404"
+    assert complete["removed_rom_ids"] == []
+    assert complete["results"][0]["reason"] == "unconfirmed_server"
+    assert harness.steam_recovery.removed == [], "no shortcut was removed"
+    assert harness.switch_calls == [], "and no repoint was attempted either"
+
+
+@pytest.mark.asyncio
+async def test_a_live_answer_in_the_round_is_its_own_proof(harness):
+    """A group with a live member already holds the proof; no control is asked for.
+
+    A correct answer about one ROM is exactly what a control would be asked to
+    demonstrate, so paying for a second request would prove nothing new.
+    """
+    _seed(harness.uow, _rom(1, fetch="old", group="g"), _rom(2, fetch="new", group="g"), control=False)
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 5
+    harness.romm.outcomes[2] = [{"id": 2}] * 5
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"])
+
+    complete = await _finish(harness)
+
+    assert complete["removed_rom_ids"] == [1]
+    assert harness.uow.roms.get(2) is not None
+    assert _CONTROL_ROM_ID not in harness.romm.calls, "no control request was needed"
+
+
+@pytest.mark.asyncio
+async def test_without_any_control_a_404_is_never_honoured(harness):
+    """Nothing the server is known to have served means nothing to check against."""
+    _seed(harness.uow, _rom(1, fetch="old"), control=False)
+    harness.romm.outcomes[1] = [RommNotFoundError("gone")] * 5
+    preview = await _preview(harness)
+    await _start(harness, preview["preview_id"], remove_fully_vanished=True)
+
+    complete = await _finish(harness)
+
+    assert harness.uow.roms.get(1) is not None
+    assert complete["results"][0]["reason"] == "unconfirmed_server"
 
 
 @pytest.mark.asyncio
@@ -2587,7 +2710,8 @@ async def test_inline_purge_keeps_the_platform_stamp_and_still_denies_the_increm
     stamp = harness.uow.platform_sync_state.get("dc")
     assert stamp is not None
     assert (stamp.fetch_id, stamp.rom_count) == ("new", 2)
-    remaining = list(harness.uow.roms.iter_all())
+    # Scoped to the stamped platform, because that is what the stamp describes.
+    remaining = list(harness.uow.roms.iter_by_platform("dc"))
     # The purge removed a row carrying the stamp's generation, so the fetcher's
     # own conditions must still deny the skip: the stamped server count no longer
     # matches the count the server now reports (1), which forces the full fetch.

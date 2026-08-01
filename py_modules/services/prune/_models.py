@@ -15,6 +15,10 @@ if TYPE_CHECKING:
 # repoint target, and the group the claim must still match.
 ActionRequester = Callable[[str, str, dict[str, object], int | None, int | None, set[int]], Awaitable[dict[str, Any]]]
 
+# Rom ids the last complete fetch returned, excluding a set and capped: the
+# control subjects a liveness round falls back on when nothing answered live.
+CanaryRomIdsFn = Callable[[set[int], int], list[int]]
+
 
 @dataclass(frozen=True)
 class PrunePreview:

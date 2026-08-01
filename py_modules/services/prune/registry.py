@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from domain.fetch_generation import current_generation_ids
 from domain.prune import group_rows
 
 if TYPE_CHECKING:
@@ -29,6 +30,23 @@ class PruneRegistry:
         with self._uow_factory() as uow:
             rows = list(uow.roms.iter_all())
         return [group for group in group_rows(rows) if candidate_ids.intersection(row.rom_id for row in group)]
+
+    def canary_rom_ids(self, exclude: set[int], limit: int) -> list[int]:
+        """Return rom ids the last complete fetch returned, as controls for a 404 round.
+
+        These are the ids RomM served most recently, so asking for one is the
+        cheapest available test of whether the ROM endpoint is still answering
+        for ids that exist. Deterministic (ascending) so the audit trail names
+        the same subject a re-run would pick, and capped by *limit* because this
+        is a control, not a survey.
+        """
+        with self._uow_factory() as uow:
+            rows = list(uow.roms.iter_all())
+            served: set[int] = set()
+            for slug in sorted({row.platform_slug for row in rows}):
+                platform_rows = [row for row in rows if row.platform_slug == slug]
+                served |= current_generation_ids(platform_rows, uow.platform_sync_state.get(slug))
+        return sorted(served - exclude)[:limit]
 
     def reread_group(self, rom_id: int) -> list[Rom]:
         with self._uow_factory() as uow:

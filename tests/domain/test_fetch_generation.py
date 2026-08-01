@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from domain.fetch_generation import backfill_needed, count_rows_for_skip, prune_candidate_ids
+import pytest
+
+from domain.fetch_generation import (
+    backfill_needed,
+    count_rows_for_skip,
+    current_generation_ids,
+    prune_candidate_ids,
+)
 from domain.platform_sync_state import PlatformSyncState
 from domain.rom import Rom
 
@@ -121,3 +128,32 @@ class TestBackfillNeeded:
     def test_no_rows_never_demands_a_backfill(self):
         assert backfill_needed([], "run-new") is False
         assert backfill_needed([], None) is False
+
+
+class TestCurrentGenerationIds:
+    def test_returns_only_rows_carrying_the_stamped_generation(self):
+        rows = [_row(4375, "run-old"), _row(25135, "run-new"), _row(25136, "run-new")]
+        stamp = PlatformSyncState.stamp(platform_slug="dc", at="now", rom_count=2, fetch_id="run-new")
+        assert current_generation_ids(rows, stamp) == {25135, 25136}
+
+    def test_is_the_exact_complement_of_the_candidate_set(self):
+        rows = [_row(4375, "run-old"), _row(25135, "run-new")]
+        stamp = PlatformSyncState.stamp(platform_slug="dc", at="now", rom_count=1, fetch_id="run-new")
+        assert current_generation_ids(rows, stamp) | prune_candidate_ids(rows, stamp) == {4375, 25135}
+        assert current_generation_ids(rows, stamp) & prune_candidate_ids(rows, stamp) == set()
+
+    @pytest.mark.parametrize(
+        "stamp",
+        [
+            None,
+            PlatformSyncState.stamp(platform_slug="dc", at="now", rom_count=1, fetch_id=""),
+            PlatformSyncState.stamp(platform_slug="dc", at="now", rom_count=0, fetch_id="run-new"),
+        ],
+    )
+    def test_an_unusable_stamp_establishes_nothing(self, stamp):
+        """No stamp, no generation, or an empty fetch cannot vouch for any row."""
+        assert current_generation_ids([_row(25135, "run-new")], stamp) == set()
+
+    def test_no_rows_yields_nothing(self):
+        stamp = PlatformSyncState.stamp(platform_slug="dc", at="now", rom_count=1, fetch_id="run-new")
+        assert current_generation_ids([], stamp) == set()

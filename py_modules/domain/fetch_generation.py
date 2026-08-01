@@ -79,3 +79,18 @@ def prune_candidate_ids(rows: Sequence[Rom], stamp: PlatformSyncState | None) ->
     if stamp is None or not stamp.fetch_id or stamp.rom_count <= 0:
         return set()
     return {row.rom_id for row in rows if row.last_fetch_id != stamp.fetch_id}
+
+
+def current_generation_ids(rows: Sequence[Rom], stamp: PlatformSyncState | None) -> set[int]:
+    """Return rows a known non-empty completed fetch is recorded as having returned.
+
+    The mirror of :func:`prune_candidate_ids`: those are the rows absent from the
+    last complete fetch, these are the ones present in it. A missing, legacy, or
+    empty stamp yields nothing, because it cannot establish that any row was
+    seen. Useful wherever a row that RomM *should* still serve is needed as a
+    control — it is a local record of what the server last said, never a promise
+    about what it says now.
+    """
+    if stamp is None or not stamp.fetch_id or stamp.rom_count <= 0:
+        return set()
+    return {row.rom_id for row in rows if row.last_fetch_id == stamp.fetch_id}

@@ -40,6 +40,33 @@ local finalization, so a source that comes back to life — or a replacement tha
 A dropped ROM does **not** 404 the saves endpoint; `GET /api/saves?rom_id=<dead>` answers `200 []`. Only `get_rom`
 distinguishes a dead id, so every liveness probe goes through it.
 
+### The 404 has to come from RomM
+
+A 404 is only evidence that a ROM is gone if the thing answering is RomM and is answering about ROMs correctly. A
+reverse proxy that misroutes `/api/roms/*` answers 404 for every id — including ids that plainly exist — and one request
+at a time that is indistinguishable from the real thing. Believed, it is also amplified: the run probes a group's
+**live** siblings too, so a misroute turns "one version vanished, repoint to the other" into "the whole game is gone",
+taking the Steam shortcut and any unselected installed content with it.
+
+So no 404 is honoured unless the same round holds positive evidence that the ROM endpoint answers:
+
+- **A live verdict is its own proof.** Any `still_there` answer — a 200 carrying the right id — came from the very
+  endpoint whose 404s are in question, so a round that saw one needs nothing further. Groups with a live member (every
+  repoint case) pay nothing for this.
+- **Otherwise the round asks a control.** Up to three ids the last complete fetch is recorded as having returned, which
+  are by construction not candidates, are probed with the same single-attempt request. One correct answer confirms the
+  round; the first success stops the walk, so the usual cost is one extra request per round, never per candidate.
+- **No confirmation, no deletion.** Every 404 in that round becomes `uncertain` with reason `unconfirmed_server`, the
+  group is skipped, and the message says the server's answers could not be confirmed. A control that is itself genuinely
+  gone reads the same way — retaining data rather than removing it.
+
+Confirmation is per round and never carried over, for the same reason the re-proof rounds exist at all: a route can
+start misbehaving between them. The control's outcome is logged with the run id, so a misroute is diagnosable from the
+audit trail rather than only from the retained rows.
+
+This is a precondition on top of the 404 rule, never a softening of it: deletion authority is still, only, a fresh
+single-attempt exact-id 404 under the pinned namespace.
+
 ### Server namespace binding
 
 A run pins the RomM namespace it discovered its candidates under: canonical server origin, token origin, and RomM user

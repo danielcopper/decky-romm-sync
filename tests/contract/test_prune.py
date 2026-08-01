@@ -16,8 +16,10 @@ from domain.sync_state import SyncState
 from domain.version_metadata import VersionMetadata
 from lib.errors import RommNotFoundError
 
+CONTROL_ROM_ID = 900041
 
-def _seed_bulk_candidate(harness, rom_id: int = 41) -> None:
+
+def _seed_bulk_candidate(harness, rom_id: int = 41, *, control: bool = True) -> None:
     rom = Rom.synced(
         rom_id=rom_id,
         platform_slug="gba",
@@ -27,6 +29,15 @@ def _seed_bulk_candidate(harness, rom_id: int = 41) -> None:
         synced_at="2026-01-01T00:00:00",
     )
     rom.record_fetch_generation("older-fetch")
+    control_rom = Rom.synced(
+        rom_id=CONTROL_ROM_ID,
+        platform_slug="snes",
+        name="Kept Game",
+        fs_name="Kept Game.sfc",
+        shortcut_app_id=None,
+        synced_at="2026-01-01T00:00:00",
+    )
+    control_rom.record_fetch_generation("snes-fetch")
     with harness.uow_factory() as uow:
         uow.roms.save(rom)
         uow.platform_sync_state.save(
@@ -37,6 +48,19 @@ def _seed_bulk_candidate(harness, rom_id: int = 41) -> None:
                 fetch_id="completed-fetch",
             )
         )
+        if control:
+            # A row the server is known to have served, on its own platform so it
+            # is neither a candidate nor part of any gba-scoped assertion. Cleanup
+            # asks it whether the ROM endpoint answers before trusting a 404.
+            uow.roms.save(control_rom)
+            uow.platform_sync_state.save(
+                PlatformSyncState.stamp(
+                    platform_slug="snes",
+                    at="2026-01-02T00:00:00",
+                    rom_count=1,
+                    fetch_id="snes-fetch",
+                )
+            )
 
 
 def _seed_installed_bulk_candidate(harness, rom_id: int = 41) -> Path:
@@ -132,7 +156,10 @@ async def test_unbound_exact_404_cleanup_deletes_real_aggregate_and_emits_comple
     with harness.uow_factory() as uow:
         assert uow.roms.get(41) is None
     probes = [entry for entry in harness.romm.call_log if entry[0] == "get_rom_once"]
-    assert probes == [("get_rom_once", (41,), {})] * 3
+    # Three re-proof rounds. Nothing answered live in any of them, so each also
+    # asks one control whether the ROM endpoint answers at all before its 404
+    # is honoured — one extra request per round, never per candidate.
+    assert probes == [("get_rom_once", (41,), {}), ("get_rom_once", (CONTROL_ROM_ID,), {})] * 3
     complete_calls = [item for item in harness.emit.await_args_list if item.args[0] == "prune_complete"]
     assert len(complete_calls) == 1
     payload = complete_calls[0].args[1]
@@ -140,6 +167,36 @@ async def test_unbound_exact_404_cleanup_deletes_real_aggregate_and_emits_comple
     assert payload["partial"] is False
     assert payload["removed_rom_ids"] == [41]
     assert payload["results"][0]["status"] == "removed"
+
+
+async def test_a_misrouted_404_removes_nothing_over_the_real_wire(harness):
+    """End to end: 404s that no control corroborates never reach the aggregate."""
+    _seed_bulk_candidate(harness)
+    harness.romm.get_rom_once_side_effect_by_id[41] = RommNotFoundError("misrouted")
+    harness.romm.get_rom_once_side_effect_by_id[CONTROL_ROM_ID] = RommNotFoundError("misrouted")
+    preview = await harness.plugin.get_prune_preview(_preview_request())
+
+    await harness.plugin.start_prune(
+        {
+            "preview_id": preview["preview_id"],
+            "confirmed": True,
+            "repoint_shortcuts": True,
+            "remove_rows": True,
+            "remove_fully_vanished": True,
+            "create_recovery_bundle": False,
+            "include_installed_rom_ids": [],
+        }
+    )
+    task = harness.plugin._prune_service._task
+    assert task is not None
+    await task
+
+    with harness.uow_factory() as uow:
+        assert uow.roms.get(41) is not None
+    payload = [item for item in harness.emit.await_args_list if item.args[0] == "prune_complete"][-1].args[1]
+    assert payload["removed_rom_ids"] == []
+    assert payload["results"][0]["status"] == "skipped"
+    assert payload["results"][0]["reason"] == "unconfirmed_server"
 
 
 async def test_cancel_prune_stops_the_running_run_over_the_real_wire(harness):

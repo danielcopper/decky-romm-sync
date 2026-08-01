@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from domain.prune import natural_default, selected_prune_ids
 from domain.sibling_resolution import AUTO_REGION
+from services.prune.liveness import UNCONFIRMED_REASON
 
 if TYPE_CHECKING:
     import asyncio
@@ -114,18 +115,26 @@ class GroupPlanner:
             f"candidates={sorted(candidate_ids)}, bound={bound[0].rom_id if bound else None}"
         )
         if not live_ids and uncertain_ids:
-            namespace_changed = any(
-                verdicts[rom_id]["reason"] == "server_namespace_changed" for rom_id in uncertain_ids
-            )
+            reasons = {verdicts[rom_id]["reason"] for rom_id in uncertain_ids}
+            if "server_namespace_changed" in reasons:
+                return self._results.group_result(
+                    rows,
+                    "skipped",
+                    "server_namespace_changed",
+                    "The RomM server or user changed during exact-ID proof; nothing was removed.",
+                )
+            if UNCONFIRMED_REASON in reasons:
+                return self._results.group_result(
+                    rows,
+                    "skipped",
+                    UNCONFIRMED_REASON,
+                    "RomM's answers could not be confirmed, so a 404 could not be trusted; nothing was removed.",
+                )
             return self._results.group_result(
                 rows,
                 "skipped",
-                "server_namespace_changed" if namespace_changed else "liveness_uncertain",
-                (
-                    "The RomM server or user changed during exact-ID proof; nothing was removed."
-                    if namespace_changed
-                    else f"RomM could not confirm {len(uncertain_ids)} group member(s); nothing was removed."
-                ),
+                "liveness_uncertain",
+                f"RomM could not confirm {len(uncertain_ids)} group member(s); nothing was removed.",
             )
 
         delete_ids = selected_prune_ids(
