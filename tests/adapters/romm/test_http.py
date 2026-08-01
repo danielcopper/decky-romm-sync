@@ -1182,6 +1182,18 @@ class TestRommDownloadErrors:
         with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommForbiddenError):
             plugin._http_adapter.download("/assets/rom.zip", dest)
 
+    def test_generic_route_404_still_raises_not_found(self, plugin, tmp_path):
+        # A byte fetch answers about a file, not an entity, so its 404 keeps the
+        # plain mapping and never has to prove an entity answer. Unifying this
+        # with the API routes must fail here rather than pass silently.
+        _setup_plugin(plugin)
+        exc = _http_error(
+            404, "Not Found", content_type="application/json", body=b'{"detail":"Not Found"}', url="http://romm.local/x"
+        )
+        dest = str(tmp_path / "rom.zip")
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommNotFoundError):
+            plugin._http_adapter.download("/assets/rom.zip", dest)
+
 
 class TestRommUploadMultipartErrors:
     """_romm_upload_multipart translates errors."""
@@ -2221,6 +2233,21 @@ class TestDownloadExternal:
 
         # A definitive 404 is not retryable — a single attempt.
         assert mock_open.call_count == 1
+
+    def test_generic_route_404_still_raises_not_found(self, tmp_path):
+        # The CDN has no entity layer at all, so this byte fetch's 404 keeps the
+        # plain mapping instead of proving an entity answer it could never give.
+        adapter = self._adapter_with_token()
+        dest = str(tmp_path / "cover.png")
+        exc = _http_error(
+            404,
+            "Not Found",
+            content_type="application/json",
+            body=b'{"detail":"Not Found"}',
+            url="https://cdn.example.com/x.png",
+        )
+        with patch("urllib.request.urlopen", side_effect=exc), pytest.raises(RommNotFoundError):
+            adapter.download_external("https://cdn.example.com/x.png", dest)
 
     @pytest.mark.parametrize(
         "url",

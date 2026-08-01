@@ -1189,10 +1189,18 @@ generic default stays put, so blocklisting the default is the robust test. Every
 `RommApiError`, which `classify_error` maps to `server_unreachable`, so infrastructure can no longer authorize a
 deletion and each caller fails **open** on it instead.
 
-The **asset routes** opt out via `translate_http_error(..., asset_route=True)` and keep the plain status mapping: RomM
-serves its cover resources from a static mount, so a genuinely missing cover answers with exactly that generic route-404
-body, and the sole consumer reacts to the 404 by refetching from the ROM's `url_cover` (the fallback above) —
-non-destructive and self-correcting rather than a deletion.
+The **byte-stream routes** — `download`, `download_conditional`, `download_external` — opt out via
+`translate_http_error(..., asset_route=True)` and keep the plain status mapping. Their 404 answers about a _file_, not
+an entity, so it is never deletion-authority grade; and it has to keep raising `RommNotFoundError`, because RomM serves
+its cover resources from a static mount where a genuinely missing cover answers with exactly that generic route-404
+body, and the sole consumer reacts by refetching from the ROM's `url_cover` (the fallback above) — non-destructive and
+self-correcting rather than a deletion. Each of the three call sites carries that constraint as a comment: a future
+unification of the two classes would silently disarm the fallback, so both sides are pinned by tests.
+
+Every deletion-authority probe reaches the network through the **JSON-API** entry points, never a byte-stream one:
+`get_rom` / `get_rom_once` (`request` / `request_once`) behind the version picker's liveness and vanished probes,
+`list_saves` (`request`) behind the save-status, copies and slot-setup reads, and `update_device` (`put_json`) behind
+the device re-registration. The one consumer that branches on a byte-stream 404 is the `url_cover` fallback.
 
 #### PersistenceAdapter notes
 

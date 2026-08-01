@@ -333,11 +333,14 @@ class RommHttpAdapter:
 
         On an API route a 404 must prove it came from RomM's entity layer before
         it becomes a :class:`RommNotFoundError` (see :meth:`_translate_not_found`).
-        *asset_route* opts the cover fetches out of that proof: RomM serves its
-        cover resources from a static mount whose miss is indistinguishable from
-        a generic route-404, and the sole consumer answers that 404 by refetching
-        the cover from the ROM's external ``url_cover`` — a non-destructive,
-        self-correcting reaction, so the plain status mapping stays.
+        *asset_route* opts the byte-stream fetches out of that proof: they answer
+        about a FILE rather than an entity, so their 404 is never
+        deletion-authority grade. It also has to keep raising
+        :class:`RommNotFoundError` — RomM serves its cover resources from a
+        static mount whose miss is indistinguishable from a generic route-404,
+        and the sole consumer answers that 404 by refetching the cover from the
+        ROM's external ``url_cover``, a non-destructive and self-correcting
+        reaction.
         """
         if isinstance(exc, urllib.error.HTTPError):
             if exc.code == 422:
@@ -592,7 +595,10 @@ class RommHttpAdapter:
             except RommApiError:
                 raise
             except Exception as exc:
-                raise self.translate_http_error(exc, url, "GET") from exc
+                # Asset-level 404: a byte fetch answers about a FILE, never about an
+                # entity, so this 404 is never deletion-authority grade and keeps the
+                # plain status mapping. Do not unify it with the API routes' proof.
+                raise self.translate_http_error(exc, url, "GET", asset_route=True) from exc
 
         return self.with_retry(_do_download)
 
@@ -648,6 +654,10 @@ class RommHttpAdapter:
                         etag=exc.headers.get("ETag"),
                         last_modified=exc.headers.get("Last-Modified"),
                     )
+                # Asset-level 404: a byte fetch answers about a FILE, never about an
+                # entity, so this 404 is never deletion-authority grade and keeps the
+                # plain status mapping — which is what arms the ``url_cover`` fallback
+                # on a static-mount cover miss. Do not unify it with the API routes.
                 raise self.translate_http_error(exc, url, "GET", asset_route=True) from exc
             except RommApiError:
                 raise
@@ -708,6 +718,10 @@ class RommHttpAdapter:
             except RommApiError:
                 raise
             except Exception as exc:
+                # Asset-level 404: a byte fetch answers about a FILE, never about an
+                # entity — and this one is a third-party CDN, which has no entity
+                # layer at all. Never deletion-authority grade; keeps the plain
+                # status mapping. Do not unify it with the API routes.
                 raise self.translate_http_error(exc, encoded_url, "GET", asset_route=True) from exc
 
         return self.with_retry(_do_download)
